@@ -8,7 +8,8 @@
    Scope: tables come from :from, :using, the joins, :insert-into, :update and :delete-from,
    under their aliases. CTEs (:with), subqueries and table functions are opaque tables: their
    columns exist but have no type. A column is :col (unique in the scope), :alias/col or
-   :alias.col. An unqualified table is in :schema (default \"public\").
+   :alias.col; a column a subquery cannot resolve is looked for in the enclosing statements,
+   as PostgreSQL does. An unqualified table is in :schema (default \"public\").
 
    Types are data malli's default registry reads (see pgmalli.core/portable). Date and
    timestamp columns are inst? by default; :time :instant or :local gives the
@@ -25,11 +26,13 @@
         plain? #(re-matches #"[A-Za-z_][A-Za-z0-9_]*" %)]
     (if (and (plain? schema) (plain? t)) (keyword (str "pg." schema) t) (str "pg." schema "/" t))))
 
-(defn- table-columns
-  "{column-name schema} of a table (or view) in the registry, nil when it is not there."
+(defn- column-entries
+  "[[column-name schema] ...] of a table (or view) in the registry, in its order; nil when it
+   is not there."
   [registry table]
-  (when-let [row (get registry (table-key table))]
-    (into {} (map (fn [[k _ s]] [(name k) s])) (rt/column-entries row))))
+  (some->> (get registry (table-key table)) rt/column-entries (map (fn [[k _ s]] [(name k) s]))))
+
+(defn- table-columns [registry table] (some->> (column-entries registry table) (into {})))
 
 ;;; statements, CTEs and scope
 
@@ -118,14 +121,24 @@
             [alias {:table table :cte? cte?
                     :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}]))))
 
+(defn- statement-chains
+  "[[statement scopes] ...] for the statements of a query, scopes the statement's own scope
+   followed by those of the statements enclosing it."
+  [registry body ctes opts]
+  (letfn [(walk [x outer]
+            (cond (statement? x) (let [chain (cons (scope registry x ctes opts) outer)]
+                                   (cons [x chain] (mapcat #(walk % chain) (vals x))))
+                  (coll? x) (mapcat #(walk % outer) (seq x))))]
+    (walk body ())))
+
 (defn- split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table, :b does not."
   [col]
   (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))]
     (if (str/includes? s ".") (str/split s #"\." 2) [nil s])))
 
-(defn- column-hits
-  "[[alias table opaque?] ...] of the tables in scope a column may belong to."
+(defn- own-hits
+  "[[alias table opaque?] ...] of the tables of one scope a column may belong to."
   [registry scope col]
   (let [[alias column] (split-column col)]
     (if alias
@@ -135,9 +148,18 @@
                       :when (or opaque? (contains? (table-columns registry table) column))]
                   [a table opaque?])))))
 
+(defn- column-hits
+  "The hits of the innermost scope (a map, or the chain of a statement and its enclosing
+   ones) that has any."
+  [registry scopes col]
+  (let [[sc & outer] (if (map? scopes) [scopes] scopes)
+        hits (own-hits registry sc col)]
+    (if (or (seq hits) (empty? outer)) hits (column-hits registry outer col))))
+
 (defn resolve-column
-  "{:table :column :schema} for a column keyword in a scope, :table the alias for an opaque
-   table and :schema nil there; nil when the column resolves to no table or to several."
+  "{:table :column :schema} for a column keyword in a scope (or the chain of scopes of a
+   nested statement), :table the alias for an opaque table and :schema nil there; nil when
+   the column resolves to no table or to several."
   [registry scope col]
   (let [hits (column-hits registry scope col)]
     (when (= 1 (count hits))
@@ -177,6 +199,12 @@
   (concat (when (map? (:set stmt)) (:set stmt))
           (when (vector? (:values stmt)) (mapcat identity (filter map? (:values stmt))))))
 
+(defn- target-scope
+  "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
+  [scopes stmt schema]
+  (let [[_ alias] (some-> (or (:update stmt) (insert-target stmt)) (table-ref schema))]
+    (select-keys (first scopes) [alias])))
+
 ;;; problems
 
 (defn- enum-values [registry schema]
@@ -184,12 +212,14 @@
         s (if (and (vector? s) (= :ref (first s))) (get registry (last s)) s)]
     (when (and (vector? s) (= :enum (first s))) (set (remove map? (rest s))))))
 
-(defn- column-problems [registry sc stmt]
-  (for [col (distinct (concat (keep (comp first select-parts) (selected-items stmt))
-                              (map second (comparisons stmt))
-                              (map first (assignments stmt))))
-        :when (and (not= :* col) (nil? (resolve-column registry sc col)))]
-    {:kind (if (< 1 (count (column-hits registry sc col))) :ambiguous-column :unknown-column) :column col}))
+(defn- star? [col] (= "*" (second (split-column col))))
+
+(defn- column-problems [registry sc stmt schema]
+  (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
+                                      (for [[_ c] (comparisons stmt)] [c sc])
+                                      (for [[c] (assignments stmt)] [c (target-scope sc stmt schema)])))
+        :when (and (not (star? col)) (nil? (resolve-column registry scope col)))]
+    {:kind (if (< 1 (count (column-hits registry scope col))) :ambiguous-column :unknown-column) :column col}))
 
 (defn- insert-problems [registry stmt schema]
   (when-let [[table] (some-> (insert-target stmt) (table-ref schema))]
@@ -212,10 +242,10 @@
          (for [c required :when (not (given-names c))]
            {:kind :missing-required-column :table table :column c}))))))
 
-(defn- enum-problems [registry sc stmt]
-  (for [[col value] (concat (for [[op col value] (comparisons stmt) :when (#{:= :<> :in} op)] [col value])
-                            (assignments stmt))
-        :let [{s :schema} (resolve-column registry sc col)
+(defn- enum-problems [registry sc stmt schema]
+  (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (#{:= :<> :in} op)] [col value sc])
+                                  (for [[col value] (assignments stmt)] [col value (target-scope sc stmt schema)]))
+        :let [{s :schema} (resolve-column registry scope col)
               values (cond (string? value) [value]
                            (and (vector? value) (= :cast (first value)) (string? (second value))) [(second value)]
                            (and (vector? value) (every? string? value)) value)
@@ -228,15 +258,17 @@
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
    or compared that are unknown, or ambiguous (unqualified and in more than one table in
    scope); required INSERT columns missing; enum literals outside the enum (compared with,
-   or assigned to, the column). Empty when the statement agrees with the registry."
-  [registry stmt ctes {:keys [schema] :or {schema "public"} :as opts}]
-  (let [sc (scope registry stmt ctes opts)]
-    (vec (concat (for [[_ {:keys [table cte?]}] sc
+   or assigned to, the column). scope is the statement's (from scope) or, for a nested
+   statement, the chain of its own and the enclosing ones. Empty when the statement agrees
+   with the registry."
+  [registry stmt scope {:keys [schema] :or {schema "public"}}]
+  (let [scopes (if (map? scope) [scope] scope)]
+    (vec (concat (for [[_ {:keys [table cte?]}] (first scopes)
                        :when (and table (not cte?) (nil? (table-columns registry table)))]
                    {:kind :unknown-table :table table})
-                 (column-problems registry sc stmt)
+                 (column-problems registry scopes stmt schema)
                  (insert-problems registry stmt schema)
-                 (enum-problems registry sc stmt)))))
+                 (enum-problems registry scopes stmt schema)))))
 
 (defn check
   "The problems of every statement of a query. A query whose :with is built elsewhere (not
@@ -245,7 +277,7 @@
   ([registry body opts]
    (let [ctes (cte-names body)
          opaque? (some (fn [stmt] (some #(let [w (get stmt %)] (and (some? w) (not (vector? w)))) [:with :with-recursive])) (statements body))
-         found (mapcat #(problems registry % ctes opts) (statements body))]
+         found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body ctes opts))]
      (vec (if opaque? (remove #(= :unknown-table (:kind %)) found) found)))))
 
 ;;; types
@@ -272,23 +304,22 @@
    one in :limit / :offset :int. The first typed use wins; a use that gives no type (:any)
    never hides one that does."
   ([registry body] (arg-types registry body {}))
-  ([registry body opts]
+  ([registry body {:keys [schema] :or {schema "public"} :as opts}]
    (let [ctes (cte-names body)
-         typed (for [stmt (statements body)
-                     :let [sc (scope registry stmt ctes opts)]
+         typed (for [[stmt sc] (statement-chains registry body ctes opts)
                      pair (concat (for [[op col value] (comparisons stmt)
                                         :let [t (column-type registry sc col false opts)]]
                                     [value (if (and (= :in op) (not= :any t)) [:sequential t] t)])
                                   (for [[_ v] (select-keys stmt [:limit :offset])] [v :int])
-                                  (for [[col v] (assignments stmt)] [v (column-type registry sc col true opts)]))]
+                                  (for [[col v] (assignments stmt)] [v (column-type registry (target-scope sc stmt schema) col true opts)]))]
                  pair)]
      (reduce (fn [acc [sym t]] (if (and (symbol? sym) (contains? #{nil :any} (acc sym))) (assoc acc sym t) acc)) {} typed))))
 
 (defn row-schema
   "The [:map ...] of one row a statement returns, as the driver builds it (as-read's
    :qualified?, :kebab?, :nil-columns and :time; an opaque source's columns under its alias)
-   and as malli's default registry reads it; an expression under an alias is nullable :any.
-   nil when a selected column cannot be resolved."
+   and as malli's default registry reads it; an expression under an alias is nullable :any;
+   :* and :t/* are the columns of the tables. nil when a selected column cannot be resolved."
   ([registry stmt ctes] (row-schema registry stmt ctes {}))
   ([registry stmt ctes {:keys [qualified? kebab? nil-columns] :as opts}]
    (let [sc (scope registry stmt ctes opts)
@@ -300,15 +331,21 @@
                    (cond (not nullable?) [k inner]
                          (= :absent nil-columns) [k {:optional true} inner]
                          :else [k [:maybe inner]])))
-         entries (for [item (selected-items stmt)
-                       :let [[col alias] (select-parts item)]]
-                   (if col
-                     (when-let [{:keys [table column schema]} (resolve-column registry sc col)]
-                       ;; a column under an alias is still keyed by its table: the driver reads the table from the field
-                       (entry (key-of table (if alias (name alias) column)) schema))
-                     (when alias (entry alias nil))))]
-     (when (and (seq entries) (every? some? entries))
-       (into [:map] entries)))))
+         star (fn [col]
+                (let [[a] (split-column col)
+                      tables (if a (some-> (get sc a) vector) (vals sc))]
+                  (when (and (seq tables) (every? #(and % (not (:opaque? %))) tables))
+                    (for [{:keys [table]} tables, [c s] (column-entries registry table)] (entry (key-of table c) s)))))
+         items (for [item (selected-items stmt)
+                     :let [[col alias] (select-parts item)]]
+                 (cond
+                   (nil? col) (when alias [(entry alias nil)])
+                   (star? col) (star col)
+                   :else (when-let [{:keys [table column schema]} (resolve-column registry sc col)]
+                           ;; a column under an alias is still keyed by its table: the driver reads the table from the field
+                           [(entry (key-of table (if alias (name alias) column)) schema)])))]
+     (when (and (seq items) (every? some? items))
+       (into [:map] cat items)))))
 
 (defn query-schema
   "[:=> [:cat arg-types...] [:sequential row]] for a function taking args and running body: a

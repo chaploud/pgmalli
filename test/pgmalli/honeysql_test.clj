@@ -90,3 +90,17 @@
   (is (= {'ids [:int {:pg/identity :always :pg/type "bigint"}]}
          (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:in :nope ids] [:= :id ids]]} opts))
       "an :in on an unknown column gives no type either"))
+
+(deftest nested-statements-see-the-enclosing-ones
+  (is (= [] (h/check registry {:select [:id] :from [:users] :where [:not-exists {:select [1] :from [:groups] :where [:= :groups.id :users.group_id]}]} opts))
+      "a correlated subquery resolves the outer table")
+  (is (= [] (h/check registry {:select [:id] :from [:users] :where [:not-exists {:select [1] :from [:groups] :where [:= :id :users.group_id]}]} opts))
+      "inner tables come first: :id is groups.id, not ambiguous with users.id")
+  (is (= [] (h/check registry {:update [:users :u] :set {:score [:+ :r.score 1]} :from [[{:select [:score] :from [:users]} :r]] :where [:= :u.id 1]} opts))
+      "a :set key belongs to the updated table only, whatever else is in scope")
+  (is (= [{:kind :unknown-column :column :nick}]
+         (h/check registry {:update :groups :set {:nick "x"} :from [[:users :u]] :where [:= :u.group_id :groups.id]} opts)))
+  (is (= [] (h/check registry {:select [:users/* [[:count :g.id] :n]] :from [:users] :left-join [[:groups :g] [:= :g.id :users.group_id]] :group-by [:users/id]} opts)))
+  (is (= [:map [:id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]] [:name [:string {:pg/type "text"}]]]
+         (h/row-schema registry {:select [:groups/*] :from [:groups]} #{} opts)) ":t/* is the table's columns")
+  (is (nil? (h/row-schema registry {:select [:*] :from [[{:select [:id] :from [:users]} :r]]} #{} opts)) "an opaque table's * is unknown"))
