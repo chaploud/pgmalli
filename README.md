@@ -39,6 +39,8 @@ PostgreSQL 14 or later and `psql`. Connection settings are psql's: `PGHOST`, `PG
 ;; In the application
 (def registry (merge (m/default-schemas) (pgmalli/registry (pgmalli/path config "public"))))
 (m/validate :pg.public/users row {:registry registry})
+;; the entry is a reference; deref it to walk the columns
+(m/children (m/deref (m/schema :pg.public/users {:registry registry})))
 
 ;; In CI
 (is (nil? (pgmalli/stale config)))                       ; files match the database
@@ -94,13 +96,22 @@ bb -m pgmalli.main generate           # identical on babashka
 | `CHECK (col IS NULL OR <any of the above>)` | `[:maybe <rendering>]` |
 | `CHECK (col IS NOT NULL)` | no `[:maybe]` |
 | column patterns joined with `AND` | each part rendered |
-| CHECK across several columns, `NOT VALID` CHECK | not rendered; kept in `:unrendered` with the expression data |
+| CHECK across several columns | `[:fn {:pg/constraint "name"} (fn [row] ...)]` on the table, compiled from the expression with PostgreSQL's NULL semantics |
+| `NOT VALID` CHECK | not rendered; kept in `:unrendered` with the expression data |
 | domain, composite and foreign-schema types | `[:any {:pg/type ...}]`, listed in `:unrendered` |
 | `timestamp`, `timestamptz` | `inst?` |
 | `date`, `time`, `interval`, range types | `[:any {:pg/type ...}]` |
 | `json`, `jsonb` | `:any` |
 | `bytea` | `bytes?` |
 | `T[]` | `[:vector <T>]` |
+
+Compiled CHECKs are plain data: malli evaluates the `(fn [row] ...)` form itself. On babashka
+that works out of the box; on the JVM add `org.babashka/sci` to your dependencies (malli's
+optional dependency for `:fn` forms). Comparisons, logic, `IS NULL`, `IN`, `BETWEEN`,
+arithmetic, `length`/`trim`/`lower`/`upper`, `coalesce`, `CASE`, regexes and the jsonb
+operators `->`, `->>`, `jsonb_typeof` are supported; a CHECK using anything else stays in
+`:unrendered`. The test suite checks the compiled forms against PostgreSQL itself on
+generated rows.
 
 Anything in `:unrendered` can be given a rendering through `:overrides`, keyed by constraint
 name: a malli schema (typically `[:ref :app/name]`, defined in your own registry) or

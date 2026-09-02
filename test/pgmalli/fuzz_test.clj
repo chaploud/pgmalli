@@ -2,17 +2,25 @@
   "Round trip of generated expressions: data -> HoneySQL -> CHECK constraint in PostgreSQL ->
    pg_get_constraintdef -> parse -> canonical, compared modulo the rewrites PostgreSQL makes.
    PGMALLI_FUZZ_SEED changes the seed (default 42, fixed in CI)."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [babashka.process :as p]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.walk :as walk]
             [honey.sql :as sql]
+            [malli.core :as m]
             [malli.generator :as mg]
+            [pgmalli.impl.compile :as c]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.ir :as ir]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*container* *db* exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
 (def ^:private columns "n integer, m integer, s text, t text, e mood, b boolean, d numeric(10,2)")
+
+(def ^:private create-mood
+  ;; both tests in this namespace need the type, in either order
+  "DO $$ BEGIN CREATE TYPE mood AS ENUM ('happy', 'sad'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;\n")
 
 (def ^:private expr-schema
   [:schema {:registry
@@ -33,7 +41,9 @@
                      [:tuple [:= :between] ::int-col ::int-lit ::int-lit]
                      [:tuple [:= :>] [:tuple [:= :length] [:tuple [:= :trim] ::str-col]] [:= 0]]
                      [:tuple [:= :=] [:= :b] :boolean]
-                     [:tuple [:= :>=] [:= :d] [:double {:min 0.0 :max 9.99}]]]
+                     [:tuple [:= :>=] [:= :d] [:double {:min 0.0 :max 9.99}]]
+                     [:tuple [:= :>] [:tuple [:= :+] ::int-col ::int-col] ::int-lit]
+                     [:tuple [:= :case] [:tuple [:= :=] [:= :e] [:= "happy"]] [:tuple [:= :>] ::int-col [:= 0]] [:= :else] [:tuple [:= :is] ::int-col :nil]]]
              ::expr [:or
                      ::atom
                      [:tuple [:= :not] [:ref ::expr]]
@@ -62,7 +72,7 @@
     (let [seed (parse-long (or (System/getenv "PGMALLI_FUZZ_SEED") "42"))
           ;; identical constraint definitions collapse into one, so keep the expressions distinct
           exprs (vec (distinct (mg/sample expr-schema {:size 60 :seed seed})))
-          ddl (str "CREATE TYPE mood AS ENUM ('happy', 'sad');\nCREATE TABLE fz (" columns
+          ddl (str create-mood "CREATE TABLE fz (" columns
                    (apply str (map-indexed (fn [i e] (str ",\n  CONSTRAINT c" i " CHECK (" (first (sql/format (x/->honeysql e) {:inline true})) ")")) exprs))
                    ");")
           _ (exec-sql! ddl)
@@ -74,3 +84,44 @@
             (is (nil? (:error parsed)) (str "c" i " " (pr-str e) " " clause))
             (is (= (normalize e) (normalize (:expr parsed)))
                 (str "input " (pr-str e) "\npg    " clause))))))))
+
+(def ^:private row-schema
+  [:map [:n [:maybe [:int {:min -6 :max 101}]]] [:m [:maybe [:int {:min -6 :max 101}]]]
+   [:s [:maybe [:enum "a" "b" "c" "it's" " a " ""]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
+   [:e [:maybe [:enum "happy" "sad"]]] [:b [:maybe :boolean]]
+   ;; only values numeric(10,2) can hold, as rows read from the database would be
+   [:d [:maybe [:enum -1.0 0.0 0.01 0.5 2.25 9.99]]]])
+
+(defn- sql-literal [column v]
+  (cond (nil? v) "NULL"
+        (string? v) (str "'" (str/replace v "'" "''") "'" (when (= column :e) "::mood"))
+        (double? v) (format "%.2f" v)
+        :else (str v)))
+
+(defn- postgres-verdicts
+  "For every row, whether each expression IS NOT FALSE according to PostgreSQL."
+  [exprs rows]
+  (let [cols [:n :m :s :t :e :b :d]
+        values (str/join ",\n" (map (fn [r] (str "(" (str/join ", " (map #(sql-literal % (get r %)) cols)) ")")) rows))
+        selects (str/join ", " (map #(str "((" (first (sql/format (x/->honeysql %) {:inline true})) ") IS NOT FALSE)") exprs))
+        sql (str create-mood "CREATE TABLE judge (id serial, " columns ");\n"
+                 "INSERT INTO judge (n, m, s, t, e, b, d) VALUES\n" values ";\n"
+                 "SELECT " selects " FROM judge ORDER BY id;")
+        {:keys [exit out err]} (p/sh ["docker" "exec" "-i" *container* "psql" "-X" "-q" "-A" "-t" "-F" "\t"
+                                      "-v" "ON_ERROR_STOP=1" "-U" "postgres" "-d" (:db *db*)]
+                                     {:in sql})]
+    (when-not (zero? exit) (throw (ex-info err {})))
+    (mapv #(mapv (fn [v] (= "t" v)) (str/split % #"\t")) (str/split-lines (str/trim out)))))
+
+(deftest compiled-checks-agree-with-postgres
+  (when *db*
+    (let [seed (parse-long (or (System/getenv "PGMALLI_FUZZ_SEED") "42"))
+          exprs (vec (distinct (mg/sample expr-schema {:size 80 :seed seed})))
+          rows (vec (distinct (mg/sample row-schema {:size 60 :seed seed})))
+          schemas (mapv #(m/schema [:fn (c/check-fn %)]) exprs)
+          verdicts (postgres-verdicts exprs rows)]
+      (testing (str "seed " seed ", " (count exprs) " expressions x " (count rows) " rows")
+        (doseq [[j row] (map-indexed vector rows)
+                [i e] (map-indexed vector exprs)]
+          (is (= (get-in verdicts [j i]) (m/validate (schemas i) row))
+              (str (pr-str e) " on " (pr-str row))))))))

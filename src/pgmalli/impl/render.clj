@@ -12,7 +12,8 @@
    overrides is {constraint-name schema-or-{:skip reason}}. A schema is added with [:and ...]
    to the column (column-local constraint) or the table (table constraint); :skip drops the
    fact from :unrendered into :skipped."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [pgmalli.impl.compile :as compile]))
 
 (defn ident-key
   "Keyword for a plain identifier, the string itself otherwise."
@@ -133,14 +134,20 @@
                      rendered (map (fn [c] [c (render-column schema-name c (remove (comp #{:column} :fact) (by-column (:column c))) overrides)]) columns)
                      ;; :unparsed facts with a column (bad DEFAULT) are handled on the column side
                      table-checks (sort-by order (filter #(and (#{:table-check :unparsed} (:fact %)) (nil? (:column %))) tfacts))
+                     compiled (fn [f] (when (= :table-check (:fact f))
+                                        (try [:fn {:pg/constraint (:constraint f)} (compile/check-fn (:expr f))]
+                                             (catch Exception _ nil))))
                      grouped (group-by (fn [f] (let [ov (override-for overrides f)]
-                                                 (cond (and (map? ov) (:skip ov)) :skipped ov :override :else :unrendered)))
+                                                 (cond (and (map? ov) (:skip ov)) :skipped
+                                                       ov :override
+                                                       (compiled f) :compiled
+                                                       :else :unrendered)))
                                        table-checks)
                      map-schema (into [:map {:pg/table table}]
                                       (map (fn [[c r]] [(ident-key (:column c)) (:schema r)]) rendered))
-                     schema (if-let [ovs (seq (:override grouped))]
-                              (into [:and map-schema] (map #(override-for overrides %) ovs))
-                              map-schema)]]
+                     extras (concat (map #(override-for overrides %) (:override grouped))
+                                    (map compiled (:compiled grouped)))
+                     schema (if (seq extras) (into [:and map-schema] extras) map-schema)]]
            {:name (schema-key schema-name table)
             :schema schema
             :unrendered (concat (mapcat (comp :unrendered second) rendered) (:unrendered grouped))

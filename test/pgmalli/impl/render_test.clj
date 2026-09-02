@@ -51,17 +51,24 @@
             [:ratio [:and {:pg/type "double precision" :pg/constraint ["ratio_check"]} :double [:> 0]]]
             [:tags [:vector {:pg/type "text[]"} :string]]
             [:title [:string {:min 1 :pg/trim true :pg/type "text" :pg/constraint ["title_check"]}]]]
-           (:pg.public/users registry)))
+           (second (:pg.public/users registry))) "the row map; the table CHECK follows it inside [:and ...]")
     (is (= [:map {:pg/table "Order Items"} [:id [:int {:pg/type "integer"}]]] (get registry "pg.public/Order Items")))
-    (is (= [[:unparsed "bad_default"] [:table-check "closed_check"]]
-           (map (juxt :fact #(or (:constraint %) (:column %))) unrendered)))
+    (is (= [[:unparsed "bad_default"]] (map (juxt :fact #(or (:constraint %) (:column %))) unrendered)))
     (is (empty? skipped))
+    (testing "table-level CHECK compiled to :fn"
+      (let [users (:pg.public/users registry)
+            [_ props form] (last users)]
+        (is (= :and (first users)))
+        (is (= {:pg/constraint "closed_check"} props))
+        (is (= 'fn (first form)))))
     (testing "the result is valid malli that validates a row"
       (let [reg (merge (m/default-schemas) registry)
             row {:id 1 :mood "happy" :nick "n" :age 30 :kind "a" :title "x" :meta {} :closed_at nil
                  :tags ["t"] :ratio 0.5 :level 2 :bad_default nil "odd name" nil}]
         (is (m/validate :pg.public/users row {:registry reg}))
         (is (not (m/validate :pg.public/users (assoc row :kind "zzz") {:registry reg})))
+        (is (not (m/validate :pg.public/users (assoc row :mood "happy" :closed_at #inst "2026") {:registry reg}))
+            "closed_check: closed_at only when mood is sad")
         (is (m/validate "pg.public/Order Items" {:id 1} {:registry reg}))))))
 
 (deftest overrides
@@ -70,7 +77,7 @@
                            "title_check" {:skip "guaranteed by the application"}})]
     (is (= [[:unparsed "bad_default"]] (map (juxt :fact :column) unrendered)))
     (is (= ["title_check"] (map :constraint skipped)))
-    (is (= :and (first (:pg.public/users registry))))
+    (is (= [:ref :app/closed-consistent] (last (:pg.public/users registry))) "the override replaces the compiled form")
     (is (= [:string {:pg/type "text"}]
            (some (fn [e] (when (and (vector? e) (= :title (first e))) (last e))) (second (:pg.public/users registry)))))))
 
