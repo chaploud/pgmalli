@@ -28,7 +28,10 @@
       (exec-sql! "CREATE TYPE mood AS ENUM ('happy', 'sad');
                   CREATE TABLE users (id bigint PRIMARY KEY, mood mood NOT NULL DEFAULT 'happy',
                                       age integer CHECK (age >= 0), nick varchar(40) CHECK (length(TRIM(BOTH FROM nick)) > 0),
-                                      closed_at timestamptz, CONSTRAINT closed CHECK (mood = 'sad' OR closed_at IS NULL));")
+                                      closed_at timestamptz, CONSTRAINT closed CHECK (mood = 'sad' OR closed_at IS NULL));
+                  CREATE UNIQUE INDEX users_nick_idx ON users (nick);
+                  CREATE UNIQUE INDEX users_nick_lower_idx ON users (lower(nick));
+                  CREATE UNIQUE INDEX users_age_open_idx ON users (age) WHERE closed_at IS NULL;")
       (testing "a missing file is stale"
         (is (every? (comp nil? :file) (get (pgmalli/stale config) "public"))))
       (testing "generate, read back, validate"
@@ -42,7 +45,9 @@
             (is (not (m/validate :pg.public/users {:id 1 :mood "sad" :age -1 :nick "n" :closed_at nil} {:registry reg})))
             (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))
                 "closed_at only when sad")
-            (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted"))))
+            (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
+            (is (= [{:columns ["nick"]}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
+                "a unique index over plain columns counts; expression and partial ones do not"))))
       (testing "stale and unrendered"
         (is (nil? (pgmalli/stale config)))
         (is (empty? (:unrendered (gen/load-file* out))))

@@ -75,7 +75,7 @@
     (is (= [:multi {:dispatch :mood :error/message "closed_check"}
             ["sad" [:map [:closed_at [:time/instant {:error/message "closed_check"}]]]]
             ["happy" [:map [:closed_at [:nil {:error/message "closed_check"}]]]]
-            [:malli.core/default :any]]
+            [:malli.core/default [:map [:mood :nil]]]]
            (nth users 2)) "a branch check becomes :multi")
     (is (empty? unrendered))
     (is (= [:pg/check {:pg/constraint "score_check" :error/message "score_check"} [:<= :score :total]] (nth users 3))
@@ -128,7 +128,7 @@
     (is (= [:multi {:dispatch :kind :error/message "k0"}
             ["a" [:map [:tenant [:enum {:error/message "k0"} #uuid "1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"]]]]
             ["b" [:map [:tenant [:nil {:error/message "k0"}]]]]
-            [:malli.core/default :any]]
+            [:malli.core/default [:map [:kind :nil]]]]
            (nth (:pg.public/t registry) 2))
         "a uuid value set is an enum of uuids")
     (is (= [:pg/check {:pg/constraint "k1" :error/message "k1"}
@@ -283,11 +283,12 @@
     (is (= [:multi {:dispatch :kind :error/message "k"}
             [nil [:map [:note [:nil {:error/message "k"}]]]]
             ["a" [:map [:note [:string {:error/message "k"}]]]]
-            [:malli.core/default :any]]
+            [:malli.core/default [:map [:kind :nil]]]]
            (nth (:pg.public/t registry) 2))
-        "a branch on the column being NULL dispatches on nil")
+        "a branch on the column being NULL dispatches on nil; a value with no branch fails the CHECK")
     (is (m/validate :pg.public/t {:kind nil :note nil :at nil :tz nil} {:registry reg}))
     (is (not (m/validate :pg.public/t {:kind nil :note "x" :at nil :tz nil} {:registry reg})))
+    (is (not (m/validate :pg.public/t {:kind "b" :note nil :at nil :tz nil} {:registry reg})) "PostgreSQL rejects it too: the OR is false")
     (is (= [:maybe [:time/local-time {:pg/type "time without time zone"}]] (get-in registry [:pg.public/t 1 2 1])))
     (is (= [:maybe [:time/offset-time {:pg/type "time with time zone"}]] (get-in registry [:pg.public/t 1 5 1])))
     (is (empty? unrendered))))
@@ -311,3 +312,33 @@
 
 (deftest deterministic
   (is (= (r/registry facts) (r/registry (shuffle facts)))))
+
+(deftest branches-without-their-own-value-and-columns-of-any-type
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "status" :position 1 :data_type "text" :is_nullable false}
+                                                                                    {:name "result" :position 2 :data_type "jsonb" :is_nullable true}]
+                                                                          :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (status = 'open'::text AND result IS NULL OR status = 'done'::text AND result IS NOT NULL)"}}}}}))
+        reg (registry-with registry)]
+    (is (= [:malli.core/default [:map [:status :nil]]] (last (nth (:pg.public/t registry) 2)))
+        "a NOT NULL dispatch column can only take the values that have a branch")
+    (is (not (m/validate :pg.public/t {:status "other" :result nil} {:registry reg})))
+    (is (= [:map [:result [:some {:error/message "k"}]]] (get-in registry [:pg.public/t 2 3 1])) "IS NOT NULL on a jsonb column is :some, not :any")
+    (is (not (m/validate :pg.public/t {:status "done" :result nil} {:registry reg})))
+    (is (m/validate :pg.public/t {:status "done" :result {"a" 1}} {:registry reg}))
+    (is (empty? unrendered))))
+
+(deftest a-generated-range-orders-its-bounds
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "valid_from" :position 1 :data_type "timestamptz" :is_nullable false}
+                                                                                    {:name "valid_until" :position 2 :data_type "timestamptz" :is_nullable true}
+                                                                                    {:name "validity" :position 3 :data_type "tstzrange" :is_nullable true
+                                                                                     :generated_expr "tstzrange(valid_from, valid_until)"}]
+                                                                          :constraints {}}}}))
+        reg (registry-with registry)
+        t1 (java.time.Instant/parse "2024-01-01T00:00:00Z") t2 (java.time.Instant/parse "2024-02-01T00:00:00Z")]
+    (is (= [:pg/check {:pg/constraint "validity_generated" :error/message "validity_generated"} [:<= :valid_from :valid_until]]
+           (nth (:pg.public/t registry) 2)))
+    (is (m/validate :pg.public/t {:valid_from t1 :valid_until t2 :validity nil} {:registry reg}))
+    (is (m/validate :pg.public/t {:valid_from t1 :valid_until nil :validity nil} {:registry reg}) "an open bound is fine")
+    (is (not (m/validate :pg.public/t {:valid_from t2 :valid_until t1 :validity nil} {:registry reg})) "the database would refuse to build the range")
+    (is (= [:unknown-type] (map :fact unrendered)) "the range column itself stays :any")))

@@ -49,6 +49,26 @@ cons AS (
   FROM pg_constraint k
   JOIN pg_namespace n ON n.oid = k.connamespace
   WHERE n.nspname = :'schema' AND k.contype IN ('c', 'p', 'u', 'f') AND k.conparentid = 0
+  UNION ALL
+  -- a unique index over plain columns, without a predicate, constrains rows as a UNIQUE constraint does
+  SELECT i.indrelid AS relid,
+         json_build_object(
+           'name', ic.relname,
+           'type', 'UNIQUE',
+           'columns', (SELECT json_agg(a.attname ORDER BY ord)
+                       FROM unnest(i.indkey::int2[]) WITH ORDINALITY AS c(attnum, ord)
+                       JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = c.attnum),
+           'is_valid', i.indisvalid,
+           'nulls_not_distinct', i.indnullsnotdistinct,
+           'index', true
+         ) AS con
+  FROM pg_index i
+  JOIN pg_class ic ON ic.oid = i.indexrelid
+  JOIN pg_class c ON c.oid = i.indrelid
+  JOIN pg_namespace n ON n.oid = c.relnamespace
+  WHERE n.nspname = :'schema' AND i.indisunique AND NOT i.indisprimary
+    AND i.indpred IS NULL AND i.indexprs IS NULL
+    AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid)
 ),
 tables AS (
   SELECT c.relname,

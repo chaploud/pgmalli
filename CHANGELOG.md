@@ -11,6 +11,20 @@ All notable changes to this project are documented here. The format follows
   first, enum / json / array values in the form the driver needs, generated columns left out,
   identity values kept.
 
+- Unique indexes over plain columns (no expression, no predicate) are read as `:pg/unique`,
+  since datasets must respect them as much as UNIQUE constraints.
+- A generated range column (`tsrange(valid_from, valid_until)`) gives its two columns a CHECK,
+  named `<column>_generated`, since the database refuses a range whose bounds are reversed.
+- `pgmalli/inserts` takes `{:on-conflict :nothing}` for a database that already holds some rows.
+
+### Fixed
+
+- A branching CHECK (`col = 'a' AND ... OR col = 'b' AND ...`) let every other value of the
+  column through; now only NULL passes without a branch, as the database has it.
+- `col IS NOT NULL` on a json or jsonb column (or any column of type `:any`) did not reject
+  NULL; it is `:some` now, and the dataset generator draws such a column from the column's
+  own type rather than from `:some`.
+
 ### Changed
 
 - `pgmalli/stale` returns the differences by registry entry and, for row and insert schemas,

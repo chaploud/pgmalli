@@ -37,6 +37,7 @@
      :or-check     CHECK whose OR alternatives are each an AND of column patterns
                                                           {:alternatives [[fact ...] ...]}
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
+                   (also lower <= upper for a generated range column, named <column>_generated)
      :unparsed     expression that could not be read     {:input :error}
 
    One CHECK can yield several facts (column patterns joined by AND); every fact from a CHECK
@@ -246,7 +247,12 @@
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
         default (cond default_value (parsed base default_value)
                       (contains? domain :default) {:expr (:default domain)})
-        generated (when generated_expr (parsed base generated_expr))]
+        generated (when generated_expr (parsed base generated_expr))
+        ;; a range built from two columns needs them ordered: the generated column's own CHECK
+        range-check (let [[f lo hi] (:expr generated)]
+                      (when (and (#{:tsrange :tstzrange :daterange :int4range :int8range :numrange} f) (keyword? lo) (keyword? hi))
+                        (merge (dissoc base :column)
+                               {:fact :table-check :constraint (str cname "_generated") :expr [:<= lo hi] :columns [(name lo) (name hi)]})))]
     (cond-> [(merge base {:fact :column :type data_type :position position :nullable? (boolean (and is_nullable (not (:not-null? domain))))}
                     (when (contains? default :expr) {:default (:expr default)})
                     (cond identity {:identity ({"ALWAYS" :always "BY DEFAULT" :default} identity)}
@@ -254,6 +260,7 @@
                     (when (contains? generated :expr) {:generated (:expr generated)}))]
       (:unparsed default) (conj (:unparsed default))
       (:unparsed generated) (conj (:unparsed generated))
+      range-check (conj range-check)
       (contains? enums type-name) (conj (merge base {:fact :enum :type-name type-name :values (get enums type-name)}))
       domain (conj (merge base {:fact :domain-ref :type-name type-name :base (:base domain)}))
       (not mapped?) (conj (merge base {:fact :unknown-type :type data_type}))

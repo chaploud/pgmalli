@@ -184,7 +184,11 @@
               as-is)
       :when-present (let [[inner un] (apply-fact [schema unrendered] (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f)) schema-name)]
                       (if (= un unrendered) [inner unrendered] as-is))
-      :not-null [schema unrendered]
+      ;; a column of any type still has to be something
+      :not-null [(cond (= :any schema) :some
+                       (and (vector? schema) (= :any (first schema))) (assoc schema 0 :some)
+                       :else schema)
+                 unrendered]
       :null [:nil unrendered]
       as-is)))
 
@@ -264,7 +268,9 @@
                           bs (for [b branches, v (if (:null b) [nil] (:values b))] (assoc (frag (:facts b)) :value v))
                           d (when default (frag default))]
                       (whole {:schema (into [:multi {:dispatch (ident-key dispatch) :error/message constraint}]
-                                            (concat (map (juxt :value :schema) bs) [[:malli.core/default (if d (:schema d) :any)]]))
+                                            ;; without a branch of its own, a value passes the CHECK only by being NULL
+                                            (concat (map (juxt :value :schema) bs)
+                                                    [[:malli.core/default (if d (:schema d) [:map [(ident-key dispatch) :nil]])]]))
                               :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
                               :skipped (mapcat :skipped (cond-> bs d (conj d)))}))
       :or-check (let [alts (map frag (:alternatives f))]

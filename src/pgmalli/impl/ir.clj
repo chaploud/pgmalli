@@ -15,7 +15,8 @@
    :kind is \"TABLE\", \"VIEW\" or \"MATERIALIZED VIEW\" (views have columns and no constraints);
    :type is one of \"CHECK\", \"PRIMARY KEY\", \"UNIQUE\", \"FOREIGN KEY\"; :references is
    {:match :schema :table :columns} for foreign keys, :match one of \"SIMPLE\", \"FULL\", \"PARTIAL\";
-   :nulls_not_distinct is set for UNIQUE constraints. Maps keyed by object name (:tables, :constraints,
+   :nulls_not_distinct is set for UNIQUE constraints; a unique index over plain columns with
+   no predicate is listed as a UNIQUE constraint too, with :index true. Maps keyed by object name (:tables, :constraints,
    :types) keep string keys; everything else is keywordized. Expressions are the strings
    PostgreSQL's deparser produces."
   (:require [clojure.java.io :as io]

@@ -39,7 +39,7 @@
     {:dispatch :mood, :error/message "closed_check"}
     ["sad" [:map [:closed_at [:time/instant {:error/message "closed_check"}]]]]
     ["happy" [:map [:closed_at [:nil {:error/message "closed_check"}]]]]
-    [:malli.core/default :any]]
+    [:malli.core/default [:map [:mood :nil]]]]
    [:pg/check
     {:error/message "referrer_check", :pg/constraint "referrer_check"}
     [:<> :referrer_id :id]]

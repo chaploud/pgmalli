@@ -135,9 +135,10 @@
    parents before the tables referencing them, and within a table rows before the rows
    referencing them. Enum values are cast to their type, json written and cast, arrays given
    their element type; time values are passed as they are (next.jdbc.date-time for the
-   java.time ones)."
-  [registry dataset]
-  (rt/inserts registry dataset))
+   java.time ones). Option :on-conflict :nothing adds ON CONFLICT DO NOTHING, for a database
+   that already holds some of the rows (seeded by migrations, say)."
+  ([registry dataset] (rt/inserts registry dataset {}))
+  ([registry dataset opts] (rt/inserts registry dataset opts)))
 
 (defn dataset-generator
   "test.check generator of datasets satisfying dataset-schema. Options: :rows wanted per table

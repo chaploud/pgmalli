@@ -469,9 +469,12 @@
   [registry gen-of name row seed]
   (let [generate (requiring-resolve 'clojure.test.check.generators/generate)
         schema (get registry name)
+        columns (into {} (map (fn [[k _ s]] [k s])) (column-entries schema))
         fragment? (fn [f] (and (vector? f) (= :map (first f))))
+        ;; a fragment saying only "not NULL" generates from the column, not from :some
+        source (fn [k s] (if (= :some (if (vector? s) (first s) s)) (non-null (get columns k s)) s))
         fill (fn [row frag i]
-               (reduce (fn [row [j e]] (let [[k _ s] (entry-parts e)] (assoc row k (generate (gen-of s) 30 (+ seed i j)))))
+               (reduce (fn [row [j e]] (let [[k _ s] (entry-parts e)] (assoc row k (generate (gen-of (source k s)) 30 (+ seed i j)))))
                        row
                        (map-indexed vector (rest frag))))]
     (if (= :and (first schema))
@@ -663,7 +666,7 @@
    table with an identity column gets OVERRIDING SYSTEM VALUE, so the ids the rows carry (and
    the references to them) hold. Rows with the same columns share one INSERT, so a column a
    row lacks takes its default. A table the registry does not have is an error."
-  [registry dataset]
+  [registry dataset {:keys [on-conflict]}]
   (let [ts (filter #(seq (get dataset (:table %))) (tables registry))]
     (when-let [unknown (seq (remove (set (map :table (tables registry))) (keys dataset)))]
       (throw (ex-info (str "dataset holds tables the registry does not: " (pr-str unknown)) {:tables unknown})))
@@ -676,5 +679,6 @@
                 rows (for [row (rows-parents-first (get dataset table) self)]
                        (into {} (for [[k v] row :when (not (generated k))] [k (insert-value registry (get columns k) v)])))]
           group (partition-by (comp set keys) rows)]
-      {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))
-       :values (vec group)})))
+      (cond-> {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))
+               :values (vec group)}
+        (= :nothing on-conflict) (assoc :on-conflict [] :do-nothing [])))))
