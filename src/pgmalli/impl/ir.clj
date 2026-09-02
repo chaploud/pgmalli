@@ -9,11 +9,13 @@
       :tables {\"users\" {:name \"users\"
                         :columns [{:name :position :data_type :type_schema :is_nullable
                                    :default_value :generated_expr :identity :max_length :precision :scale}]
-                        :constraints {\"users_age_check\" {:name :type \"CHECK\" :check_clause :is_valid}}}}
+                        :constraints {\"users_age_check\" {:name :type :columns :check_clause :is_valid :references}}}}
       :types {\"mood\" {:kind \"ENUM\" :enum_values [...]}
               \"email\" {:kind \"DOMAIN\" :base_type :not_null :default :constraints [{:name :definition}]}}}
-   Maps keyed by object name (:tables, :constraints, :types) keep string keys; everything
-   else is keywordized. Expressions are the strings PostgreSQL's deparser produces."
+   :type is one of \"CHECK\", \"PRIMARY KEY\", \"UNIQUE\", \"FOREIGN KEY\"; :references is
+   {:schema :table :columns} for foreign keys. Maps keyed by object name (:tables, :constraints,
+   :types) keep string keys; everything else is keywordized. Expressions are the strings
+   PostgreSQL's deparser produces."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]))

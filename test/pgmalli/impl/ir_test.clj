@@ -30,7 +30,20 @@
       (is (= "((nick)::text || '!'::text)" (:generated_expr (col "full_name"))))
       (is (nil? (:default_value (col "full_name"))))
       (is (= "CHECK (age >= 0)" (get-in users [:constraints "users_age_check" :check_clause])))
-      (is (= ["users_age_check"] (keys (:constraints users))) "only CHECK constraints are listed"))))
+      (is (= {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"] :check_clause nil :is_valid true :references nil}
+             (get-in users [:constraints "users_pkey"])))
+      (is (= #{"users_age_check" "users_pkey"} (set (keys (:constraints users))))))))
+
+(deftest unique-and-foreign-keys
+  (when *db*
+    (exec-sql! "CREATE TABLE groups (id int PRIMARY KEY, code text UNIQUE, UNIQUE (id, code));
+                CREATE TABLE members (id int, group_id int REFERENCES groups (id), code text,
+                                      CONSTRAINT members_uniq UNIQUE (group_id, code),
+                                      CONSTRAINT members_group_code_fkey FOREIGN KEY (group_id, code) REFERENCES groups (id, code));")
+    (let [members (get-in (ir/from-db *db*) [:tables "members" :constraints])]
+      (is (= ["group_id" "code"] (get-in members ["members_uniq" :columns])))
+      (is (= {:schema "public" :table "groups" :columns ["id"]} (get-in members ["members_group_id_fkey" :references])))
+      (is (= {:schema "public" :table "groups" :columns ["id" "code"]} (get-in members ["members_group_code_fkey" :references]))))))
 
 (deftest skips-partition-children-and-qualifies-foreign-types
   (when *db*

@@ -1,6 +1,7 @@
 -- One schema as a single JSON document. Run with: psql -At -v schema=NAME -f ir.sql
--- Reads tables (regular and partition parents), columns, CHECK constraints, enum and
--- domain types. Expressions are kept as PostgreSQL's deparser prints them.
+-- Reads tables (regular and partition parents), columns, CHECK / PRIMARY KEY / UNIQUE /
+-- FOREIGN KEY constraints, enum and domain types. Expressions are kept as PostgreSQL's
+-- deparser prints them.
 -- search_path is pinned so type qualification does not depend on the connecting user.
 SET search_path TO :"schema", pg_catalog;
 WITH cols AS (
@@ -26,21 +27,33 @@ WITH cols AS (
   LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
   WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
 ),
-checks AS (
+cons AS (
   SELECT k.conrelid AS relid,
-         json_build_object('name', k.conname, 'type', 'CHECK',
-                           'check_clause', pg_get_constraintdef(k.oid, true),
-                           'is_valid', k.convalidated) AS con
+         json_build_object(
+           'name', k.conname,
+           'type', CASE k.contype WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PRIMARY KEY' WHEN 'u' THEN 'UNIQUE' WHEN 'f' THEN 'FOREIGN KEY' END,
+           'columns', (SELECT json_agg(a.attname ORDER BY ord)
+                       FROM unnest(k.conkey) WITH ORDINALITY AS c(attnum, ord)
+                       JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = c.attnum),
+           'check_clause', CASE WHEN k.contype = 'c' THEN pg_get_constraintdef(k.oid, true) END,
+           'is_valid', k.convalidated,
+           'references', CASE WHEN k.contype = 'f' THEN json_build_object(
+                           'schema', (SELECT nspname FROM pg_class r JOIN pg_namespace rn ON rn.oid = r.relnamespace WHERE r.oid = k.confrelid),
+                           'table', (SELECT relname FROM pg_class WHERE oid = k.confrelid),
+                           'columns', (SELECT json_agg(a.attname ORDER BY ord)
+                                       FROM unnest(k.confkey) WITH ORDINALITY AS c(attnum, ord)
+                                       JOIN pg_attribute a ON a.attrelid = k.confrelid AND a.attnum = c.attnum)) END
+         ) AS con
   FROM pg_constraint k
   JOIN pg_namespace n ON n.oid = k.connamespace
-  WHERE n.nspname = :'schema' AND k.contype = 'c' AND k.conparentid = 0
+  WHERE n.nspname = :'schema' AND k.contype IN ('c', 'p', 'u', 'f') AND k.conparentid = 0
 ),
 tables AS (
   SELECT c.relname,
          json_build_object(
            'name', c.relname,
            'columns', (SELECT COALESCE(json_agg(col ORDER BY attnum), '[]'::json) FROM cols WHERE cols.relid = c.oid),
-           'constraints', (SELECT COALESCE(json_object_agg(con->>'name', con), '{}'::json) FROM checks WHERE checks.relid = c.oid)
+           'constraints', (SELECT COALESCE(json_object_agg(con->>'name', con), '{}'::json) FROM cons WHERE cons.relid = c.oid)
          ) AS tbl
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
