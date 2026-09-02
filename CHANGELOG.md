@@ -3,6 +3,16 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.38] - 2026-09-03
+
+### Changed
+
+- `smallint` and `integer` columns are `:pg/smallint` and `:pg/integer`, schema types
+  pgmalli registers with the PostgreSQL range inside, narrowed by the `:min` and `:max` a
+  CHECK adds; the generated files no longer spell the range out.
+- `:database-version` is the server version alone (`"PostgreSQL 17.6"`), the same on every
+  machine that generates.
+
 ## [0.2.35] - 2026-09-03
 
 ### Added
@@ -28,9 +38,8 @@ All notable changes to this project are documented here. The format follows
   a domain's NOT NULL and DEFAULT reach its columns; `:overrides` apply to domain CHECKs.
 - Column patterns for `LIKE`, `NOT IN`, `cardinality`, `array_length`, boolean and uuid value
   sets; bounds and value sets from several constraints tighten and intersect.
-- `smallint` and `integer` are `:pg/smallint` and `:pg/integer`, schema types carrying the
-  PostgreSQL range; `numeric(p, s)` carries its magnitude bound; `bytea` with a length CHECK
-  is `[:pg/bytes {:min :max}]`, a type that generates byte arrays.
+- `smallint` and `integer` carry their range; `numeric(p, s)` its magnitude bound; `bytea`
+  with a length CHECK is `[:pg/bytes {:min :max}]`, a type that generates byte arrays.
 - `date`, `time`, `timetz`, `timestamp`, `timestamptz` and `interval` map to
   `malli.experimental.time` schemas.
 - `pgmalli/columns`, `pgmalli/transformer` (with a `:zone` option; JSON text in json and
@@ -52,8 +61,6 @@ All notable changes to this project are documented here. The format follows
 - Trimmed non-blank strings are `[:and [:string {:min 1}] [:re "\S"]]`.
 - Schema names that are not plain identifiers make string registry keys.
 - Generating needs PostgreSQL 16 or later.
-- `:database-version` is the server version alone (`"PostgreSQL 17.6"`), the same on every
-  machine that generates.
 
 ### Removed
 
