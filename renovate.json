@@ -2,6 +2,8 @@
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": ["config:recommended", ":semanticCommitsDisabled"],
   "schedule": ["before 9am on monday"],
+  "description": "ignorePaths is narrowed because the default excludes test/, where the postgres image is pinned",
+  "ignorePaths": ["**/node_modules/**"],
   "labels": ["dependencies"],
   "packageRules": [
     {
