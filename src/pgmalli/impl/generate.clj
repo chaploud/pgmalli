@@ -4,6 +4,7 @@
    Config:
      {:schemas [\"public\"]           ; default [\"public\"]
       :out-dir \"resources/pgmalli\"  ; default; files are <out-dir>/<schema>.edn
+      :checks :data                    ; default; :fn also compiles cross-column CHECKs into [:fn ...]
       :overrides {constraint-name schema-or-{:skip reason}}
       :db {:host :port :db :user :password :sslmode :psql}}  ; optional; psql's environment otherwise
 
@@ -21,7 +22,7 @@
             [pgmalli.impl.pattern :as pattern]
             [pgmalli.impl.render :as render]))
 
-(def default-config {:schemas ["public"] :out-dir "resources/pgmalli" :overrides {} :db {}})
+(def default-config {:schemas ["public"] :out-dir "resources/pgmalli" :checks :data :overrides {} :db {}})
 
 (defn config
   "Config with defaults applied. Unknown keys are an error."
@@ -36,11 +37,11 @@
 
 (defn generated
   "Generated data for one schema."
-  [{:keys [db overrides]} schema]
+  [{:keys [db overrides checks]} schema]
   (let [ir (ir/from-db (assoc db :schema schema))]
     (sort-maps
      (merge {:schema schema :database-version (:database_version ir)}
-            (render/registry (pattern/facts ir) (or overrides {}))))))
+            (render/registry (pattern/facts ir) (or overrides {}) {:checks (or checks :data)})))))
 
 (defn path-for [c schema]
   (str (io/file (:out-dir (config c)) (str schema ".edn"))))
