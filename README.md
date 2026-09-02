@@ -184,15 +184,22 @@ subquery's columns are resolved in the subquery first, then in the statements ar
 ;; => [{:kind :missing-required-column :table "public.users" :column "score"}
 ;;     {:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
 
+(defn find-user
+  {:malli/schema (h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]})}
+  [id] ...)
+;; => [:=> [:cat [:int {...}]] [:sequential [:map [:id [:int {...}]] [:nick [:maybe [:string {...}]]]]]]
+
 (h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]}
-                {:qualified? true :nil-columns :absent :time :instant})
+                {:qualified? true :nil-columns :absent})
 ;; => [:=> [:cat [:int {...}]] [:sequential [:map [:users/id [:int {...}]] [:users/nick {:optional true} [:string {...}]]]]]
 ```
 
 Options: `:schema` for unqualified table names (default `"public"`); `:qualified?`, `:kebab?`,
-`:nil-columns` and `:time` as in `as-read`. Date and timestamp columns are `inst?` (what the
-driver returns, and a schema malli's default registry reads); `:time :instant` or `:local`
-gives the `malli.experimental.time` types instead, which `:malli/schema` metadata cannot take.
+`:nil-columns` and `:time` as in `as-read`. Without options the schema is one `:malli/schema`
+metadata can take: date and timestamp columns are `inst?` (what the driver returns, and a
+schema malli's default registry reads). `:time :instant` or `:local` gives the
+`malli.experimental.time` types instead, for a registry that has them. An ambiguous column
+comes with the tables it could belong to, under `:candidates`.
 
 ### Schemas where the registry cannot follow
 

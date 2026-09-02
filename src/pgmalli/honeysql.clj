@@ -227,8 +227,11 @@
   (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
                                       (for [[_ c] (comparisons stmt)] [c sc])
                                       (for [[c] (assignments stmt)] [c (target-scope sc stmt schema)])))
-        :when (and (not (star? col)) (nil? (resolve-column registry scope col)))]
-    {:kind (if (< 1 (count (column-hits registry scope col))) :ambiguous-column :unknown-column) :column col}))
+        :when (and (not (star? col)) (nil? (resolve-column registry scope col)))
+        :let [hits (column-hits registry scope col)]]
+    (if (< 1 (count hits))
+      {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
+      {:kind :unknown-column :column col})))
 
 (defn- insert-problems [registry stmt schema]
   (when-let [[table] (some-> (insert-target stmt) (table-ref schema))]
@@ -266,7 +269,7 @@
 (defn problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
    or compared that are unknown, or ambiguous (unqualified and in more than one table in
-   scope); required INSERT columns missing; enum literals outside the enum (compared with,
+   scope, those under :candidates); required INSERT columns missing; enum literals outside the enum (compared with,
    or assigned to, the column). scope is the statement's (from scope) or, for a nested
    statement, the chain of its own and the enclosing ones. Empty when the statement agrees
    with the registry."
