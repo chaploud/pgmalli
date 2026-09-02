@@ -174,7 +174,8 @@ the columns a query selects, returns, inserts, sets or compares must exist, an I
 carry the columns its insert schema requires, an enum literal must be one of the enum's
 values. From the same data it derives the types of the query's parameters and of the rows
 it returns, as a malli function schema for `malli.instrument` or `malli.dev`. CTEs,
-subqueries and table functions are opaque: their columns exist but have no type.
+subqueries and table functions are opaque: their columns exist but have no type. A
+subquery's columns are resolved in the subquery first, then in the statements around it.
 
 ```clojure
 (require '[pgmalli.honeysql :as h])

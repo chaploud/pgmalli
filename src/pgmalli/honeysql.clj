@@ -36,12 +36,15 @@
 
 ;;; statements, CTEs and scope
 
-(def ^:private statement-keys #{:select :select-distinct :insert-into :update :delete-from})
-(def ^:private set-ops #{:union :union-all :intersect :except})
-(def ^:private cte-body-keys (into statement-keys set-ops))
+(def ^:private statement-keys
+  #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top
+    :insert-into :update :delete-from :union :union-all :intersect :except})
 (def ^:private join-keys [:join :left-join :inner-join :right-join :full-join])
 
-(defn- statement? [x] (and (map? x) (some statement-keys (keys x))))
+(defn- statement?
+  "A query map; one holding only a set operation is one too, its members statements of their own."
+  [x]
+  (and (map? x) (some statement-keys (keys x))))
 
 (defn- nodes [body] (tree-seq coll? seq body))
 
@@ -67,7 +70,7 @@
   [x]
   (cond
     (map? x) (mapcat #(let [w (get x %)] (when (vector? w) w)) [:with :with-recursive])
-    (and (vector? x) (= 2 (count x)) (map? (second x)) (some cte-body-keys (keys (second x)))) [x]))
+    (and (vector? x) (= 2 (count x)) (statement? (second x))) [x]))
 
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
@@ -169,8 +172,14 @@
 
 ;;; what a statement selects, compares and assigns
 
-(defn- selected-items [stmt]
-  (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))] (when (vector? s) s)))
+(defn- selected-items
+  "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
+   or :returning."
+  [stmt]
+  (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))
+        on (:select-distinct-on stmt)]
+    (cond (vector? s) s
+          (vector? on) (rest on))))
 
 (defn- select-parts
   "[column alias] of a select item: a column, a column under an alias, or an aliased
