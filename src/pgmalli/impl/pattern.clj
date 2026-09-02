@@ -8,6 +8,7 @@
 
    Kinds:
      :enum-type    an enum type of the schema           {:type-name :values}
+     :view         a view or materialized view          {:materialized?}; its columns follow, all nullable
      :column       a column                              {:type :position :nullable? :default :identity :generated}
                    :identity is :always, :default or :serial (a nextval default); :generated is the expression
      :enum         column of an enum type                {:type-name :values}
@@ -318,8 +319,11 @@
       domain-facts*
       (for [[tname t] (sort-by key (:tables schema))
             :let [base {:schema schema-name :table tname}
+                  view? (contains? #{"VIEW" "MATERIALIZED VIEW"} (:kind t))
                   constraints (sort-by :name (vals (:constraints t)))]
-            f (concat (mapcat #(column-facts base % enums domains) (sort-by :name (:columns t)))
+            f (concat (when view? [(assoc base :fact :view :materialized? (= "MATERIALIZED VIEW" (:kind t)))])
+                      ;; nothing marks a view's column NOT NULL in the catalog, so every one may be NULL
+                      (mapcat #(column-facts base (cond-> % view? (assoc :is_nullable true)) enums domains) (sort-by :name (:columns t)))
                       (mapcat #(key-facts base %) constraints)
                       (mapcat #(check-facts base %) (filter #(= "CHECK" (:type %)) constraints)))]
         f)))))

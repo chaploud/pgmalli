@@ -3,6 +3,14 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.40] - 2026-09-03
+
+### Added
+
+- Views and materialized views as `:pg.<schema>/<view>` row schemas: columns and types, every
+  column nullable, `:pg/view` on the map. They get no insert schema and are not part of
+  datasets.
+
 ## [0.2.38] - 2026-09-03
 
 ### Changed

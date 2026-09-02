@@ -302,6 +302,13 @@
       (is (m/validate ds sample {:registry reg}) (pr-str sample)))
     (is (some #(seq (get % "public.children")) (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 10)) "and rows do get generated")))
 
+(deftest views-are-rows-only
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/primary-key ["id"]} [:id [:pg/integer {:pg/type "integer"}]]]
+                                          :pg.public/v [:map {:pg/view "public.v"} [:id [:maybe [:pg/integer {:pg/type "integer"}]]]]}})]
+    (is (m/validate :pg.public/v {:id nil} {:registry reg}))
+    (is (nil? (get reg :pg.public.v/insert)) "no insert schema for a view")
+    (is (= #{"public.t"} (set (keys (first (tcg/sample (pgmalli/dataset-generator reg {:rows 1}) 1))))) "not part of datasets")))
+
 (deftest several-schemas
   (let [registry (pgmalli/registry "sample" "other")
         opts {:registry registry}

@@ -292,6 +292,16 @@
     (is (= [:maybe [:time/offset-time {:pg/type "time with time zone"}]] (get-in registry [:pg.public/t 1 5 1])))
     (is (empty? unrendered))))
 
+(deftest views
+  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+                                                 :tables {"v" {:kind "VIEW" :columns [{:name "id" :position 1 :data_type "integer" :is_nullable true}
+                                                                                      {:name "name" :position 2 :data_type "text" :is_nullable true}]
+                                                               :constraints {}}
+                                                          "mv" {:kind "MATERIALIZED VIEW" :columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}}}))]
+    (is (= [:map {:pg/view "public.v"} [:id [:maybe [:pg/integer {:pg/type "integer"}]]] [:name [:maybe [:string {:pg/type "text"}]]]] (:pg.public/v registry)))
+    (is (= [:map {:pg/view "public.mv"} [:id [:maybe [:pg/integer {:pg/type "integer"}]]]] (:pg.public/mv registry))
+        "every column of a view may be NULL, whatever the catalog says")))
+
 (deftest odd-identifiers
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
                                                  :tables {"Order Items" {:columns [{:name "line no" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}}}))]

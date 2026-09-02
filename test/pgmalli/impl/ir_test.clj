@@ -34,6 +34,17 @@
              (get-in users [:constraints "users_pkey"])))
       (is (= #{"users_age_check" "users_pkey"} (set (keys (:constraints users))))))))
 
+(deftest views-and-materialized-views
+  (when *db*
+    (exec-sql! "CREATE TABLE t (id int PRIMARY KEY, name text NOT NULL);
+                CREATE VIEW v AS SELECT id, name, length(name) AS len FROM t;
+                CREATE MATERIALIZED VIEW mv AS SELECT id FROM t;")
+    (let [tables (:tables (ir/from-db *db*))]
+      (is (= ["TABLE" "VIEW" "MATERIALIZED VIEW"] (map #(get-in tables [% :kind]) ["t" "v" "mv"])))
+      (is (= [["id" "integer" true] ["name" "text" true] ["len" "integer" true]]
+             (map (juxt :name :data_type :is_nullable) (get-in tables ["v" :columns]))))
+      (is (= {} (get-in tables ["v" :constraints]))))))
+
 (deftest unique-and-foreign-keys
   (when *db*
     (exec-sql! "CREATE TABLE groups (id int PRIMARY KEY, code text UNIQUE, UNIQUE (id, code));

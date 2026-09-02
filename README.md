@@ -70,6 +70,7 @@ For a schema `public`, the registry contains:
 | `:pg.public/<enum>` | `[:enum ...]` |
 | `:pg.public/<domain>` | base type with the domain's CHECKs applied (as column patterns, else `[:pg/check-value expr]`), `[:maybe ...]` unless the domain is NOT NULL. A domain's NOT NULL and DEFAULT reach the columns of that type |
 | `:pg.public/<table>` | a valid row: `[:map ...]`, wrapped in `[:and ...]` with the table's constraints when it has any |
+| `:pg.public/<view>` | a row of a view or materialized view: columns and types, every column `[:maybe ...]`, `:pg/view` on the map; no insert schema, not part of datasets |
 | `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, identity BY DEFAULT, defaulted and nullable columns optional, `{:closed true}`; the table's constraints see an omitted column as what the database stores in it (its literal default, else NULL) |
 | `:pg/check`, `:pg/check-value`, `:pg/bytes`, `:pg/smallint`, `:pg/integer` | the schema types behind `[:pg/check expr]`, `[:pg/check-value expr]`, `[:pg/bytes {:min :max}]` and the two bounded integers |
 
@@ -194,9 +195,10 @@ Kept compatible; a change bumps the minor version.
 
 ## Scope
 
-Tables (regular and partition parents), columns, CHECK, PRIMARY KEY, UNIQUE and FOREIGN KEY
-constraints, enum and domain types. Views, indexes, triggers, policies and privileges are not
-read. Expressions are read in the form PostgreSQL's deparser prints them.
+Tables (regular and partition parents), views and materialized views, columns, CHECK,
+PRIMARY KEY, UNIQUE and FOREIGN KEY constraints, enum and domain types. Indexes, triggers,
+policies and privileges are not read. Expressions are read in the form PostgreSQL's deparser
+prints them.
 
 ## Development
 

@@ -6,12 +6,13 @@
 
    Result shape:
      {:name \"public\" :database_version \"PostgreSQL 17.6\"
-      :tables {\"users\" {:name \"users\"
+      :tables {\"users\" {:name \"users\" :kind \"TABLE\"
                         :columns [{:name :position :data_type :type_schema :is_nullable
                                    :default_value :generated_expr :identity :max_length :precision :scale}]
                         :constraints {\"users_age_check\" {:name :type :columns :check_clause :is_valid :nulls_not_distinct :references}}}}
       :types {\"mood\" {:kind \"ENUM\" :enum_values [...]}
               \"email\" {:kind \"DOMAIN\" :base_type :not_null :default :constraints [{:name :definition}]}}}
+   :kind is \"TABLE\", \"VIEW\" or \"MATERIALIZED VIEW\" (views have columns and no constraints);
    :type is one of \"CHECK\", \"PRIMARY KEY\", \"UNIQUE\", \"FOREIGN KEY\"; :references is
    {:match :schema :table :columns} for foreign keys, :match one of \"SIMPLE\", \"FULL\", \"PARTIAL\";
    :nulls_not_distinct is set for UNIQUE constraints. Maps keyed by object name (:tables, :constraints,

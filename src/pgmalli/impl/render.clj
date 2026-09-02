@@ -5,6 +5,7 @@
      :pg.<schema>/<type>     enum types and domains (a domain CHECK outside the patterns is
                              [:pg/check-value expr], evaluated over the value as :VALUE)
      :pg.<schema>/<table>    a valid row as read from the database
+     :pg.<schema>/<view>     a row of a view: columns and types, every column nullable, :pg/view on the map
    A row schema is [:map ...] alone, or [:and [:map ...] checks...] when the table has constraints
    across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments,
    and [:pg/check expr] for everything else pgmalli.impl.eval can evaluate; bytea columns with a
@@ -276,7 +277,9 @@
 (defn- order [f] [(or (:table f) (:type-name f) "") (or (:constraint f) "") (or (:column f) "")])
 
 (defn- map-props [schema-name table tfacts]
-  (prune {:pg/table (str schema-name "." table)
+  (if (some (comp #{:view} :fact) tfacts)
+    {:pg/view (str schema-name "." table)}
+    (prune {:pg/table (str schema-name "." table)
          :pg/primary-key (some #(when (= :primary-key (:fact %)) (:columns %)) tfacts)
          :pg/unique (not-empty (vec (for [f (sort-by :columns (filter (comp #{:unique} :fact) tfacts))]
                                       (cond-> {:columns (:columns f)} (false? (:nulls-distinct? f)) (assoc :nulls-distinct false)))))
@@ -284,7 +287,7 @@
                                             (cond-> {:columns (:columns f)
                                                      :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
                                                      :to (get-in f [:to :columns])}
-                                              (= :full (:match f)) (assoc :match :full)))))}))
+                                              (= :full (:match f)) (assoc :match :full)))))})))
 
 (defn- table-checks
   "{:schemas :unrendered :skipped} of the constraints that span columns."

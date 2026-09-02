@@ -1,7 +1,7 @@
 -- One schema as a single JSON document. Run with: psql -At -v schema=NAME -f ir.sql
--- Reads tables (regular and partition parents), columns, CHECK / PRIMARY KEY / UNIQUE /
--- FOREIGN KEY constraints, enum and domain types. Expressions are kept as PostgreSQL's
--- deparser prints them.
+-- Reads tables (regular and partition parents), views and materialized views, columns,
+-- CHECK / PRIMARY KEY / UNIQUE / FOREIGN KEY constraints, enum and domain types. Expressions
+-- are kept as PostgreSQL's deparser prints them.
 -- search_path is pinned so type qualification does not depend on the connecting user.
 SET search_path TO :"schema", pg_catalog;
 WITH cols AS (
@@ -25,7 +25,7 @@ WITH cols AS (
   JOIN pg_type t ON t.oid = a.atttypid
   JOIN pg_namespace tn ON tn.oid = t.typnamespace
   LEFT JOIN pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
-  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm') AND NOT c.relispartition
 ),
 cons AS (
   SELECT k.conrelid AS relid,
@@ -54,12 +54,13 @@ tables AS (
   SELECT c.relname,
          json_build_object(
            'name', c.relname,
+           'kind', CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END,
            'columns', (SELECT COALESCE(json_agg(col ORDER BY attnum), '[]'::json) FROM cols WHERE cols.relid = c.oid),
            'constraints', (SELECT COALESCE(json_object_agg(con->>'name', con), '{}'::json) FROM cons WHERE cons.relid = c.oid)
          ) AS tbl
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p') AND NOT c.relispartition
+  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm') AND NOT c.relispartition
 ),
 types AS (
   SELECT t.typname,
