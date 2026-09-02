@@ -18,13 +18,8 @@
    PostgreSQL's deparser produces."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
-            [clojure.string :as str]))
-
-(def ^:private parse-json
-  ;; babashka ships cheshire and cannot load data.json; the JVM uses data.json
-  (if (System/getProperty "babashka.version")
-    (let [f (requiring-resolve 'cheshire.core/parse-string)] #(f %))
-    (let [f (requiring-resolve 'clojure.data.json/read-str)] #(f %))))
+            [clojure.string :as str]
+            [pgmalli.impl.json :as json]))
 
 (def ^:private named-maps #{:tables :constraints :types})
 
@@ -62,7 +57,7 @@
                                                        {:psql psql} e))))]
      (when-not (zero? exit)
        (throw (ex-info (str "psql failed (exit " exit "): " (str/trim err)) {:exit exit :err err :schema schema})))
-     (let [ir (keywordize (parse-json (str/trim out)) false)]
+     (let [ir (keywordize (json/parse (str/trim out)) false)]
        (when-not (:exists ir)
          (throw (ex-info (str "schema does not exist: " schema) {:schema schema})))
        (dissoc ir :exists)))))

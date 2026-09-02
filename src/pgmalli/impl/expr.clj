@@ -23,7 +23,7 @@
 
 (def ^:private ops
   ;; longest first
-  ["::" "<>" "!=" "<=" ">=" "!~*" "!~" "~*" "~" "||" "->>" "->" "#>>" "#>" "@>" "<@" "?|" "?&" "?"
+  ["::" "<>" "!=" "<=" ">=" "!~~*" "!~~" "~~*" "~~" "!~*" "!~" "~*" "~" "||" "&&" "->>" "->" "#>>" "#>" "@>" "<@" "?|" "?&" "?"
    "=" "<" ">" "+" "-" "*" "/" "%" "^"])
 
 (defn- quoted [s i quote-char what]
@@ -72,8 +72,9 @@
 (def edn-safe-ops
   "PostgreSQL operators whose keyword form is not readable EDN, and the names used instead."
   {"~" :regex "~*" :iregex "!~" :not-regex "!~*" :not-iregex
+   "~~" :like "~~*" :ilike "!~~" :not-like "!~~*" :not-ilike
    "#>" :json-path "#>>" :json-path-text "@>" :contains "<@" :contained-by
-   "?" :has-key "?|" :has-any-key "?&" :has-all-keys "%" :mod "^" :pow})
+   "?" :has-key "?|" :has-any-key "?&" :has-all-keys "&&" :overlaps "%" :mod "^" :pow})
 
 (def ^:private binary-ops
   ;; operator -> [precedence keyword], following PostgreSQL precedence
@@ -331,5 +332,5 @@
 (defn ->honeysql
   "Replaces the EDN-safe operator names with the symbols HoneySQL formats."
   [e]
-  (let [back (into {} (map (fn [[op k]] [k (keyword op)]) edn-safe-ops))]
+  (let [back (into {} (keep (fn [[op k]] (when-not (#{:like :ilike :not-like :not-ilike} k) [k (keyword op)])) edn-safe-ops))]
     (walk/postwalk (fn [f] (if (and (vector? f) (contains? back (first f))) (assoc f 0 (back (first f))) f)) e)))
