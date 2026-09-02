@@ -195,7 +195,9 @@
    JSON text in a json or jsonb column is parsed."
   ([] (transformer {}))
   ([{:keys [zone] :or {zone (java.time.ZoneId/systemDefault)}}]
-   (let [instant (fn [x] (if (instance? java.util.Date x) (.toInstant ^java.util.Date x) x))]
+   (let [instant (fn [x] (cond (instance? java.sql.Date x) (.toInstant (.atStartOfDay (.toLocalDate ^java.sql.Date x) zone))
+                               (instance? java.util.Date x) (.toInstant ^java.util.Date x)
+                               :else x))]
      (mt/transformer
       mt/string-transformer
       {:name :pgmalli
@@ -315,11 +317,11 @@
                 (if (every? nil? v)
                   ;; an all-NULL reference stays so; under MATCH FULL no later reference may fill part of it
                   (go row ds (cond-> fixed full? (into columns)) (rest refs) grow)
-                  (let [candidates (fn [ds] (cond->> (->> (get ds table) (map #(key-of % to)) (remove #(some nil? %)) distinct)
-                                              (= table own) (remove #(= % (key-of row to)))
-                                              true (filter (fn [t] (every? (fn [[k x]] (or (not (fixed k)) (= (get row k) x))) (map vector columns t))))))
+                  (let [targets (fn [ds] (cond->> (->> (get ds table) (map #(key-of % to)) (remove #(some nil? %)) distinct)
+                                           (= table own) (remove #(= % (key-of row to)))
+                                           true (filter (fn [t] (every? (fn [[k x]] (or (not (fixed k)) (= (get row k) x))) (map vector columns t))))))
                         attempt (fn [ds grow]
-                                  (some #(go (merge row (zipmap columns %)) ds (into fixed columns) (rest refs) grow) (try-order v (candidates ds))))
+                                  (some #(go (merge row (zipmap columns %)) ds (into fixed columns) (rest refs) grow) (try-order v (targets ds))))
                         ;; what a grown parent must carry: the target columns the row already fixed
                         pins (into {} (keep (fn [[c t]] (when (fixed c) [t (get row c)])) (map vector columns to)))]
                     (or (attempt ds grow)
@@ -354,23 +356,28 @@
     (->> reasons frequencies (sort-by (comp - val)) (take 5))))
 
 (defn- generate-table
-  "The rows of one table given the tables before it: candidates, references solved (growing
-   the parents when a reference finds nothing), keys made distinct, self-references settled,
-   the batch topped up from the pool until it holds rows. Throws when nothing fits."
+  "The rows of one table given the tables before it: candidates solved one by one (a row fits
+   when it validates and collides with no key accepted before it; parents grow only while the
+   batch is short), self-references settled, the batch topped up from the pool until it holds
+   rows. Throws when no candidate fits at all; a batch shorter than rows is returned as is."
   [registry row-gen {:keys [name table refs key-sets] :as t} ds rows seed grow]
   (let [opts {:registry registry}
-        valid? #(m/validate name % opts)
+        ;; ponytail: the search is exhaustive per row; a budget of leaf checks per table keeps a
+        ;; table with many references from taking forever, at the cost of rows it might have found
+        budget (atom 5000)
+        valid? (fn [r] (and (pos? (swap! budget dec)) (m/validate name r opts)))
+        grow (when grow (fn [target ds pins] (when (pos? @budget) (grow target ds pins))))
         {self true others false} (group-by #(= table (:table %)) refs)
         settled (set (mapcat :columns others))
         cands (candidates row-gen name (max 200 (* 50 rows)) seed)
-        ;; a row is fit when it validates and its keys collide with none accepted before it, so a
-        ;; colliding target makes the search move on (or grow the parent) instead of dropping the row
         fits? (fn [pool r] (and (valid? r) (= (inc (count pool)) (count (distinct-by-keys (conj pool r) key-sets)))))
         ;; a candidate that fails on its own is dropped before any reference is solved (or grown) for it
         [pool ds] (reduce (fn [[pool ds] c]
                             (cond (>= (count pool) (* 3 rows)) (reduced [pool ds])
                                   (not (valid? c)) [pool ds]
-                                  :else (if-let [[r ds] (solve-refs c others ds #{} table #(fits? pool %) grow)] [(conj pool r) ds] [pool ds])))
+                                  :else (if-let [[r ds] (solve-refs c others ds #{} table #(fits? pool %) (when (< (count pool) rows) grow))]
+                                          [(conj pool r) ds]
+                                          [pool ds])))
                           [[] ds] cands)
         ;; settling self-references keeps the columns other references fixed; a dropped row may
         ;; be what another row points at, so repeat until the batch is stable
@@ -384,9 +391,10 @@
                  rs
                  (recur (into rs (take short more)) (drop short more)))))]
     (when (and (pos? rows) (empty? rs))
-      (throw (ex-info (str name ": none of " (count cands) " generated rows satisfied its constraints. Most often: "
-                           (str/join "; " (map (fn [[why n]] (str why " (" n ")")) (failure-reasons registry t cands ds))))
-                      {:table table :reasons (failure-reasons registry t cands ds)})))
+      (let [reasons (failure-reasons registry t cands ds)]
+        (throw (ex-info (str name ": none of " (count cands) " generated rows satisfied its constraints. Most often: "
+                             (str/join "; " (map (fn [[why n]] (str why " (" n ")")) reasons)))
+                        {:table table :reasons reasons}))))
     (assoc ds table rs)))
 
 (defn dataset-generator
@@ -403,7 +411,7 @@
    (let [ts (tables registry except)
          by-table (into {} (map (juxt :table identity) ts))
          fmap (requiring-resolve 'clojure.test.check.generators/fmap)
-         seeds (requiring-resolve 'clojure.test.check.generators/large-integer)
+         choose (requiring-resolve 'clojure.test.check.generators/choose)
          opts {:registry registry}
          row-gen (memoize (fn [name] (mg/generator (columns registry name) opts)))
          ;; datasets with one more row of a parent table each, carrying the pinned columns and
@@ -427,4 +435,5 @@
              (reduce (fn [ds [i table]] (generate-table registry row-gen (by-table table) ds rows (+ seed i) (grow 4)))
                      {}
                      (map-indexed vector (topological ts))))
-           @seeds))))
+           ;; a seed independent of test.check's size, so early samples differ too
+           (choose 0 Long/MAX_VALUE)))))
