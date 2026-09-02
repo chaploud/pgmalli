@@ -1,0 +1,9 @@
+The test corpus under test/corpus/ was harvested by running SQL from the following sources
+against PostgreSQL and collecting the expressions left in the catalog.
+
+- test/corpus/pg-regress/*.sql and the expressions harvested from them:
+  PostgreSQL Database Management System, Copyright (c) 1996-2026, PostgreSQL Global Development Group.
+  PostgreSQL License (test/corpus/pg-regress/COPYRIGHT).
+  https://github.com/postgres/postgres/tree/REL_17_STABLE/src/test/regress/sql
+- Expressions harvested from pgschema's testdata/diff/**/new.sql (the files themselves are not included):
+  Copyright pgplex, Apache License 2.0. https://github.com/pgplex/pgschema/tree/v1.12.5/testdata/diff

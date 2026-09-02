@@ -1,0 +1,199 @@
+;; Expressions harvested by dev/harvest.clj from SQL run against PostgreSQL. Sources and licenses: NOTICE
+{:sources
+ [{:name "pg-regress",
+   :license "PostgreSQL License",
+   :url
+   "https://github.com/postgres/postgres/tree/REL_17_STABLE/src/test/regress/sql"}
+  {:name "pgschema-testdata",
+   :license "Apache-2.0",
+   :url
+   "https://github.com/pgplex/pgschema/tree/v1.12.5/testdata/diff"}],
+ :expressions
+ [{:kind :check, :sql "CHECK ((x + z) = 0)"}
+  {:kind :check,
+   :sql
+   "CHECK (NOT (is_capital AND tableoid::regclass::text = 'sys_col_check_tbl'::text))"}
+  {:kind :check, :sql "CHECK (a = 1)"}
+  {:kind :check, :sql "CHECK (a = 3)"}
+  {:kind :check, :sql "CHECK (a > 0)"}
+  {:kind :check, :sql "CHECK (a >= 0)"}
+  {:kind :check,
+   :sql "CHECK (a::double precision > 10.2::double precision)"}
+  {:kind :check, :sql "CHECK (amount > 0::numeric)"}
+  {:kind :check, :sql "CHECK (b < 50)"}
+  {:kind :check, :sql "CHECK (b < 50) NOT VALID"}
+  {:kind :check, :sql "CHECK (b <= 20)"}
+  {:kind :check, :sql "CHECK (b <> 'zz'::bpchar)"}
+  {:kind :check, :sql "CHECK (b = boo(b))"}
+  {:kind :check, :sql "CHECK (b > 0) NO INHERIT"}
+  {:kind :check, :sql "CHECK (b > 10)"}
+  {:kind :check, :sql "CHECK (b >= 1 AND b <= 10)"}
+  {:kind :check,
+   :sql "CHECK (b::double precision < 1000::double precision)"}
+  {:kind :check,
+   :sql
+   "CHECK (b::double precision > 100::double precision) NO INHERIT"}
+  {:kind :check,
+   :sql "CHECK (b::double precision > 1::double precision)"}
+  {:kind :check, :sql "CHECK (budget > 0::numeric)"}
+  {:kind :check, :sql "CHECK (c > 1)"}
+  {:kind :check, :sql "CHECK (c > 2)"}
+  {:kind :check, :sql "CHECK (c > 3)"}
+  {:kind :check, :sql "CHECK (c > 6)"}
+  {:kind :check, :sql "CHECK (c IS NOT NULL)"}
+  {:kind :check, :sql "CHECK (c5 > 8)"}
+  {:kind :check, :sql "CHECK (code > 0 AND code < 255)"}
+  {:kind :check, :sql "CHECK (created_at <= updated_at)"}
+  {:kind :check, :sql "CHECK (cy > x)"}
+  {:kind :check,
+   :sql
+   "CHECK (d >= '2001-01-01'::date AND d <= '2099-12-31'::date) NOT VALID"}
+  {:kind :check,
+   :sql "CHECK (d >= '2009-01-01'::date AND d <= '2009-12-31'::date)"}
+  {:kind :check,
+   :sql
+   "CHECK (d >= '2010-01-01'::date AND d <= '2010-12-31'::date) NOT VALID"}
+  {:kind :check,
+   :sql "CHECK (d >= '2011-01-01'::date AND d <= '2011-12-31'::date)"}
+  {:kind :check, :sql "CHECK (f1 > 0)"}
+  {:kind :check, :sql "CHECK (f1 > 0) NOT VALID"}
+  {:kind :check, :sql "CHECK (false) NO INHERIT"}
+  {:kind :check,
+   :sql "CHECK (gender = ANY (ARRAY['M'::text, 'F'::text]))"}
+  {:kind :check, :sql "CHECK (positive_col > 0)"}
+  {:kind :check, :sql "CHECK (shdata < 3)"}
+  {:kind :check,
+   :sql
+   "CHECK (status::text = ANY (ARRAY['pending'::character varying, 'shipped'::character varying, 'delivered'::character varying]::text[]))"}
+  {:kind :check, :sql "CHECK (test > 0) NO INHERIT"}
+  {:kind :check,
+   :sql "CHECK (x > 3 AND y <> 'check failed'::text AND x < 7)"}
+  {:kind :check,
+   :sql "CHECK (x > 3 AND y <> 'check failed'::text AND z < 8)"}
+  {:kind :check, :sql "CHECK (x > 3)"}
+  {:kind :check,
+   :sql "CHECK (x >= 3 AND y <> 'check failed'::text AND x < 8)"}
+  {:kind :default, :sql "''::text"}
+  {:kind :default, :sql "'-NULL-'::text"}
+  {:kind :default, :sql "'Unknown'::text"}
+  {:kind :default, :sql "'active'::employee_status"}
+  {:kind :default, :sql "'active'::text"}
+  {:kind :default, :sql "'member'::text"}
+  {:kind :default, :sql "'missing@missing.com'::text"}
+  {:kind :default, :sql "'pending'::action_type"}
+  {:kind :default, :sql "'vadim'::text"}
+  {:kind :default, :sql "'{}'::jsonb"}
+  {:kind :default, :sql "'{}'::text[]"}
+  {:kind :default,
+   :sql "('-1'::integer * currval('insert_seq'::regclass))"}
+  {:kind :default, :sql "((now())::date + 1)"}
+  {:kind :default, :sql "((now())::date - 1)"}
+  {:kind :default, :sql "(1 = ANY (ARRAY[1, 2]))"}
+  {:kind :default, :sql "(100 + ((200 - 199) * 2))"}
+  {:kind :default, :sql "(now() AT TIME ZONE 'utc'::text)"}
+  {:kind :default, :sql "(random())::integer"}
+  {:kind :default, :sql "0"}
+  {:kind :default, :sql "0.0"}
+  {:kind :default, :sql "1"}
+  {:kind :default, :sql "100"}
+  {:kind :default, :sql "101"}
+  {:kind :default, :sql "123.456"}
+  {:kind :default, :sql "3"}
+  {:kind :default, :sql "42"}
+  {:kind :default, :sql "55"}
+  {:kind :default, :sql "CURRENT_DATE"}
+  {:kind :default, :sql "CURRENT_TIMESTAMP"}
+  {:kind :default, :sql "false"}
+  {:kind :default, :sql "gen_random_uuid()"}
+  {:kind :default, :sql "get_default_status()"}
+  {:kind :default, :sql "my_default_id()"}
+  {:kind :default, :sql "nextval('accounts_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('audit_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('audit_log_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('default_seq'::regclass)"}
+  {:kind :default, :sql "nextval('departments_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('documents_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('employee_emp_no_seq'::regclass)"}
+  {:kind :default,
+   :sql "nextval('employee_status_log_id_seq'::regclass)"}
+  {:kind :default,
+   :sql "nextval('employees_employee_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('employees_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('insert_seq'::regclass)"}
+  {:kind :default, :sql "nextval('inventory_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('logged1_f1_seq'::regclass)"}
+  {:kind :default, :sql "nextval('logged2_f1_seq'::regclass)"}
+  {:kind :default, :sql "nextval('logged3_f1_seq'::regclass)"}
+  {:kind :default, :sql "nextval('manager_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('order_items_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('orders_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('orders_order_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('products_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('project_manager_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('projects_id_seq'::regclass)"}
+  {:kind :default, :sql "nextval('public_id_seq'::regclass)"}
+  {:kind :default,
+   :sql "nextval('rewrite_test_notempty1_rewrite_seq'::regclass)"}
+  {:kind :default,
+   :sql "nextval('rewrite_test_notempty2_rewrite_seq'::regclass)"}
+  {:kind :default,
+   :sql "nextval('rewrite_test_notempty5_rewrite_seq'::regclass)"}
+  {:kind :default,
+   :sql "nextval('rewrite_test_notempty6_rewrite_seq'::regclass)"}
+  {:kind :default, :sql "nextval('table1_c1_seq'::regclass)"}
+  {:kind :default, :sql "nextval('test_add_column_c5_seq'::regclass)"}
+  {:kind :default, :sql "nextval('unlogged1_f1_seq'::regclass)"}
+  {:kind :default, :sql "nextval('unlogged2_f1_seq'::regclass)"}
+  {:kind :default, :sql "nextval('unlogged3_f1_seq'::regclass)"}
+  {:kind :default, :sql "nextval('users_id_seq'::regclass)"}
+  {:kind :default, :sql "now()"}
+  {:kind :default, :sql "random_id()"}
+  {:kind :default, :sql "true"}
+  {:kind :domain, :sql "CHECK ((VALUE).x <= (VALUE).y)"}
+  {:kind :domain, :sql "CHECK ((VALUE)[1] < (VALUE)[2])"}
+  {:kind :domain, :sql "CHECK (VALUE < 10)"}
+  {:kind :domain, :sql "CHECK (VALUE < 11)"}
+  {:kind :domain, :sql "CHECK (VALUE <> 'foo'::text)"}
+  {:kind :domain,
+   :sql
+   "CHECK (VALUE = ANY (ARRAY['crimson'::rainbow, 'green'::rainbow, 'blue'::rainbow]))"}
+  {:kind :domain, :sql "CHECK (VALUE > 0)"}
+  {:kind :domain, :sql "CHECK (VALUE > 0) NOT VALID"}
+  {:kind :domain, :sql "CHECK (VALUE >= 1 AND VALUE <= 10)"}
+  {:kind :domain, :sql "CHECK (VALUE IS NOT NULL)"}
+  {:kind :domain,
+   :sql
+   "CHECK (VALUE ~ '^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$'::text)"}
+  {:kind :domain, :sql "CHECK (array_length(VALUE, 1) = 3)"}
+  {:kind :domain, :sql "CHECK (array_length(VALUE, 2) = 3)"}
+  {:kind :domain, :sql "CHECK (validate_custom_id(VALUE))"}
+  {:kind :domain, :sql "CHECK (validate_row(VALUE))"}
+  {:kind :generated, :sql "'hello'::text"}
+  {:kind :generated, :sql "((a + b) * 2)"}
+  {:kind :generated, :sql "((a || '+'::text) || a)"}
+  {:kind :generated, :sql "((data ->> 'iid'::text))::integer"}
+  {:kind :generated, :sql "(a * 1)"}
+  {:kind :generated, :sql "(a * 2)"}
+  {:kind :generated, :sql "(a * 3)"}
+  {:kind :generated, :sql "(a * 4)"}
+  {:kind :generated, :sql "(a / 2)"}
+  {:kind :generated, :sql "(a || ' sec'::text)"}
+  {:kind :generated, :sql "(b * 2)"}
+  {:kind :generated, :sql "(c * 4)"}
+  {:kind :generated, :sql "(d * (4)::double precision)"}
+  {:kind :generated, :sql "(data ->> 'title'::text)"}
+  {:kind :generated, :sql "(f1 * 2)"}
+  {:kind :generated, :sql "(f1 + 1)"}
+  {:kind :generated, :sql "(f2 * 10)"}
+  {:kind :generated, :sql "(f2 * 2)"}
+  {:kind :generated,
+   :sql "(tableoid = ('gtest_tableoid'::regclass)::oid)"}
+  {:kind :generated, :sql "(x * 2)"}
+  {:kind :generated, :sql "55"}
+  {:kind :generated, :sql "NULLIF(a, 0)"}
+  {:kind :generated, :sql "ROW((a * 2), (a * 3))"}
+  {:kind :generated, :sql "a"}
+  {:kind :generated, :sql "calc_priority()"}
+  {:kind :generated, :sql "gf1(b)"}
+  {:kind :generated, :sql "lower((data ->> 'title'::text))"}
+  {:kind :generated, :sql "tableoid"}]}
