@@ -302,31 +302,33 @@
   "[row ds] with the row's references pointing at rows of ds and the row valid?, or nil.
    References sharing columns are solved together: a later reference may only choose targets
    that agree with the columns an earlier reference fixed (or that were fixed on entry), and
-   the search backtracks over targets until valid? holds. When no target fits, more-parents
-   offers datasets with one more row in the target table, tried in turn; failing that, the
-   reference's free columns become NULL. A reference to own, the row's own table, never picks
-   the row itself."
-  [row refs ds fixed own valid? more-parents]
-  (letfn [(go [row ds fixed refs more-parents]
+   the search backtracks over targets until valid? holds. When no target fits, grow offers
+   datasets with one more row in the target table that carries the columns already fixed,
+   tried in turn; failing that, the reference's free columns become NULL. A reference to own,
+   the row's own table, never picks the row itself."
+  [row refs ds fixed own valid? grow]
+  (letfn [(go [row ds fixed refs grow]
             (if (empty? refs)
               (when (valid? row) [row ds])
               (let [{:keys [columns to table full?]} (first refs)
                     v (key-of row columns)]
                 (if (every? nil? v)
                   ;; an all-NULL reference stays so; under MATCH FULL no later reference may fill part of it
-                  (go row ds (cond-> fixed full? (into columns)) (rest refs) more-parents)
+                  (go row ds (cond-> fixed full? (into columns)) (rest refs) grow)
                   (let [candidates (fn [ds] (cond->> (->> (get ds table) (map #(key-of % to)) (remove #(some nil? %)) distinct)
                                               (= table own) (remove #(= % (key-of row to)))
                                               true (filter (fn [t] (every? (fn [[k x]] (or (not (fixed k)) (= (get row k) x))) (map vector columns t))))))
-                        attempt (fn [ds more-parents]
-                                  (some #(go (merge row (zipmap columns %)) ds (into fixed columns) (rest refs) more-parents) (try-order v (candidates ds))))]
-                    (or (attempt ds more-parents)
-                        ;; a row grows at most one parent, so the search stays bounded
-                        (when (and more-parents (not= table own)) (some #(attempt % nil) (more-parents table ds)))
+                        attempt (fn [ds grow]
+                                  (some #(go (merge row (zipmap columns %)) ds (into fixed columns) (rest refs) grow) (try-order v (candidates ds))))
+                        ;; what a grown parent must carry: the target columns the row already fixed
+                        pins (into {} (keep (fn [[c t]] (when (fixed c) [t (get row c)])) (map vector columns to)))]
+                    (or (attempt ds grow)
+                        ;; a row grows at most one parent per reference, so the search stays bounded
+                        (when (and grow (not= table own)) (some #(attempt % nil) (grow table ds pins)))
                         (let [free (remove fixed columns)]
                           (when (if full? (= (count free) (count columns)) (seq free))
-                            (go (merge row (zipmap free (repeat nil))) ds (into fixed columns) (rest refs) more-parents)))))))))]
-    (go row ds fixed (sort-by (comp - count :columns) refs) more-parents)))
+                            (go (merge row (zipmap free (repeat nil))) ds (into fixed columns) (rest refs) grow)))))))))]
+    (go row ds fixed (sort-by (comp - count :columns) refs) grow)))
 
 (defn- candidates
   "n rows from a table's row generator (row-gen, memoized per table), generated from seed at a
@@ -355,7 +357,7 @@
   "The rows of one table given the tables before it: candidates, references solved (growing
    the parents when a reference finds nothing), keys made distinct, self-references settled,
    the batch topped up from the pool until it holds rows. Throws when nothing fits."
-  [registry row-gen {:keys [name table refs key-sets] :as t} ds rows seed more-parents]
+  [registry row-gen {:keys [name table refs key-sets] :as t} ds rows seed grow]
   (let [opts {:registry registry}
         valid? #(m/validate name % opts)
         {self true others false} (group-by #(= table (:table %)) refs)
@@ -368,7 +370,7 @@
         [pool ds] (reduce (fn [[pool ds] c]
                             (cond (>= (count pool) (* 3 rows)) (reduced [pool ds])
                                   (not (valid? c)) [pool ds]
-                                  :else (if-let [[r ds] (solve-refs c others ds #{} table #(fits? pool %) more-parents)] [(conj pool r) ds] [pool ds])))
+                                  :else (if-let [[r ds] (solve-refs c others ds #{} table #(fits? pool %) grow)] [(conj pool r) ds] [pool ds])))
                           [[] ds] cands)
         ;; settling self-references keeps the columns other references fixed; a dropped row may
         ;; be what another row points at, so repeat until the batch is stable
@@ -391,7 +393,8 @@
   "test.check generator of datasets that satisfy dataset-schema: tables are generated in
    foreign-key order and referencing columns are pointed at rows generated before them (a
    self-reference at the same table); a reference that finds no fitting row grows its target
-   table by one. :rows is the number of rows wanted per table, out of many more candidates; a
+   table by one row that fits, whose own references may grow their targets in turn. :rows is
+   the number of rows wanted per table, out of many more candidates; a
    table none of them fits is an error naming the constraints that failed most, since a fixture
    with an empty table is never what was asked for. :except names tables (\"schema.table\") to
    leave out; a kept table may not reference one of them."
@@ -403,27 +406,25 @@
          seeds (requiring-resolve 'clojure.test.check.generators/large-integer)
          opts {:registry registry}
          row-gen (memoize (fn [name] (mg/generator (columns registry name) opts)))
-         ;; datasets with one more row of a parent table each, solved against the dataset so far;
-         ;; the same target at the same size offers the same rows, so they are computed once
-         grown (atom {})
-         more-parents (fn [target ds]
-                        (let [{:keys [name refs key-sets] :as t} (by-table target)
-                              {self true others false} (group-by #(= target (:table %)) refs)
-                              valid? #(m/validate name % opts)
-                              rs (get ds target)
-                              settle #(first (solve-refs % self ds (set (mapcat :columns others)) target valid? nil))
-                              rows (or (get @grown [target (count rs)])
-                                       (let [new (->> (candidates row-gen name 20 (hash [target (count rs)]))
-                                                      (keep #(some-> (solve-refs % others ds #{} target valid? nil) first))
-                                                      (keep #(if self (settle %) %))
-                                                      (filter #(= (inc (count rs)) (count (distinct-by-keys (conj rs %) key-sets))))
-                                                      vec)]
-                                         (swap! grown assoc [target (count rs)] new)
-                                         new))]
-                          (when t (map #(assoc ds target (conj rs %)) rows))))]
+         ;; datasets with one more row of a parent table each, carrying the pinned columns and
+         ;; solved against the dataset so far, growing their own parents up to depth levels deep
+         grow (fn grow [depth]
+                (when (pos? depth)
+                  (fn [target ds pins]
+                    (when-let [{:keys [name refs key-sets]} (by-table target)]
+                      (let [{self true others false} (group-by #(= target (:table %)) refs)
+                            valid? #(m/validate name % opts)
+                            rs (get ds target)
+                            settle (fn [[r ds]] (some-> (if self (first (solve-refs r self ds (set (mapcat :columns others)) target valid? nil)) r) (vector ds)))
+                            fits? (fn [[r ds]] (when (= (inc (count rs)) (count (distinct-by-keys (conj rs r) key-sets))) [r ds]))]
+                        (->> (candidates row-gen name 20 (hash [target (count rs) pins]))
+                             (map #(merge % pins))
+                             (keep #(solve-refs % others ds (set (keys pins)) target valid? (grow (dec depth))))
+                             (keep settle)
+                             (keep fits?)
+                             (map (fn [[r ds]] (assoc ds target (conj (get ds target) r))))))))))]
      (fmap (fn [seed]
-             (reset! grown {})
-             (reduce (fn [ds [i table]] (generate-table registry row-gen (by-table table) ds rows (+ seed i) more-parents))
+             (reduce (fn [ds [i table]] (generate-table registry row-gen (by-table table) ds rows (+ seed i) (grow 4)))
                      {}
                      (map-indexed vector (topological ts))))
            @seeds))))

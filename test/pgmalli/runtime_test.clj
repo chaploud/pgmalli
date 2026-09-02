@@ -176,6 +176,28 @@
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 3 (count (get sample "public.audience_blocks")))))))
 
+(deftest keys-made-only-of-references
+  ;; certification_tags: PK (group_id, certification_id, tag_id), two composite references sharing
+  ;; group_id, and certifications themselves referencing users of the same group
+  (let [t (fn [table pk uniques fks cols] (into [:map (cond-> {:pg/table (str "public." table) :pg/primary-key pk} (seq uniques) (assoc :pg/unique (mapv (fn [u] {:columns u}) uniques)) (seq fks) (assoc :pg/foreign-keys fks))] cols))
+        int [:int {:pg/type "integer"}]
+        reg (pgmalli/registry {:registry {:pg.public/groups (t "groups" ["id"] [] [] [[:id int]])
+                                          :pg.public/users (t "users" ["id"] [["group_id" "tmb_user_id"]] [{:columns ["group_id"] :table "public.groups" :to ["id"]}]
+                                                              [[:id int] [:group_id int] [:tmb_user_id int]])
+                                          :pg.public/certifications (t "certifications" ["id"] [["id" "group_id"]]
+                                                                       [{:columns ["group_id"] :table "public.groups" :to ["id"]}
+                                                                        {:columns ["group_id" "updated_by"] :table "public.users" :to ["group_id" "tmb_user_id"]}]
+                                                                       [[:id int] [:group_id int] [:updated_by int]])
+                                          :pg.public/tags (t "tags" ["id"] [["id" "group_id"]] [{:columns ["group_id"] :table "public.groups" :to ["id"]}] [[:id int] [:group_id int]])
+                                          :pg.public/certification_tags (t "certification_tags" ["group_id" "certification_id" "tag_id"] []
+                                                                           [{:columns ["certification_id" "group_id"] :table "public.certifications" :to ["id" "group_id"]}
+                                                                            {:columns ["tag_id" "group_id"] :table "public.tags" :to ["id" "group_id"]}]
+                                                                           [[:group_id int] [:certification_id int] [:tag_id int]])}})
+        ds (pgmalli/dataset-schema reg)]
+    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 3}) 12)]
+      (is (m/validate ds sample {:registry reg}) (pr-str sample))
+      (is (= 3 (count (get sample "public.certification_tags")))))))
+
 (deftest generation-limits-are-loud
   (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never"} [:a [:int {:pg/type "integer"}]]] [:pg/check [:< 2 1]]]
                                           :pg.public/big [:map {:pg/table "public.big" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer" :min 1000000 :max 2147483647}]]]}})]
