@@ -248,11 +248,11 @@
             (case (:v t)
               "IN" (do (expect! st #(= :lparen (:t %)) "'('")
                        (recur [(if neg :not-in :in) left (parse-list st :rparen)]))
-              "BETWEEN" (let [_ (when (kw? (peek-tok st) "SYMMETRIC") (next-tok! st))
+              "BETWEEN" (let [symmetric (when (kw? (peek-tok st) "SYMMETRIC") (next-tok! st) true)
                               lo (parse-expr st (inc prec-in))
                               _ (expect! st #(kw? % "AND") "AND")
                               hi (parse-expr st (inc prec-in))
-                              e [:between left lo hi]]
+                              e [(if symmetric :between-symmetric :between) left lo hi]]
                           (recur (if neg [:not e] e)))
               ("LIKE" "ILIKE") (let [e [(if (= "LIKE" (:v t)) :like :ilike) left (parse-expr st (inc prec-in))]]
                                  (recur (if neg [:not e] e)))

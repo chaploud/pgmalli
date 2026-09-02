@@ -309,6 +309,7 @@
         :in (in3 (a) (map #(ev % row) (second args)))
         :not-in (not3 (in3 (a) (map #(ev % row) (second args))))
         :between (let [[v lo hi] (all)] (and3 [(cmp :>= v lo) (cmp :<= v hi)]))
+        :between-symmetric (let [[v lo hi] (all)] (or3 [(and3 [(cmp :>= v lo) (cmp :<= v hi)]) (and3 [(cmp :>= v hi) (cmp :<= v lo)])]))
         :+ (fn3 plus (a) (b))
         :- (if (second args) (fn3 minus (a) (b)) (fn3 - (a)))
         :* (fn3 * (a) (b))
@@ -378,7 +379,7 @@
 
 (def ^:private supported-ops
   #{:cast :array :raw :now :transaction_timestamp :statement_timestamp :clock_timestamp
-    :and :or :not := :<> :< :> :<= :>= :is :is-not :is-distinct-from :is-not-distinct-from :in :not-in :between
+    :and :or :not := :<> :< :> :<= :>= :is :is-not :is-distinct-from :is-not-distinct-from :in :not-in :between :between-symmetric
     :+ :- :* :/ :mod :pow :abs :round :floor :ceil :ceiling :trunc :nullif :greatest :least :coalesce
     :length :char_length :character_length :octet_length :trim :btrim :ltrim :rtrim :lower :upper :reverse
     :substr :substring :left :right :replace :starts_with :strpos :concat :||

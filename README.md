@@ -64,17 +64,18 @@ For a schema `public`, the registry contains:
 | name | schema |
 |---|---|
 | `:pg.public/<enum>` | `[:enum ...]` |
-| `:pg.public/<domain>` | base type with the domain's CHECK applied, `[:maybe ...]` unless the domain is NOT NULL |
+| `:pg.public/<domain>` | base type with the domain's CHECKs applied (as column patterns, else `[:pg/check-value expr]`), `[:maybe ...]` unless the domain is NOT NULL. A domain's NOT NULL and DEFAULT reach the columns of that type |
 | `:pg.public/<table>` | a valid row: `[:map ...]`, wrapped in `[:and ...]` with the table's constraints when it has any |
 | `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, columns with a default or NULL optional, `{:closed true}`; the table's constraints see an omitted column as what the database stores in it (its literal default, else NULL) |
-| `:pg/check` | the schema type behind `[:pg/check expr]` |
+| `:pg/check`, `:pg/check-value` | the schema types behind `[:pg/check expr]` and `[:pg/check-value expr]` |
 
 Column schemas carry provenance in their properties: `:pg/type`, `:pg/default` (a literal or
 the default expression as data), `:pg/identity` (`:always`, `:default` or `:serial`),
 `:pg/generated`, `:pg/constraint` (names of the CHECKs that shaped it). Literal defaults also
 set malli's `:default`. The map carries `:pg/table` (`"public.users"`), `:pg/primary-key`,
-`:pg/unique` and `:pg/foreign-keys` as `{:columns [...] :table "public.groups" :to [...]}`,
-composite keys included.
+`:pg/unique` (`{:columns [...]}`, with `:nulls-distinct false` for `NULLS NOT DISTINCT`) and
+`:pg/foreign-keys` (`{:columns [...] :table "public.groups" :to [...]}`, with `:match :full`
+for `MATCH FULL`), composite keys included.
 
 Identifiers that are not plain names (`Order Items`) become string keys. Spelling is left as
 the database has it.
@@ -85,24 +86,30 @@ the database has it.
 |---|---|
 | NOT NULL | no `[:maybe ...]` |
 | column of an enum or domain type | `[:ref :pg.<schema>/<type>]` |
-| `CHECK (col IN (...))`, `CHECK (col = 'x')` | `[:enum ...]` |
+| `smallint`, `integer` | `[:int {:min ... :max ...}]` with the type's range; `bigint` is `:int` |
+| `numeric(p, s)` | `[:and decimal? [:> -10^(p-s)] [:< 10^(p-s)]]` (the scale rounds, it does not reject) |
+| `CHECK (col IN (...))`, `CHECK (col = 'x')` | `[:enum ...]`; several on one column intersect; uuid values as `#uuid` |
+| `CHECK (col NOT IN (...))`, `CHECK (col <> 'x')` | `[:and <type> [:not [:enum ...]]]`, or removed from an `[:enum ...]` |
 | `CHECK (col >= a AND col <= b)`, `BETWEEN`, one-sided bounds | `[:int {:min a :max b}]`; `:double` likewise, an exclusive bound as `[:and :double [:> a]]`; `numeric` as `[:and decimal? [:>= a] [:<= b]]` |
 | `CHECK (length(trim(col)) > 0)` | `[:and [:string {:min 1}] [:re "\S"]]`; `col <> ''` is `[:string {:min 1}]` |
-| `varchar(n)`, `CHECK (length(col) <= n)` | `[:string {:max n}]` |
+| `varchar(n)`, `CHECK (length(col) <= n)` | `[:string {:max n}]`; bounds from several sources only tighten |
+| `CHECK (cardinality(col) BETWEEN a AND b)`, `CHECK (array_length(col, 1) <= n)` | `[:vector {:min a :max b} <T>]` |
 | `CHECK (jsonb_typeof(col) = 'object')` | `:map` (`'array'` becomes `[:sequential :any]`) |
 | `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`; POSIX classes such as `[[:digit:]]` in their Java form) |
+| `CHECK (col LIKE 'a%')` | `[:and :string [:re "^\Qa\E.*$"]]` (`ILIKE` adds `(?i)`) |
 | `CHECK (col IS NULL OR <any of the above>)` | `[:maybe ...]` |
 | `CHECK (col IS NOT NULL)` | no `[:maybe ...]` |
 | column patterns joined with `AND` | each part |
 | `CHECK (status = 'a' AND ... OR status = 'b' AND ...)` | `[:multi {:dispatch :status} ["a" [:map ...]] ["b" [:map ...]]]` |
 | `CHECK (x IS NULL OR y = 'v' AND ...)` and other ORs of column patterns | `[:or [:map ...] [:map ...]]` |
-| any other CHECK (`score <= total`, arithmetic, `CASE`, jsonb operators) | `[:pg/check expr]`: the expression as data, validated by a schema type pgmalli registers |
+| any other CHECK (`score <= total`, arithmetic, `CASE`, jsonb operators), or one of the above on a column whose type has no such rendering (`col = '2020-01-01'::date`) | `[:pg/check expr]`: the expression as data, validated by a schema type pgmalli registers |
+| domain `CHECK` outside the patterns | `[:pg/check-value expr]` on the domain, `VALUE` as `:VALUE` |
 | `NOT VALID` CHECK | kept in `:unrendered` |
 | `date`, `time`, `timetz`, `timestamp`, `timestamptz`, `interval` | `:time/local-date`, `:time/local-time`, `:time/offset-time`, `:time/local-date-time`, `:time/instant`, `:time/duration` |
-| `json`, `jsonb` | `:any` |
+| `json`, `jsonb` | `:any` (`:map` or `[:sequential :any]` when a CHECK pins the type) |
 | `bytea` | `bytes?` |
 | `T[]` | `[:vector <T>]` |
-| other types | `[:any {:pg/type ...}]`, listed in `:unrendered` |
+| other types (ranges, `inet`, `money`, `xml`, extensions) | `[:any {:pg/type ...}]`, listed in `:unrendered` |
 
 `(pgmalli/unrendered "public")` lists the facts that have no rendering, each with the
 constraint's expression as data. Give them one through `:overrides`, keyed by constraint name:
@@ -110,11 +117,15 @@ a malli schema (`[:ref :app/name]` defined in your own registry, for instance) o
 `{:skip "reason"}`.
 
 `:pg/check` keeps the expression as data (`[:<= :score :total]`, HoneySQL-style) and
-evaluates it as PostgreSQL would: NULL passes, integer division truncates, casts convert, an
-expression the database would fail on (division by zero, a cast that does not parse) fails
-the row. A column missing from the map is NULL to it (its literal default in an insert
-schema). A CHECK using an operator, cast or regex syntax outside its vocabulary stays in
-`:unrendered`.
+evaluates it as PostgreSQL would: NULL passes, integer division truncates, casts convert
+(dates, timestamps, intervals of fixed length, uuids, jsonb, arrays included), `now()` is the
+validation time, and an expression the database would fail on (division by zero, a cast that
+does not parse) fails the row. The vocabulary covers comparison, logic, `IN`, `BETWEEN`,
+`IS DISTINCT FROM`, arithmetic, the common string, numeric, array and jsonb functions and
+operators, `LIKE`, regexes and `CASE`; a CHECK outside it (user-defined functions, composite
+fields, `AT TIME ZONE`) stays in `:unrendered`. A column missing from the map is NULL to it
+(its literal default in an insert schema). Rows hold the registry's types: `java.time`
+values, `UUID`, jsonb as maps and vectors.
 
 ## Working with the registry
 
@@ -127,8 +138,13 @@ schema). A CHECK using an operator, cast or regex syntax outside its vocabulary 
                                             ; zone for Instants landing in timestamp (without time zone) columns; default the JVM's
 ```
 
-Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints within
-a table, foreign keys across tables, including tables of other schemas in the registry.
+Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints
+(`NULLS NOT DISTINCT` respected) within a table, foreign keys (`MATCH FULL` respected) across
+tables, including tables of other schemas in the registry. Each constraint is a check of its
+own, named in the error. The generator points references at generated rows, solving
+references that share columns together, and handles self-references; tables in a reference
+cycle are not supported. The registry adds generation hints (`:gen/min`, `:gen/max`) so key
+columns are small positive integers, strings short and times recent.
 
 ```clojure
 (def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}

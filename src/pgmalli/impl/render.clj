@@ -2,15 +2,17 @@
   "Facts -> malli schemas.
 
    registry returns {:registry {name schema} :unrendered [fact] :skipped [fact]} with
-     :pg.<schema>/<type>     enum types and domains
+     :pg.<schema>/<type>     enum types and domains (a domain CHECK outside the patterns is
+                             [:pg/check-value expr], evaluated over the value as :VALUE)
      :pg.<schema>/<table>    a valid row as read from the database
    A row schema is [:map ...] alone, or [:and [:map ...] checks...] when the table has constraints
    across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments,
    and [:pg/check expr] for everything else pgmalli.impl.eval can evaluate. Insert schemas are
    derived from row schemas when a registry is loaded (pgmalli.impl.runtime).
 
-   Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique and
-   :pg/foreign-keys ({:columns :table :to} each, tables schema-qualified); on columns :pg/type
+   Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique
+   ({:columns} each, :nulls-distinct false for NULLS NOT DISTINCT) and :pg/foreign-keys
+   ({:columns :table :to} each, tables schema-qualified, :match :full for MATCH FULL); on columns :pg/type
    :pg/default :pg/identity :pg/generated :pg/constraint, and malli's :default for literal defaults.
 
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
@@ -19,16 +21,22 @@
             [clojure.walk :as walk]
             [pgmalli.impl.eval :as check]))
 
-(defn ident-key [s]
+(defn ident-key
+  "Column names as row keys: keywords for plain identifiers, strings otherwise."
+  [s]
   (if (re-matches #"[A-Za-z_][A-Za-z0-9_]*" s) (keyword s) s))
 
+(defn- plain? [s] (re-matches #"[A-Za-z_][A-Za-z0-9_]*" s))
+
 (defn- schema-key [schema-name s]
-  (if (re-matches #"[A-Za-z_][A-Za-z0-9_]*" s)
+  (if (and (plain? schema-name) (plain? s))
     (keyword (str "pg." schema-name) s)
     (str "pg." schema-name "/" s)))
 
 (def ^:private base-types
-  (merge (zipmap ["smallint" "integer" "bigint" "int2" "int4" "int8"] (repeat :int))
+  (merge (zipmap ["smallint" "int2"] (repeat [:int {:min -32768 :max 32767}]))
+         (zipmap ["integer" "int4"] (repeat [:int {:min -2147483648 :max 2147483647}]))
+         (zipmap ["bigint" "int8"] (repeat :int))
          (zipmap ["numeric" "decimal"] (repeat 'decimal?))
          (zipmap ["real" "double precision" "float4" "float8"] (repeat :double))
          (zipmap ["text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name"] (repeat :string))
@@ -76,11 +84,10 @@
 
 (defn- default-value
   "A literal default as a value of the column's schema (malli's :default), or nil when the
-   literal is not one (a date as a string, a domain's base type unknown here)."
-  [schema lit domain?]
+   literal is not one (a date as a string)."
+  [schema lit]
   (let [base (if (vector? schema) (first schema) schema)]
     (cond
-      domain? nil
       (and (#{:int} base) (integer? lit)) lit
       (and (= :double base) (number? lit)) (double lit)
       (and (= 'decimal? base) (number? lit)) (bigdec lit)
@@ -90,7 +97,9 @@
 (defn- apply-fact
   "[schema unrendered] after one fact on a column schema."
   [[schema unrendered] {:keys [fact] :as f} schema-name]
-  (let [base (if (vector? schema) (first schema) schema)
+  (let [base (let [b (if (vector? schema) (first schema) schema)]
+               ;; bounds already appended keep the type as the first child
+               (if (and (= :and b) (not (map? (second schema)))) (let [x (second schema)] (if (vector? x) (first x) x)) b))
         string-base? (= :string base)
         number-base? (#{:int :double} base)
         decimal-base? (= 'decimal? base)
@@ -103,6 +112,11 @@
     (case fact
       :enum [[:ref (schema-key schema-name (:type-name f))] unrendered]
       :domain-ref [[:ref (schema-key schema-name (:type-name f))] unrendered]
+      ;; numeric(p, s) holds |v| < 10^(p-s); the scale rounds, it does not reject
+      :numeric (if (and decimal-base? (:precision f))
+                 (let [limit (.pow 10M (int (- (:precision f) (or (:scale f) 0))))]
+                   [[:and schema [:> (- limit)] [:< limit]] unrendered])
+                 [schema unrendered])
       :in-set (cond (nil? members) as-is
                     ;; a second IN on the same column intersects
                     (= :enum base) (let [vs (filter (set members) (enum-values schema))] (if (seq vs) [(into [:enum] vs) unrendered] as-is))
@@ -120,7 +134,7 @@
                     (and max max-exclusive? (not int?)) (as-> s [:and s [:< max]]))
                   unrendered]
                  decimal-base?
-                 [(cond-> [:and schema]
+                 [(cond-> (if (and (vector? schema) (= :and (first schema))) schema [:and schema])
                     min (conj [(if min-exclusive? :> :>=) min])
                     max (conj [(if max-exclusive? :< :<=) max]))
                   unrendered]
@@ -150,7 +164,7 @@
               as-is)
       :when-present (let [[inner un] (apply-fact [schema unrendered] (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f)) schema-name)]
                       (if (= un unrendered) [inner unrendered] as-is))
-      (:numeric :not-null) [schema unrendered]
+      :not-null [schema unrendered]
       :null [:nil unrendered]
       as-is)))
 
@@ -182,7 +196,8 @@
         lit (some-> default literal)
         schema (with-props schema {:pg/type type
                                    :pg/default (if (some? lit) lit default)
-                                   :default (when (some? lit) (default-value schema lit (some (comp #{:domain-ref} :fact) facts)))
+                                   :default (when (some? lit)
+                                              (default-value (if-let [d (some #(when (= :domain-ref (:fact %)) %) facts)] (base-type (:base d)) schema) lit))
                                    :pg/identity identity
                                    :pg/generated (when generated true)
                                    :pg/constraint (when (seq applied) (vec (sort applied)))})
@@ -235,17 +250,19 @@
       :table-check {:schema (when (and (not (false? (:valid? f))) (check/supported? (:expr f))) (pg-check f))}
       {})))
 
-(defn- order [f] [(or (:table f) "") (or (:constraint f) "") (or (:column f) "")])
+(defn- order [f] [(or (:table f) (:type-name f) "") (or (:constraint f) "") (or (:column f) "")])
 
 (defn- map-props [schema-name table tfacts]
   (into {} (remove (comp nil? val))
         {:pg/table (str schema-name "." table)
          :pg/primary-key (some #(when (= :primary-key (:fact %)) (:columns %)) tfacts)
-         :pg/unique (not-empty (vec (sort (map :columns (filter (comp #{:unique} :fact) tfacts)))))
+         :pg/unique (not-empty (vec (for [f (sort-by :columns (filter (comp #{:unique} :fact) tfacts))]
+                                      (cond-> {:columns (:columns f)} (false? (:nulls-distinct? f)) (assoc :nulls-distinct false)))))
          :pg/foreign-keys (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:references} :fact) tfacts))]
-                                            {:columns (:columns f)
-                                             :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
-                                             :to (get-in f [:to :columns])})))}))
+                                            (cond-> {:columns (:columns f)
+                                                     :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
+                                                     :to (get-in f [:to :columns])}
+                                              (= :full (:match f)) (assoc :match :full)))))}))
 
 (defn- table-checks
   "{:schemas :unrendered :skipped} of the constraints that span columns."
@@ -291,9 +308,24 @@
      :unrendered (concat (mapcat (comp :unrendered val) rendered) (:unrendered checks))
      :skipped (concat (mapcat (comp :skipped val) rendered) (:skipped checks))}))
 
-(defn- render-domain [schema-name {:keys [type-name base not-null? facts]}]
-  (let [s (:schema (fold-facts schema-name (base-type base) facts {}))]
-    [(schema-key schema-name type-name) (if not-null? s [:maybe s])]))
+(defn- render-domain
+  "{:entry :unrendered :skipped} of a domain: its base type shaped by the CHECKs that matched
+   patterns, then [:pg/check-value expr] for the others the evaluator covers."
+  [schema-name {:keys [type-name base not-null? facts]} checks overrides]
+  (let [{:keys [schema unrendered skipped]} (fold-facts schema-name (base-type base) facts overrides)
+        results (for [c checks :let [ov (override-for overrides c)]]
+                  (cond (and (map? ov) (:skip ov)) {:skipped [c]}
+                        ov {:schema ov}
+                        (and (= :domain-check (:fact c)) (check/supported? (:expr c)))
+                        {:schema [:pg/check-value {:pg/constraint (:constraint c) :error/message (:constraint c)} (:expr c)]}
+                        :else {:unrendered [c]}))
+        extras (keep :schema results)
+        s (cond (empty? extras) schema
+                (and (vector? schema) (= :and (first schema)) (not (map? (second schema)))) (into schema extras)
+                :else (into [:and schema] extras))]
+    {:entry [(schema-key schema-name type-name) (if not-null? s [:maybe s])]
+     :unrendered (concat unrendered (mapcat :unrendered results))
+     :skipped (concat skipped (mapcat :skipped results))}))
 
 (defn registry
   "facts -> {:registry :unrendered :skipped}."
@@ -301,10 +333,12 @@
   ([facts overrides]
    (let [schema-name (:schema (first facts))
          tables (for [[table tfacts] (sort-by key (group-by :table (filter :table facts)))]
-                  (render-table schema-name table tfacts overrides))]
+                  (render-table schema-name table tfacts overrides))
+         domains (for [f facts :when (= :domain (:fact f))]
+                   (render-domain schema-name f (filter #(and (= (:type-name f) (:type-name %)) (#{:domain-check :unparsed} (:fact %))) facts) overrides))
+         parts (concat domains tables)]
      {:registry (into (sorted-map-by #(compare (str %1) (str %2)))
                       (concat (for [f facts :when (= :enum-type (:fact f))] [(schema-key schema-name (:type-name f)) (into [:enum] (:values f))])
-                              (for [f facts :when (= :domain (:fact f))] (render-domain schema-name f))
-                              (map :entry tables)))
-      :unrendered (vec (sort-by order (mapcat :unrendered tables)))
-      :skipped (vec (sort-by order (mapcat :skipped tables)))})))
+                              (map :entry parts)))
+      :unrendered (vec (sort-by order (mapcat :unrendered parts)))
+      :skipped (vec (sort-by order (mapcat :skipped parts)))})))

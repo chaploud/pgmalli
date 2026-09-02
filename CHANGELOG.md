@@ -23,6 +23,23 @@ All notable changes to this project are documented here. The format follows
 - Trimmed non-blank strings are `[:and [:string {:min 1}] [:re "\S"]]`.
 - POSIX character classes in regexes (`[[:digit:]]`) are translated to their Java form;
   patterns using PostgreSQL-only escapes stay unrendered.
+- `smallint` and `integer` carry their range; `numeric(p, s)` its magnitude bound.
+- Bounds and value sets from several constraints tighten and intersect instead of the last one
+  winning.
+- Column patterns for `LIKE`, `NOT IN`, `cardinality`, `array_length`, boolean and uuid value
+  sets. A CHECK whose column pattern has no rendering on its column's type is evaluated whole.
+- Domains are always registry entries; a domain CHECK outside the patterns is
+  `[:pg/check-value expr]`; a domain's NOT NULL and DEFAULT reach its columns; `:overrides`
+  apply to domain CHECKs.
+- `:pg/unique` entries are `{:columns ...}` maps (`:nulls-distinct false` for `NULLS NOT
+  DISTINCT`); `:pg/foreign-keys` entries carry `:match :full` for `MATCH FULL`; datasets
+  respect both, check every constraint separately and name it in the error.
+- The dataset generator solves references that share columns together (tenant-style
+  composite keys) and adds generation hints for realistic values.
+- Types outside the mapping table are reported as `:unknown-type` instead of silently
+  becoming `:any`.
+- Schema names that are not plain identifiers make string registry keys.
+- `BETWEEN SYMMETRIC` is evaluated as such.
 
 ### Added
 

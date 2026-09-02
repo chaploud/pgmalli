@@ -11,8 +11,8 @@
      :column       a column                              {:type :position :nullable? :default :identity :generated}
                    :identity is :always, :default or :serial (a nextval default); :generated is the expression
      :enum         column of an enum type                {:type-name :values}
-     :domain-ref   column of a domain type               {:type-name}
-     :unknown-type type outside the mapping table       {:type}
+     :domain-ref   column of a domain type               {:type-name :base}
+     :unknown-type type outside the mapping table (rendered as :any) {:type}
      :max-length   varchar(n)                            {:max}
      :numeric      numeric(p,s)                          {:precision :scale}
      :in-set       col IN (...) / col = v                {:values}
@@ -27,9 +27,10 @@
      :null         col IS NULL
      :when-present col IS NULL OR <column pattern>       {:fact-when-present}
      :primary-key  table primary key                      {:columns}
-     :unique       UNIQUE constraint                      {:columns}
-     :references   FOREIGN KEY                            {:columns :to {:schema :table :columns}}
-     :domain       domain type                            {:type-name :base :not-null? :facts (column patterns over VALUE)}
+     :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)}
+     :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
+     :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE)}
+     :domain-check CHECK of a domain that matched no pattern {:type-name :constraint :expr}
      :branch-check CHECK of the form col = v AND ... OR col = w AND ...
                                                           {:dispatch :branches [{:values :facts}] :default}
      :or-check     CHECK whose OR alternatives are each an AND of column patterns
@@ -213,8 +214,7 @@
   #{"smallint" "integer" "bigint" "int2" "int4" "int8" "numeric" "decimal" "real" "double precision" "float4" "float8"
     "boolean" "text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name" "uuid"
     "timestamp" "timestamptz" "timestamp with time zone" "timestamp without time zone" "date" "time" "timetz" "interval"
-    "bytea" "json" "jsonb" "tsrange" "tstzrange" "daterange" "int4range" "int8range" "numrange" "inet" "cidr" "macaddr"
-    "xml" "money" "oid" "tsvector"})
+    "bytea" "json" "jsonb"})
 
 (defn- parsed
   "{:expr data} for an expression PostgreSQL printed, or {:unparsed fact} when it cannot be read."
@@ -227,9 +227,12 @@
         elem-type (str/replace type-name #"\[\]$" "")
         builtin? (or (nil? type_schema) (= "pg_catalog" type_schema))
         base (assoc base :column cname)
-        default (when default_value (parsed base default_value))
+        domain (get domains type-name)
+        ;; a domain's NOT NULL and DEFAULT reach the columns of that type
+        default (cond default_value (parsed base default_value)
+                      (contains? domain :default) {:expr (:default domain)})
         generated (when generated_expr (parsed base generated_expr))]
-    (cond-> [(merge base {:fact :column :type data_type :position position :nullable? (boolean is_nullable)}
+    (cond-> [(merge base {:fact :column :type data_type :position position :nullable? (boolean (and is_nullable (not (:not-null? domain))))}
                     (when (contains? default :expr) {:default (:expr default)})
                     (cond identity {:identity ({"ALWAYS" :always "BY DEFAULT" :default} identity)}
                           (and (vector? (:expr default)) (= :nextval (first (:expr default)))) {:identity :serial})
@@ -237,29 +240,37 @@
       (:unparsed default) (conj (:unparsed default))
       (:unparsed generated) (conj (:unparsed generated))
       (contains? enums type-name) (conj (merge base {:fact :enum :type-name type-name :values (get enums type-name)}))
-      (contains? domains type-name) (conj (merge base {:fact :domain-ref :type-name type-name}))
+      domain (conj (merge base {:fact :domain-ref :type-name type-name :base (:base domain)}))
       (and (not (contains? enums type-name)) (not (contains? domains type-name)) (not (and builtin? (known-types elem-type))))
       (conj (merge base {:fact :unknown-type :type data_type}))
       (and max_length (re-find #"^(varchar|character varying|char|character|bpchar)$" data_type))
       (conj (merge base {:fact :max-length :max max_length}))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct]}]
   (case type
     "PRIMARY KEY" [(merge base {:fact :primary-key :constraint cname :columns columns})]
-    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns})]
+    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct)})]
     "FOREIGN KEY" [(merge base {:fact :references :constraint cname :columns columns
+                                :match (if (= "FULL" (:match references)) :full :simple)
                                 :to (select-keys references [:schema :table :columns])})]
     []))
 
-(defn- domain-facts [schema-name [tname {:keys [base_type not_null constraints]}]]
-  (let [parsed (map (fn [{:keys [definition]}]
-                      (try (match-columns (normalize (x/check-clause definition)))
-                           (catch Exception _ nil)))
-                    constraints)]
-    (when (every? some? parsed)
-      [{:fact :domain :schema schema-name :type-name tname :base base_type :not-null? (boolean not_null)
-        :facts (vec (map #(dissoc % :column) (apply concat parsed)))}])))
+(defn- domain-facts
+  "The :domain fact, then a :domain-check (or :unparsed) for every CHECK that matched no pattern."
+  [schema-name [tname {:keys [base_type not_null default constraints]}]]
+  (let [base {:schema schema-name :type-name tname}
+        checks (for [{cname :name :keys [definition]} constraints
+                     :let [{:keys [expr error]} (try {:expr (x/check-clause definition)}
+                                                     (catch Exception e {:error (or (ex-message e) (str (class e)))}))
+                           ms (some-> expr normalize match-columns)]]
+                 (cond ms {:facts (map #(-> % (dissoc :column) (assoc :constraint cname)) ms)}
+                       expr {:check (merge base {:fact :domain-check :constraint cname :expr (x/canonical expr)})}
+                       :else {:check (merge base {:fact :unparsed :constraint cname :input definition :error error})}))
+        dflt (when default (parsed base default))]
+    (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (mapcat :facts checks))})
+             (contains? dflt :expr) (assoc :default (:expr dflt)))]
+          (concat (keep :check checks) (some-> (:unparsed dflt) vector)))))
 
 (defn- check-facts [base {cname :name :keys [check_clause is_valid]}]
   (let [base (assoc base :constraint cname)
@@ -287,11 +298,12 @@
   [schema]
   (let [schema-name (:name schema)
         enums (into (sorted-map) (keep (fn [[n t]] (when (= "ENUM" (:kind t)) [n (vec (:enum_values t))])) (:types schema)))
-        domains (set (keep (fn [[n t]] (when (= "DOMAIN" (:kind t)) n)) (:types schema)))]
+        domain-facts* (mapcat #(domain-facts schema-name %) (sort-by key (filter (comp #{"DOMAIN"} :kind val) (:types schema))))
+        domains (into {} (for [f domain-facts* :when (= :domain (:fact f))] [(:type-name f) (select-keys f [:base :not-null? :default])]))]
     (vec
      (concat
       (for [[n vs] enums] {:fact :enum-type :schema schema-name :type-name n :values vs})
-      (mapcat #(domain-facts schema-name %) (sort-by key (filter (comp #{"DOMAIN"} :kind val) (:types schema))))
+      domain-facts*
       (for [[tname t] (sort-by key (:tables schema))
             :let [base {:schema schema-name :table tname}
                   constraints (sort-by :name (vals (:constraints t)))]

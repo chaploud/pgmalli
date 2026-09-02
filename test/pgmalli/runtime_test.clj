@@ -2,6 +2,7 @@
   "The application side, on the checked-in generated files test/resources/pgmalli/{sample,other}.edn."
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.test.check.generators :as tcg]
+            [malli.generator :as mg]
             [malli.core :as m]
             [malli.error :as me]
             [pgmalli.core :as pgmalli]))
@@ -44,10 +45,10 @@
     (is (insert {:group_id 1 :score 1}) "happy with no closed_at")
     (is (not (insert {:group_id 1 :mood "sad" :score 1})) "an omitted column without a default is NULL, which sad forbids"))
   (testing "from generated data instead of the classpath"
-    (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:int {:pg/type "integer" :pg/default 1}]]]
+    (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default 1}]]]
                                             :pg.public/t [:and [:map {:pg/table "public.t"}
-                                                                [:a [:int {:pg/type "integer"}]]
-                                                                [:b [:maybe [:int {:pg/type "integer" :pg/default 5 :default 5}]]]]
+                                                                [:a [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]
+                                                                [:b [:maybe [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default 5 :default 5}]]]]
                                                           [:or [:map [:a {:error/message "c"} [:int {:min 1}]]] [:map [:b :nil]]]]}})]
       (is (m/validate "pg.public.Order Items/insert" {} {:registry reg}) "string keys follow the same naming")
       (is (m/validate :pg.public.t/insert {:a 0 :b nil} {:registry reg}) "entries with properties inside fragments survive")
@@ -57,9 +58,9 @@
     (let [reg (pgmalli/registry {:registry {:pg.public/t [:and [:map {:pg/table "public.t"}
                                                                 [:status [:string {:pg/type "text" :pg/default "approved" :default "approved"}]]
                                                                 [:approver [:maybe [:string {:pg/type "text"}]]]
-                                                                [:a [:int {:pg/type "integer"}]]
-                                                                [:b [:int {:pg/type "integer" :pg/default 5 :default 5}]]
-                                                                [:c [:int {:pg/type "integer" :pg/default [:nextval "s"]}]]]
+                                                                [:a [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]
+                                                                [:b [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default 5 :default 5}]]
+                                                                [:c [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default [:nextval "s"]}]]]
                                                           [:multi {:dispatch :status}
                                                            ["approved" [:map [:approver :string]]]
                                                            [:malli.core/default [:map [:approver :nil]]]]
@@ -114,6 +115,52 @@
     (testing "generated datasets satisfy all of it"
       (doseq [sample (tcg/sample (pgmalli/dataset-generator registry {:rows 6}) 8)]
         (is (m/validate ds sample opts) (pr-str sample))))))
+
+(deftest generated-values-look-like-data
+  (let [rows (tcg/sample (mg/generator :pg.sample/users opts) 40)
+        year-ago (.minus (java.time.Instant/now) (java.time.Duration/ofDays 366))]
+    (is (every? #(pos? (:id %)) rows) "keys are positive")
+    (is (every? #(<= (:id %) 100000) rows) "and small")
+    (is (every? #(or (nil? (:nick %)) (<= (count (:nick %)) 24)) rows) "strings are short")
+    (is (every? #(or (nil? (:closed_at %)) (.isAfter ^java.time.Instant (:closed_at %) year-ago)) rows) "times are recent")
+    (is (every? #(pos? (:group_id %)) rows) "referencing columns too")))
+
+(deftest key-and-reference-rules
+  (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items" :pg/primary-key ["Order ID"] :pg/unique [{:columns ["code"] :nulls-distinct false}]
+                                                                        :pg/foreign-keys [{:columns ["Parent ID" "group"] :table "public.Parents" :to ["id" "group"] :match :full}]}
+                                                                   ["Order ID" [:int {:pg/type "integer"}]]
+                                                                   [:code [:maybe [:string {:pg/type "text"}]]]
+                                                                   [:group [:maybe [:int {:pg/type "integer"}]]]
+                                                                   ["Parent ID" [:maybe [:int {:pg/type "integer"}]]]]
+                                          :pg.public/Parents [:map {:pg/table "public.Parents" :pg/primary-key ["id"]}
+                                                              [:id [:int {:pg/type "integer"}]] [:group [:int {:pg/type "integer"}]]]}})
+        ds (pgmalli/dataset-schema reg)
+        parents {"public.Parents" [{:id 1 :group 1}]}
+        valid? (fn [rows] (m/validate ds (assoc parents "public.Order Items" rows) {:registry reg}))
+        errors (fn [rows] (me/humanize (m/explain ds (assoc parents "public.Order Items" rows) {:registry reg})))
+        row (fn [id & [m]] (merge {"Order ID" id :code (str "c" id) :group nil "Parent ID" nil} m))]
+    (is (valid? [(row 1) (row 2 {"Parent ID" 1 :group 1})]))
+    (is (not (valid? [(row 1) (row 1 {:code "x"})])) "columns that are not plain identifiers are checked like any other")
+    (is (= ["public.Order Items primary key [\"Order ID\"]"] (errors [(row 1) (row 1 {:code "x"})])) "each constraint reports under its own name")
+    (is (not (valid? [(row 1 {:code nil}) (row 2 {:code nil})])) "NULLS NOT DISTINCT: two NULL codes collide")
+    (is (not (valid? [(row 1 {"Parent ID" 9 :group 1})])))
+    (is (not (valid? [(row 1 {"Parent ID" 1})])) "MATCH FULL: a partly NULL key is rejected")
+    (is (= ["public.Order Items [\"Parent ID\" \"group\"] references public.Parents [\"id\" \"group\"]"] (errors [(row 1 {"Parent ID" 1})])))))
+
+(deftest references-sharing-columns
+  ;; the tenant pattern: every table carries group_id, and composite references carry it along
+  (let [reg (pgmalli/registry {:registry {:pg.public/groups [:map {:pg/table "public.groups" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer"}]]]
+                                          :pg.public/parents [:map {:pg/table "public.parents" :pg/primary-key ["id"] :pg/unique [{:columns ["id" "group_id"]}]
+                                                                    :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
+                                                              [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]]
+                                          :pg.public/children [:map {:pg/table "public.children" :pg/primary-key ["id"]
+                                                                     :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}
+                                                                                       {:columns ["parent_id" "group_id"] :table "public.parents" :to ["id" "group_id"]}]}
+                                                               [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]] [:parent_id [:int {:pg/type "integer"}]]]}})
+        ds (pgmalli/dataset-schema reg)]
+    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 30)]
+      (is (m/validate ds sample {:registry reg}) (pr-str sample)))
+    (is (some #(seq (get % "public.children")) (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 10)) "and rows do get generated")))
 
 (deftest several-schemas
   (let [registry (pgmalli/registry "sample" "other")

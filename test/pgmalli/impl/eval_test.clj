@@ -85,6 +85,8 @@
   (is (passes? "CHECK (substr(s, 2, 2) = 'bc'::text)" {:s "abcd"}))
   (is (passes? "CHECK (\"left\"(s, 1) = 'a'::text)" {:s "abcd"}))
   (is (passes? "CHECK (replace(s, 'b'::text, 'x'::text) = 'axcd'::text)" {:s "abcd"}))
+  (is (passes? "CHECK (n BETWEEN SYMMETRIC 10 AND 1)" {:n 5}))
+  (is (not (passes? "CHECK (n BETWEEN 10 AND 1)" {:n 5})))
   (is (passes? "CHECK (a IS DISTINCT FROM b)" {:a nil :b 1}))
   (is (not (passes? "CHECK (a IS DISTINCT FROM b)" {:a nil :b nil})))
   (is (passes? "CHECK ((d / 3) > 0.7)" {:d 2.25M}) "numeric division does not throw on non-terminating decimals"))

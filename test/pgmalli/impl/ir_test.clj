@@ -30,20 +30,23 @@
       (is (= "((nick)::text || '!'::text)" (:generated_expr (col "full_name"))))
       (is (nil? (:default_value (col "full_name"))))
       (is (= "CHECK (age >= 0)" (get-in users [:constraints "users_age_check" :check_clause])))
-      (is (= {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"] :check_clause nil :is_valid true :references nil}
+      (is (= {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"] :check_clause nil :is_valid true :nulls_not_distinct nil :references nil}
              (get-in users [:constraints "users_pkey"])))
       (is (= #{"users_age_check" "users_pkey"} (set (keys (:constraints users))))))))
 
 (deftest unique-and-foreign-keys
   (when *db*
     (exec-sql! "CREATE TABLE groups (id int PRIMARY KEY, code text UNIQUE, UNIQUE (id, code));
-                CREATE TABLE members (id int, group_id int REFERENCES groups (id), code text,
+                CREATE TABLE members (id int, group_id int REFERENCES groups (id), code text, tag text,
                                       CONSTRAINT members_uniq UNIQUE (group_id, code),
-                                      CONSTRAINT members_group_code_fkey FOREIGN KEY (group_id, code) REFERENCES groups (id, code));")
+                                      CONSTRAINT members_tag_key UNIQUE NULLS NOT DISTINCT (tag),
+                                      CONSTRAINT members_group_code_fkey FOREIGN KEY (group_id, code) REFERENCES groups (id, code) MATCH FULL);")
     (let [members (get-in (ir/from-db *db*) [:tables "members" :constraints])]
       (is (= ["group_id" "code"] (get-in members ["members_uniq" :columns])))
-      (is (= {:schema "public" :table "groups" :columns ["id"]} (get-in members ["members_group_id_fkey" :references])))
-      (is (= {:schema "public" :table "groups" :columns ["id" "code"]} (get-in members ["members_group_code_fkey" :references]))))))
+      (is (false? (get-in members ["members_uniq" :nulls_not_distinct])))
+      (is (true? (get-in members ["members_tag_key" :nulls_not_distinct])))
+      (is (= {:match "SIMPLE" :schema "public" :table "groups" :columns ["id"]} (get-in members ["members_group_id_fkey" :references])))
+      (is (= {:match "FULL" :schema "public" :table "groups" :columns ["id" "code"]} (get-in members ["members_group_code_fkey" :references]))))))
 
 (deftest skips-partition-children-and-qualifies-foreign-types
   (when *db*
