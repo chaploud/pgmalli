@@ -3,5 +3,6 @@
  :aliases
  {:test {:extra-paths ["test"]
          :extra-deps {io.github.cognitect-labs/test-runner {:git/tag "v0.5.1" :git/sha "dfb30dd"}
-                      babashka/process {:mvn/version "0.6.25"}}
+                      babashka/process {:mvn/version "0.6.25"}
+                      com.github.seancorfield/honeysql {:mvn/version "2.7.1437"}}
          :main-opts ["-m" "cognitect.test-runner"]}}}
