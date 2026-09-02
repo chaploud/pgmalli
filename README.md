@@ -3,146 +3,154 @@
 [![ci](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml/badge.svg)](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml)
 [![Clojars](https://img.shields.io/clojars/v/io.github.chaploud/pgmalli.svg)](https://clojars.org/io.github.chaploud/pgmalli)
 
-Generate [malli](https://github.com/metosin/malli) schemas from an applied PostgreSQL schema.
+The applied PostgreSQL schema, as [malli](https://github.com/metosin/malli) schemas.
 
-- The database is the source of truth. The output is one EDN file per schema that your
-  application loads as a malli registry.
-- The only external requirement is `psql`. On the JVM the library depends on
-  `org.clojure/data.json`; on babashka it has no dependencies.
-- No migrations. Use whatever you use (ragtime, pgschema, plain SQL); pgmalli only asks
-  you to regenerate after migrating.
-
-## Install
+pgmalli reads a database once (through `psql`), writes one EDN file per schema, and your
+application loads those files as a malli registry. Tables, columns, types, defaults, keys and
+constraints are all in there, so code and tests can be written and checked against the real
+contract without a database at hand.
 
 ```clojure
-io.github.chaploud/pgmalli {:mvn/version "..."}
-```
+(require '[pgmalli.core :as pgmalli] '[malli.core :as m] '[malli.error :as me] '[malli.generator :as mg])
 
-PostgreSQL 14 or later and `psql`. Connection settings are psql's: `PGHOST`, `PGPORT`,
-`PGDATABASE`, `PGUSER`, `PGPASSWORD` and `~/.pgpass`.
+(def registry (pgmalli/registry "public"))
 
-## Usage
-
-```clojure
-(require '[pgmalli.core :as pgmalli] '[malli.core :as m])
-
-;; Four keys, all optional
-(def config {:schemas ["public"]                 ; default ["public"]
-             :out-dir "resources/pgmalli"        ; default; one file per schema, <out-dir>/<schema>.edn
-             :overrides {"chk_closed_at_matches_status" [:ref :app/closed-consistent]
-                         "chk_legacy_flag" {:skip "removed together with the column in 2027"}}
-             :db {:host "localhost" :port 5432 :db "app_dev" :user "app" :password "secret"}})
-
-;; Right after migrating: write the files and commit them
-(pgmalli/generate! config)   ; => {"public" "resources/pgmalli/public.edn"}
-
-;; In the application
-(def registry (merge (m/default-schemas) (pgmalli/registry (pgmalli/path config "public"))))
+;; a row as read from the database
 (m/validate :pg.public/users row {:registry registry})
-;; the entry is a reference; deref it to walk the columns
-(m/children (m/deref (m/schema :pg.public/users {:registry registry})))
 
-;; In CI
-(is (nil? (pgmalli/stale config)))                       ; files match the database
-(pgmalli/unrendered (pgmalli/path config "public"))      ; constraints without a malli rendering
+;; what an INSERT may carry: no identity or generated columns, defaults optional, closed map
+(-> (m/explain :pg.public.users/insert {:email "x" :status "closed"} {:registry registry})
+    me/humanize)
+;; => {:closed_at ["chk_closed_at_matches_status"]}
+
+;; test data that satisfies the constraints
+(mg/generate :pg.public.users/insert {:registry registry})
 ```
 
-The same from the command line, with the config map in `pgmalli.edn`:
-
-```
-clojure -M -m pgmalli.main generate
-clojure -M -m pgmalli.main check      # exit 1 when files are stale; lists unrendered facts
-bb -m pgmalli.main generate           # identical on babashka
-```
-
-## Generated file
+## Setup
 
 ```clojure
-{:schema "public"
- :database-version "PostgreSQL 17.11 ..."
- :registry {:pg.public/approval_status [:enum "pending" "approved" "rejected" "canceled"]
-            :pg.public/users
-            [:map {:pg/table "users"}
-             [:age [:maybe [:int {:min 0 :pg/type "integer" :pg/constraint ["users_age_check"]}]]]
-             [:id [:int {:pg/type "bigint"}]]
-             [:status [:ref {:pg/type "approval_status" :pg/default [:cast "pending" :approval_status]} :pg.public/approval_status]]
-             [:title [:string {:min 1 :max 255 :pg/trim true :pg/type "character varying" :pg/constraint ["chk_title"]}]]]}
- :unrendered [{:fact :table-check :schema "public" :table "users" :constraint "chk_closed_at_matches_status"
-               :expr [:or [:and [:= :status "pending"] [:is :closed_at nil]] ...] :columns ["status" "closed_at"]}]
- :skipped []}
+io.github.chaploud/pgmalli {:mvn/version "..."}   ; deps.edn or bb.edn
 ```
 
-- A table schema describes one row as read from the database. Nullable columns are `[:maybe ...]`.
-- Column properties record provenance: `:pg/type`, `:pg/default` (expression data) and
-  `:pg/constraint` (names of the constraints that shaped the schema), so a malli error can be
-  traced back to the database constraint.
-- Every enum type of the schema is a registry entry `:pg.<schema>/<type>`; columns refer to it
-  with `[:ref ...]`.
-- Identifiers that are not plain names (`Order Items`) become string keys.
-- Ordering is by name (enum values keep their declared order) and maps are sorted, so the same
-  database and config always produce the same bytes.
+Generating needs PostgreSQL 14 or later and `psql`; connection settings are psql's own
+(`PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). Applications only need the
+generated files.
 
-## What becomes what
+```
+clojure -M -m pgmalli.main generate   # writes resources/pgmalli/<schema>.edn
+clojure -M -m pgmalli.main check      # exit 1 when the files no longer match the database
+```
+
+Both read `pgmalli.edn` in the working directory when present:
+
+```clojure
+{:schemas ["public"]                 ; default
+ :out-dir "resources/pgmalli"        ; default; keep it on the classpath
+ :checks :data                       ; default; :fn also compiles cross-column CHECKs (see below)
+ :overrides {"chk_legacy_flag" {:skip "removed together with the column in 2027"}
+             "chk_scores" [:ref :app/scores-consistent]}
+ :db {:host "localhost" :port 5432 :db "app_dev" :user "app"}}   ; optional
+```
+
+The same from Clojure: `(pgmalli/generate! config)` and `(pgmalli/stale config)`.
+
+Convention: regenerate right after migrating and commit the files; in CI assert
+`(nil? (pgmalli/stale config))`.
+
+## What you get
+
+For a schema `public`, the registry contains:
+
+| name | schema |
+|---|---|
+| `:pg.public/<enum>` | `[:enum ...]` |
+| `:pg.public/<domain>` | base type with the domain's CHECK applied |
+| `:pg.public/<table>` | a valid row: `[:map ...]`, wrapped in `[:and ...]` with the table's constraints when it has any |
+| `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, columns with a default or NULL optional, `{:closed true}` |
+
+Column schemas carry provenance in their properties: `:pg/type`, `:pg/default` (a literal or
+the default expression as data), `:pg/identity` (`:always`, `:default` or `:serial`),
+`:pg/generated`, `:pg/references ["table" "column"]`, `:pg/constraint` (names of the CHECKs
+that shaped it). Literal defaults also set malli's `:default`. The map carries `:pg/table`,
+`:pg/primary-key` and `:pg/unique`.
+
+Identifiers that are not plain names (`Order Items`) become string keys. Spelling is left as
+the database has it.
+
+### PostgreSQL to malli
 
 | PostgreSQL | malli |
 |---|---|
-| column of an enum type | `[:ref :pg.<schema>/<type>]` |
-| `CHECK (col IN (...))`, `CHECK (col = 'x')`, strings or numbers | `[:enum ...]` |
-| `CHECK (col >= a AND col <= b)`, `BETWEEN`, one-sided bounds | `[:int {:min a :max b}]`; `:double` likewise; `numeric` as `[:and decimal? [:>= a] [:<= b]]` |
-| `CHECK (length(trim(col)) > 0)`, `col <> ''` | `[:string {:min 1}]` (`:pg/trim true` when trimmed) |
+| NOT NULL | no `[:maybe ...]` |
+| column of an enum or domain type | `[:ref :pg.<schema>/<type>]` |
+| `CHECK (col IN (...))`, `CHECK (col = 'x')` | `[:enum ...]` |
+| `CHECK (col >= a AND col <= b)`, `BETWEEN`, one-sided bounds | `[:int {:min a :max b}]`, `:double` likewise, `numeric` as `[:and decimal? [:>= a] [:<= b]]` |
+| `CHECK (length(trim(col)) > 0)` | `[:and [:string {:min 1}] [:re "\S"]]`; `col <> ''` is `[:string {:min 1}]` |
 | `varchar(n)`, `CHECK (length(col) <= n)` | `[:string {:max n}]` |
 | `CHECK (jsonb_typeof(col) = 'object')` | `[:map]` (`'array'` becomes `[:sequential :any]`) |
 | `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`) |
-| `CHECK (col IS NULL OR <any of the above>)` | `[:maybe <rendering>]` |
-| `CHECK (col IS NOT NULL)` | no `[:maybe]` |
-| column patterns joined with `AND` | each part rendered |
-| CHECK across several columns | `[:fn {:pg/constraint "name"} (fn [row] ...)]` on the table, compiled from the expression with PostgreSQL's NULL semantics |
-| `NOT VALID` CHECK | not rendered; kept in `:unrendered` with the expression data |
-| domain, composite and foreign-schema types | `[:any {:pg/type ...}]`, listed in `:unrendered` |
-| `timestamp`, `timestamptz` | `inst?` |
-| `date`, `time`, `interval`, range types | `[:any {:pg/type ...}]` |
+| `CHECK (col IS NULL OR <any of the above>)` | `[:maybe ...]` |
+| `CHECK (col IS NOT NULL)` | no `[:maybe ...]` |
+| column patterns joined with `AND` | each part |
+| `CHECK (status = 'a' AND ... OR status = 'b' AND ...)` | `[:multi {:dispatch :status} ["a" [:map ...]] ["b" [:map ...]]]` |
+| `CHECK (x IS NULL OR y = 'v' AND ...)` and other ORs of column patterns | `[:or [:map ...] [:map ...]]` |
+| CHECK comparing columns (`score <= total`) | not data; kept in `:unrendered`, or `[:fn ...]` with `:checks :fn` |
+| `NOT VALID` CHECK | kept in `:unrendered` |
+| `date`, `time`, `timestamp`, `timestamptz`, `interval` | `:time/local-date`, `:time/local-time`, `:time/local-date-time`, `:time/instant`, `:time/duration` |
 | `json`, `jsonb` | `:any` |
 | `bytea` | `bytes?` |
 | `T[]` | `[:vector <T>]` |
+| other types | `[:any {:pg/type ...}]`, listed in `:unrendered` |
 
-Compiled CHECKs are plain data: malli evaluates the `(fn [row] ...)` form itself. On babashka
-that works out of the box; on the JVM add `org.babashka/sci` to your dependencies (malli's
-optional dependency for `:fn` forms). Comparisons, logic, `IS NULL`, `IN`, `BETWEEN`,
-arithmetic, `length`/`trim`/`lower`/`upper`, `coalesce`, `CASE`, regexes and the jsonb
-operators `->`, `->>`, `jsonb_typeof` are supported; a CHECK using anything else stays in
-`:unrendered`. The test suite checks the compiled forms against PostgreSQL itself on
-generated rows.
+`(pgmalli/unrendered "public")` lists the facts that have no rendering, each with the
+constraint's expression as data. Give them one through `:overrides`, keyed by constraint name:
+a malli schema (`[:ref :app/name]` defined in your own registry, for instance) or
+`{:skip "reason"}`.
 
-Anything in `:unrendered` can be given a rendering through `:overrides`, keyed by constraint
-name: a malli schema (typically `[:ref :app/name]`, defined in your own registry) or
-`{:skip "reason"}`. A constraint name shared by several tables applies to all of them.
+With `:checks :fn`, CHECKs comparing columns are compiled into `(fn [row] ...)` forms that
+malli evaluates with PostgreSQL's NULL semantics. The forms are data, but evaluating them needs
+`org.babashka/sci` on the JVM (babashka has it built in), and the files can no longer be
+shared with ClojureScript. The default `:data` keeps everything plain data.
 
-Spelling is left as the database has it. There is no keyword or kebab-case conversion; do that
-on your side if you need it.
+## Working with the registry
+
+```clojure
+(pgmalli/registry "public" "auth")          ; several schemas, plus malli's defaults, malli.util and malli.experimental.time
+(pgmalli/columns registry :pg.public/users) ; the [:map ...] alone, for malli.util
+(m/decode :pg.public/users jdbc-row {:registry registry} pgmalli/transformer)
+                                            ; java.sql.Date / Timestamp and strings into the registry's types
+```
+
+Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints within
+a table, foreign keys across tables.
+
+```clojure
+(def dataset (pgmalli/dataset-schema registry))          ; {"groups" [...] "users" [...]}
+(m/validate dataset {"groups" [{:id 1 ...}] "users" [{:group_id 1 ...}]} {:registry registry})
+(clojure.test.check.generators/sample (pgmalli/dataset-generator registry {:rows 5}))
+;; tables in foreign-key order, referencing columns drawn from generated rows
+```
+
+`dataset-schema` and `dataset-generator` are built at runtime and contain functions; the
+generated files stay data.
 
 ## Contract
 
-These are kept compatible; a change bumps the minor version.
+Kept compatible; a change bumps the minor version.
 
-1. The four config keys.
-2. The layout of the generated file (`:schema`, `:database-version`, `:registry`, `:unrendered`, `:skipped`).
-3. The fact vocabulary (elements of `:unrendered`), documented in `pgmalli.impl.pattern`.
+1. The config keys `:schemas` `:out-dir` `:checks` `:overrides` `:db`.
+2. The generated file: `{:schema :database-version :registry :unrendered :skipped}` and the
+   registry names above.
+3. The fact vocabulary of `:unrendered` (`pgmalli.impl.pattern`).
 
-`pgmalli.impl.*` is internal and may change without notice.
+`pgmalli.impl.*` may change without notice.
 
-## Conventions
+## Scope
 
-1. After migrating, run `generate!` and commit the files.
-2. In CI, assert `(nil? (stale config))`.
-3. Review changes to `:unrendered` in pull request diffs.
-
-## Limitations
-
-- Reads tables (regular and partition parents), columns, CHECK constraints, enum and domain
-  types. Views, indexes, triggers, policies and privileges are not read.
-- Expressions are read in the form PostgreSQL's deparser prints them; arbitrary SQL is not parsed.
-- Overrides must be data (the files are EDN), so a function cannot be an override; use
-  `[:ref :app/name]` and define it in your registry.
+Tables (regular and partition parents), columns, CHECK, PRIMARY KEY, UNIQUE and FOREIGN KEY
+constraints, enum and domain types. Views, indexes, triggers, policies and privileges are not
+read. Expressions are read in the form PostgreSQL's deparser prints them.
 
 ## Development
 
@@ -156,9 +164,10 @@ clojure -T:build jar
 ```
 
 Database tests start a throwaway PostgreSQL container with docker (`PGMALLI_PG_IMAGE`
-selects the image, default `postgres:17-alpine`). `nix develop` provides the tools.
-Releases: push a `v*` tag; the workflow publishes to Clojars and creates a GitHub release.
-Dependency updates come from Renovate.
+selects the image). The suite includes property-based round trips through PostgreSQL:
+expressions are stored as CHECK constraints and read back, and compiled checks are compared
+with PostgreSQL's own verdict on generated rows. `nix develop` provides the tools. Releases:
+push a `v*` tag. Dependency updates come from Renovate.
 
 ## License
 
