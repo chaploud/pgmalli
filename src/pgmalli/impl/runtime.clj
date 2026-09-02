@@ -23,6 +23,20 @@
                (let [pass? (check/checker expr)]
                  {:pred (fn [row] (and (map? row) (pass? (merge defaults row)))) :min 1 :max 1}))}))
 
+(def bytes-schema
+  "[:pg/bytes {:min n :max n}]: a byte array of bounded length, generated as such (malli's bytes?
+   has no length)."
+  (m/-simple-schema
+   {:type :pg/bytes
+    :compile (fn [{:keys [min max]} _ _]
+               (let [fmap (requiring-resolve 'clojure.test.check.generators/fmap)
+                     vector-of (requiring-resolve 'clojure.test.check.generators/vector)
+                     byte-gen @(requiring-resolve 'clojure.test.check.generators/byte)]
+                 {:pred (fn [v] (and (bytes? v) (<= (or min 0) (alength ^bytes v) (or max Integer/MAX_VALUE))))
+                  :type-properties {:error/message (str "bytes, " (or min 0) " to " (or max "any") " of them")
+                                    :gen/gen (fmap byte-array (vector-of byte-gen (or min 0) (or max (+ (or min 0) 16))))}
+                  :min 0 :max 0}))}))
+
 (def check-value-schema
   "[:pg/check-value expr]: a domain CHECK, the value standing for VALUE."
   (m/-simple-schema
@@ -125,8 +139,8 @@
 
 (defn- gen-hints
   "Generation hints (:gen/min, :gen/max) for a column schema: key and identity integers are
-   small and positive, strings short, times within the last year. Data the database accepts
-   but nobody wants in a fixture is left to the schema's own bounds."
+   small and positive, strings short, times within the last year. Other columns keep the
+   schema's own bounds."
   [s key?]
   (let [[t p] (if (and (vector? s) (map? (second s))) [(first s) (second s)] [(if (vector? s) (first s) s) {}])
         now (java.time.Instant/now)
@@ -157,7 +171,8 @@
 (defn registry
   "The registry pgmalli.core/registry documents."
   [& schemas]
-  (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas) {:pg/check check-schema :pg/check-value check-value-schema})
+  (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas)
+                    {:pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema})
         generated (apply merge (map #(:registry (if (map? %) % (read-generated %))) schemas))]
     (doseq [[k s] generated :when (row-schema? s)
             :let [{:keys [pg/table pg/unique pg/foreign-keys]} (second (row-map s))]
@@ -188,7 +203,7 @@
                                     (fn [x] (if (string? x) (json/parse x) x))))}
                   :time/instant instant
                   :time/local-date (fn [x] (cond (instance? java.sql.Date x) (.toLocalDate ^java.sql.Date x)
-                                                 (instance? java.util.Date x) (.toLocalDate (.atZone ^java.time.Instant (instant x) zone))
+                                                 (or (instance? java.util.Date x) (instance? java.time.Instant x)) (.toLocalDate (.atZone ^java.time.Instant (instant x) zone))
                                                  :else x))
                   :time/local-date-time (fn [x] (cond (instance? java.sql.Timestamp x) (.toLocalDateTime ^java.sql.Timestamp x)
                                                       (instance? java.time.Instant x) (java.time.LocalDateTime/ofInstant ^java.time.Instant x zone)
@@ -197,11 +212,13 @@
 ;;; datasets: several tables at once, with keys and references checked
 
 (defn- tables
-  "[{:name :table :key-sets :refs} ...] for every row schema. A key set is {:keys :nulls-distinct?
-   :label}; a reference {:keys :table :to :full? :label}, references to tables outside the
-   registry left out."
-  [registry]
-  (let [ts (for [[k s] (sort-by (comp str key) registry) :when (row-schema? s)
+  "[{:name :table :key-sets :refs} ...] for every row schema but those in except. A key set is
+   {:columns :nulls-distinct? :label}; a reference {:columns :table :to :full? :label},
+   references to tables outside the dataset left out."
+  ([registry] (tables registry nil))
+  ([registry except]
+   (let [ts (for [[k s] (sort-by (comp str key) registry)
+                  :when (and (row-schema? s) (not (contains? (set except) (:pg/table (second (row-map s))))))
                  :let [{:keys [pg/table pg/primary-key pg/unique pg/foreign-keys]} (second (row-map s))]]
              {:name k
               :table table
@@ -214,8 +231,8 @@
               :refs (for [{:keys [columns to match] target :table} foreign-keys]
                       {:columns (mapv render/ident-key columns) :table target :to (mapv render/ident-key to) :full? (= :full match)
                        :label (str table " " (pr-str columns) " references " target " " (pr-str to))})})
-        known (set (map :table ts))]
-    (mapv (fn [t] (update t :refs #(vec (filter (comp known :table) %)))) ts)))
+         known (set (map :table ts))]
+     (mapv (fn [t] (update t :refs #(vec (filter (comp known :table) %)))) ts))))
 
 (defn- key-of [row columns] (mapv #(get row %) columns))
 
@@ -280,8 +297,8 @@
 (defn- solve-refs
   "The row with its references pointing at rows of ds. References sharing columns are solved
    together: a later reference may only choose targets that agree with the columns an earlier
-   one fixed (or in fixed already), and the search backtracks. A reference with nothing to
-   point at becomes NULL. nil when no assignment exists."
+   reference fixed (or that were fixed on entry), and the search backtracks. A reference with
+   nothing to point at has its free columns set to NULL. nil when no assignment exists."
   [row refs ds fixed]
   (letfn [(go [row fixed refs]
             (if (empty? refs)
@@ -292,10 +309,15 @@
                   ;; an all-NULL reference stays so; under MATCH FULL no later reference may fill part of it
                   (go row (cond-> fixed full? (into columns)) (rest refs))
                   (let [candidates (->> (get ds table) (map #(key-of % to)) (remove #(some nil? %)) distinct
+                                        ;; a self-reference never points at the row itself
+                                        (remove #(= % (key-of row to)))
                                         (filter (fn [t] (every? (fn [[k x]] (or (not (fixed k)) (= (get row k) x))) (map vector columns t)))))]
                     (or (some #(go (merge row (zipmap columns %)) (into fixed columns) (rest refs)) (try-order v candidates))
-                        (when (not-any? fixed columns)
-                          (go (merge row (zipmap columns (repeat nil))) (into fixed columns) (rest refs)))))))))]
+                        ;; nothing to point at: NULL the columns still free, which satisfies MATCH SIMPLE with
+                        ;; any NULL and MATCH FULL only when all of them are
+                        (let [free (remove fixed columns)]
+                          (when (if full? (= (count free) (count columns)) (seq free))
+                            (go (merge row (zipmap free (repeat nil))) (into fixed columns) (rest refs))))))))))]
     (go row fixed (sort-by (comp - count :columns) refs))))
 
 (defn dataset-generator
@@ -303,15 +325,17 @@
    foreign-key order and referencing columns are pointed at rows generated before them (a
    self-reference at the same table). :rows is the number of rows wanted per table, out of
    many more candidates; a table none of them fits is an error, since a fixture with an
-   empty table is never what was asked for."
+   empty table is never what was asked for. :except names tables (\"schema.table\") to leave
+   out, references to them included."
   ([registry] (dataset-generator registry {}))
-  ([registry {:keys [rows] :or {rows 5}}]
-   (let [ts (tables registry)
+  ([registry {:keys [rows except] :or {rows 5}}]
+   (let [ts (tables registry except)
          by-table (into {} (map (juxt :table identity) ts))
          gen (requiring-resolve 'clojure.test.check.generators/bind)
          fmap (requiring-resolve 'clojure.test.check.generators/fmap)
          return (requiring-resolve 'clojure.test.check.generators/return)
          vector-of (requiring-resolve 'clojure.test.check.generators/vector)
+         scale (requiring-resolve 'clojure.test.check.generators/scale)
          opts {:registry registry}
          table-gen (fn [{:keys [name table refs key-sets]} ds]
                      (let [valid (fn [rs] (-> (filter #(m/validate name % opts) rs) (distinct-by-keys key-sets) vec))
@@ -323,15 +347,22 @@
                                              (let [rs2 (valid (keep #(solve-refs % self (assoc ds table rs) settled) rs))]
                                                (if (= (count rs2) (count rs)) rs2 (recur rs2))))]
                        (fmap (fn [candidates]
-                               (let [rs (->> candidates (keep #(solve-refs % others ds #{})) valid (take rows) vec)
-                                     rs (if self (self-consistent rs) rs)]
+                               (let [pool (->> candidates (keep #(solve-refs % others ds #{})) valid)
+                                     ;; settling self-references may drop rows; top the batch up from the pool until it holds rows
+                                     rs (loop [rs (vec (take rows pool)) more (drop rows pool)]
+                                          (let [rs (if self (self-consistent rs) rs)
+                                                short (- rows (count rs))]
+                                            (if (or (<= short 0) (empty? more))
+                                              rs
+                                              (recur (into rs (take short more)) (drop short more)))))]
                                  (when (and (pos? rows) (empty? rs))
                                    (throw (ex-info (str name ": none of " (count candidates) " generated rows satisfied its constraints;"
                                                         " a CHECK the evaluator cannot satisfy by chance, or an empty table it references")
                                                    {:table table})))
                                  rs))
-                             ;; enough candidates that a table with an ordinary CHECK never comes out empty by chance
-                             (vector-of (mg/generator (columns registry name) opts) (max 200 (* 50 rows))))))]
+                             ;; enough candidates, at a size where keys rarely collide, that a table with an
+                             ;; ordinary CHECK rarely comes out short
+                             (vector-of (scale #(max % 30) (mg/generator (columns registry name) opts)) (max 200 (* 50 rows))))))]
      (reduce (fn [g table]
                (gen g (fn [ds] (fmap (fn [rs] (assoc ds table rs)) (table-gen (by-table table) ds)))))
              (return {})

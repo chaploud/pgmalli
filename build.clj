@@ -5,7 +5,7 @@
   (:require [clojure.tools.build.api :as b]))
 
 (def lib 'io.github.chaploud/pgmalli)
-(def version (format "0.1.%s" (b/git-count-revs nil)))
+(def version (format "0.2.%s" (b/git-count-revs nil)))
 (def class-dir "target/classes")
 (def jar-file "target/pgmalli.jar")
 (def basis (delay (b/create-basis {:project "deps.edn"})))

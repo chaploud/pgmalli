@@ -2,6 +2,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [malli.experimental.time :as time]
+            [malli.generator :as mg]
             [malli.util :as mu]
             [pgmalli.impl.pattern :as p]
             [pgmalli.impl.render :as r]
@@ -42,7 +43,7 @@
 
 (def ^:private facts (p/facts schema))
 
-(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas) {:pg/check rt/check-schema :pg/check-value rt/check-value-schema} r))
+(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas) {:pg/check rt/check-schema :pg/check-value rt/check-value-schema :pg/bytes rt/bytes-schema} r))
 
 (deftest row-schema
   (let [{:keys [registry unrendered]} (r/registry facts)
@@ -162,6 +163,9 @@
     (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re "^\\Qab\\E.*$"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e ~~ 'ab%'::text") :e))
         "LIKE is a regex")
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0" "k1"]} [:string {:min 2}] [:re "\\S"]]
+           (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "length(btrim(e)) > 0" "length(e) >= 2") :e))
+        "a bound after an [:and ...] lands on the type, where malli reads it")
     (is (= [:enum {:pg/type "boolean" :pg/constraint ["k0"]} true]
            (column (reg [{:name "b" :position 1 :data_type "boolean" :is_nullable false}] "b = true") :b)))
     (is (= [:vector {:min 1 :max 3 :pg/type "text[]" :pg/constraint ["k0"]} :string]
@@ -232,7 +236,15 @@
     (is (= [:and {:pg/type "numeric" :pg/constraint ["a_check"]} 'decimal? [:> -100M] [:< 100M] [:>= 0.5]] (get-in t [2 1]))
         "numeric(3,1) holds |v| < 100, and a CHECK narrows further")
     (is (= [:and {:pg/type "numeric"} 'decimal? [:> -10000M] [:< 10000M]] (get-in t [3 1])))
-    (is (= [:int {:min -32768 :max 32767 :pg/type "smallint"}] (get-in t [4 1])))))
+    (is (= [:int {:min -32768 :max 32767 :pg/type "smallint"}] (get-in t [4 1]))))
+  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "digest" :position 1 :data_type "bytea" :is_nullable false}]
+                                                               :constraints {"digest_check" {:name "digest_check" :type "CHECK" :check_clause "CHECK (octet_length(digest) = 32)"}}}}}))
+        reg (registry-with registry)]
+    (is (= [:pg/bytes {:min 32 :max 32 :pg/type "bytea" :pg/constraint ["digest_check"]}] (get-in registry [:pg.public/t 2 1])))
+    (is (m/validate :pg.public/t {:digest (byte-array 32)} {:registry reg}))
+    (is (not (m/validate :pg.public/t {:digest (byte-array 31)} {:registry reg})))
+    (is (every? #(= 32 (alength ^bytes (:digest %))) (mg/sample :pg.public/t {:registry reg :size 10})) "and generates the length")))
 
 (deftest partial-checks-are-never-enforced-partially
   (let [t (fn [& checks] {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["happy" "sad"]}}
@@ -252,6 +264,26 @@
     (is (= [[:regex "nm" "k0"] [:branch-check nil "k1"]] (map (juxt :fact :column :constraint) unrendered))
         "the lost regex is reported; the branch that lost it is reported whole, not enforced partially")
     (is (every? :expr unrendered))))
+
+(deftest null-branches-and-time-types
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "kind" :position 1 :data_type "text" :is_nullable true}
+                                                                                    {:name "note" :position 2 :data_type "text" :is_nullable true}
+                                                                                    {:name "at" :position 3 :data_type "time without time zone" :is_nullable true}
+                                                                                    {:name "tz" :position 4 :data_type "time with time zone" :is_nullable true}]
+                                                                          :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}}}}}))
+        reg (registry-with registry)]
+    (is (= [:multi {:dispatch :kind :error/message "k"}
+            [nil [:map [:note [:nil {:error/message "k"}]]]]
+            ["a" [:map [:note [:string {:error/message "k"}]]]]
+            [:malli.core/default :any]]
+           (nth (:pg.public/t registry) 2))
+        "a branch on the column being NULL dispatches on nil")
+    (is (m/validate :pg.public/t {:kind nil :note nil :at nil :tz nil} {:registry reg}))
+    (is (not (m/validate :pg.public/t {:kind nil :note "x" :at nil :tz nil} {:registry reg})))
+    (is (= [:maybe [:time/local-time {:pg/type "time without time zone"}]] (get-in registry [:pg.public/t 1 2 1])))
+    (is (= [:maybe [:time/offset-time {:pg/type "time with time zone"}]] (get-in registry [:pg.public/t 1 5 1])))
+    (is (empty? unrendered))))
 
 (deftest odd-identifiers
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}

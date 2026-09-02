@@ -17,8 +17,8 @@
 ;;; three-valued logic and comparison
 
 (defn- and3
-  "Left to right, stopping at the first false; nil when an operand was NULL and none false.
-   rest, not next: the operand after a decisive one is never evaluated."
+  "Left to right, returning at the first false without touching the operands after it; nil
+   when an operand was NULL and none false."
   [xs]
   (loop [xs (seq xs) r true]
     (if xs
@@ -50,10 +50,13 @@
         (number? v) (json-number v)
         :else v))
 
+(declare comparable-pair)
+
 (defn- same? [a b]
-  (cond (or (map? a) (map? b) (sequential? a) (sequential? b)) (= (json-normal a) (json-normal b))
-        (and (number? a) (number? b)) (zero? (compare a b))
-        :else (= a b)))
+  (let [[a b] (comparable-pair a b)]
+    (cond (or (map? a) (map? b) (sequential? a) (sequential? b)) (= (json-normal a) (json-normal b))
+          (and (number? a) (number? b)) (zero? (compare a b))
+          :else (= a b))))
 
 (defn- comparable-pair
   "Temporal operands of different types as PostgreSQL compares them: a date is its midnight,
@@ -385,10 +388,12 @@
     (let [[op & args] e
           a #(ev (first args) row)
           b #(ev (second args) row)
-          ;; a list, not the chunked seq args is: AND, OR and COALESCE stop at the first decisive operand
+          ;; args is a chunked seq; mapping over a list keeps AND, OR and COALESCE from
+          ;; evaluating past the first decisive operand
           all #(map (fn [x] (ev x row)) (apply list args))]
       (if-let [f (strict op)]
-        (let [vs (all)] (when (every? some? vs) (apply f vs)))
+        ;; every argument is evaluated (an error in any fails the row), then strictness applies
+        (let [vs (doall (all))] (when (every? some? vs) (apply f vs)))
         (case op
           :cast (cast-to (a) (cast-type (second args)))
           :array (mapv #(ev % row) (first args))
@@ -410,8 +415,8 @@
           :between (let [[v lo hi] (all)] (and3 [(cmp :>= v lo) (cmp :<= v hi)]))
           :between-symmetric (let [[v lo hi] (all)] (or3 [(and3 [(cmp :>= v lo) (cmp :<= v hi)]) (and3 [(cmp :>= v hi) (cmp :<= v lo)])]))
           :nullif (let [l (a) r (b)] (when-not (and (some? l) (some? r) (same? l r)) l))
-          :greatest (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (pos? (compare %2 %1)) %2 %1) vs)))
-          :least (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (neg? (compare %2 %1)) %2 %1) vs)))
+          :greatest (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (cmp :> %2 %1) %2 %1) vs)))
+          :least (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (cmp :< %2 %1) %2 %1) vs)))
           :coalesce (first (filter some? (all)))
           :concat (apply str (remove nil? (all)))
           :case (let [[clauses else] (if (= :else (last (butlast args)))

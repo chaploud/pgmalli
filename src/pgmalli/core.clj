@@ -50,8 +50,9 @@
   (rt/columns registry name))
 
 (defn transformer
-  "malli transformer decoding JDBC and string values into the registry's types. Instants that
-   land in timestamp (without time zone) columns are read in :zone, default the JVM's."
+  "malli transformer decoding JDBC and string values into the registry's types. Instants and
+   java.util.Dates that land in date or timestamp (without time zone) columns are read in
+   :zone, default the JVM's; JSON text in json and jsonb columns is parsed."
   ([] (rt/transformer))
   ([opts] (rt/transformer opts)))
 
@@ -62,6 +63,7 @@
   (rt/dataset-schema registry))
 
 (defn dataset-generator
-  "test.check generator of datasets satisfying dataset-schema; {:rows n} rows tried per table."
+  "test.check generator of datasets satisfying dataset-schema. Options: :rows wanted per table
+   (default 5), :except tables (\"schema.table\") to leave out."
   ([registry] (rt/dataset-generator registry))
   ([registry opts] (rt/dataset-generator registry opts)))

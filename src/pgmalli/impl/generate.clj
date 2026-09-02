@@ -5,7 +5,7 @@
      {:schemas [\"public\"]           ; default [\"public\"]
       :out-dir \"resources/pgmalli\"  ; default; files are <out-dir>/<schema>.edn
       :overrides {constraint-name schema-or-{:skip reason}}
-      :db {:host :port :db :user :password :sslmode :psql}}  ; optional; psql's environment otherwise
+      :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise
 
    File contents:
      {:schema \"public\" :database-version \"PostgreSQL 17.x ...\"

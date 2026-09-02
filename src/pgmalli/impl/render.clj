@@ -7,7 +7,8 @@
      :pg.<schema>/<table>    a valid row as read from the database
    A row schema is [:map ...] alone, or [:and [:map ...] checks...] when the table has constraints
    across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments,
-   and [:pg/check expr] for everything else pgmalli.impl.eval can evaluate. Insert schemas are
+   and [:pg/check expr] for everything else pgmalli.impl.eval can evaluate; bytea columns with a
+   length CHECK are [:pg/bytes {:min :max}]. Insert schemas are
    derived from row schemas when a registry is loaded (pgmalli.impl.runtime).
 
    Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique
@@ -42,7 +43,8 @@
          (zipmap ["real" "double precision" "float4" "float8"] (repeat :double))
          (zipmap ["text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name"] (repeat :string))
          {"boolean" :boolean "uuid" :uuid "bytea" 'bytes?
-          "date" :time/local-date "time" :time/local-time "timetz" :time/offset-time
+          "date" :time/local-date "time" :time/local-time "time without time zone" :time/local-time
+          "timetz" :time/offset-time "time with time zone" :time/offset-time
           "timestamp" :time/local-date-time "timestamp without time zone" :time/local-date-time
           "timestamptz" :time/instant "timestamp with time zone" :time/instant "interval" :time/duration}))
 
@@ -65,10 +67,16 @@
 
 (defn- prune [m] (into {} (remove (comp nil? val)) m))
 
-(defn- with-props [schema props]
-  (let [props (prune props)]
+(defn- with-props
+  "Properties on a column schema. On [:and type ...] the bounds malli reads (:min, :max) go on
+   the type; provenance stays on the :and, where the insert derivation reads it."
+  [schema props]
+  (let [props (prune props)
+        bounds (select-keys props [:min :max])]
     (cond
       (empty? props) schema
+      (and (vector? schema) (= :and (first schema)) (not (map? (second schema))) (seq bounds))
+      (with-props (update schema 1 with-props bounds) (apply dissoc props (keys bounds)))
       (vector? schema) (if (map? (second schema))
                          (assoc schema 1 (tighten (second schema) props))
                          (into [(first schema) props] (rest schema)))
@@ -154,6 +162,7 @@
       :length (let [{:keys [fn min max exact]} f
                     bounds {:min (or exact min) :max (or exact max)}]
                 (cond (and string-base? (#{:length :char_length} fn)) [(with-props schema bounds) unrendered]
+                      (and (= 'bytes? base) (= :octet_length fn)) [(with-props [:pg/bytes] bounds) unrendered]
                       (and (= :vector base) (= :cardinality fn)) [(with-props schema bounds) unrendered]
                       ;; array_length of an empty array is NULL, so only an upper bound means what the CHECK means
                       (and (= :vector base) (= :array_length fn) (nil? (:min bounds))) [(with-props schema bounds) unrendered]
@@ -248,7 +257,8 @@
                             :else {:schema nil :unrendered [f] :skipped (:skipped r)}))]
     (case fact
       :branch-check (let [{:keys [dispatch branches default]} f
-                          bs (for [b branches, v (:values b)] (assoc (frag (:facts b)) :value v))
+                          ;; a branch on the column being NULL dispatches on nil
+                          bs (for [b branches, v (if (:null b) [nil] (:values b))] (assoc (frag (:facts b)) :value v))
                           d (when default (frag default))]
                       (whole {:schema (into [:multi {:dispatch (ident-key dispatch) :error/message constraint}]
                                             (concat (map (juxt :value :schema) bs) [[:malli.core/default (if d (:schema d) :any)]]))

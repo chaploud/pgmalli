@@ -30,9 +30,9 @@
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
      :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE)}
-     :domain-check CHECK of a domain that matched no pattern {:type-name :constraint :expr}
+     :domain-check CHECK of a domain that matched no pattern {:type-name :constraint :expr :valid?}
      :branch-check CHECK of the form col = v AND ... OR col = w AND ...
-                                                          {:dispatch :branches [{:values :facts}] :default}
+                                                          {:dispatch :branches [{:values :facts} or {:null true :facts}] :default}
      :or-check     CHECK whose OR alternatives are each an AND of column patterns
                                                           {:alternatives [[fact ...] ...]}
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
@@ -218,7 +218,8 @@
 (def ^:private known-types
   #{"smallint" "integer" "bigint" "int2" "int4" "int8" "numeric" "decimal" "real" "double precision" "float4" "float8"
     "boolean" "text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name" "uuid"
-    "timestamp" "timestamptz" "timestamp with time zone" "timestamp without time zone" "date" "time" "timetz" "interval"
+    "timestamp" "timestamptz" "timestamp with time zone" "timestamp without time zone" "date" "time" "timetz"
+    "time without time zone" "time with time zone" "interval"
     "bytea" "json" "jsonb"})
 
 (defn- parsed

@@ -118,6 +118,22 @@
       (doseq [sample (tcg/sample (pgmalli/dataset-generator registry {:rows 6}) 8)]
         (is (m/validate ds sample opts) (pr-str sample))))))
 
+(deftest self-references-with-a-shared-group
+  ;; folders: parent_id -> same table, in the same group, never itself, NULL for roots
+  (let [reg (pgmalli/registry {:registry {:pg.public/groups [:map {:pg/table "public.groups" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer"}]]]
+                                          :pg.public/folders [:and [:map {:pg/table "public.folders" :pg/primary-key ["id"] :pg/unique [{:columns ["id" "group_id"]}]
+                                                                          :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}
+                                                                                            {:columns ["parent_id" "group_id"] :table "public.folders" :to ["id" "group_id"]}]}
+                                                                    [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]
+                                                                    [:parent_id [:maybe [:int {:pg/type "integer"}]]]]
+                                                              [:pg/check [:or [:is :parent_id nil] [:<> :parent_id :id]]]]}})
+        ds (pgmalli/dataset-schema reg)]
+    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 5}) 20)]
+      (is (m/validate ds sample {:registry reg}) (pr-str sample))
+      (is (= 5 (count (get sample "public.folders")))))
+    (is (= #{"public.groups"} (set (keys (first (tcg/sample (pgmalli/dataset-generator reg {:rows 2 :except #{"public.folders"}}) 1)))))
+        ":except leaves a table out")))
+
 (deftest generation-limits-are-loud
   (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never"} [:a [:int {:pg/type "integer"}]]] [:pg/check [:< 2 1]]]
                                           :pg.public/big [:map {:pg/table "public.big" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer" :min 1000000 :max 2147483647}]]]}})]

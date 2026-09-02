@@ -2,8 +2,9 @@
   "Turns expressions as printed by PostgreSQL's deparser (pg_get_constraintdef, pg_get_expr)
    into HoneySQL-style data. Only that output format is supported, not arbitrary SQL.
 
-   Covered: comparison, logical and arithmetic operators; IS [NOT] NULL/TRUE/FALSE; IN;
-   ANY/ALL (ARRAY[...]); BETWEEN; LIKE/ILIKE/~/~*; ::casts; function calls; TRIM(BOTH FROM x);
+   Covered: comparison, logical, arithmetic, string, array, jsonb and regex operators (see
+   edn-safe-ops); IS [NOT] NULL/TRUE/FALSE; IS [NOT] DISTINCT FROM; [NOT] IN; ANY/ALL (ARRAY[...]);
+   [NOT] BETWEEN [SYMMETRIC]; [NOT] LIKE/ILIKE; ::casts; function calls; TRIM(BOTH FROM x);
    CASE; CURRENT_TIMESTAMP and friends; AT TIME ZONE; (x).field; x[i]; quoted identifiers;
    string, number, boolean and NULL literals.
 

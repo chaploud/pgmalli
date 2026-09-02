@@ -5,56 +5,55 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
-### Changed
-
-- The registry is loaded from the classpath by schema name: `(pgmalli/registry "public")`.
-  malli is now a dependency of the library. `pgmalli/path` and the by-path forms of
-  `registry` and `unrendered` are gone.
-- Row schemas carry `:pg/table` (`"schema.table"`), `:pg/primary-key`, `:pg/unique` and
-  `:pg/foreign-keys` (`{:columns :table :to}`, composite keys included) on the map, and
-  `:pg/identity` (`:always`, `:default`, `:serial`) and `:pg/generated` on columns.
-- CHECKs that branch on one column's value become `[:multi ...]`; ORs of column patterns
-  become `[:or ...]`; every other CHECK is `[:pg/check expr]`, a schema type registered by
-  pgmalli that evaluates the expression data with PostgreSQL's semantics. Facts that could not
-  be rendered inside a branch are listed in `:unrendered` like column facts.
-- `date`, `time`, `timetz`, `timestamp`, `timestamptz` and `interval` map to
-  `malli.experimental.time` schemas.
-- Domain types are registry entries built from their base type and CHECK.
-- Trimmed non-blank strings are `[:and [:string {:min 1}] [:re "\S"]]`.
-- POSIX character classes in regexes (`[[:digit:]]`) are translated to their Java form;
-  patterns using PostgreSQL-only escapes stay unrendered.
-- `smallint` and `integer` carry their range; `numeric(p, s)` its magnitude bound.
-- Bounds and value sets from several constraints tighten and intersect instead of the last one
-  winning.
-- Column patterns for `LIKE`, `NOT IN`, `cardinality`, `array_length`, boolean and uuid value
-  sets. A CHECK whose column pattern has no rendering on its column's type is evaluated whole.
-- Domains are always registry entries; a domain CHECK outside the patterns is
-  `[:pg/check-value expr]`; a domain's NOT NULL and DEFAULT reach its columns; `:overrides`
-  apply to domain CHECKs.
-- `:pg/unique` entries are `{:columns ...}` maps (`:nulls-distinct false` for `NULLS NOT
-  DISTINCT`); `:pg/foreign-keys` entries carry `:match :full` for `MATCH FULL`; datasets
-  respect both, check every constraint separately and name it in the error.
-- The dataset generator solves references that share columns together (tenant-style
-  composite keys) and adds generation hints for realistic values.
-- Types outside the mapping table are reported as `:unknown-type` instead of silently
-  becoming `:any`.
-- Schema names that are not plain identifiers make string registry keys.
-- `BETWEEN SYMMETRIC` is evaluated as such.
-- The evaluator compares dates, timestamps and timestamptz across types as PostgreSQL does,
-  stops at the first decisive operand of `AND`, `OR` and `COALESCE`, and treats literals of the
-  schema's own enum and domain types as values; casts to other unknown types stay unrendered.
-- A CHECK is never enforced in part: when a `:multi` or `:or` branch loses a fact the evaluator
-  cannot cover, the whole CHECK is reported. `NOT VALID` domain CHECKs are reported, not applied.
-- `dataset-generator` picks `:rows` rows from many candidates and fails loudly when none fit,
-  instead of returning an empty table. jsonb values with keyword keys and JSON text are read.
-
 ### Added
 
+- `:pg/check` and `:pg/check-value`: every CHECK that no column pattern covers is kept as
+  expression data and evaluated with PostgreSQL's semantics (NULL passes, `AND`, `OR` and
+  `COALESCE` stop at the first decisive operand, casts convert, the schema's own enum and
+  domain literals are values, `now()` is the validation time). The vocabulary covers
+  comparison, logic, arithmetic, the common string, numeric, array and jsonb functions and
+  operators, `LIKE`, regexes and `CASE`; a CHECK outside it is listed in `:unrendered`.
+  jsonb values with string or keyword keys are read alike.
+- CHECKs that branch on one column's value become `[:multi ...]`; ORs of column patterns
+  `[:or ...]`; neither is ever enforced in part.
 - `:pg.<schema>.<table>/insert` schemas, derived when a registry is loaded: identity ALWAYS
-  and generated columns removed, defaulted and nullable columns optional, closed maps; table
-  constraints see omitted columns as their literal defaults.
-- `pgmalli/columns`, `pgmalli/transformer` (with a `:zone` option), `pgmalli/dataset-schema`,
-  `pgmalli/dataset-generator`.
+  and generated columns removed, identity BY DEFAULT, defaulted and nullable columns
+  optional, closed maps; the table's constraints see omitted columns as their literal
+  defaults, else NULL.
+- Row schemas carry `:pg/table` (`"schema.table"`), `:pg/primary-key`, `:pg/unique`
+  (`{:columns}` maps, `:nulls-distinct false` for NULLS NOT DISTINCT) and `:pg/foreign-keys`
+  (`{:columns :table :to}` maps, `:match :full` for MATCH FULL) on the map; columns carry
+  `:pg/identity` (`:always`, `:default`, `:serial`) and `:pg/generated`.
+- Domain types as registry entries: base type, column patterns, else `[:pg/check-value expr]`;
+  a domain's NOT NULL and DEFAULT reach its columns; `:overrides` apply to domain CHECKs.
+- Column patterns for `LIKE`, `NOT IN`, `cardinality`, `array_length`, boolean and uuid value
+  sets; bounds and value sets from several constraints tighten and intersect.
+- `smallint` and `integer` carry their range; `numeric(p, s)` its magnitude bound; `bytea`
+  with a length CHECK is `[:pg/bytes {:min :max}]`, a type that generates byte arrays.
+- `date`, `time`, `timetz`, `timestamp`, `timestamptz` and `interval` map to
+  `malli.experimental.time` schemas.
+- `pgmalli/columns`, `pgmalli/transformer` (with a `:zone` option; JSON text in json and
+  jsonb columns is parsed), `pgmalli/dataset-schema` (every key set and reference a named
+  check; NULLS NOT DISTINCT and MATCH FULL respected) and `pgmalli/dataset-generator`
+  (`:rows`, `:except`; references sharing columns solved together, self-references included;
+  a table no candidate fits is an error). Registries add generation hints when loaded, so key
+  columns are small positive integers, strings short and times recent.
+- POSIX character classes in regexes are translated to their Java form; patterns using
+  PostgreSQL-only escapes stay unrendered.
+- Types outside the mapping table are reported as `:unknown-type`.
+
+### Changed
+
+- Files generated by 0.1 are refused when loaded; regenerate them.
+- Registries load from the classpath by schema name: `(pgmalli/registry "public")`. malli is
+  a dependency of the library.
+- Trimmed non-blank strings are `[:and [:string {:min 1}] [:re "\S"]]`.
+- Schema names that are not plain identifiers make string registry keys.
+- Generating needs PostgreSQL 16 or later.
+
+### Removed
+
+- `pgmalli/path` and the by-path forms of `registry` and `unrendered`.
 
 ## [0.1.9] - 2026-09-02
 
