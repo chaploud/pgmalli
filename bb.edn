@@ -1,8 +1,9 @@
 {:paths ["src" "resources" "test"]
- :deps {com.github.seancorfield/honeysql {:mvn/version "2.7.1437"}}
+ :deps {com.github.seancorfield/honeysql {:mvn/version "2.7.1437"}
+        metosin/malli {:mvn/version "0.20.1"}}
  :tasks {test {:doc "Run the test suite with babashka"
-               :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test])
-               :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test)]
+               :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test] [pgmalli.impl.render-test])
+               :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test 'pgmalli.impl.render-test)]
                        (when (pos? (+ fail error)) (System/exit 1)))}
          test:jvm {:doc "Run the test suite on the JVM"
                    :task (shell "clojure -M:test")}}}
