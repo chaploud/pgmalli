@@ -299,7 +299,7 @@
   "Undoes rewrites PostgreSQL applies when deparsing, without changing meaning:
    numeric literals printed as casts ('-1'::integer -> -1), array casts,
    col = ANY (ARRAY[...]) -> [:in col [...]], col <> ALL (ARRAY[...]) -> [:not-in col [...]],
-   and a one-element IN -> =."
+   and a one-element IN -> = (NOT IN -> <>)."
   [e]
   (walk/postwalk
    (fn [f]
@@ -321,6 +321,9 @@
 
        (and (vector? f) (= :in (first f)) (= 1 (count (nth f 2))))
        [:= (second f) (first (nth f 2))]
+
+       (and (vector? f) (= :not-in (first f)) (= 1 (count (nth f 2))))
+       [:<> (second f) (first (nth f 2))]
 
        :else f))
    e))

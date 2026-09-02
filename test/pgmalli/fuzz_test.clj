@@ -7,9 +7,8 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [clojure.walk :as walk]
             [honey.sql :as sql]
-            [malli.core :as m]
             [malli.generator :as mg]
-            [pgmalli.impl.compile :as c]
+            [pgmalli.impl.eval :as ev]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.ir :as ir]
             [pgmalli.test-db :refer [*container* *db* exec-sql! with-postgres]]))
@@ -43,6 +42,16 @@
                      [:tuple [:= :=] [:= :b] :boolean]
                      [:tuple [:= :>=] [:= :d] [:double {:min 0.0 :max 9.99}]]
                      [:tuple [:= :>] [:tuple [:= :+] ::int-col ::int-col] ::int-lit]
+                     [:tuple [:= :>] [:tuple [:= :-] ::int-col ::int-lit] ::int-lit]
+                     [:tuple [:= :<] [:tuple [:= :*] ::int-col ::int-lit] ::int-lit]
+                     [:tuple [:= :=] [:tuple [:= :/] ::int-col [:int {:min 1 :max 5}]] ::int-lit]
+                     [:tuple [:= :>] [:tuple [:= :coalesce] ::int-col ::int-col] ::int-lit]
+                     [:tuple [:= :in] ::int-col [:tuple ::int-lit ::int-col]]
+                     [:tuple [:= :not-in] ::str-col [:vector {:min 1 :max 3} ::str-lit]]
+                     [:tuple [:= :=] [:tuple [:= :lower] ::str-col] ::str-lit]
+                     [:tuple [:= :=] [:tuple [:= :btrim] ::str-col] ::str-lit]
+                     [:tuple [:= :<=] [:tuple [:= :octet_length] ::str-col] ::int-lit]
+                     [:tuple [:= :regex] ::str-col [:enum "^[[:alpha:]]+$" "^a" "'"]]
                      [:tuple [:= :case] [:tuple [:= :=] [:= :e] [:= "happy"]] [:tuple [:= :>] ::int-col [:= 0]] [:= :else] [:tuple [:= :is] ::int-col :nil]]]
              ::expr [:or
                      ::atom
@@ -52,13 +61,15 @@
    ::expr])
 
 (defn- normalize
-  "Both sides: canonical, casts removed, BETWEEN expanded, nested AND/OR flattened,
-   doubles as two-decimal strings (numeric(10,2) rounds)."
+  "Both sides: canonical, casts removed, BETWEEN expanded, IN over columns as ORs of =
+   (PostgreSQL stores it so), nested AND/OR flattened, doubles as two-decimal strings
+   (numeric(10,2) rounds)."
   [e]
   (walk/postwalk
    (fn [f]
      (cond
        (and (vector? f) (= :cast (first f))) (second f)
+       (and (vector? f) (= :in (first f)) (some keyword? (nth f 2))) (into [:or] (map (fn [v] [:= (second f) v]) (nth f 2)))
        (and (vector? f) (= :between (first f))) [:and [:>= (second f) (nth f 2)] [:<= (second f) (nth f 3)]]
        (and (vector? f) (#{:and :or} (first f)))
        (into [(first f)] (mapcat (fn [g] (if (and (vector? g) (= (first f) (first g))) (rest g) [g])) (rest f)))
@@ -113,15 +124,14 @@
     (when-not (zero? exit) (throw (ex-info err {})))
     (mapv #(mapv (fn [v] (= "t" v)) (str/split % #"\t")) (str/split-lines (str/trim out)))))
 
-(deftest compiled-checks-agree-with-postgres
+(deftest evaluated-checks-agree-with-postgres
   (when *db*
     (let [seed (parse-long (or (System/getenv "PGMALLI_FUZZ_SEED") "42"))
           exprs (vec (distinct (mg/sample expr-schema {:size 80 :seed seed})))
           rows (vec (distinct (mg/sample row-schema {:size 60 :seed seed})))
-          schemas (mapv #(m/schema [:fn (c/check-fn %)]) exprs)
           verdicts (postgres-verdicts exprs rows)]
       (testing (str "seed " seed ", " (count exprs) " expressions x " (count rows) " rows")
         (doseq [[j row] (map-indexed vector rows)
                 [i e] (map-indexed vector exprs)]
-          (is (= (get-in verdicts [j i]) (m/validate (schemas i) row))
+          (is (= (get-in verdicts [j i]) (ev/passes? e row))
               (str (pr-str e) " on " (pr-str row))))))))
