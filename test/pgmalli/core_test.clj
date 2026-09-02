@@ -46,6 +46,6 @@
         (is (empty? (:unrendered (gen/load-file* out))))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
         (let [diffs (get (pgmalli/stale config) "public")]
-          (is (= #{[:pg.public/users :extra] [:pg.public.users/insert :extra]} (set (map (juxt :name :column) diffs)))
-              "a new column shows in the row and insert schemas, nowhere else")
+          (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
+              "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
