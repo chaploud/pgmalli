@@ -298,8 +298,9 @@
   "The row with its references pointing at rows of ds. References sharing columns are solved
    together: a later reference may only choose targets that agree with the columns an earlier
    reference fixed (or that were fixed on entry), and the search backtracks. A reference with
-   nothing to point at has its free columns set to NULL. nil when no assignment exists."
-  [row refs ds fixed]
+   nothing to point at has its free columns set to NULL. A reference to own, the row's own
+   table, never picks the row itself. nil when no assignment exists."
+  [row refs ds fixed own]
   (letfn [(go [row fixed refs]
             (if (empty? refs)
               row
@@ -308,10 +309,9 @@
                 (if (every? nil? v)
                   ;; an all-NULL reference stays so; under MATCH FULL no later reference may fill part of it
                   (go row (cond-> fixed full? (into columns)) (rest refs))
-                  (let [candidates (->> (get ds table) (map #(key-of % to)) (remove #(some nil? %)) distinct
-                                        ;; a self-reference never points at the row itself
-                                        (remove #(= % (key-of row to)))
-                                        (filter (fn [t] (every? (fn [[k x]] (or (not (fixed k)) (= (get row k) x))) (map vector columns t)))))]
+                  (let [candidates (cond->> (->> (get ds table) (map #(key-of % to)) (remove #(some nil? %)) distinct)
+                                      (= table own) (remove #(= % (key-of row to)))
+                                      true (filter (fn [t] (every? (fn [[k x]] (or (not (fixed k)) (= (get row k) x))) (map vector columns t)))))]
                     (or (some #(go (merge row (zipmap columns %)) (into fixed columns) (rest refs)) (try-order v candidates))
                         ;; nothing to point at: NULL the columns still free, which satisfies MATCH SIMPLE with
                         ;; any NULL and MATCH FULL only when all of them are
@@ -344,10 +344,10 @@
                            ;; may be what another row points at, so repeat until the batch is stable
                            settled (set (mapcat :columns others))
                            self-consistent (fn [rs]
-                                             (let [rs2 (valid (keep #(solve-refs % self (assoc ds table rs) settled) rs))]
+                                             (let [rs2 (valid (keep #(solve-refs % self (assoc ds table rs) settled table) rs))]
                                                (if (= (count rs2) (count rs)) rs2 (recur rs2))))]
                        (fmap (fn [candidates]
-                               (let [pool (->> candidates (keep #(solve-refs % others ds #{})) valid)
+                               (let [pool (->> candidates (keep #(solve-refs % others ds #{} table)) valid)
                                      ;; settling self-references may drop rows; top the batch up from the pool until it holds rows
                                      rs (loop [rs (vec (take rows pool)) more (drop rows pool)]
                                           (let [rs (if self (self-consistent rs) rs)

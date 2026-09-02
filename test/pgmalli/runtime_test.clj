@@ -134,6 +134,23 @@
     (is (= #{"public.groups"} (set (keys (first (tcg/sample (pgmalli/dataset-generator reg {:rows 2 :except #{"public.folders"}}) 1)))))
         ":except leaves a table out")))
 
+(deftest references-whose-columns-share-a-name
+  ;; group_id -> contract_groups (group_id): the target column is spelled like the referencing one
+  (let [reg (pgmalli/registry {:registry {:pg.public/contract_groups [:map {:pg/table "public.contract_groups" :pg/primary-key ["group_id"]} [:group_id [:int {:pg/type "integer"}]]]
+                                          :pg.public/audiences [:map {:pg/table "public.audiences" :pg/primary-key ["id"] :pg/unique [{:columns ["id" "group_id"]}]
+                                                                      :pg/foreign-keys [{:columns ["group_id"] :table "public.contract_groups" :to ["group_id"]}]}
+                                                                [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]]
+                                          :pg.public/audience_blocks [:map {:pg/table "public.audience_blocks" :pg/primary-key ["id"]
+                                                                            :pg/unique [{:columns ["id" "group_id"]} {:columns ["group_id" "audience_id" "sort_order"]}]
+                                                                            :pg/foreign-keys [{:columns ["audience_id" "group_id"] :table "public.audiences" :to ["id" "group_id"]}
+                                                                                              {:columns ["group_id"] :table "public.contract_groups" :to ["group_id"]}]}
+                                                                      [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]
+                                                                      [:audience_id [:int {:pg/type "integer"}]] [:sort_order [:int {:pg/type "integer"}]]]}})
+        ds (pgmalli/dataset-schema reg)]
+    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 3}) 20)]
+      (is (m/validate ds sample {:registry reg}) (pr-str sample))
+      (is (= 3 (count (get sample "public.audience_blocks")))))))
+
 (deftest generation-limits-are-loud
   (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never"} [:a [:int {:pg/type "integer"}]]] [:pg/check [:< 2 1]]]
                                           :pg.public/big [:map {:pg/table "public.big" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer" :min 1000000 :max 2147483647}]]]}})]
