@@ -342,24 +342,23 @@
     (generate (vector-of (scale #(max % 30) (row-gen name)) n) 30 seed)))
 
 (defn- failure-reasons
-  "How the candidate rows of a table failed, most frequent first: what malli explains about the
-   row, or the reference that found no target."
+  "Why a table came out short, most frequent reason first: what malli explains about the
+   candidate rows on their own, or, for rows fine on their own, the references with no row to
+   point at."
   [registry {:keys [name refs]} cands ds]
   (let [opts {:registry registry}
         reasons (for [c cands]
-                  (or (some (fn [{:keys [label columns to table]}]
-                              (let [v (key-of c columns)]
-                                (when (and (not-any? nil? v) (not-any? #(= v (key-of % to)) (get ds table))) label)))
-                            refs)
-                      (some-> (m/explain name c opts) me/humanize pr-str)
-                      "keys collide"))]
-    (->> reasons frequencies (sort-by (comp - val)) (take 5))))
+                  (or (some-> (m/explain name c opts) me/humanize pr-str)
+                      (some (fn [{:keys [label table]}] (when (empty? (get ds table)) (str "nothing to reference: " label))) refs)
+                      "no combination of referenced rows fits, or keys collide"))]
+    (->> reasons frequencies (sort-by (comp - val)) (take 5) vec)))
 
 (defn- generate-table
-  "The rows of one table given the tables before it: candidates solved one by one (a row fits
-   when it validates and collides with no key accepted before it; parents grow only while the
-   batch is short), self-references settled, the batch topped up from the pool until it holds
-   rows. Throws when no candidate fits at all; a batch shorter than rows is returned as is."
+  "The dataset with the rows of one table added: candidates solved one by one (a row fits when
+   it validates and collides with no key accepted before it; parents grow only while the batch
+   is short), self-references settled, the batch topped up from the pool until it holds rows.
+   A table that comes out short is recorded in the dataset's metadata under :pgmalli/short
+   with what it wanted, what it got and why."
   [registry row-gen {:keys [name table refs key-sets] :as t} ds rows seed grow]
   (let [opts {:registry registry}
         ;; ponytail: the search is exhaustive per row; a budget of leaf checks per table keeps a
@@ -390,22 +389,19 @@
                (if (or (<= short 0) (empty? more))
                  rs
                  (recur (into rs (take short more)) (drop short more)))))]
-    (when (and (pos? rows) (empty? rs))
-      (let [reasons (failure-reasons registry t cands ds)]
-        (throw (ex-info (str name ": none of " (count cands) " generated rows satisfied its constraints. Most often: "
-                             (str/join "; " (map (fn [[why n]] (str why " (" n ")")) reasons)))
-                        {:table table :reasons reasons}))))
-    (assoc ds table rs)))
+    (cond-> (assoc ds table rs)
+      (< (count rs) rows) (vary-meta assoc-in [:pgmalli/short table] {:wanted rows :got (count rs) :reasons (failure-reasons registry t cands ds)}))))
 
 (defn dataset-generator
   "test.check generator of datasets that satisfy dataset-schema: tables are generated in
    foreign-key order and referencing columns are pointed at rows generated before them (a
    self-reference at the same table); a reference that finds no fitting row grows its target
    table by one row that fits, whose own references may grow their targets in turn. :rows is
-   the number of rows wanted per table, out of many more candidates; a
-   table none of them fits is an error naming the constraints that failed most, since a fixture
-   with an empty table is never what was asked for. :except names tables (\"schema.table\") to
-   leave out; a kept table may not reference one of them."
+   the number of rows wanted per table, out of many more candidates; a table that comes out
+   short (a CHECK random rows cannot satisfy, a parent that came out empty) is recorded in
+   the dataset's metadata under :pgmalli/short with the reasons, and its children come out
+   short too. :except names tables (\"schema.table\") to leave out; a kept table may not
+   reference one of them."
   ([registry] (dataset-generator registry {}))
   ([registry {:keys [rows except] :or {rows 5}}]
    (let [ts (tables registry except)

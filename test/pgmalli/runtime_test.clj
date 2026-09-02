@@ -1,6 +1,7 @@
 (ns pgmalli.runtime-test
   "The application side, on the checked-in generated files test/resources/pgmalli/{sample,other}.edn."
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.string :as str]
             [clojure.test.check.generators :as tcg]
             [malli.generator :as mg]
             [malli.core :as m]
@@ -198,11 +199,18 @@
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 3 (count (get sample "public.certification_tags")))))))
 
-(deftest generation-limits-are-loud
-  (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never"} [:a [:int {:pg/type "integer"}]]] [:pg/check [:< 2 1]]]
-                                          :pg.public/big [:map {:pg/table "public.big" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer" :min 1000000 :max 2147483647}]]]}})]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"none of .* generated rows" (doall (tcg/sample (pgmalli/dataset-generator reg {:rows 2}) 1)))
-        "a table no candidate row fits is an error, not an empty fixture")
+(deftest generation-limits-are-recorded
+  (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never" :pg/primary-key ["a"]} [:a [:int {:pg/type "integer"}]]] [:pg/check {:pg/constraint "never" :error/message "never"} [:< 2 1]]]
+                                          :pg.public/child [:map {:pg/table "public.child" :pg/foreign-keys [{:columns ["never_a"] :table "public.never" :to ["a"]}]} [:never_a [:int {:pg/type "integer"}]]]
+                                          :pg.public/big [:map {:pg/table "public.big" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer" :min 1000000 :max 2147483647}]]]}})
+        sample (first (tcg/sample (pgmalli/dataset-generator reg {:rows 2}) 1))
+        short (-> sample meta :pgmalli/short)]
+    (is (= [] (get sample "public.never")) "a table no candidate row fits comes out empty")
+    (is (= {:wanted 2 :got 0} (dissoc (get short "public.never") :reasons)) "and says so in the metadata")
+    (is (str/includes? (get-in short ["public.never" :reasons 0 0]) "never") "naming the constraint")
+    (is (= {:wanted 2 :got 0 :reasons [["nothing to reference: public.child [\"never_a\"] references public.never [\"a\"]" 200]]} (get short "public.child"))
+        "its children come out short, saying why")
+    (is (m/validate (pgmalli/dataset-schema reg) sample {:registry reg}) "and the dataset is still valid")
     (is (every? #(>= (:id %) 1000000) (tcg/sample (mg/generator (pgmalli/columns reg :pg.public/big) {:registry reg}) 20))
         "a key bound above the hint range keeps the bound and drops the hint")))
 

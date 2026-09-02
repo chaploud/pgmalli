@@ -64,6 +64,7 @@
 
 (defn dataset-generator
   "test.check generator of datasets satisfying dataset-schema. Options: :rows wanted per table
-   (default 5), :except tables (\"schema.table\") to leave out (no kept table may reference them)."
+   (default 5), :except tables (\"schema.table\") to leave out (no kept table may reference them).
+   Tables that came out short are listed in the dataset's metadata under :pgmalli/short."
   ([registry] (rt/dataset-generator registry))
   ([registry opts] (rt/dataset-generator registry opts)))
