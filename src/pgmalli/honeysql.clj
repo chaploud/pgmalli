@@ -7,7 +7,11 @@
    Scope: tables come from :from, the joins, :insert-into, :update and :delete-from, under
    their aliases. CTEs (:with), subqueries and table functions are opaque tables: their
    columns exist but have no type. A column is :col (unique in the scope), :alias/col or
-   :alias.col. An unqualified table is in :schema (default \"public\")."
+   :alias.col. An unqualified table is in :schema (default \"public\").
+
+   Types are data malli's default registry reads (see pgmalli.core/portable); time columns
+   are inst? unless :time says how timestamps arrive (:instant, :local), since instrumentation
+   reads schemas through that registry, which has no malli.experimental.time."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [pgmalli.impl.runtime :as rt]))
@@ -40,17 +44,24 @@
     (walk/prewalk (fn [x] (when (and (map? x) (some statement-keys (keys x))) (swap! acc conj x)) x) body)
     @acc))
 
+(def ^:private set-ops #{:union :union-all :intersect :except})
+
 (defn cte-names
-  "Names of the CTEs a query defines, at any depth."
+  "Names of the CTEs a query defines, at any depth: the items of :with and :with-recursive,
+   and any [name statement] pair the query data holds (a CTE built up in code before it is
+   put under :with)."
   [body]
-  (let [acc (atom #{})]
+  (let [acc (atom #{})
+        entry-name (fn [entry] (when (vector? entry)
+                                 (let [n (if (vector? (first entry)) (ffirst entry) (first entry))]
+                                   (when (keyword? n) (name n)))))]
     (walk/prewalk (fn [x]
                     (when (map? x)
-                      (doseq [k [:with :with-recursive] :let [w (get x k)] :when (vector? w)
-                              entry w :when (vector? entry)
-                              :let [n (if (vector? (first entry)) (ffirst entry) (first entry))]
-                              :when (keyword? n)]
-                        (swap! acc conj (name n))))
+                      (doseq [k [:with :with-recursive] :let [w (get x k)] :when (vector? w), entry w]
+                        (some->> (entry-name entry) (swap! acc conj))))
+                    (when (and (vector? x) (= 2 (count x)) (map? (second x))
+                               (some (into statement-keys set-ops) (keys (second x))))
+                      (some->> (entry-name x) (swap! acc conj)))
                     x)
                   body)
     @acc))
@@ -63,6 +74,8 @@
   (cond
     (keyword? x) [(qualified x schema) (name x)]
     (and (vector? x) (keyword? (first x)) (or (nil? (second x)) (keyword? (second x)))) [(qualified (first x) schema) (name (or (second x) (first x)))]
+    ;; INSERT INTO table (columns...) ...
+    (and (vector? x) (keyword? (first x)) (vector? (second x))) [(qualified (first x) schema) (name (first x))]
     (and (vector? x) (keyword? (first x))) [nil (name (first x))]
     (and (vector? x) (keyword? (second x))) [nil (name (second x))]
     (and (vector? x) (vector? (first x))) (table-ref (first x) schema)
@@ -163,9 +176,14 @@
 ;;; types
 
 (defn- read-shape
-  "A column schema as a driver returns it and as malli's default registry reads it."
-  [registry schema {:keys [time]}]
-  (rt/portable-data registry (walk/postwalk (fn [f] (case [time f] [:instant :time/local-date-time] :time/instant [:local :time/instant] :time/local-date-time f)) schema)))
+  "A column schema as a driver returns it and as malli's default registry reads it: time
+   columns as inst? unless :time names how they arrive."
+  [registry schema {:keys [time] :or {time :inst}}]
+  (rt/portable-data registry (walk/postwalk (fn [f] (cond (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst?
+                                                         (and (= :instant time) (= :time/local-date-time f)) :time/instant
+                                                         (and (= :local time) (= :time/instant f)) :time/local-date-time
+                                                         :else f))
+                                            schema)))
 
 (defn- column-type
   "The type of a column for a value compared with it (NULL never matches, so no [:maybe]) or,

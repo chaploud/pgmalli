@@ -189,8 +189,9 @@ columns exist but have no type.
 ```
 
 Options: `:schema` for unqualified table names (default `"public"`) and the row shape of
-`as-read`. A test that runs `check` over every query of an application catches a renamed
-column before any query runs.
+`as-read`; time columns are `inst?` unless `:time` says how they arrive, so the schemas
+need no registry at all. A test that runs `check` over every query of an application
+catches a renamed column before any query runs.
 
 ### Schemas where the registry cannot follow
 
