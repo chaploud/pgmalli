@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ["14", "15", "16", "17", "18"]
+        pg: ["16", "17", "18"]
     env:
       PGMALLI_PG_IMAGE: postgres:${{ matrix.pg }}-alpine
     steps:
@@ -23,6 +23,10 @@ jobs:
             ~/.gitlibs
             ~/.deps.clj
           key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
       - uses: DeLaGuardo/setup-clojure@13.6.1
         with:
           cli: latest

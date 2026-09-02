@@ -33,7 +33,7 @@ contract without a database at hand.
 io.github.chaploud/pgmalli {:mvn/version "..."}   ; deps.edn or bb.edn
 ```
 
-Generating needs PostgreSQL 14 or later and `psql`; connection settings are psql's own
+Generating needs PostgreSQL 16 or later and `psql`; connection settings are psql's own
 (`PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). Applications only need the
 generated files.
 
@@ -157,7 +157,7 @@ read. Expressions are read in the form PostgreSQL's deparser prints them.
 ```
 bb test          # babashka
 bb test:jvm      # JVM
-bb test:matrix   # PostgreSQL 14 to 18, as CI does
+bb test:matrix   # PostgreSQL 16 to 18, as CI does
 bb lint          # clj-kondo
 bb harvest       # rebuild the expression corpus (test/corpus/harvested.edn)
 clojure -T:build jar

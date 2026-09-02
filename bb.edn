@@ -3,8 +3,8 @@
         metosin/malli {:mvn/version "0.20.1"}}
  :tasks {lint {:doc "clj-kondo over src and test"
                :task (shell "clj-kondo --lint src test")}
-         test:matrix {:doc "bb test against PostgreSQL 14 to 18, as CI does"
-                      :task (doseq [v ["14" "15" "16" "17" "18"]]
+         test:matrix {:doc "bb test against PostgreSQL 16 to 18, as CI does"
+                      :task (doseq [v ["16" "17" "18"]]
                               (println "==" v)
                               (shell {:extra-env {"PGMALLI_PG_IMAGE" (str "postgres:" v "-alpine")}} "bb test"))}
          harvest {:doc "Rebuild test/corpus/harvested.edn (needs docker)"

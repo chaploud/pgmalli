@@ -10,7 +10,7 @@
     in {
       devShells = forAll (pkgs: {
         default = pkgs.mkShell {
-          packages = with pkgs; [ clojure babashka clj-kondo postgresql jdk21_headless ];
+          packages = with pkgs; [ clojure babashka clj-kondo postgresql jdk25_headless ];
         };
       });
     };
