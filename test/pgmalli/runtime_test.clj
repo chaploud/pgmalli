@@ -356,9 +356,14 @@
 (deftest inserts-in-the-order-the-database-accepts
   (let [ds (tcg/generate (pgmalli/dataset-generator registry {:rows 4}) 30 42)
         stmts (pgmalli/inserts registry ds)
-        by-table (into {} (map (juxt :insert-into identity)) stmts)]
-    (is (= [:sample.groups :sample.users] (map :insert-into stmts)) "parents first")
-    (is (every? #(and (vector? %) (= [:cast :mood] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
+        by-table (into {} (map (juxt #(let [i (:insert-into %)] (if (vector? i) (last i) i)) identity)) stmts)]
+    (is (= [:sample.groups [{:overriding-value :system} :sample.users]] (map :insert-into stmts)) "parents first; identity columns kept")
+    (is (every? #(and (vector? %) (= [:cast :sample.mood] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
+    (is (not-any? #(contains? % :nick_upper) (:values (by-table :sample.users))) "generated columns are left out")
+    (is (= [[{:overriding-value :system} :sample.users]] (map :insert-into (pgmalli/inserts registry (select-keys ds ["sample.users"]))))
+        "a parent left out is already in the database")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not" (pgmalli/inserts registry {"sample.nope" [{:id 1}]})))
+    (is (= [] (pgmalli/inserts registry {"sample.groups" []})) "no rows, no INSERT")
     (is (every? (fn [[i row]] (or (nil? (:referrer_id row)) (= (:referrer_id row) (:id row))
                                   (some #(= (:referrer_id row) (:id %)) (take i (:values (by-table :sample.users))))))
                 (map-indexed vector (:values (by-table :sample.users))))
@@ -371,4 +376,7 @@
                                                            [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]]}})
         [{:keys [values]}] (pgmalli/inserts reg {"public.docs" [{:id 1 :body {"a" 1} :tags ["x"]} {:id 2 :body [] :tags nil}]})]
     (is (= [{:id 1 :body [:cast "{\"a\":1}" :jsonb] :tags [:array ["x"] :text]} {:id 2 :body [:cast "[]" :jsonb] :tags nil}] values)
-        "json written and cast, arrays with their element type, NULL as it is")))
+        "json written and cast, arrays with their element type, NULL as it is")
+    (is (= [[{:id 1 :body [:cast "1" :jsonb]}] [{:id 2}]]
+           (map :values (pgmalli/inserts reg {"public.docs" [{:id 1 :body 1} {:id 2}]})))
+        "rows with different columns get INSERTs of their own, so a missing column takes its default")))

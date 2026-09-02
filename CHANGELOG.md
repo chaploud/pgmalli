@@ -8,7 +8,8 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `pgmalli/inserts`: a dataset as HoneySQL INSERT maps, parents first and rows referred to
-  first, enum / json / array values in the form the driver needs.
+  first, enum / json / array values in the form the driver needs, generated columns left out,
+  identity values kept.
 
 ### Changed
 

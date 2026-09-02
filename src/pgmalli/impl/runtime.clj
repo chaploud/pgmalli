@@ -592,6 +592,15 @@
 
 ;;; datasets into the database
 
+(defn- sql-type
+  "The type an INSERT casts to: the referenced type's qualified name (:pg.ins/mood is ins.mood;
+   :pg/type carries the name without its schema), else :pg/type."
+  [s]
+  (if (and (vector? s) (= :ref (first s)))
+    (let [k (last s) [ns n] (if (keyword? k) [(namespace k) (name k)] (str/split k #"/" 2))]
+      (str (subs ns 3) "." n))
+    (:pg/type (column-props s))))
+
 (defn- insert-value
   "A dataset value in the form an INSERT needs: an enum cast to its type (a string parameter
    stays text), json written and cast, an array with its element type; anything else as it is."
@@ -601,19 +610,24 @@
         base (if (and (vector? s) (= :ref (first s))) (get registry (last s)) s)
         kind (when (vector? base) (first base))]
     (cond (nil? v) nil
-          (= :enum kind) [:cast v (keyword t)]
+          (= :enum kind) [:cast v (keyword (sql-type s))]
           (#{"json" "jsonb"} t) [:cast (json/write v) (keyword t)]
-          (= :vector kind) [:array (vec v) (keyword (subs t 0 (- (count t) 2)))]
+          (= :vector kind) (let [elem (non-null (last base))
+                                 elem-type (cond (and (vector? elem) (= :ref (first elem))) (sql-type elem)
+                                                 (and t (str/ends-with? t "[]")) (subs t 0 (- (count t) 2)))]
+                             (if elem-type [:array (vec v) (keyword elem-type)] [:array (vec v)]))
           :else v)))
 
 (defn- parents-first
-  "Tables ordered so every table comes after the tables it references (its own excepted)."
+  "Tables ordered so every table comes after the tables it references, among the given ones
+   (a parent not given is already in the database)."
   [ts]
   (loop [out [] left ts]
     (if (empty? left)
       out
-      (let [placed (set (map :table out))
-            ready (filter (fn [t] (every? #(or (= (:table %) (:table t)) (placed (:table %))) (:refs t))) left)]
+      (let [given (set (map :table ts))
+            placed (set (map :table out))
+            ready (filter (fn [t] (every? #(or (= (:table %) (:table t)) (not (given (:table %))) (placed (:table %))) (:refs t))) left)]
         (when (empty? ready)
           (throw (ex-info "tables reference each other in a cycle" {:tables (mapv :table left)})))
         (recur (into out ready) (remove (set ready) left))))))
@@ -638,13 +652,24 @@
             (recur (into out ready) (remove (set ready) left))))))))
 
 (defn inserts
-  "[{:insert-into :schema.table :values [row ...]} ...] for a dataset: the tables it holds,
-   parents before the tables referencing them and, within a table, rows before the rows
-   referencing them; enum, json and array values in the form the driver needs."
+  "[{:insert-into ... :values [row ...]} ...] for a dataset: its tables, parents before the
+   tables referencing them and, within a table, rows before the rows referencing them; enum,
+   json and array values in the form the driver needs. Generated columns are left out; a
+   table with an identity column gets OVERRIDING SYSTEM VALUE, so the ids the rows carry (and
+   the references to them) hold. Rows with the same columns share one INSERT, so a column a
+   row lacks takes its default. A table the registry does not have is an error."
   [registry dataset]
-  (for [{:keys [name table refs]} (parents-first (filter #(contains? dataset (:table %)) (tables registry)))
-        :let [columns (into {} (map (fn [[k _ s]] [k s])) (column-entries (get registry name)))
-              self (filter #(= table (:table %)) refs)]]
-    {:insert-into (keyword table)
-     :values (mapv (fn [row] (into {} (for [[k v] row] [k (insert-value registry (get columns k) v)])))
-                   (rows-parents-first (get dataset table) self))}))
+  (let [ts (filter #(seq (get dataset (:table %))) (tables registry))]
+    (when-let [unknown (seq (remove (set (map :table (tables registry))) (keys dataset)))]
+      (throw (ex-info (str "dataset holds tables the registry does not: " (pr-str unknown)) {:tables unknown})))
+    (for [{:keys [name table refs]} (parents-first ts)
+          :let [entries (column-entries (get registry name))
+                columns (into {} (map (fn [[k _ s]] [k s])) entries)
+                generated (set (for [[k _ s] entries :when (:pg/generated (column-props s))] k))
+                identity? (some (fn [[_ _ s]] (= :always (:pg/identity (column-props s)))) entries)
+                self (filter #(= table (:table %)) refs)
+                rows (for [row (rows-parents-first (get dataset table) self)]
+                       (into {} (for [[k v] row :when (not (generated k))] [k (insert-value registry (get columns k) v)])))]
+          group (partition-by (comp set keys) rows)]
+      {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))
+       :values (vec group)})))

@@ -248,7 +248,8 @@ generate once with a fixed seed, keep the result as EDN, and let tests read that
 
 `inserts` turns a dataset into HoneySQL INSERT maps in an order the database accepts (parents
 first, and within a table the rows referred to first), enum values cast to their type, json
-written and cast, arrays with their element type:
+written and cast, arrays with their element type. Generated columns are left out and identity
+columns kept (`OVERRIDING SYSTEM VALUE`), so the ids the rows refer to each other by hold:
 
 ```clojure
 (doseq [q (pgmalli/inserts registry dataset)]

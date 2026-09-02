@@ -30,8 +30,8 @@
                   (doseq [f un] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
                 (if stale
                   (do (println "generated files are out of date; run generate and commit:")
-                      (doseq [[schema ds] stale, {:keys [name column property checks key file db]} ds]
-                        (println " " schema (or key name) (or column property (when checks "checks") "")
+                      (doseq [[schema ds] stale, {:keys [name column property checks order key file db]} ds]
+                        (println " " schema (or key name) (or column property (when checks "checks") (when order "column order") "")
                                  "file" (pr-str file) "db" (pr-str db)))
                       (System/exit 1))
                   (println "generated files match the database")))

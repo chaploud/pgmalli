@@ -34,26 +34,29 @@
   (let [f (row-parts file) d (row-parts db)
         by (fn [part label] (for [k (distinct (concat (keys (part f)) (keys (part d))))
                                   :when (not= (get (part f) k) (get (part d) k))]
-                              {:name name label k :file (get (part f) k) :db (get (part d) k)}))]
+                              {:name name label k :file (get (part f) k) :db (get (part d) k)}))
+        order (fn [s] (map first (rt/column-entries s)))]
     (cond (= file db) nil
-          (and f d) (concat (by :columns :column) (by :props :property)
-                            (when (not= (:checks f) (:checks d)) [{:name name :checks true :file (:checks f) :db (:checks d)}]))
+          (and f d) (let [ds (concat (by :columns :column) (by :props :property)
+                                     (when (not= (:checks f) (:checks d)) [{:name name :checks true :file (:checks f) :db (:checks d)}]))]
+                      (if (seq ds) ds [{:name name :order true :file (order file) :db (order db)}]))
           :else [{:name name :file file :db db}])))
 
 (defn stale
   "{schema [difference ...]} for schemas whose file differs from what the database yields now;
    nil when everything matches. A difference names the registry entry (:name) and, for a row
-   or insert schema, the :column, :property or :checks that differ, with the :file and :db
-   sides (nil where a side lacks it); :unrendered facts differ under :key. A missing file
-   lists every entry with no :file side."
+   or insert schema, the :column, :property, :checks or column :order that differ, with the
+   :file and :db sides (nil where a side lacks it); the file's other parts (:unrendered,
+   :skipped) as wholes under :key. A missing file lists every entry with no :file side."
   [config]
   (let [diffs (for [[schema {:keys [path data]}] (gen/generated-all config)
                     :let [file (when (.exists (io/file path)) (gen/load-file* path))
                           ds (concat (for [k (distinct (concat (keys (:registry file)) (keys (:registry data))))
                                           d (differences k (get-in file [:registry k]) (get-in data [:registry k]))]
                                       d)
-                                     (when (not= (:unrendered file) (:unrendered data))
-                                       [{:key :unrendered :file (:unrendered file) :db (:unrendered data)}]))]
+                                     (for [k (distinct (concat (keys file) (keys data)))
+                                           :when (and (not (#{:registry :database-version :schema} k)) (not= (get file k) (get data k)))]
+                                       {:key k :file (get file k) :db (get data k)}))]
                     :when (seq ds)]
                 [schema (vec ds)])]
     (when (seq diffs) (into {} diffs))))

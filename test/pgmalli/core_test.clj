@@ -1,6 +1,8 @@
 (ns pgmalli.core-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            clojure.test.check.generators
+            honey.sql
             [malli.core :as m]
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.generate :as gen]
@@ -49,3 +51,30 @@
           (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
+
+(deftest inserts-load-into-the-database
+  (when *db*
+    (let [out-dir (str (doto (File/createTempFile "pgmalli-ins" "") .delete))
+          config {:db *db* :out-dir out-dir}]
+      (exec-sql! "CREATE SCHEMA ins;
+                  CREATE TYPE ins.mood AS ENUM ('happy', 'sad');
+                  CREATE TABLE ins.groups (id integer PRIMARY KEY, name text NOT NULL UNIQUE);
+                  CREATE TABLE ins.users (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+                                          group_id integer NOT NULL REFERENCES ins.groups,
+                                          parent_id bigint REFERENCES ins.users,
+                                          mood ins.mood NOT NULL DEFAULT 'happy',
+                                          nick text NOT NULL CHECK (nick <> ''),
+                                          nick_upper text GENERATED ALWAYS AS (upper(nick)) STORED,
+                                          tags text[] NOT NULL DEFAULT '{}',
+                                          meta jsonb);")
+      (pgmalli/generate! (assoc config :schemas ["ins"]))
+      (let [registry (pgmalli/registry (gen/load-file* (gen/path-for config "ins")))
+            dataset (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 4}) 30 7)
+            statements (pgmalli/inserts registry dataset)
+            counts (fn [] (str/join " " (for [t ["ins.groups" "ins.users"]]
+                                          (str "IF (SELECT count(*) FROM " t ") <> " (count (get dataset t))
+                                               " THEN RAISE EXCEPTION '" t " has the wrong number of rows'; END IF;"))))]
+        (is (= [:ins.groups [{:overriding-value :system} :ins.users]] (map :insert-into statements)))
+        (exec-sql! (str (str/join ";\n" (map #(first (honey.sql/format % {:inline true})) statements)) ";\n"
+                        "DO $$ BEGIN " (counts) " END $$;"))
+        (is true "every INSERT ran, identity ids kept, generated column left to the database")))))
