@@ -32,9 +32,18 @@
    row or insert schema by column, property and CHECKs, anything else as a whole."
   [name file db]
   (let [f (row-parts file) d (row-parts db)
+        props (fn [s] (when (and (vector? s) (map? (second s))) (second s)))
+        props-only? (fn [a b] (and (props a) (props b) (= (assoc a 1 {}) (assoc b 1 {}))))
         by (fn [part label] (for [k (distinct (concat (keys (part f)) (keys (part d))))
-                                  :when (not= (get (part f) k) (get (part d) k))]
-                              {:name name label k :file (get (part f) k) :db (get (part d) k)}))
+                                  :let [a (get (part f) k) b (get (part d) k)]
+                                  :when (not= a b)
+                                  ;; a column whose properties alone differ: one line per property
+                                  d (if (and (= :column label) (props-only? a b))
+                                      (for [pk (distinct (concat (keys (props a)) (keys (props b))))
+                                            :when (not= (get (props a) pk) (get (props b) pk))]
+                                        {:name name :column k :property pk :file (get (props a) pk) :db (get (props b) pk)})
+                                      [{:name name label k :file a :db b}])]
+                              d))
         order (fn [s] (map first (rt/column-entries s)))]
     (cond (= file db) nil
           (and f d) (let [ds (concat (by :columns :column) (by :props :property)
@@ -45,9 +54,10 @@
 (defn stale
   "{schema [difference ...]} for schemas whose file differs from what the database yields now;
    nil when everything matches. A difference names the registry entry (:name) and, for a row
-   or insert schema, the :column, :property, :checks or column :order that differ, with the
-   :file and :db sides (nil where a side lacks it); the file's other parts (:unrendered,
-   :skipped) as wholes under :key. A missing file lists every entry with no :file side."
+   or insert schema, the :column, :property (of the map, or with :column of that column),
+   :checks or column :order that differ, with the :file and :db sides (nil where a side lacks
+   it); the file's other parts (:unrendered, :skipped) as wholes under :key. A missing file
+   lists every entry with no :file side."
   [config]
   (let [diffs (for [[schema {:keys [path data]}] (gen/generated-all config)
                     :let [file (when (.exists (io/file path)) (gen/load-file* path))

@@ -22,17 +22,17 @@
       "generate" (doseq [[schema out] (pgmalli/generate! config)]
                    (println "wrote" out (str "(" schema ")")))
       "check" (let [stale (pgmalli/stale config)]
+                (when stale
+                  (println "generated files are out of date; run generate and commit:")
+                  (doseq [[schema ds] stale, {:keys [name column property checks order key file db]} ds]
+                    (println " " schema (or key name) (str column (when (and column property) " ") property)
+                             (cond checks "checks" order "column order" :else "")
+                             "file" (pr-str file) "db" (pr-str db))))
                 (doseq [schema (:schemas (gen/config config))
                         :let [p (gen/path-for config schema)
                               un (when (.exists (java.io.File. ^String p)) (:unrendered (gen/load-file* p)))]
                         :when (seq un)]
                   (println schema ": " (count un) "unrendered fact(s):")
                   (doseq [f un] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
-                (if stale
-                  (do (println "generated files are out of date; run generate and commit:")
-                      (doseq [[schema ds] stale, {:keys [name column property checks order key file db]} ds]
-                        (println " " schema (or key name) (or column property (when checks "checks") (when order "column order") "")
-                                 "file" (pr-str file) "db" (pr-str db)))
-                      (System/exit 1))
-                  (println "generated files match the database")))
+                (if stale (System/exit 1) (println "generated files match the database")))
       (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))))

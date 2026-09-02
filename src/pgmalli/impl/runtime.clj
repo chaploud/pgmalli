@@ -157,10 +157,14 @@
 (defn- with-inserts [registry]
   (into registry (for [[k s] registry :when (row-schema? s)] [(insert-name k) (insert-schema s registry)])))
 
+(def ^:private json-value
+  "What a json or jsonb column with no CHECK to shape it generates: small JSON values."
+  [:or :string :int :boolean [:map-of {:max 3} :string [:or :string :int]] [:vector {:max 3} [:or :string :int]]])
+
 (defn- gen-hints
-  "Generation hints (:gen/min, :gen/max) for a column schema: key and identity integers are
-   small and positive, strings short, times within the last year. Other columns keep the
-   schema's own bounds."
+  "Generation hints (:gen/min, :gen/max, :gen/schema) for a column schema: key and identity
+   integers are small and positive, strings short, times within the last year, an unshaped
+   json column a JSON value. Other columns keep the schema's own bounds."
   [s key?]
   (let [[t p] (if (and (vector? s) (map? (second s))) [(first s) (second s)] [(if (vector? s) (first s) s) {}])
         now (java.time.Instant/now)
@@ -172,6 +176,7 @@
                 :time/instant {:gen/min (.minus now (java.time.Duration/ofDays 365)) :gen/max now}
                 :time/local-date-time (let [n (java.time.LocalDateTime/now)] {:gen/min (.minusDays n 365) :gen/max n})
                 :time/local-date (let [n (java.time.LocalDate/now)] {:gen/min (.minusDays n 365) :gen/max n})
+                :any (when (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value})
                 nil)]
     (if (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema]))
       (if (map? (second s)) (assoc s 1 (merge p hints)) (into [t hints] (rest s)))
@@ -232,7 +237,7 @@
 (defn- without-gen
   "Schema data without the generation hints the registry added when it was loaded."
   [schema]
-  (walk/postwalk #(if (map? %) (dissoc % :gen/min :gen/max) %) schema))
+  (walk/postwalk #(if (map? %) (dissoc % :gen/min :gen/max :gen/schema) %) schema))
 
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."

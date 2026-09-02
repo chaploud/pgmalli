@@ -16,6 +16,8 @@ All notable changes to this project are documented here. The format follows
 - `pgmalli/stale` returns the differences by registry entry and, for row and insert schemas,
   by column, property and CHECKs, each with its file and database sides; `check` prints one
   line per difference instead of the EDN diff.
+- A json or jsonb column with no CHECK shaping it generates JSON values (strings, numbers,
+  booleans, small maps and vectors) rather than any value.
 - `pgmalli.honeysql`: an ambiguous column problem carries the tables it could belong to, under
   `:candidates`.
 

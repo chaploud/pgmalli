@@ -8,7 +8,8 @@
             [malli.error :as me]
             malli.experimental.time
             honey.sql
-            [pgmalli.core :as pgmalli]))
+            [pgmalli.core :as pgmalli]
+            [pgmalli.impl.json :as json]))
 
 (def registry (pgmalli/registry "sample"))
 (def opts {:registry registry})
@@ -377,6 +378,9 @@
         [{:keys [values]}] (pgmalli/inserts reg {"public.docs" [{:id 1 :body {"a" 1} :tags ["x"]} {:id 2 :body [] :tags nil}]})]
     (is (= [{:id 1 :body [:cast "{\"a\":1}" :jsonb] :tags [:array ["x"] :text]} {:id 2 :body [:cast "[]" :jsonb] :tags nil}] values)
         "json written and cast, arrays with their element type, NULL as it is")
+    (is (every? #(try (json/write %) true (catch Exception _ false))
+                (map :body (tcg/sample (mg/generator :pg.public/docs {:registry reg}) 50)))
+        "an unshaped jsonb column generates values JSON can carry")
     (is (= [[{:id 1 :body [:cast "1" :jsonb]}] [{:id 2}]]
            (map :values (pgmalli/inserts reg {"public.docs" [{:id 1 :body 1} {:id 2}]})))
         "rows with different columns get INSERTs of their own, so a missing column takes its default")))
