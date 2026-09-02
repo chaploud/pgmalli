@@ -167,6 +167,31 @@ qualified by the table, NULL columns may be missing, timestamps may arrive as In
 
 `:kebab? true` matches the kebab builders; `:time :local` matches read-as-local.
 
+### Queries checked against the registry
+
+`pgmalli.honeysql` reads HoneySQL query data, no database needed: the tables and columns a
+query touches must exist, an INSERT must carry the columns its insert schema requires, an
+enum literal must be one of the enum's values. From the same data it derives the types of
+the query's parameters and of the rows it returns, as a malli function schema for
+`malli.instrument` or `malli.dev`. CTEs, subqueries and table functions are opaque: their
+columns exist but have no type.
+
+```clojure
+(require '[pgmalli.honeysql :as h])
+
+(h/check registry {:insert-into :users :values [{:group_id 1 :mood "angry"}]})
+;; => [{:kind :missing-required-column :table "public.users" :column "score"}
+;;     {:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
+
+(h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]}
+                {:qualified? true :nil-columns :absent :time :instant})
+;; => [:=> [:cat [:int {...}]] [:sequential [:map [:users/id [:int {...}]] [:users/nick {:optional true} [:string {...}]]]]]
+```
+
+Options: `:schema` for unqualified table names (default `"public"`) and the row shape of
+`as-read`. A test that runs `check` over every query of an application catches a renamed
+column before any query runs.
+
 ### Schemas where the registry cannot follow
 
 `:malli/schema` metadata, `malli.dev/start!` and other tools read schemas through malli's

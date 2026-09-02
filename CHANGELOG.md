@@ -13,6 +13,9 @@ All notable changes to this project are documented here. The format follows
   NULL columns, kebab-case keys, timestamps as Instants or LocalDateTimes).
 - `pgmalli/portable`: the named schema as data malli's default registry reads, for
   `:malli/schema` metadata and tools that cannot take the registry.
+- `pgmalli.honeysql`: HoneySQL query data checked against the registry (tables, columns,
+  required INSERT columns, enum literals) and typed (parameters, rows, a function schema for
+  instrumentation), without a database.
 
 ## [0.2.40] - 2026-09-03
 

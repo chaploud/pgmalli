@@ -256,6 +256,11 @@
       (if (= 1 (count (remove map? parts))) (first (remove map? parts)) (into [:and] parts)))
     :else f))
 
+(defn portable-data
+  "Schema data from the registry as data malli's default registry reads; see portable."
+  [registry schema]
+  (without-gen (walk/prewalk #(portable-node registry %) schema)))
+
 (defn portable
   "The schema named in the registry as data malli's default registry reads (with
    malli.experimental.time for the time types): references to the schema's own types inlined,
@@ -263,7 +268,7 @@
    The CHECKs only pgmalli evaluates (:pg/check, :pg/check-value) are left out, so this is
    weaker than the registry's schema; use it where the registry cannot follow."
   [registry name]
-  (without-gen (walk/prewalk #(portable-node registry %) (get registry name))))
+  (portable-data registry (get registry name)))
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it: keys qualified by the table
