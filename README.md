@@ -66,14 +66,15 @@ For a schema `public`, the registry contains:
 | `:pg.public/<enum>` | `[:enum ...]` |
 | `:pg.public/<domain>` | base type with the domain's CHECK applied, `[:maybe ...]` unless the domain is NOT NULL |
 | `:pg.public/<table>` | a valid row: `[:map ...]`, wrapped in `[:and ...]` with the table's constraints when it has any |
-| `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, columns with a default or NULL optional, `{:closed true}`. Derived from the row schema when the registry is loaded, so the files hold rows only |
+| `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, columns with a default or NULL optional, `{:closed true}`; the table's constraints see an omitted column as what the database stores in it (its literal default, else NULL) |
 | `:pg/check` | the schema type behind `[:pg/check expr]` |
 
 Column schemas carry provenance in their properties: `:pg/type`, `:pg/default` (a literal or
 the default expression as data), `:pg/identity` (`:always`, `:default` or `:serial`),
 `:pg/generated`, `:pg/constraint` (names of the CHECKs that shaped it). Literal defaults also
-set malli's `:default`. The map carries `:pg/table`, `:pg/primary-key`, `:pg/unique` and
-`:pg/foreign-keys` as `[[columns] "table" [columns]]`, composite keys included.
+set malli's `:default`. The map carries `:pg/table` (`"public.users"`), `:pg/primary-key`,
+`:pg/unique` and `:pg/foreign-keys` as `{:columns [...] :table "public.groups" :to [...]}`,
+composite keys included.
 
 Identifiers that are not plain names (`Order Items`) become string keys. Spelling is left as
 the database has it.
@@ -111,10 +112,9 @@ a malli schema (`[:ref :app/name]` defined in your own registry, for instance) o
 `:pg/check` keeps the expression as data (`[:<= :score :total]`, HoneySQL-style) and
 evaluates it as PostgreSQL would: NULL passes, integer division truncates, casts convert, an
 expression the database would fail on (division by zero, a cast that does not parse) fails
-the row. A column missing from the map is NULL to it, so an insert that omits a defaulted
-column is checked as if the column were NULL. The test suite compares its verdicts with
-PostgreSQL's on generated rows. A CHECK using an operator, cast or regex syntax outside its
-vocabulary stays in `:unrendered`.
+the row. A column missing from the map is NULL to it (its literal default in an insert
+schema). A CHECK using an operator, cast or regex syntax outside its vocabulary stays in
+`:unrendered`.
 
 ## Working with the registry
 
@@ -122,10 +122,9 @@ vocabulary stays in `:unrendered`.
 (pgmalli/registry "public" "auth")          ; several schemas, plus malli's defaults, malli.util and malli.experimental.time
 (pgmalli/columns registry :pg.public/users) ; the [:map ...] alone, for malli.util
 (m/decode :pg.public/users jdbc-row {:registry registry} (pgmalli/transformer))
-                                            ; java.sql.Date / Timestamp, Instant (as next.jdbc's read-as-instant
-                                            ; returns for timestamp columns) and strings into the registry's types
+                                            ; JDBC (java.sql.Date / Timestamp, Instant) and string values into the registry's types
 (pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})
-                                            ; the zone Instants are read in for timestamp columns; default: the JVM's
+                                            ; zone for Instants landing in timestamp (without time zone) columns; default the JVM's
 ```
 
 Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints within
@@ -135,8 +134,7 @@ a table, foreign keys across tables, including tables of other schemas in the re
 (def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}
 (m/validate dataset {"public.groups" [{:id 1 ...}] "public.users" [{:group_id 1 ...}]} {:registry registry})
 (clojure.test.check.generators/sample (pgmalli/dataset-generator registry {:rows 5}))
-;; tables in foreign-key order, referencing columns drawn from generated rows;
-;; :rows are tried per table, rows that end up violating a constraint are dropped
+;; :rows tried per table; rows violating a constraint are dropped
 ```
 
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the

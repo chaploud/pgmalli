@@ -4,7 +4,7 @@ Issues and pull requests are welcome.
 
 - `bb test` runs the suite on babashka, `bb test:jvm` on the JVM. Both need docker for the
   database tests; `PGMALLI_SKIP_DB=1` skips them.
-- `bb test:matrix` runs the suite against PostgreSQL 16 to 18, which is what CI does.
+- `bb test:matrix` runs the suite against every PostgreSQL version CI covers.
 - `bb lint` runs clj-kondo. `bb harvest` rebuilds the expression corpus (needs docker).
 - Database tests start a throwaway PostgreSQL container; `PGMALLI_PG_IMAGE` selects the image.
 - `clojure -T:build jar` builds; a release is a pushed `v*` tag. Dependency updates come from

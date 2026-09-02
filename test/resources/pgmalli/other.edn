@@ -3,9 +3,9 @@
  :registry
  {:pg.other/notes
   [:map
-   {:pg/foreign-keys [[["user_id"] "sample.users" ["id"]]],
+   {:pg/foreign-keys [{:columns ["user_id"], :table "sample.users", :to ["id"]}],
     :pg/primary-key ["id"],
-    :pg/table "notes"}
+    :pg/table "other.notes"}
    [:id [:int {:pg/type "integer"}]]
    [:user_id [:int {:pg/type "bigint"}]]]},
  :schema "other",

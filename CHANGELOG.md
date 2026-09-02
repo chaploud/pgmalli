@@ -10,9 +10,9 @@ All notable changes to this project are documented here. The format follows
 - The registry is loaded from the classpath by schema name: `(pgmalli/registry "public")`.
   malli is now a dependency of the library. `pgmalli/path` and the by-path forms of
   `registry` and `unrendered` are gone.
-- Row schemas carry `:pg/primary-key`, `:pg/unique` and `:pg/foreign-keys` (composite keys
-  included) on the map, and `:pg/identity` (`:always`, `:default`, `:serial`) and
-  `:pg/generated` on columns.
+- Row schemas carry `:pg/table` (`"schema.table"`), `:pg/primary-key`, `:pg/unique` and
+  `:pg/foreign-keys` (`{:columns :table :to}`, composite keys included) on the map, and
+  `:pg/identity` (`:always`, `:default`, `:serial`) and `:pg/generated` on columns.
 - CHECKs that branch on one column's value become `[:multi ...]`; ORs of column patterns
   become `[:or ...]`; every other CHECK is `[:pg/check expr]`, a schema type registered by
   pgmalli that evaluates the expression data with PostgreSQL's semantics. Facts that could not
@@ -27,7 +27,8 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `:pg.<schema>.<table>/insert` schemas, derived when a registry is loaded: identity ALWAYS
-  and generated columns removed, defaulted and nullable columns optional, closed maps.
+  and generated columns removed, defaulted and nullable columns optional, closed maps; table
+  constraints see omitted columns as their literal defaults.
 - `pgmalli/columns`, `pgmalli/transformer` (with a `:zone` option), `pgmalli/dataset-schema`,
   `pgmalli/dataset-generator`.
 

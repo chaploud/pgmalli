@@ -21,7 +21,7 @@
             [clojure.string :as str]))
 
 (def ^:private parse-json
-  ;; babashka ships cheshire but cannot load data.json; the JVM gets data.json as the only dependency.
+  ;; babashka ships cheshire and cannot load data.json; the JVM uses data.json
   (if (System/getProperty "babashka.version")
     (let [f (requiring-resolve 'cheshire.core/parse-string)] #(f %))
     (let [f (requiring-resolve 'clojure.data.json/read-str)] #(f %))))

@@ -4,7 +4,6 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [clojure.walk :as walk]
             [malli.core :as m]
             [malli.experimental.time :as time]
             malli.experimental.time.generator
@@ -15,12 +14,12 @@
 
 (def check-schema
   "[:pg/check expr]: a row passes when the CHECK expression data does (pgmalli.impl.eval).
-   A column missing from the row counts as NULL."
+   A column missing from the row is NULL, or its value in the :pg/defaults property."
   (m/-simple-schema
    {:type :pg/check
-    :compile (fn [_ [expr] _]
+    :compile (fn [{:keys [pg/defaults]} [expr] _]
                (let [pass? (check/checker expr)]
-                 {:pred (fn [row] (and (map? row) (pass? row))) :min 1 :max 1}))}))
+                 {:pred (fn [row] (and (map? row) (pass? (merge defaults row)))) :min 1 :max 1}))}))
 
 (defn read-generated
   "The generated data for a schema name, from the classpath (pgmalli/<schema>.edn)."
@@ -52,23 +51,50 @@
     (when-not (or (:pg/generated props) (= :always (:pg/identity props)))
       [k (cond-> p (or (:pg/identity props) (contains? props :pg/default) nullable?) (assoc :optional true)) s])))
 
-(defn- optional-keys
-  "Every [:map ...] without properties (the fragments of :multi and :or) with all keys optional."
-  [schema]
-  (walk/postwalk (fn [f]
-                   (if (and (vector? f) (= :map (first f)) (not (map? (second f))))
-                     (into [:map] (map (fn [e] (let [[k p s] (entry-parts e)] [k (assoc p :optional true) s])) (rest f)))
-                     f))
-                 schema))
+(defn- omitted-values
+  "What the database stores for a column left out of an INSERT: {column literal} for literal
+   defaults; columns whose default is an expression are in :unknown."
+  [entries]
+  (reduce (fn [acc e]
+            (let [[k _ s] (entry-parts e) props (column-props s)]
+              (cond (contains? props :default) (assoc-in acc [:literal k] (:default props))
+                    (contains? props :pg/default) (update acc :unknown conj k)
+                    :else acc)))
+          {:literal {} :unknown #{}}
+          entries))
+
+(defn- as-insert-sees-it
+  "A table constraint with omitted columns standing for what the database stores in them:
+   fragment keys are optional unless NULL (or the literal default) would violate them, a :multi
+   on a column with a literal default takes that value's branch when the column is absent, and
+   a :pg/check evaluates the literal defaults."
+  [schema {:keys [literal unknown]} registry]
+  (letfn [(entry [e] (let [[k p s] (entry-parts e)]
+                       (if (or (unknown k) (m/validate s (get literal k) {:registry registry}))
+                         [k (assoc p :optional true) (go s)]
+                         [k p (go s)])))
+          (go [f]
+            (if-not (vector? f)
+              f
+              (case (first f)
+                :pg/check (let [[_ p e] (if (map? (second f)) f [:pg/check {} (second f)])]
+                            [:pg/check (assoc p :pg/defaults literal) e])
+                :map (if (map? (second f)) f (into [:map] (map entry (rest f))))
+                :multi (let [f (mapv go f)
+                             absent (some (fn [[v s]] (when (= v (get literal (:dispatch (second f)))) s)) (drop 2 f))]
+                         (cond-> f absent (conj [nil absent])))
+                (mapv go f))))]
+    (go schema)))
 
 (defn- insert-schema
   "What an INSERT may carry: identity ALWAYS and generated columns removed, columns with a
-   default or NULL optional, closed map; the table constraints follow with their keys optional."
-  [row]
+   default or NULL optional, closed map; then the table constraints, see as-insert-sees-it."
+  [row registry]
   (let [[_ props & entries] (row-map row)
-        m (into [:map (assoc props :closed true)] (keep insert-entry entries))]
+        m (into [:map (assoc props :closed true)] (keep insert-entry entries))
+        omitted (omitted-values entries)]
     (if (= :and (first row))
-      (into [:and m] (map optional-keys (drop 2 row)))
+      (into [:and m] (map #(as-insert-sees-it % omitted registry) (drop 2 row)))
       m)))
 
 (defn- insert-name
@@ -85,15 +111,17 @@
     (and (:pg/table props) (not (:closed props)))))
 
 (defn- with-inserts [registry]
-  (into registry (for [[k s] registry :when (row-name? registry k)] [(insert-name k) (insert-schema s)])))
+  (into registry (for [[k s] registry :when (row-name? registry k)] [(insert-name k) (insert-schema s registry)])))
 
 (defn registry
-  "malli registry with the generated schemas (schema names read from the classpath, or generated
-   data maps), insert schemas derived from them, and everything they need (malli defaults,
-   malli.util, malli.experimental.time)."
+  "The registry pgmalli.core/registry documents."
   [& schemas]
   (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas) {:pg/check check-schema})
         generated (apply merge (map #(:registry (if (map? %) % (read-generated %))) schemas))]
+    (doseq [[k s] generated
+            :let [table (when (vector? s) (:pg/table (second (row-map s))))]
+            :when (and (string? table) (not (str/includes? table ".")))]
+      (throw (ex-info (str k " was generated by an older pgmalli (:pg/table is not schema-qualified); run generate! again") {:name k})))
     (merge base (with-inserts (merge base generated)) generated)))
 
 (defn columns
@@ -103,11 +131,9 @@
     (if (= :and (m/type s)) (first (m/children s)) s)))
 
 (defn transformer
-  "Decodes values as they arrive from JDBC drivers or JSON into the types the registry uses:
-   java.sql.Timestamp / java.util.Date -> Instant, java.sql.Date -> LocalDate, Instant and
-   java.util.Date -> LocalDate / LocalDateTime in :zone (default: the JVM's zone, which is what
-   JDBC drivers use when they hand out an Instant for a timestamp column), strings -> numbers,
-   booleans and temporal types (malli's string transformer)."
+  "Decodes JDBC and string values into the registry's types: java.sql.Timestamp and
+   java.util.Date -> Instant, java.sql.Date -> LocalDate, an Instant or java.util.Date landing
+   in a date or timestamp (without time zone) column is read in :zone, default the JVM's."
   ([] (transformer {}))
   ([{:keys [zone] :or {zone (java.time.ZoneId/systemDefault)}}]
    (let [instant (fn [x] (if (instance? java.util.Date x) (.toInstant ^java.util.Date x) x))]
@@ -124,23 +150,16 @@
 
 ;;; datasets: several tables at once, with keys and references checked
 
-(defn- schema-of
-  "The PostgreSQL schema a registry name belongs to (:pg.public/users -> \"public\")."
-  [k]
-  (subs (if (keyword? k) (namespace k) (first (str/split k #"/" 2))) 3))
-
 (defn- tables
-  "[{:name :table :key-sets :refs} ...] for every row schema: :table is schema-qualified, as are
-   the targets in :refs ([[keys table keys] ...]); references to tables outside the registry are left out."
+  "[{:name :table :key-sets :refs} ...] for every row schema; :refs is [[keys table keys] ...],
+   references to tables outside the registry left out."
   [registry]
   (let [ts (for [k (sort-by str (keys registry)) :when (row-name? registry k)
-                 :let [{:keys [pg/table pg/primary-key pg/unique pg/foreign-keys]} (m/properties (columns registry k))
-                       schema (schema-of k)]]
+                 :let [{:keys [pg/table pg/primary-key pg/unique pg/foreign-keys]} (m/properties (columns registry k))]]
              {:name k
-              :table (str schema "." table)
+              :table table
               :key-sets (remove nil? (cons primary-key unique))
-              :refs (for [[cols to-table to] foreign-keys]
-                      [(mapv keyword cols) (if (str/includes? to-table ".") to-table (str schema "." to-table)) (mapv keyword to)])})
+              :refs (for [{:keys [columns table to]} foreign-keys] [(mapv keyword columns) table (mapv keyword to)])})
         known (set (map :table ts))]
     (mapv (fn [t] (update t :refs #(vec (filter (comp known second) %)))) ts)))
 

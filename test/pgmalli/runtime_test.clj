@@ -15,15 +15,19 @@
 
 (deftest registry-from-classpath
   (is (m/validate :pg.sample/users user opts))
-  (is (= {:pg/table "users" :pg/primary-key ["id"]
-          :pg/foreign-keys [[["group_id" "group_name"] "groups" ["id" "name"]] [["group_id"] "groups" ["id"]] [["referrer_id"] "users" ["id"]]]}
+  (is (= {:pg/table "sample.users" :pg/primary-key ["id"]
+          :pg/foreign-keys [{:columns ["group_id" "group_name"] :table "sample.groups" :to ["id" "name"]}
+                            {:columns ["group_id"] :table "sample.groups" :to ["id"]}
+                            {:columns ["referrer_id"] :table "sample.users" :to ["id"]}]}
          (m/properties (pgmalli/columns registry :pg.sample/users))))
   (is (= {:closed_at ["closed_check"]}
          (me/humanize (m/explain :pg.sample/users (assoc user :closed_at nil) opts)))
       "errors name the constraint")
   (is (= ["score_check"]
          (me/humanize (m/explain :pg.sample/users (assoc user :score 3) opts))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope"))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope")))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "t"} [:a :int]]}}))
+      "files from before the schema-qualified :pg/table are refused, not half-read"))
 
 (deftest insert-schemas
   (let [insert (fn [row] (m/validate :pg.sample.users/insert row opts))]
@@ -34,14 +38,43 @@
     (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :seq 7 :total 9}) "serials and defaults may be given")
     (is (not (insert {:group_id 1 :mood "happy" :closed_at (java.time.Instant/now) :score 1})) "table constraints apply")
     (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 5 :total 2})) ":pg/check too")
-    (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 5}) "an omitted column is NULL to a :pg/check, even with a default"))
+    (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 5}) "score <= total holds with the default total 10")
+    (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 15})) "and fails against it, as the INSERT would")
+    (is (not (insert {:group_id 1 :closed_at (java.time.Instant/now) :score 1})) "omitting mood means happy, which forbids closed_at")
+    (is (insert {:group_id 1 :score 1}) "happy with no closed_at")
+    (is (not (insert {:group_id 1 :mood "sad" :score 1})) "an omitted column without a default is NULL, which sad forbids"))
   (testing "from generated data instead of the classpath"
-    (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "Order Items"} ["line no" [:int {:pg/type "integer" :pg/default 1}]]]
-                                            :pg.public/t [:and [:map {:pg/table "t"} [:a [:int {:pg/type "integer"}]] [:b [:maybe [:int {:pg/type "integer"}]]]]
+    (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:int {:pg/type "integer" :pg/default 1}]]]
+                                            :pg.public/t [:and [:map {:pg/table "public.t"}
+                                                                [:a [:int {:pg/type "integer"}]]
+                                                                [:b [:maybe [:int {:pg/type "integer" :pg/default 5 :default 5}]]]]
                                                           [:or [:map [:a {:error/message "c"} [:int {:min 1}]]] [:map [:b :nil]]]]}})]
       (is (m/validate "pg.public.Order Items/insert" {} {:registry reg}) "string keys follow the same naming")
-      (is (m/validate :pg.public.t/insert {:a 0} {:registry reg}) "entries with properties inside fragments survive")
-      (is (not (m/validate :pg.public.t/insert {:a 0 :b 1} {:registry reg}))))))
+      (is (m/validate :pg.public.t/insert {:a 0 :b nil} {:registry reg}) "entries with properties inside fragments survive")
+      (is (not (m/validate :pg.public.t/insert {:a 0} {:registry reg})) "an omitted b is 5, not NULL, so the :or has no alternative left")
+      (is (not (m/validate :pg.public.t/insert {:a 0 :b 1} {:registry reg})))))
+  (testing "what an omitted column stands for"
+    (let [reg (pgmalli/registry {:registry {:pg.public/t [:and [:map {:pg/table "public.t"}
+                                                                [:status [:string {:pg/type "text" :pg/default "approved" :default "approved"}]]
+                                                                [:approver [:maybe [:string {:pg/type "text"}]]]
+                                                                [:a [:int {:pg/type "integer"}]]
+                                                                [:b [:int {:pg/type "integer" :pg/default 5 :default 5}]]
+                                                                [:c [:int {:pg/type "integer" :pg/default [:nextval "s"]}]]]
+                                                          [:multi {:dispatch :status}
+                                                           ["approved" [:map [:approver :string]]]
+                                                           [:malli.core/default [:map [:approver :nil]]]]
+                                                          [:or [:map [:a [:int {:min 1}]]] [:map [:b [:int {:min 1}]]]]
+                                                          [:pg/check [:<= :a :b]]
+                                                          [:pg/check [:<= :a :c]]]}})
+          insert (fn [row] (m/validate :pg.public.t/insert row {:registry reg}))]
+      (is (insert {:status "pending" :approver nil :a 0}) "a value without a branch of its own still takes the default branch")
+      (is (not (insert {:approver nil :a 0})) "omitted status is approved, which needs an approver")
+      (is (insert {:approver "x" :a 0}) "the default b satisfies the :or, so it may be omitted")
+      (is (insert {:approver "x" :a 5}) "a :pg/check sees the default b")
+      (is (not (insert {:approver "x" :a 6})))
+      (is (insert {:approver "x" :a 6 :b 9}))
+      (is (not (insert {:approver "x" :a 1 :b nil})) "an explicit NULL wins over the default")
+      (is (insert {:approver "x" :a 100 :b 200}) "an expression default is unknown, so the :pg/check on c cannot fail"))))
 
 (deftest transformer-decodes-jdbc-values
   ;; babashka cannot construct java.sql.Timestamp; the JVM run covers this

@@ -5,8 +5,7 @@
    Application side (files on the classpath as pgmalli/<schema>.edn): registry, unrendered,
    columns, transformer, dataset-schema, dataset-generator.
 
-   Config: {:schemas [\"public\"] :out-dir \"resources/pgmalli\" :overrides {} :db {}},
-   every key optional. The config, the generated file layout and the fact vocabulary
+   The config (pgmalli.impl.generate), the generated file layout and the fact vocabulary
    (pgmalli.impl.pattern) are the stable contract; pgmalli.impl.* may change without notice."
   (:require [clojure.data :as data]
             [clojure.java.io :as io]

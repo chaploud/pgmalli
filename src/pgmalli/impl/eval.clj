@@ -66,7 +66,8 @@
 (defn- ev [e row]
   (cond
     (or (string? e) (number? e) (boolean? e) (nil? e)) e
-    (keyword? e) (get row e)
+    ;; columns whose names are not plain identifiers are string keys in rows
+    (keyword? e) (if (contains? row e) (get row e) (get row (name e)))
     :else
     (let [[op & args] e
           a #(ev (first args) row)

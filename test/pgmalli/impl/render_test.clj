@@ -26,7 +26,10 @@
                                {:name "seq" :position 11 :data_type "integer" :is_nullable false :default_value "nextval('users_seq_seq'::regclass)"}
                                {:name "full_name" :position 12 :data_type "text" :is_nullable true :generated_expr "(nick || 'x'::text)"}
                                {:name "score" :position 13 :data_type "integer" :is_nullable false}
-                               {:name "total" :position 14 :data_type "integer" :is_nullable false}]
+                               {:name "total" :position 14 :data_type "integer" :is_nullable false}
+                               {:name "price" :position 15 :data_type "numeric" :is_nullable false :default_value "0"}
+                               {:name "since" :position 16 :data_type "date" :is_nullable false :default_value "'2020-01-01'::date"}
+                               {:name "flag" :position 17 :data_type "boolean" :is_nullable false :default_value "false"}]
                      :constraints {"users_pkey" {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"]}
                                    "users_nick_key" {:name "users_nick_key" :type "UNIQUE" :columns ["nick"]}
                                    "users_group_id_fkey" {:name "users_group_id_fkey" :type "FOREIGN KEY" :columns ["group_id"]
@@ -47,19 +50,22 @@
     (is (= [:enum "happy" "sad"] (:pg.public/mood registry)))
     (is (= [:maybe [:and :string [:re "@"]]] (:pg.public/email registry)) "domain = base type + its CHECK")
     (is (= :and (first users)) "columns, then the table constraints")
-    (is (= [:map {:pg/table "users" :pg/primary-key ["id"] :pg/unique [["nick"]] :pg/foreign-keys [[["group_id"] "groups" ["id"]]]}
+    (is (= [:map {:pg/table "public.users" :pg/primary-key ["id"] :pg/unique [["nick"]] :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
             [:age [:maybe [:int {:min 0 :max 150 :pg/type "integer" :pg/constraint ["age_check"]}]]]
             [:born [:maybe [:time/local-date {:pg/type "date"}]]]
             [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
             [:created_at [:time/instant {:pg/type "timestamptz" :pg/default [:now]}]]
+            [:flag [:boolean {:pg/type "boolean" :pg/default false :default false}]]
             [:full_name [:maybe [:string {:pg/type "text" :pg/generated true}]]]
             [:group_id [:int {:pg/type "integer"}]]
             [:id [:int {:pg/type "bigint" :pg/identity :always}]]
             [:mail [:maybe [:ref {:pg/type "email"} :pg.public/email]]]
             [:mood [:ref {:pg/type "mood" :pg/default "happy" :default "happy"} :pg.public/mood]]
             [:nick [:maybe [:string {:max 40 :pg/type "character varying"}]]]
+            [:price ['decimal? {:pg/type "numeric" :pg/default 0 :default 0M}]]
             [:score [:int {:pg/type "integer"}]]
             [:seq [:int {:pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
+            [:since [:time/local-date {:pg/type "date" :pg/default "2020-01-01"}]]
             [:title [:and {:pg/type "text" :pg/constraint ["title_check"]} [:string {:min 1}] [:re "\\S"]]]
             [:total [:int {:pg/type "integer"}]]]
            (second users)))
@@ -74,7 +80,8 @@
     (testing "validation and generation through malli"
       (let [reg (registry-with registry)
             row {:id 1 :group_id 1 :mood "sad" :mail "a@b" :nick "n" :age 30 :title "t" :born (java.time.LocalDate/now)
-                 :closed_at (java.time.Instant/now) :created_at (java.time.Instant/now) :seq 1 :full_name nil :score 1 :total 2}]
+                 :closed_at (java.time.Instant/now) :created_at (java.time.Instant/now) :seq 1 :full_name nil :score 1 :total 2
+                 :price 1M :since (java.time.LocalDate/now) :flag true}]
         (is (m/validate :pg.public/users row {:registry reg}))
         (is (not (m/validate :pg.public/users (assoc row :closed_at nil) {:registry reg})) "sad needs closed_at")
         (is (not (m/validate :pg.public/users (assoc row :title "  ") {:registry reg})) "trimmed non-blank")
@@ -103,7 +110,7 @@
                                                             :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
                                                                                     {:name "b" :position 2 :data_type "integer" :is_nullable false}]
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))]
-    (is (= [:map {:pg/table "t"} [:a [:int {:pg/type "integer"}]] [:b [:int {:pg/type "integer"}]]] (:pg.public/t registry)))
+    (is (= [:map {:pg/table "public.t"} [:a [:int {:pg/type "integer"}]] [:b [:int {:pg/type "integer"}]]] (:pg.public/t registry)))
     (is (= [{:fact :table-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered)))))
 
 (deftest facts-lost-inside-branches-are-reported
@@ -123,7 +130,7 @@
 (deftest odd-identifiers
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
                                                  :tables {"Order Items" {:columns [{:name "line no" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}}}))]
-    (is (= [:map {:pg/table "Order Items"} ["line no" [:int {:pg/type "integer"}]]] (get registry "pg.public/Order Items")))))
+    (is (= [:map {:pg/table "public.Order Items"} ["line no" [:int {:pg/type "integer"}]]] (get registry "pg.public/Order Items")))))
 
 (deftest deterministic
   (is (= (r/registry facts) (r/registry (shuffle facts)))))

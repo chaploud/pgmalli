@@ -1,5 +1,5 @@
 (ns pgmalli.impl.render
-  "Facts -> malli schemas. Every fact kind has exactly one rendering.
+  "Facts -> malli schemas.
 
    registry returns {:registry {name schema} :unrendered [fact] :skipped [fact]} with
      :pg.<schema>/<type>     enum types and domains
@@ -9,8 +9,8 @@
    and [:pg/check expr] for everything else pgmalli.impl.eval can evaluate. Insert schemas are
    derived from row schemas when a registry is loaded (pgmalli.impl.runtime).
 
-   Properties: on the map :pg/table :pg/primary-key :pg/unique :pg/foreign-keys
-   ([[columns] table [columns]], tables of other schemas prefixed); on columns :pg/type
+   Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique and
+   :pg/foreign-keys ({:columns :table :to} each, tables schema-qualified); on columns :pg/type
    :pg/default :pg/identity :pg/generated :pg/constraint, and malli's :default for literal defaults.
 
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
@@ -58,6 +58,19 @@
 (defn- literal [e]
   (let [e (strip-casts e)]
     (when (or (string? e) (number? e) (boolean? e)) e)))
+
+(defn- default-value
+  "A literal default as a value of the column's schema (malli's :default), or nil when the
+   literal is not one (a date as a string, a domain's base type unknown here)."
+  [schema lit domain?]
+  (let [base (if (vector? schema) (first schema) schema)]
+    (cond
+      domain? nil
+      (and (#{:int} base) (integer? lit)) lit
+      (and (= :double base) (number? lit)) (double lit)
+      (and (= 'decimal? base) (number? lit)) (bigdec lit)
+      (and (#{:string :ref :enum} base) (string? lit)) lit
+      (and (= :boolean base) (boolean? lit)) lit)))
 
 (defn- apply-fact
   "[schema unrendered] after one fact on a column schema."
@@ -138,7 +151,7 @@
         lit (some-> default literal)
         schema (with-props schema {:pg/type type
                                    :pg/default (if (some? lit) lit default)
-                                   :default lit
+                                   :default (when (some? lit) (default-value schema lit (some (comp #{:domain-ref} :fact) facts)))
                                    :pg/identity identity
                                    :pg/generated (when generated true)
                                    :pg/constraint (when (seq applied) (vec (sort applied)))})
@@ -183,7 +196,6 @@
                   {:schema (into [:or {:error/message constraint}] (map :schema alts))
                    :unrendered (mapcat :unrendered alts)
                    :skipped (mapcat :skipped alts)})
-      ;; NOT VALID: existing rows may violate it, so it is reported, not enforced
       :table-check {:schema (when (and (not (false? (:valid? f))) (check/supported? (:expr f)))
                               [:pg/check {:pg/constraint constraint :error/message constraint} (:expr f)])}
       {})))
@@ -192,12 +204,13 @@
 
 (defn- map-props [schema-name table tfacts]
   (into {} (remove (comp nil? val))
-        {:pg/table table
+        {:pg/table (str schema-name "." table)
          :pg/primary-key (some #(when (= :primary-key (:fact %)) (:columns %)) tfacts)
          :pg/unique (not-empty (vec (sort (map :columns (filter (comp #{:unique} :fact) tfacts)))))
-         :pg/foreign-keys (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:references} :fact) tfacts))
-                                                :let [{:keys [schema table columns]} (:to f)]]
-                                            [(:columns f) (if (= schema schema-name) table (str schema "." table)) columns])))}))
+         :pg/foreign-keys (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:references} :fact) tfacts))]
+                                            {:columns (:columns f)
+                                             :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
+                                             :to (get-in f [:to :columns])})))}))
 
 (defn- table-checks
   "{:schemas :unrendered :skipped} of the constraints that span columns."

@@ -3,7 +3,7 @@
  :registry
  {:pg.sample/groups
   [:map
-   {:pg/primary-key ["id"], :pg/table "groups", :pg/unique [["name"] ["id" "name"]]}
+   {:pg/primary-key ["id"], :pg/table "sample.groups", :pg/unique [["name"] ["id" "name"]]}
    [:id [:int {:pg/type "integer"}]]
    [:name [:string {:pg/type "text"}]]],
   :pg.sample/mood [:enum "happy" "sad"],
@@ -11,11 +11,11 @@
   [:and
    [:map
     {:pg/foreign-keys
-     [[["group_id" "group_name"] "groups" ["id" "name"]]
-      [["group_id"] "groups" ["id"]]
-      [["referrer_id"] "users" ["id"]]],
+     [{:columns ["group_id" "group_name"], :table "sample.groups", :to ["id" "name"]}
+      {:columns ["group_id"], :table "sample.groups", :to ["id"]}
+      {:columns ["referrer_id"], :table "sample.users", :to ["id"]}],
      :pg/primary-key ["id"],
-     :pg/table "users"}
+     :pg/table "sample.users"}
     [:born [:maybe [:time/local-date {:pg/type "date"}]]]
     [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
     [:group_id [:int {:pg/type "integer"}]]
