@@ -18,7 +18,8 @@
 
 (defn- and3
   "Left to right, returning at the first false without touching the operands after it; nil
-   when an operand was NULL and none false."
+   when an operand was NULL and none false. rest, not next: next would realize the operand
+   after a decisive one."
   [xs]
   (loop [xs (seq xs) r true]
     (if xs

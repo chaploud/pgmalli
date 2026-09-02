@@ -36,8 +36,9 @@ All notable changes to this project are documented here. The format follows
   jsonb columns is parsed), `pgmalli/dataset-schema` (every key set and reference a named
   check; NULLS NOT DISTINCT and MATCH FULL respected) and `pgmalli/dataset-generator`
   (`:rows`, `:except`; references sharing columns solved together, self-references included;
-  a table no candidate fits is an error). Registries add generation hints when loaded, so key
-  columns are small positive integers, strings short and times recent.
+  a reference that finds no fitting row grows its target table; a table no candidate fits is
+  an error naming the constraints that failed most). Registries add generation hints when
+  loaded, so key columns are small positive integers, strings short and times recent.
 - POSIX character classes in regexes are translated to their Java form; patterns using
   PostgreSQL-only escapes stay unrendered.
 - Types outside the mapping table are reported as `:unknown-type`.

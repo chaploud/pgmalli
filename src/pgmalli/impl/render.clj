@@ -162,7 +162,7 @@
       :length (let [{:keys [fn min max exact]} f
                     bounds {:min (or exact min) :max (or exact max)}]
                 (cond (and string-base? (#{:length :char_length} fn)) [(with-props schema bounds) unrendered]
-                      (and (= 'bytes? base) (= :octet_length fn)) [(with-props [:pg/bytes] bounds) unrendered]
+                      (and (#{'bytes? :pg/bytes} base) (= :octet_length fn)) [(with-props (if (= :pg/bytes base) schema [:pg/bytes]) bounds) unrendered]
                       (and (= :vector base) (= :cardinality fn)) [(with-props schema bounds) unrendered]
                       ;; array_length of an empty array is NULL, so only an upper bound means what the CHECK means
                       (and (= :vector base) (= :array_length fn) (nil? (:min bounds))) [(with-props schema bounds) unrendered]

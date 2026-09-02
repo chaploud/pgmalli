@@ -157,8 +157,9 @@ and times recent.
 (def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}
 (m/validate dataset {"public.groups" [{:id 1 ...}] "public.users" [{:group_id 1 ...}]} {:registry registry})
 (clojure.test.check.generators/sample (pgmalli/dataset-generator registry {:rows 5 :except #{"public.audit_log"}}))
-;; :rows wanted per table, picked from many more candidates; a table none fits is an error;
-;; :except leaves tables out, references to them included
+;; :rows wanted per table, picked from many more candidates; a reference that finds no fitting
+;; row grows its target table; a table none fits is an error naming the constraints that failed
+;; most; :except leaves tables out (no kept table may reference them)
 ```
 
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the

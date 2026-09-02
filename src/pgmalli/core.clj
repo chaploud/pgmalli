@@ -64,6 +64,6 @@
 
 (defn dataset-generator
   "test.check generator of datasets satisfying dataset-schema. Options: :rows wanted per table
-   (default 5), :except tables (\"schema.table\") to leave out."
+   (default 5), :except tables (\"schema.table\") to leave out (no kept table may reference them)."
   ([registry] (rt/dataset-generator registry))
   ([registry opts] (rt/dataset-generator registry opts)))

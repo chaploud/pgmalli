@@ -132,7 +132,32 @@
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 5 (count (get sample "public.folders")))))
     (is (= #{"public.groups"} (set (keys (first (tcg/sample (pgmalli/dataset-generator reg {:rows 2 :except #{"public.folders"}}) 1)))))
-        ":except leaves a table out")))
+        ":except leaves a table out")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"references public.groups, which :except leaves out"
+                          (doall (tcg/sample (pgmalli/dataset-generator reg {:rows 2 :except #{"public.groups"}}) 1)))
+        "but not one that kept tables reference")))
+
+(deftest children-pinning-a-parent-column
+  ;; exams: (content_id, content_type) -> contents (id, type), with CHECK (content_type = 'exam');
+  ;; with few contents none may be an exam, so the reference grows the parent table
+  (let [reg (pgmalli/registry {:registry {:pg.public/kinds [:enum "exam" "link" "manual" "quiz"]
+                                          :pg.public/groups [:map {:pg/table "public.groups" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer"}]]]
+                                          :pg.public/contents [:map {:pg/table "public.contents" :pg/primary-key ["id"] :pg/unique [{:columns ["id" "type"]} {:columns ["id" "group_id"]}]
+                                                                     :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
+                                                               [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]
+                                                               [:type [:ref {:pg/type "kinds"} :pg.public/kinds]]]
+                                          :pg.public/exams [:and [:map {:pg/table "public.exams" :pg/primary-key ["content_id"]
+                                                                        :pg/foreign-keys [{:columns ["content_id" "content_type"] :table "public.contents" :to ["id" "type"]}
+                                                                                          {:columns ["content_id" "group_id"] :table "public.contents" :to ["id" "group_id"]}
+                                                                                          {:columns ["group_id"] :table "public.groups" :to ["id"]}]}
+                                                                  [:content_id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]
+                                                                  [:content_type [:ref {:pg/type "kinds"} :pg.public/kinds]] [:score [:int {:pg/type "integer"}]]]
+                                                            [:pg/check {:pg/constraint "exams_type"} [:= :content_type [:cast "exam" :kinds]]]]}})
+        ds (pgmalli/dataset-schema reg)]
+    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 3}) 15)]
+      (is (m/validate ds sample {:registry reg}) (pr-str sample))
+      (is (= 3 (count (get sample "public.exams"))))
+      (is (every? #(= "exam" (:content_type %)) (get sample "public.exams"))))))
 
 (deftest references-whose-columns-share-a-name
   ;; group_id -> contract_groups (group_id): the target column is spelled like the referencing one
