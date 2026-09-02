@@ -164,6 +164,15 @@ and times recent.
 ;; tables that came out short, with what their candidate rows failed on
 ```
 
+Rows come from the column schemas, with the branch of a `:multi` or `:or` filled in from its
+own fragment; a `:pg/check` holds by rejection, so a CHECK that wants structured jsonb leaves
+its table short. Generating a dataset for a schema of tens of tables takes seconds to a
+minute: generate once with a fixed seed, keep the result as EDN, and let tests read that.
+
+```clojure
+(clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 5}) 30 42)
+```
+
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the
 generated files stay data.
 

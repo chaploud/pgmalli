@@ -332,14 +332,43 @@
                             (go (merge row (zipmap free (repeat nil))) ds (into fixed columns) (rest refs) grow)))))))))]
     (go row ds fixed (sort-by (comp - count :columns) refs) grow)))
 
+(defn- fill-branches
+  "The row with the columns a :multi or :or of the row schema constrains regenerated from the
+   branch the row falls in (the value of the dispatch column, or an alternative picked by
+   seed), so branching CHECKs hold by construction instead of by chance."
+  [registry gen-of name row seed]
+  (let [generate (requiring-resolve 'clojure.test.check.generators/generate)
+        schema (get registry name)
+        fragment? (fn [f] (and (vector? f) (= :map (first f))))
+        fill (fn [row frag i]
+               (reduce (fn [row [j e]] (let [[k _ s] (entry-parts e)] (assoc row k (generate (gen-of s) 30 (+ seed i j)))))
+                       row
+                       (map-indexed vector (rest frag))))]
+    (if (= :and (first schema))
+      (reduce (fn [row [i part]]
+                (case (first part)
+                  :multi (let [branches (drop 2 part)
+                               frag (or (some (fn [[v s]] (when (= v (get row (:dispatch (second part)))) s)) branches)
+                                        (some (fn [[v s]] (when (= v :malli.core/default) s)) branches))]
+                           (if (fragment? frag) (fill row frag (* 100 i)) row))
+                  :or (let [alts (filterv fragment? (drop 2 part))]
+                        (if (seq alts) (fill row (nth alts (mod (hash [seed i]) (count alts))) (* 100 i)) row))
+                  row))
+              row
+              (map-indexed vector (drop 2 schema)))
+      row)))
+
 (defn- candidates
-  "n rows from a table's row generator (row-gen, memoized per table), generated from seed at a
-   size where keys rarely collide. No shrink tree is built, so large datasets stay cheap."
-  [row-gen name n seed]
+  "n rows from a table's row generator (gen-of, memoized per schema), generated from seed at a
+   size where keys rarely collide, their branching CHECKs filled in. No shrink tree is built,
+   so large datasets stay cheap."
+  [registry gen-of name n seed]
   (let [generate (requiring-resolve 'clojure.test.check.generators/generate)
         vector-of (requiring-resolve 'clojure.test.check.generators/vector)
         scale (requiring-resolve 'clojure.test.check.generators/scale)]
-    (generate (vector-of (scale #(max % 30) (row-gen name)) n) 30 seed)))
+    (->> (generate (vector-of (scale #(max % 30) (gen-of (columns registry name))) n) 30 seed)
+         (map-indexed (fn [i row] (fill-branches registry gen-of name row (+ seed (* 1000 i)))))
+         vec)))
 
 (defn- failure-reasons
   "Why a table came out short, most frequent reason first: what malli explains about the
@@ -359,7 +388,7 @@
    is short), self-references settled, the batch topped up from the pool until it holds rows.
    A table that comes out short is recorded in the dataset's metadata under :pgmalli/short
    with what it wanted, what it got and why."
-  [registry row-gen {:keys [name table refs key-sets] :as t} ds rows seed grow]
+  [registry gen-of {:keys [name table refs key-sets] :as t} ds rows seed grow]
   (let [opts {:registry registry}
         ;; ponytail: the search is exhaustive per row; a budget of leaf checks per table keeps a
         ;; table with many references from taking forever, at the cost of rows it might have found
@@ -368,7 +397,7 @@
         grow (when grow (fn [target ds pins] (when (pos? @budget) (grow target ds pins))))
         {self true others false} (group-by #(= table (:table %)) refs)
         settled (set (mapcat :columns others))
-        cands (candidates row-gen name (max 200 (* 50 rows)) seed)
+        cands (candidates registry gen-of name (max 200 (* 50 rows)) seed)
         fits? (fn [pool r] (and (valid? r) (= (inc (count pool)) (count (distinct-by-keys (conj pool r) key-sets)))))
         ;; a candidate that fails on its own is dropped before any reference is solved (or grown) for it
         [pool ds] (reduce (fn [[pool ds] c]
@@ -409,7 +438,7 @@
          fmap (requiring-resolve 'clojure.test.check.generators/fmap)
          choose (requiring-resolve 'clojure.test.check.generators/choose)
          opts {:registry registry}
-         row-gen (memoize (fn [name] (mg/generator (columns registry name) opts)))
+         gen-of (memoize (fn [schema] (mg/generator schema opts)))
          ;; datasets with one more row of a parent table each, carrying the pinned columns and
          ;; solved against the dataset so far, growing their own parents up to depth levels deep
          grow (fn grow [depth]
@@ -421,14 +450,14 @@
                             rs (get ds target)
                             settle (fn [[r ds]] (some-> (if self (first (solve-refs r self ds (set (mapcat :columns others)) target valid? nil)) r) (vector ds)))
                             fits? (fn [[r ds]] (when (= (inc (count rs)) (count (distinct-by-keys (conj rs r) key-sets))) [r ds]))]
-                        (->> (candidates row-gen name 20 (hash [target (count rs) pins]))
+                        (->> (candidates registry gen-of name 20 (hash [target (count rs) pins]))
                              (map #(merge % pins))
                              (keep #(solve-refs % others ds (set (keys pins)) target valid? (grow (dec depth))))
                              (keep settle)
                              (keep fits?)
                              (map (fn [[r ds]] (assoc ds target (conj (get ds target) r))))))))))]
      (fmap (fn [seed]
-             (reduce (fn [ds [i table]] (generate-table registry row-gen (by-table table) ds rows (+ seed i) (grow 4)))
+             (reduce (fn [ds [i table]] (generate-table registry gen-of (by-table table) ds rows (+ seed i) (grow 4)))
                      {}
                      (map-indexed vector (topological ts))))
            ;; a seed independent of test.check's size, so early samples differ too

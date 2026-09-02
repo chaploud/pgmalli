@@ -199,6 +199,19 @@
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 3 (count (get sample "public.certification_tags")))))))
 
+(deftest branches-are-filled-in
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:and [:map {:pg/table "public.t" :pg/primary-key ["id"]}
+                                                              [:id [:int {:pg/type "integer"}]]
+                                                              [:status [:enum {:pg/type "text"} "open" "closed"]]
+                                                              [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
+                                                              [:note [:maybe [:string {:pg/type "text"}]]]]
+                                                        [:multi {:dispatch :status}
+                                                         ["open" [:map [:closed_at :nil]]]
+                                                         ["closed" [:map [:closed_at :time/instant] [:note [:string {:min 1}]]]]]]}})
+        sample (first (tcg/sample (pgmalli/dataset-generator reg {:rows 8}) 1))]
+    (is (= 8 (count (get sample "public.t"))) "a branching CHECK is met by construction")
+    (is (nil? (-> sample meta :pgmalli/short)))))
+
 (deftest generation-limits-are-recorded
   (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never" :pg/primary-key ["a"]} [:a [:int {:pg/type "integer"}]]] [:pg/check {:pg/constraint "never" :error/message "never"} [:< 2 1]]]
                                           :pg.public/child [:map {:pg/table "public.child" :pg/foreign-keys [{:columns ["never_a"] :table "public.never" :to ["a"]}]} [:never_a [:int {:pg/type "integer"}]]]
