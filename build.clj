@@ -5,7 +5,14 @@
   (:require [clojure.tools.build.api :as b]))
 
 (def lib 'io.github.chaploud/pgmalli)
-(def version (format "0.2.%s" (b/git-count-revs nil)))
+(defn- tag-version
+  "The version is the release tag (v1.2.3 -> 1.2.3), passed in as PGMALLI_VERSION by the release
+   workflow; a build outside a release is a snapshot of the last tag."
+  []
+  (or (System/getenv "PGMALLI_VERSION")
+      (str (or (some-> (b/git-process {:git-args "describe --tags --abbrev=0 --match v*"}) (subs 1)) "0.0.0") "-SNAPSHOT")))
+
+(def version (tag-version))
 (def class-dir "target/classes")
 (def jar-file "target/pgmalli.jar")
 (def basis (delay (b/create-basis {:project "deps.edn"})))
