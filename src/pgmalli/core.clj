@@ -69,8 +69,10 @@
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it. Options: :qualified? (keys as
-   :table/column), :kebab?, :nil-columns :absent (NULL columns missing, next.jdbc.optional),
-   :time :instant or :local (how timestamps arrive)."
+   :table/column, next.jdbc's as-maps), :kebab? (keys and table names in kebab-case),
+   :nil-columns :absent (NULL columns missing, next.jdbc.optional), :time :instant
+   (read-as-instant: timestamps as Instants, dates stay java.sql.Date, so inst?) or :local
+   (read-as-local: timestamptz as LocalDateTime)."
   [registry name opts]
   (rt/as-read registry name opts))
 

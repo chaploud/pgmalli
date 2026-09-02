@@ -169,12 +169,12 @@ qualified by the table, NULL columns may be missing, timestamps may arrive as In
 
 ### Queries checked against the registry
 
-`pgmalli.honeysql` reads HoneySQL query data, no database needed: the tables and columns a
-query touches must exist, an INSERT must carry the columns its insert schema requires, an
-enum literal must be one of the enum's values. From the same data it derives the types of
-the query's parameters and of the rows it returns, as a malli function schema for
-`malli.instrument` or `malli.dev`. CTEs, subqueries and table functions are opaque: their
-columns exist but have no type.
+`pgmalli.honeysql` reads HoneySQL query data, no database needed: the tables must exist,
+the columns a query selects, returns, inserts, sets or compares must exist, an INSERT must
+carry the columns its insert schema requires, an enum literal must be one of the enum's
+values. From the same data it derives the types of the query's parameters and of the rows
+it returns, as a malli function schema for `malli.instrument` or `malli.dev`. CTEs,
+subqueries and table functions are opaque: their columns exist but have no type.
 
 ```clojure
 (require '[pgmalli.honeysql :as h])
@@ -188,25 +188,24 @@ columns exist but have no type.
 ;; => [:=> [:cat [:int {...}]] [:sequential [:map [:users/id [:int {...}]] [:users/nick {:optional true} [:string {...}]]]]]
 ```
 
-Options: `:schema` for unqualified table names (default `"public"`) and the row shape of
-`as-read`. Time columns are `inst?` unless `:time` says how they arrive; leave `:time` out for
-a schema that goes into `:malli/schema` metadata, which malli's default registry reads. A
-test that runs `check` over every query of an application catches a renamed column before
-any query runs.
+Options: `:schema` for unqualified table names (default `"public"`); `:qualified?`, `:kebab?`,
+`:nil-columns` and `:time` as in `as-read`. Date and timestamp columns are `inst?` (what the
+driver returns, and a schema malli's default registry reads); `:time :instant` or `:local`
+gives the `malli.experimental.time` types instead, which `:malli/schema` metadata cannot take.
 
 ### Schemas where the registry cannot follow
 
 `:malli/schema` metadata, `malli.dev/start!` and other tools read schemas through malli's
 default registry. `portable` gives the named schema as data that registry reads (with
-`malli.experimental.time` added for the time types): the schema's own enums inlined,
-pgmalli's types as their malli counterparts, generation hints dropped. The CHECKs only
-pgmalli evaluates (`:pg/check`, `:pg/check-value`) are left out, so it is weaker than the
-registry's schema; prefer the registry where you can pass it.
+`malli.experimental.time` added for the time types): the schema's own enums and domains
+inlined, pgmalli's types as their malli counterparts, generation hints dropped. The CHECKs
+only pgmalli evaluates (`:pg/check`, `:pg/check-value`) are left out.
 
 ```clojure
-(defn find-user [id] ...)
-(alter-meta! #'find-user assoc :malli/schema [:=> [:cat (pgmalli/non-null (pgmalli/column registry :pg.public/users :id))]
-                                                  [:maybe (pgmalli/portable registry :pg.public/users)]])
+(defn find-user
+  {:malli/schema [:=> [:cat (pgmalli/non-null (pgmalli/column registry :pg.public/users :id))]
+                  [:maybe (pgmalli/portable registry :pg.public/users)]]}
+  [id] ...)
 ```
 
 Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints

@@ -25,6 +25,8 @@
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (h/check registry {:select [:*] :from [:nope]} opts)))
   (is (= [{:kind :unknown-column :column :nick_name}] (h/check registry {:select [:nick_name] :from [:users]} opts)))
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:id] :from [:users] :where [:= :nope 1]} opts)) "compared columns too")
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:update :users :set {:nope 1} :where [:= :id 1]} opts)) "and set ones")
   (is (= [{:kind :missing-required-column :table "sample.users" :column "score"}]
          (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad"}]} opts))
       "an INSERT must carry the columns the insert schema requires")
@@ -55,6 +57,7 @@
           "a column under an alias keeps its table in the key, as the driver does")
       (is (m/validate row {:users/id 1 :users/g 2} malli-opts) "as malli's default registry reads it"))
     (is (= [:map [:sub/id [:maybe :any]]] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} #{} (assoc opts :qualified? true))))
+    (is (= [:map [:users/group-id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]] (h/row-schema registry '{:select [:group_id] :from [:users]} #{} (assoc opts :qualified? true :kebab? true))))
     (is (= {'x [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]} opts))
         "an untyped use never hides a typed one")
     (let [row (h/row-schema registry body #{} (assoc opts :nil-columns :absent))]

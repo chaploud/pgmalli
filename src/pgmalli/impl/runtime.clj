@@ -140,7 +140,7 @@
       (into [:and m] (map #(as-insert-sees-it % omitted registry) (drop 2 row)))
       m)))
 
-(defn- insert-name
+(defn insert-name
   ":pg.<schema>/<table> -> :pg.<schema>.<table>/insert, string keys alike."
   [row-name]
   (if (keyword? row-name)
@@ -210,9 +210,24 @@
 
 ;;; the same schemas in other shapes
 
-(defn- entry-key [e] (first e))
-
 (defn- entries [schema] (drop (if (map? (second schema)) 2 1) schema))
+
+(defn column-entries
+  "[[column props schema] ...] of a row or insert schema as data."
+  [schema]
+  (map entry-parts (filter vector? (entries (row-map schema)))))
+
+(defn read-time
+  "Schema data with the time types a driver returns under :time: :instant when timestamps
+   arrive as Instants (dates stay java.sql.Date, hence inst?), :local when timestamptz arrives
+   as LocalDateTime, :inst when the schema is read without malli.experimental.time."
+  [time schema]
+  (walk/postwalk (fn [f] (case [time f]
+                           [:instant :time/local-date-time] :time/instant
+                           [:instant :time/local-date] 'inst?
+                           [:local :time/instant] :time/local-date-time
+                           (if (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst? f)))
+                 schema))
 
 (defn- without-gen
   "Schema data without the generation hints the registry added when it was loaded."
@@ -220,7 +235,7 @@
   (walk/postwalk #(if (map? %) (dissoc % :gen/min :gen/max) %) schema))
 
 (defn- data-columns
-  "The [:map ...] of a row or insert schema as data, without the table-level constraints."
+  "The row map of a generated schema as data (columns gives the malli schema)."
   [registry name]
   (let [s (get registry name)]
     (when-not (vector? s) (throw (ex-info (str name " is not a generated schema") {:name name})))
@@ -230,7 +245,7 @@
   "The schema of one column of a row or insert schema, as data (with its [:maybe ...])."
   [registry name col]
   (let [k (render/ident-key (clojure.core/name col))]
-    (some (fn [e] (when (= k (entry-key e)) (without-gen (last (entry-parts e))))) (entries (data-columns registry name)))))
+    (some (fn [[ek _ s]] (when (= k ek) (without-gen s))) (column-entries (get registry name)))))
 
 (defn non-null
   "A column schema without its [:maybe ...]: the type a value must have when it is not NULL."
@@ -239,8 +254,8 @@
 
 (def ^:private int-ranges {:pg/smallint [-32768 32767] :pg/integer [-2147483648 2147483647]})
 
-(defn- attach-props
-  "Schema data with properties merged in."
+(defn- merge-props
+  "Schema data with properties merged in (plainly; render's with-props narrows bounds)."
   [s p]
   (cond (empty? p) s
         (and (vector? s) (map? (second s))) (assoc s 1 (merge (second s) p))
@@ -248,22 +263,19 @@
         :else [s p]))
 
 (defn- portable-node [registry f]
-  (cond
-    (int-ranges f) (let [[lo hi] (int-ranges f)] [:int {:min lo :max hi}])
-    (and (vector? f) (int-ranges (first f)))
-    (let [[lo hi] (int-ranges (first f)) p (if (map? (second f)) (second f) {})]
-      [:int (assoc p :min (max lo (:min p lo)) :max (min hi (:max p hi)))])
-    (and (vector? f) (= :pg/bytes (first f))) 'bytes?
-    (and (vector? f) (= :ref (first f)) (contains? registry (last f)))
-    ;; the inlined target is converted here: prewalk walks its children, not the node itself
-    (let [target (get registry (last f)) p (when (map? (second f)) (second f))]
-      (portable-node registry (attach-props target (or p {}))))
-    (and (vector? f) (= :and (first f)))
-    ;; without the CHECKs only pgmalli evaluates; an :and of one schema is that schema, its props kept
-    (let [props (when (map? (second f)) (second f))
-          parts (remove #(and (vector? %) (#{:pg/check :pg/check-value} (first %))) (if props (drop 2 f) (rest f)))]
-      (if (= 1 (count parts)) (attach-props (first parts) (or props {})) (into (if props [:and props] [:and]) parts)))
-    :else f))
+  (let [[t p] (if (vector? f) [(first f) (when (map? (second f)) (second f))] [f nil])]
+    (cond
+      (int-ranges t) (let [[lo hi] (int-ranges t) p (or p {})]
+                       [:int (assoc p :min (max lo (:min p lo)) :max (min hi (:max p hi)))])
+      (and (vector? f) (= :pg/bytes t)) 'bytes?
+      (and (vector? f) (= :ref t) (contains? registry (last f)))
+      ;; the inlined target is converted here: prewalk walks its children, not the node itself
+      (portable-node registry (merge-props (get registry (last f)) p))
+      (and (vector? f) (= :and t))
+      ;; without the CHECKs only pgmalli evaluates
+      (let [parts (remove #(and (vector? %) (#{:pg/check :pg/check-value} (first %))) (entries f))]
+        (if (= 1 (count parts)) (merge-props (first parts) p) (into (if p [:and p] [:and]) parts)))
+      :else f)))
 
 (defn portable-data
   "Schema data from the registry as data malli's default registry reads; see portable."
@@ -280,31 +292,23 @@
   (portable-data registry (get registry name)))
 
 (defn as-read
-  "The [:map ...] of a row as a JDBC result builder returns it: keys qualified by the table
-   (:qualified? true, next.jdbc's as-maps) or not; NULL columns absent (:nil-columns :absent,
-   next.jdbc.optional) or present as nil; :kebab? true for kebab-case keys and table names;
-   :time :instant when timestamps arrive as Instants (read-as-instant, which leaves dates as
-   java.sql.Date, hence inst?), :local when timestamptz arrives as LocalDateTime (read-as-local)."
+  "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
+   pgmalli.core/as-read."
   [registry name {:keys [qualified? kebab? nil-columns time]}]
   (let [m (without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         kebab (fn [s] (cond-> s kebab? (str/replace "_" "-")))
         table (some-> (or (:pg/table props) (:pg/view props)) (str/split #"\." 2) second kebab)
         key* (fn [k] (let [s (kebab (clojure.core/name k))]
-                       (if (keyword? k) (if qualified? (keyword table s) (keyword s)) (if qualified? (str table "/" s) s))))
-        time* (fn [s] (walk/postwalk (fn [f] (case [time f]
-                                                [:instant :time/local-date-time] :time/instant
-                                                [:instant :time/local-date] 'inst?
-                                                [:local :time/instant] :time/local-date-time
-                                                f))
-                                     s))
-        entry (fn [e] (let [[k p s] (entry-parts e)
-                            s (time* s)
+                       (cond (not qualified?) (if (keyword? k) (keyword s) s)
+                             (keyword? k) (keyword table s)
+                             :else (str table "/" s))))
+        entry (fn [[k p s]] (let [s (read-time time s)
                             absent? (and (= :absent nil-columns) (vector? s) (= :maybe (first s)))
                             p (cond-> p absent? (assoc :optional true))
                             s (if absent? (last s) s)]
                         (if (empty? p) [(key* k) s] [(key* k) p s])))]
-    (into (if props [:map props] [:map]) (map entry (entries m)))))
+    (into (if props [:map props] [:map]) (map entry (column-entries m)))))
 
 (defn transformer
   "Decodes JDBC and string values into the registry's types: java.sql.Timestamp and
