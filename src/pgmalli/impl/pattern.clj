@@ -99,7 +99,7 @@
        (let [[a b] (map bound (rest e))]
          (when (and a b (= (:column a) (:column b)) (not= (contains? a :min) (contains? b :min)))
            (merge a b))))
-     (bound e)
+     (when (vector? e) (bound e))
 
      (when (vector? e)
        (let [[op l r] e]

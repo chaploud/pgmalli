@@ -2,8 +2,6 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [malli.core :as m]
-            [malli.experimental.time :as time]
-            [malli.util :as mu]
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.generate :as gen]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
@@ -37,7 +35,7 @@
           (is (= data (get-in (gen/generated-all config) ["public" :data])))
           (is (= (slurp out) (do (pgmalli/generate! config) (slurp out))) "byte-for-byte deterministic")
           (is (empty? (:unrendered data)) "the table CHECK is a :multi")
-          (let [reg (merge (m/default-schemas) (mu/schemas) (time/schemas) (:registry data))]
+          (let [reg (pgmalli/registry data)]
             (is (m/validate :pg.public/users {:id 1 :mood "sad" :age 3 :nick "n" :closed_at nil} {:registry reg}))
             (is (not (m/validate :pg.public/users {:id 1 :mood "sad" :age -1 :nick "n" :closed_at nil} {:registry reg})))
             (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))

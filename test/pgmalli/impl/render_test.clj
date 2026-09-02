@@ -4,7 +4,8 @@
             [malli.experimental.time :as time]
             [malli.util :as mu]
             [pgmalli.impl.pattern :as p]
-            [pgmalli.impl.render :as r]))
+            [pgmalli.impl.render :as r]
+            [pgmalli.impl.runtime :as rt]))
 
 (def ^:private schema
   {:name "public"
@@ -38,7 +39,7 @@
 
 (def ^:private facts (p/facts schema))
 
-(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas) r))
+(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas) {:pg/check rt/check-schema} r))
 
 (deftest row-schema
   (let [{:keys [registry unrendered]} (r/registry facts)
@@ -46,13 +47,13 @@
     (is (= [:enum "happy" "sad"] (:pg.public/mood registry)))
     (is (= [:maybe [:and :string [:re "@"]]] (:pg.public/email registry)) "domain = base type + its CHECK")
     (is (= :and (first users)) "columns, then the table constraints")
-    (is (= [:map {:pg/table "users" :pg/primary-key ["id"] :pg/unique [["nick"]]}
+    (is (= [:map {:pg/table "users" :pg/primary-key ["id"] :pg/unique [["nick"]] :pg/foreign-keys [[["group_id"] "groups" ["id"]]]}
             [:age [:maybe [:int {:min 0 :max 150 :pg/type "integer" :pg/constraint ["age_check"]}]]]
             [:born [:maybe [:time/local-date {:pg/type "date"}]]]
             [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
             [:created_at [:time/instant {:pg/type "timestamptz" :pg/default [:now]}]]
             [:full_name [:maybe [:string {:pg/type "text" :pg/generated true}]]]
-            [:group_id [:int {:pg/type "integer" :pg/references ["groups" "id"]}]]
+            [:group_id [:int {:pg/type "integer"}]]
             [:id [:int {:pg/type "bigint" :pg/identity :always}]]
             [:mail [:maybe [:ref {:pg/type "email"} :pg.public/email]]]
             [:mood [:ref {:pg/type "mood" :pg/default "happy" :default "happy"} :pg.public/mood]]
@@ -67,7 +68,9 @@
             ["happy" [:map [:closed_at [:nil {:error/message "closed_check"}]]]]
             [:malli.core/default :any]]
            (nth users 2)) "a branch check becomes :multi")
-    (is (= [[:table-check "score_check"]] (map (juxt :fact :constraint) unrendered)) "column comparisons stay unrendered under :checks :data")
+    (is (empty? unrendered))
+    (is (= [:pg/check {:pg/constraint "score_check" :error/message "score_check"} [:<= :score :total]] (nth users 3))
+        "a column comparison is a :pg/check over the expression data")
     (testing "validation and generation through malli"
       (let [reg (registry-with registry)
             row {:id 1 :group_id 1 :mood "sad" :mail "a@b" :nick "n" :age 30 :title "t" :born (java.time.LocalDate/now)
@@ -75,40 +78,52 @@
         (is (m/validate :pg.public/users row {:registry reg}))
         (is (not (m/validate :pg.public/users (assoc row :closed_at nil) {:registry reg})) "sad needs closed_at")
         (is (not (m/validate :pg.public/users (assoc row :title "  ") {:registry reg})) "trimmed non-blank")
-        (is (not (m/validate :pg.public/users (assoc row :mail "nope") {:registry reg})) "domain check")))))
+        (is (not (m/validate :pg.public/users (assoc row :mail "nope") {:registry reg})) "domain check")
+        (is (not (m/validate :pg.public/users (assoc row :score 3) {:registry reg})) ":pg/check score <= total")))))
 
-(deftest insert-schema
-  (let [{:keys [registry]} (r/registry facts)
-        insert (:pg.public.users/insert registry)
-        entries (into {} (map (fn [[k & r]] [k (vec r)]) (rest (rest (second insert)))))]
-    (is (= {:closed true} (second (second insert))))
-    (is (not (contains? entries :id)) "identity ALWAYS cannot be inserted")
-    (is (not (contains? entries :full_name)) "generated columns cannot be inserted")
-    (is (= {:optional true} (first (entries :seq))) "serial is optional")
-    (is (= {:optional true} (first (entries :mood))) "defaulted is optional")
-    (is (= {:optional true} (first (entries :nick))) "nullable is optional")
-    (is (= {} (first (entries :title))) "required otherwise")
-    (let [reg (registry-with registry)]
-      (is (m/validate :pg.public.users/insert {:group_id 1 :mood "happy" :title "t" :score 1 :total 2} {:registry reg}))
-      (is (not (m/validate :pg.public.users/insert {:group_id 1 :mood "happy" :title "t" :score 1 :total 2 :extra 1} {:registry reg})) "closed"))))
+(deftest only-rows-and-types-are-emitted
+  (is (= [:pg.public/email :pg.public/groups :pg.public/mood :pg.public/users]
+         (keys (:registry (r/registry facts))))))
 
-(deftest fn-checks-are-opt-in
-  (let [{:keys [registry unrendered]} (r/registry facts {} {:checks :fn})]
-    (is (empty? unrendered))
-    (is (= 'fn (first (last (last (:pg.public/users registry))))))))
+(deftest unsupported-vocabulary-stays-unrendered
+  (let [{:keys [unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                   :tables {"t" {:columns [{:name "g" :position 1 :data_type "geometry" :type_schema "public" :is_nullable true}]
+                                                                 :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (st_area(g) > 0)"}}}}}))]
+    (is (= [:unknown-type :table-check] (map :fact unrendered)))))
 
 (deftest overrides
   (let [{:keys [registry unrendered skipped]} (r/registry facts {"score_check" [:ref :app/score-within-total]
                                                                    "title_check" {:skip "guaranteed by the application"}})]
     (is (empty? unrendered))
     (is (= ["title_check"] (map :constraint skipped)))
-    (is (some #{[:ref :app/score-within-total]} (:pg.public/users registry)))))
+    (is (some #{[:ref :app/score-within-total]} (:pg.public/users registry)) "the override replaces the :pg/check")))
+
+(deftest not-valid-checks-are-reported-not-enforced
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
+                                                                                    {:name "b" :position 2 :data_type "integer" :is_nullable false}]
+                                                                          :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))]
+    (is (= [:map {:pg/table "t"} [:a [:int {:pg/type "integer"}]] [:b [:int {:pg/type "integer"}]]] (:pg.public/t registry)))
+    (is (= [{:fact :table-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered)))))
+
+(deftest facts-lost-inside-branches-are-reported
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "kind" :position 1 :data_type "text" :is_nullable false}
+                                                                                    {:name "tenant" :position 2 :data_type "uuid" :is_nullable true}]
+                                                                          :constraints {"k" {:name "k" :type "CHECK"
+                                                                                             :check_clause "CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}}}}}))]
+    (is (= [:multi {:dispatch :kind :error/message "k"}
+            ["a" [:map [:tenant [:uuid {:error/message "k"}]]]]
+            ["b" [:map [:tenant [:nil {:error/message "k"}]]]]
+            [:malli.core/default :any]]
+           (nth (:pg.public/t registry) 2)))
+    (is (= [{:fact :in-set :column "tenant" :constraint "k"}] (map #(select-keys % [:fact :column :constraint]) unrendered))
+        "the value set has no rendering on a uuid, and says so")))
 
 (deftest odd-identifiers
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
                                                  :tables {"Order Items" {:columns [{:name "line no" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}}}))]
-    (is (= [:map {:pg/table "Order Items"} ["line no" [:int {:pg/type "integer"}]]] (get registry "pg.public/Order Items")))
-    (is (contains? registry "pg.public.Order Items/insert"))))
+    (is (= [:map {:pg/table "Order Items"} ["line no" [:int {:pg/type "integer"}]]] (get registry "pg.public/Order Items")))))
 
 (deftest deterministic
   (is (= (r/registry facts) (r/registry (shuffle facts)))))

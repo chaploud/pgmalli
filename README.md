@@ -47,7 +47,6 @@ Both read `pgmalli.edn` in the working directory when present:
 ```clojure
 {:schemas ["public"]                 ; default
  :out-dir "resources/pgmalli"        ; default; keep it on the classpath
- :checks :data                       ; default; :fn also compiles cross-column CHECKs (see below)
  :overrides {"chk_legacy_flag" {:skip "removed together with the column in 2027"}
              "chk_scores" [:ref :app/scores-consistent]}
  :db {:host "localhost" :port 5432 :db "app_dev" :user "app"}}   ; optional
@@ -65,15 +64,16 @@ For a schema `public`, the registry contains:
 | name | schema |
 |---|---|
 | `:pg.public/<enum>` | `[:enum ...]` |
-| `:pg.public/<domain>` | base type with the domain's CHECK applied |
+| `:pg.public/<domain>` | base type with the domain's CHECK applied, `[:maybe ...]` unless the domain is NOT NULL |
 | `:pg.public/<table>` | a valid row: `[:map ...]`, wrapped in `[:and ...]` with the table's constraints when it has any |
-| `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, columns with a default or NULL optional, `{:closed true}` |
+| `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, columns with a default or NULL optional, `{:closed true}`. Derived from the row schema when the registry is loaded, so the files hold rows only |
+| `:pg/check` | the schema type behind `[:pg/check expr]` |
 
 Column schemas carry provenance in their properties: `:pg/type`, `:pg/default` (a literal or
 the default expression as data), `:pg/identity` (`:always`, `:default` or `:serial`),
-`:pg/generated`, `:pg/references ["table" "column"]`, `:pg/constraint` (names of the CHECKs
-that shaped it). Literal defaults also set malli's `:default`. The map carries `:pg/table`,
-`:pg/primary-key` and `:pg/unique`.
+`:pg/generated`, `:pg/constraint` (names of the CHECKs that shaped it). Literal defaults also
+set malli's `:default`. The map carries `:pg/table`, `:pg/primary-key`, `:pg/unique` and
+`:pg/foreign-keys` as `[[columns] "table" [columns]]`, composite keys included.
 
 Identifiers that are not plain names (`Order Items`) become string keys. Spelling is left as
 the database has it.
@@ -85,19 +85,19 @@ the database has it.
 | NOT NULL | no `[:maybe ...]` |
 | column of an enum or domain type | `[:ref :pg.<schema>/<type>]` |
 | `CHECK (col IN (...))`, `CHECK (col = 'x')` | `[:enum ...]` |
-| `CHECK (col >= a AND col <= b)`, `BETWEEN`, one-sided bounds | `[:int {:min a :max b}]`, `:double` likewise, `numeric` as `[:and decimal? [:>= a] [:<= b]]` |
+| `CHECK (col >= a AND col <= b)`, `BETWEEN`, one-sided bounds | `[:int {:min a :max b}]`; `:double` likewise, an exclusive bound as `[:and :double [:> a]]`; `numeric` as `[:and decimal? [:>= a] [:<= b]]` |
 | `CHECK (length(trim(col)) > 0)` | `[:and [:string {:min 1}] [:re "\S"]]`; `col <> ''` is `[:string {:min 1}]` |
 | `varchar(n)`, `CHECK (length(col) <= n)` | `[:string {:max n}]` |
-| `CHECK (jsonb_typeof(col) = 'object')` | `[:map]` (`'array'` becomes `[:sequential :any]`) |
-| `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`) |
+| `CHECK (jsonb_typeof(col) = 'object')` | `:map` (`'array'` becomes `[:sequential :any]`) |
+| `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`; POSIX classes such as `[[:digit:]]` in their Java form) |
 | `CHECK (col IS NULL OR <any of the above>)` | `[:maybe ...]` |
 | `CHECK (col IS NOT NULL)` | no `[:maybe ...]` |
 | column patterns joined with `AND` | each part |
 | `CHECK (status = 'a' AND ... OR status = 'b' AND ...)` | `[:multi {:dispatch :status} ["a" [:map ...]] ["b" [:map ...]]]` |
 | `CHECK (x IS NULL OR y = 'v' AND ...)` and other ORs of column patterns | `[:or [:map ...] [:map ...]]` |
-| CHECK comparing columns (`score <= total`) | not data; kept in `:unrendered`, or `[:fn ...]` with `:checks :fn` |
+| any other CHECK (`score <= total`, arithmetic, `CASE`, jsonb operators) | `[:pg/check expr]`: the expression as data, validated by a schema type pgmalli registers |
 | `NOT VALID` CHECK | kept in `:unrendered` |
-| `date`, `time`, `timestamp`, `timestamptz`, `interval` | `:time/local-date`, `:time/local-time`, `:time/local-date-time`, `:time/instant`, `:time/duration` |
+| `date`, `time`, `timetz`, `timestamp`, `timestamptz`, `interval` | `:time/local-date`, `:time/local-time`, `:time/offset-time`, `:time/local-date-time`, `:time/instant`, `:time/duration` |
 | `json`, `jsonb` | `:any` |
 | `bytea` | `bytes?` |
 | `T[]` | `[:vector <T>]` |
@@ -108,28 +108,35 @@ constraint's expression as data. Give them one through `:overrides`, keyed by co
 a malli schema (`[:ref :app/name]` defined in your own registry, for instance) or
 `{:skip "reason"}`.
 
-With `:checks :fn`, CHECKs comparing columns are compiled into `(fn [row] ...)` forms that
-malli evaluates with PostgreSQL's NULL semantics. The forms are data, but evaluating them needs
-`org.babashka/sci` on the JVM (babashka has it built in), and the files can no longer be
-shared with ClojureScript. The default `:data` keeps everything plain data.
+`:pg/check` keeps the expression as data (`[:<= :score :total]`, HoneySQL-style) and
+evaluates it as PostgreSQL would: NULL passes, integer division truncates, casts convert, an
+expression the database would fail on (division by zero, a cast that does not parse) fails
+the row. A column missing from the map is NULL to it, so an insert that omits a defaulted
+column is checked as if the column were NULL. The test suite compares its verdicts with
+PostgreSQL's on generated rows. A CHECK using an operator, cast or regex syntax outside its
+vocabulary stays in `:unrendered`.
 
 ## Working with the registry
 
 ```clojure
 (pgmalli/registry "public" "auth")          ; several schemas, plus malli's defaults, malli.util and malli.experimental.time
 (pgmalli/columns registry :pg.public/users) ; the [:map ...] alone, for malli.util
-(m/decode :pg.public/users jdbc-row {:registry registry} pgmalli/transformer)
-                                            ; java.sql.Date / Timestamp and strings into the registry's types
+(m/decode :pg.public/users jdbc-row {:registry registry} (pgmalli/transformer))
+                                            ; java.sql.Date / Timestamp, Instant (as next.jdbc's read-as-instant
+                                            ; returns for timestamp columns) and strings into the registry's types
+(pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})
+                                            ; the zone Instants are read in for timestamp columns; default: the JVM's
 ```
 
 Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints within
-a table, foreign keys across tables.
+a table, foreign keys across tables, including tables of other schemas in the registry.
 
 ```clojure
-(def dataset (pgmalli/dataset-schema registry))          ; {"groups" [...] "users" [...]}
-(m/validate dataset {"groups" [{:id 1 ...}] "users" [{:group_id 1 ...}]} {:registry registry})
+(def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}
+(m/validate dataset {"public.groups" [{:id 1 ...}] "public.users" [{:group_id 1 ...}]} {:registry registry})
 (clojure.test.check.generators/sample (pgmalli/dataset-generator registry {:rows 5}))
-;; tables in foreign-key order, referencing columns drawn from generated rows
+;; tables in foreign-key order, referencing columns drawn from generated rows;
+;; :rows are tried per table, rows that end up violating a constraint are dropped
 ```
 
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the
@@ -139,9 +146,9 @@ generated files stay data.
 
 Kept compatible; a change bumps the minor version.
 
-1. The config keys `:schemas` `:out-dir` `:checks` `:overrides` `:db`.
+1. The config keys `:schemas` `:out-dir` `:overrides` `:db`.
 2. The generated file: `{:schema :database-version :registry :unrendered :skipped}` and the
-   registry names above.
+   registry names above (insert schemas are derived at load time, not stored).
 3. The fact vocabulary of `:unrendered` (`pgmalli.impl.pattern`).
 
 `pgmalli.impl.*` may change without notice.
@@ -154,20 +161,9 @@ read. Expressions are read in the form PostgreSQL's deparser prints them.
 
 ## Development
 
-```
-bb test          # babashka
-bb test:jvm      # JVM
-bb test:matrix   # PostgreSQL 16 to 18, as CI does
-bb lint          # clj-kondo
-bb harvest       # rebuild the expression corpus (test/corpus/harvested.edn)
-clojure -T:build jar
-```
-
-Database tests start a throwaway PostgreSQL container with docker (`PGMALLI_PG_IMAGE`
-selects the image). The suite includes property-based round trips through PostgreSQL:
-expressions are stored as CHECK constraints and read back, and compiled checks are compared
-with PostgreSQL's own verdict on generated rows. `nix develop` provides the tools. Releases:
-push a `v*` tag. Dependency updates come from Renovate.
+See [CONTRIBUTING.md](CONTRIBUTING.md). The suite includes property-based round trips through
+PostgreSQL: expressions are stored as CHECK constraints and read back, and `:pg/check`
+verdicts are compared with PostgreSQL's own on generated rows.
 
 ## License
 

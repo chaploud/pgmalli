@@ -1,19 +1,11 @@
 (ns pgmalli.core
   "Generate malli schemas from an applied PostgreSQL schema, and use them.
 
-   Generation (needs psql):
-     (generate! config)   ; writes <out-dir>/<schema>.edn for every schema
-     (stale config)       ; nil when the files match the database, else the differences
+   Generation (needs psql): generate!, stale.
+   Application side (files on the classpath as pgmalli/<schema>.edn): registry, unrendered,
+   columns, transformer, dataset-schema, dataset-generator.
 
-   Application side (files on the classpath as pgmalli/<schema>.edn):
-     (registry \"public\")                 ; malli registry: generated schemas + malli defaults, util and time
-     (unrendered \"public\")               ; facts that have no malli rendering
-     (columns registry :pg.public/users)  ; the [:map ...] without table-level constraints
-     transformer                          ; decodes JDBC / JSON values into the registry's types
-     (dataset-schema registry)            ; {\"table\" [row ...]} with keys and references checked
-     (dataset-generator registry)         ; generator of such datasets, in foreign-key order
-
-   Config: {:schemas [\"public\"] :out-dir \"resources/pgmalli\" :checks :data :overrides {} :db {}},
+   Config: {:schemas [\"public\"] :out-dir \"resources/pgmalli\" :overrides {} :db {}},
    every key optional. The config, the generated file layout and the fact vocabulary
    (pgmalli.impl.pattern) are the stable contract; pgmalli.impl.* may change without notice."
   (:require [clojure.data :as data]
@@ -42,17 +34,35 @@
 ;;; application side
 
 (defn registry
-  "malli registry holding the generated schemas of the named schemas (from the classpath),
-   plus malli's defaults, malli.util and malli.experimental.time."
-  [& schema-names]
-  (apply rt/registry schema-names))
+  "malli registry holding the generated schemas of the named schemas (read from the classpath;
+   generated data maps are accepted too), insert schemas derived from them, plus malli's
+   defaults, malli.util and malli.experimental.time."
+  [& schemas]
+  (apply rt/registry schemas))
 
 (defn unrendered
   "Facts of a schema that have no malli rendering."
   [schema-name]
   (:unrendered (rt/read-generated schema-name)))
 
-(def columns rt/columns)
-(def transformer rt/transformer)
-(def dataset-schema rt/dataset-schema)
-(def dataset-generator rt/dataset-generator)
+(defn columns
+  "The [:map ...] of a row or insert schema, without the table-level constraints."
+  [registry name]
+  (rt/columns registry name))
+
+(defn transformer
+  "malli transformer decoding JDBC and string values into the registry's types. Instants that
+   land in timestamp (without time zone) columns are read in :zone, default the JVM's."
+  ([] (rt/transformer))
+  ([opts] (rt/transformer opts)))
+
+(defn dataset-schema
+  "Schema for {\"schema.table\" [row ...]} datasets: rows, primary keys, unique constraints and
+   foreign keys checked across the registry's tables."
+  [registry]
+  (rt/dataset-schema registry))
+
+(defn dataset-generator
+  "test.check generator of datasets satisfying dataset-schema; {:rows n} rows tried per table."
+  ([registry] (rt/dataset-generator registry))
+  ([registry opts] (rt/dataset-generator registry opts)))
