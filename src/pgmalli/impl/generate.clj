@@ -8,7 +8,7 @@
       :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise
 
    File contents:
-     {:schema \"public\" :database-version \"PostgreSQL 17.x ...\"
+     {:schema \"public\" :database-version \"PostgreSQL 17.6\"
       :registry {name schema} :unrendered [fact ...] :skipped [fact ...]}
 
    Output is deterministic (sorted maps, pprint). Overrides that are not EDN (functions)

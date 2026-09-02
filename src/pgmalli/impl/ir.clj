@@ -5,7 +5,7 @@
    PGSSLMODE, ~/.pgpass); entries in the db map override them for the call.
 
    Result shape:
-     {:name \"public\" :database_version \"PostgreSQL 17.x ...\"
+     {:name \"public\" :database_version \"PostgreSQL 17.6\"
       :tables {\"users\" {:name \"users\"
                         :columns [{:name :position :data_type :type_schema :is_nullable
                                    :default_value :generated_expr :identity :max_length :precision :scale}]

@@ -16,7 +16,7 @@
           users (get-in s [:tables "users"])
           col #(first (filter (comp #{%} :name) (:columns users)))]
       (is (= "public" (:name s)))
-      (is (re-find #"^PostgreSQL 1\d" (:database_version s)))
+      (is (re-matches #"PostgreSQL \d+(\.\d+)?" (:database_version s)) "the server version alone, the same on every machine")
       (is (= ["happy" "sad"] (get-in s [:types "mood" :enum_values])))
       (is (= {:kind "DOMAIN" :base_type "text" :not_null false :default nil :name "email"
               :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)" :is_valid true}]}

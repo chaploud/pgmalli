@@ -80,7 +80,7 @@ types AS (
 SELECT json_build_object(
   'name', :'schema',
   'exists', EXISTS (SELECT 1 FROM pg_namespace WHERE nspname = :'schema'),
-  'database_version', version(),
+  'database_version', 'PostgreSQL ' || current_setting('server_version'),
   'tables', (SELECT COALESCE(json_object_agg(relname, tbl), '{}'::json) FROM tables),
   'types', (SELECT COALESCE(json_object_agg(typname, typ), '{}'::json) FROM types)
 );

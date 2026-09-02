@@ -25,6 +25,9 @@ contract without a database at hand.
 
 ;; test data that satisfies the constraints
 (mg/generate :pg.public.users/insert {:registry registry})
+
+;; enum values are strings; cast them when the row goes to SQL (HoneySQL shown)
+{:insert-into :users :values [(update row :status #(vector :cast % :user_status))]}
 ```
 
 ## Setup
@@ -33,9 +36,10 @@ contract without a database at hand.
 io.github.chaploud/pgmalli {:mvn/version "..."}   ; deps.edn or bb.edn
 ```
 
-Generating needs PostgreSQL 16 or later and `psql`; connection settings are psql's own
-(`PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). Applications only need the
-generated files.
+Generating needs PostgreSQL 16 or later and `psql`, wherever `generate` or `check` runs
+(the development machine and CI; JVM base images rarely ship it). Connection settings are
+psql's own (`PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`) or the `:db` map.
+Applications only need the generated files.
 
 ```
 clojure -M -m pgmalli.main generate   # writes resources/pgmalli/<schema>.edn
@@ -49,7 +53,7 @@ Both read `pgmalli.edn` in the working directory when present:
  :out-dir "resources/pgmalli"        ; default; keep it on the classpath
  :overrides {"chk_legacy_flag" {:skip "removed together with the column in 2027"}
              "chk_scores" [:ref :app/scores-consistent]}
- :db {:host "localhost" :port 5432 :db "app_dev" :user "app"}}   ; optional
+ :db {:host "localhost" :port 5432 :db "app_dev" :user "app"}}   ; optional; :password too, else PGPASSWORD or ~/.pgpass
 ```
 
 The same from Clojure: `(pgmalli/generate! config)` and `(pgmalli/stale config)`.
@@ -131,7 +135,8 @@ conjunct of an `AND` is necessary on its own, while a `:multi` or `:or` is never
 part. A column missing from the map is NULL to it (its literal default in an insert schema).
 Rows hold the registry's types: `java.time` values, `UUID`, jsonb as maps (string or keyword
 keys) and vectors. A CHECK comparing `timestamp` with `timestamptz` or `now()` converts in
-the JVM's zone, so keep the transformer's `:zone` at its default when such CHECKs exist.
+the JVM's zone; give the transformer the zone your JDBC driver used when it turned timestamps
+into Instants (the JVM's, unless you configured otherwise), so both read the same clock.
 
 ## Working with the registry
 
@@ -166,8 +171,8 @@ and times recent.
 
 Rows come from the column schemas, with the branch of a `:multi` or `:or` filled in from its
 own fragment; a `:pg/check` holds by rejection, so a CHECK that wants structured jsonb leaves
-its table short. Generating a dataset for a schema of tens of tables takes seconds to a
-minute: generate once with a fixed seed, keep the result as EDN, and let tests read that.
+its table short. A dataset of 71 tables and 250 rows takes about a second; for a fixture,
+generate once with a fixed seed, keep the result as EDN, and let tests read that.
 
 ```clojure
 (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 5}) 30 42)

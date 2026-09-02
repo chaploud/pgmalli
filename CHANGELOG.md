@@ -52,6 +52,8 @@ All notable changes to this project are documented here. The format follows
 - Trimmed non-blank strings are `[:and [:string {:min 1}] [:re "\S"]]`.
 - Schema names that are not plain identifiers make string registry keys.
 - Generating needs PostgreSQL 16 or later.
+- `:database-version` is the server version alone (`"PostgreSQL 17.6"`), the same on every
+  machine that generates.
 
 ### Removed
 
