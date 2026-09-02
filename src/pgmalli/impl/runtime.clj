@@ -11,6 +11,7 @@
             [malli.transform :as mt]
             [malli.util :as mu]
             [pgmalli.impl.eval :as check]
+            [pgmalli.impl.json :as json]
             [pgmalli.impl.render :as render]))
 
 (def check-schema
@@ -171,14 +172,18 @@
 (defn transformer
   "Decodes JDBC and string values into the registry's types: java.sql.Timestamp and
    java.util.Date -> Instant, java.sql.Date -> LocalDate, an Instant or java.util.Date landing
-   in a date or timestamp (without time zone) column is read in :zone, default the JVM's."
+   in a date or timestamp (without time zone) column is read in :zone, default the JVM's;
+   JSON text in a json or jsonb column is parsed."
   ([] (transformer {}))
   ([{:keys [zone] :or {zone (java.time.ZoneId/systemDefault)}}]
    (let [instant (fn [x] (if (instance? java.util.Date x) (.toInstant ^java.util.Date x) x))]
      (mt/transformer
       mt/string-transformer
       {:name :pgmalli
-       :decoders {:time/instant instant
+       :decoders {:any {:compile (fn [schema _]
+                                  (when (#{"json" "jsonb"} (:pg/type (m/properties schema)))
+                                    (fn [x] (if (string? x) (json/parse x) x))))}
+                  :time/instant instant
                   :time/local-date (fn [x] (cond (instance? java.sql.Date x) (.toLocalDate ^java.sql.Date x)
                                                  (instance? java.util.Date x) (.toLocalDate (.atZone ^java.time.Instant (instant x) zone))
                                                  :else x))
@@ -261,9 +266,9 @@
 (defn- solve-refs
   "The row with its references pointing at rows of ds. References sharing columns are solved
    together: a later reference may only choose targets that agree with the columns an earlier
-   one fixed, and the search backtracks. A reference with nothing to point at becomes NULL.
-   nil when no assignment exists."
-  [row refs ds]
+   one fixed (or in fixed already), and the search backtracks. A reference with nothing to
+   point at becomes NULL. nil when no assignment exists."
+  [row refs ds fixed]
   (letfn [(go [row fixed refs]
             (if (empty? refs)
               row
@@ -281,7 +286,7 @@
                     (or (some #(go (merge row (zipmap keys %)) (into fixed keys) (rest refs)) ordered)
                         (when (not-any? fixed keys)
                           (go (merge row (zipmap keys (repeat nil))) (into fixed keys) (rest refs)))))))))]
-    (go row #{} (sort-by (comp - count :keys) refs))))
+    (go row fixed (sort-by (comp - count :keys) refs))))
 
 (defn dataset-generator
   "test.check generator of datasets that satisfy dataset-schema: tables are generated in
@@ -300,12 +305,14 @@
          table-gen (fn [{:keys [name table refs key-sets]} ds]
                      (let [valid (fn [rs] (-> (filter #(m/validate name % opts) rs) (distinct-by-keys key-sets) vec))
                            {self true others false} (group-by #(= table (:table %)) refs)
-                           ;; a dropped row may be what another row points at, so repeat until the batch is stable
+                           ;; self-references keep the columns other references fixed, and a dropped row
+                           ;; may be what another row points at, so repeat until the batch is stable
+                           settled (set (mapcat :keys others))
                            self-consistent (fn [rs]
-                                             (let [rs2 (valid (keep #(solve-refs % self (assoc ds table rs)) rs))]
+                                             (let [rs2 (valid (keep #(solve-refs % self (assoc ds table rs) settled) rs))]
                                                (if (= (count rs2) (count rs)) rs2 (recur rs2))))]
                        (fmap (fn [rs]
-                               (let [rs (valid (keep #(solve-refs % others ds) rs))]
+                               (let [rs (valid (keep #(solve-refs % others ds #{}) rs))]
                                  (if self (self-consistent rs) rs)))
                              (vector-of (mg/generator (columns registry name) opts) rows))))]
      (reduce (fn [g table]

@@ -125,7 +125,7 @@ does not parse) fails the row. The vocabulary covers comparison, logic, `IN`, `B
 operators, `LIKE`, regexes and `CASE`; a CHECK outside it (user-defined functions, composite
 fields, `AT TIME ZONE`) stays in `:unrendered`. A column missing from the map is NULL to it
 (its literal default in an insert schema). Rows hold the registry's types: `java.time`
-values, `UUID`, jsonb as maps and vectors.
+values, `UUID`, jsonb as maps (string or keyword keys) and vectors.
 
 ## Working with the registry
 
@@ -143,8 +143,9 @@ Datasets (fixtures, seeds) are checked as a whole: primary keys and unique const
 tables, including tables of other schemas in the registry. Each constraint is a check of its
 own, named in the error. The generator points references at generated rows, solving
 references that share columns together, and handles self-references; tables in a reference
-cycle are not supported. The registry adds generation hints (`:gen/min`, `:gen/max`) so key
-columns are small positive integers, strings short and times recent.
+cycle are not supported. When a registry is loaded it adds generation hints (`:gen/min`,
+`:gen/max`; the files carry none) so key columns are small positive integers, strings short
+and times recent.
 
 ```clojure
 (def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}

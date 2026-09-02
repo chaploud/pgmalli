@@ -23,9 +23,10 @@
 (defn- json-number [n] (.stripTrailingZeros (bigdec n)))
 
 (defn- json-normal
-  "jsonb equality is structural with numeric numbers."
+  "A jsonb value as the evaluator reads it: string keys (applications often read them as
+   keywords), numeric numbers (jsonb equality is numeric)."
   [v]
-  (cond (map? v) (into {} (map (fn [[k x]] [k (json-normal x)])) v)
+  (cond (map? v) (into {} (map (fn [[k x]] [(if (keyword? k) (name k) k) (json-normal x)])) v)
         (sequential? v) (mapv json-normal v)
         (number? v) (json-number v)
         :else v))
@@ -281,7 +282,8 @@
   (cond
     (or (string? e) (number? e) (boolean? e) (nil? e)) e
     ;; columns whose names are not plain identifiers are string keys in rows
-    (keyword? e) (if (contains? row e) (get row e) (get row (name e)))
+    (keyword? e) (let [v (if (contains? row e) (get row e) (get row (name e)))]
+                   (if (or (map? v) (sequential? v)) (json-normal v) v))
     :else
     (let [[op & args] e
           a #(ev (first args) row)

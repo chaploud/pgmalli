@@ -100,6 +100,11 @@
   (is (passes? "CHECK (tags && ARRAY['a'::text])" {:tags ["b" "a"]}))
   (is (passes? "CHECK (tags @> ARRAY['a'::text, 'a'::text])" {:tags ["a"]}) "array containment ignores duplicates")
   (is (passes? "CHECK (params @> '{\"a\": {\"b\": 1}}'::jsonb)" {:params {"a" {"b" 1 "c" 2}}}))
+  (testing "jsonb read with keyword keys, as next.jdbc is often set up to"
+    (is (passes? "CHECK ((params ->> 'manual-id'::text) ~ '^[1-9][0-9]*$'::text)" {:params {:manual-id 1423}}))
+    (is (passes? "CHECK ((params - 'manual-id'::text) = '{}'::jsonb)" {:params {:manual-id 1423}}))
+    (is (passes? "CHECK (params ? 'a'::text)" {:params {:a nil}}))
+    (is (passes? "CHECK (params = '{\"a\": {\"b\": 1}}'::jsonb)" {:params {:a {:b 1}}})))
   (is (not (passes? "CHECK (params @> '{\"a\": [1]}'::jsonb)" {:params {"a" 2}})))
   (is (passes? "CHECK (params @> '[1]'::jsonb)" {:params [1 2]}))
   (is (passes? "CHECK (params ? 'a'::text)" {:params {"a" nil}}))

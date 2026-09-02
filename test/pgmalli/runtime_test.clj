@@ -117,13 +117,19 @@
         (is (m/validate ds sample opts) (pr-str sample))))))
 
 (deftest generated-values-look-like-data
-  (let [rows (tcg/sample (mg/generator :pg.sample/users opts) 40)
+  (let [rows (tcg/sample (mg/generator (pgmalli/columns registry :pg.sample/users) opts) 40)
         year-ago (.minus (java.time.Instant/now) (java.time.Duration/ofDays 366))]
     (is (every? #(pos? (:id %)) rows) "keys are positive")
     (is (every? #(<= (:id %) 100000) rows) "and small")
     (is (every? #(or (nil? (:nick %)) (<= (count (:nick %)) 24)) rows) "strings are short")
     (is (every? #(or (nil? (:closed_at %)) (.isAfter ^java.time.Instant (:closed_at %) year-ago)) rows) "times are recent")
     (is (every? #(pos? (:group_id %)) rows) "referencing columns too")))
+
+(deftest transformer-parses-json-text
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:params [:any {:pg/type "jsonb"}]] [:note [:maybe [:string {:pg/type "text"}]]]]}})
+        decoded (m/decode :pg.public/t {:params "{\"a\": [1, 2]}" :note "{\"b\": 1}"} {:registry reg} (pgmalli/transformer))]
+    (is (= {"a" [1 2]} (:params decoded)) "JSON text in a jsonb column is parsed")
+    (is (= "{\"b\": 1}" (:note decoded)) "text stays text")))
 
 (deftest key-and-reference-rules
   (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items" :pg/primary-key ["Order ID"] :pg/unique [{:columns ["code"] :nulls-distinct false}]
@@ -153,10 +159,12 @@
                                           :pg.public/parents [:map {:pg/table "public.parents" :pg/primary-key ["id"] :pg/unique [{:columns ["id" "group_id"]}]
                                                                     :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
                                                               [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]]
-                                          :pg.public/children [:map {:pg/table "public.children" :pg/primary-key ["id"]
+                                          :pg.public/children [:map {:pg/table "public.children" :pg/primary-key ["id"] :pg/unique [{:columns ["id" "group_id"]}]
                                                                      :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}
-                                                                                       {:columns ["parent_id" "group_id"] :table "public.parents" :to ["id" "group_id"]}]}
-                                                               [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]] [:parent_id [:int {:pg/type "integer"}]]]}})
+                                                                                       {:columns ["parent_id" "group_id"] :table "public.parents" :to ["id" "group_id"]}
+                                                                                       {:columns ["sibling_id" "group_id"] :table "public.children" :to ["id" "group_id"]}]}
+                                                               [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]] [:parent_id [:int {:pg/type "integer"}]]
+                                                               [:sibling_id [:maybe [:int {:pg/type "integer"}]]]]}})
         ds (pgmalli/dataset-schema reg)]
     (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 30)]
       (is (m/validate ds sample {:registry reg}) (pr-str sample)))
