@@ -1,2 +1,0 @@
-- 2026-09-02: v0.2 前の総仕上げ。評価器の語彙を実スキーマの CHECK が使う範囲まで広げ (日付/uuid/jsonb/配列のリテラル、LIKE、jsonb 演算子など)、fuzz で PostgreSQL と 12,000 件突き合わせ。描画できない列 fact は CHECK 丸ごと :pg/check に落とし、部分 enforce はしない。domain は常に registry に入れ、未対応 CHECK は :pg/check-value。dataset は制約ごとに [:fn] で名指し、共有列 FK を一括で解き、生成ヒントはロード時付与。Codex レビュー (private/code-review-2026-09-02.md) の P1〜P2 はすべて反映。
-- 2026-09-03: v0.2.38 を公開 (myskill 最終レビューの取り込み: :pg/integer / :pg/smallint 型、:database-version はサーバ版のみ、README の psql / :zone / :password / 所要時間 / enum cast)。columns の改名は見送り。
