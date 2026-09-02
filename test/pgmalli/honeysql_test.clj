@@ -68,3 +68,25 @@
         "an expression under an alias is :any; a symbol used nowhere is :any")
     (is (= [:sequential [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
            (last (h/query-schema registry '[id] '{:select [:id] :from [:users] :where [:= :id id]} opts))))))
+
+(deftest scope-follows-the-statement
+  (is (= [] (h/check registry {:delete-from :users :where [:in :group_id {:select [:id] :from [:groups] :where [:= :name 'n]}]} opts))
+      "a nested statement's columns are judged in its own scope, not the outer one")
+  (is (= [{:kind :unknown-column :column :nope}]
+         (h/check registry {:select [:id] :from [:users] :where [:in :group_id {:select [:id] :from [:groups] :where [:= :nope 1]}]} opts)))
+  (is (= [] (h/check registry {:delete-from [:users :u] :using [[:groups :g]] :where [:= :g.id :u.group_id]} opts)) ":using")
+  (is (= [] (h/check registry {:update :users :set {:score 1} :from [[:groups :g]] :where [:= :g.id :group_id]} opts)) "UPDATE ... FROM")
+  (is (= [] (h/check registry {:select [:u.id :g.name] :from [[:users :u]] :cross-join [[:groups :g]]} opts)) ":cross-join")
+  (is (= [{:kind :unknown-column :column :u.nope}] (h/check registry {:select [:u.nope] :from [[:users :u]]} opts))
+      "a qualified column must exist in its table")
+  (is (= [{:kind :unknown-column :table "sample.users" :column :nope}]
+         (h/check registry {:insert-into [[:users [:group_id :mood :score :nope]] {:select [:group_id :mood :score 1] :from [:users]}]} opts))
+      "the column list of INSERT ... SELECT")
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]} opts))
+      "an unknown :values column is reported once")
+  (is (= [] (h/check registry '{:insert-into tbl :values rows} opts)) "a target passed in says nothing")
+  (let [with-interval (assoc registry :pg.sample/spans [:map {:pg/table "sample.spans"} [:id :int] [:span [:time/duration {:pg/type "interval"}]]])]
+    (is (= [:map [:span :any]] (h/row-schema with-interval {:select [:span] :from [:spans]} #{} opts)) "an interval is a driver object"))
+  (is (= {'ids [:int {:pg/identity :always :pg/type "bigint"}]}
+         (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:in :nope ids] [:= :id ids]]} opts))
+      "an :in on an unknown column gives no type either"))

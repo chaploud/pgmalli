@@ -5,8 +5,8 @@
    and from the same data, the types of the query's parameters and of the rows it returns,
    as malli schemas.
 
-   Scope: tables come from :from, the joins, :insert-into, :update and :delete-from, under
-   their aliases. CTEs (:with), subqueries and table functions are opaque tables: their
+   Scope: tables come from :from, :using, the joins, :insert-into, :update and :delete-from,
+   under their aliases. CTEs (:with), subqueries and table functions are opaque tables: their
    columns exist but have no type. A column is :col (unique in the scope), :alias/col or
    :alias.col. An unqualified table is in :schema (default \"public\").
 
@@ -36,14 +36,22 @@
 (def ^:private statement-keys #{:select :select-distinct :insert-into :update :delete-from})
 (def ^:private set-ops #{:union :union-all :intersect :except})
 (def ^:private cte-body-keys (into statement-keys set-ops))
-(def ^:private join-keys [:join :left-join :inner-join :right-join :full-join :cross-join])
+(def ^:private join-keys [:join :left-join :inner-join :right-join :full-join])
+
+(defn- statement? [x] (and (map? x) (some statement-keys (keys x))))
 
 (defn- nodes [body] (tree-seq coll? seq body))
+
+(defn- own-nodes
+  "The nodes of one statement's part, not descending into the statements nested in it: those
+   are statements of their own, judged in their own scope."
+  [part]
+  (tree-seq #(and (coll? %) (not (statement? %))) seq part))
 
 (defn statements
   "The statements in a query (a map, or Clojure data holding maps); a subquery is one too."
   [body]
-  (into [] (filter #(and (map? %) (some statement-keys (keys %)))) (nodes body)))
+  (into [] (filter statement?) (nodes body)))
 
 (defn- cte-name [entry]
   (when (vector? entry)
@@ -92,15 +100,16 @@
         (vector? a) (table-ref a schema)))))
 
 (defn- insert-target
-  "The table of :insert-into, which may carry its columns: [:t [:a :b]]."
+  "The :insert-into item naming the table, :t or [:t [:a :b]]; with a SELECT it is the first of a pair."
   [stmt]
-  (let [i (:insert-into stmt)] (if (vector? i) (first i) i)))
+  (let [i (:insert-into stmt)]
+    (if (and (vector? i) (map? (second i))) (first i) i)))
 
 (defn scope
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool}} of one statement; ctes are the
    query's CTE names, which shadow a table only when the reference is written without a schema."
   [registry stmt ctes {:keys [schema] :or {schema "public"}}]
-  (let [refs (concat (let [f (:from stmt)] (if (keyword? f) [f] f))
+  (let [refs (concat (for [k [:from :using :cross-join] :let [f (get stmt k)] :when f, t (if (keyword? f) [f] f)] t)
                      (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] t)
                      [(insert-target stmt) (:update stmt) (:delete-from stmt)])]
     (into {}
@@ -120,7 +129,8 @@
   [registry scope col]
   (let [[alias column] (split-column col)]
     (if alias
-      (when-let [{:keys [table opaque?]} (get scope alias)] [[alias table opaque?]])
+      (when-let [{:keys [table opaque?]} (get scope alias)]
+        (when (or opaque? (contains? (table-columns registry table) column)) [[alias table opaque?]]))
       (distinct (for [[a {:keys [table opaque?]}] scope
                       :when (or opaque? (contains? (table-columns registry table) column))]
                   [a table opaque?])))))
@@ -154,7 +164,7 @@
 (defn- comparisons
   "[op column value] of the comparisons in a statement's conditions."
   [stmt]
-  (for [x (nodes (select-keys stmt (into [:where :having :on-conflict] join-keys)))
+  (for [x (own-nodes (select-keys stmt (into [:where :having :on-conflict] join-keys)))
         :when (and (vector? x) (keyword? (first x)) (keyword? (second x)))
         :let [[op col value] x]
         :when (#{:= :<> :< :> :<= :>= :in :like :ilike} op)]
@@ -182,19 +192,21 @@
     {:kind (if (< 1 (count (column-hits registry sc col))) :ambiguous-column :unknown-column) :column col}))
 
 (defn- insert-problems [registry stmt schema]
-  (when-let [i (:insert-into stmt)]
-    (let [[table] (table-ref (insert-target stmt) schema)
-          columns (table-columns registry table)
+  (when-let [[table] (some-> (insert-target stmt) (table-ref schema))]
+    (let [columns (table-columns registry table)
+          target (insert-target stmt)
+          ;; INSERT INTO t (a b) ... : [:t [:a :b]], or [[:t [:a :b]] {:select ...}] with a SELECT
+          listed (when (vector? target) (second target))
           values (:values stmt)
           ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
-          given (cond (and (vector? i) (vector? (second i))) (second i)
-                      (and (vector? values) (map? (first values))) (distinct (mapcat keys (filter map? values))))
+          given (or listed (when (and (vector? values) (map? (first values))) (distinct (mapcat keys (filter map? values)))))
           given-names (set (map name given))
           required (set (for [[k p] (some->> (table-key table) rt/insert-name (get registry) rt/column-entries)
                               :when (not (:optional p))]
                           (name k)))]
       (concat
-       (for [c given :when (and columns (not (contains? columns (name c))))]
+       ;; the columns of :values are checked with the other assignments
+       (for [c listed :when (and columns (not (contains? columns (name c))))]
          {:kind :unknown-column :table table :column c})
        (when (seq given)
          (for [c required :when (not (given-names c))]
@@ -242,7 +254,8 @@
   "A column schema as a driver returns it and as malli's default registry reads it; an
    interval is a driver object, :any."
   [registry schema {:keys [time] :or {time :inst}}]
-  (rt/portable-data registry (rt/read-time time (if (= :time/duration schema) :any schema))))
+  (let [t (if (vector? schema) (first schema) schema)]
+    (rt/portable-data registry (rt/read-time time (if (= :time/duration t) :any schema)))))
 
 (defn- column-type
   "The type of a column for a value compared with it (NULL never matches, so no [:maybe]) or,
@@ -263,8 +276,9 @@
    (let [ctes (cte-names body)
          typed (for [stmt (statements body)
                      :let [sc (scope registry stmt ctes opts)]
-                     pair (concat (for [[op col value] (comparisons stmt)]
-                                    [value (if (= :in op) [:sequential (column-type registry sc col false opts)] (column-type registry sc col false opts))])
+                     pair (concat (for [[op col value] (comparisons stmt)
+                                        :let [t (column-type registry sc col false opts)]]
+                                    [value (if (and (= :in op) (not= :any t)) [:sequential t] t)])
                                   (for [[_ v] (select-keys stmt [:limit :offset])] [v :int])
                                   (for [[col v] (assignments stmt)] [v (column-type registry sc col true opts)]))]
                  pair)]
@@ -273,8 +287,8 @@
 (defn row-schema
   "The [:map ...] of one row a statement returns, as the driver builds it (as-read's
    :qualified?, :kebab?, :nil-columns and :time; an opaque source's columns under its alias)
-   and as malli's default registry reads it; expressions under an alias are :any. nil when a
-   selected column cannot be resolved."
+   and as malli's default registry reads it; an expression under an alias is nullable :any.
+   nil when a selected column cannot be resolved."
   ([registry stmt ctes] (row-schema registry stmt ctes {}))
   ([registry stmt ctes {:keys [qualified? kebab? nil-columns] :as opts}]
    (let [sc (scope registry stmt ctes opts)
