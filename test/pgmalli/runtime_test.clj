@@ -6,6 +6,7 @@
             [malli.generator :as mg]
             [malli.core :as m]
             [malli.error :as me]
+            malli.experimental.time
             [pgmalli.core :as pgmalli]))
 
 (def registry (pgmalli/registry "sample"))
@@ -308,6 +309,29 @@
     (is (m/validate :pg.public/v {:id nil} {:registry reg}))
     (is (nil? (get reg :pg.public.v/insert)) "no insert schema for a view")
     (is (= #{"public.t"} (set (keys (first (tcg/sample (pgmalli/dataset-generator reg {:rows 1}) 1))))) "not part of datasets")))
+
+(deftest other-shapes-of-the-same-schema
+  (testing "portable: what malli's default registry reads"
+    (let [p (pgmalli/portable registry :pg.sample/users)
+          opts {:registry (merge (m/default-schemas) (malli.experimental.time/schemas))}]
+      (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (get-in p [1 7 1])) "the enum is inlined")
+      (is (= [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] (get-in p [1 4 1])) "integers carry their range")
+      (is (= :multi (first (nth p 2))) "the branching CHECK stays")
+      (is (= 3 (count p)) "the :pg/check constraints are left out")
+      (is (m/validate p (assoc user :group_name "a") opts))
+      (is (not (m/validate p (assoc user :group_id 2147483648) opts)))
+      (is (= 'bytes? (get-in (pgmalli/portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
+      (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
+  (testing "as-read: the map as next.jdbc builds it"
+    (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant})]
+      (is (= [:users/born {:optional true} [:time/local-date {:pg/type "date"}]] (nth r 2)) "NULL columns absent, keys qualified")
+      (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "timestamps as Instants")
+      (is (m/validate r {:users/id 1 :users/group_id 1 :users/mood "sad" :users/seq 1 :users/score 1 :users/total 2} opts)))
+    (is (some #{[:nick-upper [:maybe [:string {:pg/generated true :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:kebab? true}))))
+  (testing "column and non-null"
+    (is (= [:maybe [:string {:max 40 :pg/type "character varying"}]] (pgmalli/column registry :pg.sample/users :nick)))
+    (is (= [:string {:max 40 :pg/type "character varying"}] (pgmalli/non-null (pgmalli/column registry :pg.sample/users "nick"))))
+    (is (nil? (pgmalli/column registry :pg.sample/users :nope)))))
 
 (deftest several-schemas
   (let [registry (pgmalli/registry "sample" "other")

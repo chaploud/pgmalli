@@ -3,6 +3,17 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `pgmalli/column` and `pgmalli/non-null`: one column's schema, with and without its
+  `[:maybe ...]`.
+- `pgmalli/as-read`: the row map as a JDBC result builder returns it (qualified keys, absent
+  NULL columns, kebab-case keys, timestamps as Instants or LocalDateTimes).
+- `pgmalli/portable`: the named schema as data malli's default registry reads, for
+  `:malli/schema` metadata and tools that cannot take the registry.
+
 ## [0.2.40] - 2026-09-03
 
 ### Added

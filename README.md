@@ -148,6 +148,38 @@ into Instants (the JVM's, unless you configured otherwise), so both read the sam
                                             ; JDBC (java.sql.Date / Timestamp, Instant) and string values into the registry's types
 (pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})
                                             ; zone for Instants landing in timestamp (without time zone) columns; default the JVM's
+(pgmalli/column registry :pg.public/users :nick)      ; => [:maybe [:string {:max 40 :pg/type "character varying"}]]
+(pgmalli/non-null (pgmalli/column registry :pg.public/users :nick))   ; what a non-NULL value must be
+```
+
+### Rows as the driver returns them
+
+next.jdbc's result builders shape a row differently from the database's: keys may be
+qualified by the table, NULL columns may be missing, timestamps may arrive as Instants.
+`as-read` gives the `[:map ...]` of that shape, so results can be validated as they are.
+
+```clojure
+(pgmalli/as-read registry :pg.public/users {:qualified? true        ; :users/id, as as-maps builds
+                                            :nil-columns :absent    ; next.jdbc.optional drops NULLs
+                                            :time :instant})        ; read-as-instant
+;; => [:map {...} [:users/id [:pg/integer ...]] [:users/nick {:optional true} [:string ...]] ...]
+```
+
+`:kebab? true` matches the kebab builders; `:time :local` matches read-as-local.
+
+### Schemas where the registry cannot follow
+
+`:malli/schema` metadata, `malli.dev/start!` and other tools read schemas through malli's
+default registry. `portable` gives the named schema as data that registry reads (with
+`malli.experimental.time` added for the time types): the schema's own enums inlined,
+pgmalli's types as their malli counterparts, generation hints dropped. The CHECKs only
+pgmalli evaluates (`:pg/check`, `:pg/check-value`) are left out, so it is weaker than the
+registry's schema; prefer the registry where you can pass it.
+
+```clojure
+(defn find-user [id] ...)
+(alter-meta! #'find-user assoc :malli/schema [:=> [:cat (pgmalli/non-null (pgmalli/column registry :pg.public/users :id))]
+                                                  [:maybe (pgmalli/portable registry :pg.public/users)]])
 ```
 
 Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints

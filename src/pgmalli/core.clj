@@ -49,6 +49,31 @@
   [registry name]
   (rt/columns registry name))
 
+(defn column
+  "The schema of one column of a row or insert schema, as data, [:maybe ...] included."
+  [registry name col]
+  (rt/column registry name col))
+
+(defn non-null
+  "A column schema without its [:maybe ...]: what a value must be when it is not NULL."
+  [schema]
+  (rt/non-null schema))
+
+(defn portable
+  "The named schema as data malli's default registry reads (plus malli.experimental.time):
+   the schema's own types inlined, pgmalli's types as their malli counterparts, generation
+   hints dropped, the CHECKs only pgmalli evaluates left out. For :malli/schema metadata and
+   other places the registry cannot follow."
+  [registry name]
+  (rt/portable registry name))
+
+(defn as-read
+  "The [:map ...] of a row as a JDBC result builder returns it. Options: :qualified? (keys as
+   :table/column), :kebab?, :nil-columns :absent (NULL columns missing, next.jdbc.optional),
+   :time :instant or :local (how timestamps arrive)."
+  [registry name opts]
+  (rt/as-read registry name opts))
+
 (defn transformer
   "malli transformer decoding JDBC and string values into the registry's types. Instants and
    java.util.Dates that land in date or timestamp (without time zone) columns are read in
