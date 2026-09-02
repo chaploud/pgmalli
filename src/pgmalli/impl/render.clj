@@ -36,8 +36,10 @@
     (str "pg." schema-name "/" s)))
 
 (def ^:private base-types
-  (merge (zipmap ["smallint" "int2"] (repeat [:int {:min -32768 :max 32767}]))
-         (zipmap ["integer" "int4"] (repeat [:int {:min -2147483648 :max 2147483647}]))
+  ;; smallint and integer are schema types pgmalli registers, carrying PostgreSQL's range; a
+  ;; bigint is exactly a long, so it is :int
+  (merge (zipmap ["smallint" "int2"] (repeat :pg/smallint))
+         (zipmap ["integer" "int4"] (repeat :pg/integer))
          (zipmap ["bigint" "int8"] (repeat :int))
          (zipmap ["numeric" "decimal"] (repeat 'decimal?))
          (zipmap ["real" "double precision" "float4" "float8"] (repeat :double))
@@ -99,7 +101,7 @@
   [schema lit]
   (let [base (if (vector? schema) (first schema) schema)]
     (cond
-      (and (#{:int} base) (integer? lit)) lit
+      (and (#{:int :pg/integer :pg/smallint} base) (integer? lit)) lit
       (and (= :double base) (number? lit)) (double lit)
       (and (= 'decimal? base) (number? lit)) (bigdec lit)
       (and (#{:string :ref :enum} base) (string? lit)) lit
@@ -118,7 +120,7 @@
   [[schema unrendered] {:keys [fact] :as f} schema-name]
   (let [base (schema-base schema)
         string-base? (= :string base)
-        number-base? (#{:int :double} base)
+        number-base? (#{:int :pg/integer :pg/smallint :double} base)
         decimal-base? (= 'decimal? base)
         enum-base? (or string-base? number-base? (#{:ref :boolean} base))
         as-is [schema (conj unrendered f)]
@@ -141,7 +143,7 @@
                         (= :enum base) (let [vs (remove (set members) (enum-values schema))] (if (seq vs) [(into [:enum] vs) unrendered] as-is))
                         :else [[:and schema [:not (into [:enum] members)]] unrendered])
       :range (let [{:keys [min max min-exclusive? max-exclusive?]} f
-                   int? (= :int base)]
+                   int? (#{:int :pg/integer :pg/smallint} base)]
                (cond
                  number-base?
                  [(cond-> (with-props schema {:min (when min (if (and min-exclusive? int?) (inc min) (when-not min-exclusive? min)))

@@ -67,7 +67,7 @@ For a schema `public`, the registry contains:
 | `:pg.public/<domain>` | base type with the domain's CHECKs applied (as column patterns, else `[:pg/check-value expr]`), `[:maybe ...]` unless the domain is NOT NULL. A domain's NOT NULL and DEFAULT reach the columns of that type |
 | `:pg.public/<table>` | a valid row: `[:map ...]`, wrapped in `[:and ...]` with the table's constraints when it has any |
 | `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, identity BY DEFAULT, defaulted and nullable columns optional, `{:closed true}`; the table's constraints see an omitted column as what the database stores in it (its literal default, else NULL) |
-| `:pg/check`, `:pg/check-value`, `:pg/bytes` | the schema types behind `[:pg/check expr]`, `[:pg/check-value expr]` and `[:pg/bytes {:min :max}]` |
+| `:pg/check`, `:pg/check-value`, `:pg/bytes`, `:pg/smallint`, `:pg/integer` | the schema types behind `[:pg/check expr]`, `[:pg/check-value expr]`, `[:pg/bytes {:min :max}]` and the two bounded integers |
 
 Column schemas carry provenance in their properties: `:pg/type`, `:pg/default` (a literal or
 the default expression as data), `:pg/identity` (`:always`, `:default` or `:serial`),
@@ -87,7 +87,7 @@ the database has it.
 |---|---|
 | NOT NULL | no `[:maybe ...]` |
 | column of an enum or domain type | `[:ref :pg.<schema>/<type>]` |
-| `smallint`, `integer` | `[:int {:min ... :max ...}]` with the type's range; `bigint` is `:int` |
+| `smallint`, `integer` | `:pg/smallint`, `:pg/integer`: schema types with the PostgreSQL range (CHECK bounds narrow them through `:min` and `:max`); `bigint` is `:int`, exactly a long |
 | `numeric(p, s)` | `[:and decimal? [:> -10^(p-s)] [:< 10^(p-s)]]` (the scale rounds, it does not reject) |
 | `CHECK (col IN (...))`, `CHECK (col = 'x')` | `[:enum ...]`; several on one column intersect; uuid values as `#uuid` |
 | `CHECK (col NOT IN (...))`, `CHECK (col <> 'x')` | `[:and <type> [:not [:enum ...]]]`, or removed from an `[:enum ...]` |

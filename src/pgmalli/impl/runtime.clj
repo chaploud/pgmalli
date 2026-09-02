@@ -38,6 +38,23 @@
                                     :gen/gen (fmap byte-array (vector-of byte-gen (or min 0) (or max (+ (or min 0) 16))))}
                   :min 0 :max 0}))}))
 
+(defn- bounded-int
+  "A schema type for an integer type of PostgreSQL: its range, narrowed by :min and :max
+   properties from CHECKs, generated within :gen/min and :gen/max when given."
+  [type lo hi]
+  (m/-simple-schema
+   {:type type
+    :compile (fn [{:keys [min max] gen-min :gen/min gen-max :gen/max} _ _]
+               (let [lo (clojure.core/max lo (or min lo)) hi (clojure.core/min hi (or max hi))
+                     large-integer* (requiring-resolve 'clojure.test.check.generators/large-integer*)]
+                 {:pred (fn [v] (and (int? v) (<= lo v hi)))
+                  :type-properties {:error/message (str "should be an integer between " lo " and " hi)
+                                    :gen/gen (large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})}
+                  :min 0 :max 0}))}))
+
+(def smallint-schema (bounded-int :pg/smallint -32768 32767))
+(def integer-schema (bounded-int :pg/integer -2147483648 2147483647))
+
 (def check-value-schema
   "[:pg/check-value expr]: a domain CHECK, the value standing for VALUE."
   (m/-simple-schema
@@ -146,7 +163,7 @@
   (let [[t p] (if (and (vector? s) (map? (second s))) [(first s) (second s)] [(if (vector? s) (first s) s) {}])
         now (java.time.Instant/now)
         hints (case t
-                :int (when key?
+                (:int :pg/integer :pg/smallint) (when key?
                        (let [lo (max 1 (:min p Long/MIN_VALUE)) hi (min 100000 (:max p Long/MAX_VALUE))]
                          (when (<= lo hi) {:gen/min lo :gen/max hi})))
                 :string (when (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) 24)})
@@ -173,7 +190,8 @@
   "The registry pgmalli.core/registry documents."
   [& schemas]
   (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas)
-                    {:pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema})
+                    {:pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
+                     :pg/smallint smallint-schema :pg/integer integer-schema})
         generated (apply merge (map #(:registry (if (map? %) % (read-generated %))) schemas))]
     (doseq [[k s] generated :when (row-schema? s)
             :let [{:keys [pg/table pg/unique pg/foreign-keys]} (second (row-map s))]

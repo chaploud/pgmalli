@@ -6,7 +6,7 @@
    {:pg/foreign-keys [{:columns ["user_id"], :table "sample.users", :to ["id"]}],
     :pg/primary-key ["id"],
     :pg/table "other.notes"}
-   [:id [:int {:max 2147483647, :min -2147483648, :pg/type "integer"}]]
+   [:id [:pg/integer {:pg/type "integer"}]]
    [:user_id [:int {:pg/type "bigint"}]]]},
  :schema "other",
  :skipped [],

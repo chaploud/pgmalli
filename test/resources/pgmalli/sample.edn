@@ -6,7 +6,7 @@
    {:pg/primary-key ["id"],
     :pg/table "sample.groups",
     :pg/unique [{:columns ["name"]} {:columns ["id" "name"]}]}
-   [:id [:int {:max 2147483647, :min -2147483648, :pg/type "integer"}]]
+   [:id [:pg/integer {:pg/type "integer"}]]
    [:name [:string {:pg/type "text"}]]],
   :pg.sample/mood [:enum "happy" "sad"],
   :pg.sample/users
@@ -20,23 +20,20 @@
      :pg/table "sample.users"}
     [:born [:maybe [:time/local-date {:pg/type "date"}]]]
     [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
-    [:group_id [:int {:max 2147483647, :min -2147483648, :pg/type "integer"}]]
+    [:group_id [:pg/integer {:pg/type "integer"}]]
     [:group_name [:maybe [:string {:pg/type "text"}]]]
     [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
     [:mood [:ref {:default "happy", :pg/default "happy", :pg/type "mood"} :pg.sample/mood]]
     [:nick [:maybe [:string {:max 40, :pg/type "character varying"}]]]
     [:nick_upper [:maybe [:string {:pg/generated true, :pg/type "text"}]]]
     [:referrer_id [:maybe [:int {:pg/type "bigint"}]]]
-    [:score [:int {:max 2147483647, :min -2147483648, :pg/type "integer"}]]
+    [:score [:pg/integer {:pg/type "integer"}]]
     [:seq
-     [:int
-      {:max 2147483647,
-       :min -2147483648,
-       :pg/default [:nextval [:cast "users_seq_seq" :regclass]],
+     [:pg/integer
+      {:pg/default [:nextval [:cast "users_seq_seq" :regclass]],
        :pg/identity :serial,
        :pg/type "integer"}]]
-    [:total
-     [:int {:default 10, :max 2147483647, :min -2147483648, :pg/default 10, :pg/type "integer"}]]
+    [:total [:pg/integer {:default 10, :pg/default 10, :pg/type "integer"}]]
     [:updated_at [:maybe [:time/local-date-time {:pg/type "timestamp"}]]]]
    [:multi
     {:dispatch :mood, :error/message "closed_check"}

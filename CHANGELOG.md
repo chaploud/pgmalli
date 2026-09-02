@@ -28,8 +28,9 @@ All notable changes to this project are documented here. The format follows
   a domain's NOT NULL and DEFAULT reach its columns; `:overrides` apply to domain CHECKs.
 - Column patterns for `LIKE`, `NOT IN`, `cardinality`, `array_length`, boolean and uuid value
   sets; bounds and value sets from several constraints tighten and intersect.
-- `smallint` and `integer` carry their range; `numeric(p, s)` its magnitude bound; `bytea`
-  with a length CHECK is `[:pg/bytes {:min :max}]`, a type that generates byte arrays.
+- `smallint` and `integer` are `:pg/smallint` and `:pg/integer`, schema types carrying the
+  PostgreSQL range; `numeric(p, s)` carries its magnitude bound; `bytea` with a length CHECK
+  is `[:pg/bytes {:min :max}]`, a type that generates byte arrays.
 - `date`, `time`, `timetz`, `timestamp`, `timestamptz` and `interval` map to
   `malli.experimental.time` schemas.
 - `pgmalli/columns`, `pgmalli/transformer` (with a `:zone` option; JSON text in json and

@@ -48,10 +48,10 @@
     (is (insert {:group_id 1 :score 1}) "happy with no closed_at")
     (is (not (insert {:group_id 1 :mood "sad" :score 1})) "an omitted column without a default is NULL, which sad forbids"))
   (testing "from generated data instead of the classpath"
-    (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default 1}]]]
+    (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:pg/integer {:pg/type "integer" :pg/default 1}]]]
                                             :pg.public/t [:and [:map {:pg/table "public.t"}
-                                                                [:a [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]
-                                                                [:b [:maybe [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default 5 :default 5}]]]]
+                                                                [:a [:pg/integer {:pg/type "integer"}]]
+                                                                [:b [:maybe [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]]]
                                                           [:or [:map [:a {:error/message "c"} [:int {:min 1}]]] [:map [:b :nil]]]]}})]
       (is (m/validate "pg.public.Order Items/insert" {} {:registry reg}) "string keys follow the same naming")
       (is (m/validate :pg.public.t/insert {:a 0 :b nil} {:registry reg}) "entries with properties inside fragments survive")
@@ -61,9 +61,9 @@
     (let [reg (pgmalli/registry {:registry {:pg.public/t [:and [:map {:pg/table "public.t"}
                                                                 [:status [:string {:pg/type "text" :pg/default "approved" :default "approved"}]]
                                                                 [:approver [:maybe [:string {:pg/type "text"}]]]
-                                                                [:a [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]
-                                                                [:b [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default 5 :default 5}]]
-                                                                [:c [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default [:nextval "s"]}]]]
+                                                                [:a [:pg/integer {:pg/type "integer"}]]
+                                                                [:b [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]
+                                                                [:c [:pg/integer {:pg/type "integer" :pg/default [:nextval "s"]}]]]
                                                           [:multi {:dispatch :status}
                                                            ["approved" [:map [:approver :string]]]
                                                            [:malli.core/default [:map [:approver :nil]]]]

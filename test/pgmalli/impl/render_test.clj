@@ -43,7 +43,9 @@
 
 (def ^:private facts (p/facts schema))
 
-(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas) {:pg/check rt/check-schema :pg/check-value rt/check-value-schema :pg/bytes rt/bytes-schema} r))
+(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas)
+                                 {:pg/check rt/check-schema :pg/check-value rt/check-value-schema :pg/bytes rt/bytes-schema
+                                  :pg/smallint rt/smallint-schema :pg/integer rt/integer-schema} r))
 
 (deftest row-schema
   (let [{:keys [registry unrendered]} (r/registry facts)
@@ -52,23 +54,23 @@
     (is (= [:maybe [:and :string [:re "@"]]] (:pg.public/email registry)) "domain = base type + its CHECK")
     (is (= :and (first users)) "columns, then the table constraints")
     (is (= [:map {:pg/table "public.users" :pg/primary-key ["id"] :pg/unique [{:columns ["nick"]}] :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
-            [:age [:maybe [:int {:min 0 :max 150 :pg/type "integer" :pg/constraint ["age_check"]}]]]
+            [:age [:maybe [:pg/integer {:min 0 :max 150 :pg/type "integer" :pg/constraint ["age_check"]}]]]
             [:born [:maybe [:time/local-date {:pg/type "date"}]]]
             [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
             [:created_at [:time/instant {:pg/type "timestamptz" :pg/default [:now]}]]
             [:flag [:boolean {:pg/type "boolean" :pg/default false :default false}]]
             [:full_name [:maybe [:string {:pg/type "text" :pg/generated true}]]]
-            [:group_id [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]
+            [:group_id [:pg/integer {:pg/type "integer"}]]
             [:id [:int {:pg/type "bigint" :pg/identity :always}]]
             [:mail [:maybe [:ref {:pg/type "email"} :pg.public/email]]]
             [:mood [:ref {:pg/type "mood" :pg/default "happy" :default "happy"} :pg.public/mood]]
             [:nick [:maybe [:string {:max 40 :pg/type "character varying"}]]]
             [:price ['decimal? {:pg/type "numeric" :pg/default 0 :default 0M}]]
-            [:score [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]
-            [:seq [:int {:min -2147483648 :max 2147483647 :pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
+            [:score [:pg/integer {:pg/type "integer"}]]
+            [:seq [:pg/integer {:pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
             [:since [:time/local-date {:pg/type "date" :pg/default "2020-01-01"}]]
             [:title [:and {:pg/type "text" :pg/constraint ["title_check"]} [:string {:min 1}] [:re "\\S"]]]
-            [:total [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]]
+            [:total [:pg/integer {:pg/type "integer"}]]]
            (second users)))
     (is (= [:multi {:dispatch :mood :error/message "closed_check"}
             ["sad" [:map [:closed_at [:time/instant {:error/message "closed_check"}]]]]
@@ -111,7 +113,7 @@
                                                             :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
                                                                                     {:name "b" :position 2 :data_type "integer" :is_nullable false}]
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))]
-    (is (= [:map {:pg/table "public.t"} [:a [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]] [:b [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]] (:pg.public/t registry)))
+    (is (= [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]] [:b [:pg/integer {:pg/type "integer"}]]] (:pg.public/t registry)))
     (is (= [{:fact :table-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered)))))
 
 (deftest checks-that-lose-a-fact-are-evaluated-whole
@@ -146,7 +148,7 @@
                                              :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause (str "CHECK (" c ")")}]) checks))}}})
         column (fn [reg col] (some (fn [[k s]] (when (= k col) s)) (drop 2 (let [r (:pg.public/t reg)] (if (= :and (first r)) (second r) r)))))
         reg (fn [& args] (:registry (r/registry (p/facts (apply t args)))))]
-    (is (= [:int {:min 10 :max 2147483647 :pg/type "integer" :pg/constraint ["k0" "k1"]}]
+    (is (= [:pg/integer {:min 10 :pg/type "integer" :pg/constraint ["k0" "k1"]}]
            (column (reg [{:name "n" :position 1 :data_type "integer" :is_nullable false}] "n >= 10" "n >= 0") :n))
         "the tighter bound wins")
     (is (= [:string {:max 5 :pg/type "character varying" :pg/constraint ["k0"]}]
@@ -189,7 +191,7 @@
                                                       {:name "code" :position 3 :data_type "opaque" :type_schema "public" :is_nullable true}]
                                             :constraints {}}}}))
         reg (registry-with registry)]
-    (is (= [:maybe [:and [:int {:min -2147483648 :max 2147483647}] [:pg/check-value {:pg/constraint "even_int_check" :error/message "even_int_check"} [:= [:mod :VALUE 2] 0]]]]
+    (is (= [:maybe [:and :pg/integer [:pg/check-value {:pg/constraint "even_int_check" :error/message "even_int_check"} [:= [:mod :VALUE 2] 0]]]]
            (:pg.public/even_int registry))
         "a domain CHECK outside the patterns is evaluated over the value")
     (is (m/validate :pg.public/even_int 4 {:registry reg}))
@@ -201,7 +203,7 @@
     (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                             :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
                                                               :tables {}}))]
-      (is (= [:maybe [:int {:min -2147483648 :max 2147483647}]] (:pg.public/pos registry)) "a NOT VALID domain CHECK is not applied")
+      (is (= [:maybe :pg/integer] (:pg.public/pos registry)) "a NOT VALID domain CHECK is not applied")
       (is (= [{:fact :domain-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered))))
     (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
                                                                                           :constraints [{:name "d_check" :definition "CHECK (VALUE >= '2020-01-01'::date)"}]}}
@@ -236,7 +238,12 @@
     (is (= [:and {:pg/type "numeric" :pg/constraint ["a_check"]} 'decimal? [:> -100M] [:< 100M] [:>= 0.5]] (get-in t [2 1]))
         "numeric(3,1) holds |v| < 100, and a CHECK narrows further")
     (is (= [:and {:pg/type "numeric"} 'decimal? [:> -10000M] [:< 10000M]] (get-in t [3 1])))
-    (is (= [:int {:min -32768 :max 32767 :pg/type "smallint"}] (get-in t [4 1]))))
+    (is (= [:pg/smallint {:pg/type "smallint"}] (get-in t [4 1])))
+    (let [reg (registry-with registry)]
+      (is (m/validate :pg.public/t {:a 1.5M :b 1M :c 32767 :d nil :e nil} {:registry reg}))
+      (is (not (m/validate :pg.public/t {:a 1.5M :b 1M :c 32768 :d nil :e nil} {:registry reg})) "smallint keeps its range")
+      (is (not (m/validate :pg.public/t {:a 1.5M :b 1M :c 1 :d nil :e 2147483648} {:registry reg})) "so does integer")
+      (is (every? #(<= -32768 (:c %) 32767) (mg/sample :pg.public/t {:registry reg :size 20})) "and generates within it")))
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "digest" :position 1 :data_type "bytea" :is_nullable false}]
                                                                :constraints {"digest_check" {:name "digest_check" :type "CHECK" :check_clause "CHECK (octet_length(digest) = 32)"}}}}}))
@@ -288,7 +295,7 @@
 (deftest odd-identifiers
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
                                                  :tables {"Order Items" {:columns [{:name "line no" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}}}))]
-    (is (= [:map {:pg/table "public.Order Items"} ["line no" [:int {:min -2147483648 :max 2147483647 :pg/type "integer"}]]] (get registry "pg.public/Order Items"))))
+    (is (= [:map {:pg/table "public.Order Items"} ["line no" [:pg/integer {:pg/type "integer"}]]] (get registry "pg.public/Order Items"))))
   (is (= ["pg.odd schema/t"] (keys (:registry (r/registry (p/facts {:name "odd schema" :types {} :tables {"t" {:columns [{:name "a" :position 1 :data_type "text" :is_nullable true}] :constraints {}}}})))))
       "a schema name that is not a plain identifier makes string keys too"))
 
