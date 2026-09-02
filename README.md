@@ -189,9 +189,10 @@ columns exist but have no type.
 ```
 
 Options: `:schema` for unqualified table names (default `"public"`) and the row shape of
-`as-read`; time columns are `inst?` unless `:time` says how they arrive, so the schemas
-need no registry at all. A test that runs `check` over every query of an application
-catches a renamed column before any query runs.
+`as-read`. Time columns are `inst?` unless `:time` says how they arrive; leave `:time` out for
+a schema that goes into `:malli/schema` metadata, which malli's default registry reads. A
+test that runs `check` over every query of an application catches a renamed column before
+any query runs.
 
 ### Schemas where the registry cannot follow
 

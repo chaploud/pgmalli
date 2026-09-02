@@ -18,7 +18,9 @@
   (is (= [] (h/check registry '(cond-> {:select [:id] :from [:tree]} deep? (assoc :with-recursive [[:tree {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:tree]}]}]])) opts))
       "a CTE built up in code is one too")
   (is (= [] (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [:group_id :mood :score] :from [:users]}]} opts))
-      "INSERT INTO table (columns) SELECT"))
+      "INSERT INTO table (columns) SELECT")
+  (is (= [] (h/check registry '{:insert-into :users :values rows} opts)) "rows passed in say nothing about the columns")
+  (is (= {} (h/arg-types registry '{:insert-into :users :values rows} opts))))
 
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (h/check registry {:select [:*] :from [:nope]} opts)))

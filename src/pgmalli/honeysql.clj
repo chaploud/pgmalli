@@ -178,7 +178,8 @@
                             :when (and (#{:= :<> :in} op) (keyword? col))]
                         [col value])
                       (when (map? (:set stmt)) (:set stmt))
-                      (mapcat identity (filter map? (:values stmt))))
+                      ;; :values may be a symbol (rows passed in), which says nothing about the columns
+                      (when (vector? (:values stmt)) (mapcat identity (filter map? (:values stmt)))))
         literals (for [[col value] pairs
                        :let [{s :schema} (resolve-column registry sc col)
                              values (cond (string? value) [value]
