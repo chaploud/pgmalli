@@ -170,7 +170,7 @@
                       ;; array_length of an empty array is NULL, so only an upper bound means what the CHECK means
                       (and (= :vector base) (= :array_length fn) (nil? (:min bounds))) [(with-props schema bounds) unrendered]
                       :else as-is))
-      :json-type (if (= :any base)
+      :json-type (if (#{:any :some} base)
                    (case (:json-type f)
                      "object" [:map unrendered]
                      "array" [[:sequential :any] unrendered]

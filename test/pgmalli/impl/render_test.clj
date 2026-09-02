@@ -342,3 +342,11 @@
     (is (m/validate :pg.public/t {:valid_from t1 :valid_until nil :validity nil} {:registry reg}) "an open bound is fine")
     (is (not (m/validate :pg.public/t {:valid_from t2 :valid_until t1 :validity nil} {:registry reg})) "the database would refuse to build the range")
     (is (= [:unknown-type] (map :fact unrendered)) "the range column itself stays :any")))
+
+(deftest a-json-column-both-not-null-and-shaped
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "payload" :position 1 :data_type "jsonb" :is_nullable true}]
+                                                                          :constraints {"nn" {:name "nn" :type "CHECK" :check_clause "CHECK (payload IS NOT NULL)"}
+                                                                                        "obj" {:name "obj" :type "CHECK" :check_clause "CHECK (jsonb_typeof(payload) = 'object'::text)"}}}}}))]
+    (is (= [:map {:pg/type "jsonb" :pg/constraint ["nn" "obj"]}] (get-in registry [:pg.public/t 2 1])) "IS NOT NULL and jsonb_typeof together are still [:map]")
+    (is (empty? unrendered))))

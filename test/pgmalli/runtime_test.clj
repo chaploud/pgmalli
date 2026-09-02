@@ -384,3 +384,20 @@
     (is (= [[{:id 1 :body [:cast "1" :jsonb]}] [{:id 2}]]
            (map :values (pgmalli/inserts reg {"public.docs" [{:id 1 :body 1} {:id 2}]})))
         "rows with different columns get INSERTs of their own, so a missing column takes its default")))
+
+(deftest branches-are-filled-even-when-the-dispatch-column-cannot-be-null
+  (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/t [:and [:map {:pg/table "public.t" :pg/primary-key ["id"]}
+                                                              [:id [:int {:pg/type "integer"}]]
+                                                              [:status [:string {:pg/type "text"}]]
+                                                              [:result [:maybe [:any {:pg/type "jsonb"}]]]]
+                                                        [:multi {:dispatch :status}
+                                                         ["open" [:map [:result :nil]]]
+                                                         ["done" [:map [:result :some]]]
+                                                         [:malli.core/default [:map [:status :nil]]]]]}})
+        ds (tcg/generate (pgmalli/dataset-generator reg {:rows 6}) 30 3)
+        rows (get ds "public.t")]
+    (is (= 6 (count rows)) "no row is lost to the default branch")
+    (is (every? #{"open" "done"} (map :status rows)))
+    (is (every? #(or (= "open" (:status %)) (some? (:result %))) rows))
+    (is (m/validate (pgmalli/dataset-schema reg) ds {:registry reg}))))

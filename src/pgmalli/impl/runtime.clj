@@ -480,10 +480,13 @@
     (if (= :and (first schema))
       (reduce (fn [row [i part]]
                 (case (first part)
-                  :multi (let [branches (drop 2 part)
-                               frag (or (some (fn [[v s]] (when (= v (get row (:dispatch (second part)))) s)) branches)
-                                        (some (fn [[v s]] (when (= v :malli.core/default) s)) branches))]
-                           (if (fragment? frag) (fill row frag (* 100 i)) row))
+                  ;; a row whose dispatch value has no branch is moved to a branch (the default only
+                  ;; passes a NULL dispatch, which a NOT NULL column cannot hold)
+                  :multi (let [dk (:dispatch (second part))
+                               branches (remove #(= :malli.core/default (first %)) (drop 2 part))
+                               hit (some (fn [[v s]] (when (= v (get row dk)) s)) branches)
+                               [v frag] (if hit [(get row dk) hit] (when (seq branches) (nth branches (mod (hash [seed i]) (count branches)))))]
+                           (if (fragment? frag) (fill (assoc row dk v) frag (* 100 i)) row))
                   :or (let [alts (filterv fragment? (drop 2 part))]
                         (if (seq alts) (fill row (nth alts (mod (hash [seed i]) (count alts))) (* 100 i)) row))
                   row))

@@ -31,7 +31,9 @@
                                       closed_at timestamptz, CONSTRAINT closed CHECK (mood = 'sad' OR closed_at IS NULL));
                   CREATE UNIQUE INDEX users_nick_idx ON users (nick);
                   CREATE UNIQUE INDEX users_nick_lower_idx ON users (lower(nick));
-                  CREATE UNIQUE INDEX users_age_open_idx ON users (age) WHERE closed_at IS NULL;")
+                  CREATE UNIQUE INDEX users_age_open_idx ON users (age) WHERE closed_at IS NULL;
+                  CREATE UNIQUE INDEX users_age_inc_idx ON users (age) INCLUDE (nick);
+                  CREATE UNIQUE INDEX closed ON users (closed_at);")
       (testing "a missing file is stale"
         (is (every? (comp nil? :file) (get (pgmalli/stale config) "public"))))
       (testing "generate, read back, validate"
@@ -46,8 +48,9 @@
             (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))
                 "closed_at only when sad")
             (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
-            (is (= [{:columns ["nick"]}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
-                "a unique index over plain columns counts; expression and partial ones do not"))))
+            (is (= [{:columns ["age"]} {:columns ["nick"]}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
+                "unique indexes over plain columns count, key columns only; expression and partial ones, and one named as a constraint is, do not")
+            (is (some #(= "closed" (:error/message (second %))) (drop 2 (:pg.public/users reg))) "the CHECK named like the index is still there"))))
       (testing "stale and unrendered"
         (is (nil? (pgmalli/stale config)))
         (is (empty? (:unrendered (gen/load-file* out))))
