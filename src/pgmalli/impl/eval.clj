@@ -1,24 +1,43 @@
 (ns pgmalli.impl.eval
   "Evaluates CHECK expression data against a row the way PostgreSQL does: nil is NULL,
    comparisons and functions yield nil when an operand is nil, and a CHECK passes unless its
-   result is false. An expression PostgreSQL would fail on (division by zero, a cast that does
-   not parse) fails the row, since the database would reject it too. Rows hold the registry's
-   types (java.time, UUID, jsonb as maps and vectors).
+   result is false. AND, OR and COALESCE stop at the first decisive operand, left to right. An
+   expression PostgreSQL would fail on (division by zero, a cast that does not parse) fails
+   the row, since the database would reject it too. Rows hold the registry's types (java.time,
+   UUID, jsonb as maps and vectors).
 
    Only the vocabulary that occurs in CHECK constraints is implemented; supported? tells
    whether an expression is inside it, and render leaves the others unrendered."
   (:require [clojure.string :as str]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.json :as json])
-  (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneOffset)
+  (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneId ZoneOffset)
            (java.util UUID)))
 
 ;;; three-valued logic and comparison
 
-(defn- and3 [xs] (cond (some false? xs) false (some nil? xs) nil :else true))
-(defn- or3 [xs] (cond (some true? xs) true (some nil? xs) nil :else false))
+(defn- and3
+  "Left to right, stopping at the first false; nil when an operand was NULL and none false.
+   rest, not next: the operand after a decisive one is never evaluated."
+  [xs]
+  (loop [xs (seq xs) r true]
+    (if xs
+      (let [v (first xs)]
+        (cond (false? v) false
+              (nil? v) (recur (seq (rest xs)) nil)
+              :else (recur (seq (rest xs)) r)))
+      r)))
+
+(defn- or3 [xs]
+  (loop [xs (seq xs) r false]
+    (if xs
+      (let [v (first xs)]
+        (cond (true? v) true
+              (nil? v) (recur (seq (rest xs)) nil)
+              :else (recur (seq (rest xs)) r)))
+      r)))
+
 (defn- not3 [v] (when (some? v) (not v)))
-(defn- fn3 [f & xs] (when (every? some? xs) (apply f xs)))
 
 (defn- json-number [n] (.stripTrailingZeros (bigdec n)))
 
@@ -36,12 +55,29 @@
         (and (number? a) (number? b)) (zero? (compare a b))
         :else (= a b)))
 
+(defn- comparable-pair
+  "Temporal operands of different types as PostgreSQL compares them: a date is its midnight,
+   a timestamp is read in the session zone (the JVM's here) against a timestamptz."
+  [a b]
+  (let [zone (ZoneId/systemDefault)
+        temporal? #(or (instance? Instant %) (instance? LocalDateTime %) (instance? LocalDate %))
+        to-instant #(cond (instance? Instant %) %
+                          (instance? LocalDateTime %) (.toInstant (.atZone ^LocalDateTime % zone))
+                          (instance? LocalDate %) (.toInstant (.atStartOfDay ^LocalDate % zone)))
+        to-local #(if (instance? LocalDate %) (.atStartOfDay ^LocalDate %) %)]
+    (cond (= (class a) (class b)) [a b]
+          (not (and (temporal? a) (temporal? b))) [a b]
+          (or (instance? Instant a) (instance? Instant b)) [(to-instant a) (to-instant b)]
+          :else [(to-local a) (to-local b)])))
+
 (defn- cmp [op a b]
   (when (and (some? a) (some? b))
     (case op
       := (same? a b)
       :<> (not (same? a b))
-      (let [c (compare a b)] (case op :< (neg? c) :> (pos? c) :<= (not (pos? c)) :>= (not (neg? c)))))))
+      (let [[a b] (comparable-pair a b)
+            c (compare a b)]
+        (case op :< (neg? c) :> (pos? c) :<= (not (pos? c)) :>= (not (neg? c)))))))
 
 (defn- in3
   "x IN (...): nil when nothing matched and a NULL was among the values."
@@ -54,16 +90,14 @@
 ;;; arithmetic, temporal and string helpers
 
 (defn- plus [a b]
-  (cond (and (number? a) (number? b)) (+ a b)
-        (instance? Duration b) (cond (instance? LocalDate a) (.plusDays ^LocalDate a (.toDays ^Duration b))
-                                    (instance? Instant a) (.plus ^Instant a ^Duration b)
-                                    (instance? LocalDateTime a) (.plus ^LocalDateTime a ^Duration b)
-                                    (instance? Duration a) (.plus ^Duration a ^Duration b)
-                                    :else (throw (ex-info "cannot add" {:a a :b b})))
-        (instance? Duration a) (plus b a)
-        (and (instance? LocalDate a) (integer? b)) (.plusDays ^LocalDate a b)
-        (and (integer? a) (instance? LocalDate b)) (.plusDays ^LocalDate b a)
-        :else (throw (ex-info "cannot add" {:a a :b b}))))
+  ;; addition commutes: the date, time or number goes first, the duration or day count second
+  (let [[a b] (if (or (instance? Duration a) (and (integer? a) (instance? LocalDate b))) [b a] [a b])]
+    (cond (and (number? a) (number? b)) (+ a b)
+          (instance? LocalDate a) (.plusDays ^LocalDate a (if (integer? b) b (.toDays ^Duration b)))
+          (instance? Instant a) (.plus ^Instant a ^Duration b)
+          (instance? LocalDateTime a) (.plus ^LocalDateTime a ^Duration b)
+          (instance? Duration a) (.plus ^Duration a ^Duration b)
+          :else (throw (ex-info "cannot add" {:a a :b b})))))
 
 (defn- minus [a b]
   (cond (and (number? a) (number? b)) (- a b)
@@ -72,6 +106,7 @@
         (and (instance? LocalDate a) (instance? LocalDate b)) (- (.toEpochDay ^LocalDate a) (.toEpochDay ^LocalDate b))
         (and (instance? Instant a) (instance? Instant b)) (Duration/between b a)
         (and (instance? LocalDateTime a) (instance? LocalDateTime b)) (Duration/between b a)
+        ;; jsonb: delete a key, keys, or an element
         (and (map? a) (string? b)) (dissoc a b)
         (and (map? a) (sequential? b)) (apply dissoc a b)
         (and (vector? a) (integer? b)) (let [i (if (neg? b) (+ (count a) b) b)]
@@ -84,9 +119,17 @@
         (or (decimal? a) (decimal? b)) (.divide (bigdec a) (bigdec b) java.math.MathContext/DECIMAL64)
         :else (/ a b)))
 
-(defn- round-half-up [v digits]
-  (let [r (.setScale (bigdec v) (int digits) java.math.RoundingMode/HALF_UP)]
-    (cond (integer? v) v (double? v) (double r) :else r)))
+(defn- power [x y]
+  (let [r (Math/pow (double x) (double y))]
+    (if (and (integer? x) (integer? y) (not (neg? y))) (bigdec r) r)))
+
+(defn- round*
+  "round(v[, digits]): numeric ties go away from zero, double precision ties to even."
+  ([v] (round* v 0))
+  ([v digits]
+   (let [mode (if (double? v) java.math.RoundingMode/HALF_EVEN java.math.RoundingMode/HALF_UP)
+         r (.setScale (bigdec v) (int digits) mode)]
+     (cond (integer? v) v (double? v) (double r) :else r))))
 
 (defn- floor* [v] (cond (integer? v) v (double? v) (Math/floor v) :else (.setScale (bigdec v) 0 java.math.RoundingMode/FLOOR)))
 (defn- ceil* [v] (cond (integer? v) v (double? v) (Math/ceil v) :else (.setScale (bigdec v) 0 java.math.RoundingMode/CEILING)))
@@ -122,34 +165,44 @@
 ;;; casts
 
 (def ^:private integer-types #{:smallint :integer :bigint :int2 :int4 :int8})
-(def ^:private decimal-types #{:numeric :decimal :real :double-precision :float4 :float8})
+(def ^:private exact-types #{:numeric :decimal})
+(def ^:private float-types #{:real :double-precision :float4 :float8})
 (def ^:private text-types #{:text :varchar :character-varying :char :character :bpchar :name})
 (def ^:private temporal-types #{:date :timestamp :timestamp-without-time-zone :timestamptz :timestamp-with-time-zone :time :interval})
 (def ^:private boolean-words {"t" true "true" true "y" true "yes" true "on" true "1" true
                               "f" false "false" false "n" false "no" false "off" false "0" false})
+
+(defn- cast-type [t] (if (vector? t) (first t) t))                                  ; [:numeric 10 2] -> :numeric
+(defn- array-elem [t] (when-let [[_ e] (re-matches #"(.+)-array" (name t))] (keyword e)))
 
 (def ^:private interval-units
   {"day" 86400 "days" 86400 "d" 86400 "hour" 3600 "hours" 3600 "h" 3600 "hr" 3600 "hrs" 3600
    "min" 60 "mins" 60 "minute" 60 "minutes" 60 "m" 60 "sec" 1 "secs" 1 "second" 1 "seconds" 1 "s" 1
    "week" 604800 "weeks" 604800 "w" 604800})
 
+(def ^:private interval-clock #"(?s)(.*?)(-?\d+):(\d\d)(?::(\d\d(?:\.\d+)?))?\s*(.*)")
+
+(defn- clock-seconds [hh mm ss]
+  (* (if (str/starts-with? hh "-") -1 1)
+     (+ (* 3600 (abs (parse-long hh))) (* 60 (parse-long mm)) (if ss (bigdec ss) 0))))
+
+(defn- unit-seconds
+  "'3 days 90 secs' as seconds; months and years have no fixed length and are rejected."
+  [words]
+  (reduce (fn [acc [n u]]
+            (if-let [secs (and (re-matches #"[+-]?\d+(\.\d+)?" (str n)) (interval-units u))]
+              (+ acc (* (bigdec n) secs))
+              (throw (ex-info "unsupported interval" {:words words}))))
+          0
+          (partition-all 2 words)))
+
 (defn- parse-interval
-  "'1 day 02:03:04', '3 days', '01:00:00', '90 secs' as a Duration; months and years have no
-   fixed length and are rejected."
+  "'1 day 02:03:04', '3 days', '01:00:00', '90 secs' as a Duration."
   [s]
   (let [s (str/lower-case (str/trim s))
-        [_ before hh mm ss after] (or (re-matches #"(?s)(.*?)(-?\d+):(\d\d)(?::(\d\d(?:\.\d+)?))?\s*(.*)" s) [nil s nil nil nil ""])
-        words (remove str/blank? (str/split (str before " " after) #"\s+"))
-        secs (loop [ws words acc 0]
-               (cond (empty? ws) acc
-                     (and (next ws) (re-matches #"[+-]?\d+(\.\d+)?" (first ws)) (interval-units (second ws)))
-                     (recur (nnext ws) (+ acc (* (bigdec (first ws)) (interval-units (second ws)))))
-                     :else (throw (ex-info "unsupported interval" {:interval s}))))
-        clock (if hh
-                (* (if (str/starts-with? hh "-") -1 1)
-                   (+ (* 3600 (abs (parse-long hh))) (* 60 (parse-long mm)) (if ss (bigdec ss) 0)))
-                0)]
-    (Duration/ofMillis (long (* 1000 (+ secs clock))))))
+        [_ before hh mm ss after] (or (re-matches interval-clock s) [nil s nil nil nil ""])
+        words (remove str/blank? (str/split (str before " " after) #"\s+"))]
+    (Duration/ofMillis (long (* 1000 (+ (unit-seconds words) (if hh (clock-seconds hh mm ss) 0)))))))
 
 (defn- parse-timestamptz [s]
   (let [s (str/replace (str/trim s) #"^(\S+) " "$1T")
@@ -176,7 +229,8 @@
                             (number? v) (long (.setScale (bigdec v) 0 java.math.RoundingMode/HALF_UP))
                             (boolean? v) (if v 1 0)
                             :else (Long/parseLong (str/trim v)))
-    (decimal-types t) (if (number? v) v (bigdec (str/trim v)))
+    (exact-types t) (bigdec (if (number? v) v (str/trim v)))
+    (float-types t) (double (if (number? v) v (parse-double (str/trim v))))
     (text-types t) (cond (string? v) v
                          (instance? LocalDateTime v) (str/replace (str v) "T" " ")
                          (instance? Instant v) (-> (str (.atOffset ^Instant v ZoneOffset/UTC)) (str/replace "T" " ") (str/replace #"Z$" "+00"))
@@ -196,10 +250,7 @@
     (= :interval t) (if (instance? Duration v) v (parse-interval v))
     (= :uuid t) (if (instance? UUID v) v (UUID/fromString (str/trim v)))
     (#{:json :jsonb} t) (if (string? v) (json/parse v) v)
-    (str/ends-with? (name t) "-array") (if (string? v)
-                                         (let [elem (keyword (subs (name t) 0 (- (count (name t)) 6)))]
-                                           (mapv #(cast-to % elem) (parse-array v)))
-                                         v)
+    (array-elem t) (if (string? v) (mapv #(cast-to % (array-elem t)) (parse-array v)) v)
     :else v))
 
 ;;; patterns
@@ -278,6 +329,52 @@
 
 ;;; evaluation
 
+(def ^:private strict
+  "Operators that are a function of their evaluated arguments: a NULL argument makes the
+   result NULL, an exception fails the row. Arities follow PostgreSQL's."
+  {:+ plus :- minus :* * :/ divide :mod rem :pow power :abs abs
+   :round round* :floor floor* :ceil ceil* :ceiling ceil* :trunc trunc*
+   :length count :char_length count :character_length count :octet_length octets
+   :lower str/lower-case :upper str/upper-case :reverse str/reverse
+   :substr substr :substring substr :left left* :right right*
+   ;; TRIM(BOTH chars FROM x) parses as [:trim chars x]; btrim(x, chars) keeps the call order
+   :trim (fn ([s] (str/trim s)) ([cs s] (trim-chars cs s)))
+   :btrim (fn ([s] (str/trim s)) ([s cs] (trim-chars cs s)))
+   :ltrim (fn ([s] (str/triml s)) ([s cs] (apply str (drop-while (set cs) s))))
+   :rtrim (fn ([s] (str/trimr s)) ([s cs] (apply str (reverse (drop-while (set cs) (reverse s))))))
+   :replace (fn [s from to] (if (= "" from) s (str/replace s from to)))
+   :starts_with (fn [s p] (str/starts-with? s p))
+   :strpos (fn [s p] (inc (or (str/index-of s p) -1)))
+   :|| concat*
+   :like (fn [s p] (matches? s (like-regex p)))
+   :ilike (fn [s p] (matches? s (str "(?i)" (like-regex p))))
+   :not-like (fn [s p] (not (matches? s (like-regex p))))
+   :not-ilike (fn [s p] (not (matches? s (str "(?i)" (like-regex p)))))
+   :regex (fn [s re] (matches? s (posix-classes re)))
+   :iregex (fn [s re] (matches? s (str "(?i)" (posix-classes re))))
+   :not-regex (fn [s re] (not (matches? s (posix-classes re))))
+   :not-iregex (fn [s re] (not (matches? s (str "(?i)" (posix-classes re)))))
+   :subscript (fn [v i] (when (<= 1 i (count v)) (nth v (dec i))))
+   :array_length (fn [v dim] (when (and (= 1 dim) (seq v)) (count v)))
+   :cardinality count
+   :array_position (fn [v x] (some (fn [[i y]] (when (same? x y) (inc i))) (map-indexed vector v)))
+   :overlaps (fn [l r] (boolean (some (fn [x] (some #(same? x %) r)) l)))
+   :contains json-contains?
+   :contained-by (fn [l r] (json-contains? r l))
+   :jsonb_typeof json-type
+   :jsonb_array_length (fn [v] (if (sequential? v) (count v) (throw (ex-info "not a JSON array" {}))))
+   :-> json-get
+   :->> (fn [v k] (json-text (json-get v k)))
+   :json-path json-path
+   :json-path-text (fn [v p] (json-text (json-path v p)))
+   :has-key json-has-key?
+   :has-any-key (fn [v ks] (boolean (some #(json-has-key? v %) ks)))
+   :has-all-keys (fn [v ks] (every? #(json-has-key? v %) ks))})
+
+(def ^:private raw-values
+  {"CURRENT_TIMESTAMP" #(Instant/now) "CURRENT_DATE" #(LocalDate/now) "LOCALTIMESTAMP" #(LocalDateTime/now)
+   "CURRENT_TIME" #(OffsetTime/now) "LOCALTIME" #(LocalTime/now)})
+
 (defn- ev [e row]
   (cond
     (or (string? e) (number? e) (boolean? e) (nil? e)) e
@@ -288,139 +385,81 @@
     (let [[op & args] e
           a #(ev (first args) row)
           b #(ev (second args) row)
-          c #(ev (nth args 2) row)
-          all #(map (fn [x] (ev x row)) args)]
-      (case op
-        :cast (cast-to (a) (let [t (second args)] (if (vector? t) (first t) t)))
-        :array (mapv #(ev % row) (first args))
-        :raw (case (first args)
-               "CURRENT_TIMESTAMP" (Instant/now) "CURRENT_DATE" (LocalDate/now) "LOCALTIMESTAMP" (LocalDateTime/now)
-               "CURRENT_TIME" (OffsetTime/now) "LOCALTIME" (LocalTime/now))
-        (:now :transaction_timestamp :statement_timestamp :clock_timestamp) (Instant/now)
-        :and (and3 (all))
-        :or (or3 (all))
-        :not (not3 (a))
-        (:= :<> :< :> :<= :>=) (let [r (second args)]
-                                 (cond (and (vector? r) (= :any (first r))) (fn3 (fn [v vs] (or3 (map #(cmp op v %) vs))) (a) (ev (second r) row))
-                                       (and (vector? r) (= :all (first r))) (fn3 (fn [v vs] (and3 (map #(cmp op v %) vs))) (a) (ev (second r) row))
-                                       :else (cmp op (a) (b))))
-        :is (let [v (a)] (if (nil? (second args)) (nil? v) (= v (second args))))
-        :is-not (let [v (a)] (if (nil? (second args)) (some? v) (not= v (second args))))
-        :is-distinct-from (let [l (a) r (b)] (not (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r)))))
-        :is-not-distinct-from (let [l (a) r (b)] (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r))))
-        :in (in3 (a) (map #(ev % row) (second args)))
-        :not-in (not3 (in3 (a) (map #(ev % row) (second args))))
-        :between (let [[v lo hi] (all)] (and3 [(cmp :>= v lo) (cmp :<= v hi)]))
-        :between-symmetric (let [[v lo hi] (all)] (or3 [(and3 [(cmp :>= v lo) (cmp :<= v hi)]) (and3 [(cmp :>= v hi) (cmp :<= v lo)])]))
-        :+ (fn3 plus (a) (b))
-        :- (if (second args) (fn3 minus (a) (b)) (fn3 - (a)))
-        :* (fn3 * (a) (b))
-        :/ (fn3 divide (a) (b))
-        :mod (fn3 rem (a) (b))
-        :pow (fn3 (fn [x y] (let [r (Math/pow (double x) (double y))] (if (and (integer? x) (integer? y) (not (neg? y))) (bigdec r) r))) (a) (b))
-        :abs (fn3 abs (a))
-        :round (if (second args) (fn3 round-half-up (a) (b)) (fn3 #(round-half-up % 0) (a)))
-        :floor (fn3 floor* (a))
-        (:ceil :ceiling) (fn3 ceil* (a))
-        :trunc (fn3 trunc* (a))
-        :nullif (let [l (a) r (b)] (when-not (and (some? l) (some? r) (same? l r)) l))
-        :greatest (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (pos? (compare %2 %1)) %2 %1) vs)))
-        :least (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (neg? (compare %2 %1)) %2 %1) vs)))
-        :coalesce (first (filter some? (all)))
-        (:length :char_length :character_length) (fn3 count (a))
-        :octet_length (fn3 octets (a))
-        ;; TRIM(BOTH chars FROM x) parses as [:trim chars x]; btrim(x, chars) keeps the call order
-        :trim (if (second args) (fn3 trim-chars (a) (b)) (fn3 str/trim (a)))
-        :btrim (if (second args) (fn3 trim-chars (b) (a)) (fn3 str/trim (a)))
-        :ltrim (if (second args) (fn3 (fn [s cs] (apply str (drop-while (set cs) s))) (a) (b)) (fn3 str/triml (a)))
-        :rtrim (if (second args) (fn3 (fn [s cs] (apply str (reverse (drop-while (set cs) (reverse s))))) (a) (b)) (fn3 str/trimr (a)))
-        :lower (fn3 str/lower-case (a))
-        :upper (fn3 str/upper-case (a))
-        :reverse (fn3 str/reverse (a))
-        (:substr :substring) (if (nth args 2 nil) (fn3 substr (a) (b) (c)) (fn3 substr (a) (b)))
-        :left (fn3 left* (a) (b))
-        :right (fn3 right* (a) (b))
-        :replace (fn3 (fn [s from to] (if (= "" from) s (str/replace s from to))) (a) (b) (c))
-        :starts_with (fn3 (fn [s p] (str/starts-with? s p)) (a) (b))
-        :strpos (fn3 (fn [s p] (inc (or (str/index-of s p) -1))) (a) (b))
-        :concat (apply str (remove nil? (all)))
-        :|| (fn3 concat* (a) (b))
-        :like (fn3 (fn [s p] (matches? s (like-regex p))) (a) (b))
-        :ilike (fn3 (fn [s p] (matches? s (str "(?i)" (like-regex p)))) (a) (b))
-        :not-like (fn3 (fn [s p] (not (matches? s (like-regex p)))) (a) (b))
-        :not-ilike (fn3 (fn [s p] (not (matches? s (str "(?i)" (like-regex p))))) (a) (b))
-        :regex (fn3 (fn [s re] (matches? s (posix-classes re))) (a) (b))
-        :iregex (fn3 (fn [s re] (matches? s (str "(?i)" (posix-classes re)))) (a) (b))
-        :not-regex (fn3 (fn [s re] (not (matches? s (posix-classes re)))) (a) (b))
-        :not-iregex (fn3 (fn [s re] (not (matches? s (str "(?i)" (posix-classes re))))) (a) (b))
-        :subscript (fn3 (fn [v i] (when (<= 1 i (count v)) (nth v (dec i)))) (a) (b))
-        :array_length (fn3 (fn [v _] (when (seq v) (count v))) (a) (b))
-        :cardinality (fn3 count (a))
-        :array_position (fn3 (fn [v x] (some (fn [[i y]] (when (same? x y) (inc i))) (map-indexed vector v))) (a) (b))
-        :overlaps (fn3 (fn [l r] (boolean (some (fn [x] (some #(same? x %) r)) l))) (a) (b))
-        :contains (fn3 json-contains? (a) (b))
-        :contained-by (fn3 (fn [l r] (json-contains? r l)) (a) (b))
-        :jsonb_typeof (json-type (a))
-        :jsonb_array_length (fn3 (fn [v] (if (sequential? v) (count v) (throw (ex-info "not a JSON array" {})))) (a))
-        :-> (fn3 json-get (a) (b))
-        :->> (fn3 (fn [v k] (json-text (json-get v k))) (a) (b))
-        :json-path (fn3 json-path (a) (b))
-        :json-path-text (fn3 (fn [v p] (json-text (json-path v p))) (a) (b))
-        :has-key (fn3 json-has-key? (a) (b))
-        :has-any-key (fn3 (fn [v ks] (boolean (some #(json-has-key? v %) ks))) (a) (b))
-        :has-all-keys (fn3 (fn [v ks] (every? #(json-has-key? v %) ks)) (a) (b))
-        :case (let [[clauses else] (if (= :else (last (butlast args)))
-                                     [(butlast (butlast args)) (last args)]
-                                     [args nil])
-                    ;; the first true condition selects the branch; its result may itself be NULL or false
-                    branch (some (fn [[cnd r]] (when (true? (ev cnd row)) [r])) (partition 2 clauses))]
-                (ev (if branch (first branch) else) row))
-        (throw (ex-info (str "unsupported in CHECK: " op) {:unsupported op}))))))
+          ;; a list, not the chunked seq args is: AND, OR and COALESCE stop at the first decisive operand
+          all #(map (fn [x] (ev x row)) (apply list args))]
+      (if-let [f (strict op)]
+        (let [vs (all)] (when (every? some? vs) (apply f vs)))
+        (case op
+          :cast (cast-to (a) (cast-type (second args)))
+          :array (mapv #(ev % row) (first args))
+          :raw ((raw-values (first args)))
+          (:now :transaction_timestamp :statement_timestamp :clock_timestamp) (Instant/now)
+          :and (and3 (all))
+          :or (or3 (all))
+          :not (not3 (a))
+          (:= :<> :< :> :<= :>=) (let [r (second args)]
+                                   (cond (and (vector? r) (= :any (first r))) (let [v (a) vs (ev (second r) row)] (when (and (some? v) (some? vs)) (or3 (map #(cmp op v %) vs))))
+                                         (and (vector? r) (= :all (first r))) (let [v (a) vs (ev (second r) row)] (when (and (some? v) (some? vs)) (and3 (map #(cmp op v %) vs))))
+                                         :else (cmp op (a) (b))))
+          :is (let [v (a)] (if (nil? (second args)) (nil? v) (= v (second args))))
+          :is-not (let [v (a)] (if (nil? (second args)) (some? v) (not= v (second args))))
+          :is-distinct-from (let [l (a) r (b)] (not (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r)))))
+          :is-not-distinct-from (let [l (a) r (b)] (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r))))
+          :in (in3 (a) (map #(ev % row) (second args)))
+          :not-in (not3 (in3 (a) (map #(ev % row) (second args))))
+          :between (let [[v lo hi] (all)] (and3 [(cmp :>= v lo) (cmp :<= v hi)]))
+          :between-symmetric (let [[v lo hi] (all)] (or3 [(and3 [(cmp :>= v lo) (cmp :<= v hi)]) (and3 [(cmp :>= v hi) (cmp :<= v lo)])]))
+          :nullif (let [l (a) r (b)] (when-not (and (some? l) (some? r) (same? l r)) l))
+          :greatest (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (pos? (compare %2 %1)) %2 %1) vs)))
+          :least (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (neg? (compare %2 %1)) %2 %1) vs)))
+          :coalesce (first (filter some? (all)))
+          :concat (apply str (remove nil? (all)))
+          :case (let [[clauses else] (if (= :else (last (butlast args)))
+                                       [(butlast (butlast args)) (last args)]
+                                       [args nil])
+                      ;; the first true condition selects the branch; its result may itself be NULL or false
+                      branch (some (fn [[cnd r]] (when (true? (ev cnd row)) [r])) (partition 2 clauses))]
+                  (ev (if branch (first branch) else) row))
+          (throw (ex-info (str "unsupported in CHECK: " op) {:unsupported op})))))))
 
 ;;; vocabulary
 
 (def ^:private supported-ops
-  #{:cast :array :raw :now :transaction_timestamp :statement_timestamp :clock_timestamp
-    :and :or :not := :<> :< :> :<= :>= :is :is-not :is-distinct-from :is-not-distinct-from :in :not-in :between :between-symmetric
-    :+ :- :* :/ :mod :pow :abs :round :floor :ceil :ceiling :trunc :nullif :greatest :least :coalesce
-    :length :char_length :character_length :octet_length :trim :btrim :ltrim :rtrim :lower :upper :reverse
-    :substr :substring :left :right :replace :starts_with :strpos :concat :||
-    :like :ilike :not-like :not-ilike :regex :iregex :not-regex :not-iregex
-    :subscript :array_length :cardinality :array_position :overlaps :contains :contained-by
-    :jsonb_typeof :jsonb_array_length :-> :->> :json-path :json-path-text :has-key :has-any-key :has-all-keys
-    :case})
-
-(def ^:private raw-values #{"CURRENT_TIMESTAMP" "CURRENT_DATE" "LOCALTIMESTAMP" "CURRENT_TIME" "LOCALTIME"})
-
-(def ^:private opaque-types
-  ;; a literal cast to any type but these is an enum or domain value
-  #{:regclass :oid :bytea :inet :cidr :macaddr :money :xml :tsvector})
+  (into (set (keys strict))
+        [:cast :array :raw :now :transaction_timestamp :statement_timestamp :clock_timestamp
+         :and :or :not := :<> :< :> :<= :>= :is :is-not :is-distinct-from :is-not-distinct-from
+         :in :not-in :between :between-symmetric :nullif :greatest :least :coalesce :concat :case]))
 
 (defn- literal-arg [v] (if (and (vector? v) (= :cast (first v))) (second v) v))
 
-(defn- castable? [a t]
-  (let [t (if (vector? t) (first t) t)
-        converted? (or (temporal-types t) (#{:uuid :json :jsonb} t) (str/ends-with? (name t) "-array"))]
+(defn- castable?
+  "Whether cast-to converts to t: the types it knows, or a literal of one of the schema's own
+   enum and domain types (types), which is the value itself."
+  [a t types]
+  (let [t (cast-type t)]
     (boolean
-     (cond (or (integer-types t) (decimal-types t) (text-types t) (= :boolean t)) true
-           converted? (or (not (string? a)) (try (cast-to a t) true (catch Exception _ false)))
-           :else (and (string? a) (not (opaque-types t)))))))
+     (cond (or (integer-types t) (exact-types t) (float-types t) (text-types t) (= :boolean t)) true
+           (or (temporal-types t) (#{:uuid :json :jsonb} t) (array-elem t))
+           (or (not (string? a)) (try (cast-to a t) true (catch Exception _ false)))
+           :else (and (string? a) (contains? types (name t)))))))
 
-(defn- supported-node? [[op a t]]
+(defn- supported-node? [[op a t] types]
   (case op
-    :cast (castable? a t)
+    :cast (castable? a t types)
     (:regex :iregex :not-regex :not-iregex) (let [re (literal-arg t)] (and (string? re) (some? (java-regex re))))
     (:like :ilike :not-like :not-ilike) (string? (literal-arg t))
     :raw (contains? raw-values a)
     (contains? supported-ops op)))
 
 (defn supported?
-  "Whether every operator, cast and pattern in the expression is implemented."
-  [e]
-  (every? #(or (not (vector? %)) (supported-node? %))
-          (tree-seq vector?
-                    (fn [v] (case (first v) (:in :not-in) (cons (second v) (nth v 2)) :array (second v) (rest v)))
-                    (x/canonical e))))
+  "Whether every operator, cast and pattern in the expression is implemented; types are the
+   schema's enum and domain names, whose literals are values as they are."
+  ([e] (supported? e #{}))
+  ([e types]
+   (every? #(or (not (vector? %)) (supported-node? % types))
+           (tree-seq vector?
+                     (fn [v] (case (first v) (:in :not-in) (cons (second v) (nth v 2)) :array (second v) :cast [(second v)] (rest v)))
+                     (x/canonical e)))))
 
 (defn checker
   "Row predicate of a CHECK expression: true when the result is true or NULL, as in PostgreSQL."

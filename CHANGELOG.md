@@ -40,6 +40,13 @@ All notable changes to this project are documented here. The format follows
   becoming `:any`.
 - Schema names that are not plain identifiers make string registry keys.
 - `BETWEEN SYMMETRIC` is evaluated as such.
+- The evaluator compares dates, timestamps and timestamptz across types as PostgreSQL does,
+  stops at the first decisive operand of `AND`, `OR` and `COALESCE`, and treats literals of the
+  schema's own enum and domain types as values; casts to other unknown types stay unrendered.
+- A CHECK is never enforced in part: when a `:multi` or `:or` branch loses a fact the evaluator
+  cannot cover, the whole CHECK is reported. `NOT VALID` domain CHECKs are reported, not applied.
+- `dataset-generator` picks `:rows` rows from many candidates and fails loudly when none fit,
+  instead of returning an empty table. jsonb values with keyword keys and JSON text are read.
 
 ### Added
 

@@ -68,6 +68,25 @@
     (is (passes? "CHECK (params = '{\"a\": 1}'::jsonb)" {:params {"a" 1.0}}) "jsonb equality is numeric")
     (is (ev/supported? (x/check-clause "CHECK (created_at <= now())")) "now() is the validation time")))
 
+(deftest cross-type-and-short-circuit
+  (let [dt (java.time.LocalDateTime/parse "2026-01-01T10:00")]
+    (is (passes? "CHECK (created_at <= now())" {:created_at dt}) "a timestamp against now() compares in the JVM's zone")
+    (is (passes? "CHECK (created_at <= CURRENT_DATE)" {:created_at dt}))
+    (is (passes? "CHECK (born <= now())" {:born (java.time.LocalDate/parse "2026-01-01")}))
+    (is (not (passes? "CHECK (born > '2026-01-01 12:00:00'::timestamp without time zone)" {:born (java.time.LocalDate/parse "2026-01-01")}))
+        "a date is its midnight"))
+  (is (passes? "CHECK ((a)::numeric / b >= 0.5)" {:a 1 :b 2}) "a numeric cast of an integer divides as numeric")
+  (is (passes? "CHECK ((a)::double precision / b >= 0.5)" {:a 1 :b 2}))
+  (is (ev/supported? (x/check-clause "CHECK ((a)::numeric(10,2) > 0)")) "parameterized casts")
+  (is (not (ev/supported? (x/check-clause "CHECK (n <@ '[1,10)'::int4range)"))) "unknown types are not values as they are")
+  (is (ev/supported? (x/check-clause "CHECK (mood = 'sad'::mood)") #{"mood"}) "the schema's own types are")
+  (is (not (ev/supported? (x/check-clause "CHECK (mood = 'sad'::mood)"))))
+  (is (passes? "CHECK ((a - NULL::integer) IS NULL)" {:a 1}) "a literal NULL operand is not a unary minus")
+  (is (passes? "CHECK (round(d) = 2)" {:d 2.5}) "double precision rounds half to even")
+  (is (passes? "CHECK (round(d) = 3)" {:d 2.5M}) "numeric away from zero")
+  (is (passes? "CHECK (d = 0 OR (t / d) > 1)" {:d 0 :t 5}) "OR stops at the first true operand")
+  (is (passes? "CHECK (coalesce(t, t / d) > 1)" {:d 0 :t 5})))
+
 (deftest strings-and-numbers
   (is (passes? "CHECK (code ~~ 'ab%'::text)" {:code "abc"}))
   (is (not (passes? "CHECK (code ~~ 'ab\\_'::text)" {:code "abc"})) "an escaped underscore is literal")

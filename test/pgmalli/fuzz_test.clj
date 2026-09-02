@@ -160,8 +160,8 @@
   [:map [:n [:maybe [:int {:min -6 :max 101}]]] [:m [:maybe [:int {:min -6 :max 101}]]]
    [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB"]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
    [:e [:maybe [:enum "happy" "sad"]]] [:b [:maybe :boolean]]
-   ;; only values numeric(10,2) can hold, as rows read from the database would be
-   [:d [:maybe [:enum -1.0 0.0 0.01 0.5 2.25 2.5 9.99]]]
+   ;; only values numeric(10,2) can hold, as BigDecimals, as rows read from the database would be
+   [:d [:maybe [:enum -1.0M 0.0M 0.01M 0.5M 2.25M 2.5M 9.99M]]]
    ;; containers only: jsonb - on a scalar makes the whole SELECT fail
    [:j [:maybe [:enum {} {"a" 1} {"a" "x" "b" [1 2]} {"a" {"b" 1}} {"a" nil "c" true} [1 "a"] [] [{"a" 1}]]]]
    [:arr [:maybe [:enum [] ["a"] ["a" "b"] ["b" "a" "a"] ["it's"]]]]

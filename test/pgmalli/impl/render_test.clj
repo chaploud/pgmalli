@@ -194,6 +194,18 @@
     (is (= [:ref {:pg/type "mandatory" :pg/default "n/a" :default "n/a"} :pg.public/mandatory] (get-in registry [:pg.public/t 4 1]))
         "the domain's NOT NULL and DEFAULT reach its columns")
     (is (= [:maybe :string] (:pg.public/opaque registry)) "a domain whose CHECK cannot be evaluated still exists")
+    (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
+                                                                                            :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
+                                                              :tables {}}))]
+      (is (= [:maybe [:int {:min -2147483648 :max 2147483647}]] (:pg.public/pos registry)) "a NOT VALID domain CHECK is not applied")
+      (is (= [{:fact :domain-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered))))
+    (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
+                                                                                          :constraints [{:name "d_check" :definition "CHECK (VALUE >= '2020-01-01'::date)"}]}}
+                                                              :tables {}}))]
+      (is (= [:maybe [:and :time/local-date [:pg/check-value {:pg/constraint "d_check" :error/message "d_check"} [:>= :VALUE [:cast "2020-01-01" :date]]]]]
+             (:pg.public/d registry))
+          "a domain CHECK that loses its fact is evaluated whole too")
+      (is (empty? unrendered)))
     (is (= [{:fact :domain-check :type-name "opaque" :constraint "opaque_check"}] (map #(select-keys % [:fact :type-name :constraint]) unrendered)))
     (is (= [:maybe [:and :string [:re "x"]]]
            (:pg.public/opaque (:registry (r/registry (p/facts {:name "public" :types {"opaque" {:kind "DOMAIN" :base_type "text" :not_null false
@@ -221,6 +233,25 @@
         "numeric(3,1) holds |v| < 100, and a CHECK narrows further")
     (is (= [:and {:pg/type "numeric"} 'decimal? [:> -10000M] [:< 10000M]] (get-in t [3 1])))
     (is (= [:int {:min -32768 :max 32767 :pg/type "smallint"}] (get-in t [4 1])))))
+
+(deftest partial-checks-are-never-enforced-partially
+  (let [t (fn [& checks] {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["happy" "sad"]}}
+                          :tables {"t" {:columns [{:name "nm" :position 1 :data_type "text" :is_nullable false}
+                                                  {:name "kind" :position 2 :data_type "text" :is_nullable false}
+                                                  {:name "mood" :position 3 :data_type "mood" :type_schema "public" :is_nullable false}
+                                                  {:name "score" :position 4 :data_type "integer" :is_nullable false}]
+                                        :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause c}]) checks))}}})
+        {:keys [registry unrendered]} (r/registry (p/facts (t "CHECK (length(nm) > 3 AND nm ~ '\\mfoo'::text)"
+                                                              "CHECK (kind = 'a'::text AND nm ~ '\\mfoo'::text OR kind = 'b'::text AND nm IS NULL)"
+                                                              "CHECK (mood = 'sad'::mood OR score > length(nm))")))
+        row (:pg.public/t registry)]
+    (is (= [:string {:min 4 :pg/type "text" :pg/constraint ["k0"]}] (get-in row [1 4 1]))
+        "a CHECK the evaluator cannot take whole keeps its renderable part")
+    (is (= [:pg/check {:pg/constraint "k2" :error/message "k2"} [:or [:= :mood [:cast "sad" :mood]] [:> :score [:length :nm]]]] (nth row 2))
+        "an enum literal is a value the evaluator knows")
+    (is (= [[:regex "nm" "k0"] [:branch-check nil "k1"]] (map (juxt :fact :column :constraint) unrendered))
+        "the lost regex is reported; the branch that lost it is reported whole, not enforced partially")
+    (is (every? :expr unrendered))))
 
 (deftest odd-identifiers
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}

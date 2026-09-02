@@ -104,7 +104,8 @@
                                       :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)"}]}}
                      :tables {"t" {:columns [{:name "mail" :position 1 :data_type "email" :type_schema "public" :is_nullable true}] :constraints {}}}})]
     (is (= {:fact :domain :schema "public" :type-name "email" :base "text" :not-null? false
-            :facts [{:fact :regex :re "@" :case-insensitive? false :constraint "email_check"}]}
+            :facts [{:fact :regex :re "@" :case-insensitive? false :constraint "email_check" :schema "public" :type-name "email"
+                     :expr [:regex :VALUE [:cast "@" :text]]}]}
            (first fs)))
     (is (= [{:fact :column} {:fact :domain-ref :base "text"}] (map #(select-keys % [:fact :base]) (rest fs))))))
 

@@ -70,7 +70,7 @@ types AS (
                            'base_type', pg_catalog.format_type(t.typbasetype, t.typtypmod),
                            'not_null', t.typnotnull,
                            'default', t.typdefault,
-                           'constraints', (SELECT COALESCE(json_agg(json_build_object('name', k.conname, 'definition', pg_get_constraintdef(k.oid, true))), '[]'::json)
+                           'constraints', (SELECT COALESCE(json_agg(json_build_object('name', k.conname, 'definition', pg_get_constraintdef(k.oid, true), 'is_valid', k.convalidated)), '[]'::json)
                                            FROM pg_constraint k WHERE k.contypid = t.oid AND k.contype = 'c'))
          END AS typ
   FROM pg_type t

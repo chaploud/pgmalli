@@ -60,7 +60,9 @@
     [({:< :> :> :< :<= :>= :>= :<=} op) b a]
     e))
 
-(defn- referenced-columns [e]
+(defn referenced-columns
+  "Names of the columns an expression reads."
+  [e]
   (letfn [(walk [f] (cond (vector? f) (case (first f)
                                         (:in :not-in) (concat (walk (second f)) (mapcat walk (nth f 2)))
                                         :array (mapcat walk (second f))
@@ -82,6 +84,8 @@
        (if (#{:> :>=} op) :min-exclusive? :max-exclusive?) (boolean (#{:> :<} op))})))
 
 (defn- literal? [v] (or (string? v) (number? v) (boolean? v)))
+
+(def ^:private length-fns #{:length :char_length :octet_length :cardinality :array_length})
 
 (defn- match-column
   "One column-local pattern of a normalized expression, or nil."
@@ -113,19 +117,20 @@
          {:column (second a) :fact :non-blank :trim? true})
        (when (and (= :<> op) (= "" b) (column-ref? a))
          {:column a :fact :non-blank :trim? false})
-       (when (and (= :and op) (= 3 (count e))
-                  (let [[[o1 c1 t] [o2 c2 s]] (rest e)]
-                    (and (= := o1) (= :<> o2) (column-ref? c1) (= c1 c2) (= t [:btrim c1]) (= "" s))))
-         {:column (second a) :fact :non-blank :trim? true})
+       ;; col = btrim(col) AND col <> '': a trimmed, non-empty string
+       (when (and (= :and op) (= 3 (count e)))
+         (let [[[o1 c1 t] [o2 c2 s]] (rest e)]
+           (when (and (= := o1) (= :<> o2) (column-ref? c1) (= c1 c2) (= t [:btrim c1]) (= "" s))
+             {:column c1 :fact :non-blank :trim? true})))
 
-       (when (and (#{:< :<= :> :>= :=} fop) (vector? fa) (#{:length :char_length :octet_length :cardinality :array_length} (first fa))
+       (when (and (#{:< :<= :> :>= :=} fop) (vector? fa) (length-fns (first fa))
                   (column-ref? (second fa)) (number? fb))
          (merge {:column (second fa) :fact :length :fn (first fa)}
                 (case fop
                   := {:exact fb}
                   :<= {:max fb} :< {:max (dec fb)}
                   :>= {:min fb} :> {:min (inc fb)})))
-       (when (and (= :between op) (vector? a) (#{:length :char_length :octet_length :cardinality :array_length} (first a))
+       (when (and (= :between op) (vector? a) (length-fns (first a))
                   (column-ref? (second a)) (number? b) (number? c))
          {:column (second a) :fact :length :fn (first a) :min b :max c})
 
@@ -222,12 +227,20 @@
   (let [{:keys [expr error]} (x/try-parse s)]
     (if error {:unparsed (merge base {:fact :unparsed :input s :error error})} {:expr expr})))
 
+(defn- try-clause
+  "{:expr data} for a CHECK clause PostgreSQL printed, or {:error message}."
+  [s]
+  (try {:expr (x/check-clause s)}
+       (catch Exception e {:error (or (ex-message e) (str (class e)))})))
+
 (defn- column-facts [base {cname :name :keys [data_type type_schema is_nullable default_value max_length precision scale identity generated_expr position]} enums domains]
   (let [type-name (str/replace data_type #"^[^.]+\." "")
         elem-type (str/replace type-name #"\[\]$" "")
         builtin? (or (nil? type_schema) (= "pg_catalog" type_schema))
         base (assoc base :column cname)
         domain (get domains type-name)
+        mapped? (or (contains? enums type-name) (contains? domains type-name) (and builtin? (known-types elem-type)))
+        char-type? (#{"varchar" "character varying" "char" "character" "bpchar"} data_type)
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
         default (cond default_value (parsed base default_value)
                       (contains? domain :default) {:expr (:default domain)})
@@ -241,10 +254,8 @@
       (:unparsed generated) (conj (:unparsed generated))
       (contains? enums type-name) (conj (merge base {:fact :enum :type-name type-name :values (get enums type-name)}))
       domain (conj (merge base {:fact :domain-ref :type-name type-name :base (:base domain)}))
-      (and (not (contains? enums type-name)) (not (contains? domains type-name)) (not (and builtin? (known-types elem-type))))
-      (conj (merge base {:fact :unknown-type :type data_type}))
-      (and max_length (re-find #"^(varchar|character varying|char|character|bpchar)$" data_type))
-      (conj (merge base {:fact :max-length :max max_length}))
+      (not mapped?) (conj (merge base {:fact :unknown-type :type data_type}))
+      (and max_length char-type?) (conj (merge base {:fact :max-length :max max_length}))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
 (defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct]}]
@@ -260,12 +271,13 @@
   "The :domain fact, then a :domain-check (or :unparsed) for every CHECK that matched no pattern."
   [schema-name [tname {:keys [base_type not_null default constraints]}]]
   (let [base {:schema schema-name :type-name tname}
-        checks (for [{cname :name :keys [definition]} constraints
-                     :let [{:keys [expr error]} (try {:expr (x/check-clause definition)}
-                                                     (catch Exception e {:error (or (ex-message e) (str (class e)))}))
-                           ms (some-> expr normalize match-columns)]]
-                 (cond ms {:facts (map #(-> % (dissoc :column) (assoc :constraint cname)) ms)}
-                       expr {:check (merge base {:fact :domain-check :constraint cname :expr (x/canonical expr)})}
+        checks (for [{cname :name :keys [definition is_valid]} constraints
+                     :let [{:keys [expr error]} (try-clause definition)
+                           ;; NOT VALID: existing values may violate it, so it is reported, not applied
+                           ms (when (not= false is_valid) (some-> expr normalize match-columns))
+                           check (when expr (merge base {:constraint cname :expr (x/canonical expr)}))]]
+                 (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
+                       expr {:check (cond-> (assoc check :fact :domain-check) (false? is_valid) (assoc :valid? false))}
                        :else {:check (merge base {:fact :unparsed :constraint cname :input definition :error error})}))
         dflt (when default (parsed base default))]
     (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (mapcat :facts checks))})
@@ -275,8 +287,7 @@
 (defn- check-facts [base {cname :name :keys [check_clause is_valid]}]
   (let [base (assoc base :constraint cname)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
-        parsed (try {:expr (x/check-clause check_clause)}
-                    (catch Exception e {:error (or (ex-message e) (str (class e)))}))]
+        parsed (try-clause check_clause)]
     (if-let [e (:expr parsed)]
       (let [n (when (not= false is_valid) (normalize e))
             base (assoc base :expr (x/canonical e))]

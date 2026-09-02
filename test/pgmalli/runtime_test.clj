@@ -28,7 +28,9 @@
          (me/humanize (m/explain :pg.sample/users (assoc user :score 3) opts))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope")))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "t"} [:a :int]]}}))
-      "files from before the schema-qualified :pg/table are refused, not half-read"))
+      "files from before the schema-qualified :pg/table are refused, not half-read")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/unique [["a"]]} [:a :int]]}}))
+      "so are files with the older key shapes"))
 
 (deftest insert-schemas
   (let [insert (fn [row] (m/validate :pg.sample.users/insert row opts))]
@@ -115,6 +117,14 @@
     (testing "generated datasets satisfy all of it"
       (doseq [sample (tcg/sample (pgmalli/dataset-generator registry {:rows 6}) 8)]
         (is (m/validate ds sample opts) (pr-str sample))))))
+
+(deftest generation-limits-are-loud
+  (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never"} [:a [:int {:pg/type "integer"}]]] [:pg/check [:< 2 1]]]
+                                          :pg.public/big [:map {:pg/table "public.big" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer" :min 1000000 :max 2147483647}]]]}})]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"none of .* generated rows" (doall (tcg/sample (pgmalli/dataset-generator reg {:rows 2}) 1)))
+        "a table no candidate row fits is an error, not an empty fixture")
+    (is (every? #(>= (:id %) 1000000) (tcg/sample (mg/generator (pgmalli/columns reg :pg.public/big) {:registry reg}) 20))
+        "a key bound above the hint range keeps the bound and drops the hint")))
 
 (deftest generated-values-look-like-data
   (let [rows (tcg/sample (mg/generator (pgmalli/columns registry :pg.sample/users) opts) 40)

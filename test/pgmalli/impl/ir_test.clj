@@ -19,7 +19,7 @@
       (is (re-find #"^PostgreSQL 1\d" (:database_version s)))
       (is (= ["happy" "sad"] (get-in s [:types "mood" :enum_values])))
       (is (= {:kind "DOMAIN" :base_type "text" :not_null false :default nil :name "email"
-              :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)"}]}
+              :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)" :is_valid true}]}
              (get-in s [:types "email"])))
       (is (= ["mood" "public"] ((juxt :data_type :type_schema) (col "mood"))))
       (is (= "'happy'::mood" (:default_value (col "mood"))))

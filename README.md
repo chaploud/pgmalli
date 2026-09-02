@@ -104,7 +104,7 @@ the database has it.
 | `CHECK (x IS NULL OR y = 'v' AND ...)` and other ORs of column patterns | `[:or [:map ...] [:map ...]]` |
 | any other CHECK (`score <= total`, arithmetic, `CASE`, jsonb operators), or one of the above on a column whose type has no such rendering (`col = '2020-01-01'::date`) | `[:pg/check expr]`: the expression as data, validated by a schema type pgmalli registers |
 | domain `CHECK` outside the patterns | `[:pg/check-value expr]` on the domain, `VALUE` as `:VALUE` |
-| `NOT VALID` CHECK | kept in `:unrendered` |
+| `NOT VALID` CHECK (table or domain) | kept in `:unrendered` |
 | `date`, `time`, `timetz`, `timestamp`, `timestamptz`, `interval` | `:time/local-date`, `:time/local-time`, `:time/offset-time`, `:time/local-date-time`, `:time/instant`, `:time/duration` |
 | `json`, `jsonb` | `:any` (`:map` or `[:sequential :any]` when a CHECK pins the type) |
 | `bytea` | `bytes?` |
@@ -117,15 +117,17 @@ a malli schema (`[:ref :app/name]` defined in your own registry, for instance) o
 `{:skip "reason"}`.
 
 `:pg/check` keeps the expression as data (`[:<= :score :total]`, HoneySQL-style) and
-evaluates it as PostgreSQL would: NULL passes, integer division truncates, casts convert
-(dates, timestamps, intervals of fixed length, uuids, jsonb, arrays included), `now()` is the
-validation time, and an expression the database would fail on (division by zero, a cast that
-does not parse) fails the row. The vocabulary covers comparison, logic, `IN`, `BETWEEN`,
-`IS DISTINCT FROM`, arithmetic, the common string, numeric, array and jsonb functions and
-operators, `LIKE`, regexes and `CASE`; a CHECK outside it (user-defined functions, composite
-fields, `AT TIME ZONE`) stays in `:unrendered`. A column missing from the map is NULL to it
-(its literal default in an insert schema). Rows hold the registry's types: `java.time`
-values, `UUID`, jsonb as maps (string or keyword keys) and vectors.
+evaluates it as PostgreSQL would: NULL passes, `AND`, `OR` and `COALESCE` stop at the first
+decisive operand, integer division truncates, casts convert (dates, timestamps, intervals of
+fixed length, uuids, jsonb, arrays and the schema's own enum and domain literals included),
+`now()` is the validation time, and an expression the database would fail on (division by
+zero, a cast that does not parse) fails the row. The vocabulary covers comparison, logic,
+`IN`, `BETWEEN`, `IS DISTINCT FROM`, arithmetic, the common string, numeric, array and jsonb
+functions and operators, `LIKE`, regexes and `CASE`; a CHECK outside it (user-defined
+functions, casts to range or geometric types, composite fields, `AT TIME ZONE`) stays in
+`:unrendered`, whole: a CHECK is never enforced in part. A column missing from the map is
+NULL to it (its literal default in an insert schema). Rows hold the registry's types:
+`java.time` values, `UUID`, jsonb as maps (string or keyword keys) and vectors.
 
 ## Working with the registry
 
@@ -151,7 +153,7 @@ and times recent.
 (def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}
 (m/validate dataset {"public.groups" [{:id 1 ...}] "public.users" [{:group_id 1 ...}]} {:registry registry})
 (clojure.test.check.generators/sample (pgmalli/dataset-generator registry {:rows 5}))
-;; :rows tried per table; rows violating a constraint are dropped
+;; :rows wanted per table, picked from many more candidates; a table none fits is an error
 ```
 
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the
