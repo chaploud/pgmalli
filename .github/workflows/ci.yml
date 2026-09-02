@@ -1,0 +1,38 @@
+name: ci
+on: [push, pull_request]
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: ["14", "15", "16", "17", "18"]
+    env:
+      PGMALLI_PG_IMAGE: postgres:${{ matrix.pg }}-alpine
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0   # the jar version is derived from the commit count
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+            ~/.deps.clj
+          key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: latest
+          bb: latest
+          clj-kondo: latest
+      - name: install psql
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: pull postgres image
+        run: docker pull $PGMALLI_PG_IMAGE
+      - run: bb lint
+      - run: bb test
+      - run: bb test:jvm
+      - run: clojure -T:build jar

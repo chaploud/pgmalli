@@ -1,7 +1,13 @@
 {:paths ["src" "resources" "test"]
  :deps {com.github.seancorfield/honeysql {:mvn/version "2.7.1437"}
         metosin/malli {:mvn/version "0.20.1"}}
- :tasks {harvest {:doc "Rebuild test/corpus/harvested.edn (needs docker)"
+ :tasks {lint {:doc "clj-kondo over src and test"
+               :task (shell "clj-kondo --lint src test")}
+         test:matrix {:doc "bb test against PostgreSQL 14 to 18, as CI does"
+                      :task (doseq [v ["14" "15" "16" "17" "18"]]
+                              (println "==" v)
+                              (shell {:extra-env {"PGMALLI_PG_IMAGE" (str "postgres:" v "-alpine")}} "bb test"))}
+         harvest {:doc "Rebuild test/corpus/harvested.edn (needs docker)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/harvest.clj")}
          test {:doc "Run the test suite with babashka"

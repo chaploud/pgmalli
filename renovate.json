@@ -1,0 +1,30 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":semanticCommitsDisabled"],
+  "schedule": ["before 9am on monday"],
+  "labels": ["dependencies"],
+  "packageRules": [
+    {
+      "description": "Test and build dependencies in one PR",
+      "matchFileNames": ["deps.edn", "bb.edn"],
+      "matchDepNames": ["metosin/malli", "com.github.seancorfield/honeysql", "babashka/process", "io.github.clojure/tools.build", "slipset/deps-deploy"],
+      "groupName": "dev deps"
+    },
+    {
+      "description": "GitHub Actions in one PR",
+      "matchManagers": ["github-actions"],
+      "groupName": "github actions"
+    }
+  ],
+  "customManagers": [
+    {
+      "description": "postgres image used by the tests",
+      "customType": "regex",
+      "managerFilePatterns": ["/^test/pgmalli/test_db\\.clj$/"],
+      "matchStrings": ["\"postgres:(?<currentValue>\\d+)-alpine\""],
+      "depNameTemplate": "postgres",
+      "datasourceTemplate": "docker",
+      "versioningTemplate": "regex:^(?<major>\\d+)$"
+    }
+  ]
+}

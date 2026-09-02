@@ -1,0 +1,27 @@
+name: release
+# Pushing a v* tag builds the jar, publishes it to Clojars and creates a GitHub release.
+# Secrets: CLOJARS_USERNAME, CLOJARS_PASSWORD (a deploy token).
+on:
+  push:
+    tags: ["v*"]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: latest
+      - run: clojure -T:build jar
+      - run: clojure -X:deploy
+        env:
+          CLOJARS_USERNAME: ${{ secrets.CLOJARS_USERNAME }}
+          CLOJARS_PASSWORD: ${{ secrets.CLOJARS_PASSWORD }}
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: target/pgmalli.jar
+          generate_release_notes: true

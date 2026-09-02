@@ -1,5 +1,8 @@
 # pgmalli
 
+[![ci](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml/badge.svg)](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml)
+[![Clojars](https://img.shields.io/clojars/v/io.github.chaploud/pgmalli.svg)](https://clojars.org/io.github.chaploud/pgmalli)
+
 Generate [malli](https://github.com/metosin/malli) schemas from an applied PostgreSQL schema.
 
 - The database is the source of truth. The output is one EDN file per schema that your
@@ -135,11 +138,16 @@ These are kept compatible; a change bumps the minor version.
 ```
 bb test          # babashka
 bb test:jvm      # JVM
-PGMALLI_SKIP_DB=1 bb test   # only what runs without docker
+bb test:matrix   # PostgreSQL 14 to 18, as CI does
+bb lint          # clj-kondo
+bb harvest       # rebuild the expression corpus (test/corpus/harvested.edn)
+clojure -T:build jar
 ```
 
 Database tests start a throwaway PostgreSQL container with docker (`PGMALLI_PG_IMAGE`
-selects the image, default `postgres:17-alpine`).
+selects the image, default `postgres:17-alpine`). `nix develop` provides the tools.
+Releases: push a `v*` tag; the workflow publishes to Clojars and creates a GitHub release.
+Dependency updates come from Renovate.
 
 ## License
 
