@@ -79,3 +79,43 @@
   (is (= {:all {:enum-type 1 :column 3 :enum 1 :max-length 1 :in-set 1 :table-check 1}
           :checks {:in-set 1 :table-check 1}}
          (p/coverage (p/facts (schema-with-checks "c IN ('a'::text)" "a < b"))))))
+
+(deftest keys-and-references
+  (let [fs (p/facts {:name "public" :types {}
+                     :tables {"m" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false :default_value "nextval('m_id_seq'::regclass)"}
+                                             {:name "g" :position 2 :data_type "integer" :is_nullable false}]
+                                   :constraints {"m_pkey" {:name "m_pkey" :type "PRIMARY KEY" :columns ["id"]}
+                                                 "m_g_key" {:name "m_g_key" :type "UNIQUE" :columns ["g"]}
+                                                 "m_g_fkey" {:name "m_g_fkey" :type "FOREIGN KEY" :columns ["g"]
+                                                             :references {:schema "public" :table "groups" :columns ["id"]}}}}}})]
+    (is (= :serial (:identity (first (filter (comp #{"id"} :column) fs)))) "a nextval default is a serial column")
+    (is (= [[:references ["g"]] [:unique ["g"]] [:primary-key ["id"]]]
+           (map (juxt :fact :columns) (filter :constraint fs))) "constraints in name order")
+    (is (= {:schema "public" :table "groups" :columns ["id"]} (:to (first (filter (comp #{:references} :fact) fs)))))))
+
+(deftest domains
+  (let [fs (p/facts {:name "public"
+                     :types {"email" {:kind "DOMAIN" :base_type "text" :not_null false
+                                      :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)"}]}}
+                     :tables {"t" {:columns [{:name "mail" :position 1 :data_type "email" :type_schema "public" :is_nullable true}] :constraints {}}}})]
+    (is (= {:fact :domain :schema "public" :type-name "email" :base "text" :not-null? false
+            :facts [{:fact :regex :re "@" :case-insensitive? false}]}
+           (first fs)))
+    (is (= [:column :domain-ref] (map :fact (rest fs))))))
+
+(deftest branch-checks
+  (is (= [{:fact :branch-check :dispatch "status"
+           :branches [{:values ["pending"] :facts [{:fact :null :column "closed_at"}]}
+                      {:values ["approved" "rejected"] :facts [{:fact :not-null :column "closed_at"}]}]
+           :default nil}]
+         (check-facts "status = 'pending'::approval_status AND closed_at IS NULL OR (status IN ('approved'::approval_status, 'rejected'::approval_status)) AND closed_at IS NOT NULL")))
+  (is (= [{:fact :branch-check :dispatch "status"
+           :branches [{:values ["approved" "rejected"] :facts [{:fact :not-null :column "approver"}]}]
+           :default [{:fact :null :column "approver"}]}]
+         (check-facts "(status IN ('approved'::t, 'rejected'::t)) AND approver IS NOT NULL OR (status <> ALL (ARRAY['approved'::t, 'rejected'::t])) AND approver IS NULL")))
+  (is (= [{:fact :or-check
+           :alternatives [[{:fact :null :column "pin"}]
+                          [{:fact :in-set :column "kind" :values ["skill"]} {:fact :in-set :column "verb" :values ["acquired"]}]]}]
+         (check-facts "pin IS NULL OR kind = 'skill'::text AND verb = 'acquired'::text"))
+      "alternatives over different columns become an :or-check")
+  (is (= :table-check (:fact (first (check-facts "a IS NULL OR a <> b"))))))
