@@ -24,8 +24,8 @@
                    (println "wrote" out (str "(" schema ")")))
       "check" (let [stale (pgmalli/stale config)]
                 (doseq [schema (:schemas (gen/config config))
-                        :let [p (pgmalli/path config schema)
-                              un (when (.exists (java.io.File. ^String p)) (pgmalli/unrendered p))]
+                        :let [p (gen/path-for config schema)
+                              un (when (.exists (java.io.File. ^String p)) (:unrendered (gen/load-file* p)))]
                         :when (seq un)]
                   (println schema ": " (count un) "unrendered fact(s):")
                   (doseq [f un] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))

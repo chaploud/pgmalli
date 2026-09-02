@@ -1,4 +1,4 @@
-{:paths ["src" "resources" "test"]
+{:paths ["src" "resources" "test" "test/resources"]
  :deps {com.github.seancorfield/honeysql {:mvn/version "2.7.1437"}
         metosin/malli {:mvn/version "0.20.1"}}
  :tasks {lint {:doc "clj-kondo over src and test"
@@ -11,8 +11,8 @@
                   :extra-paths ["dev"]
                   :task (load-file "dev/harvest.clj")}
          test {:doc "Run the test suite with babashka"
-               :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test] [pgmalli.impl.compile-test] [pgmalli.impl.render-test] [pgmalli.core-test] [pgmalli.fuzz-test] [pgmalli.corpus-test])
-               :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test 'pgmalli.impl.compile-test 'pgmalli.impl.render-test 'pgmalli.core-test 'pgmalli.fuzz-test 'pgmalli.corpus-test)]
+               :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test] [pgmalli.impl.compile-test] [pgmalli.impl.render-test] [pgmalli.core-test] [pgmalli.runtime-test] [pgmalli.fuzz-test] [pgmalli.corpus-test])
+               :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test 'pgmalli.impl.compile-test 'pgmalli.impl.render-test 'pgmalli.core-test 'pgmalli.runtime-test 'pgmalli.fuzz-test 'pgmalli.corpus-test)]
                        (when (pos? (+ fail error)) (System/exit 1)))}
          test:jvm {:doc "Run the test suite on the JVM"
                    :task (shell "clojure -M:test")}}}

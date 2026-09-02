@@ -2,6 +2,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [malli.core :as m]
+            [malli.experimental.time :as time]
+            [malli.util :as mu]
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.generate :as gen]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
@@ -22,7 +24,7 @@
   (when *db*
     (let [out-dir (str (doto (File/createTempFile "pgmalli-gen" "") .delete))
           config {:db *db* :out-dir out-dir}
-          out (pgmalli/path config "public")]
+          out (gen/path-for config "public")]
       (exec-sql! "CREATE TYPE mood AS ENUM ('happy', 'sad');
                   CREATE TABLE users (id bigint PRIMARY KEY, mood mood NOT NULL DEFAULT 'happy',
                                       age integer CHECK (age >= 0), nick varchar(40) CHECK (length(TRIM(BOTH FROM nick)) > 0),
@@ -34,14 +36,15 @@
         (let [data (gen/load-file* out)]
           (is (= data (get-in (gen/generated-all config) ["public" :data])))
           (is (= (slurp out) (do (pgmalli/generate! config) (slurp out))) "byte-for-byte deterministic")
-          (is (empty? (:unrendered data)) "the table CHECK is compiled")
-          (let [reg (merge (m/default-schemas) (pgmalli/registry out))]
+          (is (empty? (:unrendered data)) "the table CHECK is a :multi")
+          (let [reg (merge (m/default-schemas) (mu/schemas) (time/schemas) (:registry data))]
             (is (m/validate :pg.public/users {:id 1 :mood "sad" :age 3 :nick "n" :closed_at nil} {:registry reg}))
             (is (not (m/validate :pg.public/users {:id 1 :mood "sad" :age -1 :nick "n" :closed_at nil} {:registry reg})))
-            (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at #inst "2026"} {:registry reg}))
-                "compiled CHECK: closed_at only when sad"))))
+            (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))
+                "closed_at only when sad")
+            (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted"))))
       (testing "stale and unrendered"
         (is (nil? (pgmalli/stale config)))
-        (is (empty? (pgmalli/unrendered out)))
+        (is (empty? (:unrendered (gen/load-file* out))))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
         (is (contains? (pgmalli/stale config) "public"))))))
