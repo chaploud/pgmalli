@@ -1,0 +1,7 @@
+{:paths ["src" "resources" "test"]
+ :tasks {test {:doc "Run the test suite with babashka"
+               :requires ([clojure.test :as t] [pgmalli.impl.ir-test])
+               :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test)]
+                       (when (pos? (+ fail error)) (System/exit 1)))}
+         test:jvm {:doc "Run the test suite on the JVM"
+                   :task (shell "clojure -M:test")}}}
