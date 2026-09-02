@@ -7,8 +7,7 @@
 
    The config (pgmalli.impl.generate), the generated file layout and the fact vocabulary
    (pgmalli.impl.pattern) are the stable contract; pgmalli.impl.* may change without notice."
-  (:require [clojure.data :as data]
-            [clojure.java.io :as io]
+  (:require [clojure.java.io :as io]
             [pgmalli.impl.generate :as gen]
             [pgmalli.impl.runtime :as rt]))
 
@@ -19,15 +18,44 @@
   [config]
   (gen/generate! config))
 
+(defn- row-parts
+  "{:columns {name entry} :props :checks} of a row or insert schema, nil for other entries."
+  [s]
+  (let [m (if (and (vector? s) (= :and (first s))) (second s) s)]
+    (when (and (vector? m) (= :map (first m)) (map? (second m)))
+      {:columns (into {} (map (fn [[k p s]] [k (if (seq p) [p s] s)])) (rt/column-entries s))
+       :props (second m)
+       :checks (when (= :and (first s)) (vec (drop 2 s)))})))
+
+(defn- differences
+  "The differences between the file's and the database's version of one registry entry, a
+   row or insert schema by column, property and CHECKs, anything else as a whole."
+  [name file db]
+  (let [f (row-parts file) d (row-parts db)
+        by (fn [part label] (for [k (distinct (concat (keys (part f)) (keys (part d))))
+                                  :when (not= (get (part f) k) (get (part d) k))]
+                              {:name name label k :file (get (part f) k) :db (get (part d) k)}))]
+    (cond (= file db) nil
+          (and f d) (concat (by :columns :column) (by :props :property)
+                            (when (not= (:checks f) (:checks d)) [{:name name :checks true :file (:checks f) :db (:checks d)}]))
+          :else [{:name name :file file :db db}])))
+
 (defn stale
-  "{schema [only-in-file only-in-db]} for schemas whose file differs from what the database
-   yields now; nil when everything matches. A missing file counts as entirely stale."
+  "{schema [difference ...]} for schemas whose file differs from what the database yields now;
+   nil when everything matches. A difference names the registry entry (:name) and, for a row
+   or insert schema, the :column, :property or :checks that differ, with the :file and :db
+   sides (nil where a side lacks it); :unrendered facts differ under :key. A missing file
+   lists every entry with no :file side."
   [config]
   (let [diffs (for [[schema {:keys [path data]}] (gen/generated-all config)
-                    :let [file (when (.exists (io/file path)) (dissoc (gen/load-file* path) :database-version))
-                          [only-file only-db _] (data/diff file (dissoc data :database-version))]
-                    :when (or only-file only-db)]
-                [schema [only-file only-db]])]
+                    :let [file (when (.exists (io/file path)) (gen/load-file* path))
+                          ds (concat (for [k (distinct (concat (keys (:registry file)) (keys (:registry data))))
+                                          d (differences k (get-in file [:registry k]) (get-in data [:registry k]))]
+                                      d)
+                                     (when (not= (:unrendered file) (:unrendered data))
+                                       [{:key :unrendered :file (:unrendered file) :db (:unrendered data)}]))]
+                    :when (seq ds)]
+                [schema (vec ds)])]
     (when (seq diffs) (into {} diffs))))
 
 ;;; application side
@@ -88,6 +116,15 @@
    foreign keys checked across the registry's tables."
   [registry]
   (rt/dataset-schema registry))
+
+(defn inserts
+  "HoneySQL INSERT maps for a dataset, one per table, in an order the database accepts:
+   parents before the tables referencing them, and within a table rows before the rows
+   referencing them. Enum values are cast to their type, json written and cast, arrays given
+   their element type; time values are passed as they are (next.jdbc.date-time for the
+   java.time ones)."
+  [registry dataset]
+  (rt/inserts registry dataset))
 
 (defn dataset-generator
   "test.check generator of datasets satisfying dataset-schema. Options: :rows wanted per table

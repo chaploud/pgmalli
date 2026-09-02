@@ -59,7 +59,8 @@ Both read `pgmalli.edn` in the working directory when present:
 The same from Clojure: `(pgmalli/generate! config)` and `(pgmalli/stale config)`.
 
 Convention: regenerate right after migrating and commit the files; in CI assert
-`(nil? (pgmalli/stale config))`.
+`(nil? (pgmalli/stale config))`, or run `check`, which prints one line per column, property
+or CHECK that differs between the file and the database.
 
 ## What you get
 
@@ -243,6 +244,15 @@ generate once with a fixed seed, keep the result as EDN, and let tests read that
 
 ```clojure
 (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 5}) 30 42)
+```
+
+`inserts` turns a dataset into HoneySQL INSERT maps in an order the database accepts (parents
+first, and within a table the rows referred to first), enum values cast to their type, json
+written and cast, arrays with their element type:
+
+```clojure
+(doseq [q (pgmalli/inserts registry dataset)]
+  (jdbc/execute! db (honey.sql/format q)))
 ```
 
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the

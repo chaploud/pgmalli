@@ -28,7 +28,7 @@
                                       age integer CHECK (age >= 0), nick varchar(40) CHECK (length(TRIM(BOTH FROM nick)) > 0),
                                       closed_at timestamptz, CONSTRAINT closed CHECK (mood = 'sad' OR closed_at IS NULL));")
       (testing "a missing file is stale"
-        (is (= [nil] (map first (vals (pgmalli/stale config))))))
+        (is (every? (comp nil? :file) (get (pgmalli/stale config) "public"))))
       (testing "generate, read back, validate"
         (is (= {"public" out} (pgmalli/generate! config)))
         (let [data (gen/load-file* out)]
@@ -45,4 +45,7 @@
         (is (nil? (pgmalli/stale config)))
         (is (empty? (:unrendered (gen/load-file* out))))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
-        (is (contains? (pgmalli/stale config) "public"))))))
+        (let [diffs (get (pgmalli/stale config) "public")]
+          (is (= #{[:pg.public/users :extra] [:pg.public.users/insert :extra]} (set (map (juxt :name :column) diffs)))
+              "a new column shows in the row and insert schemas, nowhere else")
+          (is (every? (comp nil? :file) diffs)))))))

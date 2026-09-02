@@ -5,8 +5,16 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `pgmalli/inserts`: a dataset as HoneySQL INSERT maps, parents first and rows referred to
+  first, enum / json / array values in the form the driver needs.
+
 ### Changed
 
+- `pgmalli/stale` returns the differences by registry entry and, for row and insert schemas,
+  by column, property and CHECKs, each with its file and database sides; `check` prints one
+  line per difference instead of the EDN diff.
 - `pgmalli.honeysql`: an ambiguous column problem carries the tables it could belong to, under
   `:candidates`.
 

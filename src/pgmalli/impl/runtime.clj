@@ -589,3 +589,62 @@
                      (map-indexed vector (topological ts))))
            ;; a seed independent of test.check's size, so early samples differ too
            (choose 0 Long/MAX_VALUE)))))
+
+;;; datasets into the database
+
+(defn- insert-value
+  "A dataset value in the form an INSERT needs: an enum cast to its type (a string parameter
+   stays text), json written and cast, an array with its element type; anything else as it is."
+  [registry schema v]
+  (let [s (non-null schema)
+        t (:pg/type (column-props s))
+        base (if (and (vector? s) (= :ref (first s))) (get registry (last s)) s)
+        kind (when (vector? base) (first base))]
+    (cond (nil? v) nil
+          (= :enum kind) [:cast v (keyword t)]
+          (#{"json" "jsonb"} t) [:cast (json/write v) (keyword t)]
+          (= :vector kind) [:array (vec v) (keyword (subs t 0 (- (count t) 2)))]
+          :else v)))
+
+(defn- parents-first
+  "Tables ordered so every table comes after the tables it references (its own excepted)."
+  [ts]
+  (loop [out [] left ts]
+    (if (empty? left)
+      out
+      (let [placed (set (map :table out))
+            ready (filter (fn [t] (every? #(or (= (:table %) (:table t)) (placed (:table %))) (:refs t))) left)]
+        (when (empty? ready)
+          (throw (ex-info "tables reference each other in a cycle" {:tables (mapv :table left)})))
+        (recur (into out ready) (remove (set ready) left))))))
+
+(defn- rows-parents-first
+  "Rows of one table ordered so a row comes after the rows it references through refs (the
+   table's references to itself); a NULL reference, or one to the row itself, waits for nothing."
+  [rows refs]
+  (if (empty? refs)
+    rows
+    (loop [out [] left rows]
+      (if (empty? left)
+        out
+        (let [targets (set (for [r refs, row out] [(:to r) (key-of row (:to r))]))
+              ready (filter (fn [row] (every? (fn [{:keys [columns to]}]
+                                                (let [k (key-of row columns)]
+                                                  (or (some nil? k) (= k (key-of row to)) (targets [to k]))))
+                                              refs))
+                            left)]
+          (if (empty? ready)
+            (into out left)
+            (recur (into out ready) (remove (set ready) left))))))))
+
+(defn inserts
+  "[{:insert-into :schema.table :values [row ...]} ...] for a dataset: the tables it holds,
+   parents before the tables referencing them and, within a table, rows before the rows
+   referencing them; enum, json and array values in the form the driver needs."
+  [registry dataset]
+  (for [{:keys [name table refs]} (parents-first (filter #(contains? dataset (:table %)) (tables registry)))
+        :let [columns (into {} (map (fn [[k _ s]] [k s])) (column-entries (get registry name)))
+              self (filter #(= table (:table %)) refs)]]
+    {:insert-into (keyword table)
+     :values (mapv (fn [row] (into {} (for [[k v] row] [k (insert-value registry (get columns k) v)])))
+                   (rows-parents-first (get dataset table) self))}))

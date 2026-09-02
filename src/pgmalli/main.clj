@@ -6,7 +6,6 @@
      clojure -M -m pgmalli.main check    [pgmalli.edn]   ; exit 1 when files are stale
      bb -m pgmalli.main ..."
   (:require [clojure.edn :as edn]
-            [clojure.pprint :as pp]
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.generate :as gen]))
 
@@ -31,7 +30,9 @@
                   (doseq [f un] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
                 (if stale
                   (do (println "generated files are out of date; run generate and commit:")
-                      (binding [*print-namespace-maps* false] (pp/pprint stale))
+                      (doseq [[schema ds] stale, {:keys [name column property checks key file db]} ds]
+                        (println " " schema (or key name) (or column property (when checks "checks") "")
+                                 "file" (pr-str file) "db" (pr-str db)))
                       (System/exit 1))
                   (println "generated files match the database")))
       (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))))

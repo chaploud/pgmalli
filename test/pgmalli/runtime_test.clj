@@ -7,6 +7,7 @@
             [malli.core :as m]
             [malli.error :as me]
             malli.experimental.time
+            honey.sql
             [pgmalli.core :as pgmalli]))
 
 (def registry (pgmalli/registry "sample"))
@@ -351,3 +352,23 @@
       (is (m/validate ds sample opts) (pr-str sample)))
     (is (m/validate (pgmalli/dataset-schema (pgmalli/registry "other")) {"other.notes" [{:id 1 :user_id 9}]} {:registry (pgmalli/registry "other")})
         "a reference to a table outside the registry is not checked")))
+
+(deftest inserts-in-the-order-the-database-accepts
+  (let [ds (tcg/generate (pgmalli/dataset-generator registry {:rows 4}) 30 42)
+        stmts (pgmalli/inserts registry ds)
+        by-table (into {} (map (juxt :insert-into identity)) stmts)]
+    (is (= [:sample.groups :sample.users] (map :insert-into stmts)) "parents first")
+    (is (every? #(and (vector? %) (= [:cast :mood] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
+    (is (every? (fn [[i row]] (or (nil? (:referrer_id row)) (= (:referrer_id row) (:id row))
+                                  (some #(= (:referrer_id row) (:id %)) (take i (:values (by-table :sample.users))))))
+                (map-indexed vector (:values (by-table :sample.users))))
+        "a row comes after the row it refers to")
+    (is (every? #(string? (first (honey.sql/format %))) stmts)))
+  (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/docs [:map {:pg/table "public.docs" :pg/primary-key ["id"]}
+                                                           [:id [:int {:pg/type "integer"}]]
+                                                           [:body [:any {:pg/type "jsonb"}]]
+                                                           [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]]}})
+        [{:keys [values]}] (pgmalli/inserts reg {"public.docs" [{:id 1 :body {"a" 1} :tags ["x"]} {:id 2 :body [] :tags nil}]})]
+    (is (= [{:id 1 :body [:cast "{\"a\":1}" :jsonb] :tags [:array ["x"] :text]} {:id 2 :body [:cast "[]" :jsonb] :tags nil}] values)
+        "json written and cast, arrays with their element type, NULL as it is")))
