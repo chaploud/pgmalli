@@ -113,19 +113,64 @@
     (is (= [:map {:pg/table "public.t"} [:a [:int {:pg/type "integer"}]] [:b [:int {:pg/type "integer"}]]] (:pg.public/t registry)))
     (is (= [{:fact :table-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered)))))
 
-(deftest facts-lost-inside-branches-are-reported
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
-                                                            :tables {"t" {:columns [{:name "kind" :position 1 :data_type "text" :is_nullable false}
-                                                                                    {:name "tenant" :position 2 :data_type "uuid" :is_nullable true}]
-                                                                          :constraints {"k" {:name "k" :type "CHECK"
-                                                                                             :check_clause "CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}}}}}))]
-    (is (= [:multi {:dispatch :kind :error/message "k"}
-            ["a" [:map [:tenant [:uuid {:error/message "k"}]]]]
-            ["b" [:map [:tenant [:nil {:error/message "k"}]]]]
+(deftest checks-that-lose-a-fact-are-evaluated-whole
+  (let [table (fn [& checks] {:name "public" :types {}
+                              :tables {"t" {:columns [{:name "kind" :position 1 :data_type "text" :is_nullable false}
+                                                      {:name "tenant" :position 2 :data_type "uuid" :is_nullable true}
+                                                      {:name "since" :position 3 :data_type "date" :is_nullable true}]
+                                            :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause c}]) checks))}}})
+        {:keys [registry unrendered]} (r/registry (p/facts (table "CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"
+                                                                  "CHECK (kind = 'a'::text AND since = '2020-01-01'::date OR kind = 'b'::text AND since IS NULL)"
+                                                                  "CHECK (since >= '2019-01-01'::date)")))]
+    (is (= [:multi {:dispatch :kind :error/message "k0"}
+            ["a" [:map [:tenant [:enum {:error/message "k0"} #uuid "1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"]]]]
+            ["b" [:map [:tenant [:nil {:error/message "k0"}]]]]
             [:malli.core/default :any]]
-           (nth (:pg.public/t registry) 2)))
-    (is (= [{:fact :in-set :column "tenant" :constraint "k"}] (map #(select-keys % [:fact :column :constraint]) unrendered))
-        "the value set has no rendering on a uuid, and says so")))
+           (nth (:pg.public/t registry) 2))
+        "a uuid value set is an enum of uuids")
+    (is (= [:pg/check {:pg/constraint "k1" :error/message "k1"}
+            [:or [:and [:= :kind [:cast "a" :text]] [:= :since [:cast "2020-01-01" :date]]] [:and [:= :kind [:cast "b" :text]] [:is :since nil]]]]
+           (nth (:pg.public/t registry) 3))
+        "a branch whose fact has no rendering is evaluated whole")
+    (is (= [:pg/check {:pg/constraint "k2" :error/message "k2"} [:>= :since [:cast "2019-01-01" :date]]]
+           (nth (:pg.public/t registry) 4))
+        "so is a column pattern that has none")
+    (is (= [:maybe [:time/local-date {:pg/type "date"}]] (get-in registry [:pg.public/t 1 3 1]))
+        "and the column keeps its bare type")
+    (is (empty? unrendered))))
+
+(deftest constraints-are-conjoined
+  (let [t (fn [cols & checks] {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["a" "b" "c"]}}
+                               :tables {"t" {:columns cols
+                                             :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause (str "CHECK (" c ")")}]) checks))}}})
+        column (fn [reg col] (some (fn [[k s]] (when (= k col) s)) (drop 2 (let [r (:pg.public/t reg)] (if (= :and (first r)) (second r) r)))))
+        reg (fn [& args] (:registry (r/registry (p/facts (apply t args)))))]
+    (is (= [:int {:min 10 :pg/type "integer" :pg/constraint ["k0" "k1"]}]
+           (column (reg [{:name "n" :position 1 :data_type "integer" :is_nullable false}] "n >= 10" "n >= 0") :n))
+        "the tighter bound wins")
+    (is (= [:string {:max 5 :pg/type "character varying" :pg/constraint ["k0"]}]
+           (column (reg [{:name "s" :position 1 :data_type "character varying" :is_nullable false :max_length 5}] "length(s) <= 10") :s))
+        "a CHECK cannot widen varchar(n)")
+    (is (= [:enum {:pg/type "text" :pg/constraint ["k0" "k1"]} "b"]
+           (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e IN ('a'::text, 'b'::text)" "e IN ('b'::text, 'c'::text)") :e))
+        "value sets intersect")
+    (is (= [:enum {:pg/type "text" :pg/constraint ["k0" "k1"]} "a"]
+           (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e IN ('a'::text, 'b'::text)" "e <> 'b'::text") :e))
+        "and exclude")
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:not [:enum "x" "y"]]]
+           (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e <> ALL (ARRAY['x'::text, 'y'::text])") :e)))
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re "^\\Qab\\E.*$"]]
+           (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e ~~ 'ab%'::text") :e))
+        "LIKE is a regex")
+    (is (= [:enum {:pg/type "boolean" :pg/constraint ["k0"]} true]
+           (column (reg [{:name "b" :position 1 :data_type "boolean" :is_nullable false}] "b = true") :b)))
+    (is (= [:vector {:min 1 :max 3 :pg/type "text[]" :pg/constraint ["k0"]} :string]
+           (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "cardinality(tags) BETWEEN 1 AND 3") :tags)))
+    (is (= [:vector {:max 3 :pg/type "text[]" :pg/constraint ["k0"]} :string]
+           (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) <= 3") :tags)))
+    (is (= [:pg/check {:pg/constraint "k0" :error/message "k0"} [:= [:array_length :tags 1] 3]]
+           (nth (:pg.public/t (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) = 3")) 2))
+        "array_length of an empty array is NULL, so an exact length is evaluated whole")))
 
 (deftest odd-identifiers
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}

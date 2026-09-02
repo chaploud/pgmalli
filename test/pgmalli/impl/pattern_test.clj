@@ -11,7 +11,7 @@
                  :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause (str "CHECK (" c ")")}]) clauses))}}})
 
 (defn- check-facts [& clauses]
-  (->> (p/facts (apply schema-with-checks clauses)) (filter :constraint) (map #(dissoc % :schema :table :constraint)) vec))
+  (->> (p/facts (apply schema-with-checks clauses)) (filter :constraint) (map #(cond-> (dissoc % :schema :table :constraint) (not= :table-check (:fact %)) (dissoc :expr))) vec))
 
 (deftest facts-from-types-and-columns
   (is (= [{:fact :enum-type :schema "public" :type-name "mood" :values ["happy" "sad"]}

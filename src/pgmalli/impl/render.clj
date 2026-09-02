@@ -43,14 +43,29 @@
       [:vector (base-type elem)]
       (get base-types t :any))))
 
+(defn- tighten
+  "Properties merged onto existing ones; :min and :max only ever narrow, since a CHECK cannot
+   widen what the type or another CHECK already bounds."
+  [old props]
+  (reduce-kv (fn [m k v]
+               (assoc m k (case k
+                            :min (if (contains? m :min) (max (m :min) v) v)
+                            :max (if (contains? m :max) (min (m :max) v) v)
+                            v)))
+             old props))
+
 (defn- with-props [schema props]
   (let [props (into {} (remove (comp nil? val) props))]
     (cond
       (empty? props) schema
       (vector? schema) (if (map? (second schema))
-                         (assoc schema 1 (merge (second schema) props))
+                         (assoc schema 1 (tighten (second schema) props))
                          (into [(first schema) props] (rest schema)))
       :else [schema props])))
+
+(defn- enum-values [schema] (if (map? (second schema)) (drop 2 schema) (rest schema)))
+
+(defn- uuid-string? [v] (and (string? v) (re-matches #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" v)))
 
 (defn- strip-casts [e]
   (walk/postwalk #(if (and (vector? %) (= :cast (first %))) (second %) %) e))
@@ -79,12 +94,22 @@
         string-base? (= :string base)
         number-base? (#{:int :double} base)
         decimal-base? (= 'decimal? base)
-        enum-base? (or string-base? number-base? (= :ref base) (= :enum base))
-        as-is [schema (conj unrendered f)]]
+        enum-base? (or string-base? number-base? (#{:ref :boolean} base))
+        as-is [schema (conj unrendered f)]
+        ;; the values of an IN as members of the column's type; nil when they are not
+        members (cond (and (= :uuid base) (every? uuid-string? (:values f))) (map parse-uuid (:values f))
+                      enum-base? (:values f)
+                      (= :enum base) (:values f))]
     (case fact
       :enum [[:ref (schema-key schema-name (:type-name f))] unrendered]
       :domain-ref [[:ref (schema-key schema-name (:type-name f))] unrendered]
-      :in-set (if enum-base? [(into [:enum] (:values f)) unrendered] as-is)
+      :in-set (cond (nil? members) as-is
+                    ;; a second IN on the same column intersects
+                    (= :enum base) (let [vs (filter (set members) (enum-values schema))] (if (seq vs) [(into [:enum] vs) unrendered] as-is))
+                    :else [(into [:enum] members) unrendered])
+      :not-in-set (cond (nil? members) as-is
+                        (= :enum base) (let [vs (remove (set members) (enum-values schema))] (if (seq vs) [(into [:enum] vs) unrendered] as-is))
+                        :else [[:and schema [:not (into [:enum] members)]] unrendered])
       :range (let [{:keys [min max min-exclusive? max-exclusive?]} f
                    int? (= :int base)]
                (cond
@@ -104,10 +129,13 @@
                    [(if (:trim? f) [:and (with-props schema {:min 1}) [:re "\\S"]] (with-props schema {:min 1})) unrendered]
                    as-is)
       :max-length (if string-base? [(with-props schema {:max (:max f)}) unrendered] as-is)
-      :length (if (and string-base? (#{:length :char_length} (:fn f)))
-                (let [{:keys [min max exact]} f]
-                  [(with-props schema {:min (or exact min) :max (or exact max)}) unrendered])
-                as-is)
+      :length (let [{:keys [fn min max exact]} f
+                    bounds {:min (or exact min) :max (or exact max)}]
+                (cond (and string-base? (#{:length :char_length} fn)) [(with-props schema bounds) unrendered]
+                      (and (= :vector base) (= :cardinality fn)) [(with-props schema bounds) unrendered]
+                      ;; array_length of an empty array is NULL, so only an upper bound means what the CHECK means
+                      (and (= :vector base) (= :array_length fn) (nil? (:min bounds))) [(with-props schema bounds) unrendered]
+                      :else as-is))
       :json-type (if (= :any base)
                    (case (:json-type f)
                      "object" [:map unrendered]
@@ -117,6 +145,9 @@
       :regex (if-let [re (when string-base? (check/java-regex (:re f)))]
                [[:and schema [:re (str (when (:case-insensitive? f) "(?i)") re)]] unrendered]
                as-is)
+      :like (if string-base?
+              [[:and schema [:re (str (when (:case-insensitive? f) "(?i)") (check/like-regex (:pattern f)))]] unrendered]
+              as-is)
       :when-present (let [[inner un] (apply-fact [schema unrendered] (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f)) schema-name)]
                       (if (= un unrendered) [inner unrendered] as-is))
       (:numeric :not-null) [schema unrendered]
@@ -124,7 +155,7 @@
       as-is)))
 
 (def ^:private fact-order
-  {:enum 0 :domain-ref 0 :max-length 1 :numeric 1 :not-null 1 :null 1 :in-set 2 :non-blank 3 :range 3 :length 3 :json-type 3 :when-present 4 :regex 5})
+  {:enum 0 :domain-ref 0 :max-length 1 :numeric 1 :not-null 1 :null 1 :in-set 2 :not-in-set 3 :non-blank 3 :range 3 :length 3 :json-type 3 :when-present 4 :regex 5 :like 5})
 
 (defn- override-for [overrides f]
   (when-let [c (:constraint f)] (get overrides c)))
@@ -180,24 +211,28 @@
      :unrendered (mapcat :unrendered parts)
      :skipped (mapcat :skipped parts)}))
 
+(defn- pg-check [{:keys [constraint expr]}]
+  [:pg/check {:pg/constraint constraint :error/message constraint} expr])
+
 (defn- table-constraint
   "{:schema :unrendered :skipped} for a table-level check fact; :schema nil when it cannot be rendered."
   [schema-name columns by-column {:keys [fact constraint] :as f} overrides]
-  (let [frag #(fragment schema-name columns by-column (map (partial merge (select-keys f [:schema :table :constraint])) %) constraint overrides)]
+  (let [frag #(fragment schema-name columns by-column (map (partial merge (select-keys f [:schema :table :constraint])) %) constraint overrides)
+        ;; a branch that lost a fact is evaluated whole instead of enforced partially
+        whole (fn [r] (if (and (seq (:unrendered r)) (check/supported? (:expr f))) {:schema (pg-check f)} r))]
     (case fact
       :branch-check (let [{:keys [dispatch branches default]} f
                           bs (for [b branches, v (:values b)] (assoc (frag (:facts b)) :value v))
                           d (when default (frag default))]
-                      {:schema (into [:multi {:dispatch (ident-key dispatch) :error/message constraint}]
-                                     (concat (map (juxt :value :schema) bs) [[:malli.core/default (if d (:schema d) :any)]]))
-                       :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
-                       :skipped (mapcat :skipped (cond-> bs d (conj d)))})
+                      (whole {:schema (into [:multi {:dispatch (ident-key dispatch) :error/message constraint}]
+                                            (concat (map (juxt :value :schema) bs) [[:malli.core/default (if d (:schema d) :any)]]))
+                              :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
+                              :skipped (mapcat :skipped (cond-> bs d (conj d)))}))
       :or-check (let [alts (map frag (:alternatives f))]
-                  {:schema (into [:or {:error/message constraint}] (map :schema alts))
-                   :unrendered (mapcat :unrendered alts)
-                   :skipped (mapcat :skipped alts)})
-      :table-check {:schema (when (and (not (false? (:valid? f))) (check/supported? (:expr f)))
-                              [:pg/check {:pg/constraint constraint :error/message constraint} (:expr f)])}
+                  (whole {:schema (into [:or {:error/message constraint}] (map :schema alts))
+                          :unrendered (mapcat :unrendered alts)
+                          :skipped (mapcat :skipped alts)}))
+      :table-check {:schema (when (and (not (false? (:valid? f))) (check/supported? (:expr f))) (pg-check f))}
       {})))
 
 (defn- order [f] [(or (:table f) "") (or (:constraint f) "") (or (:column f) "")])
@@ -225,12 +260,31 @@
      :unrendered (mapcat :unrendered results)
      :skipped (mapcat :skipped results)}))
 
+(defn- expr-columns [e]
+  (->> (tree-seq vector? rest e) (filter keyword?) (remove #{:else :*}) (map name) distinct vec))
+
+(defn- fold-columns [schema-name columns tfacts overrides]
+  (let [by-column (group-by :column (filter :column tfacts))]
+    (into (sorted-map)
+          (for [[col c] columns]
+            [col (column-schema schema-name c (remove (comp #{:column} :fact) (by-column col)) overrides)]))))
+
+(defn- whole-checks
+  "Facts with the CHECKs whose column facts could not all be rendered replaced by one
+   :table-check each, to be evaluated whole."
+  [schema-name table tfacts rendered]
+  (let [lost (set (keep #(when (:expr %) (:constraint %)) (mapcat (comp :unrendered val) rendered)))]
+    (if (empty? lost)
+      tfacts
+      (concat (remove #(and (:expr %) (lost (:constraint %))) tfacts)
+              (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) tfacts)]]
+                {:fact :table-check :schema schema-name :table table :constraint c :expr (:expr f) :columns (expr-columns (:expr f))})))))
+
 (defn- render-table [schema-name table tfacts overrides]
   (let [columns (into {} (map (juxt :column identity) (filter (comp #{:column} :fact) tfacts)))
+        tfacts (whole-checks schema-name table tfacts (fold-columns schema-name columns tfacts overrides))
         by-column (group-by :column (filter :column tfacts))
-        rendered (into (sorted-map)
-                       (for [[col c] columns]
-                         [col (column-schema schema-name c (remove (comp #{:column} :fact) (by-column col)) overrides)]))
+        rendered (fold-columns schema-name columns tfacts overrides)
         row (into [:map (map-props schema-name table tfacts)] (for [[col r] rendered] [(ident-key col) (:schema r)]))
         checks (table-checks schema-name columns by-column tfacts overrides)]
     {:entry [(schema-key schema-name table) (if (seq (:schemas checks)) (into [:and row] (:schemas checks)) row)]

@@ -16,11 +16,13 @@
      :max-length   varchar(n)                            {:max}
      :numeric      numeric(p,s)                          {:precision :scale}
      :in-set       col IN (...) / col = v                {:values}
+     :not-in-set   col NOT IN (...) / col <> v            {:values}
      :range        col >= a AND col <= b, BETWEEN, ...   {:min :max :min-exclusive? :max-exclusive?}
      :non-blank    length(trim(col)) > 0 / col <> ''     {:trim?}
-     :length       length(col) <= n / octet_length = n   {:fn :min :max :exact}
+     :length       length(col) <= n, cardinality(col) > 0 {:fn :min :max :exact}
      :json-type    jsonb_typeof(col) = 'object'          {:json-type}
      :regex        col ~ 're'                            {:re :case-insensitive?}
+     :like         col LIKE 'p'                          {:pattern :case-insensitive?}
      :not-null     col IS NOT NULL
      :null         col IS NULL
      :when-present col IS NULL OR <column pattern>       {:fact-when-present}
@@ -35,8 +37,9 @@
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
      :unparsed     expression that could not be read     {:input :error}
 
-   One CHECK can yield several facts (column patterns joined by AND). NOT VALID constraints
-   are never matched, since existing rows may violate them."
+   One CHECK can yield several facts (column patterns joined by AND); every fact from a CHECK
+   carries the whole expression as :expr. NOT VALID constraints are never matched, since
+   existing rows may violate them."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [pgmalli.impl.expr :as x]))
@@ -77,7 +80,7 @@
        (if (#{:> :>=} op) :min :max) v
        (if (#{:> :>=} op) :min-exclusive? :max-exclusive?) (boolean (#{:> :<} op))})))
 
-(defn- literal? [v] (or (string? v) (number? v)))
+(defn- literal? [v] (or (string? v) (number? v) (boolean? v)))
 
 (defn- match-column
   "One column-local pattern of a normalized expression, or nil."
@@ -91,6 +94,8 @@
 
        (when (and (= :in op) (column-ref? a) (every? literal? b)) {:column a :fact :in-set :values (vec b)})
        (when (and (= := op) (column-ref? a) (literal? b)) {:column a :fact :in-set :values [b]})
+       (when (and (= :not-in op) (column-ref? a) (every? literal? b)) {:column a :fact :not-in-set :values (vec b)})
+       (when (and (= :<> op) (column-ref? a) (literal? b) (not= "" b)) {:column a :fact :not-in-set :values [b]})
 
        (when (and (= :between op) (column-ref? a) (number? b) (number? c))
          {:column a :fact :range :min b :max c :min-exclusive? false :max-exclusive? false})
@@ -112,19 +117,24 @@
                     (and (= := o1) (= :<> o2) (column-ref? c1) (= c1 c2) (= t [:btrim c1]) (= "" s))))
          {:column (second a) :fact :non-blank :trim? true})
 
-       (when (and (#{:< :<= :> :>= :=} fop) (vector? fa) (#{:length :char_length :octet_length} (first fa))
+       (when (and (#{:< :<= :> :>= :=} fop) (vector? fa) (#{:length :char_length :octet_length :cardinality :array_length} (first fa))
                   (column-ref? (second fa)) (number? fb))
          (merge {:column (second fa) :fact :length :fn (first fa)}
                 (case fop
                   := {:exact fb}
                   :<= {:max fb} :< {:max (dec fb)}
                   :>= {:min fb} :> {:min (inc fb)})))
+       (when (and (= :between op) (vector? a) (#{:length :char_length :octet_length :cardinality :array_length} (first a))
+                  (column-ref? (second a)) (number? b) (number? c))
+         {:column (second a) :fact :length :fn (first a) :min b :max c})
 
        (when (and (= := op) (vector? a) (= :jsonb_typeof (first a)) (column-ref? (second a)) (string? b))
          {:column (second a) :fact :json-type :json-type b})
 
        (when (and (#{:regex :iregex} op) (column-ref? a) (string? b))
          {:column a :fact :regex :re b :case-insensitive? (= :iregex op)})
+       (when (and (#{:like :ilike} op) (column-ref? a) (string? b))
+         {:column a :fact :like :pattern b :case-insensitive? (= :ilike op)})
 
        (when (and (= :or op) (= 3 (count e)))
          (let [is-null? (fn [x] (and (vector? x) (= :is (first x)) (nil? (nth x 2)) (column-ref? (second x))))
@@ -257,14 +267,15 @@
         parsed (try {:expr (x/check-clause check_clause)}
                     (catch Exception e {:error (or (ex-message e) (str (class e)))}))]
     (if-let [e (:expr parsed)]
-      (let [n (when (not= false is_valid) (normalize e))]
+      (let [n (when (not= false is_valid) (normalize e))
+            base (assoc base :expr (x/canonical e))]
         (if-let [ms (some-> n match-columns)]
           (mapv #(merge base (stringify %)) ms)
           (if-let [b (some-> n match-branches)]
             [(merge base {:fact :branch-check} (stringify b) {:dispatch (name (:dispatch b))})]
             (if-let [alts (some-> n match-alternatives)]
               [(merge base {:fact :or-check :alternatives (stringify alts)})]
-              [(cond-> (merge base {:fact :table-check :expr (x/canonical e) :columns (referenced-columns e)})
+              [(cond-> (merge base {:fact :table-check :columns (referenced-columns e)})
                  (false? is_valid) (assoc :valid? false))]))))
       [(merge base {:fact :unparsed :input check_clause :error (:error parsed)})])))
 
