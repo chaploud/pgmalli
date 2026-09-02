@@ -219,10 +219,14 @@
          opts {:registry registry}
          table-gen (fn [{:keys [name table refs key-sets]} ds]
                      (let [valid (fn [rs] (-> (filter #(m/validate name % opts) rs) (distinct-by-keys key-sets) vec))
-                           {self true others false} (group-by #(= table (second %)) refs)]
+                           {self true others false} (group-by #(= table (second %)) refs)
+                           ;; a dropped row may be what another row points at, so repeat until the batch is stable
+                           self-consistent (fn [rs]
+                                             (let [rs2 (valid (point-at rs self (assoc ds table rs)))]
+                                               (if (= (count rs2) (count rs)) rs2 (recur rs2))))]
                        (fmap (fn [rs]
                                (let [rs (valid (point-at rs others ds))]
-                                 (if self (valid (point-at rs self (assoc ds table rs))) rs)))
+                                 (if self (self-consistent rs) rs)))
                              (vector-of (mg/generator (columns registry name) opts) rows))))]
      (reduce (fn [g table]
                (gen g (fn [ds] (fmap (fn [rs] (assoc ds table rs)) (table-gen (by-table table) ds)))))
