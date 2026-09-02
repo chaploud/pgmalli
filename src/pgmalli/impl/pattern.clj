@@ -2,8 +2,9 @@
   "Facts about a schema, derived from the structure read by pgmalli.impl.ir.
 
    A fact is a map with :fact (the kind), :schema, and :table / :column / :constraint where they
-   apply. Column-local CHECK constraints are matched against a fixed set of patterns; anything
-   else is kept as :table-check with the expression data, never dropped.
+   apply. CHECK constraints are matched against a fixed set of patterns (column patterns, then
+   :branch-check and :or-check); anything else is kept as :table-check with the expression data,
+   never dropped.
 
    Kinds:
      :enum-type    an enum type of the schema           {:type-name :values}
@@ -21,12 +22,12 @@
      :json-type    jsonb_typeof(col) = 'object'          {:json-type}
      :regex        col ~ 're'                            {:re :case-insensitive?}
      :not-null     col IS NOT NULL
-     :null         col IS NULL (only inside branches of a :branch-check)
+     :null         col IS NULL
      :when-present col IS NULL OR <column pattern>       {:fact-when-present}
      :primary-key  table primary key                      {:columns}
      :unique       UNIQUE constraint                      {:columns}
      :references   FOREIGN KEY                            {:columns :to {:schema :table :columns}}
-     :domain       domain type                            {:type-name :base :facts (column patterns over VALUE)}
+     :domain       domain type                            {:type-name :base :not-null? :facts (column patterns over VALUE)}
      :branch-check CHECK of the form col = v AND ... OR col = w AND ...
                                                           {:dispatch :branches [{:values :facts}] :default}
      :or-check     CHECK whose OR alternatives are each an AND of column patterns
@@ -62,7 +63,7 @@
                                         (mapcat walk (rest f)))
                           (keyword? f) [f]
                           :else nil))]
-    (->> (walk (strip-casts (if (vector? e) e [:x e])))
+    (->> (walk (strip-casts e))
          (remove #{:else :*})
          (map name) distinct vec)))
 
@@ -79,68 +80,58 @@
 (defn- literal? [v] (or (string? v) (number? v)))
 
 (defn- match-column
-  "One column-local pattern, or nil."
+  "One column-local pattern of a normalized expression, or nil."
   [e]
-  (let [e (strip-casts (x/canonical e))]
-    (or
-     (when (and (vector? e) (= :is-not (first e)) (column-ref? (second e)) (nil? (nth e 2)))
-       {:column (second e) :fact :not-null})
-     (when (and (vector? e) (= :is (first e)) (column-ref? (second e)) (nil? (nth e 2)))
-       {:column (second e) :fact :null})
+  (when (vector? e)
+    (let [[op a b c] e
+          [fop fa fb] (flip e)]
+      (or
+       (when (and (= :is-not op) (column-ref? a) (nil? b)) {:column a :fact :not-null})
+       (when (and (= :is op) (column-ref? a) (nil? b)) {:column a :fact :null})
 
-     (when (and (vector? e) (= :in (first e)) (column-ref? (second e)) (every? literal? (nth e 2)))
-       {:column (second e) :fact :in-set :values (vec (nth e 2))})
-     (when (and (vector? e) (= := (first e)) (column-ref? (second e)) (literal? (nth e 2)))
-       {:column (second e) :fact :in-set :values [(nth e 2)]})
+       (when (and (= :in op) (column-ref? a) (every? literal? b)) {:column a :fact :in-set :values (vec b)})
+       (when (and (= := op) (column-ref? a) (literal? b)) {:column a :fact :in-set :values [b]})
 
-     (when (and (vector? e) (= :between (first e)) (column-ref? (second e)) (number? (nth e 2)) (number? (nth e 3)))
-       {:column (second e) :fact :range :min (nth e 2) :max (nth e 3) :min-exclusive? false :max-exclusive? false})
-     (when (and (vector? e) (= :and (first e)) (= 3 (count e)))
-       (let [[a b] (map bound (rest e))]
-         (when (and a b (= (:column a) (:column b)) (not= (contains? a :min) (contains? b :min)))
-           (merge a b))))
-     (when (vector? e) (bound e))
+       (when (and (= :between op) (column-ref? a) (number? b) (number? c))
+         {:column a :fact :range :min b :max c :min-exclusive? false :max-exclusive? false})
+       (when (and (= :and op) (= 3 (count e)))
+         (let [[lo hi] (map bound (rest e))]
+           (when (and lo hi (= (:column lo) (:column hi)) (not= (contains? lo :min) (contains? hi :min)))
+             (merge lo hi))))
+       (bound e)
 
-     (when (vector? e)
-       (let [[op l r] e]
-         (cond
-           (and (= :> op) (= 0 r) (vector? l) (#{:length :char_length} (first l))
-                (vector? (second l)) (#{:trim :btrim} (first (second l))) (column-ref? (second (second l))))
-           {:column (second (second l)) :fact :non-blank :trim? true}
-           (and (= :<> op) (= "" r) (vector? l) (= :btrim (first l)) (column-ref? (second l)))
-           {:column (second l) :fact :non-blank :trim? true}
-           (and (= :<> op) (= "" r) (column-ref? l))
-           {:column l :fact :non-blank :trim? false}
-           (and (= :and op) (= 3 (count e))
-                (let [[[o1 c1 t] [o2 c2 s]] (rest e)]
-                  (and (= := o1) (= :<> o2) (column-ref? c1) (= c1 c2) (= t [:btrim c1]) (= "" s))))
-           {:column (second (second e)) :fact :non-blank :trim? true}
-           :else nil)))
+       (when (and (= :> op) (= 0 b) (vector? a) (#{:length :char_length} (first a))
+                  (vector? (second a)) (#{:trim :btrim} (first (second a))) (column-ref? (second (second a))))
+         {:column (second (second a)) :fact :non-blank :trim? true})
+       (when (and (= :<> op) (= "" b) (vector? a) (= :btrim (first a)) (column-ref? (second a)))
+         {:column (second a) :fact :non-blank :trim? true})
+       (when (and (= :<> op) (= "" b) (column-ref? a))
+         {:column a :fact :non-blank :trim? false})
+       (when (and (= :and op) (= 3 (count e))
+                  (let [[[o1 c1 t] [o2 c2 s]] (rest e)]
+                    (and (= := o1) (= :<> o2) (column-ref? c1) (= c1 c2) (= t [:btrim c1]) (= "" s))))
+         {:column (second a) :fact :non-blank :trim? true})
 
-     (when (vector? e)
-       (let [[op l r] (flip e)]
-         (when (and (#{:< :<= :> :>= :=} op) (vector? l) (#{:length :char_length :octet_length} (first l))
-                    (column-ref? (second l)) (number? r))
-           (merge {:column (second l) :fact :length :fn (first l)}
-                  (case op
-                    := {:exact r}
-                    :<= {:max r} :< {:max (dec r)}
-                    :>= {:min r} :> {:min (inc r)})))))
+       (when (and (#{:< :<= :> :>= :=} fop) (vector? fa) (#{:length :char_length :octet_length} (first fa))
+                  (column-ref? (second fa)) (number? fb))
+         (merge {:column (second fa) :fact :length :fn (first fa)}
+                (case fop
+                  := {:exact fb}
+                  :<= {:max fb} :< {:max (dec fb)}
+                  :>= {:min fb} :> {:min (inc fb)})))
 
-     (when (and (vector? e) (= := (first e)) (vector? (second e)) (= :jsonb_typeof (first (second e)))
-                (column-ref? (second (second e))) (string? (nth e 2)))
-       {:column (second (second e)) :fact :json-type :json-type (nth e 2)})
+       (when (and (= := op) (vector? a) (= :jsonb_typeof (first a)) (column-ref? (second a)) (string? b))
+         {:column (second a) :fact :json-type :json-type b})
 
-     (when (and (vector? e) (#{:regex :iregex} (first e)) (column-ref? (second e)) (string? (nth e 2)))
-       {:column (second e) :fact :regex :re (nth e 2) :case-insensitive? (= :iregex (first e))})
+       (when (and (#{:regex :iregex} op) (column-ref? a) (string? b))
+         {:column a :fact :regex :re b :case-insensitive? (= :iregex op)})
 
-     (when (and (vector? e) (= :or (first e)) (= 3 (count e)))
-       (let [is-null? (fn [a] (and (vector? a) (= :is (first a)) (nil? (nth a 2)) (column-ref? (second a))))
-             [a b] (rest e)
-             [[_ c] inner] (cond (is-null? a) [a b] (is-null? b) [b a])
-             m (when c (match-column inner))]
-         (when (and m (= c (:column m)))
-           {:column c :fact :when-present :fact-when-present (dissoc m :column)}))))))
+       (when (and (= :or op) (= 3 (count e)))
+         (let [is-null? (fn [x] (and (vector? x) (= :is (first x)) (nil? (nth x 2)) (column-ref? (second x))))
+               [[_ col] inner] (cond (is-null? a) [a b] (is-null? b) [b a])
+               m (when col (match-column inner))]
+           (when (and m (= col (:column m)))
+             {:column col :fact :when-present :fact-when-present (dissoc m :column)})))))))
 
 (defn- terms [e] (if (and (vector? e) (= :and (first e))) (rest e) [e]))
 
@@ -160,12 +151,16 @@
 
 (declare match-columns)
 
+(defn- normalize
+  "The form the matchers read: PostgreSQL's rewrites undone, casts removed."
+  [e]
+  (strip-casts (x/canonical e)))
+
 (defn- match-branches
   "CHECK whose alternatives each pin one column to literal values (or its nullness) and constrain
    other columns with column patterns. Returns {:dispatch col :branches [...] :default facts} or nil."
   [e]
-  (let [e (strip-casts (x/canonical e))
-        alts (if (and (vector? e) (= :or (first e))) (rest e) [e])
+  (let [alts (if (and (vector? e) (= :or (first e))) (rest e) [e])
         analyse (fn [alt]
                   (let [ts (terms alt)
                         d (some dispatch-term ts)
@@ -189,10 +184,9 @@
 (defn- match-alternatives
   "OR whose alternatives are each an AND of column patterns: [[fact ...] ...], or nil."
   [e]
-  (let [e (strip-casts (x/canonical e))]
-    (when (and (vector? e) (= :or (first e)))
-      (let [alts (map match-columns (rest e))]
-        (when (every? some? alts) (vec alts))))))
+  (when (and (vector? e) (= :or (first e)))
+    (let [alts (map match-columns (rest e))]
+      (when (every? some? alts) (vec alts)))))
 
 (defn- match-columns
   "All column facts of an expression, or nil if any AND branch matches nothing."
@@ -212,24 +206,26 @@
     "bytea" "json" "jsonb" "tsrange" "tstzrange" "daterange" "int4range" "int8range" "numrange" "inet" "cidr" "macaddr"
     "xml" "money" "oid" "tsvector"})
 
-(defn- parsed-or-unparsed [base s]
+(defn- parsed
+  "{:expr data} for an expression PostgreSQL printed, or {:unparsed fact} when it cannot be read."
+  [base s]
   (let [{:keys [expr error]} (x/try-parse s)]
-    (if error [nil (merge base {:fact :unparsed :input s :error error})] [expr nil])))
+    (if error {:unparsed (merge base {:fact :unparsed :input s :error error})} {:expr expr})))
 
-(defn- column-facts [base {:keys [name data_type type_schema is_nullable default_value max_length precision scale identity generated_expr position]} enums domains]
+(defn- column-facts [base {cname :name :keys [data_type type_schema is_nullable default_value max_length precision scale identity generated_expr position]} enums domains]
   (let [type-name (str/replace data_type #"^[^.]+\." "")
         elem-type (str/replace type-name #"\[\]$" "")
         builtin? (or (nil? type_schema) (= "pg_catalog" type_schema))
-        base (assoc base :column name)
-        [default default-unparsed] (when default_value (parsed-or-unparsed base default_value))
-        [generated generated-unparsed] (when generated_expr (parsed-or-unparsed base generated_expr))]
+        base (assoc base :column cname)
+        default (when default_value (parsed base default_value))
+        generated (when generated_expr (parsed base generated_expr))]
     (cond-> [(merge base {:fact :column :type data_type :position position :nullable? (boolean is_nullable)}
-                    (when default {:default default})
+                    (when (contains? default :expr) {:default (:expr default)})
                     (cond identity {:identity ({"ALWAYS" :always "BY DEFAULT" :default} identity)}
-                          (and (vector? default) (= :nextval (first default))) {:identity :serial})
-                    (when generated {:generated generated}))]
-      default-unparsed (conj default-unparsed)
-      generated-unparsed (conj generated-unparsed)
+                          (and (vector? (:expr default)) (= :nextval (first (:expr default)))) {:identity :serial})
+                    (when (contains? generated :expr) {:generated (:expr generated)}))]
+      (:unparsed default) (conj (:unparsed default))
+      (:unparsed generated) (conj (:unparsed generated))
       (contains? enums type-name) (conj (merge base {:fact :enum :type-name type-name :values (get enums type-name)}))
       (contains? domains type-name) (conj (merge base {:fact :domain-ref :type-name type-name}))
       (and (not (contains? enums type-name)) (not (contains? domains type-name)) (not (and builtin? (known-types elem-type))))
@@ -238,34 +234,35 @@
       (conj (merge base {:fact :max-length :max max_length}))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {:keys [name type columns references]}]
+(defn- key-facts [base {cname :name :keys [type columns references]}]
   (case type
-    "PRIMARY KEY" [(merge base {:fact :primary-key :constraint name :columns columns})]
-    "UNIQUE" [(merge base {:fact :unique :constraint name :columns columns})]
-    "FOREIGN KEY" [(merge base {:fact :references :constraint name :columns columns
+    "PRIMARY KEY" [(merge base {:fact :primary-key :constraint cname :columns columns})]
+    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns})]
+    "FOREIGN KEY" [(merge base {:fact :references :constraint cname :columns columns
                                 :to (select-keys references [:schema :table :columns])})]
     []))
 
 (defn- domain-facts [schema-name [tname {:keys [base_type not_null constraints]}]]
   (let [parsed (map (fn [{:keys [definition]}]
-                      (try (match-columns (x/check-clause definition))
+                      (try (match-columns (normalize (x/check-clause definition)))
                            (catch Exception _ nil)))
                     constraints)]
     (when (every? some? parsed)
       [{:fact :domain :schema schema-name :type-name tname :base base_type :not-null? (boolean not_null)
         :facts (vec (map #(dissoc % :column) (apply concat parsed)))}])))
 
-(defn- check-facts [base {:keys [name check_clause is_valid]}]
-  (let [base (assoc base :constraint name)
+(defn- check-facts [base {cname :name :keys [check_clause is_valid]}]
+  (let [base (assoc base :constraint cname)
+        stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try {:expr (x/check-clause check_clause)}
                     (catch Exception e {:error (or (ex-message e) (str (class e)))}))]
     (if-let [e (:expr parsed)]
-      (if-let [ms (when (not= false is_valid) (match-columns e))]
-        (mapv #(merge base % {:column (clojure.core/name (:column %))}) ms)
-        (let [stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column clojure.core/name) %) m))]
-          (if-let [b (when (not= false is_valid) (match-branches e))]
-            [(merge base {:fact :branch-check} (stringify b) {:dispatch (clojure.core/name (:dispatch b))})]
-            (if-let [alts (when (not= false is_valid) (match-alternatives e))]
+      (let [n (when (not= false is_valid) (normalize e))]
+        (if-let [ms (some-> n match-columns)]
+          (mapv #(merge base (stringify %)) ms)
+          (if-let [b (some-> n match-branches)]
+            [(merge base {:fact :branch-check} (stringify b) {:dispatch (name (:dispatch b))})]
+            (if-let [alts (some-> n match-alternatives)]
               [(merge base {:fact :or-check :alternatives (stringify alts)})]
               [(cond-> (merge base {:fact :table-check :expr (x/canonical e) :columns (referenced-columns e)})
                  (false? is_valid) (assoc :valid? false))]))))

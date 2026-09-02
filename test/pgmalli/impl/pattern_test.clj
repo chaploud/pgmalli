@@ -32,6 +32,10 @@
 
 (deftest column-patterns
   (is (= [{:fact :not-null :column "c"}] (check-facts "c IS NOT NULL")))
+  (is (= [{:fact :in-set :column "c" :values [1 2]} {:fact :range :column "m" :min 1 :min-exclusive? false}]
+         (check-facts "c = ANY (ARRAY[1, 2]) AND m >= 1")) "PostgreSQL's rewrites are undone below the top level too")
+  (is (= [{:fact :when-present :column "c" :fact-when-present {:fact :in-set :values [1 2]}}]
+         (check-facts "c IS NULL OR c = ANY (ARRAY[1, 2])")))
   (is (= [{:fact :in-set :column "c" :values ["a" "b"]}] (check-facts "c IN ('a'::text, 'b'::text)")))
   (is (= [{:fact :in-set :column "c" :values ["a"]}] (check-facts "c = 'a'::mood")))
   (is (= [{:fact :in-set :column "c" :values ["a" "b"]}] (check-facts "c::text IN ('a'::character varying, 'b'::character varying)")))
@@ -66,6 +70,7 @@
   (is (= [{:fact :table-check :expr [:and [:>= :c 0] [:<= :c :total]] :columns ["c" "total"]}]
          (check-facts "c >= 0 AND c <= total")))
   (is (= [{:fact :table-check :expr [:in :x [:a :b]] :columns ["x" "a" "b"]}] (check-facts "x IN (a, b)")))
+  (is (= [{:fact :table-check :expr :c :columns ["c"]}] (check-facts "c")) "a bare boolean column")
   (is (= ["c" "p"] (:columns (first (check-facts "CASE c WHEN 'a'::text THEN (p ->> 'x'::text) = 'y'::text ELSE false END"))))))
 
 (deftest not-valid-is-never-matched
