@@ -212,6 +212,27 @@
     (is (= 8 (count (get sample "public.t"))) "a branching CHECK is met by construction")
     (is (nil? (-> sample meta :pgmalli/short)))))
 
+(deftest branches-decide-nullable-references
+  ;; approval requests: a pending request has no approver, an approved one an approver of the same group
+  (let [int [:int {:pg/type "integer"}]
+        reg (pgmalli/registry {:registry {:pg.public/groups [:map {:pg/table "public.groups" :pg/primary-key ["id"]} [:id int]]
+                                          :pg.public/users [:map {:pg/table "public.users" :pg/primary-key ["id"] :pg/unique [{:columns ["id" "group_id"]}]
+                                                                  :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
+                                                            [:id int] [:group_id int]]
+                                          :pg.public/requests [:and [:map {:pg/table "public.requests" :pg/primary-key ["id"]
+                                                                           :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}
+                                                                                             {:columns ["requester_id" "group_id"] :table "public.users" :to ["id" "group_id"]}
+                                                                                             {:columns ["approver_id" "group_id"] :table "public.users" :to ["id" "group_id"]}]}
+                                                                     [:id int] [:group_id int] [:requester_id int] [:approver_id [:maybe int]]
+                                                                     [:status [:enum {:pg/type "text"} "pending" "approved"]]]
+                                                               [:multi {:dispatch :status}
+                                                                ["pending" [:map [:approver_id :nil]]]
+                                                                ["approved" [:map [:approver_id [:int {:min 1}]]]]]]}})
+        ds (pgmalli/dataset-schema reg)]
+    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 8)]
+      (is (m/validate ds sample {:registry reg}) (pr-str sample))
+      (is (= 6 (count (get sample "public.requests"))) (pr-str (-> sample meta :pgmalli/short))))))
+
 (deftest generation-limits-are-recorded
   (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never" :pg/primary-key ["a"]} [:a [:int {:pg/type "integer"}]]] [:pg/check {:pg/constraint "never" :error/message "never"} [:< 2 1]]]
                                           :pg.public/child [:map {:pg/table "public.child" :pg/foreign-keys [{:columns ["never_a"] :table "public.never" :to ["a"]}]} [:never_a [:int {:pg/type "integer"}]]]

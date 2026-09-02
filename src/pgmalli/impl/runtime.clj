@@ -304,7 +304,8 @@
   "[row ds] with the row's references pointing at rows of ds and the row valid?, or nil.
    References sharing columns are solved together: a later reference may only choose targets
    that agree with the columns an earlier reference fixed (or that were fixed on entry), and
-   the search backtracks over targets until valid? holds. When no target fits, grow offers
+   the search backtracks over targets until valid? holds. A reference holding a NULL is left
+   alone where PostgreSQL accepts it as it is. When no target fits, grow offers
    datasets with one more row in the target table that carries the columns already fixed,
    tried in turn; failing that, the reference's free columns become NULL. A reference to own,
    the row's own table, never picks the row itself."
@@ -314,8 +315,10 @@
               (when (valid? row) [row ds])
               (let [{:keys [columns to table full?]} (first refs)
                     v (key-of row columns)]
-                (if (every? nil? v)
-                  ;; an all-NULL reference stays so; under MATCH FULL no later reference may fill part of it
+                (if (or (every? nil? v) (and (not full?) (some nil? v)))
+                  ;; a reference with a NULL is left as it is: PostgreSQL accepts it (all NULL, or any NULL
+                  ;; under MATCH SIMPLE), and a NULL a branch chose must stay one. Under MATCH FULL no later
+                  ;; reference may fill part of an all-NULL key
                   (go row ds (cond-> fixed full? (into columns)) (rest refs) grow)
                   (let [targets (fn [ds] (cond->> (->> (get ds table) (map #(key-of % to)) (remove #(some nil? %)) distinct)
                                            (= table own) (remove #(= % (key-of row to)))
@@ -359,16 +362,18 @@
       row)))
 
 (defn- candidates
-  "n rows from a table's row generator (gen-of, memoized per schema), generated from seed at a
-   size where keys rarely collide, their branching CHECKs filled in. No shrink tree is built,
-   so large datasets stay cheap."
+  "Up to n rows from a table's row generator (gen-of, memoized per schema), generated from seed
+   at a size where keys rarely collide, their branching CHECKs filled in. Lazy, in chunks, so a
+   table that fills from a few rows never generates the rest; no shrink tree is built, so
+   large datasets stay cheap."
   [registry gen-of name n seed]
   (let [generate (requiring-resolve 'clojure.test.check.generators/generate)
         vector-of (requiring-resolve 'clojure.test.check.generators/vector)
-        scale (requiring-resolve 'clojure.test.check.generators/scale)]
-    (->> (generate (vector-of (scale #(max % 30) (gen-of (columns registry name))) n) 30 seed)
-         (map-indexed (fn [i row] (fill-branches registry gen-of name row (+ seed (* 1000 i)))))
-         vec)))
+        scale (requiring-resolve 'clojure.test.check.generators/scale)
+        chunk 25]
+    (->> (range 0 n chunk)
+         (mapcat (fn [start] (generate (vector-of (scale #(max % 30) (gen-of (columns registry name))) (min chunk (- n start))) 30 (+ seed start))))
+         (map-indexed (fn [i row] (fill-branches registry gen-of name row (+ seed (* 1000 i))))))))
 
 (defn- failure-reasons
   "Why a table came out short, most frequent reason first: what malli explains about the
@@ -419,7 +424,7 @@
                  rs
                  (recur (into rs (take short more)) (drop short more)))))]
     (cond-> (assoc ds table rs)
-      (< (count rs) rows) (vary-meta assoc-in [:pgmalli/short table] {:wanted rows :got (count rs) :reasons (failure-reasons registry t cands ds)}))))
+      (< (count rs) rows) (vary-meta assoc-in [:pgmalli/short table] {:wanted rows :got (count rs) :reasons (failure-reasons registry t (vec cands) ds)}))))
 
 (defn dataset-generator
   "test.check generator of datasets that satisfy dataset-schema: tables are generated in
