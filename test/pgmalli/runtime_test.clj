@@ -324,10 +324,17 @@
       (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
   (testing "as-read: the map as next.jdbc builds it"
     (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant})]
-      (is (= [:users/born {:optional true} [:time/local-date {:pg/type "date"}]] (nth r 2)) "NULL columns absent, keys qualified")
+      (is (= [:users/group_name {:optional true} [:string {:pg/type "text"}]] (nth r 5)) "NULL columns absent, keys qualified")
       (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "timestamps as Instants")
+      (is (= [:users/born {:optional true} ['inst? {:pg/type "date"}]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
       (is (m/validate r {:users/id 1 :users/group_id 1 :users/mood "sad" :users/seq 1 :users/score 1 :users/total 2} opts)))
-    (is (some #{[:nick-upper [:maybe [:string {:pg/generated true :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:kebab? true}))))
+    (is (some #{[:nick-upper [:maybe [:string {:pg/generated true :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:kebab? true})))
+    (is (= :order-items/line-no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {:qualified? true :kebab? true}) 2)))
+        "the table half is kebab-cased too"))
+  (testing "portable converts what it inlines"
+    (let [reg (pgmalli/registry {:registry {:pg.public/code [:and :string [:pg/check-value {:pg/constraint "c"} [:<> :VALUE ""]]]
+                                            :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
+      (is (= [:map {:pg/table "public.t"} [:c [:string {:pg/type "code"}]]] (pgmalli/portable reg :pg.public/t)))))
   (testing "column and non-null"
     (is (= [:maybe [:string {:max 40 :pg/type "character varying"}]] (pgmalli/column registry :pg.sample/users :nick)))
     (is (= [:string {:max 40 :pg/type "character varying"}] (pgmalli/non-null (pgmalli/column registry :pg.sample/users "nick"))))

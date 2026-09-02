@@ -66,23 +66,36 @@
                   body)
     @acc))
 
-(defn- qualified [k schema] (if (namespace k) (str (namespace k) "." (name k)) (str schema "." (name k))))
+(defn- qualified
+  "\"schema.table\" of a table keyword: :schema/table, :schema.table, or :table in the default schema."
+  [k schema]
+  (cond (namespace k) (str (namespace k) "." (name k))
+        (str/includes? (name k) ".") (name k)
+        :else (str schema "." (name k))))
+
+(defn- written
+  "The table name as written when it names no schema, the form a CTE may shadow."
+  [k]
+  (when-not (or (namespace k) (str/includes? (name k) ".")) (name k)))
 
 (defn- table-ref
-  "[table alias] of a :from / join item; an opaque item (subquery, function) has no table."
+  "[table alias written] of a :from / join item: the table's qualified name, its alias, and the
+   name as written (nil when qualified by a schema); an opaque item (subquery, function) has no table."
   [x schema]
   (cond
-    (keyword? x) [(qualified x schema) (name x)]
-    (and (vector? x) (keyword? (first x)) (or (nil? (second x)) (keyword? (second x)))) [(qualified (first x) schema) (name (or (second x) (first x)))]
+    (keyword? x) [(qualified x schema) (name x) (written x)]
+    (and (vector? x) (keyword? (first x)) (or (nil? (second x)) (keyword? (second x))))
+    [(qualified (first x) schema) (name (or (second x) (first x))) (written (first x))]
     ;; INSERT INTO table (columns...) ...
-    (and (vector? x) (keyword? (first x)) (vector? (second x))) [(qualified (first x) schema) (name (first x))]
+    (and (vector? x) (keyword? (first x)) (vector? (second x))) [(qualified (first x) schema) (name (first x)) (written (first x))]
     (and (vector? x) (keyword? (first x))) [nil (name (first x))]
     (and (vector? x) (keyword? (second x))) [nil (name (second x))]
     (and (vector? x) (vector? (first x))) (table-ref (first x) schema)
     :else nil))
 
 (defn scope
-  "{alias {:table \"schema.table\" :opaque? bool}} of one statement; ctes are the query's CTE names."
+  "{alias {:table \"schema.table\" :opaque? bool :cte? bool}} of one statement; ctes are the
+   query's CTE names, which shadow a table only when the reference is written without a schema."
   [registry stmt ctes {:keys [schema] :or {schema "public"}}]
   (let [from (let [f (:from stmt)] (if (keyword? f) [f] f))
         joins (for [k [:join :left-join :inner-join :right-join :full-join :cross-join]
@@ -91,25 +104,30 @@
                 t)
         targets [(let [i (:insert-into stmt)] (if (vector? i) (first i) i)) (:update stmt) (:delete-from stmt)]]
     (into {}
-          (for [[table alias] (keep #(table-ref % schema) (concat from joins targets))]
-            [alias {:table table
-                    :opaque? (boolean (or (nil? table) (ctes (name (last (str/split table #"\.")))) (nil? (table-columns registry table))))}]))))
+          (for [[table alias written] (keep #(table-ref % schema) (concat from joins targets))
+                :let [cte? (boolean (and written (ctes written)))]]
+            [alias {:table table :cte? cte?
+                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}]))))
+
+(defn- column-hits
+  "[[alias table opaque?] ...] of the tables in scope an unqualified column may belong to."
+  [registry scope column]
+  (distinct (for [[alias {:keys [table opaque?]}] scope
+                  :when (or opaque? (contains? (table-columns registry table) column))]
+              [alias table opaque?])))
 
 (defn resolve-column
-  "{:table :column :schema} for a column keyword in a scope; :schema nil on an opaque table;
-   nil when the column resolves to no table or to several."
+  "{:table :column :schema} for a column keyword in a scope, :table the alias for an opaque
+   table and :schema nil there; nil when the column resolves to no table or to several."
   [registry scope col]
   (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))
-        [alias column] (if (str/includes? s ".") (str/split s #"\." 2) [nil s])]
-    (if alias
-      (when-let [{:keys [table opaque?]} (get scope alias)]
-        {:table (or table alias) :column column :schema (when-not opaque? (get (table-columns registry table) column))})
-      (let [hits (distinct (for [[_ {:keys [table opaque?]}] scope
-                                 :when (or opaque? (contains? (table-columns registry table) column))]
-                             [table opaque?]))]
-        (when (= 1 (count hits))
-          (let [[table opaque?] (first hits)]
-            {:table (or table column) :column column :schema (when-not opaque? (get (table-columns registry table) column))}))))))
+        [alias column] (if (str/includes? s ".") (str/split s #"\." 2) [nil s])
+        hits (if alias
+               (when-let [{:keys [table opaque?]} (get scope alias)] [[alias table opaque?]])
+               (column-hits registry scope column))]
+    (when (= 1 (count hits))
+      (let [[alias table opaque?] (first hits)]
+        {:table (or table alias) :column column :schema (when-not opaque? (get (table-columns registry table) column))}))))
 
 ;;; problems
 
@@ -123,8 +141,9 @@
     (let [[table] (table-ref (if (vector? i) (first i) i) schema)
           columns (table-columns registry table)
           values (:values stmt)
+          ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
           given (cond (and (vector? i) (vector? (second i))) (second i)
-                      (and (vector? values) (map? (first values))) (keys (first values)))
+                      (and (vector? values) (map? (first values))) (distinct (mapcat keys (filter map? values))))
           insert (when columns (get registry (#'rt/insert-name (table-key table))))
           required (when insert
                      (set (for [e (rest (#'rt/row-map insert)) :when (vector? e)
@@ -138,25 +157,33 @@
            {:kind :missing-required-column :table table :column c}))))))
 
 (defn problems
-  "The problems of one statement: unknown tables and columns, required INSERT columns
-   missing, enum literals outside the enum. Empty when the statement agrees with the registry."
+  "The problems of one statement: unknown or ambiguous tables and columns, required INSERT
+   columns missing, enum literals outside the enum (compared with, or assigned to, the
+   column). Empty when the statement agrees with the registry."
   [registry stmt ctes {:keys [schema] :or {schema "public"} :as opts}]
   (let [sc (scope registry stmt ctes opts)
-        unknown-tables (for [[_ {:keys [table]}] sc
-                             :when (and table (nil? (table-columns registry table)) (not (ctes (last (str/split table #"\.")))))]
+        unknown-tables (for [[_ {:keys [table cte?]}] sc
+                             :when (and table (not cte?) (nil? (table-columns registry table)))]
                          {:kind :unknown-table :table table})
         selected (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))] (when (vector? s) s))
         select-items (for [item selected
                            :let [col (cond (keyword? item) item
                                            (and (vector? item) (keyword? (first item))) (first item))]
                            :when (and col (not= :* col) (nil? (resolve-column registry sc col)))]
-                       {:kind :unknown-column :column col})
-        literals (for [[op col value] (filter #(and (vector? %) (keyword? (first %))) (tree-seq coll? seq (select-keys stmt [:where :having :set :values])))
-                       :when (and (#{:= :<> :in} op) (keyword? col))
+                       (if (and (nil? (namespace col)) (not (str/includes? (name col) ".")) (< 1 (count (column-hits registry sc (name col)))))
+                         {:kind :ambiguous-column :column col}
+                         {:kind :unknown-column :column col}))
+        ;; column-value pairs: comparisons in :where / :having, assignments in :set and :values
+        pairs (concat (for [[op col value] (filter #(and (vector? %) (keyword? (first %))) (tree-seq coll? seq (select-keys stmt [:where :having])))
+                            :when (and (#{:= :<> :in} op) (keyword? col))]
+                        [col value])
+                      (when (map? (:set stmt)) (:set stmt))
+                      (mapcat identity (filter map? (:values stmt))))
+        literals (for [[col value] pairs
                        :let [{s :schema} (resolve-column registry sc col)
                              values (cond (string? value) [value]
                                           (and (vector? value) (= :cast (first value)) (string? (second value))) [(second value)]
-                                          (and (= :in op) (vector? value) (every? string? value)) value)
+                                          (and (vector? value) (every? string? value)) value)
                              allowed (when s (enum-values registry s))]
                        :when (and allowed (seq values))
                        v values :when (not (contains? allowed v))]
@@ -181,6 +208,7 @@
   [registry schema {:keys [time] :or {time :inst}}]
   (rt/portable-data registry (walk/postwalk (fn [f] (cond (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst?
                                                          (and (= :instant time) (= :time/local-date-time f)) :time/instant
+                                                         (and (= :instant time) (= :time/local-date f)) 'inst?
                                                          (and (= :local time) (= :time/instant f)) :time/local-date-time
                                                          :else f))
                                             schema)))
@@ -196,11 +224,12 @@
 
 (defn arg-types
   "{symbol schema} for the symbols of a query: a symbol compared with a column has the
-   column's type, one assigned to it the column's type with NULL, one in :limit / :offset :int."
+   column's type, one assigned to it the column's type with NULL, one in :limit / :offset :int.
+   The first typed use wins; a use that gives no type (:any) never hides one that does."
   ([registry body] (arg-types registry body {}))
   ([registry body opts]
    (let [acc (atom {})
-         note! (fn [sym t] (when (symbol? sym) (swap! acc update sym #(or % t))))
+         note! (fn [sym t] (when (symbol? sym) (swap! acc update sym #(if (or (nil? %) (= :any %)) t %))))
          ctes (cte-names body)]
      (doseq [stmt (statements body)
              :let [sc (scope registry stmt ctes opts)]]
@@ -239,8 +268,9 @@
          entries (for [item selected]
                    (cond
                      (keyword? item) (when-let [{:keys [table column schema]} (resolve-column registry sc item)] (entry (key-of table column) schema))
+                     ;; a column under an alias is still keyed by its table: the driver reads the table from the field
                      (and (vector? item) (keyword? (first item)) (keyword? (second item)))
-                     (when-let [{:keys [schema]} (resolve-column registry sc (first item))] (entry (second item) schema))
+                     (when-let [{:keys [table schema]} (resolve-column registry sc (first item))] (entry (key-of table (name (second item))) schema))
                      (and (vector? item) (keyword? (second item))) (entry (second item) nil)))]
      (when (and (seq entries) (every? some? entries))
        (into [:map] entries)))))

@@ -28,6 +28,13 @@
       "an INSERT must carry the columns the insert schema requires")
   (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
          (h/check registry {:select [:id] :from [:users] :where [:= :mood [:cast "angry" :mood]]} opts)))
+  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
+         (h/check registry {:update :users :set {:mood "angry"} :where [:= :id 1]} opts)) "assigned literals too")
+  (is (= [] (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad"} {:group_id 1 :mood "sad" :score 1}]} opts))
+      "a multi-row INSERT carries the union of its columns")
+  (is (= [{:kind :ambiguous-column :column :id}] (h/check registry {:select [:id] :from [:users] :join [:groups [:= :groups.id :users.group_id]]} opts)))
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:with [[:users {:select [:id] :from [:groups]}]] :select [:nope] :from [:sample.users]} opts))
+      "a CTE shadows a table only when the reference is written without a schema")
   (is (= [] (h/check registry {:select [:id] :from [:users] :where [:in :mood ["happy" "sad"]]} opts))))
 
 (deftest types-of-parameters-and-rows
@@ -41,9 +48,13 @@
       (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]]
               [:users/nick {:optional true} [:string {:max 40 :pg/type "character varying"}]]
               [:users/closed_at {:optional true} [:time/instant {:pg/type "timestamptz"}]]
-              [:g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
-             row))
-      (is (m/validate row {:users/id 1 :g 2} malli-opts) "as malli's default registry reads it"))
+              [:users/g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
+             row)
+          "a column under an alias keeps its table in the key, as the driver does")
+      (is (m/validate row {:users/id 1 :users/g 2} malli-opts) "as malli's default registry reads it"))
+    (is (= [:map [:sub/id [:maybe :any]]] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} #{} (assoc opts :qualified? true))))
+    (is (= {'x [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]} opts))
+        "an untyped use never hides a typed one")
     (let [row (h/row-schema registry body #{} (assoc opts :nil-columns :absent))]
       (is (= [:closed_at {:optional true} ['inst? {:pg/type "timestamptz"}]] (nth row 3)) "by default time columns are inst?, which the default registry has")
       (is (m/validate row {:id 1 :g 2 :closed_at (java.util.Date.)}) "and no registry is needed"))

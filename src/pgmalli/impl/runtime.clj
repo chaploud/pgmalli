@@ -150,7 +150,8 @@
 (defn- row-schema?
   "Row schemas carry :pg/table; their inserts do too, but closed."
   [s]
-  (let [props (when (vector? s) (second (row-map s)))]
+  (let [m (when (vector? s) (row-map s))
+        props (when (vector? m) (second m))]
     (and (map? props) (string? (:pg/table props)) (not (:closed props)))))
 
 (defn- with-inserts [registry]
@@ -238,6 +239,14 @@
 
 (def ^:private int-ranges {:pg/smallint [-32768 32767] :pg/integer [-2147483648 2147483647]})
 
+(defn- attach-props
+  "Schema data with properties merged in."
+  [s p]
+  (cond (empty? p) s
+        (and (vector? s) (map? (second s))) (assoc s 1 (merge (second s) p))
+        (vector? s) (into [(first s) p] (rest s))
+        :else [s p]))
+
 (defn- portable-node [registry f]
   (cond
     (int-ranges f) (let [[lo hi] (int-ranges f)] [:int {:min lo :max hi}])
@@ -246,14 +255,14 @@
       [:int (assoc p :min (max lo (:min p lo)) :max (min hi (:max p hi)))])
     (and (vector? f) (= :pg/bytes (first f))) 'bytes?
     (and (vector? f) (= :ref (first f)) (contains? registry (last f)))
+    ;; the inlined target is converted here: prewalk walks its children, not the node itself
     (let [target (get registry (last f)) p (when (map? (second f)) (second f))]
-      (cond (not p) target
-            (and (vector? target) (map? (second target))) (assoc target 1 (merge (second target) p))
-            (vector? target) (into [(first target) p] (rest target))
-            :else [target p]))
+      (portable-node registry (attach-props target (or p {}))))
     (and (vector? f) (= :and (first f)))
-    (let [parts (remove #(and (vector? %) (#{:pg/check :pg/check-value} (first %))) (rest f))]
-      (if (= 1 (count (remove map? parts))) (first (remove map? parts)) (into [:and] parts)))
+    ;; without the CHECKs only pgmalli evaluates; an :and of one schema is that schema, its props kept
+    (let [props (when (map? (second f)) (second f))
+          parts (remove #(and (vector? %) (#{:pg/check :pg/check-value} (first %))) (if props (drop 2 f) (rest f)))]
+      (if (= 1 (count parts)) (attach-props (first parts) (or props {})) (into (if props [:and props] [:and]) parts)))
     :else f))
 
 (defn portable-data
@@ -273,17 +282,19 @@
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it: keys qualified by the table
    (:qualified? true, next.jdbc's as-maps) or not; NULL columns absent (:nil-columns :absent,
-   next.jdbc.optional) or present as nil; :kebab? true for kebab-case keys; :time :instant when
-   timestamps arrive as Instants (read-as-instant), :local when timestamptz arrives as
-   LocalDateTime (read-as-local)."
+   next.jdbc.optional) or present as nil; :kebab? true for kebab-case keys and table names;
+   :time :instant when timestamps arrive as Instants (read-as-instant, which leaves dates as
+   java.sql.Date, hence inst?), :local when timestamptz arrives as LocalDateTime (read-as-local)."
   [registry name {:keys [qualified? kebab? nil-columns time]}]
   (let [m (without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
-        table (some-> (or (:pg/table props) (:pg/view props)) (str/split #"\." 2) second)
-        key* (fn [k] (let [s (cond-> (clojure.core/name k) kebab? (str/replace "_" "-"))]
+        kebab (fn [s] (cond-> s kebab? (str/replace "_" "-")))
+        table (some-> (or (:pg/table props) (:pg/view props)) (str/split #"\." 2) second kebab)
+        key* (fn [k] (let [s (kebab (clojure.core/name k))]
                        (if (keyword? k) (if qualified? (keyword table s) (keyword s)) (if qualified? (str table "/" s) s))))
         time* (fn [s] (walk/postwalk (fn [f] (case [time f]
                                                 [:instant :time/local-date-time] :time/instant
+                                                [:instant :time/local-date] 'inst?
                                                 [:local :time/instant] :time/local-date-time
                                                 f))
                                      s))
