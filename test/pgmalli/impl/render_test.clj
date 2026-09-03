@@ -463,3 +463,12 @@
         "neither the CHECK nor the foreign key is applied: the database never checks them")
     (is (empty? unrendered))
     (is (= #{["b_check" :not-enforced] ["t_p_id_fkey" :not-enforced]} (set (map (juxt :constraint :kind) diagnostics))))))
+
+(deftest a-row-trigger-is-noted
+  (let [{:keys [diagnostics]} (r/registry (p/facts {:name "public" :types {}
+                                                    :tables {"t" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}]
+                                                                  :constraints {}
+                                                                  :triggers [{:name "t_audit" :insert true :update true :delete false}
+                                                                             {:name "t_on_delete" :insert false :update false :delete true}]}}}))]
+    (is (= [{:kind :row-trigger :trigger "t_audit" :table "public.t"}] (map #(select-keys % [:kind :trigger :table]) diagnostics))
+        "the INSERT trigger is noted, a DELETE one is no concern of a dataset")))

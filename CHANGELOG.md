@@ -7,6 +7,13 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `:diagnostics` names a table's row-level INSERT triggers: their code may reject or change
+  rows the schema accepts, which the catalog does not show.
+
+## [0.2.43] - 2026-09-03
+
+### Added
+
 - `:diagnostics` in the generated file, `pgmalli/diagnostics`, printed by `check`: states the
   database stores but no row can satisfy or that deserve a look (a partitioned table with no
   partition, an unreachable partition, `CHECK (false)`, contradicting CHECKs on a column, a

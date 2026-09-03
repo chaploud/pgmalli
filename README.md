@@ -271,7 +271,8 @@ generated files stay data.
 Some states PostgreSQL keeps are worth a look: a partitioned table with no partition (it takes
 no row), a partition its parent's bounds make unreachable, a `CHECK (false)`, CHECKs on one
 column that contradict each other, a constraint left `NOT VALID`, a unique index repeating a
-key. The generated file lists them under `:diagnostics` (`(pgmalli/diagnostics "public")`),
+key, a row-level INSERT trigger (its code may reject or change rows the schema accepts). The
+generated file lists them under `:diagnostics` (`(pgmalli/diagnostics "public")`),
 each with a `:kind`, a `:severity` and a `:confidence` (`:proven` when the catalog alone
 shows it), and `check` prints them. Generation goes on regardless: the schemas say what the
 database says.

@@ -111,7 +111,13 @@ tables AS (
            'kind', CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END,
            'columns', (SELECT COALESCE(json_agg(col ORDER BY attnum), '[]'::json) FROM cols WHERE cols.relid = c.oid),
            -- an index may bear a constraint's name (they are different namespaces), so it is keyed apart
-           'constraints', (SELECT COALESCE(json_object_agg(CASE WHEN (con->>'index')::boolean THEN con->>'name' || ' (index)' ELSE con->>'name' END, con), '{}'::json) FROM cons WHERE cons.relid = c.oid)
+           'constraints', (SELECT COALESCE(json_object_agg(CASE WHEN (con->>'index')::boolean THEN con->>'name' || ' (index)' ELSE con->>'name' END, con), '{}'::json) FROM cons WHERE cons.relid = c.oid),
+           -- row-level triggers a user wrote and left enabled: their code may reject or change a row
+           'triggers', (SELECT COALESCE(json_agg(json_build_object('name', t.tgname,
+                                                                    'insert', (t.tgtype & 4) = 4, 'update', (t.tgtype & 16) = 16, 'delete', (t.tgtype & 8) = 8)
+                                                  ORDER BY t.tgname), '[]'::json)
+                        FROM pg_catalog.pg_trigger t
+                        WHERE t.tgrelid = c.oid AND NOT t.tgisinternal AND t.tgenabled <> 'D' AND (t.tgtype & 1) = 1)
          ) AS tbl
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

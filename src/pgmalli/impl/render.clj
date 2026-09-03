@@ -380,6 +380,9 @@
                      (for [f tfacts :when (false? (:valid? f))]
                        {:kind :not-valid :confidence :proven :severity :info :constraint (:constraint f)
                         :message (str (:constraint f) " is NOT VALID: rows from before it may violate it, new rows may not")})
+                     (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))]
+                       {:kind :row-trigger :confidence :proven :severity :info :trigger (:name f)
+                        :message (str "trigger " (:name f) " runs for every inserted row: its code may reject or change rows the schema accepts")})
                      (for [f tfacts :when (= :not-enforced (:fact f))]
                        {:kind :not-enforced :confidence :proven :severity :info :constraint (:constraint f)
                         :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})

@@ -9,7 +9,8 @@
       :tables {\"users\" {:name \"users\" :kind \"TABLE\"
                         :columns [{:name :position :data_type :type_schema :is_nullable
                                    :default_value :generated_expr :identity :max_length :precision :scale}]
-                        :constraints {\"users_age_check\" {:name :type :columns :check_clause :is_valid :nulls_not_distinct :references}}}}
+                        :constraints {\"users_age_check\" {:name :type :columns :check_clause :is_valid :nulls_not_distinct :references}}
+                        :triggers [{:name :insert :update :delete}]}}
       :types {\"mood\" {:kind \"ENUM\" :enum_values [...]}
               \"email\" {:kind \"DOMAIN\" :base_type :not_null :default :constraints [{:name :definition}]}}}
    :kind is \"TABLE\", \"VIEW\" or \"MATERIALIZED VIEW\" (views have columns and no constraints);
