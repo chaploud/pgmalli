@@ -7,7 +7,8 @@
      bb -m pgmalli.main ..."
   (:require [clojure.edn :as edn]
             [pgmalli.generate :as generate]
-            [pgmalli.impl.generate :as gen]))
+            [pgmalli.impl.generate :as gen]
+            [pgmalli.impl.shape :as shape]))
 
 (defn- read-config [path]
   (let [path (or path "pgmalli.edn")]
@@ -18,7 +19,7 @@
 
 (defn- counts [data]
   (let [entries (vals (:registry data))
-        kind (fn [s] (let [m (if (and (vector? s) (= :and (first s))) (second s) s)
+        kind (fn [s] (let [m (when (vector? s) (shape/row-map s))
                            p (when (and (vector? m) (map? (second m))) (second m))]
                        (cond (:pg/view p) :view (:pg/table p) :table (and (vector? s) (= :enum (first s))) :enum :else :domain)))
         f (frequencies (map kind entries))]

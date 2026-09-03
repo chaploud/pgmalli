@@ -8,7 +8,10 @@
    (pgmalli.impl.pattern) are the stable contract; pgmalli.impl.* may change without notice."
   (:require [malli.core :as m]
             [malli.registry :as mr]
-            [pgmalli.impl.runtime :as rt]))
+            [pgmalli.impl.jdbc :as jdbc]
+            [pgmalli.impl.portable :as portable]
+            [pgmalli.impl.registry :as reg]
+            [pgmalli.impl.shape :as shape]))
 
 (defn generated
   "The generated file of a schema (from the classpath), as data: {:schema :database-version
@@ -21,14 +24,14 @@
    NOT ENFORCED constraint, a unique index repeating a key, a row-level INSERT trigger), each
    {:table :kind :confidence :severity :message ...}."
   [schema-name]
-  (rt/read-generated schema-name))
+  (reg/read-generated schema-name))
 
 (defn registry
   "malli registry holding the generated schemas of the named schemas (read from the classpath;
    generated data maps are accepted too), insert schemas derived from them, plus malli's
    defaults, malli.util and malli.experimental.time."
   [& schemas]
-  (apply rt/registry schemas))
+  (apply reg/registry schemas))
 
 (defn install!
   "Makes the registry of the named schemas malli's default registry (it holds malli's own
@@ -40,7 +43,7 @@
    before, which malli.registry/set-default-registry! puts back."
   [& schemas]
   (let [before (mr/-schemas m/default-registry)]
-    (mr/set-default-registry! (apply rt/registry schemas))
+    (mr/set-default-registry! (apply reg/registry schemas))
     before))
 
 (defn columns
@@ -48,17 +51,17 @@
    malli.util's select-keys, optional-keys and the like take (the [:and ...] of a table with
    constraints is not a map to them)."
   [registry name]
-  (rt/columns registry name))
+  (reg/columns registry name))
 
 (defn column
   "The schema of one column of a row or insert schema, as data, [:maybe ...] included."
   [registry name col]
-  (rt/column registry name col))
+  (portable/column registry name col))
 
 (defn non-null
   "A column schema without its [:maybe ...]: what a value must be when it is not NULL."
   [schema]
-  (rt/non-null schema))
+  (shape/non-null schema))
 
 (defn portable
   "The named schema as data malli's default registry reads (plus malli.experimental.time):
@@ -66,14 +69,7 @@
    hints dropped, the CHECKs only pgmalli evaluates left out. For :malli/schema metadata and
    other places the registry cannot follow."
   [registry name]
-  (rt/portable registry name))
-
-(def ^:private builders
-  "next.jdbc result set builders -> how they shape a row."
-  {"as-maps" {:qualified? true} "as-unqualified-maps" {} "as-lower-maps" {:qualified? true} "as-unqualified-lower-maps" {}
-   "as-modified-maps" {:qualified? true} "as-unqualified-modified-maps" {}
-   "as-kebab-maps" {:qualified? true :kebab? true} "as-unqualified-kebab-maps" {:kebab? true}
-   "as-arrays" nil "as-unqualified-arrays" nil "as-lower-arrays" nil "as-unqualified-lower-arrays" nil})
+  (portable/portable registry name))
 
 (defn read-options
   "The reading options (see as-read) of a next.jdbc result set builder named by its symbol:
@@ -81,11 +77,7 @@
    and the like. nil for a builder that builds no map (as-arrays); an error for one pgmalli
    does not know."
   [builder]
-  (let [ns (namespace builder) n (name builder)]
-    (when-not (contains? builders n)
-      (throw (ex-info (str "not a next.jdbc result set builder pgmalli knows: " builder) {:builder builder})))
-    (when-let [o (get builders n)]
-      (cond-> o (= "next.jdbc.optional" ns) (assoc :nil-columns :absent)))))
+  (jdbc/read-options builder))
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it. Options, the ones
@@ -96,11 +88,11 @@
    inst?) or :local (read-as-local: timestamptz as LocalDateTime); without :time every date and
    timestamp is inst?, which malli's default registry reads."
   [registry name opts]
-  (rt/as-read registry name opts))
+  (portable/as-read registry name opts))
 
 (defn transformer
   "malli transformer decoding JDBC and string values into the registry's types. Instants and
    java.util.Dates that land in date or timestamp (without time zone) columns are read in
    :zone, default the JVM's; JSON text in json and jsonb columns is parsed."
-  ([] (rt/transformer))
-  ([opts] (rt/transformer opts)))
+  ([] (jdbc/transformer))
+  ([opts] (jdbc/transformer opts)))

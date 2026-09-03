@@ -12,7 +12,7 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.generate]
-            [pgmalli.impl.runtime]
+            [pgmalli.impl.registry]
             [pgmalli.data :as data]
             [pgmalli.impl.json :as json]))
 
@@ -497,7 +497,7 @@
     (is (= {"public.t" [{:id 1}]} (data/read-dataset path)) "the tables alone are the value")))
 
 (deftest regex-checks-generate-what-matches
-  (when @pgmalli.impl.runtime/regex-generation?
+  (when @pgmalli.impl.registry/regex-generation?
    (let [reg (pgmalli/registry {:database-version "x"
                                :registry {:pg.public/email [:and :string [:re "^[^@]+@[^@]+$"]]
                                           :pg.public/t [:map {:pg/table "public.t"}
@@ -517,7 +517,10 @@
     (is (m/validate :pg.sample/groups {:id 1 :name "g"} {:registry composite}))
     (is (= [] (h/check composite {:select [:id] :from [:groups]} {:schema "sample"})))
     (is (= 2 (count (keys (tcg/generate (data/dataset-generator composite {:rows 2}) 20 1)))) "datasets from a composite registry")
-    (is (= (pgmalli/column registry :pg.sample/users :nick) (pgmalli/column composite :pg.sample/users :nick)))))
+    (is (= (pgmalli/column registry :pg.sample/users :nick) (pgmalli/column composite :pg.sample/users :nick)))
+    (is (= (pgmalli/portable registry :pg.sample/users) (pgmalli/portable composite :pg.sample/users)) "portable inlines references through a composite registry")
+    (is (= (h/query-schema registry '[id] {:select [:id] :from [:groups]} {:schema "sample"})
+           (h/query-schema composite '[id] {:select [:id] :from [:groups]} {:schema "sample"})))))
 
 (deftest text-decodes-into-the-bounded-numbers
   (let [reg (pgmalli/registry {:database-version "x"

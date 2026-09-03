@@ -9,7 +9,7 @@
       :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise"
   (:require [clojure.java.io :as io]
             [pgmalli.impl.generate :as gen]
-            [pgmalli.impl.runtime :as rt]))
+            [pgmalli.impl.shape :as shape]))
 
 (defn generate!
   "Writes the generated file for every schema in the config. Returns {schema path}."
@@ -19,9 +19,9 @@
 (defn- row-parts
   "{:columns {name entry} :props :checks} of a row or insert schema, nil for other entries."
   [s]
-  (let [m (if (and (vector? s) (= :and (first s))) (second s) s)]
+  (let [m (shape/row-map s)]
     (when (and (vector? m) (= :map (first m)) (map? (second m)))
-      {:columns (into {} (map (fn [[k p s]] [k (if (seq p) [p s] s)])) (rt/column-entries s))
+      {:columns (into {} (map (fn [[k p s]] [k (if (seq p) [p s] s)])) (shape/column-entries s))
        :props (second m)
        :checks (when (= :and (first s)) (vec (drop 2 s)))})))
 
@@ -42,7 +42,7 @@
                                         {:name name :column k :property pk :file (get (props a) pk) :db (get (props b) pk)})
                                       [{:name name label k :file a :db b}])]
                               d))
-        order (fn [s] (map first (rt/column-entries s)))]
+        order (fn [s] (map first (shape/column-entries s)))]
     (cond (= file db) nil
           (and f d) (let [ds (concat (by :columns :column) (by :props :property)
                                      (when (not= (:checks f) (:checks d)) [{:name name :checks true :file (:checks f) :db (:checks d)}]))]

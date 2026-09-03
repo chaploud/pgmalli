@@ -15,7 +15,8 @@
    timestamp columns are inst? by default; :time :instant or :local gives the
    malli.experimental.time types, as as-read does."
   (:require [clojure.string :as str]
-            [pgmalli.impl.runtime :as rt]))
+            [pgmalli.impl.portable :as portable]
+            [pgmalli.impl.shape :as shape]))
 
 ;;; tables and columns of the registry
 
@@ -30,9 +31,20 @@
   "[[column-name schema] ...] of a table (or view) in the registry, in its order; nil when it
    is not there."
   [registry table]
-  (some->> (get (rt/schemas-of registry) (table-key table)) rt/column-entries (map (fn [[k _ s]] [(name k) s]))))
+  (some->> (get (::schemas registry) (table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s]))))
 
-(defn- table-columns [registry table] (some->> (column-entries registry table) (into {})))
+(defn- reading
+  "The registry as this namespace reads it: its schemas taken once (a composite registry merges
+   them on every lookup) and the columns of a table memoized, since a column is looked for in
+   every table in scope. The public functions take a registry and make one of it; one passed on
+   again is left as it is."
+  [registry]
+  (if (::schemas registry)
+    registry
+    (let [r {::schemas (shape/schemas-of registry)}]
+      (assoc r ::table-columns (memoize #(some->> (column-entries r %) (into {})))))))
+
+(defn- table-columns [registry table] ((::table-columns registry) table))
 
 ;;; statements, CTEs and scope
 
@@ -146,7 +158,8 @@
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool}} of one statement; ctes are the
    query's CTE names, which shadow a table only when the reference is written without a schema."
   [registry stmt ctes {:keys [schema] :or {schema "public"}}]
-  (let [refs (concat (for [k [:from :using :cross-join] :let [f (get stmt k)] :when f, t (if (keyword? f) [f] f)] t)
+  (let [registry (reading registry)
+        refs (concat (for [k [:from :using :cross-join] :let [f (get stmt k)] :when f, t (if (keyword? f) [f] f)] t)
                      (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] t)
                      [(insert-target stmt) (:update stmt) (:delete-from stmt)])
         sc (into {}
@@ -227,7 +240,8 @@
    nested statement), :table the alias for an opaque table and :schema nil there; nil when
    the column resolves to no table or to several."
   [registry scope col]
-  (let [hits (column-hits registry scope col)]
+  (let [registry (reading registry)
+        hits (column-hits registry scope col)]
     (when (= 1 (count hits))
       (let [[alias table opaque?] (first hits)
             column (second (split-column col))]
@@ -303,8 +317,8 @@
 ;;; problems
 
 (defn- enum-values [registry schema]
-  (let [s (rt/non-null schema)
-        s (if (and (vector? s) (= :ref (first s))) (get (rt/schemas-of registry) (last s)) s)]
+  (let [s (shape/non-null schema)
+        s (if (and (vector? s) (= :ref (first s))) (get (::schemas registry) (last s)) s)]
     (when (and (vector? s) (= :enum (first s))) (set (remove map? (rest s))))))
 
 (defn- star? [col] (= "*" (second (split-column col))))
@@ -336,7 +350,7 @@
           ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
           given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
           given-names (set (map name given))
-          required (set (for [[k p] (some->> (table-key table) rt/insert-name (get (rt/schemas-of registry)) rt/column-entries)
+          required (set (for [[k p] (some->> (table-key table) shape/insert-name (get (::schemas registry)) shape/column-entries)
                               :when (not (:optional p))]
                           (name k)))]
       (concat
@@ -369,7 +383,8 @@
    statement, the chain of its own and the enclosing ones. Empty when the statement agrees
    with the registry."
   [registry stmt scope {:keys [schema] :or {schema "public"}}]
-  (let [scopes (if (map? scope) [scope] scope)]
+  (let [registry (reading registry)
+        scopes (if (map? scope) [scope] scope)]
     (vec (concat (for [[_ {:keys [table cte?]}] (first scopes)
                        :when (and table (not cte?) (nil? (table-columns registry table)))]
                    {:kind :unknown-table :table table})
@@ -382,7 +397,8 @@
    data) cannot have its unknown tables judged, so those are left out for it."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (let [opaque? (some (fn [stmt] (some #(let [w (get stmt %)] (and (some? w) (not (vector? w)))) [:with :with-recursive])) (statements body))
+   (let [registry (reading registry)
+         opaque? (some (fn [stmt] (some #(let [w (get stmt %)] (and (some? w) (not (vector? w)))) [:with :with-recursive])) (statements body))
          found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body opts))]
      (vec (if opaque? (remove #(= :unknown-table (:kind %)) found) found)))))
 
@@ -393,14 +409,14 @@
    interval is a driver object, :any."
   [registry schema {:keys [time] :or {time :inst}}]
   (let [t (if (vector? schema) (first schema) schema)]
-    (rt/portable-data registry (rt/read-time time (if (= :time/duration t) :any schema)))))
+    (portable/portable-data (::schemas registry) (shape/read-time time (if (= :time/duration t) :any schema)))))
 
 (defn- column-type
   "The type of a column for a value compared with it (NULL never matches, so no [:maybe]) or,
    with nullable?, assigned to it."
   [registry sc col nullable? opts]
   (if-let [s (:schema (resolve-column registry sc col))]
-    (let [inner (read-shape registry (rt/non-null s) opts)]
+    (let [inner (read-shape registry (shape/non-null s) opts)]
       (if (and nullable? (= :maybe (first s))) [:maybe inner] inner))
     :any))
 
@@ -411,7 +427,8 @@
    never hides one that does."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema "public"} :as opts}]
-   (let [typed (for [[stmt sc] (statement-chains registry body opts)
+   (let [registry (reading registry)
+         typed (for [[stmt sc] (statement-chains registry body opts)
                      pair (concat (for [[op col value] (comparisons stmt)
                                         :let [t (column-type registry sc col false opts)]]
                                     [value (if (and (= :in op) (not= :any t)) [:sequential t] t)])
@@ -427,12 +444,13 @@
    :* and :t/* are the columns of the tables. nil when a selected column cannot be resolved."
   ([registry stmt ctes] (row-schema registry stmt ctes {}))
   ([registry stmt ctes {:keys [qualified? kebab? nil-columns] :as opts}]
-   (let [sc (scope registry stmt ctes opts)
+   (let [registry (reading registry)
+         sc (scope registry stmt ctes opts)
          kebab (fn [s] (cond-> s kebab? (str/replace "_" "-")))
          key-of (fn [table column] (if qualified? (keyword (kebab (last (str/split table #"\."))) (kebab column)) (keyword (kebab column))))
          entry (fn [k schema]
                  (let [nullable? (or (nil? schema) (= :maybe (first schema)))
-                       inner (if schema (read-shape registry (rt/non-null schema) opts) :any)]
+                       inner (if schema (read-shape registry (shape/non-null schema) opts) :any)]
                    (cond (not nullable?) [k inner]
                          (= :absent nil-columns) [k {:optional true} inner]
                          :else [k [:maybe inner]])))
@@ -458,7 +476,8 @@
    for a function returning one row or nil. A return that cannot be resolved is :any."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
-   (let [types (arg-types registry body opts)
+   (let [registry (reading registry)
+         types (arg-types registry body opts)
          row (when (map? body) (row-schema registry body (cte-names body) opts))]
      [:=> (into [:cat] (map #(get types % :any)) args)
       (cond (nil? row) :any (= :one result) [:maybe row] :else [:sequential row])])))

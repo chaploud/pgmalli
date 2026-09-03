@@ -4,21 +4,22 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
-            [pgmalli.impl.runtime :as rt])
+            [pgmalli.impl.dataset :as ds]
+            [pgmalli.impl.insert :as insert])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetTime)))
 
 (defn dataset-schema
   "Schema for {\"schema.table\" [row ...]} datasets: rows, primary keys, unique constraints and
    foreign keys checked across the registry's tables."
   [registry]
-  (rt/dataset-schema registry))
+  (ds/dataset-schema registry))
 
 (defn dataset-generator
   "test.check generator of datasets satisfying dataset-schema. Options: :rows wanted per table
    (default 5), :except tables (\"schema.table\") to leave out (no kept table may reference them).
    Tables that came out short are listed in the dataset's metadata, see short-tables."
-  ([registry] (rt/dataset-generator registry))
-  ([registry opts] (rt/dataset-generator registry opts)))
+  ([registry] (ds/dataset-generator registry))
+  ([registry opts] (ds/dataset-generator registry opts)))
 
 (defn short-tables
   "{\"schema.table\" {:wanted n :got n :reasons [[reason count] ...]}} for the tables of a
@@ -35,8 +36,8 @@
    java.time ones); a column a row lacks is DEFAULT. A column the table does not have is an
    error. Option :on-conflict :nothing adds ON CONFLICT DO NOTHING, for a database that already
    holds some of the rows (seeded by migrations, say)."
-  ([registry dataset] (rt/inserts registry dataset {}))
-  ([registry dataset opts] (rt/inserts registry dataset opts)))
+  ([registry dataset] (insert/inserts registry dataset {}))
+  ([registry dataset opts] (insert/inserts registry dataset opts)))
 
 ;;; datasets as EDN: the values EDN has no literal for go under pgmalli's tags
 

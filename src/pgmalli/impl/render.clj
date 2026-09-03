@@ -10,7 +10,7 @@
    across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments,
    and [:pg/check expr] for everything else pgmalli.impl.eval can evaluate; bytea columns with a
    length CHECK are [:pg/bytes {:min :max}]. Insert schemas are
-   derived from row schemas when a registry is loaded (pgmalli.impl.runtime).
+   derived from row schemas when a registry is loaded (pgmalli.impl.registry).
 
    Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique
    ({:columns} each, :nulls-distinct false for NULLS NOT DISTINCT) and :pg/foreign-keys

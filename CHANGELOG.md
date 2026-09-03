@@ -7,6 +7,20 @@ All notable changes to this project are documented here. The format follows
 
 ### Changed
 
+- `pgmalli.impl.runtime` is split by concern into `pgmalli.impl.shape` (schema data as shapes),
+  `pgmalli.impl.pgtypes` (the `:pg/*` schema types), `pgmalli.impl.registry` (generated files as
+  registries), `pgmalli.impl.portable`, `pgmalli.impl.jdbc`, `pgmalli.impl.dataset` and
+  `pgmalli.impl.insert`. The public namespaces are unchanged.
+
+### Fixed
+
+- `portable`, and `pgmalli.honeysql`'s `row-schema` and `query-schema`, threw on a composite
+  registry (`malli.registry/composite-registry`) instead of inlining its references.
+
+## [0.2.44] - 2026-09-04
+
+### Changed
+
 - Three namespaces by what they need: `pgmalli.core` reads the generated files (`registry`,
   `generated`, `install!`, `columns`, `column`, `non-null`, `portable`, `as-read`,
   `read-options`, `transformer`); `pgmalli.generate` needs psql (`generate!`, `stale`, `check`);

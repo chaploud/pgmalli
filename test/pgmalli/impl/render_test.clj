@@ -6,7 +6,8 @@
             [malli.util :as mu]
             [pgmalli.impl.pattern :as p]
             [pgmalli.impl.render :as r]
-            [pgmalli.impl.runtime :as rt]))
+            [pgmalli.impl.pgtypes :as pgtypes]
+            [pgmalli.impl.registry :as reg]))
 
 (def ^:private schema
   {:name "public"
@@ -44,8 +45,8 @@
 (def ^:private facts (p/facts schema))
 
 (defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas)
-                                 {:pg/check rt/check-schema :pg/check-value rt/check-value-schema :pg/bytes rt/bytes-schema
-                                  :pg/smallint rt/smallint-schema :pg/integer rt/integer-schema :pg/numeric rt/numeric-schema} r))
+                                 {:pg/check pgtypes/check-schema :pg/check-value pgtypes/check-value-schema :pg/bytes pgtypes/bytes-schema
+                                  :pg/smallint pgtypes/smallint-schema :pg/integer pgtypes/integer-schema :pg/numeric pgtypes/numeric-schema} r))
 
 (deftest row-schema
   (let [{:keys [registry unrendered]} (r/registry facts)
@@ -249,7 +250,7 @@
       (is (m/validate :pg.public/t {:a 1.5M :b 1M :c 32767 :d nil :e nil} {:registry reg}))
       (is (not (m/validate :pg.public/t {:a 1.5M :b 1M :c 32768 :d nil :e nil} {:registry reg})) "smallint keeps its range")
       (is (not (m/validate :pg.public/t {:a 1.5M :b 1M :c 1 :d nil :e 2147483648} {:registry reg})) "so does integer")
-      (is (every? #(<= -32768 (:c %) 32767) (mg/sample :pg.public/t {:registry (rt/registry {:database-version "x" :registry registry}) :size 20}))
+      (is (every? #(<= -32768 (:c %) 32767) (mg/sample :pg.public/t {:registry (reg/registry {:database-version "x" :registry registry}) :size 20}))
           "and generates within it (the loaded registry's hints keep the bounded numeric from failing the search)")))
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "digest" :position 1 :data_type "bytea" :is_nullable false}]
