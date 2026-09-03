@@ -437,6 +437,10 @@
        :decoders {:any {:compile (fn [schema _]
                                   (when (#{"json" "jsonb"} (:pg/type (m/properties schema)))
                                     (fn [x] (if (string? x) (json/parse x) x))))}
+                  ;; the bounded numbers, from text as :int and :double are
+                  :pg/integer (fn [x] (if (string? x) (or (parse-long x) x) x))
+                  :pg/smallint (fn [x] (if (string? x) (or (parse-long x) x) x))
+                  :pg/numeric (fn [x] (if (string? x) (try (bigdec x) (catch Exception _ x)) x))
                   :time/instant instant
                   :time/local-date (fn [x] (cond (instance? java.sql.Date x) (.toLocalDate ^java.sql.Date x)
                                                  (or (instance? java.util.Date x) (instance? java.time.Instant x)) (.toLocalDate (.atZone ^java.time.Instant (instant x) zone))

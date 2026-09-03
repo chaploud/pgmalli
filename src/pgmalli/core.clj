@@ -44,7 +44,9 @@
     before))
 
 (defn columns
-  "The [:map ...] of a row or insert schema, without the table-level constraints."
+  "The [:map ...] of a row or insert schema, without the table-level constraints: what
+   malli.util's select-keys, optional-keys and the like take (the [:and ...] of a table with
+   constraints is not a map to them)."
   [registry name]
   (rt/columns registry name))
 

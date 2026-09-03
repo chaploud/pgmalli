@@ -166,14 +166,18 @@
    does not show: its chain ends in :open, a column it cannot resolve is taken to be the
    enclosing statement's, and every CTE the query defines anywhere is visible to it."
   [registry body opts]
-  (letfn [(walk [x outer ctes in-vector?]
-            (cond (statement? x) (let [open? (and (empty? outer) in-vector?)
+  (letfn [(walk [x outer ctes in-vector? under?]
+            (cond (statement? x) (let [open? (and (empty? outer) in-vector? (not under?))
                                        ctes (into (if open? (cte-names body) ctes) (keep cte-name) (cte-entries x))
                                        outer (if open? (list :open) outer)
                                        chain (cons (scope registry x ctes opts) outer)]
-                                   (cons [x chain] (mapcat #(walk % chain ctes false) (vals x))))
-                  (coll? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x))) (seq x))))]
-    (walk body () (free-cte-names body) false)))
+                                   (cons [x chain]
+                                         (concat
+                                          ;; INSERT ... SELECT: the SELECT does not see the table inserted into
+                                          (walk (:insert-into x) outer ctes false true)
+                                          (mapcat #(walk % chain ctes false true) (vals (dissoc x :insert-into))))))
+                  (coll? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x)) under?) (seq x))))]
+    (walk body () (free-cte-names body) false false)))
 
 (defn- split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table, :b does not."
@@ -270,8 +274,12 @@
    symbol, rows passed in, saying nothing about the columns)."
   [stmt]
   (let [values (:values stmt)
-        columns (:columns (insert-parts stmt))]
+        columns (:columns (insert-parts stmt))
+        do-update (:do-update-set stmt)]
     (concat (when (map? (:set stmt)) (:set stmt))
+            ;; ON CONFLICT DO UPDATE SET: a map of assignments, or the columns taken from EXCLUDED
+            (cond (map? do-update) do-update
+                  (vector? do-update) (for [c do-update :when (keyword? c)] [c nil]))
             (when (vector? values)
               (concat (mapcat identity (filter map? values))
                       ;; positional rows under the listed columns
@@ -292,8 +300,16 @@
 
 (defn- star? [col] (= "*" (second (split-column col))))
 
+(defn- ordering-columns
+  "The columns :order-by and :group-by name as they are (:col, or [:col :asc]); expressions
+   there are not read."
+  [stmt]
+  (concat (for [c (:group-by stmt) :when (column-keyword? c)] c)
+          (for [o (:order-by stmt) :let [c (if (vector? o) (first o) o)] :when (column-keyword? c)] c)))
+
 (defn- column-problems [registry sc stmt schema]
   (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
+                                      (for [c (ordering-columns stmt)] [c sc])
                                       (for [[_ c] (comparisons stmt)] [c sc])
                                       (for [c (:columns (insert-parts stmt))] [c (target-scope sc stmt schema)])
                                       (for [[c] (assignments stmt)] [c (target-scope sc stmt schema)])))
@@ -337,8 +353,9 @@
 (defn problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
    or compared that are unknown, or ambiguous (unqualified and in more than one table in
-   scope, those under :candidates); required INSERT columns missing, or a row of :values not
-   as long as :columns; enum literals outside the enum (compared with,
+   scope, those under :candidates), in :select, :where, :having, join conditions, :set, :values,
+   ON CONFLICT DO UPDATE SET, :group-by and :order-by (bare columns there); required INSERT
+   columns missing, or a row of :values not as long as :columns; enum literals outside the enum (compared with,
    or assigned to, the column). scope is the statement's (from scope) or, for a nested
    statement, the chain of its own and the enclosing ones. Empty when the statement agrees
    with the registry."

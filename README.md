@@ -163,7 +163,7 @@ map `registry` returns, or a `malli.registry/composite-registry` of it and your 
 (pgmalli/registry "public" "auth")          ; several schemas, plus malli's defaults, malli.util and malli.experimental.time
 (pgmalli/generated "public")                ; the file as data: :schema :database-version :diagnostics :registry :unrendered :skipped
 (pgmalli/install! "public")                 ; the registry as malli's default one: :pg.public/users everywhere, no registry to pass
-(pgmalli/columns registry :pg.public/users) ; the [:map ...] alone, for malli.util
+(pgmalli/columns registry :pg.public/users) ; the [:map ...] alone: what malli.util's select-keys, optional-keys and the like take
 (m/decode :pg.public/users jdbc-row {:registry registry} (pgmalli/transformer))
                                             ; JDBC (java.sql.Date / Timestamp, Instant) and string values into the registry's types
 (pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})

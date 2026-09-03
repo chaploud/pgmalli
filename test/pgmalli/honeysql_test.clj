@@ -165,3 +165,16 @@
   (is (= [:=> [:cat [:int {:pg/identity :always :pg/type "bigint"}]] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40}]]]]]]
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
+
+(deftest the-fifth-round-of-shapes
+  (is (= [{:kind :unknown-column :column :name}]
+         (h/check registry {:insert-into [:groups {:select [:id :name] :from [:users]}]} opts))
+      "the SELECT of an INSERT ... SELECT does not see the table inserted into")
+  (is (= [{:kind :unknown-column :column :nope}]
+         (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:nope 1}} opts))
+      "ON CONFLICT DO UPDATE SET assigns columns too")
+  (is (= [{:kind :unknown-column :column :nope}]
+         (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set [:name :nope]} opts)))
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:id] :from [:users] :order-by [[:nope :asc]]} opts)))
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:group_id] :from [:users] :group-by [:nope]} opts)))
+  (is (= [] (h/check registry {:select [:group_id] :from [:users] :group-by [[:lower :nick]] :order-by [[[:count :*] :desc]]} opts)) "expressions there are not read"))
