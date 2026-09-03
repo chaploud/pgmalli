@@ -27,21 +27,26 @@
                                     :gen/gen (fmap byte-array (vector-of byte-gen (or min 0) (or max (+ (or min 0) 16))))}
                   :min 0 :max 0}))}))
 
+(def int-ranges
+  "The range each integer type pgmalli registers holds (a bigint is exactly a long, so it is :int)."
+  {:pg/smallint [-32768 32767] :pg/integer [-2147483648 2147483647]})
+
 (defn- bounded-int
   "A schema type for an integer type of PostgreSQL: its range, narrowed by :min and :max
    properties from CHECKs, generated within :gen/min and :gen/max when given."
-  [type lo hi]
-  (m/-simple-schema
-   {:type type
-    :compile (fn [{:keys [min max] gen-min :gen/min gen-max :gen/max} _ _]
-               (let [lo (clojure.core/max lo (or min lo)) hi (clojure.core/min hi (or max hi))
-                     large-integer* (requiring-resolve 'clojure.test.check.generators/large-integer*)]
-                 {:pred (fn [v] (and (int? v) (<= lo v hi)))
-                  :type-properties {:error/message (str "should be an integer between " lo " and " hi)
-                                    :gen/gen (large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})}
-                  :min 0 :max 0}))}))
+  [type]
+  (let [[lo hi] (int-ranges type)]
+    (m/-simple-schema
+     {:type type
+      :compile (fn [{:keys [min max] gen-min :gen/min gen-max :gen/max} _ _]
+                 (let [lo (clojure.core/max lo (or min lo)) hi (clojure.core/min hi (or max hi))
+                       large-integer* (requiring-resolve 'clojure.test.check.generators/large-integer*)]
+                   {:pred (fn [v] (and (int? v) (<= lo v hi)))
+                    :type-properties {:error/message (str "should be an integer between " lo " and " hi)
+                                      :gen/gen (large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})}
+                    :min 0 :max 0}))})))
 
-(def smallint-schema (bounded-int :pg/smallint -32768 32767))
+(def smallint-schema (bounded-int :pg/smallint))
 
 (def numeric-schema
   "[:pg/numeric {:precision p :scale s}]: a BigDecimal a numeric(p, s) column stores: rounded to
@@ -64,7 +69,7 @@
                                                                     :max (clojure.core/min bound (if gen-max (scaled gen-max) bound))}))}
                   :min 0 :max 0}))}))
 
-(def integer-schema (bounded-int :pg/integer -2147483648 2147483647))
+(def integer-schema (bounded-int :pg/integer))
 
 (def check-value-schema
   "[:pg/check-value expr]: a domain CHECK, the value standing for VALUE."
@@ -74,4 +79,7 @@
                (let [pass? (check/checker expr)]
                  {:pred (fn [v] (pass? {:VALUE v})) :min 1 :max 1}))}))
 
-(def int-ranges {:pg/smallint [-32768 32767] :pg/integer [-2147483648 2147483647]})
+(def schemas
+  "The schema types pgmalli registers, by name."
+  {:pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
+   :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema})

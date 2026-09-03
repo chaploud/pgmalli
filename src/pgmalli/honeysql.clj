@@ -20,18 +20,11 @@
 
 ;;; tables and columns of the registry
 
-(defn- table-key
-  "\"public.users\" -> :pg.public/users (a string key when the names are not plain identifiers)."
-  [table]
-  (let [[schema t] (str/split table #"\." 2)
-        plain? #(re-matches #"[A-Za-z_][A-Za-z0-9_]*" %)]
-    (if (and (plain? schema) (plain? t)) (keyword (str "pg." schema) t) (str "pg." schema "/" t))))
-
 (defn- column-entries
   "[[column-name schema] ...] of a table (or view) in the registry, in its order; nil when it
    is not there."
   [registry table]
-  (some->> (get (::schemas registry) (table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s]))))
+  (some->> (get (::schemas registry) (shape/table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s]))))
 
 (defn- reading
   "The registry as this namespace reads it: its schemas taken once (a composite registry merges
@@ -350,7 +343,7 @@
           ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
           given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
           given-names (set (map name given))
-          required (set (for [[k p] (some->> (table-key table) shape/insert-name (get (::schemas registry)) shape/column-entries)
+          required (set (for [[k p] (some->> (shape/table-key table) shape/insert-name (get (::schemas registry)) shape/column-entries)
                               :when (not (:optional p))]
                           (name k)))]
       (concat

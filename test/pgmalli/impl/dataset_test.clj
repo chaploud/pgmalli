@@ -1,20 +1,15 @@
-(ns pgmalli.runtime-test
-  "The application side, on the checked-in generated files test/resources/pgmalli/{sample,other}.edn."
-  (:require [clojure.test :refer [deftest is testing]]
-            [clojure.string :as str]
+(ns pgmalli.impl.dataset-test
+  "Datasets checked and generated, on the checked-in test/resources/pgmalli/sample.edn."
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [clojure.test.check.generators :as tcg]
-            [malli.generator :as mg]
             [malli.core :as m]
-            [malli.registry]
             [malli.error :as me]
-            malli.experimental.time
-            honey.sql
+            [malli.generator :as mg]
             [pgmalli.core :as pgmalli]
-            [pgmalli.honeysql :as h]
-            [pgmalli.generate]
-            [pgmalli.impl.registry]
             [pgmalli.data :as data]
-            [pgmalli.impl.json :as json]))
+            [pgmalli.impl.json :as json]
+            [pgmalli.impl.registry]))
 
 (def registry (pgmalli/registry "sample"))
 (def opts {:registry registry})
@@ -22,92 +17,6 @@
 (def ^:private user
   {:id 1 :group_id 1 :group_name nil :updated_at nil :mood "sad" :nick nil :born nil :closed_at (java.time.Instant/now)
    :referrer_id nil :seq 1 :nick_upper nil :score 1 :total 2})
-
-(deftest registry-from-classpath
-  (is (m/validate :pg.sample/users user opts))
-  (is (= {:pg/table "sample.users" :pg/primary-key ["id"]
-          :pg/foreign-keys [{:columns ["group_id" "group_name"] :table "sample.groups" :to ["id" "name"]}
-                            {:columns ["group_id"] :table "sample.groups" :to ["id"]}
-                            {:columns ["referrer_id"] :table "sample.users" :to ["id"]}]}
-         (m/properties (pgmalli/columns registry :pg.sample/users))))
-  (is (= {:closed_at ["closed_check"]}
-         (me/humanize (m/explain :pg.sample/users (assoc user :closed_at nil) opts)))
-      "errors name the constraint")
-  (is (= ["score_check"]
-         (me/humanize (m/explain :pg.sample/users (assoc user :score 3) opts))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope")))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "t"} [:a :int]]}}))
-      "files from before the schema-qualified :pg/table are refused, not half-read")
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/unique [["a"]]} [:a :int]]}}))
-      "so are files with the older key shapes"))
-
-(deftest insert-schemas
-  (let [insert (fn [row] (m/validate :pg.sample.users/insert row opts))]
-    (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1}) "defaults, serials and nullable columns may be omitted")
-    (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now)})) "score has no default")
-    (is (not (insert {:id 1 :group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1})) "identity ALWAYS cannot be inserted")
-    (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :nick_upper "X"})) "nor a generated column")
-    (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :seq 7 :total 9}) "serials and defaults may be given")
-    (is (not (insert {:group_id 1 :mood "happy" :closed_at (java.time.Instant/now) :score 1})) "table constraints apply")
-    (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 5 :total 2})) ":pg/check too")
-    (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 5}) "score <= total holds with the default total 10")
-    (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 15})) "and fails against it, as the INSERT would")
-    (is (not (insert {:group_id 1 :closed_at (java.time.Instant/now) :score 1})) "omitting mood means happy, which forbids closed_at")
-    (is (insert {:group_id 1 :score 1}) "happy with no closed_at")
-    (is (not (insert {:group_id 1 :mood "sad" :score 1})) "an omitted column without a default is NULL, which sad forbids"))
-  (testing "from generated data instead of the classpath"
-    (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:pg/integer {:pg/type "integer" :pg/default 1}]]]
-                                            :pg.public/t [:and [:map {:pg/table "public.t"}
-                                                                [:a [:pg/integer {:pg/type "integer"}]]
-                                                                [:b [:maybe [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]]]
-                                                          [:or [:map [:a {:error/message "c"} [:int {:min 1}]]] [:map [:b :nil]]]]}})]
-      (is (m/validate "pg.public.Order Items/insert" {} {:registry reg}) "string keys follow the same naming")
-      (is (m/validate :pg.public.t/insert {:a 0 :b nil} {:registry reg}) "entries with properties inside fragments survive")
-      (is (not (m/validate :pg.public.t/insert {:a 0} {:registry reg})) "an omitted b is 5, not NULL, so the :or has no alternative left")
-      (is (not (m/validate :pg.public.t/insert {:a 0 :b 1} {:registry reg})))))
-  (testing "what an omitted column stands for"
-    (let [reg (pgmalli/registry {:registry {:pg.public/t [:and [:map {:pg/table "public.t"}
-                                                                [:status [:string {:pg/type "text" :pg/default "approved" :default "approved"}]]
-                                                                [:approver [:maybe [:string {:pg/type "text"}]]]
-                                                                [:a [:pg/integer {:pg/type "integer"}]]
-                                                                [:b [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]
-                                                                [:c [:pg/integer {:pg/type "integer" :pg/default [:nextval "s"]}]]]
-                                                          [:multi {:dispatch :status}
-                                                           ["approved" [:map [:approver :string]]]
-                                                           [:malli.core/default [:map [:approver :nil]]]]
-                                                          [:or [:map [:a [:int {:min 1}]]] [:map [:b [:int {:min 1}]]]]
-                                                          [:pg/check [:<= :a :b]]
-                                                          [:pg/check [:<= :a :c]]]}})
-          insert (fn [row] (m/validate :pg.public.t/insert row {:registry reg}))]
-      (is (insert {:status "pending" :approver nil :a 0}) "a value without a branch of its own still takes the default branch")
-      (is (not (insert {:approver nil :a 0})) "omitted status is approved, which needs an approver")
-      (is (insert {:approver "x" :a 0}) "the default b satisfies the :or, so it may be omitted")
-      (is (insert {:approver "x" :a 5}) "a :pg/check sees the default b")
-      (is (not (insert {:approver "x" :a 6})))
-      (is (insert {:approver "x" :a 6 :b 9}))
-      (is (not (insert {:approver "x" :a 1 :b nil})) "an explicit NULL wins over the default")
-      (is (insert {:approver "x" :a 100 :b 200}) "an expression default is unknown, so the :pg/check on c cannot fail"))))
-
-(deftest transformer-decodes-jdbc-values
-  ;; babashka cannot construct java.sql.Timestamp; the JVM run covers this
-  (when-not (System/getProperty "babashka.version")
-    (let [tokyo (java.time.ZoneId/of "Asia/Tokyo")
-          at (java.time.Instant/parse "2026-01-01T23:04:05Z")
-          row (assoc user :born (java.sql.Date/valueOf "2026-01-02") :closed_at (java.sql.Timestamp. (.toEpochMilli at)))
-          decode (fn [row t] (m/decode :pg.sample/users row opts t))
-          decoded (decode row (pgmalli/transformer))]
-      (is (= (java.time.LocalDate/parse "2026-01-02") (:born decoded)))
-      (is (= at (:closed_at decoded)))
-      (is (m/validate :pg.sample/users decoded opts))
-      (is (= 42 (:id (decode (assoc row :id "42") (pgmalli/transformer)))) "strings too")
-      (testing "wall-clock values are read in :zone"
-        (is (= (java.time.LocalDateTime/parse "2026-01-02T08:04:05")
-               (:updated_at (decode (assoc row :updated_at at) (pgmalli/transformer {:zone tokyo})))))
-        (is (= (java.time.LocalDate/parse "2026-01-02")
-               (:born (decode (assoc row :born (java.util.Date/from at)) (pgmalli/transformer {:zone tokyo})))))
-        (is (= (java.time.LocalDateTime/ofInstant at (java.time.ZoneId/systemDefault))
-               (:updated_at (decode (assoc row :updated_at at) (pgmalli/transformer))))
-            "default: the JVM's zone, as JDBC's read-as-instant used")))))
 
 (def ^:private good
   {"sample.groups" [{:id 1 :name "a"} {:id 2 :name "b"}]
@@ -265,12 +174,6 @@
     (is (every? #(or (nil? (:closed_at %)) (.isAfter ^java.time.Instant (:closed_at %) year-ago)) rows) "times are recent")
     (is (every? #(pos? (:group_id %)) rows) "referencing columns too")))
 
-(deftest transformer-parses-json-text
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:params [:any {:pg/type "jsonb"}]] [:note [:maybe [:string {:pg/type "text"}]]]]}})
-        decoded (m/decode :pg.public/t {:params "{\"a\": [1, 2]}" :note "{\"b\": 1}"} {:registry reg} (pgmalli/transformer))]
-    (is (= {"a" [1 2]} (:params decoded)) "JSON text in a jsonb column is parsed")
-    (is (= "{\"b\": 1}" (:note decoded)) "text stays text")))
-
 (deftest key-and-reference-rules
   (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items" :pg/primary-key ["Order ID"] :pg/unique [{:columns ["code"] :nulls-distinct false}]
                                                                         :pg/foreign-keys [{:columns ["Parent ID" "group"] :table "public.Parents" :to ["id" "group"] :match :full}]}
@@ -316,82 +219,6 @@
     (is (m/validate :pg.public/v {:id nil} {:registry reg}))
     (is (nil? (get reg :pg.public.v/insert)) "no insert schema for a view")
     (is (= #{"public.t"} (set (keys (first (tcg/sample (data/dataset-generator reg {:rows 1}) 1))))) "not part of datasets")))
-
-(deftest other-shapes-of-the-same-schema
-  (testing "portable: what malli's default registry reads"
-    (let [p (pgmalli/portable registry :pg.sample/users)
-          opts {:registry (merge (m/default-schemas) (malli.experimental.time/schemas))}]
-      (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (get-in p [1 7 1])) "the enum is inlined")
-      (is (= [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] (get-in p [1 4 1])) "integers carry their range")
-      (is (= :multi (first (nth p 2))) "the branching CHECK stays")
-      (is (= 3 (count p)) "the :pg/check constraints are left out")
-      (is (m/validate p (assoc user :group_name "a") opts))
-      (is (not (m/validate p (assoc user :group_id 2147483648) opts)))
-      (is (= 'bytes? (get-in (pgmalli/portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
-      (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
-  (testing "as-read: the map as next.jdbc builds it"
-    (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant})]
-      (is (= [:users/group_name {:optional true} [:string {:pg/type "text"}]] (nth r 5)) "NULL columns absent, keys qualified")
-      (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "timestamps as Instants")
-      (is (= [:users/born {:optional true} ['inst? {:pg/type "date"}]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
-      (is (m/validate r {:users/id 1 :users/group_id 1 :users/mood "sad" :users/seq 1 :users/score 1 :users/total 2} opts)))
-    (is (some #{[:nick-upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]] :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:kebab? true})))
-    (is (= :order-items/line-no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {:qualified? true :kebab? true}) 2)))
-        "the table half is kebab-cased too"))
-  (testing "portable converts what it inlines"
-    (let [reg (pgmalli/registry {:registry {:pg.public/code [:and :string [:pg/check-value {:pg/constraint "c"} [:<> :VALUE ""]]]
-                                            :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
-      (is (= [:map {:pg/table "public.t"} [:c [:string {:pg/type "code"}]]] (pgmalli/portable reg :pg.public/t)))))
-  (testing "column and non-null"
-    (is (= [:maybe [:string {:max 40 :pg/type "character varying"}]] (pgmalli/column registry :pg.sample/users :nick)))
-    (is (= [:string {:max 40 :pg/type "character varying"}] (pgmalli/non-null (pgmalli/column registry :pg.sample/users "nick"))))
-    (is (nil? (pgmalli/column registry :pg.sample/users :nope)))))
-
-(deftest several-schemas
-  (let [registry (pgmalli/registry "sample" "other")
-        opts {:registry registry}
-        ds (data/dataset-schema registry)]
-    (is (m/validate :pg.other.notes/insert {:id 1 :user_id 1} opts))
-    (is (m/validate ds (assoc good "other.notes" [{:id 1 :user_id 1}]) opts))
-    (is (not (m/validate ds (assoc good "other.notes" [{:id 1 :user_id 9}]) opts)) "a reference into another schema")
-    (doseq [sample (tcg/sample (data/dataset-generator registry {:rows 4}) 4)]
-      (is (m/validate ds sample opts) (pr-str sample)))
-    (is (m/validate (data/dataset-schema (pgmalli/registry "other")) {"other.notes" [{:id 1 :user_id 9}]} {:registry (pgmalli/registry "other")})
-        "a reference to a table outside the registry is not checked")))
-
-(deftest inserts-in-the-order-the-database-accepts
-  (let [ds (tcg/generate (data/dataset-generator registry {:rows 4}) 30 42)
-        stmts (data/inserts registry ds)
-        by-table (into {} (map (juxt #(let [i (:insert-into %)] (if (vector? i) (last i) i)) identity)) stmts)]
-    (is (= [:sample.groups [{:overriding-value :system} :sample.users]] (map :insert-into stmts)) "parents first; identity columns kept")
-    (is (every? #(and (vector? %) (= [:cast :sample.mood] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
-    (is (not-any? #(contains? % :nick_upper) (:values (by-table :sample.users))) "generated columns are left out")
-    (is (= [[{:overriding-value :system} :sample.users]] (map :insert-into (data/inserts registry (select-keys ds ["sample.users"]))))
-        "a parent left out is already in the database")
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not" (data/inserts registry {"sample.nope" [{:id 1}]})))
-    (is (= [] (data/inserts registry {"sample.groups" []})) "no rows, no INSERT")
-    (is (every? (fn [[i row]] (or (nil? (:referrer_id row)) (= (:referrer_id row) (:id row))
-                                  (some #(= (:referrer_id row) (:id %)) (take i (:values (by-table :sample.users))))))
-                (map-indexed vector (:values (by-table :sample.users))))
-        "a row comes after the row it refers to")
-    (is (every? #(string? (first (honey.sql/format %))) stmts)))
-  (let [reg (pgmalli/registry {:database-version "x"
-                               :registry {:pg.public/docs [:map {:pg/table "public.docs" :pg/primary-key ["id"]}
-                                                           [:id [:int {:pg/type "integer"}]]
-                                                           [:body [:any {:pg/type "jsonb"}]]
-                                                           [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]]}})
-        [{:keys [values]}] (data/inserts reg {"public.docs" [{:id 1 :body {"a" 1} :tags ["x"]} {:id 2 :body [] :tags nil}]})]
-    (is (= [{:id 1 :body [:cast "{\"a\":1}" :jsonb] :tags [:array ["x"] :text]} {:id 2 :body [:cast "[]" :jsonb] :tags nil}] values)
-        "json written and cast, arrays with their element type, NULL as it is")
-    (is (every? #(try (json/write %) true (catch Exception _ false))
-                (map :body (tcg/sample (mg/generator :pg.public/docs {:registry reg}) 50)))
-        "an unshaped jsonb column generates values JSON can carry")
-    (is (= [[{:id 1 :body [:cast "1" :jsonb]} {:id 2 :body [:default]}]]
-           (map :values (data/inserts reg {"public.docs" [{:id 1 :body 1} {:id 2}]})))
-        "one INSERT per table; a column a row lacks is DEFAULT")
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"columns the table does not have"
-                          (doall (data/inserts reg {"public.docs" [{:id 1 :nope 2}]})))
-        "a column the table does not have never reaches the database")))
 
 (deftest branches-are-filled-even-when-the-dispatch-column-cannot-be-null
   (let [reg (pgmalli/registry {:database-version "x"
@@ -456,46 +283,6 @@
     (is (= [:map {:pg/table "public.t"} [:a [:and {:pg/type "numeric"} 'decimal? [:> 1] [:< 1000]]] [:b [:and {:pg/type "numeric"} 'decimal? [:>= 0.5]]]]
            (pgmalli/portable reg :pg.public/t)) "the hints stay out of portable data; :pg/numeric is decimal? there")))
 
-(deftest reading-options-of-a-next-jdbc-builder
-  (is (= {:qualified? true} (pgmalli/read-options 'next.jdbc/as-maps)))
-  (is (= {} (pgmalli/read-options 'next.jdbc/as-unqualified-lower-maps)))
-  (is (= {:kebab? true :nil-columns :absent} (pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps)))
-  (is (nil? (pgmalli/read-options 'next.jdbc/as-arrays)) "no map, no options")
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a next.jdbc" (pgmalli/read-options 'my.ns/as-things)))
-  (is (= (pgmalli/as-read registry :pg.sample/users (pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps))
-         (pgmalli/as-read registry :pg.sample/users {:kebab? true :nil-columns :absent}))
-      "the options are as-read's"))
-
-(deftest a-dataset-kept-as-edn-comes-back-as-it-was
-  (let [ds (tcg/generate (data/dataset-generator registry {:rows 3}) 30 11)
-        path (str (java.io.File/createTempFile "pgmalli-ds" ".edn"))
-        _ (data/write-dataset path ds)
-        back (data/read-dataset path)]
-    (is (= (update-vals ds vec) (update-vals back vec)) "java.time values round-trip under pgmalli's tags")
-    (is (m/validate (data/dataset-schema registry) back opts))
-    (is (nil? (data/short-tables ds)) "nothing short in the sample")
-    (is (= (data/short-tables ds) (data/short-tables back)) "what came out short survives the file")
-    (is (re-find #"#pgmalli/" (slurp path)) "the file carries the tags"))
-  (let [bytes-ds {"public.t" [{:id 1 :b (byte-array [1 2 255])}]}
-        path (str (java.io.File/createTempFile "pgmalli-bytes" ".edn"))]
-    (data/write-dataset path bytes-ds)
-    (is (= [1 2 -1] (seq (:b (first (get (data/read-dataset path) "public.t"))))) "bytes as hex")))
-
-(deftest install-makes-the-names-readable-everywhere
-  (let [before (pgmalli/install! "sample")]
-    (is (m/validate :pg.sample/groups {:id 1 :name "g"}) "no registry passed: malli's default one has it now")
-    (is (not (m/validate :pg.sample/groups {:id "x" :name "g"})))
-    (is (map? before) "what the default registry held, to put back")
-    (malli.registry/set-default-registry! before)
-    (is (thrown? Exception (m/validate :pg.sample/groups {:id 1 :name "g"})) "put back: the names are gone again")))
-
-(deftest a-short-dataset-keeps-its-reasons-through-the-file
-  (let [ds (with-meta {"public.t" [{:id 1}]} {:pgmalli/short {"public.t" {:wanted 3 :got 1 :reasons [["x" 2]]}}})
-        path (str (java.io.File/createTempFile "pgmalli-short" ".edn"))]
-    (data/write-dataset path ds)
-    (is (= {"public.t" {:wanted 3 :got 1 :reasons [["x" 2]]}} (data/short-tables (data/read-dataset path))))
-    (is (= {"public.t" [{:id 1}]} (data/read-dataset path)) "the tables alone are the value")))
-
 (deftest regex-checks-generate-what-matches
   (when @pgmalli.impl.registry/regex-generation?
    (let [reg (pgmalli/registry {:database-version "x"
@@ -511,39 +298,3 @@
     (is (every? #(and (<= (count (:code %)) 10) (str/starts-with? (:code %) "ab")) rows) "a LIKE pattern, within the length")
     (is (= [:map {:pg/table "public.t"} [:sku [:and {:pg/type "text"} :string [:re "^[A-Z]{3}-[0-9]{4}$"]]] [:mail [:and {:pg/type "email"} :string [:re "^[^@]+@[^@]+$"]]] [:code [:and {:pg/type "text"} [:string {:max 10}] [:re "^ab.*$"]]]]
            (pgmalli/portable reg :pg.public/t)) "the hint stays out of portable data"))))
-
-(deftest any-malli-registry-will-do
-  (let [composite (malli.registry/composite-registry registry {:app/flag :boolean})]
-    (is (m/validate :pg.sample/groups {:id 1 :name "g"} {:registry composite}))
-    (is (= [] (h/check composite {:select [:id] :from [:groups]} {:schema "sample"})))
-    (is (= 2 (count (keys (tcg/generate (data/dataset-generator composite {:rows 2}) 20 1)))) "datasets from a composite registry")
-    (is (= (pgmalli/column registry :pg.sample/users :nick) (pgmalli/column composite :pg.sample/users :nick)))
-    (is (= (pgmalli/portable registry :pg.sample/users) (pgmalli/portable composite :pg.sample/users)) "portable inlines references through a composite registry")
-    (is (= (h/query-schema registry '[id] {:select [:id] :from [:groups]} {:schema "sample"})
-           (h/query-schema composite '[id] {:select [:id] :from [:groups]} {:schema "sample"})))))
-
-(deftest text-decodes-into-the-bounded-numbers
-  (let [reg (pgmalli/registry {:database-version "x"
-                               :registry {:pg.public/t [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]] [:b [:pg/smallint {:pg/type "smallint"}]]
-                                                        [:c [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 5 :scale 2}]]] [:d [:int {:pg/type "bigint"}]]]}})]
-    (is (= {:a 5 :b 7 :c 1.25M :d 9} (m/decode :pg.public/t {:a "5" :b "7" :c "1.25" :d "9"} {:registry reg} (pgmalli/transformer))))
-    (is (= {:a "x" :b 7 :c "y" :d 9} (m/decode :pg.public/t {:a "x" :b 7 :c "y" :d "9"} {:registry reg} (pgmalli/transformer))) "what does not parse stays as it was")))
-
-(deftest what-an-update-may-set
-  (is (= [:map {:pg/table "sample.users" :closed true}
-          [:born {:optional true} [:maybe [:time/local-date {:pg/type "date"}]]]
-          [:closed_at {:optional true} [:maybe [:time/instant {:pg/type "timestamptz"}]]]
-          [:group_id {:optional true} [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
-         (vec (take 5 (pgmalli/portable registry :pg.sample.users/update)))))
-  (is (m/validate :pg.sample.users/update {:nick "n"} opts) "any subset of the columns")
-  (is (not (m/validate :pg.sample.users/update {:score nil} opts)) "a NOT NULL column cannot be set to NULL")
-  (is (not (m/validate :pg.sample.users/update {:id 1} opts)) "an identity ALWAYS column cannot be set")
-  (is (not (m/validate :pg.sample.users/update {:nick_upper "x"} opts)) "nor a generated one")
-  (is (not (m/validate :pg.sample.users/update {:nope 1} opts)) "closed"))
-
-(deftest a-migration-read-from-two-files
-  (let [before (pgmalli/generated "sample")
-        after (assoc-in before [:registry :pg.sample/groups] (conj (get-in before [:registry :pg.sample/groups]) [:motto [:maybe [:string {:pg/type "text"}]]]))]
-    (is (= [{:name :pg.sample/groups :column :motto :file nil :db [:maybe [:string {:pg/type "text"}]]}]
-           (pgmalli.generate/diff before after)))
-    (is (= [] (pgmalli.generate/diff before before)))))

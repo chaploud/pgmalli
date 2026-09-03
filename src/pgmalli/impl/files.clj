@@ -1,4 +1,4 @@
-(ns pgmalli.impl.generate
+(ns pgmalli.impl.files
   "Config -> generated EDN files, one per schema.
 
    Config:
@@ -38,7 +38,7 @@
   "The file's data from the rendering of a schema's facts, in reading order: what it is, then
    what deserves a look, then the schemas, then what was left out."
   [schema database-version facts overrides]
-  (let [r (sort-maps (render/registry facts (or overrides {})))]
+  (let [r (sort-maps (render/rendered facts (or overrides {})))]
     (array-map :schema schema :database-version database-version
                :diagnostics (:diagnostics r) :registry (:registry r) :unrendered (:unrendered r) :skipped (:skipped r))))
 

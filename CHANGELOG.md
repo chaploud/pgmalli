@@ -11,6 +11,9 @@ All notable changes to this project are documented here. The format follows
   `pgmalli.impl.pgtypes` (the `:pg/*` schema types), `pgmalli.impl.registry` (generated files as
   registries), `pgmalli.impl.portable`, `pgmalli.impl.jdbc`, `pgmalli.impl.dataset` and
   `pgmalli.impl.insert`. The public namespaces are unchanged.
+- `pgmalli.impl.render/registry` is `rendered` (what it returns is the file's `:registry` map,
+  not a malli registry), `pgmalli.impl.generate` is `pgmalli.impl.files`, and the diff algorithm
+  behind `pgmalli.generate` is `pgmalli.impl.diff`.
 
 ### Fixed
 

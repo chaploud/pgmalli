@@ -52,6 +52,30 @@
     (keyword (str (namespace row-name) "." (name row-name)) "update")
     (str (str/replace-first row-name "/" ".") "/update")))
 
+(defn plain?
+  "Whether an identifier needs no quoting, so it can be a keyword."
+  [s]
+  (re-matches #"[A-Za-z_][A-Za-z0-9_]*" s))
+
+(defn ident-key
+  "Column names as row keys: keywords for plain identifiers, strings otherwise."
+  [s]
+  (if (plain? s) (keyword s) s))
+
+(defn schema-key
+  "A table, view or type of a schema as a registry key: :pg.<schema>/<name>, a string key when
+   either name is not a plain identifier."
+  [schema-name s]
+  (if (and (plain? schema-name) (plain? s))
+    (keyword (str "pg." schema-name) s)
+    (str "pg." schema-name "/" s)))
+
+(defn table-key
+  "\"public.users\" -> :pg.public/users: schema-key over a qualified name."
+  [table]
+  (let [[schema t] (str/split table #"\." 2)]
+    (schema-key schema t)))
+
 (defn non-null
   "A column schema without its [:maybe ...]: the type a value must have when it is not NULL."
   [schema]

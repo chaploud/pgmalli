@@ -44,12 +44,10 @@
 
 (def ^:private facts (p/facts schema))
 
-(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas)
-                                 {:pg/check pgtypes/check-schema :pg/check-value pgtypes/check-value-schema :pg/bytes pgtypes/bytes-schema
-                                  :pg/smallint pgtypes/smallint-schema :pg/integer pgtypes/integer-schema :pg/numeric pgtypes/numeric-schema} r))
+(defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas r))
 
 (deftest row-schema
-  (let [{:keys [registry unrendered]} (r/registry facts)
+  (let [{:keys [registry unrendered]} (r/rendered facts)
         users (:pg.public/users registry)]
     (is (= [:enum "happy" "sad"] (:pg.public/mood registry)))
     (is (= [:and :string [:re "@"]] (:pg.public/email registry)) "domain = what a non-NULL value must be: base type + its CHECK")
@@ -94,23 +92,23 @@
 
 (deftest only-rows-and-types-are-emitted
   (is (= [:pg.public/email :pg.public/groups :pg.public/mood :pg.public/users]
-         (keys (:registry (r/registry facts))))))
+         (keys (:registry (r/rendered facts))))))
 
 (deftest unsupported-vocabulary-stays-unrendered
-  (let [{:keys [unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                    :tables {"t" {:columns [{:name "g" :position 1 :data_type "geometry" :type_schema "public" :is_nullable true}]
                                                                  :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (st_area(g) > 0)"}}}}}))]
     (is (= [:unknown-type :table-check] (map :fact unrendered)))))
 
 (deftest overrides
-  (let [{:keys [registry unrendered skipped]} (r/registry facts {"score_check" [:ref :app/score-within-total]
+  (let [{:keys [registry unrendered skipped]} (r/rendered facts {"score_check" [:ref :app/score-within-total]
                                                                    "title_check" {:skip "guaranteed by the application"}})]
     (is (empty? unrendered))
     (is (= ["title_check"] (map :constraint skipped)))
     (is (some #{[:ref :app/score-within-total]} (:pg.public/users registry)) "the override replaces the :pg/check")))
 
 (deftest not-valid-checks-are-enforced-and-marked
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
                                                                                     {:name "b" :position 2 :data_type "integer" :is_nullable false}]
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))
@@ -128,7 +126,7 @@
                                                       {:name "tenant" :position 2 :data_type "uuid" :is_nullable true}
                                                       {:name "since" :position 3 :data_type "date" :is_nullable true}]
                                             :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause c}]) checks))}}})
-        {:keys [registry unrendered]} (r/registry (p/facts (table "CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"
+        {:keys [registry unrendered]} (r/rendered (p/facts (table "CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"
                                                                   "CHECK (kind = 'a'::text AND since = '2020-01-01'::date OR kind = 'b'::text AND since IS NULL)"
                                                                   "CHECK (since >= '2019-01-01'::date)")))]
     (is (= [:multi {:dispatch :kind :error/message "k0"}
@@ -153,7 +151,7 @@
                                :tables {"t" {:columns cols
                                              :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause (str "CHECK (" c ")")}]) checks))}}})
         column (fn [reg col] (some (fn [[k s]] (when (= k col) s)) (drop 2 (let [r (:pg.public/t reg)] (if (= :and (first r)) (second r) r)))))
-        reg (fn [& args] (:registry (r/registry (p/facts (apply t args)))))]
+        reg (fn [& args] (:registry (r/rendered (p/facts (apply t args)))))]
     (is (= [:pg/integer {:min 10 :pg/type "integer" :pg/constraint ["k0" "k1"]}]
            (column (reg [{:name "n" :position 1 :data_type "integer" :is_nullable false}] "n >= 10" "n >= 0") :n))
         "the tighter bound wins")
@@ -186,7 +184,7 @@
 
 (deftest domains
   (let [{:keys [registry unrendered]}
-        (r/registry (p/facts {:name "public"
+        (r/rendered (p/facts {:name "public"
                               :types {"even_int" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                   :constraints [{:name "even_int_check" :definition "CHECK ((VALUE % 2) = 0)"}]}
                                       "mandatory" {:kind "DOMAIN" :base_type "text" :not_null true :default "'n/a'::text" :constraints []}
@@ -206,13 +204,13 @@
     (is (= [:ref {:pg/type "mandatory" :pg/default "n/a" :default "n/a"} :pg.public/mandatory] (get-in registry [:pg.public/t 4 1]))
         "the domain's NOT NULL and DEFAULT reach its columns")
     (is (= :string (:pg.public/opaque registry)) "a domain whose CHECK cannot be evaluated still exists")
-    (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
+    (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                             :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
                                                               :tables {}}))]
       (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "pos_check" :error/message "pos_check" :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
         "a NOT VALID domain CHECK is enforced (the database enforces it for every new value), marked")
       (is (empty? unrendered)))
-    (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
+    (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
                                                                                           :constraints [{:name "d_check" :definition "CHECK (VALUE >= '2020-01-01'::date)"}]}}
                                                               :tables {}}))]
       (is (= [:and :time/local-date [:pg/check-value {:pg/constraint "d_check" :error/message "d_check"} [:>= :VALUE [:cast "2020-01-01" :date]]]]
@@ -221,14 +219,14 @@
       (is (empty? unrendered)))
     (is (= [{:fact :domain-check :type-name "opaque" :constraint "opaque_check"}] (map #(select-keys % [:fact :type-name :constraint]) unrendered)))
     (is (= [:and :string [:re "x"]]
-           (:pg.public/opaque (:registry (r/registry (p/facts {:name "public" :types {"opaque" {:kind "DOMAIN" :base_type "text" :not_null false
+           (:pg.public/opaque (:registry (r/rendered (p/facts {:name "public" :types {"opaque" {:kind "DOMAIN" :base_type "text" :not_null false
                                                                                                     :constraints [{:name "opaque_check" :definition "CHECK (validate(VALUE))"}]}}
                                                                :tables {}})
                                                      {"opaque_check" [:re "x"]}))))
         "overrides apply to domain CHECKs too")))
 
 (deftest numeric-and-key-shapes
-  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "a" :position 1 :data_type "numeric" :is_nullable false :precision 3 :scale 1}
                                                                          {:name "b" :position 2 :data_type "numeric" :is_nullable false :precision 4}
                                                                          {:name "c" :position 3 :data_type "smallint" :is_nullable false}
@@ -252,7 +250,7 @@
       (is (not (m/validate :pg.public/t {:a 1.5M :b 1M :c 1 :d nil :e 2147483648} {:registry reg})) "so does integer")
       (is (every? #(<= -32768 (:c %) 32767) (mg/sample :pg.public/t {:registry (reg/registry {:database-version "x" :registry registry}) :size 20}))
           "and generates within it (the loaded registry's hints keep the bounded numeric from failing the search)")))
-  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "digest" :position 1 :data_type "bytea" :is_nullable false}]
                                                                :constraints {"digest_check" {:name "digest_check" :type "CHECK" :check_clause "CHECK (octet_length(digest) = 32)"}}}}}))
         reg (registry-with registry)]
@@ -268,7 +266,7 @@
                                                   {:name "mood" :position 3 :data_type "mood" :type_schema "public" :is_nullable false}
                                                   {:name "score" :position 4 :data_type "integer" :is_nullable false}]
                                         :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause c}]) checks))}}})
-        {:keys [registry unrendered]} (r/registry (p/facts (t "CHECK (length(nm) > 3 AND nm ~ '\\mfoo'::text)"
+        {:keys [registry unrendered]} (r/rendered (p/facts (t "CHECK (length(nm) > 3 AND nm ~ '\\mfoo'::text)"
                                                               "CHECK (kind = 'a'::text AND nm ~ '\\mfoo'::text OR kind = 'b'::text AND nm IS NULL)"
                                                               "CHECK (mood = 'sad'::mood OR score > length(nm))")))
         row (:pg.public/t registry)]
@@ -281,7 +279,7 @@
     (is (every? :expr unrendered))))
 
 (deftest null-branches-and-time-types
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "kind" :position 1 :data_type "text" :is_nullable true}
                                                                                     {:name "note" :position 2 :data_type "text" :is_nullable true}
                                                                                     {:name "at" :position 3 :data_type "time without time zone" :is_nullable true}
@@ -302,7 +300,7 @@
     (is (empty? unrendered))))
 
 (deftest views
-  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"v" {:kind "VIEW" :columns [{:name "id" :position 1 :data_type "integer" :is_nullable true}
                                                                                       {:name "name" :position 2 :data_type "text" :is_nullable true}]
                                                                :constraints {}}
@@ -312,17 +310,17 @@
         "every column of a view may be NULL, whatever the catalog says")))
 
 (deftest odd-identifiers
-  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"Order Items" {:columns [{:name "line no" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}}}))]
     (is (= [:map {:pg/table "public.Order Items"} ["line no" [:pg/integer {:pg/type "integer"}]]] (get registry "pg.public/Order Items"))))
-  (is (= ["pg.odd schema/t"] (keys (:registry (r/registry (p/facts {:name "odd schema" :types {} :tables {"t" {:columns [{:name "a" :position 1 :data_type "text" :is_nullable true}] :constraints {}}}})))))
+  (is (= ["pg.odd schema/t"] (keys (:registry (r/rendered (p/facts {:name "odd schema" :types {} :tables {"t" {:columns [{:name "a" :position 1 :data_type "text" :is_nullable true}] :constraints {}}}})))))
       "a schema name that is not a plain identifier makes string keys too"))
 
 (deftest deterministic
-  (is (= (r/registry facts) (r/registry (shuffle facts)))))
+  (is (= (r/rendered facts) (r/rendered (shuffle facts)))))
 
 (deftest branches-without-their-own-value-and-columns-of-any-type
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "status" :position 1 :data_type "text" :is_nullable false}
                                                                                     {:name "result" :position 2 :data_type "jsonb" :is_nullable true}]
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (status = 'open'::text AND result IS NULL OR status = 'done'::text AND result IS NOT NULL)"}}}}}))
@@ -336,7 +334,7 @@
     (is (empty? unrendered))))
 
 (deftest a-generated-range-orders-its-bounds
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "valid_from" :position 1 :data_type "timestamptz" :is_nullable false}
                                                                                     {:name "valid_until" :position 2 :data_type "timestamptz" :is_nullable true}
                                                                                     {:name "validity" :position 3 :data_type "tstzrange" :is_nullable true
@@ -353,7 +351,7 @@
     (is (empty? unrendered))))
 
 (deftest a-json-column-both-not-null-and-shaped
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "payload" :position 1 :data_type "jsonb" :is_nullable true}]
                                                                           :constraints {"nn" {:name "nn" :type "CHECK" :check_clause "CHECK (payload IS NOT NULL)"}
                                                                                         "obj" {:name "obj" :type "CHECK" :check_clause "CHECK (jsonb_typeof(payload) = 'object'::text)"}}}}}))]
@@ -374,7 +372,7 @@
       (is (every? #(fits? p s %) (mg/sample [:pg/numeric {:precision p :scale s}] {:registry reg :size 50})) (str "generates within numeric(" p "," s ")")))))
 
 (deftest types-the-regression-suite-uses
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "o" :position 1 :data_type "oid" :is_nullable false}
                                                                                     {:name "c" :position 2 :data_type "\"char\"" :is_nullable false}
                                                                                     {:name "b" :position 3 :data_type "bit" :is_nullable false :max_length 4}
@@ -396,7 +394,7 @@
     (is (not (m/validate :pg.public/t {:o 1 :c "x" :b "01" :vb "01" :ip "10.0.0.1" :tags ["abcdef"]} {:registry reg})))))
 
 (deftest a-check-on-a-generated-column-checks-its-expression
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"positive" {:kind "DOMAIN" :base_type "integer" :not_null false
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"positive" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                              :constraints [{:name "positive_check" :definition "CHECK (VALUE > 0)"}]}}
                                                             :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
                                                                                     {:name "b" :position 2 :data_type "integer" :is_nullable true :generated_expr "(a * 2)"}
@@ -413,7 +411,7 @@
     (is (empty? unrendered))))
 
 (deftest an-alternative-no-row-can-match-is-left-out
-  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "id" :position 1 :data_type "bigint" :is_nullable false}]
                                                                ;; as a partition whose parent was re-attached above it renders: 30 <= id < 30
                                                                :constraints {"p" {:name "p" :type "CHECK"
@@ -424,7 +422,7 @@
     (is (not (m/validate :pg.public/t {:id 30} {:registry reg})))))
 
 (deftest nested-list-partitions-pin-their-common-values
-  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}]
                                                                ;; a LIST partition (1, 2) sub-partitioned by LIST: leaf (1), leaf (2)
                                                                :constraints {"p" {:name "p" :type "CHECK"
@@ -435,7 +433,7 @@
     (is (not (m/validate :pg.public/t {:a 4} {:registry reg})))))
 
 (deftest diagnostics-name-what-no-row-can-satisfy
-  (let [{:keys [diagnostics]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [diagnostics]} (r/rendered (p/facts {:name "public" :types {}
                                                     :tables {"t" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}
                                                                             {:name "n" :position 2 :data_type "integer" :is_nullable false}]
                                                                   :constraints {"t_pkey" {:name "t_pkey" :type "PRIMARY KEY" :columns ["id"]}
@@ -453,7 +451,7 @@
     (is (every? #(and (keyword? (:severity %)) (= :proven (:confidence %)) (string? (:message %))) diagnostics))))
 
 (deftest a-not-enforced-constraint-is-noted-not-applied
-  (let [{:keys [registry unrendered diagnostics]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered diagnostics]} (r/rendered (p/facts {:name "public" :types {}
                                                                         :tables {"p" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}]
                                                                                       :constraints {"p_pkey" {:name "p_pkey" :type "PRIMARY KEY" :columns ["id"]}}}
                                                                                  "t" {:columns [{:name "b" :position 1 :data_type "integer" :is_nullable false}
@@ -467,7 +465,7 @@
     (is (= #{["b_check" :not-enforced] ["t_p_id_fkey" :not-enforced]} (set (map (juxt :constraint :kind) diagnostics))))))
 
 (deftest a-row-trigger-is-noted
-  (let [{:keys [diagnostics]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [diagnostics]} (r/rendered (p/facts {:name "public" :types {}
                                                     :tables {"t" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}]
                                                                   :constraints {}
                                                                   :triggers [{:name "t_audit" :insert true :update true :delete false}
@@ -476,7 +474,7 @@
         "the INSERT trigger is noted, a DELETE one is no concern of a dataset")))
 
 (deftest a-domain-column-that-is-not-null-rejects-null
-  (let [{:keys [registry]} (r/registry (p/facts {:name "public"
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public"
                                                  :types {"email" {:kind "DOMAIN" :base_type "text" :not_null false :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)"}]}
                                                          "money_amount" {:kind "DOMAIN" :base_type "numeric(12,2)" :not_null false :constraints [{:name "money_amount_check" :definition "CHECK (VALUE >= (0)::numeric)"}]}
                                                          "short_name" {:kind "DOMAIN" :base_type "character varying(8)" :not_null false :constraints []}}
@@ -496,7 +494,7 @@
     (is (= [{:columns ["email"]} {:columns ["nick"] :index true}] (:pg/unique (second (:pg.public/t registry)))) "a unique index is marked")))
 
 (deftest an-override-keyed-by-type
-  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "ip" :position 1 :data_type "inet" :is_nullable false}
                                                                                     {:name "ips" :position 2 :data_type "inet[]" :is_nullable true}]
                                                                           :constraints {}}}})

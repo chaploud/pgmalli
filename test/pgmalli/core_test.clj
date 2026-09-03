@@ -7,7 +7,7 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
-            [pgmalli.impl.generate :as gen]
+            [pgmalli.impl.files :as gen]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
   (:import (java.io File)))
 

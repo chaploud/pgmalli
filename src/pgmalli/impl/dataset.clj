@@ -5,7 +5,6 @@
             [malli.error :as me]
             [malli.generator :as mg]
             [pgmalli.impl.registry :as reg]
-            [pgmalli.impl.render :as render]
             [pgmalli.impl.shape :as shape]))
 
 (defn tables
@@ -20,13 +19,13 @@
              {:name k
               :table table
               :key-sets (concat (when primary-key
-                                  [{:columns (mapv render/ident-key primary-key) :nulls-distinct? true
+                                  [{:columns (mapv shape/ident-key primary-key) :nulls-distinct? true
                                     :label (str table " primary key " (pr-str primary-key))}])
                                 (for [{:keys [columns nulls-distinct]} unique]
-                                  {:columns (mapv render/ident-key columns) :nulls-distinct? (not (false? nulls-distinct))
+                                  {:columns (mapv shape/ident-key columns) :nulls-distinct? (not (false? nulls-distinct))
                                    :label (str table " unique " (pr-str columns))}))
               :refs (for [{:keys [columns to match] target :table} foreign-keys]
-                      {:columns (mapv render/ident-key columns) :table target :to (mapv render/ident-key to) :full? (= :full match)
+                      {:columns (mapv shape/ident-key columns) :table target :to (mapv shape/ident-key to) :full? (= :full match)
                        :label (str table " " (pr-str columns) " references " target " " (pr-str to))})})
          known (set (map :table ts))
          excepted (set except)]

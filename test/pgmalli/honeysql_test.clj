@@ -1,6 +1,6 @@
 (ns pgmalli.honeysql-test
   "HoneySQL query data against the checked-in sample registry."
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [malli.experimental.time :as time]
             [pgmalli.core :as pgmalli]
@@ -111,39 +111,74 @@
       "a :select-distinct-on subquery is a statement of its own")
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select-distinct-on [[:group_id] :group_id :nope] :from [:users]} opts))))
 
-(deftest honeysql-shapes-the-checker-must-read
-  (is (= [{:kind :unknown-column :column :nope}]
-         (h/check registry {:insert-into [{:overriding-value :system} :users] :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]} opts))
-      "the option map inserts itself emits")
-  (is (= [] (h/check registry {:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad" 2]]} opts)) ":columns with positional rows")
-  (is (= [{:kind :unknown-column :column :nope} {:kind :missing-required-column :table "sample.users" :column "score"}]
-         (h/check registry {:insert-into :users :columns [:group_id :mood :nope] :values [[1 "sad" 2]]} opts)))
-  (is (= [{:kind :values-arity :table "sample.users" :row 0 :columns 3 :values 2}]
-         (h/check registry {:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad"]]} opts)))
-  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
-         (h/check registry {:insert-into :users :columns [:group_id :mood :score] :values [[1 "angry" 2]]} opts)) "positional values are assignments")
-  (is (= {'m [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]}
-         (h/arg-types registry '{:insert-into :users :columns [:group_id :mood :score] :values [[1 m 2]]} opts)))
-  (is (= [{:kind :unknown-column :column :g.nope}]
-         (h/check registry {:select [:u.id] :from [[:users :u]] :join [[:groups :g] [:= :u.group_id :g.nope]]} opts))
-      "both sides of a comparison are columns")
-  (is (= {'gid [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]}
-         (h/arg-types registry '{:select [:id] :from [:users] :where [:= gid :group_id]} opts)) "a symbol on the left takes the column's type")
-  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select-top [10 :nope] :from [:users]} opts)) "TOP n, then the items")
-  (is (= [{:kind :unknown-column :column :nope}]
-         (h/check registry {:select [:nope] :from [:users]
-                            :where [:in :id {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]} opts))
-      "a CTE of an inner statement is not visible outside it: the outer :users is the table"))
+(def ^:private shapes
+  "[query expected-problems note]: the shapes of HoneySQL data the checker must read."
+  '[[{:insert-into [{:overriding-value :system} :users] :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]}
+     [{:kind :unknown-column :column :nope}]
+     "the option map inserts itself emits"]
+    [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad" 2]]}
+     []
+     ":columns with positional rows"]
+    [{:insert-into :users :columns [:group_id :mood :nope] :values [[1 "sad" 2]]}
+     [{:kind :unknown-column :column :nope} {:kind :missing-required-column :table "sample.users" :column "score"}]
+     "an unknown column in :columns leaves the column it stands in for missing"]
+    [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad"]]}
+     [{:kind :values-arity :table "sample.users" :row 0 :columns 3 :values 2}]
+     "a row shorter than the column list"]
+    [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "angry" 2]]}
+     [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
+     "positional values are assignments"]
+    [{:select [:u.id] :from [[:users :u]] :join [[:groups :g] [:= :u.group_id :g.nope]]}
+     [{:kind :unknown-column :column :g.nope}]
+     "both sides of a comparison are columns"]
+    [{:select-top [10 :nope] :from [:users]}
+     [{:kind :unknown-column :column :nope}]
+     "TOP n, then the items"]
+    [{:select [:nope] :from [:users]
+      :where [:in :id {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]}
+     [{:kind :unknown-column :column :nope}]
+     "a CTE of an inner statement is not visible outside it: the outer :users is the table"]
+    [{:update [:users :u] :set {:score :v.score} :from [[{:values [[1 2]]} [:v {:columns [:id :score]}]]] :where [:= :u.id :v.id]}
+     []
+     "an alias listing its columns over VALUES has those columns"]
+    [{:update [:users :u] :set {:score :v.score} :from [[{:values [[1 2]]} [:v {:columns [:id :score]}]]] :where [:= :u.id :v.nope]}
+     [{:kind :unknown-column :column :v.nope}]
+     "a column that alias does not list"]
+    [{:select [:id :current_timestamp] :from [:users] :where [:> :closed_at :current_timestamp]}
+     []
+     "CURRENT_TIMESTAMP is a SQL word, not a column"]
+    [(cond-> {:select [:id] :from [:g]} true (assoc :with [[:f {:select [:id] :from [:users]} :materialized] [:g {:select [:id] :from [:f]}]]))
+     []
+     "a CTE with a qualifier, built in code"]
+    [{:insert-into [:groups {:select [:id :name] :from [:users]}]}
+     [{:kind :unknown-column :column :name}]
+     "the SELECT of an INSERT ... SELECT does not see the table inserted into"]
+    [{:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:nope 1}}
+     [{:kind :unknown-column :column :nope}]
+     "ON CONFLICT DO UPDATE SET assigns columns too"]
+    [{:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set [:name :nope]}
+     [{:kind :unknown-column :column :nope}]
+     "as a list of columns too"]
+    [{:select [:id] :from [:users] :order-by [[:nope :asc]]}
+     [{:kind :unknown-column :column :nope}]
+     "ORDER BY names columns"]
+    [{:select [:group_id] :from [:users] :group-by [:nope]}
+     [{:kind :unknown-column :column :nope}]
+     "GROUP BY too"]
+    [{:select [:group_id] :from [:users] :group-by [[:lower :nick]] :order-by [[[:count :*] :desc]]}
+     []
+     "expressions there are not read"]])
 
-(deftest shapes-a-real-project-writes
-  (is (= [] (h/check registry {:update [:users :u] :set {:score :v.score} :from [[{:values [[1 2]]} [:v {:columns [:id :score]}]]] :where [:= :u.id :v.id]} opts))
-      "an alias listing its columns over VALUES has those columns")
-  (is (= [{:kind :unknown-column :column :v.nope}]
-         (h/check registry {:update [:users :u] :set {:score :v.score} :from [[{:values [[1 2]]} [:v {:columns [:id :score]}]]] :where [:= :u.id :v.nope]} opts)))
-  (is (= [] (h/check registry {:select [:id :current_timestamp] :from [:users] :where [:> :closed_at :current_timestamp]} opts))
-      "CURRENT_TIMESTAMP is a SQL word, not a column")
-  (is (= [] (h/check registry '(cond-> {:select [:id] :from [:g]} true (assoc :with [[:f {:select [:id] :from [:users]} :materialized] [:g {:select [:id] :from [:f]}]])) opts))
-      "a CTE with a qualifier, built in code"))
+(deftest shapes-the-checker-reads
+  (doseq [[query expected note] shapes]
+    (testing note
+      (is (= expected (h/check registry query opts)))))
+  (testing "the types the same shapes give"
+    (is (= {'m [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]}
+           (h/arg-types registry '{:insert-into :users :columns [:group_id :mood :score] :values [[1 m 2]]} opts)))
+    (is (= {'gid [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]}
+           (h/arg-types registry '{:select [:id] :from [:users] :where [:= gid :group_id]} opts))
+        "a symbol on the left takes the column's type")))
 
 (deftest a-subquery-added-to-a-query-built-elsewhere
   (is (= [] (h/check registry '(update query :select conj [[:exists {:select [1] :from [:groups] :where [:= :groups.id :skills/group_id]}] :flag]) opts))
@@ -165,19 +200,6 @@
   (is (= [:=> [:cat [:int {:pg/identity :always :pg/type "bigint"}]] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40}]]]]]]
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
-
-(deftest the-fifth-round-of-shapes
-  (is (= [{:kind :unknown-column :column :name}]
-         (h/check registry {:insert-into [:groups {:select [:id :name] :from [:users]}]} opts))
-      "the SELECT of an INSERT ... SELECT does not see the table inserted into")
-  (is (= [{:kind :unknown-column :column :nope}]
-         (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:nope 1}} opts))
-      "ON CONFLICT DO UPDATE SET assigns columns too")
-  (is (= [{:kind :unknown-column :column :nope}]
-         (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set [:name :nope]} opts)))
-  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:id] :from [:users] :order-by [[:nope :asc]]} opts)))
-  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:group_id] :from [:users] :group-by [:nope]} opts)))
-  (is (= [] (h/check registry {:select [:group_id] :from [:users] :group-by [[:lower :nick]] :order-by [[[:count :*] :desc]]} opts)) "expressions there are not read"))
 
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]

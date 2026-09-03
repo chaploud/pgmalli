@@ -1,5 +1,5 @@
 ;; Writes test/resources/pgmalli/{sample,other}.edn from in-memory schemas (no database needed).
-(require '[pgmalli.impl.pattern :as p] '[pgmalli.impl.generate :as gen])
+(require '[pgmalli.impl.pattern :as p] '[pgmalli.impl.files :as gen])
 (def sample
   {:name "sample"
    :types {"mood" {:kind "ENUM" :enum_values ["happy" "sad"]}}

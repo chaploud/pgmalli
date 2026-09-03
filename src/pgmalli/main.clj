@@ -7,7 +7,7 @@
      bb -m pgmalli.main ..."
   (:require [clojure.edn :as edn]
             [pgmalli.generate :as generate]
-            [pgmalli.impl.generate :as gen]
+            [pgmalli.impl.files :as gen]
             [pgmalli.impl.shape :as shape]))
 
 (defn- read-config [path]

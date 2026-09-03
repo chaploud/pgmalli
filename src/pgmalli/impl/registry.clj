@@ -10,7 +10,6 @@
             malli.experimental.time.generator
             [malli.util :as mu]
             [pgmalli.impl.pgtypes :as pgtypes]
-            [pgmalli.impl.render :as render]
             [pgmalli.impl.shape :as shape]))
 
 (defn read-generated
@@ -165,7 +164,7 @@
 
 (defn- with-gen-hints [row]
   (let [[_ props & entries] (shape/row-map row)
-        key-cols (set (map render/ident-key (concat (:pg/primary-key props) (mapcat :columns (:pg/unique props)) (mapcat :columns (:pg/foreign-keys props)))))
+        key-cols (set (map shape/ident-key (concat (:pg/primary-key props) (mapcat :columns (:pg/unique props)) (mapcat :columns (:pg/foreign-keys props)))))
         m (into [:map props]
                 (map (fn [e] (let [[k p s] (shape/entry-parts e)
                                    key? (or (key-cols k) (:pg/identity (shape/column-props s)))
@@ -196,9 +195,7 @@
 (defn registry
   "The registry pgmalli.core/registry documents."
   [& schemas]
-  (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas)
-                    {:pg/check pgtypes/check-schema :pg/check-value pgtypes/check-value-schema :pg/bytes pgtypes/bytes-schema
-                     :pg/smallint pgtypes/smallint-schema :pg/integer pgtypes/integer-schema :pg/numeric pgtypes/numeric-schema})
+  (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas)
         generated (apply merge (map #(:registry (if (map? %) % (read-generated %))) schemas))]
     (doseq [[k s] generated :when (shape/row-schema? s)
             :let [{:keys [pg/table pg/unique pg/foreign-keys]} (second (shape/row-map s))]

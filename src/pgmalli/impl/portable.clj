@@ -4,7 +4,6 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [pgmalli.impl.pgtypes :as pgtypes]
-            [pgmalli.impl.render :as render]
             [pgmalli.impl.shape :as shape]))
 
 (defn- data-columns
@@ -17,7 +16,7 @@
 (defn column
   "The schema of one column of a row or insert schema, as data (with its [:maybe ...])."
   [registry name col]
-  (let [k (render/ident-key (clojure.core/name col))]
+  (let [k (shape/ident-key (clojure.core/name col))]
     (some (fn [[ek _ s]] (when (= k ek) (shape/without-gen s))) (shape/column-entries (get (shape/schemas-of registry) name)))))
 
 (defn- portable-node [schemas f]

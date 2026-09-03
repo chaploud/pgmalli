@@ -1,7 +1,8 @@
 (ns pgmalli.impl.render
   "Facts -> malli schemas.
 
-   registry returns {:registry {name schema} :unrendered [fact] :skipped [fact]} with
+   rendered returns {:registry {name schema} :unrendered [fact] :skipped [fact]}; :registry is
+   the file's :registry map (names to schemas), not a malli registry, and holds
      :pg.<schema>/<type>     enum types and domains (a domain CHECK outside the patterns is
                              [:pg/check-value expr], evaluated over the value as :VALUE)
      :pg.<schema>/<table>    a valid row as read from the database
@@ -22,19 +23,10 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [pgmalli.impl.eval :as check]
-            [pgmalli.impl.pattern :as pattern]))
+            [pgmalli.impl.pattern :as pattern]
+            [pgmalli.impl.shape :as shape]))
 
-(defn ident-key
-  "Column names as row keys: keywords for plain identifiers, strings otherwise."
-  [s]
-  (if (re-matches #"[A-Za-z_][A-Za-z0-9_]*" s) (keyword s) s))
-
-(defn- plain? [s] (re-matches #"[A-Za-z_][A-Za-z0-9_]*" s))
-
-(defn- schema-key [schema-name s]
-  (if (and (plain? schema-name) (plain? s))
-    (keyword (str "pg." schema-name) s)
-    (str "pg." schema-name "/" s)))
+;;; types
 
 (def ^:private base-types
   ;; smallint and integer are schema types pgmalli registers, carrying PostgreSQL's range; a
@@ -121,6 +113,8 @@
         b (head schema)]
     (if (and (= :and b) (not (map? (second schema)))) (head (second schema)) b)))
 
+;;; column facts
+
 (defn- apply-fact
   "[schema unrendered] after one fact on a column schema."
   [[schema unrendered] {:keys [fact] :as f} schema-name]
@@ -135,7 +129,7 @@
                       enum-base? (:values f)
                       (= :enum base) (:values f))]
     (case fact
-      (:enum :domain-ref) [[:ref (schema-key schema-name (:type-name f))] unrendered]
+      (:enum :domain-ref) [[:ref (shape/schema-key schema-name (:type-name f))] unrendered]
       ;; numeric(p, s): rounded to s places, then fewer than p - s digits before the point
       :numeric (if (and decimal-base? (:precision f))
                  [[:and schema [:pg/numeric {:precision (:precision f) :scale (or (:scale f) 0)}]] unrendered]
@@ -252,6 +246,8 @@
   (:schema (fold-facts schema-name (or (type-override overrides (:type column)) (base-type (:type column)))
                        (filter (comp type-facts :fact) (by-column (:column column))) {})))
 
+;;; table constraints
+
 (defn- fragment
   "{:schema [:map ...] :unrendered :skipped} constraining only the columns named in facts (used
    inside :multi and :or). Column schemas name the constraint in :error/message so humanized
@@ -260,7 +256,7 @@
   (let [parts (for [[col fs] (sort-by key (group-by :column facts))
                     :let [base (if (some (comp #{:null} :fact) fs) :nil (column-base schema-name (get columns col) by-column overrides))
                           r (fold-facts schema-name base (remove (comp #{:null} :fact) fs) overrides)]]
-                (assoc r :entry [(ident-key col) (with-props (:schema r) {:error/message constraint})]))]
+                (assoc r :entry [(shape/ident-key col) (with-props (:schema r) {:error/message constraint})]))]
     {:schema (into [:map] (map :entry parts))
      :unrendered (mapcat :unrendered parts)
      :skipped (mapcat :skipped parts)}))
@@ -291,12 +287,12 @@
                           ;; a branch on the column being NULL dispatches on nil
                           bs (for [b branches, v (if (:null b) [nil] (:values b))] (assoc (frag (:facts b)) :value v))
                           d (when default (frag default))]
-                      (whole {:schema (into [:multi {:dispatch (ident-key dispatch) :error/message constraint}]
+                      (whole {:schema (into [:multi {:dispatch (shape/ident-key dispatch) :error/message constraint}]
                                             ;; two alternatives pinning the same value: either may hold; without a
                                             ;; branch of its own, a value passes the CHECK only by being NULL
                                             (concat (for [[v group] (group-by :value bs)]
                                                       [v (if (= 1 (count group)) (:schema (first group)) (into [:or] (map :schema group)))])
-                                                    [[:malli.core/default (if d (:schema d) [:map [(ident-key dispatch) :nil]])]]))
+                                                    [[:malli.core/default (if d (:schema d) [:map [(shape/ident-key dispatch) :nil]])]]))
                               :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
                               :skipped (mapcat :skipped (cond-> bs d (conj d)))}))
       ;; an alternative no row can match is left out (a generator would look for one forever)
@@ -368,6 +364,37 @@
           (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) facts)]]
             (merge extra {:fact :table-check :constraint c :expr (:expr f) :columns (pattern/referenced-columns (:expr f))}))))
 
+;;; tables and domains
+
+(defn- table-diagnostics
+  "The states a table stores that no row can satisfy, or that deserve a look: [{:kind :confidence
+   :severity :message ...} ...] over its rendered columns, its table constraints and its facts."
+  [rendered checks tfacts]
+  (let [keys-of (fn [fact] (map :columns (filter (comp #{fact} :fact) tfacts)))]
+    (concat
+            (:diagnostics checks)
+            (for [[col r] rendered :when (impossible? (:schema r))]
+              {:kind :contradiction :confidence :proven :severity :error :column col
+               :message (str "no value fits column " col ": its CHECKs contradict each other")})
+            (for [s (:schemas checks) :when (and (vector? s) (= :pg/check (first s)) (false? (last s)))
+                  :let [c (:pg/constraint (second s)) partitions? (str/ends-with? (str c) " (partitions)")]]
+              {:kind (if partitions? :no-partition :check-false) :confidence :proven :severity :warning :constraint c
+               :message (if partitions? "a partitioned table with no partition takes no row" (str c " is CHECK (false): the table takes no row"))})
+            (for [f tfacts :when (false? (:valid? f))]
+              {:kind :not-valid :confidence :proven :severity :info :constraint (:constraint f)
+               :message (str (:constraint f) " is NOT VALID: rows from before it may violate it, new rows may not")})
+            (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))]
+              {:kind :row-trigger :confidence :proven :severity :info :trigger (:name f)
+               :message (str "trigger " (:name f) " runs for every inserted row: its code may reject or change rows the schema accepts")})
+            (for [f tfacts :when (= :not-enforced (:fact f))]
+              {:kind :not-enforced :confidence :proven :severity :info :constraint (:constraint f)
+               :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})
+            (for [f (filter (comp #{:unique} :fact) tfacts)
+                  :when (or (some #{(:columns f)} (keys-of :primary-key))
+                            (< 1 (count (filter #{(:columns f)} (keys-of :unique)))))]
+              {:kind :redundant-unique :confidence :proven :severity :info :constraint (:constraint f)
+               :message (str (:constraint f) " repeats a key on the same columns " (pr-str (:columns f)))}))))
+
 (defn- render-table [schema-name table tfacts overrides types]
   (let [columns (into {} (map (juxt :column identity) (filter (comp #{:column} :fact) tfacts)))
         ;; a first pass only tells which CHECKs lost a fact; those are re-folded as whole checks
@@ -376,37 +403,13 @@
         tfacts (if (empty? lost) tfacts (as-whole-checks tfacts lost {:schema schema-name :table table}))
         by-column (group-by :column (filter :column tfacts))
         rendered (if (empty? lost) first-pass (fold-columns schema-name columns tfacts overrides))
-        row (into [:map (map-props schema-name table tfacts)] (for [[col r] rendered] [(ident-key col) (:schema r)]))
+        row (into [:map (map-props schema-name table tfacts)] (for [[col r] rendered] [(shape/ident-key col) (:schema r)]))
         checks (table-checks schema-name columns by-column tfacts overrides types)
-        qualified (str schema-name "." table)
-        keys-of (fn [fact] (map :columns (filter (comp #{fact} :fact) tfacts)))
-        diagnostics (concat
-                     (:diagnostics checks)
-                     (for [[col r] rendered :when (impossible? (:schema r))]
-                       {:kind :contradiction :confidence :proven :severity :error :column col
-                        :message (str "no value fits column " col ": its CHECKs contradict each other")})
-                     (for [s (:schemas checks) :when (and (vector? s) (= :pg/check (first s)) (false? (last s)))
-                           :let [c (:pg/constraint (second s)) partitions? (str/ends-with? (str c) " (partitions)")]]
-                       {:kind (if partitions? :no-partition :check-false) :confidence :proven :severity :warning :constraint c
-                        :message (if partitions? "a partitioned table with no partition takes no row" (str c " is CHECK (false): the table takes no row"))})
-                     (for [f tfacts :when (false? (:valid? f))]
-                       {:kind :not-valid :confidence :proven :severity :info :constraint (:constraint f)
-                        :message (str (:constraint f) " is NOT VALID: rows from before it may violate it, new rows may not")})
-                     (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))]
-                       {:kind :row-trigger :confidence :proven :severity :info :trigger (:name f)
-                        :message (str "trigger " (:name f) " runs for every inserted row: its code may reject or change rows the schema accepts")})
-                     (for [f tfacts :when (= :not-enforced (:fact f))]
-                       {:kind :not-enforced :confidence :proven :severity :info :constraint (:constraint f)
-                        :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})
-                     (for [f (filter (comp #{:unique} :fact) tfacts)
-                           :when (or (some #{(:columns f)} (keys-of :primary-key))
-                                     (< 1 (count (filter #{(:columns f)} (keys-of :unique)))))]
-                       {:kind :redundant-unique :confidence :proven :severity :info :constraint (:constraint f)
-                        :message (str (:constraint f) " repeats a key on the same columns " (pr-str (:columns f)))}))]
-    {:entry [(schema-key schema-name table) (if (seq (:schemas checks)) (into [:and row] (:schemas checks)) row)]
+        qualified (str schema-name "." table)]
+    {:entry [(shape/schema-key schema-name table) (if (seq (:schemas checks)) (into [:and row] (:schemas checks)) row)]
      :unrendered (concat (mapcat (comp :unrendered val) rendered) (:unrendered checks))
      :skipped (concat (mapcat (comp :skipped val) rendered) (:skipped checks))
-     :diagnostics (map #(assoc % :table qualified) diagnostics)}))
+     :diagnostics (map #(assoc % :table qualified) (table-diagnostics rendered checks tfacts))}))
 
 (defn- render-domain
   "{:entry :unrendered :skipped} of a domain: its base type shaped by the CHECKs that matched
@@ -432,15 +435,18 @@
                 :else (into [:and schema] extras))]
     ;; a domain is what a non-NULL value must be; whether NULL is allowed is the column's (a
     ;; domain's own NOT NULL reaches its columns as a fact)
-    {:entry [(schema-key schema-name type-name) s]
+    {:entry [(shape/schema-key schema-name type-name) s]
      :unrendered (concat unrendered (mapcat :unrendered results))
      :skipped (concat skipped (mapcat :skipped results))}))
 
-(defn registry
-  "facts -> {:registry :unrendered :skipped :diagnostics}; a diagnostic is a state the database
+;;; api
+
+(defn rendered
+  "facts -> {:registry :unrendered :skipped :diagnostics}, :registry being the file's :registry
+   map (names to schemas) rather than a malli registry; a diagnostic is a state the database
    stores but no row can satisfy (or that deserves a look): {:table :kind :confidence :severity
    :message ...}, :confidence :proven when shown from the catalog alone."
-  ([facts] (registry facts {}))
+  ([facts] (rendered facts {}))
   ([facts overrides]
    (let [schema-name (:schema (first facts))
          ;; literals of the schema's own types ('sad'::mood) are values as they are
@@ -451,7 +457,7 @@
                    (render-domain schema-name f (filter #(and (= (:type-name f) (:type-name %)) (#{:domain-check :unparsed} (:fact %))) facts) overrides types))
          parts (concat domains tables)]
      {:registry (into (sorted-map-by #(compare (str %1) (str %2)))
-                      (concat (for [f facts :when (= :enum-type (:fact f))] [(schema-key schema-name (:type-name f)) (into [:enum] (:values f))])
+                      (concat (for [f facts :when (= :enum-type (:fact f))] [(shape/schema-key schema-name (:type-name f)) (into [:enum] (:values f))])
                               (map :entry parts)))
       :unrendered (vec (sort-by order (mapcat :unrendered parts)))
       :skipped (vec (sort-by order (mapcat :skipped parts)))

@@ -21,7 +21,7 @@
             [honey.sql :as sql]
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
-            [pgmalli.impl.generate :as gen]
+            [pgmalli.impl.files :as gen]
             [pgmalli.test-db :as db]))
 
 (def ^:private statement-timeout "20000")

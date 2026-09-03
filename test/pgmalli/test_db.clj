@@ -49,12 +49,15 @@
                                  {:in sql})]
     (when-not (zero? exit) (throw (ex-info (str "SQL failed: " (str/trim err)) {:sql sql})))))
 
+(def ^:private said-skipped
+  (delay (println "PGMALLI_SKIP_DB is set: the tests that need a database are skipped")))
+
 (defn with-postgres
   "clojure.test :once fixture. Binds *db* to an empty database for the namespace.
    Set PGMALLI_SKIP_DB to run without docker; *db* is then nil."
   [f]
   (if (System/getenv "PGMALLI_SKIP_DB")
-    (f)
+    (do @said-skipped (f))
     (let [{:keys [name port]} @container
           dbname (str "t_" (System/nanoTime))]
       (exec-in! name "postgres" (str "CREATE DATABASE " dbname))
