@@ -72,10 +72,28 @@
     (map? x) (mapcat #(let [w (get x %)] (when (vector? w) w)) [:with :with-recursive])
     (and (vector? x) (= 2 (count x)) (statement? (second x))) [x]))
 
+(declare insert-parts)
+
+(defn- cte-names*
+  "CTE names in a query: the :with entries of its statements when with? holds, and the
+   [name statement] pairs sitting outside any :with (CTEs built up in code). The value of
+   :insert-into, [target {:select ...}], has that shape too and is not one."
+  [x with?]
+  (cond (statement? x) (concat (when with? (keep cte-name (cte-entries x)))
+                               (mapcat #(cte-names* % with?) (vals (dissoc x :with :with-recursive :insert-into)))
+                               (cte-names* (:select (insert-parts x)) with?))
+        (and (vector? x) (= 2 (count x)) (statement? (second x)) (cte-name x)) (cons (cte-name x) (cte-names* (second x) with?))
+        (coll? x) (mapcat #(cte-names* % with?) (seq x))))
+
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
   [body]
-  (into #{} (keep cte-name) (mapcat cte-entries (nodes body))))
+  (set (cte-names* body true)))
+
+(defn- free-cte-names
+  "Names of the CTEs built up in code (pairs outside any :with), which every statement sees."
+  [body]
+  (set (cte-names* body false)))
 
 (defn- qualified
   "\"schema.table\" of a table keyword: :schema/table, :schema.table, or :table in the default schema."
@@ -105,11 +123,21 @@
         (keyword? b) [nil (name b) nil]
         (vector? a) (table-ref a schema)))))
 
-(defn- insert-target
-  "The :insert-into item naming the table, :t or [:t [:a :b]]; with a SELECT it is the first of a pair."
+(defn- insert-parts
+  "{:table :columns :select} of :insert-into in its HoneySQL shapes: :t, [:t [:a :b]],
+   [target {:select ...}], any of them behind an option map ({:overriding-value :system}); the
+   statement's :columns when the target lists none. nil when the target is not a table name
+   (a symbol, rows built elsewhere)."
   [stmt]
-  (let [i (:insert-into stmt)]
-    (if (and (vector? i) (map? (second i))) (first i) i)))
+  (let [i (:insert-into stmt)
+        i (if (and (vector? i) (map? (first i))) (vec (rest i)) i)
+        i (if (and (vector? i) (= 1 (count i))) (first i) i)
+        [target select] (if (and (vector? i) (map? (second i))) [(first i) (second i)] [i nil])
+        [table listed] (if (and (vector? target) (keyword? (first target))) [(first target) (second target)] [target nil])]
+    (when (keyword? table)
+      {:table table :columns (or listed (let [c (:columns stmt)] (when (vector? c) c))) :select select})))
+
+(defn- insert-target [stmt] (:table (insert-parts stmt)))
 
 (defn scope
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool}} of one statement; ctes are the
@@ -126,13 +154,15 @@
 
 (defn- statement-chains
   "[[statement scopes] ...] for the statements of a query, scopes the statement's own scope
-   followed by those of the statements enclosing it."
-  [registry body ctes opts]
-  (letfn [(walk [x outer]
-            (cond (statement? x) (let [chain (cons (scope registry x ctes opts) outer)]
-                                   (cons [x chain] (mapcat #(walk % chain) (vals x))))
-                  (coll? x) (mapcat #(walk % outer) (seq x))))]
-    (walk body ())))
+   followed by those of the statements enclosing it. A CTE is visible to the statement whose
+   :with defines it and to the statements inside it, not outside."
+  [registry body opts]
+  (letfn [(walk [x outer ctes]
+            (cond (statement? x) (let [ctes (into ctes (keep cte-name) (cte-entries x))
+                                       chain (cons (scope registry x ctes opts) outer)]
+                                   (cons [x chain] (mapcat #(walk % chain ctes) (vals x))))
+                  (coll? x) (mapcat #(walk % outer ctes) (seq x))))]
+    (walk body () (free-cte-names body))))
 
 (defn- split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table, :b does not."
@@ -177,9 +207,9 @@
    or :returning."
   [stmt]
   (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))
-        on (:select-distinct-on stmt)]
+        after-first (or (:select-distinct-on stmt) (:select-top stmt) (:select-distinct-top stmt))]
     (cond (vector? s) s
-          (vector? on) (rest on))))
+          (vector? after-first) (rest after-first))))
 
 (defn- select-parts
   "[column alias] of a select item: a column, a column under an alias, or an aliased
@@ -192,21 +222,29 @@
     (keyword? (first item)) [(first item) nil]
     (keyword? (second item)) [nil (second item)]))
 
+(def ^:private comparison-ops #{:= :<> :< :> :<= :>= :in :like :ilike})
+
 (defn- comparisons
-  "[op column value] of the comparisons in a statement's conditions."
+  "[op column other] for each column side of the comparisons in a statement's conditions: a
+   column on either side, the other side whatever it is (a value, a symbol, a column)."
   [stmt]
   (for [x (own-nodes (select-keys stmt (into [:where :having :on-conflict] join-keys)))
-        :when (and (vector? x) (keyword? (first x)) (keyword? (second x)))
-        :let [[op col value] x]
-        :when (#{:= :<> :< :> :<= :>= :in :like :ilike} op)]
-    [op col value]))
+        :when (and (vector? x) (= 3 (count x)) (comparison-ops (first x)))
+        :let [[op a b] x]
+        [col other] (cond-> [] (keyword? a) (conj [a b]) (keyword? b) (conj [b a]))]
+    [op col other]))
 
 (defn- assignments
   "[column value] pairs a statement assigns: :set, and the maps of :values (which may be a
    symbol, rows passed in, saying nothing about the columns)."
   [stmt]
-  (concat (when (map? (:set stmt)) (:set stmt))
-          (when (vector? (:values stmt)) (mapcat identity (filter map? (:values stmt))))))
+  (let [values (:values stmt)
+        columns (:columns (insert-parts stmt))]
+    (concat (when (map? (:set stmt)) (:set stmt))
+            (when (vector? values)
+              (concat (mapcat identity (filter map? values))
+                      ;; positional rows under the listed columns
+                      (when columns (mapcat #(map vector columns %) (filter vector? values))))))))
 
 (defn- target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
@@ -226,6 +264,7 @@
 (defn- column-problems [registry sc stmt schema]
   (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
                                       (for [[_ c] (comparisons stmt)] [c sc])
+                                      (for [c (:columns (insert-parts stmt))] [c (target-scope sc stmt schema)])
                                       (for [[c] (assignments stmt)] [c (target-scope sc stmt schema)])))
         :when (and (not (star? col)) (nil? (resolve-column registry scope col)))
         :let [hits (column-hits registry scope col)]]
@@ -234,22 +273,20 @@
       {:kind :unknown-column :column col})))
 
 (defn- insert-problems [registry stmt schema]
-  (when-let [[table] (some-> (insert-target stmt) (table-ref schema))]
-    (let [columns (table-columns registry table)
-          target (insert-target stmt)
-          ;; INSERT INTO t (a b) ... : [:t [:a :b]], or [[:t [:a :b]] {:select ...}] with a SELECT
-          listed (when (vector? target) (second target))
+  (when-let [{:keys [table columns]} (insert-parts stmt)]
+    (let [[table] (table-ref table schema)
           values (:values stmt)
+          rows (when (vector? values) values)
           ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
-          given (or listed (when (and (vector? values) (map? (first values))) (distinct (mapcat keys (filter map? values)))))
+          given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
           given-names (set (map name given))
           required (set (for [[k p] (some->> (table-key table) rt/insert-name (get registry) rt/column-entries)
                               :when (not (:optional p))]
                           (name k)))]
       (concat
-       ;; the columns of :values are checked with the other assignments
-       (for [c listed :when (and columns (not (contains? columns (name c))))]
-         {:kind :unknown-column :table table :column c})
+       (when columns
+         (for [[i row] (map-indexed vector (filter vector? rows)) :when (not= (count row) (count columns))]
+           {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
        (when (seq given)
          (for [c required :when (not (given-names c))]
            {:kind :missing-required-column :table table :column c}))))))
@@ -269,7 +306,8 @@
 (defn problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
    or compared that are unknown, or ambiguous (unqualified and in more than one table in
-   scope, those under :candidates); required INSERT columns missing; enum literals outside the enum (compared with,
+   scope, those under :candidates); required INSERT columns missing, or a row of :values not
+   as long as :columns; enum literals outside the enum (compared with,
    or assigned to, the column). scope is the statement's (from scope) or, for a nested
    statement, the chain of its own and the enclosing ones. Empty when the statement agrees
    with the registry."
@@ -287,9 +325,8 @@
    data) cannot have its unknown tables judged, so those are left out for it."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (let [ctes (cte-names body)
-         opaque? (some (fn [stmt] (some #(let [w (get stmt %)] (and (some? w) (not (vector? w)))) [:with :with-recursive])) (statements body))
-         found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body ctes opts))]
+   (let [opaque? (some (fn [stmt] (some #(let [w (get stmt %)] (and (some? w) (not (vector? w)))) [:with :with-recursive])) (statements body))
+         found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body opts))]
      (vec (if opaque? (remove #(= :unknown-table (:kind %)) found) found)))))
 
 ;;; types
@@ -317,8 +354,7 @@
    never hides one that does."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema "public"} :as opts}]
-   (let [ctes (cte-names body)
-         typed (for [[stmt sc] (statement-chains registry body ctes opts)
+   (let [typed (for [[stmt sc] (statement-chains registry body opts)
                      pair (concat (for [[op col value] (comparisons stmt)
                                         :let [t (column-type registry sc col false opts)]]
                                     [value (if (and (= :in op) (not= :any t)) [:sequential t] t)])

@@ -3,6 +3,28 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Changed
+
+- `numeric(p, s)` columns are `[:pg/numeric {:precision p :scale s}]`: the value is rounded to
+  `s` places as PostgreSQL rounds it, then must have fewer than `p - s` digits before the
+  point. The scale is read signed, so `numeric(2,-3)` and `numeric(3,5)` are right.
+- `pgmalli/inserts` emits one INSERT per table, `DEFAULT` for a column a row lacks, and
+  refuses a column the table does not have. Rows referencing each other in a cycle load.
+- `pgmalli.honeysql` reads every `:insert-into` shape HoneySQL accepts (an option map such as
+  `{:overriding-value :system}`, `:columns` with positional rows, which it checks for arity,
+  unknown and required columns, enum literals and parameter types), both sides of a
+  comparison, `:select-top`, and CTEs as lexical: a `:with` is visible inside its statement
+  only.
+- A unique index bearing a CHECK constraint's name is read as well as the constraint.
+- `test.check` is a direct dependency, as the generators use it directly.
+
+### Fixed
+
+- `numeric(3,5)` and `numeric(2,-3)`, which PostgreSQL allows, threw when the registry loaded.
+- A `NOT NULL` jsonb column with no shaping CHECK generated non-JSON values.
+
 ## [0.2.42] - 2026-09-03
 
 ### Added

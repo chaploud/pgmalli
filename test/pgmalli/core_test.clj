@@ -33,7 +33,8 @@
                   CREATE UNIQUE INDEX users_nick_lower_idx ON users (lower(nick));
                   CREATE UNIQUE INDEX users_age_open_idx ON users (age) WHERE closed_at IS NULL;
                   CREATE UNIQUE INDEX users_age_inc_idx ON users (age) INCLUDE (nick);
-                  CREATE UNIQUE INDEX closed ON users (closed_at);")
+                  CREATE UNIQUE INDEX closed ON users (closed_at);
+                  CREATE TABLE prices (id integer PRIMARY KEY, p1 numeric(3,1), p2 numeric(3,5), p3 numeric(2,-3));")
       (testing "a missing file is stale"
         (is (every? (comp nil? :file) (get (pgmalli/stale config) "public"))))
       (testing "generate, read back, validate"
@@ -48,9 +49,20 @@
             (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))
                 "closed_at only when sad")
             (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
-            (is (= [{:columns ["age"]} {:columns ["nick"]}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
-                "unique indexes over plain columns count, key columns only; expression and partial ones, and one named as a constraint is, do not")
-            (is (some #(= "closed" (:error/message (second %))) (drop 2 (:pg.public/users reg))) "the CHECK named like the index is still there"))))
+            (is (= [{:columns ["age"]} {:columns ["closed_at"]} {:columns ["nick"]}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
+                "unique indexes over plain columns count, key columns only, even one named as a constraint is; expression and partial ones do not")
+            (is (some #(= "closed" (:error/message (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
+            (let [col (fn [k] (pgmalli/non-null (pgmalli/column reg :pg.public/prices k)))]
+              (is (= [[:pg/numeric {:precision 3 :scale 1}] [:pg/numeric {:precision 3 :scale 5}] [:pg/numeric {:precision 2 :scale -3}]]
+                     (map #(last (col %)) [:p1 :p2 :p3]))
+                  "the scale is read as PostgreSQL stores it, signed")
+              (doseq [[k ok bad] [[:p1 99.94M 99.95M] [:p2 0.00999M 0.01M] [:p3 99000M 99500M]]]
+                (is (m/validate (col k) ok {:registry reg}))
+                (is (not (m/validate (col k) bad {:registry reg})))
+                (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (rand-int 1000000) ", " ok ")"))
+                (is (thrown-with-msg? clojure.lang.ExceptionInfo #"numeric field overflow"
+                                      (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (rand-int 1000000) ", " bad ")")))
+                    (str k ": the database draws the line where the schema does")))))))
       (testing "stale and unrendered"
         (is (nil? (pgmalli/stale config)))
         (is (empty? (:unrendered (gen/load-file* out))))

@@ -17,7 +17,9 @@ WITH cols AS (
            'identity', CASE a.attidentity WHEN 'a' THEN 'ALWAYS' WHEN 'd' THEN 'BY DEFAULT' END,
            'max_length', CASE WHEN a.atttypid IN ('varchar'::regtype, 'bpchar'::regtype) AND a.atttypmod > 4 THEN a.atttypmod - 4 END,
            'precision', CASE WHEN a.atttypid = 'numeric'::regtype AND a.atttypmod > 4 THEN ((a.atttypmod - 4) >> 16) & 65535 END,
-           'scale', CASE WHEN a.atttypid = 'numeric'::regtype AND a.atttypmod > 4 THEN (a.atttypmod - 4) & 65535 END
+           -- the scale is the low 11 bits of the typmod, signed (numeric(2,-3) is allowed)
+           'scale', CASE WHEN a.atttypid = 'numeric'::regtype AND a.atttypmod > 4
+                    THEN CASE WHEN ((a.atttypmod - 4) & 2047) >= 1024 THEN ((a.atttypmod - 4) & 2047) - 2048 ELSE (a.atttypmod - 4) & 2047 END END
          ) AS col
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -51,7 +53,7 @@ cons AS (
   WHERE n.nspname = :'schema' AND k.contype IN ('c', 'p', 'u', 'f') AND k.conparentid = 0
   UNION ALL
   -- a unique index over plain columns, without a predicate, constrains rows as a UNIQUE constraint does;
-  -- its key columns only (INCLUDE columns are not part of the key), and not under a constraint's name
+  -- its key columns only (INCLUDE columns are not part of the key)
   SELECT i.indrelid AS relid,
          json_build_object(
            'name', ic.relname,
@@ -71,7 +73,6 @@ cons AS (
   WHERE n.nspname = :'schema' AND i.indisunique AND NOT i.indisprimary
     AND i.indpred IS NULL AND i.indexprs IS NULL
     AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conindid = i.indexrelid)
-    AND NOT EXISTS (SELECT 1 FROM pg_constraint k WHERE k.conrelid = i.indrelid AND k.conname = ic.relname)
 ),
 tables AS (
   SELECT c.relname,
@@ -79,7 +80,8 @@ tables AS (
            'name', c.relname,
            'kind', CASE c.relkind WHEN 'v' THEN 'VIEW' WHEN 'm' THEN 'MATERIALIZED VIEW' ELSE 'TABLE' END,
            'columns', (SELECT COALESCE(json_agg(col ORDER BY attnum), '[]'::json) FROM cols WHERE cols.relid = c.oid),
-           'constraints', (SELECT COALESCE(json_object_agg(con->>'name', con), '{}'::json) FROM cons WHERE cons.relid = c.oid)
+           -- an index may bear a constraint's name (they are different namespaces), so it is keyed apart
+           'constraints', (SELECT COALESCE(json_object_agg(CASE WHEN (con->>'index')::boolean THEN con->>'name' || ' (index)' ELSE con->>'name' END, con), '{}'::json) FROM cons WHERE cons.relid = c.oid)
          ) AS tbl
   FROM pg_class c
   JOIN pg_namespace n ON n.oid = c.relnamespace

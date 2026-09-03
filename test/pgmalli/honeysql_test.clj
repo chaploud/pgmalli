@@ -80,7 +80,7 @@
   (is (= [] (h/check registry {:select [:u.id :g.name] :from [[:users :u]] :cross-join [[:groups :g]]} opts)) ":cross-join")
   (is (= [{:kind :unknown-column :column :u.nope}] (h/check registry {:select [:u.nope] :from [[:users :u]]} opts))
       "a qualified column must exist in its table")
-  (is (= [{:kind :unknown-column :table "sample.users" :column :nope}]
+  (is (= [{:kind :unknown-column :column :nope}]
          (h/check registry {:insert-into [[:users [:group_id :mood :score :nope]] {:select [:group_id :mood :score 1] :from [:users]}]} opts))
       "the column list of INSERT ... SELECT")
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]} opts))
@@ -110,3 +110,27 @@
                                            [:= :latest.group_id :cp.group_id]]} opts))
       "a :select-distinct-on subquery is a statement of its own")
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select-distinct-on [[:group_id] :group_id :nope] :from [:users]} opts))))
+
+(deftest honeysql-shapes-the-checker-must-read
+  (is (= [{:kind :unknown-column :column :nope}]
+         (h/check registry {:insert-into [{:overriding-value :system} :users] :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]} opts))
+      "the option map inserts itself emits")
+  (is (= [] (h/check registry {:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad" 2]]} opts)) ":columns with positional rows")
+  (is (= [{:kind :unknown-column :column :nope} {:kind :missing-required-column :table "sample.users" :column "score"}]
+         (h/check registry {:insert-into :users :columns [:group_id :mood :nope] :values [[1 "sad" 2]]} opts)))
+  (is (= [{:kind :values-arity :table "sample.users" :row 0 :columns 3 :values 2}]
+         (h/check registry {:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad"]]} opts)))
+  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
+         (h/check registry {:insert-into :users :columns [:group_id :mood :score] :values [[1 "angry" 2]]} opts)) "positional values are assignments")
+  (is (= {'m [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]}
+         (h/arg-types registry '{:insert-into :users :columns [:group_id :mood :score] :values [[1 m 2]]} opts)))
+  (is (= [{:kind :unknown-column :column :g.nope}]
+         (h/check registry {:select [:u.id] :from [[:users :u]] :join [[:groups :g] [:= :u.group_id :g.nope]]} opts))
+      "both sides of a comparison are columns")
+  (is (= {'gid [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]}
+         (h/arg-types registry '{:select [:id] :from [:users] :where [:= gid :group_id]} opts)) "a symbol on the left takes the column's type")
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select-top [10 :nope] :from [:users]} opts)) "TOP n, then the items")
+  (is (= [{:kind :unknown-column :column :nope}]
+         (h/check registry {:select [:nope] :from [:users]
+                            :where [:in :id {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]} opts))
+      "a CTE of an inner statement is not visible outside it: the outer :users is the table"))

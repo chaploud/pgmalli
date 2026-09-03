@@ -131,10 +131,9 @@
                       (= :enum base) (:values f))]
     (case fact
       (:enum :domain-ref) [[:ref (schema-key schema-name (:type-name f))] unrendered]
-      ;; numeric(p, s) holds |v| < 10^(p-s); the scale rounds, it does not reject
+      ;; numeric(p, s): rounded to s places, then fewer than p - s digits before the point
       :numeric (if (and decimal-base? (:precision f))
-                 (let [limit (.pow 10M (int (- (:precision f) (or (:scale f) 0))))]
-                   [[:and schema [:> (- limit)] [:< limit]] unrendered])
+                 [[:and schema [:pg/numeric {:precision (:precision f) :scale (or (:scale f) 0)}]] unrendered]
                  [schema unrendered])
       :in-set (cond (nil? members) as-is
                     ;; a second IN on the same column intersects

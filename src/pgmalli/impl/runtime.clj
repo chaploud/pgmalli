@@ -54,6 +54,23 @@
                   :min 0 :max 0}))}))
 
 (def smallint-schema (bounded-int :pg/smallint -32768 32767))
+
+(def numeric-schema
+  "[:pg/numeric {:precision p :scale s}]: a BigDecimal a numeric(p, s) column stores: rounded to
+   s places (half up, as PostgreSQL rounds on the way in), fewer than p - s digits before the
+   point. s may exceed p, or be negative, as PostgreSQL allows."
+  (m/-simple-schema
+   {:type :pg/numeric
+    :compile (fn [{:keys [precision scale] :or {scale 0}} _ _]
+               (let [limit (.movePointRight 1M (int (- precision scale)))
+                     digits (int (clojure.core/min precision 18))
+                     bound (dec (long (.longValueExact (.movePointRight 1M digits))))
+                     fmap (requiring-resolve 'clojure.test.check.generators/fmap)
+                     large-integer* (requiring-resolve 'clojure.test.check.generators/large-integer*)]
+                 {:pred (fn [v] (and (decimal? v) (< (.abs (.setScale ^BigDecimal v (int scale) java.math.RoundingMode/HALF_UP)) limit)))
+                  :type-properties {:error/message (str "should fit numeric(" precision ", " scale ")")
+                                    :gen/gen (fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale)) (large-integer* {:min (- bound) :max bound}))}
+                  :min 0 :max 0}))}))
 (def integer-schema (bounded-int :pg/integer -2147483648 2147483647))
 
 (def check-value-schema
@@ -176,7 +193,7 @@
                 :time/instant {:gen/min (.minus now (java.time.Duration/ofDays 365)) :gen/max now}
                 :time/local-date-time (let [n (java.time.LocalDateTime/now)] {:gen/min (.minusDays n 365) :gen/max n})
                 :time/local-date (let [n (java.time.LocalDate/now)] {:gen/min (.minusDays n 365) :gen/max n})
-                :any (when (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value})
+                (:any :some) (when (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value})
                 nil)]
     (if (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema]))
       (if (map? (second s)) (assoc s 1 (merge p hints)) (into [t hints] (rest s)))
@@ -198,7 +215,7 @@
   [& schemas]
   (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas)
                     {:pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
-                     :pg/smallint smallint-schema :pg/integer integer-schema})
+                     :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema})
         generated (apply merge (map #(:registry (if (map? %) % (read-generated %))) schemas))]
     (doseq [[k s] generated :when (row-schema? s)
             :let [{:keys [pg/table pg/unique pg/foreign-keys]} (second (row-map s))]
@@ -273,6 +290,7 @@
       (int-ranges t) (let [[lo hi] (int-ranges t) p (or p {})]
                        [:int (assoc p :min (max lo (:min p lo)) :max (min hi (:max p hi)))])
       (and (vector? f) (= :pg/bytes t)) 'bytes?
+      (and (vector? f) (= :pg/numeric t)) 'decimal?
       (and (vector? f) (= :ref t) (contains? registry (last f)))
       ;; the inlined target is converted here: prewalk walks its children, not the node itself
       (portable-node registry (merge-props (get registry (last f)) p))
@@ -664,11 +682,13 @@
 
 (defn inserts
   "[{:insert-into ... :values [row ...]} ...] for a dataset: its tables, parents before the
-   tables referencing them and, within a table, rows before the rows referencing them; enum,
-   json and array values in the form the driver needs. Generated columns are left out; a
-   table with an identity column gets OVERRIDING SYSTEM VALUE, so the ids the rows carry (and
-   the references to them) hold. Rows with the same columns share one INSERT, so a column a
-   row lacks takes its default. A table the registry does not have is an error."
+   tables referencing them and, within a table, rows before the rows referencing them (rows
+   referencing each other in a cycle are fine in one INSERT: the database checks foreign keys
+   at the end of the statement); enum, json and array values in the form the driver needs.
+   Generated columns are left out; a table with an identity column gets OVERRIDING SYSTEM
+   VALUE, so the ids the rows carry (and the references to them) hold; a column a row lacks is
+   DEFAULT. A table the registry does not have, or a column the table does not have, is an
+   error. Option :on-conflict :nothing adds ON CONFLICT DO NOTHING."
   [registry dataset {:keys [on-conflict]}]
   (let [ts (filter #(seq (get dataset (:table %))) (tables registry))]
     (when-let [unknown (seq (remove (set (map :table (tables registry))) (keys dataset)))]
@@ -679,9 +699,14 @@
                 generated (set (for [[k _ s] entries :when (:pg/generated (column-props s))] k))
                 identity? (some (fn [[_ _ s]] (= :always (:pg/identity (column-props s)))) entries)
                 self (filter #(= table (:table %)) refs)
-                rows (for [row (rows-parents-first (get dataset table) self)]
-                       (into {} (for [[k v] row :when (not (generated k))] [k (insert-value registry (get columns k) v)])))]
-          group (partition-by (comp set keys) rows)]
+                rows (rows-parents-first (get dataset table) self)
+                unknown (into {} (for [[i row] (map-indexed vector rows)
+                                       :let [u (remove #(contains? columns %) (keys row))] :when (seq u)]
+                                   [i (vec u)]))
+                _ (when (seq unknown)
+                    (throw (ex-info (str table " rows carry columns the table does not have: " (pr-str (distinct (mapcat val unknown))))
+                                    {:table table :rows unknown})))
+                used (remove generated (distinct (mapcat keys rows)))]]
       (cond-> {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))
-               :values (vec group)}
+               :values (mapv (fn [row] (into {} (for [k used] [k (if (contains? row k) (insert-value registry (get columns k) (get row k)) [:default])]))) rows)}
         (= :nothing on-conflict) (assoc :on-conflict [] :do-nothing [])))))

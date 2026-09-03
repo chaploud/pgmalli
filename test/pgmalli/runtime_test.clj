@@ -381,9 +381,12 @@
     (is (every? #(try (json/write %) true (catch Exception _ false))
                 (map :body (tcg/sample (mg/generator :pg.public/docs {:registry reg}) 50)))
         "an unshaped jsonb column generates values JSON can carry")
-    (is (= [[{:id 1 :body [:cast "1" :jsonb]}] [{:id 2}]]
+    (is (= [[{:id 1 :body [:cast "1" :jsonb]} {:id 2 :body [:default]}]]
            (map :values (pgmalli/inserts reg {"public.docs" [{:id 1 :body 1} {:id 2}]})))
-        "rows with different columns get INSERTs of their own, so a missing column takes its default")))
+        "one INSERT per table; a column a row lacks is DEFAULT")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"columns the table does not have"
+                          (doall (pgmalli/inserts reg {"public.docs" [{:id 1 :nope 2}]})))
+        "a column the table does not have never reaches the database")))
 
 (deftest branches-are-filled-even-when-the-dispatch-column-cannot-be-null
   (let [reg (pgmalli/registry {:database-version "x"
@@ -401,3 +404,10 @@
     (is (every? #{"open" "done"} (map :status rows)))
     (is (every? #(or (= "open" (:status %)) (some? (:result %))) rows))
     (is (m/validate (pgmalli/dataset-schema reg) ds {:registry reg}))))
+
+(deftest a-not-null-jsonb-column-still-generates-json
+  (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:body [:some {:pg/type "jsonb"}]]]}})]
+    (is (every? #(and (some? %) (try (json/write %) true (catch Exception _ false)))
+                (map :body (tcg/sample (mg/generator :pg.public/t {:registry reg}) 50)))
+        "IS NOT NULL on jsonb: JSON values, none of them nil")))

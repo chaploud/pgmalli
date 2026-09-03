@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          fetch-depth: 0   # the jar version is derived from the commit count
+          fetch-depth: 0   # the jar version comes from the latest release tag
       - uses: actions/cache@v6
         with:
           path: |

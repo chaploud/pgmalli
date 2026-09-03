@@ -95,7 +95,7 @@ the database has it.
 | NOT NULL | no `[:maybe ...]` |
 | column of an enum or domain type | `[:ref :pg.<schema>/<type>]` |
 | `smallint`, `integer` | `:pg/smallint`, `:pg/integer`: schema types with the PostgreSQL range (CHECK bounds narrow them through `:min` and `:max`); `bigint` is `:int`, exactly a long |
-| `numeric(p, s)` | `[:and decimal? [:> -10^(p-s)] [:< 10^(p-s)]]` (the scale rounds, it does not reject) |
+| `numeric(p, s)` | `[:and decimal? [:pg/numeric {:precision p :scale s}]]`: rounded to `s` places (half up, as the database does), then fewer than `p - s` digits before the point; `s` above `p` or negative as PostgreSQL allows |
 | `CHECK (col IN (...))`, `CHECK (col = 'x')` | `[:enum ...]`; several on one column intersect; uuid values as `#uuid` |
 | `CHECK (col NOT IN (...))`, `CHECK (col <> 'x')` | `[:and <type> [:not [:enum ...]]]`, or removed from an `[:enum ...]` |
 | `CHECK (col >= a AND col <= b)`, `BETWEEN`, one-sided bounds | `[:int {:min a :max b}]`; `:double` likewise, an exclusive bound as `[:and :double [:> a]]`; `numeric` as `[:and decimal? [:>= a] [:<= b]]` |
@@ -230,10 +230,10 @@ and times recent.
 ```clojure
 (def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}
 (m/validate dataset {"public.groups" [{:id 1 ...}] "public.users" [{:group_id 1 ...}]} {:registry registry})
-(clojure.test.check.generators/sample (pgmalli/dataset-generator registry {:rows 5 :except #{"public.audit_log"}}))
+(def sample (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 5 :except #{"public.audit_log"}}) 30 42))
 ;; :rows wanted per table, picked from many more candidates; a reference that finds no fitting
 ;; row grows its target table; :except leaves tables out (no kept table may reference them)
-(-> dataset meta :pgmalli/short)
+(-> sample meta :pgmalli/short)
 ;; => {"public.jobs" {:wanted 5 :got 0 :reasons [["{:params [\"chk_jobs_params\"]}" 200]]}}
 ;; tables that came out short, with what their candidate rows failed on
 ```
@@ -247,10 +247,11 @@ generate once with a fixed seed, keep the result as EDN, and let tests read that
 (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 5}) 30 42)
 ```
 
-`inserts` turns a dataset into HoneySQL INSERT maps in an order the database accepts (parents
-first, and within a table the rows referred to first), enum values cast to their type, json
-written and cast, arrays with their element type. Generated columns are left out and identity
-columns kept (`OVERRIDING SYSTEM VALUE`), so the ids the rows refer to each other by hold:
+`inserts` turns a dataset into HoneySQL INSERT maps, one per table, in an order the database
+accepts (parents first, and within a table the rows referred to first), enum values cast to
+their type, json written and cast, arrays with their element type, a column a row lacks
+`DEFAULT`. Generated columns are left out and identity columns kept (`OVERRIDING SYSTEM
+VALUE`), so the ids the rows refer to each other by hold:
 
 ```clojure
 (doseq [q (pgmalli/inserts registry dataset)]

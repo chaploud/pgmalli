@@ -45,7 +45,7 @@
 
 (defn- registry-with [r] (merge (m/default-schemas) (mu/schemas) (time/schemas)
                                  {:pg/check rt/check-schema :pg/check-value rt/check-value-schema :pg/bytes rt/bytes-schema
-                                  :pg/smallint rt/smallint-schema :pg/integer rt/integer-schema} r))
+                                  :pg/smallint rt/smallint-schema :pg/integer rt/integer-schema :pg/numeric rt/numeric-schema} r))
 
 (deftest row-schema
   (let [{:keys [registry unrendered]} (r/registry facts)
@@ -235,9 +235,9 @@
     (is (= {:pg/table "public.t" :pg/unique [{:columns ["d"] :nulls-distinct false}]
             :pg/foreign-keys [{:columns ["e"] :table "public.u" :to ["id"] :match :full}]}
            (second t)))
-    (is (= [:and {:pg/type "numeric" :pg/constraint ["a_check"]} 'decimal? [:> -100M] [:< 100M] [:>= 0.5]] (get-in t [2 1]))
-        "numeric(3,1) holds |v| < 100, and a CHECK narrows further")
-    (is (= [:and {:pg/type "numeric"} 'decimal? [:> -10000M] [:< 10000M]] (get-in t [3 1])))
+    (is (= [:and {:pg/type "numeric" :pg/constraint ["a_check"]} 'decimal? [:pg/numeric {:precision 3 :scale 1}] [:>= 0.5]] (get-in t [2 1]))
+        "numeric(3,1) rounds to one place and holds fewer than two digits before the point; a CHECK narrows further")
+    (is (= [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 4 :scale 0}]] (get-in t [3 1])))
     (is (= [:pg/smallint {:pg/type "smallint"}] (get-in t [4 1])))
     (let [reg (registry-with registry)]
       (is (m/validate :pg.public/t {:a 1.5M :b 1M :c 32767 :d nil :e nil} {:registry reg}))
@@ -350,3 +350,16 @@
                                                                                         "obj" {:name "obj" :type "CHECK" :check_clause "CHECK (jsonb_typeof(payload) = 'object'::text)"}}}}}))]
     (is (= [:map {:pg/type "jsonb" :pg/constraint ["nn" "obj"]}] (get-in registry [:pg.public/t 2 1])) "IS NOT NULL and jsonb_typeof together are still [:map]")
     (is (empty? unrendered))))
+
+(deftest numeric-rounds-before-it-counts-digits
+  (let [reg (registry-with {})
+        fits? (fn [p s v] (m/validate [:pg/numeric {:precision p :scale s}] v {:registry reg}))]
+    (is (fits? 3 1 99.94M) "rounds to 99.9")
+    (is (not (fits? 3 1 99.95M)) "rounds to 100.0, three digits before the point: PostgreSQL says numeric_value_out_of_range")
+    (is (fits? 3 5 0.00999M) "scale above precision")
+    (is (not (fits? 3 5 0.01M)))
+    (is (fits? 2 -3 99000M) "negative scale")
+    (is (not (fits? 2 -3 99500M)) "rounds to 100000")
+    (is (not (fits? 3 1 1.0)) "a double is not what the driver returns")
+    (doseq [[p s] [[3 1] [3 5] [2 -3] [30 10]]]
+      (is (every? #(fits? p s %) (mg/sample [:pg/numeric {:precision p :scale s}] {:registry reg :size 50})) (str "generates within numeric(" p "," s ")")))))
