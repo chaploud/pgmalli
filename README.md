@@ -63,7 +63,8 @@ The same from Clojure, in `pgmalli.generate`: `(generate/generate! config)` and
 Convention: regenerate right after migrating and commit the files; in CI assert
 `(nil? (:stale (generate/check config)))`, or run `check`, which prints one line per column,
 property or CHECK that differs between the file and the database, then the unrendered facts
-and the diagnostics.
+and the diagnostics. `(generate/diff before after)` gives the same differences between two
+generated files, a migration's effect on the schemas.
 
 Three namespaces, by what they need: `pgmalli.core` reads the generated files and needs
 nothing else; `pgmalli.generate` needs `psql`; `pgmalli.data` (datasets) needs test.check;
@@ -80,6 +81,7 @@ For a schema `public`, the registry contains:
 | `:pg.public/<table>` | a valid row: `[:map ...]`, wrapped in `[:and ...]` with the table's constraints when it has any |
 | `:pg.public/<view>` | a row of a view or materialized view: columns and types, every column `[:maybe ...]`, `:pg/view` on the map; no insert schema, not part of datasets |
 | `:pg.public.<table>/insert` | what an INSERT may carry: identity ALWAYS and generated columns removed, identity BY DEFAULT, defaulted and nullable columns optional, `{:closed true}`; the table's constraints see an omitted column as what the database stores in it (its literal default, else NULL) |
+| `:pg.public.<table>/update` | what an UPDATE may set: the same columns, every one optional, each holding what the column holds (a NOT NULL column cannot be set to NULL), `{:closed true}`; no table constraints, since they hold on the updated row, which the columns sent do not show |
 | `:pg/check`, `:pg/check-value`, `:pg/bytes`, `:pg/smallint`, `:pg/integer` | the schema types behind `[:pg/check expr]`, `[:pg/check-value expr]`, `[:pg/bytes {:min :max}]` and the two bounded integers |
 
 Column schemas carry provenance in their properties: `:pg/type`, `:pg/default` (a literal or
@@ -135,7 +137,8 @@ the database has it.
 `(:unrendered (pgmalli/generated "public"))` lists the facts that have no rendering, each
 with the constraint's expression as data. Give them one through `:overrides`, keyed by constraint name:
 a malli schema (`[:ref :app/name]` defined in your own registry, for instance) or
-`{:skip "reason"}`.
+`{:skip "reason"}`. A keyword key names a type instead: `{:inet [:re "^[0-9.]+$"]}` makes
+every `inet` column that schema (the column's own CHECKs still apply on top).
 
 `:pg/check` keeps the expression as data (`[:<= :score :total]`, HoneySQL-style) and
 evaluates it as PostgreSQL would: NULL passes, `AND`, `OR` and `COALESCE` stop at the first

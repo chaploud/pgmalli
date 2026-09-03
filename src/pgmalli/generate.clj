@@ -67,17 +67,22 @@
                  :when (.exists (io/file p))]
              [schema (gen/load-file* p)])))
 
+(defn diff
+  "[difference ...] between two generated data maps of a schema, as stale reports them (:file the
+   first, :db the second): a migration's effect on the schemas, read from the files alone."
+  [before after]
+  (vec (concat (for [k (distinct (concat (keys (:registry before)) (keys (:registry after))))
+                     d (differences k (get-in before [:registry k]) (get-in after [:registry k]))]
+                 d)
+               (for [k (distinct (concat (keys before) (keys after)))
+                     :when (and (not (#{:registry :database-version :schema} k)) (not= (get before k) (get after k)))]
+                 {:key k :file (get before k) :db (get after k)}))))
+
 (defn- stale* [config files]
   (let [diffs (for [[schema {:keys [data]}] (gen/generated-all config)
-                    :let [file (get files schema)
-                          ds (concat (for [k (distinct (concat (keys (:registry file)) (keys (:registry data))))
-                                          d (differences k (get-in file [:registry k]) (get-in data [:registry k]))]
-                                      d)
-                                     (for [k (distinct (concat (keys file) (keys data)))
-                                           :when (and (not (#{:registry :database-version :schema} k)) (not= (get file k) (get data k)))]
-                                       {:key k :file (get file k) :db (get data k)}))]
+                    :let [ds (diff (get files schema) data)]
                     :when (seq ds)]
-                [schema (vec ds)])]
+                [schema ds])]
     (when (seq diffs) (into {} diffs))))
 
 (defn check

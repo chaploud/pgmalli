@@ -169,6 +169,25 @@
     (keyword (str (namespace row-name) "." (name row-name)) "insert")
     (str (str/replace-first row-name "/" ".") "/insert")))
 
+(defn update-name
+  ":pg.<schema>/<table> -> :pg.<schema>.<table>/update, string keys alike."
+  [row-name]
+  (if (keyword? row-name)
+    (keyword (str (namespace row-name) "." (name row-name)) "update")
+    (str (str/replace-first row-name "/" ".") "/update")))
+
+(defn- update-schema
+  "What an UPDATE may set: the columns an INSERT may carry, every one optional (an update sends
+   the columns it changes), each holding what the column holds (a NOT NULL column cannot be set
+   to NULL), closed map. The table constraints are left out: they hold on the updated row,
+   which the columns sent do not show."
+  [row]
+  (let [[_ props & entries] (row-map row)]
+    (into [:map (assoc (select-keys props [:pg/table]) :closed true)]
+          (for [e entries :let [[k p s] (entry-parts e) cp (column-props s)]
+                :when (not (or (:pg/generated cp) (= :always (:pg/identity cp))))]
+            [k (assoc p :optional true) s]))))
+
 (defn- row-schema?
   "Row schemas carry :pg/table; their inserts do too, but closed."
   [s]
@@ -177,7 +196,9 @@
     (and (map? props) (string? (:pg/table props)) (not (:closed props)))))
 
 (defn- with-inserts [registry]
-  (into registry (for [[k s] registry :when (row-schema? s)] [(insert-name k) (insert-schema s registry)])))
+  (into registry (for [[k s] registry :when (row-schema? s)
+                       e [[(insert-name k) (insert-schema s registry)] [(update-name k) (update-schema s)]]]
+                   e)))
 
 (def ^:private json-value
   "What a json or jsonb column with no CHECK to shape it generates: small JSON values."

@@ -220,10 +220,16 @@
           {:schema base :unrendered [] :skipped [] :applied []}
           (sort-by (juxt (comp fact-order :fact) :constraint) facts)))
 
+(defn- type-override
+  "The schema an override gives every column of a type (keyword keys of :overrides name types:
+   {:inet [:re ...]}), nil when there is none."
+  [overrides data-type]
+  (get overrides (keyword (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" ""))))
+
 (defn- column-schema
   "Schema of one column with provenance properties; nullable columns wrapped in [:maybe ...]."
   [schema-name {:keys [type nullable? default identity generated]} facts overrides]
-  (let [{:keys [schema unrendered skipped applied]} (fold-facts schema-name (base-type type) facts overrides)
+  (let [{:keys [schema unrendered skipped applied]} (fold-facts schema-name (or (type-override overrides type) (base-type type)) facts overrides)
         lit (some-> default literal)
         schema (with-props schema {:pg/type type
                                    :pg/default (if (some? lit) lit default)
@@ -240,9 +246,10 @@
 (def ^:private type-facts #{:enum :domain-ref :max-length :numeric})
 
 (defn- column-base
-  "Base schema of a column: its type, shaped by the facts that come from the type itself."
-  [schema-name column by-column]
-  (:schema (fold-facts schema-name (base-type (:type column))
+  "Base schema of a column: its type (or what an override makes of the type), shaped by the
+   facts that come from the type itself."
+  [schema-name column by-column overrides]
+  (:schema (fold-facts schema-name (or (type-override overrides (:type column)) (base-type (:type column)))
                        (filter (comp type-facts :fact) (by-column (:column column))) {})))
 
 (defn- fragment
@@ -251,7 +258,7 @@
    errors point at it."
   [schema-name columns by-column facts constraint overrides]
   (let [parts (for [[col fs] (sort-by key (group-by :column facts))
-                    :let [base (if (some (comp #{:null} :fact) fs) :nil (column-base schema-name (get columns col) by-column))
+                    :let [base (if (some (comp #{:null} :fact) fs) :nil (column-base schema-name (get columns col) by-column overrides))
                           r (fold-facts schema-name base (remove (comp #{:null} :fact) fs) overrides)]]
                 (assoc r :entry [(ident-key col) (with-props (:schema r) {:error/message constraint})]))]
     {:schema (into [:map] (map :entry parts))

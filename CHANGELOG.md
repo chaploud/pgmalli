@@ -43,6 +43,10 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- `:pg.public.<table>/update`: what an UPDATE may set, next to the insert schema.
+- `:overrides` with a keyword key names a type: every column of that type gets the schema.
+- `pgmalli.generate/diff`: the differences between two generated files, as `stale` reports
+  them, a migration's effect read from the files alone.
 - `pgmalli.core/install!`: the registry as malli's default one, so `:malli/schema`,
   `malli.dev/start!` and `malli.instrument` read the generated names directly; it returns what
   the default registry held before, for putting back.

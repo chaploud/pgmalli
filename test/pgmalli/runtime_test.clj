@@ -11,6 +11,7 @@
             honey.sql
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
+            [pgmalli.generate]
             [pgmalli.impl.runtime]
             [pgmalli.data :as data]
             [pgmalli.impl.json :as json]))
@@ -524,3 +525,22 @@
                                                         [:c [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 5 :scale 2}]]] [:d [:int {:pg/type "bigint"}]]]}})]
     (is (= {:a 5 :b 7 :c 1.25M :d 9} (m/decode :pg.public/t {:a "5" :b "7" :c "1.25" :d "9"} {:registry reg} (pgmalli/transformer))))
     (is (= {:a "x" :b 7 :c "y" :d 9} (m/decode :pg.public/t {:a "x" :b 7 :c "y" :d "9"} {:registry reg} (pgmalli/transformer))) "what does not parse stays as it was")))
+
+(deftest what-an-update-may-set
+  (is (= [:map {:pg/table "sample.users" :closed true}
+          [:born {:optional true} [:maybe [:time/local-date {:pg/type "date"}]]]
+          [:closed_at {:optional true} [:maybe [:time/instant {:pg/type "timestamptz"}]]]
+          [:group_id {:optional true} [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
+         (vec (take 5 (pgmalli/portable registry :pg.sample.users/update)))))
+  (is (m/validate :pg.sample.users/update {:nick "n"} opts) "any subset of the columns")
+  (is (not (m/validate :pg.sample.users/update {:score nil} opts)) "a NOT NULL column cannot be set to NULL")
+  (is (not (m/validate :pg.sample.users/update {:id 1} opts)) "an identity ALWAYS column cannot be set")
+  (is (not (m/validate :pg.sample.users/update {:nick_upper "x"} opts)) "nor a generated one")
+  (is (not (m/validate :pg.sample.users/update {:nope 1} opts)) "closed"))
+
+(deftest a-migration-read-from-two-files
+  (let [before (pgmalli/generated "sample")
+        after (assoc-in before [:registry :pg.sample/groups] (conj (get-in before [:registry :pg.sample/groups]) [:motto [:maybe [:string {:pg/type "text"}]]]))]
+    (is (= [{:name :pg.sample/groups :column :motto :file nil :db [:maybe [:string {:pg/type "text"}]]}]
+           (pgmalli.generate/diff before after)))
+    (is (= [] (pgmalli.generate/diff before before)))))

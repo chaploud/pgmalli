@@ -493,3 +493,13 @@
     (is (= [:string {:max 8}] (:pg.public/short_name registry)) "and a varchar(8) domain's length")
     (is (= [:* :price [:cast 2 :numeric]] (:pg/generated (second (last (last (get-in registry [:pg.public/t 5])))))) "a generated column carries its expression")
     (is (= [{:columns ["email"]} {:columns ["nick"] :index true}] (:pg/unique (second (:pg.public/t registry)))) "a unique index is marked")))
+
+(deftest an-override-keyed-by-type
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "ip" :position 1 :data_type "inet" :is_nullable false}
+                                                                                    {:name "ips" :position 2 :data_type "inet[]" :is_nullable true}]
+                                                                          :constraints {}}}})
+                                                  {:inet [:re "^[0-9.]+$"]})]
+    (is (= [:re {:pg/type "inet"} "^[0-9.]+$"] (get-in registry [:pg.public/t 2 1])) "every inet column is what the override says")
+    (is (= [:maybe [:vector {:pg/type "inet[]"} :any]] (get-in registry [:pg.public/t 3 1])) "arrays keep their element type as it is")
+    (is (empty? unrendered))))
