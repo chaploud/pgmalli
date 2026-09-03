@@ -258,7 +258,7 @@
                       (contains? domain :default) {:expr (:default domain)})
         generated (when generated_expr (parsed base generated_expr))
         ;; a range built from two columns needs them ordered: the generated column's own CHECK
-        range-check (let [[f lo hi] (:expr generated)]
+        range-check (let [e (:expr generated) [f lo hi] (when (vector? e) e)]
                       (when (and (#{:tsrange :tstzrange :daterange :int4range :int8range :numrange} f) (keyword? lo) (keyword? hi))
                         (merge (dissoc base :column)
                                {:fact :table-check :constraint (str cname "_generated") :expr [:<= lo hi] :columns [(name lo) (name hi)]})))]

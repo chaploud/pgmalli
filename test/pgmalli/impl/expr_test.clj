@@ -112,3 +112,8 @@
   (is (= [:random [:named :min 10] [:named :max 100]] (:expr (x/try-parse "random(min => 10, max => 100)"))))
   (is (= [:check_con_function [:row :check_con_tbl]] (x/check-clause "CHECK (check_con_function(check_con_tbl.*))")))
   (is (= false (x/check-clause "CHECK (false) NO INHERIT"))))
+
+(deftest collations-are-left-out
+  (is (= [:= :b [:cast "abc" :text]] (x/check-clause "CHECK (b = 'abc'::text COLLATE case_insensitive)")))
+  (is (= [:= [:cast :c :text] [:any [:array [[:cast "a" :text] [:cast "b" :text]]]]]
+         (x/check-clause "CHECK ((c)::text = ANY (ARRAY['a'::text COLLATE \"C\", 'b'::text COLLATE \"C\"]))"))))

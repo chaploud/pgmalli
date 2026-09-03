@@ -219,8 +219,12 @@
                 :time/instant {:gen/min (.minus now (java.time.Duration/ofDays 365)) :gen/max now}
                 :time/local-date-time (let [n (java.time.LocalDateTime/now)] {:gen/min (.minusDays n 365) :gen/max n})
                 :time/local-date (let [n (java.time.LocalDate/now)] {:gen/min (.minusDays n 365) :gen/max n})
+                ;; a type pgmalli cannot write a value of generates NULL; a NOT NULL column of it
+                ;; leaves its table short, with the reason, rather than carrying a value the
+                ;; database refuses
                 (:any :some) (cond (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value}
-                                   (opaque-literals (type-name p)) {:gen/elements (opaque-literals (type-name p))})
+                                   (opaque-literals (type-name p)) {:gen/elements (opaque-literals (type-name p))}
+                                   (:pg/type p) {:gen/elements [nil]})
                 nil)]
     (if (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
       (if (map? (second s)) (assoc s 1 (merge p hints)) (into [t hints] (rest s)))
@@ -518,8 +522,10 @@
         fragment? (fn [f] (and (vector? f) (= :map (first f))))
         ;; a fragment saying only "not NULL" generates from the column, not from :some
         source (fn [k s] (if (= :some (if (vector? s) (first s) s)) (non-null (get columns k s)) s))
-        fill (fn [row frag i]
-               (reduce (fn [row [j e]] (let [[k _ s] (entry-parts e)] (assoc row k (generate (gen-of (source k s)) 30 (+ seed i j)))))
+        ;; a branch's own dispatch value is kept: the fragment names the column too (col IS NOT NULL)
+        fill (fn [row frag i keep]
+               (reduce (fn [row [j e]] (let [[k _ s] (entry-parts e)]
+                                         (if (= k keep) row (assoc row k (generate (gen-of (source k s)) 30 (+ seed i j))))))
                        row
                        (map-indexed vector (rest frag))))]
     (if (= :and (first schema))
@@ -531,9 +537,9 @@
                                branches (remove #(= :malli.core/default (first %)) (drop 2 part))
                                hit (some (fn [[v s]] (when (= v (get row dk)) s)) branches)
                                [v frag] (if hit [(get row dk) hit] (when (seq branches) (nth branches (mod (hash [seed i]) (count branches)))))]
-                           (if (fragment? frag) (fill (assoc row dk v) frag (* 100 i)) row))
+                           (if (fragment? frag) (fill (assoc row dk v) frag (* 100 i) dk) row))
                   :or (let [alts (filterv fragment? (drop 2 part))]
-                        (if (seq alts) (fill row (nth alts (mod (hash [seed i]) (count alts))) (* 100 i)) row))
+                        (if (seq alts) (fill row (nth alts (mod (hash [seed i]) (count alts))) (* 100 i) nil) row))
                   row))
               row
               (map-indexed vector (drop 2 schema)))

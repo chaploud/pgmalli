@@ -16,7 +16,7 @@
 ;;; tokens
 
 (def ^:private keywords
-  #{"AND" "OR" "NOT" "IS" "NULL" "IN" "ANY" "ALL" "SOME" "ARRAY" "CASE" "WHEN" "THEN" "ELSE" "END"
+  #{"AND" "OR" "NOT" "IS" "NULL" "IN" "ANY" "ALL" "SOME" "ARRAY" "CASE" "WHEN" "THEN" "ELSE" "END" "COLLATE"
     "TRUE" "FALSE" "LIKE" "ILIKE" "BETWEEN" "SIMILAR" "TO" "FROM" "BOTH" "LEADING" "TRAILING"
     "DISTINCT" "ESCAPE" "SYMMETRIC" "AT" "TIME" "ZONE"
     "CURRENT_TIMESTAMP" "CURRENT_DATE" "CURRENT_TIME" "LOCALTIMESTAMP" "LOCALTIME"
@@ -220,6 +220,10 @@
         ;; t.* : the whole row, as an argument
         (and (= :dot (:t t)) (op? (second (:toks @st)) "*"))
         (if (< min-prec prec-postfix) (do (next-tok! st) (next-tok! st) (recur [:row left])) left)
+
+        ;; expr COLLATE "name": the collation is left out, the value is the same
+        (kw? t "COLLATE")
+        (if (< min-prec prec-postfix) (do (next-tok! st) (ident-name st (next-tok! st)) (recur left)) left)
 
         ;; name => value : a named argument
         (op? t "=>")

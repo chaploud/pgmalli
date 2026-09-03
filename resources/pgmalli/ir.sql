@@ -89,6 +89,7 @@ cons AS (
   JOIN pg_catalog.pg_inherits ch ON ch.inhparent = p.oid
   WHERE n.nspname = :'schema' AND p.relkind = 'p'
   GROUP BY p.oid, p.relname
+  HAVING string_agg(pg_catalog.pg_get_partition_constraintdef(ch.inhrelid), '') IS NOT NULL
 ),
 tables AS (
   SELECT c.relname,

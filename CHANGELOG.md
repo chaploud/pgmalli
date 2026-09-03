@@ -25,8 +25,11 @@ All notable changes to this project are documented here. The format follows
   `tsvector`, `tsquery`, `jsonpath`, the geometric, range and multirange types, `pg_lsn` and
   the `reg*` types are `:any` with their `:pg/type` (no longer unknown) and generate literals
   the database reads. `varchar(n)[]` bounds its elements.
-- The CHECK parser reads `IS [NOT] JSON ...`, named arguments (`min => 10`) and `t.*`; a
-  `CHECK (false)` is no longer taken as unparsed.
+- The CHECK parser reads `IS [NOT] JSON ...`, named arguments (`min => 10`), `t.*` and
+  `COLLATE` (left out: the value is the same); a `CHECK (false)` is no longer taken as unparsed.
+- A column of a type pgmalli cannot write a value of generates NULL; a NOT NULL column of such
+  a type leaves its table short, with the reason, instead of carrying a value the database
+  refuses.
 - `pgmalli.impl.ir` names every catalog table with `pg_catalog.`, so a schema defining a table
   of the same name does not break the read.
 - `test.check` is a direct dependency, as the generators use it directly.
@@ -34,6 +37,9 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 
 - `numeric(3,5)` and `numeric(2,-3)`, which PostgreSQL allows, threw when the registry loaded.
+- A branch that names its own dispatch column (as a LIST partition's bounds do, `c IS NOT NULL
+  AND c = 'x'`) had the value that picked the branch regenerated, so every row fell to the
+  default branch and the table came out empty.
 - A `NOT NULL` jsonb column with no shaping CHECK generated non-JSON values.
 
 ## [0.2.42] - 2026-09-03

@@ -426,3 +426,15 @@
     (is (every? #(re-matches #"[01]{0,3}" %) (map :vb rows)))
     (is (= [:map {:pg/table "public.t"} [:ip [:any {:pg/type "inet"}]] [:r [:maybe [:any {:pg/type "int4range"}]]] [:b [:string {:pg/type "bit" :min 4 :max 4}]] [:vb [:string {:pg/type "bit varying" :max 3}]]]
            (pgmalli/portable reg :pg.public/t)) "the hints stay out of portable data")))
+
+(deftest a-list-partition-keeps-the-value-that-picked-its-branch
+  (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/t [:and [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:c [:maybe [:string {:pg/type "text"}]]]]
+                                                        ;; as a LIST partition renders: the branch names the dispatch column (c IS NOT NULL)
+                                                        [:multi {:dispatch :c}
+                                                         ["0000" [:map [:c :string]]]
+                                                         ["0005" [:map [:c :string]]]
+                                                         [:malli.core/default [:map [:c :nil]]]]]}})
+        ds (tcg/generate (pgmalli/dataset-generator reg {:rows 6}) 30 5)]
+    (is (= 6 (count (get ds "public.t"))) "no row is lost")
+    (is (every? #{"0000" "0005"} (map :c (get ds "public.t"))) "the value that picked the branch is not regenerated")))
