@@ -1,4 +1,4 @@
-;; bb -cp dev -e '(load-file "dev/sweep_report.clj")' -- <out-dir>: what a sweep found, grouped.
+;; bb sweep:report <out-dir>: what a sweep found, grouped.
 (require '[clojure.edn :as edn] '[babashka.fs :as fs] '[clojure.string :as str])
 (defn- cut [s n] (let [s (str s)] (subs s 0 (min n (count s)))))
 (let [[dir] *command-line-args*

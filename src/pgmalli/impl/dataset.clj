@@ -167,18 +167,19 @@
       row)))
 
 (defn- candidates
-  "Up to n rows from a table's row generator (gen-of, memoized per schema), generated from seed
+  "Up to n rows from a table's row generator (mem, memoized per table name), generated from seed
    at a size where keys rarely collide, their branching CHECKs filled in. Lazy, in chunks, so a
    table that fills from a few rows never generates the rest; no shrink tree is built, so
    large datasets stay cheap."
-  [registry gen-of name n seed]
+  [registry mem name n seed]
   (let [generate (requiring-resolve 'clojure.test.check.generators/generate)
         vector-of (requiring-resolve 'clojure.test.check.generators/vector)
         scale (requiring-resolve 'clojure.test.check.generators/scale)
+        row-gen ((:row-gen mem) name)
         chunk 25]
     (->> (range 0 n chunk)
-         (mapcat (fn [start] (generate (vector-of (scale #(max % 30) (gen-of (reg/columns registry name))) (min chunk (- n start))) 30 (+ seed start))))
-         (map-indexed (fn [i row] (fill-branches registry gen-of name row (+ seed (* 1000 i))))))))
+         (mapcat (fn [start] (generate (vector-of (scale #(max % 30) row-gen) (min chunk (- n start))) 30 (+ seed start))))
+         (map-indexed (fn [i row] (fill-branches registry (:gen-of mem) name row (+ seed (* 1000 i))))))))
 
 (defn- failure-reasons
   "Why a table came out short, most frequent reason first: what malli explains about the
@@ -198,16 +199,16 @@
    is short), self-references settled, the batch topped up from the pool until it holds rows.
    A table that comes out short is recorded in the dataset's metadata under :pgmalli/short
    with what it wanted, what it got and why."
-  [registry gen-of {:keys [name table refs key-sets] :as t} ds rows seed grow]
-  (let [opts {:registry registry}
-        ;; ponytail: the search is exhaustive per row; a budget of leaf checks per table keeps a
+  [registry mem {:keys [name table refs key-sets] :as t} ds rows seed grow]
+  (let [;; ponytail: the search is exhaustive per row; a budget of leaf checks per table keeps a
         ;; table with many references from taking forever, at the cost of rows it might have found
         budget (atom 5000)
-        valid? (fn [r] (and (pos? (swap! budget dec)) (m/validate name r opts)))
+        validate ((:validator mem) name)
+        valid? (fn [r] (and (pos? (swap! budget dec)) (validate r)))
         grow (when grow (fn [target ds pins] (when (pos? @budget) (grow target ds pins))))
         {self true others false} (group-by #(= table (:table %)) refs)
         settled (set (mapcat :columns others))
-        cands (candidates registry gen-of name (max 200 (* 50 rows)) seed)
+        cands (candidates registry mem name (max 200 (* 50 rows)) seed)
         fits? (fn [pool r] (and (valid? r) (= (inc (count pool)) (count (distinct-by-keys (conj pool r) key-sets)))))
         ;; a candidate that fails on its own is dropped before any reference is solved (or grown) for it
         [pool ds] (reduce (fn [[pool ds] c]
@@ -248,7 +249,12 @@
          fmap (requiring-resolve 'clojure.test.check.generators/fmap)
          choose (requiring-resolve 'clojure.test.check.generators/choose)
          opts {:registry registry}
+         ;; one generator and one validator per table (a schema looked up by name is a fresh
+         ;; object every time, so memoizing on the schema itself never hits)
          gen-of (memoize (fn [schema] (mg/generator schema opts)))
+         mem {:gen-of gen-of
+              :row-gen (memoize (fn [name] (gen-of (reg/columns registry name))))
+              :validator (memoize (fn [name] (m/validator (m/schema name opts))))}
          ;; datasets with one more row of a parent table each, carrying the pinned columns and
          ;; solved against the dataset so far, growing their own parents up to depth levels deep
          grow (fn grow [depth]
@@ -256,18 +262,18 @@
                   (fn [target ds pins]
                     (when-let [{:keys [name refs key-sets]} (by-table target)]
                       (let [{self true others false} (group-by #(= target (:table %)) refs)
-                            valid? #(m/validate name % opts)
+                            valid? ((:validator mem) name)
                             rs (get ds target)
                             settle (fn [[r ds]] (some-> (if self (first (solve-refs r self ds (set (mapcat :columns others)) target valid? nil)) r) (vector ds)))
                             fits? (fn [[r ds]] (when (= (inc (count rs)) (count (distinct-by-keys (conj rs r) key-sets))) [r ds]))]
-                        (->> (candidates registry gen-of name 20 (hash [target (count rs) pins]))
+                        (->> (candidates registry mem name 20 (hash [target (count rs) pins]))
                              (map #(merge % pins))
                              (keep #(solve-refs % others ds (set (keys pins)) target valid? (grow (dec depth))))
                              (keep settle)
                              (keep fits?)
                              (map (fn [[r ds]] (assoc ds target (conj (get ds target) r))))))))))]
      (fmap (fn [seed]
-             (reduce (fn [ds [i table]] (generate-table registry gen-of (by-table table) ds rows (+ seed i) (grow 4)))
+             (reduce (fn [ds [i table]] (generate-table registry mem (by-table table) ds rows (+ seed i) (grow 4)))
                      {}
                      (map-indexed vector (topological ts))))
            ;; a seed independent of test.check's size, so early samples differ too

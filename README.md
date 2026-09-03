@@ -281,8 +281,9 @@ and times recent.
 
 Rows come from the column schemas, with the branch of a `:multi` or `:or` filled in from its
 own fragment; a `:pg/check` holds by rejection, so a CHECK that wants structured jsonb leaves
-its table short. A dataset of 71 tables and 250 rows takes about a second. For a fixture,
-generate once with a fixed seed, keep it in the repository, and let tests read it:
+its table short. Generation costs: 70 tables of 15 columns with 6 CHECKs each at `:rows 5`
+(350 rows) take about 1.4 s on a warm JVM, and the time grows faster than linearly in `:rows`.
+For a fixture, generate once with a fixed seed, keep it in the repository, and let tests read it:
 `write-dataset` and `read-dataset` carry the `java.time` values and byte arrays EDN has no
 literal for under pgmalli's tags (`#pgmalli/instant "..."`, `#pgmalli/bytes "hex"`).
 

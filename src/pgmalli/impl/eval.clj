@@ -260,11 +260,13 @@
 
 ;;; patterns
 
-(defn- posix-classes
-  "[[:digit:]] and friends as the \\p{Digit} classes Java understands."
-  [re]
-  (str/replace re #"\[:(alpha|digit|alnum|upper|lower|space|punct|xdigit|cntrl|print|graph|blank):\]"
-               (fn [[_ c]] (str "\\p{" (str/capitalize c) "}"))))
+(def ^:private posix-classes
+  "[[:digit:]] and friends as the \\p{Digit} classes Java understands. Memoized: the keys are the
+   regexes of a schema, a finite set, and this runs once per row otherwise."
+  (memoize
+   (fn [re]
+     (str/replace re #"\[:(alpha|digit|alnum|upper|lower|space|punct|xdigit|cntrl|print|graph|blank):\]"
+                  (fn [[_ c]] (str "\\p{" (str/capitalize c) "}"))))))
 
 (defn java-regex
   "The Java regex for a PostgreSQL pattern, or nil when it uses syntax Java reads differently."
@@ -290,7 +292,11 @@
                                         :else (escape-regex m))))
        "$"))
 
-(defn- matches? [s re] (some? (re-find (re-pattern (str "(?s)" re)) s)))
+(def ^:private compiled
+  "The regex compiled, memoized over the same finite set of strings as posix-classes."
+  (memoize (fn [re] (re-pattern (str "(?s)" re)))))
+
+(defn- matches? [s re] (some? (re-find (compiled re) s)))
 
 ;;; jsonb
 
@@ -336,7 +342,7 @@
 
 (defn- json-type [v]
   (cond (nil? v) nil (map? v) "object" (sequential? v) "array" (string? v) "string"
-        (number? v) "number" (boolean? v) "boolean" :else "null"))
+        (number? v) "number" (boolean? v) "boolean"))
 
 ;;; evaluation
 

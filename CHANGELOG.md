@@ -14,6 +14,11 @@ All notable changes to this project are documented here. The format follows
 - `pgmalli.impl.render/registry` is `rendered` (what it returns is the file's `:registry` map,
   not a malli registry), `pgmalli.impl.generate` is `pgmalli.impl.files`, and the diff algorithm
   behind `pgmalli.generate` is `pgmalli.impl.diff`.
+- Dataset generation binds one validator and one row generator per table instead of building
+  them per row, and `pgmalli.impl.eval` compiles a CHECK's regexes once instead of once per row;
+  generated datasets are unchanged.
+- `bb sweep:report` and `bb fixture` are tasks, `bb harvest` takes the pgschema corpus from
+  `PGMALLI_PGSCHEMA_DIR` and leaves it out (saying so) when it is not there.
 
 ### Fixed
 

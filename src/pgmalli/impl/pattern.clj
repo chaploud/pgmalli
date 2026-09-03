@@ -28,7 +28,8 @@
      :null         col IS NULL
      :when-present col IS NULL OR <column pattern>       {:fact-when-present}
      :primary-key  table primary key                      {:columns}
-     :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)}
+     :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
+                                                           :index? (from a unique index, not a constraint)}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
      :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE)}
      :domain-check CHECK of a domain that matched no pattern {:type-name :constraint :expr :valid?}
@@ -37,9 +38,9 @@
      :or-check     CHECK whose OR alternatives are each an AND of column patterns
                                                           {:alternatives [[fact ...] ...]}
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
+                   (also lower <= upper for a generated range column, named <column>_generated)
      :not-enforced a NOT ENFORCED CHECK or FOREIGN KEY   {:constraint :input} (nothing to render)
      :trigger      a row-level trigger left enabled       {:name :insert :update :delete} (nothing to render)
-                   (also lower <= upper for a generated range column, named <column>_generated)
      :unparsed     expression that could not be read     {:input :error}
 
    One CHECK can yield several facts (column patterns joined by AND); every fact from a CHECK

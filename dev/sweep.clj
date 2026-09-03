@@ -11,7 +11,7 @@
      :short           a table the dataset generator could not fill   (bug or limit)
      :rejected        a generated row the database refused           (bug: the schema accepts what the database rejects)
 
-   bb -cp src:resources:test:dev -e \"(load-file \\\"dev/sweep.clj\\\")\" -- <sql-dir> <out-dir> [file-glob]
+   bb sweep <sql-dir> <out-dir> [file-glob]; bb sweep:report <out-dir> groups what it found.
    PGMALLI_PG_IMAGE picks the PostgreSQL image, as for the tests."
   (:require [babashka.fs :as fs]
             [babashka.process :as p]

@@ -47,7 +47,7 @@
           (= c \") (let [[v next] (quoted s i \" "identifier")] (recur next (conj out {:t :ident :v v})))
 
           (or (Character/isDigit c) (and (= c \.) (< (inc i) (count s)) (Character/isDigit (.charAt ^String s (inc i)))))
-          (let [m (re-find #"^\d*\.?\d+(?:[eE][+-]?\d+)?|^\d+" (subs s i))
+          (let [m (re-find #"^\d*\.?\d+(?:[eE][+-]?\d+)?" (subs s i))
                 v (if (re-find #"[.eE]" m) (Double/parseDouble m) (try (Long/parseLong m) (catch Exception _ (bigint m))))]
             (recur (+ i (count m)) (conj out {:t :num :v v})))
 
@@ -104,6 +104,8 @@
     (when-not (pred t) (throw (ex-info (str "expected " what) {:got t :input (:input @st)})))
     t))
 
+(def ^:private closing-text {:rparen "')'" :rbracket "']'"})
+
 (defn- parse-list
   "Comma-separated expressions up to and including the closing token."
   [st close]
@@ -113,7 +115,7 @@
       (let [t (next-tok! st)]
         (cond (= :comma (:t t)) (recur (conj acc (parse-expr st 0)))
               (= close (:t t)) acc
-              :else (throw (ex-info (str "expected ',' or " (name close)) {:got t :input (:input @st)})))))))
+              :else (throw (ex-info (str "expected ',' or " (closing-text close)) {:got t :input (:input @st)})))))))
 
 (defn- ident-name
   "Dotted qualification (schema.func) folded into one name."

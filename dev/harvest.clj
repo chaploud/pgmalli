@@ -9,13 +9,22 @@
             [pgmalli.impl.ir :as ir]
             [pgmalli.test-db :as db]))
 
+(def ^:private pgschema-dir
+  "A checkout of pgschema's testdata/diff, from PGMALLI_PGSCHEMA_DIR; nil when it is not there,
+   and then that source is left out of the run and of the file's :sources."
+  (let [d (System/getenv "PGMALLI_PGSCHEMA_DIR")]
+    (when (and d (fs/directory? d)) d)))
+
+(when-not pgschema-dir
+  (println "PGMALLI_PGSCHEMA_DIR is unset or not a directory: harvesting without pgschema-testdata"))
+
 (def sources
-  [{:name "pg-regress" :license "PostgreSQL License"
-    :url "https://github.com/postgres/postgres/tree/REL_17_STABLE/src/test/regress/sql"
-    :files (sort (map str (fs/glob "test/corpus/pg-regress" "*.sql")))}
-   {:name "pgschema-testdata" :license "Apache-2.0"
-    :url "https://github.com/pgplex/pgschema/tree/v1.12.5/testdata/diff"
-    :files (sort (map str (fs/glob (str (fs/home) "/Documents/OSS/pgschema/testdata/diff") "**/new.sql")))}])
+  (cond-> [{:name "pg-regress" :license "PostgreSQL License"
+            :url "https://github.com/postgres/postgres/tree/REL_17_STABLE/src/test/regress/sql"
+            :files (sort (map str (fs/glob "test/corpus/pg-regress" "*.sql")))}]
+    pgschema-dir (conj {:name "pgschema-testdata" :license "Apache-2.0"
+                        :url "https://github.com/pgplex/pgschema/tree/v1.12.5/testdata/diff"
+                        :files (sort (map str (fs/glob pgschema-dir "**/new.sql")))})))
 
 (defn- psql! [dbname sql]
   (p/sh ["docker" "exec" "-i" db/*container* "psql" "-X" "-q" "-U" "postgres" "-d" dbname] {:in sql}))

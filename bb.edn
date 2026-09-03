@@ -14,6 +14,12 @@
          sweep {:doc "bb sweep <sql-dir> <out-dir> [glob]: run SQL files through the whole pipeline, findings as EDN (needs docker)"
                 :extra-paths ["dev"]
                 :task (load-file "dev/sweep.clj")}
+         sweep:report {:doc "bb sweep:report <out-dir>: what a sweep found, grouped"
+                       :extra-paths ["dev"]
+                       :task (load-file "dev/sweep_report.clj")}
+         fixture {:doc "Rewrite test/resources/pgmalli/{sample,other}.edn from dev/fixture.clj (no database)"
+                  :extra-paths ["dev"]
+                  :task (load-file "dev/fixture.clj")}
          test {:doc "Run the test suite with babashka"
                :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test] [pgmalli.impl.eval-test] [pgmalli.honeysql-test] [pgmalli.impl.render-test] [pgmalli.core-test] [pgmalli.impl.registry-test] [pgmalli.impl.dataset-test] [pgmalli.impl.insert-test] [pgmalli.impl.jdbc-test] [pgmalli.data-test] [pgmalli.fuzz-test] [pgmalli.corpus-test])
                :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test 'pgmalli.impl.eval-test 'pgmalli.honeysql-test 'pgmalli.impl.render-test 'pgmalli.core-test 'pgmalli.impl.registry-test 'pgmalli.impl.dataset-test 'pgmalli.impl.insert-test 'pgmalli.impl.jdbc-test 'pgmalli.data-test 'pgmalli.fuzz-test 'pgmalli.corpus-test)]

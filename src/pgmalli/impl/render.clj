@@ -116,81 +116,81 @@
 ;;; column facts
 
 (defn- apply-fact
-  "[schema unrendered] after one fact on a column schema."
-  [[schema unrendered] {:keys [fact] :as f} schema-name]
+  "{:schema :unrendered} after one fact on a column schema."
+  [{:keys [schema unrendered]} {:keys [fact] :as f} schema-name]
   (let [base (schema-base schema)
         string-base? (= :string base)
         number-base? (#{:int :pg/integer :pg/smallint :double} base)
         decimal-base? (= 'decimal? base)
         enum-base? (or string-base? number-base? (#{:ref :boolean} base))
-        as-is [schema (conj unrendered f)]
+        kept (fn [s] {:schema s :unrendered unrendered})
+        as-is {:schema schema :unrendered (conj unrendered f)}
         ;; the values of an IN as members of the column's type; nil when they are not
         members (cond (and (= :uuid base) (every? uuid-string? (:values f))) (map parse-uuid (:values f))
                       enum-base? (:values f)
                       (= :enum base) (:values f))]
     (case fact
-      (:enum :domain-ref) [[:ref (shape/schema-key schema-name (:type-name f))] unrendered]
+      (:enum :domain-ref) (kept [:ref (shape/schema-key schema-name (:type-name f))])
       ;; numeric(p, s): rounded to s places, then fewer than p - s digits before the point
-      :numeric (if (and decimal-base? (:precision f))
-                 [[:and schema [:pg/numeric {:precision (:precision f) :scale (or (:scale f) 0)}]] unrendered]
-                 [schema unrendered])
+      :numeric (kept (if (and decimal-base? (:precision f))
+                       [:and schema [:pg/numeric {:precision (:precision f) :scale (or (:scale f) 0)}]]
+                       schema))
       :in-set (cond (nil? members) as-is
                     ;; a second IN on the same column intersects
-                    (= :enum base) (let [vs (filter (set members) (enum-values schema))] (if (seq vs) [(into [:enum] vs) unrendered] as-is))
-                    :else [(into [:enum] members) unrendered])
+                    (= :enum base) (let [vs (filter (set members) (enum-values schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
+                    :else (kept (into [:enum] members)))
       :not-in-set (cond (nil? members) as-is
-                        (= :enum base) (let [vs (remove (set members) (enum-values schema))] (if (seq vs) [(into [:enum] vs) unrendered] as-is))
-                        :else [[:and schema [:not (into [:enum] members)]] unrendered])
+                        (= :enum base) (let [vs (remove (set members) (enum-values schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
+                        :else (kept [:and schema [:not (into [:enum] members)]]))
       :range (let [{:keys [min max min-exclusive? max-exclusive?]} f
                    int? (#{:int :pg/integer :pg/smallint} base)]
                (cond
                  number-base?
-                 [(cond-> (with-props schema {:min (when min (if (and min-exclusive? int?) (inc min) (when-not min-exclusive? min)))
-                                              :max (when max (if (and max-exclusive? int?) (dec max) (when-not max-exclusive? max)))})
-                    (and min min-exclusive? (not int?)) (as-> s [:and s [:> min]])
-                    (and max max-exclusive? (not int?)) (as-> s [:and s [:< max]]))
-                  unrendered]
+                 (kept (cond-> (with-props schema {:min (when min (if (and min-exclusive? int?) (inc min) (when-not min-exclusive? min)))
+                                                   :max (when max (if (and max-exclusive? int?) (dec max) (when-not max-exclusive? max)))})
+                         (and min min-exclusive? (not int?)) (as-> s [:and s [:> min]])
+                         (and max max-exclusive? (not int?)) (as-> s [:and s [:< max]])))
                  decimal-base?
-                 [(cond-> (if (and (vector? schema) (= :and (first schema))) schema [:and schema])
-                    min (conj [(if min-exclusive? :> :>=) min])
-                    max (conj [(if max-exclusive? :< :<=) max]))
-                  unrendered]
+                 (kept (cond-> (if (and (vector? schema) (= :and (first schema))) schema [:and schema])
+                         min (conj [(if min-exclusive? :> :>=) min])
+                         max (conj [(if max-exclusive? :< :<=) max])))
                  :else as-is))
       :non-blank (if string-base?
-                   [(if (:trim? f) [:and (with-props schema {:min 1}) [:re "\\S"]] (with-props schema {:min 1})) unrendered]
+                   (kept (if (:trim? f) [:and (with-props schema {:min 1}) [:re "\\S"]] (with-props schema {:min 1})))
                    as-is)
-      :max-length (cond string-base? [(with-props schema {:max (:max f)}) unrendered]
+      :max-length (cond string-base? (kept (with-props schema {:max (:max f)}))
                         ;; an array of varchar(n): the bound is the elements'
-                        (and (vector? schema) (= :vector (first schema)) (= :string (last schema))) [(conj (pop schema) [:string {:max (:max f)}]) unrendered]
+                        (and (vector? schema) (= :vector (first schema)) (= :string (last schema))) (kept (conj (pop schema) [:string {:max (:max f)}]))
                         :else as-is)
       :length (let [{:keys [fn min max exact]} f
                     bounds {:min (or exact min) :max (or exact max)}]
-                (cond (and string-base? (#{:length :char_length} fn)) [(with-props schema bounds) unrendered]
-                      (and (#{'bytes? :pg/bytes} base) (= :octet_length fn)) [(with-props (if (= :pg/bytes base) schema [:pg/bytes]) bounds) unrendered]
-                      (and (= :vector base) (= :cardinality fn)) [(with-props schema bounds) unrendered]
+                (cond (and string-base? (#{:length :char_length} fn)) (kept (with-props schema bounds))
+                      (and (#{'bytes? :pg/bytes} base) (= :octet_length fn)) (kept (with-props (if (= :pg/bytes base) schema [:pg/bytes]) bounds))
+                      (and (= :vector base) (= :cardinality fn)) (kept (with-props schema bounds))
                       ;; array_length of an empty array is NULL, so only an upper bound means what the CHECK means
-                      (and (= :vector base) (= :array_length fn) (nil? (:min bounds))) [(with-props schema bounds) unrendered]
+                      (and (= :vector base) (= :array_length fn) (nil? (:min bounds))) (kept (with-props schema bounds))
                       :else as-is))
       :json-type (if (#{:any :some} base)
                    (case (:json-type f)
-                     "object" [:map unrendered]
-                     "array" [[:sequential :any] unrendered]
+                     "object" (kept :map)
+                     "array" (kept [:sequential :any])
                      as-is)
                    as-is)
       :regex (if-let [re (when string-base? (check/java-regex (:re f)))]
-               [[:and schema [:re (str (when (:case-insensitive? f) "(?i)") re)]] unrendered]
+               (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") re)]])
                as-is)
       :like (if string-base?
-              [[:and schema [:re (str (when (:case-insensitive? f) "(?i)") (check/like-regex (:pattern f)))]] unrendered]
+              (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") (check/like-regex (:pattern f)))]])
               as-is)
-      :when-present (let [[inner un] (apply-fact [schema unrendered] (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f)) schema-name)]
-                      (if (= un unrendered) [inner unrendered] as-is))
+      :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered}
+                                            (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f))
+                                            schema-name)]
+                      (if (= (:unrendered inner) unrendered) (kept (:schema inner)) as-is))
       ;; a column of any type still has to be something
-      :not-null [(cond (= :any schema) :some
-                       (and (vector? schema) (= :any (first schema))) (assoc schema 0 :some)
-                       :else schema)
-                 unrendered]
-      :null [:nil unrendered]
+      :not-null (kept (cond (= :any schema) :some
+                            (and (vector? schema) (= :any (first schema))) (assoc schema 0 :some)
+                            :else schema))
+      :null (kept :nil)
       as-is)))
 
 (def ^:private fact-order
@@ -208,7 +208,7 @@
               (cond
                 (and (map? ov) (:skip ov)) (update acc :skipped conj f)
                 ov (-> acc (assoc :schema [:and schema ov]) (update :applied conj (:constraint f)))
-                :else (let [[s un] (apply-fact [schema unrendered] f schema-name)]
+                :else (let [{s :schema un :unrendered} (apply-fact acc f schema-name)]
                         (cond-> (assoc acc :schema s :unrendered un)
                           (and (= un unrendered) (:constraint f)) (update :applied conj (:constraint f)))))))
           {:schema base :unrendered [] :skipped [] :applied []}
