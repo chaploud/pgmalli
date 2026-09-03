@@ -20,8 +20,9 @@ All notable changes to this project are documented here. The format follows
 
 - `pgmalli.honeysql`: the SELECT of an `INSERT ... SELECT` saw the table inserted into as an
   enclosing scope, so a column of the target's went unreported; it no longer does. Columns
-  assigned by `ON CONFLICT DO UPDATE SET` and named as they are in `:group-by` and `:order-by`
-  are checked too.
+  assigned by `ON CONFLICT DO UPDATE SET` (a map, a vector, or `{:fields [...] :where ...}`,
+  where `EXCLUDED` is the row proposed for insertion) and named as they are in `:group-by` and
+  `:order-by` are checked too.
 - `transformer` decodes text into `:pg/integer`, `:pg/smallint` and `:pg/numeric` columns, as
   it did into `:int` ones.
 - A column or domain with a regex CHECK (`col ~ '...'`, `LIKE`) could not be generated: malli

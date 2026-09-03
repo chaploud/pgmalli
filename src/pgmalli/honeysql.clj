@@ -148,14 +148,18 @@
   [registry stmt ctes {:keys [schema] :or {schema "public"}}]
   (let [refs (concat (for [k [:from :using :cross-join] :let [f (get stmt k)] :when f, t (if (keyword? f) [f] f)] t)
                      (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] t)
-                     [(insert-target stmt) (:update stmt) (:delete-from stmt)])]
-    (into {}
-          (for [[table alias written listed] (keep #(table-ref % schema) refs)
-                :let [cte? (boolean (and written (ctes written)))]]
-            [alias (cond-> {:table table :cte? cte?
-                            :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}
-                     ;; the columns an alias lists are the ones it has, typeless
-                     listed (assoc :columns listed))]))))
+                     [(insert-target stmt) (:update stmt) (:delete-from stmt)])
+        sc (into {}
+                 (for [[table alias written listed] (keep #(table-ref % schema) refs)
+                       :let [cte? (boolean (and written (ctes written)))]]
+                   [alias (cond-> {:table table :cte? cte?
+                                   :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}
+                            ;; the columns an alias lists are the ones it has, typeless
+                            listed (assoc :columns listed))]))]
+    ;; ON CONFLICT: EXCLUDED is the row proposed for insertion, with the target's columns
+    (if-let [[_ alias] (when (contains? stmt :on-conflict) (some-> (insert-target stmt) (table-ref schema)))]
+      (let [target (assoc (get sc alias) :excluded? true)] (assoc sc "EXCLUDED" target "excluded" target))
+      sc)))
 
 (defn- statement-chains
   "[[statement scopes] ...] for the statements of a query, scopes the statement's own scope
@@ -200,8 +204,9 @@
     (if alias
       (when-let [{:keys [table opaque?] :as entry} (get scope alias)]
         (when (has-column? registry entry column) [[alias table opaque?]]))
-      (distinct (for [[a {:keys [table opaque?] :as entry}] scope
-                      :when (has-column? registry entry column)]
+      ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
+      (distinct (for [[a {:keys [table opaque? excluded?] :as entry}] scope
+                      :when (and (not excluded?) (has-column? registry entry column))]
                   [a table opaque?])))))
 
 (defn- column-hits
@@ -263,7 +268,9 @@
   "[op column other] for each column side of the comparisons in a statement's conditions: a
    column on either side, the other side whatever it is (a value, a symbol, a column)."
   [stmt]
-  (for [x (own-nodes (select-keys stmt (into [:where :having :on-conflict] join-keys)))
+  (for [x (own-nodes (cond-> (select-keys stmt (into [:where :having :on-conflict] join-keys))
+                       ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
+                       (map? (:do-update-set stmt)) (assoc :do-update-where (:where (:do-update-set stmt)))))
         :when (and (vector? x) (= 3 (count x)) (comparison-ops (first x)))
         :let [[op a b] x]
         [col other] (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a]))]
@@ -277,8 +284,10 @@
         columns (:columns (insert-parts stmt))
         do-update (:do-update-set stmt)]
     (concat (when (map? (:set stmt)) (:set stmt))
-            ;; ON CONFLICT DO UPDATE SET: a map of assignments, or the columns taken from EXCLUDED
-            (cond (map? do-update) do-update
+            ;; ON CONFLICT DO UPDATE SET: a map of assignments, the columns taken from EXCLUDED, or
+            ;; {:fields [...] :where ...} (the columns taken from EXCLUDED, under a condition)
+            (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update) :when (keyword? c)] [c nil])
+                  (map? do-update) do-update
                   (vector? do-update) (for [c do-update :when (keyword? c)] [c nil]))
             (when (vector? values)
               (concat (mapcat identity (filter map? values))

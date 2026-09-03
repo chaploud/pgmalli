@@ -178,3 +178,13 @@
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:id] :from [:users] :order-by [[:nope :asc]]} opts)))
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:group_id] :from [:users] :group-by [:nope]} opts)))
   (is (= [] (h/check registry {:select [:group_id] :from [:users] :group-by [[:lower :nick]] :order-by [[[:count :*] :desc]]} opts)) "expressions there are not read"))
+
+(deftest every-shape-of-do-update-set
+  (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
+                               :do-update-set {:fields [:name] :where [:<= :groups.name :EXCLUDED.name]} :returning [:id]} opts))
+      "{:fields :where}: the fields are the columns taken from EXCLUDED, the row proposed for insertion")
+  (is (= [{:kind :unknown-column :column :EXCLUDED.nope}]
+         (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
+                            :do-update-set {:fields [:name] :where [:= :groups.name :EXCLUDED.nope]}} opts))
+      "EXCLUDED has the target's columns, no others")
+  (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:name :excluded.name}} opts))))
