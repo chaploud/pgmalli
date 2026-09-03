@@ -291,10 +291,18 @@
                               :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
                               :skipped (mapcat :skipped (cond-> bs d (conj d)))}))
       ;; an alternative no row can match is left out (a generator would look for one forever)
-      :or-check (let [alts (remove (comp impossible? :schema) (map frag (:alternatives f)))]
-                  (whole {:schema (if (seq alts) (into [:or {:error/message constraint}] (map :schema alts)) [:not {:error/message constraint} :any])
-                          :unrendered (mapcat :unrendered alts)
-                          :skipped (mapcat :skipped alts)}))
+      :or-check (let [all (map frag (:alternatives f))
+                      alts (remove (comp impossible? :schema) all)
+                      partitions? (str/ends-with? constraint " (partitions)")]
+                  (assoc (whole {:schema (if (seq alts) (into [:or {:error/message constraint}] (map :schema alts)) [:not {:error/message constraint} :any])
+                                 :unrendered (mapcat :unrendered alts)
+                                 :skipped (mapcat :skipped alts)})
+                         :diagnostics (for [[i a] (map-indexed vector all) :when (impossible? (:schema a))]
+                                        {:kind (if partitions? :unreachable-partition :unreachable-alternative) :confidence :proven :severity :warning
+                                         :constraint constraint :alternative i
+                                         :message (if partitions?
+                                                    "a partition can take no row: its bounds and its parent's do not overlap"
+                                                    (str "alternative " (inc i) " of " constraint " can match no row: its bounds cross"))})))
       ;; NOT VALID: the database enforces it for new rows all the same, so it is enforced, marked
       :table-check {:schema (when (check/supported? (:expr f) types)
                               (cond-> (pg-check f) (false? (:valid? f)) (assoc-in [1 :pg/not-valid] true)))}
@@ -326,7 +334,8 @@
                                 (if (or (:schema r) (seq (:unrendered r))) r (update r :unrendered conj f)))))]
     {:schemas (keep :schema results)
      :unrendered (mapcat :unrendered results)
-     :skipped (mapcat :skipped results)}))
+     :skipped (mapcat :skipped results)
+     :diagnostics (mapcat :diagnostics results)}))
 
 (defn- fold-columns [schema-name columns tfacts overrides]
   (let [by-column (group-by :column (filter :column tfacts))]
@@ -356,10 +365,33 @@
         by-column (group-by :column (filter :column tfacts))
         rendered (if (empty? lost) first-pass (fold-columns schema-name columns tfacts overrides))
         row (into [:map (map-props schema-name table tfacts)] (for [[col r] rendered] [(ident-key col) (:schema r)]))
-        checks (table-checks schema-name columns by-column tfacts overrides types)]
+        checks (table-checks schema-name columns by-column tfacts overrides types)
+        qualified (str schema-name "." table)
+        keys-of (fn [fact] (map :columns (filter (comp #{fact} :fact) tfacts)))
+        diagnostics (concat
+                     (:diagnostics checks)
+                     (for [[col r] rendered :when (impossible? (:schema r))]
+                       {:kind :contradiction :confidence :proven :severity :error :column col
+                        :message (str "no value fits column " col ": its CHECKs contradict each other")})
+                     (for [s (:schemas checks) :when (and (vector? s) (= :pg/check (first s)) (false? (last s)))
+                           :let [c (:pg/constraint (second s)) partitions? (str/ends-with? (str c) " (partitions)")]]
+                       {:kind (if partitions? :no-partition :check-false) :confidence :proven :severity :warning :constraint c
+                        :message (if partitions? "a partitioned table with no partition takes no row" (str c " is CHECK (false): the table takes no row"))})
+                     (for [f tfacts :when (false? (:valid? f))]
+                       {:kind :not-valid :confidence :proven :severity :info :constraint (:constraint f)
+                        :message (str (:constraint f) " is NOT VALID: rows from before it may violate it, new rows may not")})
+                     (for [f tfacts :when (= :not-enforced (:fact f))]
+                       {:kind :not-enforced :confidence :proven :severity :info :constraint (:constraint f)
+                        :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})
+                     (for [f (filter (comp #{:unique} :fact) tfacts)
+                           :when (or (some #{(:columns f)} (keys-of :primary-key))
+                                     (< 1 (count (filter #{(:columns f)} (keys-of :unique)))))]
+                       {:kind :redundant-unique :confidence :proven :severity :info :constraint (:constraint f)
+                        :message (str (:constraint f) " repeats a key on the same columns " (pr-str (:columns f)))}))]
     {:entry [(schema-key schema-name table) (if (seq (:schemas checks)) (into [:and row] (:schemas checks)) row)]
      :unrendered (concat (mapcat (comp :unrendered val) rendered) (:unrendered checks))
-     :skipped (concat (mapcat (comp :skipped val) rendered) (:skipped checks))}))
+     :skipped (concat (mapcat (comp :skipped val) rendered) (:skipped checks))
+     :diagnostics (map #(assoc % :table qualified) diagnostics)}))
 
 (defn- render-domain
   "{:entry :unrendered :skipped} of a domain: its base type shaped by the CHECKs that matched
@@ -388,7 +420,9 @@
      :skipped (concat skipped (mapcat :skipped results))}))
 
 (defn registry
-  "facts -> {:registry :unrendered :skipped}."
+  "facts -> {:registry :unrendered :skipped :diagnostics}; a diagnostic is a state the database
+   stores but no row can satisfy (or that deserves a look): {:table :kind :confidence :severity
+   :message ...}, :confidence :proven when shown from the catalog alone."
   ([facts] (registry facts {}))
   ([facts overrides]
    (let [schema-name (:schema (first facts))
@@ -403,4 +437,5 @@
                       (concat (for [f facts :when (= :enum-type (:fact f))] [(schema-key schema-name (:type-name f)) (into [:enum] (:values f))])
                               (map :entry parts)))
       :unrendered (vec (sort-by order (mapcat :unrendered parts)))
-      :skipped (vec (sort-by order (mapcat :skipped parts)))})))
+      :skipped (vec (sort-by order (mapcat :skipped parts)))
+      :diagnostics (vec (sort-by (juxt :table :constraint :kind) (mapcat :diagnostics parts)))})))

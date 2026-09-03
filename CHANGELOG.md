@@ -5,6 +5,14 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- `:diagnostics` in the generated file, `pgmalli/diagnostics`, printed by `check`: states the
+  database stores but no row can satisfy or that deserve a look (a partitioned table with no
+  partition, an unreachable partition, `CHECK (false)`, contradicting CHECKs on a column, a
+  NOT VALID constraint, a unique index repeating a key), each with a kind, severity and
+  confidence.
+
 ### Changed
 
 - `numeric(p, s)` columns are `[:pg/numeric {:precision p :scale s}]`: the value is rounded to
@@ -12,6 +20,9 @@ All notable changes to this project are documented here. The format follows
   point. The scale is read signed, so `numeric(2,-3)` and `numeric(3,5)` are right.
 - `pgmalli/inserts` emits one INSERT per table, `DEFAULT` for a column a row lacks, and
   refuses a column the table does not have. Rows referencing each other in a cycle load.
+- `pgmalli.honeysql` reads an alias listing its columns (`[:v {:columns [...]}]` over VALUES),
+  takes `:current_timestamp` and the other argument-less SQL words for what they are rather
+  than columns, and a CTE entry with a qualifier (`[:name query :materialized]`).
 - `pgmalli.honeysql` reads every `:insert-into` shape HoneySQL accepts (an option map such as
   `{:overriding-value :system}`, `:columns` with positional rows, which it checks for arity,
   unknown and required columns, enum literals and parameter types), both sides of a
@@ -42,6 +53,8 @@ All notable changes to this project are documented here. The format follows
 - A column of a type pgmalli cannot write a value of generates NULL; a NOT NULL column of such
   a type leaves its table short, with the reason, instead of carrying a value the database
   refuses.
+- A `NOT ENFORCED` CHECK or FOREIGN KEY (PostgreSQL 18) is not applied, since the database
+  never checks it; it is noted in `:diagnostics`.
 - `pgmalli.impl.ir` names every catalog table with `pg_catalog.`, so a schema defining a table
   of the same name does not break the read.
 - `test.check` is a direct dependency, as the generators use it directly.

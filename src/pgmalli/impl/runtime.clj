@@ -192,12 +192,13 @@
    "xid" ["1" "1234"] "xid8" ["1" "1234"] "cid" ["0" "3"]
    "point" ["(1,2)" "(0,0)" "(-1.5,2.5)"] "line" ["{1,-1,0}" "{0,1,-2}"] "lseg" ["[(0,0),(1,1)]"] "box" ["((0,0),(1,1))" "((1,1),(2,3))"]
    "path" ["[(0,0),(1,1),(2,0)]" "((0,0),(1,1),(2,0))"] "polygon" ["((0,0),(1,0),(1,1))"] "circle" ["<(0,0),1>" "<(1,1),2.5>"]
-   "int4range" ["[1,10)" "empty" "(,5]"] "int8range" ["[1,10)" "empty"] "numrange" ["[1.5,2.5]" "empty"]
-   "tsrange" ["[2020-01-01 00:00,2020-01-02 00:00)" "empty"] "tstzrange" ["[2020-01-01 00:00+00,2020-01-02 00:00+00)" "empty"]
-   "daterange" ["[2020-01-01,2020-02-01)" "empty"]
-   "int4multirange" ["{[1,3),[5,7)}" "{}"] "int8multirange" ["{[1,3)}" "{}"] "nummultirange" ["{[1.5,2.5]}" "{}"]
-   "tsmultirange" ["{[2020-01-01 00:00,2020-01-02 00:00)}" "{}"] "tstzmultirange" ["{[2020-01-01 00:00+00,2020-01-02 00:00+00)}" "{}"]
-   "datemultirange" ["{[2020-01-01,2020-02-01)}" "{}"]
+   ;; no empty range: a WITHOUT OVERLAPS key refuses one
+   "int4range" ["[1,10)" "[20,30)" "(,5]"] "int8range" ["[1,10)" "[20,30)"] "numrange" ["[1.5,2.5]" "[3,4)"]
+   "tsrange" ["[2020-01-01 00:00,2020-01-02 00:00)" "[2021-01-01 00:00,2021-06-01 00:00)"] "tstzrange" ["[2020-01-01 00:00+00,2020-01-02 00:00+00)" "[2021-01-01 00:00+00,2021-06-01 00:00+00)"]
+   "daterange" ["[2020-01-01,2020-02-01)" "[2021-01-01,2021-06-01)"]
+   "int4multirange" ["{[1,3),[5,7)}" "{[10,20)}"] "int8multirange" ["{[1,3)}" "{[10,20)}"] "nummultirange" ["{[1.5,2.5]}" "{[3,4)}"]
+   "tsmultirange" ["{[2020-01-01 00:00,2020-01-02 00:00)}"] "tstzmultirange" ["{[2020-01-01 00:00+00,2020-01-02 00:00+00)}"]
+   "datemultirange" ["{[2020-01-01,2020-02-01)}" "{[2021-01-01,2021-06-01)}"]
    "regclass" ["pg_class" "pg_type"] "regtype" ["integer" "text"] "regrole" ["postgres"] "regproc" ["now"] "regprocedure" ["now()"]
    "regoper" ["+"] "regoperator" ["+(integer,integer)"] "regnamespace" ["public"] "regconfig" ["english"] "regdictionary" ["simple"] "regcollation" ["\"C\""]})
 

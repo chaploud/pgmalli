@@ -134,3 +134,22 @@
          (h/check registry {:select [:nope] :from [:users]
                             :where [:in :id {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]} opts))
       "a CTE of an inner statement is not visible outside it: the outer :users is the table"))
+
+(deftest shapes-a-real-project-writes
+  (is (= [] (h/check registry {:update [:users :u] :set {:score :v.score} :from [[{:values [[1 2]]} [:v {:columns [:id :score]}]]] :where [:= :u.id :v.id]} opts))
+      "an alias listing its columns over VALUES has those columns")
+  (is (= [{:kind :unknown-column :column :v.nope}]
+         (h/check registry {:update [:users :u] :set {:score :v.score} :from [[{:values [[1 2]]} [:v {:columns [:id :score]}]]] :where [:= :u.id :v.nope]} opts)))
+  (is (= [] (h/check registry {:select [:id :current_timestamp] :from [:users] :where [:> :closed_at :current_timestamp]} opts))
+      "CURRENT_TIMESTAMP is a SQL word, not a column")
+  (is (= [] (h/check registry '(cond-> {:select [:id] :from [:g]} true (assoc :with [[:f {:select [:id] :from [:users]} :materialized] [:g {:select [:id] :from [:f]}]])) opts))
+      "a CTE with a qualifier, built in code"))
+
+(deftest a-subquery-added-to-a-query-built-elsewhere
+  (is (= [] (h/check registry '(update query :select conj [[:exists {:select [1] :from [:groups] :where [:= :groups.id :skills/group_id]}] :flag]) opts))
+      "the enclosing statement is not in the data: its columns cannot be judged")
+  (is (= [{:kind :unknown-column :column :groups.nope}]
+         (h/check registry '(update query :select conj [[:exists {:select [1] :from [:groups] :where [:= :groups.nope :skills/group_id]}] :flag]) opts))
+      "its own columns still are")
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry '(cond-> {:select [:nope] :from [:users]} deep? (assoc :limit 1)) opts))
+      "a statement built in code at the top is still the statement"))

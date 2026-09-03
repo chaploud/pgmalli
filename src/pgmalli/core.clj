@@ -85,6 +85,15 @@
   [schema-name]
   (:unrendered (rt/read-generated schema-name)))
 
+(defn diagnostics
+  "What the generator noticed about a schema that the database stores but that deserves a look:
+   a partitioned table with no partition, a partition its parent's bounds make unreachable, a
+   CHECK (false), CHECKs on a column that contradict each other, a NOT VALID constraint, a
+   unique index repeating a key. Each is {:table :kind :confidence :severity :message ...};
+   :confidence is :proven when the catalog alone shows it."
+  [schema-name]
+  (:diagnostics (rt/read-generated schema-name)))
+
 (defn columns
   "The [:map ...] of a row or insert schema, without the table-level constraints."
   [registry name]

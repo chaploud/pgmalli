@@ -112,6 +112,7 @@ the database has it.
 | `CHECK (x IS NULL OR y = 'v' AND ...)` and other ORs of column patterns | `[:or [:map ...] [:map ...]]` |
 | any other CHECK (`score <= total`, arithmetic, `CASE`, jsonb operators), or one of the above on a column whose type has no such rendering (`col = '2020-01-01'::date`) | `[:pg/check expr]`: the expression as data, validated by a schema type pgmalli registers |
 | domain `CHECK` outside the patterns | `[:pg/check-value expr]` on the domain, `VALUE` as `:VALUE` |
+| `NOT ENFORCED` CHECK or FOREIGN KEY (PostgreSQL 18) | nothing: the database never checks it; noted in `:diagnostics` |
 | `NOT VALID` CHECK | enforced as a whole `[:pg/check {:pg/not-valid true} ...]`, since the database enforces it for every new row; a row from before it may not validate (skip it with an override if such rows must) |
 | `date`, `time`, `timetz`, `timestamp`, `timestamptz`, `interval` | `:time/local-date`, `:time/local-time`, `:time/offset-time`, `:time/local-date-time`, `:time/instant`, `:time/duration` |
 | `json`, `jsonb` | `:any` (`:map` or `[:sequential :any]` when a CHECK pins the type) |
@@ -264,6 +265,16 @@ VALUE`), so the ids the rows refer to each other by hold:
 
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the
 generated files stay data.
+
+### What the database stores but no row can satisfy
+
+Some states PostgreSQL keeps are worth a look: a partitioned table with no partition (it takes
+no row), a partition its parent's bounds make unreachable, a `CHECK (false)`, CHECKs on one
+column that contradict each other, a constraint left `NOT VALID`, a unique index repeating a
+key. The generated file lists them under `:diagnostics` (`(pgmalli/diagnostics "public")`),
+each with a `:kind`, a `:severity` and a `:confidence` (`:proven` when the catalog alone
+shows it), and `check` prints them. Generation goes on regardless: the schemas say what the
+database says.
 
 ## Contract
 

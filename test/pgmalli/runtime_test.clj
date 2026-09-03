@@ -421,7 +421,7 @@
                                                         [:vb [:string {:pg/type "bit varying" :max 3}]]]}})
         rows (tcg/sample (mg/generator :pg.public/t {:registry reg}) 40)]
     (is (every? #{"10.0.0.1" "192.168.1.0/24" "::1"} (map :ip rows)))
-    (is (every? #(or (nil? %) (#{"[1,10)" "empty" "(,5]"} %)) (map :r rows)))
+    (is (every? #(or (nil? %) (#{"[1,10)" "[20,30)" "(,5]"} %)) (map :r rows)))
     (is (every? #(re-matches #"[01]{4}" %) (map :b rows)))
     (is (every? #(re-matches #"[01]{0,3}" %) (map :vb rows)))
     (is (= [:map {:pg/table "public.t"} [:ip [:any {:pg/type "inet"}]] [:r [:maybe [:any {:pg/type "int4range"}]]] [:b [:string {:pg/type "bit" :min 4 :max 4}]] [:vb [:string {:pg/type "bit varying" :max 3}]]]

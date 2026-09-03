@@ -30,7 +30,7 @@
       (is (= "((nick)::text || '!'::text)" (:generated_expr (col "full_name"))))
       (is (nil? (:default_value (col "full_name"))))
       (is (= "CHECK (age >= 0)" (get-in users [:constraints "users_age_check" :check_clause])))
-      (is (= {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"] :check_clause nil :is_valid true :nulls_not_distinct nil :references nil}
+      (is (= {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"] :check_clause nil :is_valid true :is_enforced true :nulls_not_distinct nil :references nil}
              (get-in users [:constraints "users_pkey"])))
       (is (= #{"users_age_check" "users_pkey"} (set (keys (:constraints users))))))))
 

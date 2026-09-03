@@ -41,6 +41,8 @@ cons AS (
                        JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = c.attnum),
            'check_clause', CASE WHEN k.contype = 'c' THEN pg_get_constraintdef(k.oid, true) END,
            'is_valid', k.convalidated,
+           -- NOT ENFORCED (PostgreSQL 18): conenforced is absent before, hence read through jsonb
+           'is_enforced', COALESCE((to_jsonb(k) ->> 'conenforced')::boolean, true),
            'nulls_not_distinct', CASE WHEN k.contype = 'u' THEN (SELECT i.indnullsnotdistinct FROM pg_catalog.pg_index i WHERE i.indexrelid = k.conindid) END,
            'references', CASE WHEN k.contype = 'f' THEN json_build_object(
                            'match', CASE k.confmatchtype WHEN 'f' THEN 'FULL' WHEN 'p' THEN 'PARTIAL' ELSE 'SIMPLE' END,

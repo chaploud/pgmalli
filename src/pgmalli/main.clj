@@ -30,9 +30,12 @@
                              "file" (pr-str file) "db" (pr-str db))))
                 (doseq [schema (:schemas (gen/config config))
                         :let [p (gen/path-for config schema)
-                              un (when (.exists (java.io.File. ^String p)) (:unrendered (gen/load-file* p)))]
-                        :when (seq un)]
-                  (println schema ": " (count un) "unrendered fact(s):")
-                  (doseq [f un] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
+                              {:keys [unrendered diagnostics]} (when (.exists (java.io.File. ^String p)) (gen/load-file* p))]]
+                  (when (seq unrendered)
+                    (println schema ": " (count unrendered) "unrendered fact(s):")
+                    (doseq [f unrendered] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
+                  (when (seq diagnostics)
+                    (println schema ": " (count diagnostics) "diagnostic(s):")
+                    (doseq [d diagnostics] (println "  " (name (:severity d)) (:table d) (:message d)))))
                 (if stale (System/exit 1) (println "generated files match the database")))
       (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))))

@@ -431,3 +431,35 @@
     (is (= [1 2 3 :malli.core/default] (map first (drop 2 (nth (:pg.public/t registry) 2)))) "each value once")
     (is (m/validate :pg.public/t {:a 2} {:registry reg}))
     (is (not (m/validate :pg.public/t {:a 4} {:registry reg})))))
+
+(deftest diagnostics-name-what-no-row-can-satisfy
+  (let [{:keys [diagnostics]} (r/registry (p/facts {:name "public" :types {}
+                                                    :tables {"t" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}
+                                                                            {:name "n" :position 2 :data_type "integer" :is_nullable false}]
+                                                                  :constraints {"t_pkey" {:name "t_pkey" :type "PRIMARY KEY" :columns ["id"]}
+                                                                                "t_id_idx" {:name "t_id_idx" :type "UNIQUE" :columns ["id"]}
+                                                                                "t (partitions)" {:name "t (partitions)" :type "CHECK"
+                                                                                                  :check_clause "CHECK (((id >= 0) AND (id < 10)) OR ((id >= 30) AND (id < 40) AND (id >= 20) AND (id < 30)))"}
+                                                                                "n_big" {:name "n_big" :type "CHECK" :check_clause "CHECK (n > 10)"}
+                                                                                "n_small" {:name "n_small" :type "CHECK" :check_clause "CHECK (n < 5)"}
+                                                                                "nv" {:name "nv" :type "CHECK" :check_clause "CHECK (n <> 7)" :is_valid false}}}
+                                                             "e" {:columns [{:name "k" :position 1 :data_type "integer" :is_nullable false}]
+                                                                  :constraints {"e (partitions)" {:name "e (partitions)" :type "CHECK" :check_clause "CHECK (false)"}}}}}))]
+    (is (= #{[:no-partition "public.e"] [:contradiction "public.t"] [:unreachable-partition "public.t"] [:not-valid "public.t"] [:redundant-unique "public.t"]}
+           (set (map (juxt :kind :table) diagnostics))))
+    (is (= 5 (count diagnostics)))
+    (is (every? #(and (keyword? (:severity %)) (= :proven (:confidence %)) (string? (:message %))) diagnostics))))
+
+(deftest a-not-enforced-constraint-is-noted-not-applied
+  (let [{:keys [registry unrendered diagnostics]} (r/registry (p/facts {:name "public" :types {}
+                                                                        :tables {"p" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}]
+                                                                                      :constraints {"p_pkey" {:name "p_pkey" :type "PRIMARY KEY" :columns ["id"]}}}
+                                                                                 "t" {:columns [{:name "b" :position 1 :data_type "integer" :is_nullable false}
+                                                                                                {:name "p_id" :position 2 :data_type "integer" :is_nullable true}]
+                                                                                      :constraints {"b_check" {:name "b_check" :type "CHECK" :check_clause "CHECK (b > 10) NOT ENFORCED" :is_valid true :is_enforced false}
+                                                                                                    "t_p_id_fkey" {:name "t_p_id_fkey" :type "FOREIGN KEY" :columns ["p_id"] :is_enforced false
+                                                                                                                   :references {:schema "public" :table "p" :columns ["id"]}}}}}}))]
+    (is (= [:map {:pg/table "public.t"} [:b [:pg/integer {:pg/type "integer"}]] [:p_id [:maybe [:pg/integer {:pg/type "integer"}]]]] (:pg.public/t registry))
+        "neither the CHECK nor the foreign key is applied: the database never checks them")
+    (is (empty? unrendered))
+    (is (= #{["b_check" :not-enforced] ["t_p_id_fkey" :not-enforced]} (set (map (juxt :constraint :kind) diagnostics))))))

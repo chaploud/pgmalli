@@ -37,6 +37,7 @@
      :or-check     CHECK whose OR alternatives are each an AND of column patterns
                                                           {:alternatives [[fact ...] ...]}
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
+     :not-enforced a NOT ENFORCED CHECK or FOREIGN KEY   {:constraint :input} (nothing to render)
                    (also lower <= upper for a generated range column, named <column>_generated)
      :unparsed     expression that could not be read     {:input :error}
 
@@ -287,13 +288,16 @@
       (and max_length (#{"bit varying" "varbit"} elem-type)) (conj (merge base {:fact :length :fn :length :max max_length}))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced]}]
   (case type
     "PRIMARY KEY" [(merge base {:fact :primary-key :constraint cname :columns columns})]
     "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct)})]
-    "FOREIGN KEY" [(merge base {:fact :references :constraint cname :columns columns
-                                :match (if (= "FULL" (:match references)) :full :simple)
-                                :to (select-keys references [:schema :table :columns])})]
+    ;; NOT ENFORCED: the database never checks it, so it is not a reference, only noted
+    "FOREIGN KEY" (if (false? is_enforced)
+                    [(merge base {:fact :not-enforced :constraint cname :input (str "FOREIGN KEY " (pr-str columns))})]
+                    [(merge base {:fact :references :constraint cname :columns columns
+                                  :match (if (= "FULL" (:match references)) :full :simple)
+                                  :to (select-keys references [:schema :table :columns])})])
     []))
 
 (defn- domain-facts
@@ -322,11 +326,14 @@
         (sequential? e) (map #(substitute % subst) e)
         :else e))
 
-(defn- check-facts [base {cname :name :keys [check_clause is_valid]} generated]
+(defn- check-facts [base {cname :name :keys [check_clause is_valid is_enforced]} generated]
   (let [base (assoc base :constraint cname)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try-clause check_clause)]
-    (if (contains? parsed :expr)
+    (cond
+      ;; NOT ENFORCED: the database never checks it, so nothing is rendered; it is noted
+      (false? is_enforced) [(merge base {:fact :not-enforced :input check_clause})]
+      (contains? parsed :expr)
       (let [;; a generated column holds its expression's value: the CHECK is on that
             e (substitute (:expr parsed) generated)
             n (when (not= false is_valid) (normalize e))
@@ -339,7 +346,7 @@
               [(merge base {:fact :or-check :alternatives (stringify alts)})]
               [(cond-> (merge base {:fact :table-check :columns (referenced-columns e)})
                  (false? is_valid) (assoc :valid? false))]))))
-      [(merge base {:fact :unparsed :input check_clause :error (:error parsed)})])))
+      :else [(merge base {:fact :unparsed :input check_clause :error (:error parsed)})])))
 
 ;;; API
 

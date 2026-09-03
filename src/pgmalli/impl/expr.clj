@@ -310,7 +310,7 @@
 (defn check-clause
   "The expression inside \"CHECK (...)\" as data. Trailing NOT VALID / NO INHERIT are ignored."
   [s]
-  (let [[_ inner] (re-matches #"(?s)CHECK\s*\((.*)\)(?:\s+(?:NOT VALID|NO INHERIT))*\s*" s)]
+  (let [[_ inner] (re-matches #"(?s)CHECK\s*\((.*)\)(?:\s+(?:NOT VALID|NO INHERIT|NOT ENFORCED|ENFORCED))*\s*" s)]
     (when-not inner (throw (ex-info "not a CHECK (...) clause" {:input s})))
     (parse inner)))
 

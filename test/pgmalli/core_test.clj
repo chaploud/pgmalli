@@ -37,7 +37,8 @@
                   CREATE TABLE prices (id integer PRIMARY KEY, p1 numeric(3,1), p2 numeric(3,5), p3 numeric(2,-3));
                   CREATE TABLE parted (k integer NOT NULL, v text) PARTITION BY RANGE (k);
                   CREATE TABLE parted_low PARTITION OF parted FOR VALUES FROM (0) TO (100);
-                  CREATE TABLE parted_high PARTITION OF parted FOR VALUES FROM (100) TO (200);")
+                  CREATE TABLE parted_high PARTITION OF parted FOR VALUES FROM (100) TO (200);
+                  CREATE TABLE nopart (k integer) PARTITION BY LIST (k);")
       (testing "a missing file is stale"
         (is (every? (comp nil? :file) (get (pgmalli/stale config) "public"))))
       (testing "generate, read back, validate"
@@ -69,7 +70,9 @@
               (is (m/validate :pg.public/parted {:k 150 :v nil} {:registry reg}))
               (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
               (is (every? #(< -1 (:k %) 200) (get (clojure.test.check.generators/generate (pgmalli/dataset-generator reg {:rows 5}) 30 1) "public.parted"))
-                  "generated rows land in a partition")))))
+                  "generated rows land in a partition")
+              (is (= [{:kind :no-partition :table "public.nopart"}] (map #(select-keys % [:kind :table]) (:diagnostics data)))
+                  "the file says what deserves a look")))))
       (testing "stale and unrendered"
         (is (nil? (pgmalli/stale config)))
         (is (empty? (:unrendered (gen/load-file* out))))

@@ -70,7 +70,7 @@
   [x]
   (cond
     (map? x) (mapcat #(let [w (get x %)] (when (vector? w) w)) [:with :with-recursive])
-    (and (vector? x) (= 2 (count x)) (statement? (second x))) [x]))
+    (and (vector? x) (<= 2 (count x) 3) (statement? (second x))) [x]))
 
 (declare insert-parts)
 
@@ -82,7 +82,7 @@
   (cond (statement? x) (concat (when with? (keep cte-name (cte-entries x)))
                                (mapcat #(cte-names* % with?) (vals (dissoc x :with :with-recursive :insert-into)))
                                (cte-names* (:select (insert-parts x)) with?))
-        (and (vector? x) (= 2 (count x)) (statement? (second x)) (cte-name x)) (cons (cte-name x) (cte-names* (second x) with?))
+        (and (vector? x) (<= 2 (count x) 3) (statement? (second x)) (cte-name x)) (cons (cte-name x) (cte-names* (second x) with?))
         (coll? x) (mapcat #(cte-names* % with?) (seq x))))
 
 (defn cte-names
@@ -108,19 +108,22 @@
   (when-not (or (namespace k) (str/includes? (name k) ".")) (name k)))
 
 (defn- table-ref
-  "[table alias written] of a :from / join / target item: the table's qualified name, its alias,
-   and the name as written (nil when qualified by a schema); an opaque item (subquery, function)
-   has no table."
+  "[table alias written columns] of a :from / join / target item: the table's qualified name,
+   its alias, the name as written (nil when qualified by a schema), and the columns an alias
+   lists ([:v {:columns [:id :n]}] over a VALUES); an opaque item (subquery, function) has no
+   table."
   [x schema]
   (cond
     (keyword? x) [(qualified x schema) (name x) (written x)]
     (vector? x)
-    (let [[a b] x]
+    (let [[a b] x
+          ;; [:alias {:columns [...]}]
+          [b listed] (if (and (vector? b) (keyword? (first b)) (map? (second b))) [(first b) (mapv name (:columns (second b)))] [b nil])]
       (cond
         ;; :t / [:t :alias] / INSERT INTO t (columns...)
-        (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (name (if (keyword? b) b a)) (written a)]
-        (keyword? a) [nil (name a) nil]
-        (keyword? b) [nil (name b) nil]
+        (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (name (if (keyword? b) b a)) (written a) listed]
+        (keyword? a) [nil (name a) nil listed]
+        (keyword? b) [nil (name b) nil listed]
         (vector? a) (table-ref a schema)))))
 
 (defn- insert-parts
@@ -147,22 +150,28 @@
                      (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] t)
                      [(insert-target stmt) (:update stmt) (:delete-from stmt)])]
     (into {}
-          (for [[table alias written] (keep #(table-ref % schema) refs)
+          (for [[table alias written listed] (keep #(table-ref % schema) refs)
                 :let [cte? (boolean (and written (ctes written)))]]
-            [alias {:table table :cte? cte?
-                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}]))))
+            [alias (cond-> {:table table :cte? cte?
+                            :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}
+                     ;; the columns an alias lists are the ones it has, typeless
+                     listed (assoc :columns listed))]))))
 
 (defn- statement-chains
   "[[statement scopes] ...] for the statements of a query, scopes the statement's own scope
    followed by those of the statements enclosing it. A CTE is visible to the statement whose
-   :with defines it and to the statements inside it, not outside."
+   :with defines it and to the statements inside it, not outside. A statement found inside a
+   vector of a code form, not under a statement (a subquery a helper adds to a query built
+   elsewhere), has an enclosing statement this data does not show: its chain ends in :open,
+   and a column it cannot resolve is taken to be the enclosing statement's."
   [registry body opts]
-  (letfn [(walk [x outer ctes]
+  (letfn [(walk [x outer ctes in-vector?]
             (cond (statement? x) (let [ctes (into ctes (keep cte-name) (cte-entries x))
+                                       outer (if (and (empty? outer) in-vector?) (list :open) outer)
                                        chain (cons (scope registry x ctes opts) outer)]
-                                   (cons [x chain] (mapcat #(walk % chain ctes) (vals x))))
-                  (coll? x) (mapcat #(walk % outer ctes) (seq x))))]
-    (walk body () (free-cte-names body))))
+                                   (cons [x chain] (mapcat #(walk % chain ctes false) (vals x))))
+                  (coll? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x))) (seq x))))]
+    (walk body () (free-cte-names body) false)))
 
 (defn- split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table, :b does not."
@@ -170,15 +179,23 @@
   (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))]
     (if (str/includes? s ".") (str/split s #"\." 2) [nil s])))
 
+(defn- has-column?
+  "Whether a scope entry may hold a column: one it lists, one of its table's, or anything for
+   an opaque table."
+  [registry {:keys [table opaque? columns]} column]
+  (cond columns (boolean (some #{column} columns))
+        opaque? true
+        :else (contains? (table-columns registry table) column)))
+
 (defn- own-hits
   "[[alias table opaque?] ...] of the tables of one scope a column may belong to."
   [registry scope col]
   (let [[alias column] (split-column col)]
     (if alias
-      (when-let [{:keys [table opaque?]} (get scope alias)]
-        (when (or opaque? (contains? (table-columns registry table) column)) [[alias table opaque?]]))
-      (distinct (for [[a {:keys [table opaque?]}] scope
-                      :when (or opaque? (contains? (table-columns registry table) column))]
+      (when-let [{:keys [table opaque?] :as entry} (get scope alias)]
+        (when (has-column? registry entry column) [[alias table opaque?]]))
+      (distinct (for [[a {:keys [table opaque?] :as entry}] scope
+                      :when (has-column? registry entry column)]
                   [a table opaque?])))))
 
 (defn- column-hits
@@ -186,8 +203,13 @@
    ones) that has any."
   [registry scopes col]
   (let [[sc & outer] (if (map? scopes) [scopes] scopes)
-        hits (own-hits registry sc col)]
-    (if (or (seq hits) (empty? outer)) hits (column-hits registry outer col))))
+        hits (own-hits registry sc col)
+        [alias] (split-column col)]
+    (cond (or (seq hits) (empty? outer)) hits
+          ;; the enclosing statement is not in the data: a column not of this scope's tables is
+          ;; one of its, untyped
+          (= :open (first outer)) (if (and alias (contains? sc alias)) hits [[alias nil true]])
+          :else (column-hits registry outer col))))
 
 (defn resolve-column
   "{:table :column :schema} for a column keyword in a scope (or the chain of scopes of a
@@ -201,6 +223,13 @@
         {:table (or table alias) :column column :schema (when-not opaque? (get (table-columns registry table) column))}))))
 
 ;;; what a statement selects, compares and assigns
+
+(def ^:private sql-values
+  "Keywords HoneySQL writes as SQL words, not columns."
+  #{:current_timestamp :current_date :current_time :localtime :localtimestamp :current_user :session_user :current_role
+    :current_catalog :current_schema :user :true :false :null :default :*})
+
+(defn- column-keyword? [x] (and (keyword? x) (not (sql-values x))))
 
 (defn- selected-items
   "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
@@ -216,7 +245,7 @@
    expression, which has no column."
   [item]
   (cond
-    (keyword? item) [item nil]
+    (keyword? item) (when (column-keyword? item) [item nil])
     (not (vector? item)) nil
     (and (keyword? (first item)) (keyword? (second item))) [(first item) (second item)]
     (keyword? (first item)) [(first item) nil]
@@ -231,7 +260,7 @@
   (for [x (own-nodes (select-keys stmt (into [:where :having :on-conflict] join-keys)))
         :when (and (vector? x) (= 3 (count x)) (comparison-ops (first x)))
         :let [[op a b] x]
-        [col other] (cond-> [] (keyword? a) (conj [a b]) (keyword? b) (conj [b a]))]
+        [col other] (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a]))]
     [op col other]))
 
 (defn- assignments
