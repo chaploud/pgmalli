@@ -5,8 +5,9 @@
    and from the same data, the types of the query's parameters and of the rows it returns,
    as malli schemas.
 
-   Scope: tables come from :from, :using, the joins, :insert-into, :update and :delete-from,
-   under their aliases. CTEs (:with), subqueries and table functions are opaque tables: their
+   Scope: tables come from :from, :using, :cross-join, the joins (:join, :left-join,
+   :right-join, :inner-join, :full-join, :outer-join; :join-by is not read), :insert-into,
+   :update and :delete-from, under their aliases. CTEs (:with), subqueries and table functions are opaque tables: their
    columns exist but have no type. A column is :col (unique in the scope), :alias/col or
    :alias.col; a column a subquery cannot resolve is looked for in the enclosing statements,
    as PostgreSQL does. An unqualified table is in :schema (default \"public\").
@@ -47,14 +48,12 @@
 (def ^:private statement-keys
   #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top
     :insert-into :update :delete-from :union :union-all :intersect :except})
-(def ^:private join-keys [:join :left-join :inner-join :right-join :full-join])
+(def ^:private join-keys [:join :left-join :inner-join :right-join :outer-join :full-join])
 
 (defn- statement?
   "A query map; one holding only a set operation is one too, its members statements of their own."
   [x]
   (and (map? x) (some statement-keys (keys x))))
-
-(defn- nodes [body] (tree-seq coll? seq body))
 
 (defn- own-nodes
   "The nodes of one statement's part, not descending into the statements nested in it: those
@@ -65,7 +64,7 @@
 (defn statements
   "The statements in a query (a map, or Clojure data holding maps); a subquery is one too."
   [body]
-  (into [] (filter statement?) (nodes body)))
+  (into [] (filter statement?) (tree-seq coll? seq body)))
 
 (defn- cte-name [entry]
   (when (vector? entry)
@@ -80,7 +79,19 @@
     (map? x) (mapcat #(let [w (get x %)] (when (vector? w) w)) [:with :with-recursive])
     (and (vector? x) (<= 2 (count x) 3) (statement? (second x))) [x]))
 
-(declare insert-parts)
+(defn- insert-parts
+  "{:table :columns :select} of :insert-into in its HoneySQL shapes: :t, [:t [:a :b]],
+   [target {:select ...}], any of them behind an option map ({:overriding-value :system}); the
+   statement's :columns when the target lists none. nil when the target is not a table name
+   (a symbol, rows built elsewhere)."
+  [stmt]
+  (let [i (:insert-into stmt)
+        i (if (and (vector? i) (map? (first i))) (vec (rest i)) i)
+        i (if (and (vector? i) (= 1 (count i))) (first i) i)
+        [target select] (if (and (vector? i) (map? (second i))) [(first i) (second i)] [i nil])
+        [table listed] (if (and (vector? target) (keyword? (first target))) [(first target) (second target)] [target nil])]
+    (when (keyword? table)
+      {:table table :columns (or listed (let [c (:columns stmt)] (when (vector? c) c))) :select select})))
 
 (defn- cte-names*
   "CTE names in a query: the :with entries of its statements when with? holds, and the
@@ -133,20 +144,6 @@
         (keyword? a) [nil (name a) nil listed]
         (keyword? b) [nil (name b) nil listed]
         (vector? a) (table-ref a schema)))))
-
-(defn- insert-parts
-  "{:table :columns :select} of :insert-into in its HoneySQL shapes: :t, [:t [:a :b]],
-   [target {:select ...}], any of them behind an option map ({:overriding-value :system}); the
-   statement's :columns when the target lists none. nil when the target is not a table name
-   (a symbol, rows built elsewhere)."
-  [stmt]
-  (let [i (:insert-into stmt)
-        i (if (and (vector? i) (map? (first i))) (vec (rest i)) i)
-        i (if (and (vector? i) (= 1 (count i))) (first i) i)
-        [target select] (if (and (vector? i) (map? (second i))) [(first i) (second i)] [i nil])
-        [table listed] (if (and (vector? target) (keyword? (first target))) [(first target) (second target)] [target nil])]
-    (when (keyword? table)
-      {:table table :columns (or listed (let [c (:columns stmt)] (when (vector? c) c))) :select select})))
 
 (defn- insert-target [stmt] (:table (insert-parts stmt)))
 
@@ -346,7 +343,7 @@
           ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
           given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
           given-names (set (map name given))
-          required (set (for [[k p] (some->> (shape/table-key table) shape/insert-name (get (::schemas registry)) shape/column-entries)
+          required (set (for [[k p] (some-> (get (::schemas registry) (shape/derived-name (shape/table-key table) "insert")) shape/column-entries)
                               :when (not (:optional p))]
                           (name k)))]
       (concat

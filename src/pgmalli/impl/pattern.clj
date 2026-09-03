@@ -48,13 +48,11 @@
    existing rows may violate them."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [pgmalli.impl.expr :as x]))
+            [pgmalli.impl.expr :as x]
+            [pgmalli.impl.shape :as shape]))
 
 
 ;;; expression helpers
-
-(defn- strip-casts [e]
-  (walk/postwalk (fn [f] (if (and (vector? f) (= :cast (first f)) (= 3 (count f))) (second f) f)) e))
 
 (defn- column-ref? [e] (and (keyword? e) (nil? (namespace e))))
 
@@ -74,7 +72,7 @@
                                         (mapcat walk (rest f)))
                           (keyword? f) [f]
                           :else nil))]
-    (->> (walk (strip-casts e))
+    (->> (walk (x/strip-casts e))
          (remove #{:else :*})
          (map name) distinct vec)))
 
@@ -170,12 +168,19 @@
 (defn- null-term [t]
   (when (and (vector? t) (= :is (first t)) (column-ref? (second t)) (nil? (nth t 2))) (second t)))
 
-(declare match-columns)
-
 (defn- normalize
   "The form the matchers read: PostgreSQL's rewrites undone, casts removed."
   [e]
-  (strip-casts (x/canonical e)))
+  (x/strip-casts (x/canonical e)))
+
+(defn- match-columns
+  "All column facts of an expression, or nil if any AND branch matches nothing."
+  [e]
+  (if-let [m (match-column e)]
+    [m]
+    (when (and (vector? e) (= :and (first e)))
+      (let [ms (map match-columns (rest e))]
+        (when (every? some? ms) (vec (apply concat ms)))))))
 
 (defn- match-branches
   "CHECK whose alternatives each pin one column to literal values (or its nullness) and constrain
@@ -217,15 +222,6 @@
     (let [alts (map match-columns (rest e))]
       (when (every? some? alts) (vec alts)))))
 
-(defn- match-columns
-  "All column facts of an expression, or nil if any AND branch matches nothing."
-  [e]
-  (if-let [m (match-column e)]
-    [m]
-    (when (and (vector? e) (= :and (first e)))
-      (let [ms (map match-columns (rest e))]
-        (when (every? some? ms) (vec (apply concat ms)))))))
-
 ;;; facts from columns and constraints
 
 (def ^:private known-types
@@ -234,15 +230,6 @@
     "timestamp" "timestamptz" "timestamp with time zone" "timestamp without time zone" "date" "time" "timetz"
     "time without time zone" "time with time zone" "interval"
     "bytea" "json" "jsonb" "oid" "\"char\"" "bit" "bit varying" "varbit"})
-
-(def opaque-types
-  "Types a driver hands over as objects of its own (PGobject and the like): rendered :any with
-   their :pg/type, and generated from a few literals the database reads."
-  #{"inet" "cidr" "macaddr" "macaddr8" "money" "xml" "tsvector" "tsquery" "jsonpath"
-    "point" "line" "lseg" "box" "path" "polygon" "circle" "pg_lsn" "tid" "xid" "xid8" "cid" "pg_snapshot" "txid_snapshot"
-    "int4range" "int8range" "numrange" "tsrange" "tstzrange" "daterange"
-    "int4multirange" "int8multirange" "nummultirange" "tsmultirange" "tstzmultirange" "datemultirange"
-    "regclass" "regtype" "regrole" "regproc" "regprocedure" "regoper" "regoperator" "regnamespace" "regconfig" "regdictionary" "regcollation"})
 
 (defn- parsed
   "{:expr data} for an expression PostgreSQL printed, or {:unparsed fact} when it cannot be read."
@@ -262,7 +249,7 @@
         builtin? (or (nil? type_schema) (= "pg_catalog" type_schema))
         base (assoc base :column cname)
         domain (get domains type-name)
-        mapped? (or (contains? enums type-name) (contains? domains type-name) (and builtin? (or (known-types elem-type) (opaque-types elem-type))))
+        mapped? (or (contains? enums type-name) (contains? domains type-name) (and builtin? (or (known-types elem-type) (shape/opaque-types elem-type))))
         char-type? (#{"varchar" "character varying" "char" "character" "bpchar"} elem-type)
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
         default (cond default_value (parsed base default_value)
@@ -394,8 +381,3 @@
                                   f))))]
         f)))))
 
-(defn coverage
-  "Counts per fact kind; :checks restricts to facts that came from CHECK constraints."
-  [facts]
-  {:all (frequencies (map :fact facts))
-   :checks (frequencies (map :fact (filter :constraint facts)))})

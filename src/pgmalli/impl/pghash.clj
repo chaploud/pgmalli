@@ -106,7 +106,7 @@
                     (.putLong bb (.getLeastSignificantBits ^java.util.UUID v))
                     (hash-bytes-extended (.array bb) partition-seed))
         (bytes? v) (hash-bytes-extended v partition-seed)
-        (instance? java.time.LocalDate v) (hash-uint32-extended (.toEpochDay (.minusDays ^java.time.LocalDate v (.toEpochDay epoch-2000))) partition-seed)
+        (instance? java.time.LocalDate v) (hash-uint32-extended (- (.toEpochDay ^java.time.LocalDate v) (.toEpochDay epoch-2000)) partition-seed)
         (instance? java.time.Instant v) (let [i ^java.time.Instant v
                                               micros (+ (* (- (.getEpochSecond i) 946684800) 1000000) (quot (.getNano i) 1000))]
                                           (hash-int8-extended micros partition-seed))

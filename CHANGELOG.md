@@ -25,9 +25,15 @@ All notable changes to this project are documented here. The format follows
   :known}`) for a name the registry does not hold, where two of them returned nil.
 - `bb sweep:report` and `bb fixture` are tasks, `bb harvest` takes the pgschema corpus from
   `PGMALLI_PGSCHEMA_DIR` and leaves it out (saying so) when it is not there.
+- `pgmalli.honeysql` reads `:outer-join`, so its tables are in scope; the opaque types are one
+  list, the insert and update names one function, and the strip-casts, entry-access and
+  `:any`-to-`:some` steps one each.
 
 ### Fixed
 
+- A `NOT NULL` column whose type renders `:any` (a `jsonb` column with no CHECK to shape it, an
+  opaque type) is `:some`, so it rejects NULL as the README says; it took nil, and a generated
+  row the database refused.
 - `portable`, and `pgmalli.honeysql`'s `row-schema` and `query-schema`, threw on a composite
   registry (`malli.registry/composite-registry`) instead of inlining its references.
 

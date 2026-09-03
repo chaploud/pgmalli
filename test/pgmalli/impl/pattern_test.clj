@@ -80,11 +80,6 @@
     (is (= {:fact :table-check :valid? false :columns ["c"] :expr [:>= :c 0]}
            (dissoc (last fs) :schema :table :constraint)))))
 
-(deftest coverage-counts
-  (is (= {:all {:enum-type 1 :column 3 :enum 1 :max-length 1 :in-set 1 :table-check 1}
-          :checks {:in-set 1 :table-check 1}}
-         (p/coverage (p/facts (schema-with-checks "c IN ('a'::text)" "a < b"))))))
-
 (deftest keys-and-references
   (let [fs (p/facts {:name "public" :types {}
                      :tables {"m" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false :default_value "nextval('m_id_seq'::regclass)"}

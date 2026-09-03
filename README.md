@@ -66,7 +66,7 @@ property or CHECK that differs between the file and the database, then the unren
 and the diagnostics. `(generate/diff before after)` gives the same differences between two
 generated files, a migration's effect on the schemas.
 
-Three namespaces, by what they need: `pgmalli.core` reads the generated files and needs
+Four namespaces, by what they need: `pgmalli.core` reads the generated files and needs
 nothing else; `pgmalli.generate` needs `psql`; `pgmalli.data` (datasets) needs test.check;
 `pgmalli.honeysql` reads HoneySQL query data.
 
@@ -115,7 +115,7 @@ the database has it.
 | `CHECK (jsonb_typeof(col) = 'object')` | `:map` (`'array'` becomes `[:sequential :any]`) |
 | `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`; POSIX classes such as `[[:digit:]]` in their Java form); generated from the regex on the JVM (test.chuck; babashka draws strings and filters them) |
 | `CHECK (col LIKE 'a%')` | `[:and :string [:re "^\Qa\E.*$"]]` (`ILIKE` adds `(?i)`) |
-| `CHECK (col IS NULL OR <any of the above>)` | `[:maybe ...]` |
+| `CHECK (col IS NULL OR <any of the above>)` | the inner pattern applied to the column (NULL passes it); `[:maybe ...]` comes from the column being nullable |
 | `CHECK (col IS NOT NULL)` | no `[:maybe ...]` |
 | column patterns joined with `AND` | each part |
 | `CHECK (status = 'a' AND ... OR status = 'b' AND ...)` | `[:multi {:dispatch :status} ["a" [:map ...]] ["b" [:map ...]]]` |

@@ -43,9 +43,10 @@
     (assemble schema (:database_version ir) (pattern/facts ir) overrides)))
 
 (defn path-for
-  "Where a schema's file goes: <out-dir>/<schema>.edn."
+  "Where a schema's file goes: <out-dir>/<schema>.edn; the config as given or with its
+   defaults applied."
   [c schema]
-  (str (io/file (:out-dir (config c)) (str schema ".edn"))))
+  (str (io/file (:out-dir c (:out-dir default-config)) (str schema ".edn"))))
 
 (defn generated-all
   "{schema {:path :data}} for every schema in the config."

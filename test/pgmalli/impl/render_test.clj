@@ -371,6 +371,15 @@
     (doseq [[p s] [[3 1] [3 5] [2 -3] [30 10]]]
       (is (every? #(fits? p s %) (mg/sample [:pg/numeric {:precision p :scale s}] {:registry reg :size 50})) (str "generates within numeric(" p "," s ")")))))
 
+(deftest not-null-of-an-opaque-type-rejects-nil
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "a" :position 1 :data_type "jsonb" :is_nullable false}
+                                                                         {:name "b" :position 2 :data_type "jsonb" :is_nullable true}]
+                                                               :constraints {}}}}))
+        col (fn [k] (last (some #(when (= k (first %)) %) (drop 2 (:pg.public/t registry)))))]
+    (is (= [:some {:pg/type "jsonb"}] (col :a)) "NOT NULL, with nothing to shape it: anything but nil")
+    (is (= [:maybe [:any {:pg/type "jsonb"}]] (col :b)))))
+
 (deftest types-the-regression-suite-uses
   (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "o" :position 1 :data_type "oid" :is_nullable false}
@@ -387,7 +396,7 @@
     (is (= [:string {:pg/type "\"char\""}] (col :c)))
     (is (= [:string {:pg/type "bit" :min 4 :max 4}] (col :b)) "bit(n) is exactly n digits")
     (is (= [:string {:pg/type "bit varying" :max 6}] (col :vb)))
-    (is (= [:any {:pg/type "inet"}] (col :ip)) "a type the driver hands over as its own object")
+    (is (= [:some {:pg/type "inet"}] (col :ip)) "a type the driver hands over as its own object")
     (is (= [:vector {:pg/type "character varying[]"} [:string {:max 5}]] (col :tags)) "varchar(5)[] bounds the elements")
     (is (empty? unrendered) "none of them is unknown")
     (is (m/validate :pg.public/t {:o 1 :c "x" :b "0101" :vb "01" :ip "10.0.0.1" :tags ["abcde"]} {:registry reg}))

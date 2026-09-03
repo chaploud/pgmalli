@@ -90,32 +90,12 @@
 
 (defn- with-derived [registry]
   (into registry (for [[k s] registry :when (shape/row-schema? s)
-                       e [[(shape/insert-name k) (insert-schema s registry)] [(shape/update-name k) (update-schema s)]]]
+                       e [[(shape/derived-name k "insert") (insert-schema s registry)] [(shape/derived-name k "update") (update-schema s)]]]
                    e)))
 
 (def ^:private json-value
   "What a json or jsonb column with no CHECK to shape it generates: small JSON values."
   [:or :string :int :boolean [:map-of {:max 3} :string [:or :string :int]] [:vector {:max 3} [:or :string :int]]])
-
-(def ^:private opaque-literals
-  "Literals the database reads for the types rendered :any: what a dataset column of such a
-   type generates (any of them, as text; the driver's own objects come back on read)."
-  {"inet" ["10.0.0.1" "192.168.1.0/24" "::1"] "cidr" ["10.0.0.0/8" "192.168.1.0/24" "2001:db8::/32"]
-   "macaddr" ["08:00:2b:01:02:03" "08-00-2b-01-02-04"] "macaddr8" ["08:00:2b:01:02:03:04:05"]
-   "money" ["12.34" "0.00" "-5.50"] "xml" ["<a/>" "<a b=\"1\">x</a>"] "tsvector" ["'a' 'b'" "'fat':2 'rat':3"] "tsquery" ["'a' & 'b'" "'fat' | 'rat'"]
-   "jsonpath" ["$.a" "$[*] ? (@ > 1)"] "pg_lsn" ["0/16B3748" "1/0"] "tid" ["(0,1)" "(1,2)"] "pg_snapshot" ["10:20:" "10:20:10,14,15"] "txid_snapshot" ["10:20:"]
-   "xid" ["1" "1234"] "xid8" ["1" "1234"] "cid" ["0" "3"]
-   "point" ["(1,2)" "(0,0)" "(-1.5,2.5)"] "line" ["{1,-1,0}" "{0,1,-2}"] "lseg" ["[(0,0),(1,1)]"] "box" ["((0,0),(1,1))" "((1,1),(2,3))"]
-   "path" ["[(0,0),(1,1),(2,0)]" "((0,0),(1,1),(2,0))"] "polygon" ["((0,0),(1,0),(1,1))"] "circle" ["<(0,0),1>" "<(1,1),2.5>"]
-   ;; no empty range: a WITHOUT OVERLAPS key refuses one
-   "int4range" ["[1,10)" "[20,30)" "(,5]"] "int8range" ["[1,10)" "[20,30)"] "numrange" ["[1.5,2.5]" "[3,4)"]
-   "tsrange" ["[2020-01-01 00:00,2020-01-02 00:00)" "[2021-01-01 00:00,2021-06-01 00:00)"] "tstzrange" ["[2020-01-01 00:00+00,2020-01-02 00:00+00)" "[2021-01-01 00:00+00,2021-06-01 00:00+00)"]
-   "daterange" ["[2020-01-01,2020-02-01)" "[2021-01-01,2021-06-01)"]
-   "int4multirange" ["{[1,3),[5,7)}" "{[10,20)}"] "int8multirange" ["{[1,3)}" "{[10,20)}"] "nummultirange" ["{[1.5,2.5]}" "{[3,4)}"]
-   "tsmultirange" ["{[2020-01-01 00:00,2020-01-02 00:00)}"] "tstzmultirange" ["{[2020-01-01 00:00+00,2020-01-02 00:00+00)}"]
-   "datemultirange" ["{[2020-01-01,2020-02-01)}" "{[2021-01-01,2021-06-01)}"]
-   "regclass" ["pg_class" "pg_type"] "regtype" ["integer" "text"] "regrole" ["postgres"] "regproc" ["now"] "regprocedure" ["now()"]
-   "regoper" ["+"] "regoperator" ["+(integer,integer)"] "regnamespace" ["public"] "regconfig" ["english"] "regdictionary" ["simple"] "regcollation" ["\"C\""]})
 
 (defn- gen-hints
   "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap) for a column
@@ -128,7 +108,7 @@
         ;; a numeric bounded by CHECKs ([:and decimal? [:> 1] [:< 1000]]) generates within them: the
         ;; bounds go to the head as :gen/min and :gen/max, on a :pg/numeric when the head is bare
         numeric-bounds (when (= :and t)
-                         (let [parts (if (map? (second s)) (drop 2 s) (rest s))
+                         (let [parts (shape/entries s)
                                head (first parts)
                                lo (some (fn [[op v]] (when (and (#{:> :>=} op) (number? v)) v)) (rest parts))
                                hi (some (fn [[op v]] (when (and (#{:< :<=} op) (number? v)) v)) (rest parts))]
@@ -150,7 +130,7 @@
                 ;; an array of a type pgmalli cannot write a value of: empty, which every array type takes
                 :vector (when (= :any (last s)) {:gen/elements [[]]})
                 (:any :some) (cond (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value}
-                                   (opaque-literals (shape/type-name p)) {:gen/elements (opaque-literals (shape/type-name p))}
+                                   (shape/opaque-literals (shape/type-name p)) {:gen/elements (shape/opaque-literals (shape/type-name p))}
                                    (:pg/type p) {:gen/elements [nil]})
                 nil)]
     (cond
@@ -188,7 +168,7 @@
   [f]
   (if (and (vector? f) (= :and (first f)) (not (and (map? (second f)) (some #{:gen/schema :gen/gen :gen/fmap :gen/elements} (keys (second f))))))
     (let [props (when (map? (second f)) (second f))
-          parts (if props (drop 2 f) (rest f))
+          parts (shape/entries f)
           from (or (when @regex-generation? (some #(when (and (vector? %) (= :re (first %))) %) parts))
                    (some #(when (and (vector? %) (= :ref (first %))) %) parts))]
       ;; generated from that part first, the other parts filtering: malli's :and generator

@@ -52,9 +52,10 @@
    'pgmalli/bytes (fn [hex] (byte-array (map #(unchecked-byte (Integer/parseInt (subs hex % (+ % 2)) 16)) (range 0 (count hex) 2))))})
 
 (defn- literal [v]
-  (cond (some (fn [[c _]] (instance? c v)) tags) (tagged-literal (symbol (some (fn [[c t]] (when (instance? c v) t)) tags)) (str v))
-        (bytes? v) (tagged-literal 'pgmalli/bytes (apply str (map #(format "%02x" (bit-and % 0xff)) v)))
-        :else v))
+  (let [tag (some (fn [[c t]] (when (instance? c v) t)) tags)]
+    (cond tag (tagged-literal (symbol tag) (str v))
+          (bytes? v) (tagged-literal 'pgmalli/bytes (apply str (map #(format "%02x" (bit-and % 0xff)) v)))
+          :else v)))
 
 (defn write-dataset
   "Writes a dataset as EDN, one table per block and one row per line, java.time values and

@@ -21,8 +21,8 @@
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
    overrides is {constraint-name schema-or-{:skip reason}}."
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]
             [pgmalli.impl.eval :as ev]
+            [pgmalli.impl.expr :as x]
             [pgmalli.impl.pattern :as pattern]
             [pgmalli.impl.shape :as shape]))
 
@@ -82,15 +82,10 @@
                          (into [(first schema) props] (rest schema)))
       :else [schema props])))
 
-(defn- enum-values [schema] (if (map? (second schema)) (drop 2 schema) (rest schema)))
-
 (defn- uuid-string? [v] (and (string? v) (re-matches #"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}" v)))
 
-(defn- strip-casts [e]
-  (walk/postwalk #(if (and (vector? %) (= :cast (first %))) (second %) %) e))
-
 (defn- literal [e]
-  (let [e (strip-casts e)]
+  (let [e (x/strip-casts e)]
     (when (or (string? e) (number? e) (boolean? e)) e)))
 
 (defn- default-value
@@ -115,6 +110,13 @@
 
 ;;; column facts
 
+(defn- rejecting-nil
+  "A column of any type still has to be something: :any takes nil, :some does not."
+  [schema]
+  (cond (= :any schema) :some
+        (and (vector? schema) (= :any (first schema))) (assoc schema 0 :some)
+        :else schema))
+
 (defn- apply-fact
   "{:schema :unrendered} after one fact on a column schema."
   [{:keys [schema unrendered]} {:keys [fact] :as f} schema-name]
@@ -137,10 +139,10 @@
                        schema))
       :in-set (cond (nil? members) as-is
                     ;; a second IN on the same column intersects
-                    (= :enum base) (let [vs (filter (set members) (enum-values schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
+                    (= :enum base) (let [vs (filter (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
                     :else (kept (into [:enum] members)))
       :not-in-set (cond (nil? members) as-is
-                        (= :enum base) (let [vs (remove (set members) (enum-values schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
+                        (= :enum base) (let [vs (remove (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
                         :else (kept [:and schema [:not (into [:enum] members)]]))
       :range (let [{:keys [min max min-exclusive? max-exclusive?]} f
                    int? (#{:int :pg/integer :pg/smallint} base)]
@@ -186,10 +188,7 @@
                                             (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f))
                                             schema-name)]
                       (if (= (:unrendered inner) unrendered) (kept (:schema inner)) as-is))
-      ;; a column of any type still has to be something
-      :not-null (kept (cond (= :any schema) :some
-                            (and (vector? schema) (= :any (first schema))) (assoc schema 0 :some)
-                            :else schema))
+      :not-null (kept (rejecting-nil schema))
       :null (kept :nil)
       as-is)))
 
@@ -234,7 +233,7 @@
                                    :pg/generated generated
                                    :pg/constraint (when (seq applied) (vec (sort (distinct applied))))})
         not-null-check? (some (comp #{:not-null} :fact) facts)]
-    {:schema (if (and nullable? (not not-null-check?)) [:maybe schema] schema)
+    {:schema (if (and nullable? (not not-null-check?)) [:maybe schema] (rejecting-nil schema))
      :unrendered unrendered :skipped skipped}))
 
 (def ^:private type-facts #{:enum :domain-ref :max-length :numeric})

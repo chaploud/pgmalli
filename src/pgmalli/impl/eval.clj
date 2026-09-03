@@ -52,14 +52,6 @@
         (number? v) (json-number v)
         :else v))
 
-(declare comparable-pair)
-
-(defn- same? [a b]
-  (let [[a b] (comparable-pair a b)]
-    (cond (or (map? a) (map? b) (sequential? a) (sequential? b)) (= (json-normal a) (json-normal b))
-          (and (number? a) (number? b)) (zero? (compare a b))
-          :else (= a b))))
-
 (defn- comparable-pair
   "Temporal operands of different types as PostgreSQL compares them: a date is its midnight,
    a timestamp is read in the session zone (the JVM's here) against a timestamptz."
@@ -74,6 +66,12 @@
           (not (and (temporal? a) (temporal? b))) [a b]
           (or (instance? Instant a) (instance? Instant b)) [(to-instant a) (to-instant b)]
           :else [(to-local a) (to-local b)])))
+
+(defn- same? [a b]
+  (let [[a b] (comparable-pair a b)]
+    (cond (or (map? a) (map? b) (sequential? a) (sequential? b)) (= (json-normal a) (json-normal b))
+          (and (number? a) (number? b)) (zero? (compare a b))
+          :else (= a b))))
 
 (defn- cmp [op a b]
   (when (and (some? a) (some? b))

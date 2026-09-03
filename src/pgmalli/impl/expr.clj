@@ -324,6 +324,11 @@
 (def ^:private numeric-types
   #{:smallint :integer :bigint :int2 :int4 :int8 :numeric :decimal :real :double-precision :float4 :float8})
 
+(defn strip-casts
+  "An expression with its casts ([:cast x type]) replaced by what they cast."
+  [e]
+  (walk/postwalk (fn [f] (if (and (vector? f) (= :cast (first f)) (= 3 (count f))) (second f) f)) e))
+
 (defn canonical
   "Undoes rewrites PostgreSQL applies when deparsing, without changing meaning:
    numeric literals printed as casts ('-1'::integer -> -1), array casts,

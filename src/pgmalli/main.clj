@@ -19,9 +19,10 @@
 
 (defn- counts [data]
   (let [entries (vals (:registry data))
-        kind (fn [s] (let [m (when (vector? s) (shape/row-map s))
-                           p (when (and (vector? m) (map? (second m))) (second m))]
-                       (cond (:pg/view p) :view (:pg/table p) :table (and (vector? s) (= :enum (first s))) :enum :else :domain)))
+        kind (fn [s] (cond (and (vector? s) (:pg/view (second (shape/row-map s)))) :view
+                           (shape/row-schema? s) :table
+                           (and (vector? s) (= :enum (first s))) :enum
+                           :else :domain))
         f (frequencies (map kind entries))]
     (str (f :table 0) " tables, " (f :view 0) " views, " (f :enum 0) " enums, " (f :domain 0) " domains; "
          (count (:unrendered data)) " unrendered, " (count (:diagnostics data)) " diagnostics")))

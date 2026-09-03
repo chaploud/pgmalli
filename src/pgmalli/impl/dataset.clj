@@ -200,8 +200,8 @@
    A table that comes out short is recorded in the dataset's metadata under :pgmalli/short
    with what it wanted, what it got and why."
   [registry mem {:keys [name table refs key-sets] :as t} ds rows seed grow]
-  (let [;; ponytail: the search is exhaustive per row; a budget of leaf checks per table keeps a
-        ;; table with many references from taking forever, at the cost of rows it might have found
+  (let [;; the search is exhaustive per row, so a budget of leaf checks per table keeps a table
+        ;; with many references from taking forever, at the cost of rows it might have found
         budget (atom 5000)
         validate ((:validator mem) name)
         valid? (fn [r] (and (pos? (swap! budget dec)) (validate r)))
