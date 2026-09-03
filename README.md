@@ -116,7 +116,11 @@ the database has it.
 | `date`, `time`, `timetz`, `timestamp`, `timestamptz`, `interval` | `:time/local-date`, `:time/local-time`, `:time/offset-time`, `:time/local-date-time`, `:time/instant`, `:time/duration` |
 | `json`, `jsonb` | `:any` (`:map` or `[:sequential :any]` when a CHECK pins the type) |
 | `bytea` | `bytes?`; with `CHECK (octet_length(col) = n)` `[:pg/bytes {:min n :max n}]`, a type that generates byte arrays of that length |
-| `T[]` | `[:vector <T>]` |
+| `T[]` | `[:vector <T>]`; `varchar(n)[]` bounds the elements |
+| `oid`, `xid`, `xid8`, `cid` | `:int` |
+| `bit(n)`, `bit varying(n)` | `[:string {:min n :max n}]` / `[:string {:max n}]`, generated as digits |
+| `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, `tsquery`, `jsonpath`, geometric, range, multirange, `pg_lsn`, `reg*` | `[:any {:pg/type "..."}]`: the driver hands these over as its own objects; a dataset generates them as literals the database reads |
+| a partitioned table | its row schema carries a CHECK named `<table> (partitions)`, the OR of its partitions' bounds: a row it takes is one some partition takes |
 | other types (ranges, `inet`, `money`, `xml`, extensions) | `[:any {:pg/type ...}]`, listed in `:unrendered` |
 
 `(pgmalli/unrendered "public")` lists the facts that have no rendering, each with the
@@ -274,8 +278,9 @@ Kept compatible; a change bumps the minor version.
 
 ## Scope
 
-Tables (regular and partition parents), views and materialized views, columns, CHECK,
-PRIMARY KEY, UNIQUE and FOREIGN KEY constraints, unique indexes, enum and domain types. A
+Tables (regular and partition parents, whose partitions' bounds become a CHECK), views and
+materialized views, columns, CHECK, PRIMARY KEY, UNIQUE and FOREIGN KEY constraints, unique
+indexes, enum and domain types. A
 generated column is left to the database, except that a range built from two columns
 (`tsrange(valid_from, valid_until)`) gives them a CHECK, lower bound not above the upper.
 Other indexes, EXCLUDE constraints, triggers, policies and privileges are not read: rows a

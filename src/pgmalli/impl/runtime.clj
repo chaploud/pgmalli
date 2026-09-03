@@ -178,10 +178,34 @@
   "What a json or jsonb column with no CHECK to shape it generates: small JSON values."
   [:or :string :int :boolean [:map-of {:max 3} :string [:or :string :int]] [:vector {:max 3} [:or :string :int]]])
 
+(def ^:private opaque-literals
+  "Literals the database reads for the types rendered :any: what a dataset column of such a
+   type generates (any of them, as text; the driver's own objects come back on read)."
+  {"inet" ["10.0.0.1" "192.168.1.0/24" "::1"] "cidr" ["10.0.0.0/8" "192.168.1.0/24" "2001:db8::/32"]
+   "macaddr" ["08:00:2b:01:02:03" "08-00-2b-01-02-04"] "macaddr8" ["08:00:2b:01:02:03:04:05"]
+   "money" ["12.34" "0.00" "-5.50"] "xml" ["<a/>" "<a b=\"1\">x</a>"] "tsvector" ["'a' 'b'" "'fat':2 'rat':3"] "tsquery" ["'a' & 'b'" "'fat' | 'rat'"]
+   "jsonpath" ["$.a" "$[*] ? (@ > 1)"] "pg_lsn" ["0/16B3748" "1/0"] "tid" ["(0,1)" "(1,2)"] "pg_snapshot" ["10:20:" "10:20:10,14,15"] "txid_snapshot" ["10:20:"]
+   "point" ["(1,2)" "(0,0)" "(-1.5,2.5)"] "line" ["{1,-1,0}" "{0,1,-2}"] "lseg" ["[(0,0),(1,1)]"] "box" ["((0,0),(1,1))" "((1,1),(2,3))"]
+   "path" ["[(0,0),(1,1),(2,0)]" "((0,0),(1,1),(2,0))"] "polygon" ["((0,0),(1,0),(1,1))"] "circle" ["<(0,0),1>" "<(1,1),2.5>"]
+   "int4range" ["[1,10)" "empty" "(,5]"] "int8range" ["[1,10)" "empty"] "numrange" ["[1.5,2.5]" "empty"]
+   "tsrange" ["[2020-01-01 00:00,2020-01-02 00:00)" "empty"] "tstzrange" ["[2020-01-01 00:00+00,2020-01-02 00:00+00)" "empty"]
+   "daterange" ["[2020-01-01,2020-02-01)" "empty"]
+   "int4multirange" ["{[1,3),[5,7)}" "{}"] "int8multirange" ["{[1,3)}" "{}"] "nummultirange" ["{[1.5,2.5]}" "{}"]
+   "tsmultirange" ["{[2020-01-01 00:00,2020-01-02 00:00)}" "{}"] "tstzmultirange" ["{[2020-01-01 00:00+00,2020-01-02 00:00+00)}" "{}"]
+   "datemultirange" ["{[2020-01-01,2020-02-01)}" "{}"]
+   "regclass" ["pg_class" "pg_type"] "regtype" ["integer" "text"] "regrole" ["postgres"] "regproc" ["now"] "regprocedure" ["now()"]
+   "regoper" ["+"] "regoperator" ["+(integer,integer)"] "regnamespace" ["public"] "regconfig" ["english"] "regdictionary" ["simple"] "regcollation" ["\"C\""]})
+
+(defn- type-name
+  "The type of a column schema without its typmod or array brackets: \"bit(8)[]\" -> \"bit\"."
+  [p]
+  (some-> (:pg/type p) (str/replace #"\(.*\)|\[\]" "") str/trim))
+
 (defn- gen-hints
-  "Generation hints (:gen/min, :gen/max, :gen/schema) for a column schema: key and identity
-   integers are small and positive, strings short, times within the last year, an unshaped
-   json column a JSON value. Other columns keep the schema's own bounds."
+  "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap) for a column
+   schema: key and identity integers are small and positive, strings short, times within the
+   last year, an unshaped json column a JSON value, an opaque type one of a few literals, a bit
+   string digits. Other columns keep the schema's own bounds."
   [s key?]
   (let [[t p] (if (and (vector? s) (map? (second s))) [(first s) (second s)] [(if (vector? s) (first s) s) {}])
         now (java.time.Instant/now)
@@ -189,13 +213,16 @@
                 (:int :pg/integer :pg/smallint) (when key?
                        (let [lo (max 1 (:min p Long/MIN_VALUE)) hi (min 100000 (:max p Long/MAX_VALUE))]
                          (when (<= lo hi) {:gen/min lo :gen/max hi})))
-                :string (when (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) 24)})
+                :string (if (#{"bit" "bit varying" "varbit"} (type-name p))
+                          {:gen/schema [:vector {:min (:min p 1) :max (:max p (:min p 8))} [:enum "0" "1"]] :gen/fmap #(apply str %)}
+                          (when (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) 24)}))
                 :time/instant {:gen/min (.minus now (java.time.Duration/ofDays 365)) :gen/max now}
                 :time/local-date-time (let [n (java.time.LocalDateTime/now)] {:gen/min (.minusDays n 365) :gen/max n})
                 :time/local-date (let [n (java.time.LocalDate/now)] {:gen/min (.minusDays n 365) :gen/max n})
-                (:any :some) (when (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value})
+                (:any :some) (cond (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value}
+                                   (opaque-literals (type-name p)) {:gen/elements (opaque-literals (type-name p))})
                 nil)]
-    (if (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema]))
+    (if (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
       (if (map? (second s)) (assoc s 1 (merge p hints)) (into [t hints] (rest s)))
       s)))
 
@@ -254,7 +281,7 @@
 (defn- without-gen
   "Schema data without the generation hints the registry added when it was loaded."
   [schema]
-  (walk/postwalk #(if (map? %) (dissoc % :gen/min :gen/max :gen/schema) %) schema))
+  (walk/postwalk #(if (map? %) (dissoc % :gen/min :gen/max :gen/schema :gen/elements :gen/fmap) %) schema))
 
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."

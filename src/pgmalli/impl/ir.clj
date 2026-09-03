@@ -17,7 +17,10 @@
    {:match :schema :table :columns} for foreign keys, :match one of \"SIMPLE\", \"FULL\", \"PARTIAL\";
    :nulls_not_distinct is set for UNIQUE constraints; a unique index over plain columns with
    no predicate is listed as a UNIQUE constraint too, with :index true, keyed \"<name> (index)\"
-   since an index may bear a constraint's name. Maps keyed by object name (:tables, :constraints,
+   since an index may bear a constraint's name. A partitioned table carries a CHECK named
+   \"<table> (partitions)\": the OR of its partitions' bounds, since it takes a row only when
+   one of them does. :max_length is the typmod of varchar, bpchar, bit and varbit columns,
+   of the element type for an array column. Maps keyed by object name (:tables, :constraints,
    :types) keep string keys; everything else is keywordized. Expressions are the strings
    PostgreSQL's deparser produces."
   (:require [clojure.java.io :as io]

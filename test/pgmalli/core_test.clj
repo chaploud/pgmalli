@@ -34,7 +34,10 @@
                   CREATE UNIQUE INDEX users_age_open_idx ON users (age) WHERE closed_at IS NULL;
                   CREATE UNIQUE INDEX users_age_inc_idx ON users (age) INCLUDE (nick);
                   CREATE UNIQUE INDEX closed ON users (closed_at);
-                  CREATE TABLE prices (id integer PRIMARY KEY, p1 numeric(3,1), p2 numeric(3,5), p3 numeric(2,-3));")
+                  CREATE TABLE prices (id integer PRIMARY KEY, p1 numeric(3,1), p2 numeric(3,5), p3 numeric(2,-3));
+                  CREATE TABLE parted (k integer NOT NULL, v text) PARTITION BY RANGE (k);
+                  CREATE TABLE parted_low PARTITION OF parted FOR VALUES FROM (0) TO (100);
+                  CREATE TABLE parted_high PARTITION OF parted FOR VALUES FROM (100) TO (200);")
       (testing "a missing file is stale"
         (is (every? (comp nil? :file) (get (pgmalli/stale config) "public"))))
       (testing "generate, read back, validate"
@@ -62,7 +65,11 @@
                 (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (rand-int 1000000) ", " ok ")"))
                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"numeric field overflow"
                                       (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (rand-int 1000000) ", " bad ")")))
-                    (str k ": the database draws the line where the schema does")))))))
+                    (str k ": the database draws the line where the schema does")))
+              (is (m/validate :pg.public/parted {:k 150 :v nil} {:registry reg}))
+              (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
+              (is (every? #(< -1 (:k %) 200) (get (clojure.test.check.generators/generate (pgmalli/dataset-generator reg {:rows 5}) 30 1) "public.parted"))
+                  "generated rows land in a partition")))))
       (testing "stale and unrendered"
         (is (nil? (pgmalli/stale config)))
         (is (empty? (:unrendered (gen/load-file* out))))

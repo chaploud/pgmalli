@@ -45,7 +45,11 @@
          (zipmap ["numeric" "decimal"] (repeat 'decimal?))
          (zipmap ["real" "double precision" "float4" "float8"] (repeat :double))
          (zipmap ["text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name"] (repeat :string))
-         {"boolean" :boolean "uuid" :uuid "bytea" 'bytes?
+         ;; bit strings are strings of 0 and 1 (bit(1) comes back from pgjdbc as a Boolean, a driver setting)
+         (zipmap ["bit" "bit varying" "varbit"] (repeat :string))
+         ;; the object identifier types a driver returns as numbers
+         (zipmap ["oid" "xid" "xid8" "cid"] (repeat :int))
+         {"boolean" :boolean "uuid" :uuid "bytea" 'bytes? "\"char\"" :string
           "date" :time/local-date "time" :time/local-time "time without time zone" :time/local-time
           "timetz" :time/offset-time "time with time zone" :time/offset-time
           "timestamp" :time/local-date-time "timestamp without time zone" :time/local-date-time
@@ -160,7 +164,10 @@
       :non-blank (if string-base?
                    [(if (:trim? f) [:and (with-props schema {:min 1}) [:re "\\S"]] (with-props schema {:min 1})) unrendered]
                    as-is)
-      :max-length (if string-base? [(with-props schema {:max (:max f)}) unrendered] as-is)
+      :max-length (cond string-base? [(with-props schema {:max (:max f)}) unrendered]
+                        ;; an array of varchar(n): the bound is the elements'
+                        (and (vector? schema) (= :vector (first schema)) (= :string (last schema))) [(conj (pop schema) [:string {:max (:max f)}]) unrendered]
+                        :else as-is)
       :length (let [{:keys [fn min max exact]} f
                     bounds {:min (or exact min) :max (or exact max)}]
                 (cond (and string-base? (#{:length :char_length} fn)) [(with-props schema bounds) unrendered]

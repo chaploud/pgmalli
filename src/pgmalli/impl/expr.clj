@@ -24,7 +24,7 @@
 
 (def ^:private ops
   ;; longest first
-  ["::" "<>" "!=" "<=" ">=" "!~~*" "!~~" "~~*" "~~" "!~*" "!~" "~*" "~" "||" "&&" "->>" "->" "#>>" "#>" "@>" "<@" "?|" "?&" "?"
+  ["::" "=>" "<>" "!=" "<=" ">=" "!~~*" "!~~" "~~*" "~~" "!~*" "!~" "~*" "~" "||" "&&" "->>" "->" "#>>" "#>" "@>" "<@" "?|" "?&" "?"
    "=" "<" ">" "+" "-" "*" "/" "%" "^"])
 
 (defn- quoted [s i quote-char what]
@@ -217,6 +217,14 @@
         (and (= :dot (:t t)) (= :ident (:t (second (:toks @st)))))
         (if (< min-prec prec-postfix) (do (next-tok! st) (recur [:field left (keyword (:v (next-tok! st)))])) left)
 
+        ;; t.* : the whole row, as an argument
+        (and (= :dot (:t t)) (op? (second (:toks @st)) "*"))
+        (if (< min-prec prec-postfix) (do (next-tok! st) (next-tok! st) (recur [:row left])) left)
+
+        ;; name => value : a named argument
+        (op? t "=>")
+        (if (keyword? left) (do (next-tok! st) (recur [:named left (parse-expr st 0)])) left)
+
         (= :lbracket (:t t))
         (if (< min-prec prec-postfix)
           (do (next-tok! st)
@@ -237,6 +245,14 @@
                 (cond
                   (kw? n "DISTINCT") (do (expect! st #(kw? % "FROM") "FROM")
                                          (recur [(if neg :is-not-distinct-from :is-distinct-from) left (parse-expr st (inc prec-is))]))
+                  ;; IS [NOT] JSON [VALUE | ARRAY | OBJECT | SCALAR] [WITH | WITHOUT UNIQUE [KEYS]]
+                  (= "JSON" (str/upper-case (str (:v n))))
+                  (let [words (loop [ws []]
+                                (let [w (str/upper-case (str (:v (peek-tok st))))]
+                                  (if (#{"VALUE" "ARRAY" "OBJECT" "SCALAR" "WITH" "WITHOUT" "UNIQUE" "KEYS"} w)
+                                    (do (next-tok! st) (recur (conj ws w)))
+                                    ws)))]
+                    (recur (into [(if neg :is-not-json :is-json) left] (map #(keyword (str/lower-case %)) words))))
                   (#{"NULL" "TRUE" "FALSE"} (:v n))
                   (recur [(if neg :is-not :is) left ({"NULL" nil "TRUE" true "FALSE" false} (:v n))])
                   :else (throw (ex-info "unexpected token after IS" {:got n :input (:input @st)})))))

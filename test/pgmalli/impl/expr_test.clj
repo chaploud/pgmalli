@@ -105,3 +105,10 @@
         (testing (pr-str e)
           (is (= (or expected e)
                  (x/canonical (x/check-clause (get-in constraints [(str "c" i) :check_clause]))))))))))
+
+(deftest shapes-from-the-regression-suite
+  (is (= [:is-json :js] (x/check-clause "CHECK (js IS JSON)")))
+  (is (= [:is-not-json :js :object :with :unique :keys] (x/check-clause "CHECK (js IS NOT JSON OBJECT WITH UNIQUE KEYS)")))
+  (is (= [:random [:named :min 10] [:named :max 100]] (:expr (x/try-parse "random(min => 10, max => 100)"))))
+  (is (= [:check_con_function [:row :check_con_tbl]] (x/check-clause "CHECK (check_con_function(check_con_tbl.*))")))
+  (is (= false (x/check-clause "CHECK (false) NO INHERIT"))))

@@ -18,6 +18,17 @@ All notable changes to this project are documented here. The format follows
   comparison, `:select-top`, and CTEs as lexical: a `:with` is visible inside its statement
   only.
 - A unique index bearing a CHECK constraint's name is read as well as the constraint.
+- A partitioned table's row schema carries the OR of its partitions' bounds as a CHECK, so a
+  generated row lands in a partition.
+- More types: `oid`, `xid`, `xid8`, `cid` are `:int`; `"char"` a string; `bit(n)` and `bit
+  varying(n)` strings of digits with their length; `inet`, `cidr`, `macaddr`, `money`, `xml`,
+  `tsvector`, `tsquery`, `jsonpath`, the geometric, range and multirange types, `pg_lsn` and
+  the `reg*` types are `:any` with their `:pg/type` (no longer unknown) and generate literals
+  the database reads. `varchar(n)[]` bounds its elements.
+- The CHECK parser reads `IS [NOT] JSON ...`, named arguments (`min => 10`) and `t.*`; a
+  `CHECK (false)` is no longer taken as unparsed.
+- `pgmalli.impl.ir` names every catalog table with `pg_catalog.`, so a schema defining a table
+  of the same name does not break the read.
 - `test.check` is a direct dependency, as the generators use it directly.
 
 ### Fixed

@@ -10,6 +10,9 @@
          harvest {:doc "Rebuild test/corpus/harvested.edn (needs docker)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/harvest.clj")}
+         sweep {:doc "bb sweep <sql-dir> <out-dir> [glob]: run SQL files through the whole pipeline, findings as EDN (needs docker)"
+                :extra-paths ["dev"]
+                :task (load-file "dev/sweep.clj")}
          test {:doc "Run the test suite with babashka"
                :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test] [pgmalli.impl.eval-test] [pgmalli.honeysql-test] [pgmalli.impl.render-test] [pgmalli.core-test] [pgmalli.runtime-test] [pgmalli.fuzz-test] [pgmalli.corpus-test])
                :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test 'pgmalli.impl.eval-test 'pgmalli.honeysql-test 'pgmalli.impl.render-test 'pgmalli.core-test 'pgmalli.runtime-test 'pgmalli.fuzz-test 'pgmalli.corpus-test)]

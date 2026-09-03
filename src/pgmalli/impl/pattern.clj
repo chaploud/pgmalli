@@ -222,7 +222,16 @@
     "boolean" "text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name" "uuid"
     "timestamp" "timestamptz" "timestamp with time zone" "timestamp without time zone" "date" "time" "timetz"
     "time without time zone" "time with time zone" "interval"
-    "bytea" "json" "jsonb"})
+    "bytea" "json" "jsonb" "oid" "xid" "xid8" "cid" "\"char\"" "bit" "bit varying" "varbit"})
+
+(def opaque-types
+  "Types a driver hands over as objects of its own (PGobject and the like): rendered :any with
+   their :pg/type, and generated from a few literals the database reads."
+  #{"inet" "cidr" "macaddr" "macaddr8" "money" "xml" "tsvector" "tsquery" "jsonpath"
+    "point" "line" "lseg" "box" "path" "polygon" "circle" "pg_lsn" "tid" "pg_snapshot" "txid_snapshot"
+    "int4range" "int8range" "numrange" "tsrange" "tstzrange" "daterange"
+    "int4multirange" "int8multirange" "nummultirange" "tsmultirange" "tstzmultirange" "datemultirange"
+    "regclass" "regtype" "regrole" "regproc" "regprocedure" "regoper" "regoperator" "regnamespace" "regconfig" "regdictionary" "regcollation"})
 
 (defn- parsed
   "{:expr data} for an expression PostgreSQL printed, or {:unparsed fact} when it cannot be read."
@@ -242,8 +251,8 @@
         builtin? (or (nil? type_schema) (= "pg_catalog" type_schema))
         base (assoc base :column cname)
         domain (get domains type-name)
-        mapped? (or (contains? enums type-name) (contains? domains type-name) (and builtin? (known-types elem-type)))
-        char-type? (#{"varchar" "character varying" "char" "character" "bpchar"} data_type)
+        mapped? (or (contains? enums type-name) (contains? domains type-name) (and builtin? (or (known-types elem-type) (opaque-types elem-type))))
+        char-type? (#{"varchar" "character varying" "char" "character" "bpchar"} elem-type)
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
         default (cond default_value (parsed base default_value)
                       (contains? domain :default) {:expr (:default domain)})
@@ -265,6 +274,9 @@
       domain (conj (merge base {:fact :domain-ref :type-name type-name :base (:base domain)}))
       (not mapped?) (conj (merge base {:fact :unknown-type :type data_type}))
       (and max_length char-type?) (conj (merge base {:fact :max-length :max max_length}))
+      ;; bit(n) is exactly n digits, bit varying(n) at most n
+      (and max_length (= "bit" elem-type)) (conj (merge base {:fact :length :fn :length :exact max_length}))
+      (and max_length (#{"bit varying" "varbit"} elem-type)) (conj (merge base {:fact :length :fn :length :max max_length}))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
 (defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct]}]
@@ -297,8 +309,9 @@
   (let [base (assoc base :constraint cname)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try-clause check_clause)]
-    (if-let [e (:expr parsed)]
-      (let [n (when (not= false is_valid) (normalize e))
+    (if (contains? parsed :expr)
+      (let [e (:expr parsed)
+            n (when (not= false is_valid) (normalize e))
             base (assoc base :expr (x/canonical e))]
         (if-let [ms (some-> n match-columns)]
           (mapv #(merge base (stringify %)) ms)

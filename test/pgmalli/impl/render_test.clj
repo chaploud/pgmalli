@@ -341,7 +341,8 @@
     (is (m/validate :pg.public/t {:valid_from t1 :valid_until t2 :validity nil} {:registry reg}))
     (is (m/validate :pg.public/t {:valid_from t1 :valid_until nil :validity nil} {:registry reg}) "an open bound is fine")
     (is (not (m/validate :pg.public/t {:valid_from t2 :valid_until t1 :validity nil} {:registry reg})) "the database would refuse to build the range")
-    (is (= [:unknown-type] (map :fact unrendered)) "the range column itself stays :any")))
+    (is (= [:maybe [:any {:pg/type "tstzrange" :pg/generated true}]] (last (get-in registry [:pg.public/t 1 4]))) "the range column itself is opaque: :any with its type")
+    (is (empty? unrendered))))
 
 (deftest a-json-column-both-not-null-and-shaped
   (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
@@ -363,3 +364,24 @@
     (is (not (fits? 3 1 1.0)) "a double is not what the driver returns")
     (doseq [[p s] [[3 1] [3 5] [2 -3] [30 10]]]
       (is (every? #(fits? p s %) (mg/sample [:pg/numeric {:precision p :scale s}] {:registry reg :size 50})) (str "generates within numeric(" p "," s ")")))))
+
+(deftest types-the-regression-suite-uses
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "o" :position 1 :data_type "oid" :is_nullable false}
+                                                                                    {:name "c" :position 2 :data_type "\"char\"" :is_nullable false}
+                                                                                    {:name "b" :position 3 :data_type "bit" :is_nullable false :max_length 4}
+                                                                                    {:name "vb" :position 4 :data_type "bit varying" :is_nullable false :max_length 6}
+                                                                                    {:name "ip" :position 5 :data_type "inet" :is_nullable false}
+                                                                                    {:name "tags" :position 6 :data_type "character varying[]" :is_nullable false :max_length 5}]
+                                                                          :constraints {}}}}))
+        reg (registry-with registry)
+        col (fn [k] (last (some #(when (= k (first %)) %) (drop 2 (:pg.public/t registry)))))]
+    (is (= [:int {:pg/type "oid"}] (col :o)))
+    (is (= [:string {:pg/type "\"char\""}] (col :c)))
+    (is (= [:string {:pg/type "bit" :min 4 :max 4}] (col :b)) "bit(n) is exactly n digits")
+    (is (= [:string {:pg/type "bit varying" :max 6}] (col :vb)))
+    (is (= [:any {:pg/type "inet"}] (col :ip)) "a type the driver hands over as its own object")
+    (is (= [:vector {:pg/type "character varying[]"} [:string {:max 5}]] (col :tags)) "varchar(5)[] bounds the elements")
+    (is (empty? unrendered) "none of them is unknown")
+    (is (m/validate :pg.public/t {:o 1 :c "x" :b "0101" :vb "01" :ip "10.0.0.1" :tags ["abcde"]} {:registry reg}))
+    (is (not (m/validate :pg.public/t {:o 1 :c "x" :b "01" :vb "01" :ip "10.0.0.1" :tags ["abcdef"]} {:registry reg})))))
