@@ -24,6 +24,12 @@ All notable changes to this project are documented here. The format follows
   column's expression, as the database computes it: `b GENERATED ALWAYS AS (a * 2)` with
   `CHECK (b < 50)` bounds `a`.
 - `xid`, `xid8` and `cid` are opaque (the database takes no integer for them).
+- A `NOT VALID` CHECK is enforced, as a whole `[:pg/check {:pg/not-valid true} ...]`: the
+  database rejects a new row that violates it, so a dataset must not carry one. It was kept
+  in `:unrendered` before.
+- A partitioned table with no partition takes no row (`CHECK (false)`); a leaf partition's own
+  CHECKs are part of the parent's partition CHECK.
+- An array of a type pgmalli cannot write a value of generates an empty array.
 - A numeric column bounded by CHECKs (`[:and decimal? [:> 1] [:< 1000]]`) generates within the
   bounds instead of drawing any decimal and failing to find one that fits.
 - More types: `oid`, `xid`, `xid8`, `cid` are `:int`; `"char"` a string; `bit(n)` and `bit
@@ -43,6 +49,12 @@ All notable changes to this project are documented here. The format follows
 ### Fixed
 
 - `numeric(3,5)` and `numeric(2,-3)`, which PostgreSQL allows, threw when the registry loaded.
+- An alternative of an OR that no row can match (a partition left unreachable by its parent's
+  bounds renders as `30 <= id < 30`) is left out of `[:or ...]`; a generator looked for a row
+  in it forever.
+- Nested LIST partitions (`a IN (1, 2)` then `a = 1`) pinned every value of the outer list,
+  so two branches carried the same value and the registry failed to load with duplicate keys;
+  the pins are intersected, and two alternatives pinning one value become `[:or ...]`.
 - A branch that names its own dispatch column (as a LIST partition's bounds do, `c IS NOT NULL
   AND c = 'x'`) had the value that picked the branch regenerated, so every row fell to the
   default branch and the table came out empty.

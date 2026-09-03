@@ -108,13 +108,18 @@
     (is (= ["title_check"] (map :constraint skipped)))
     (is (some #{[:ref :app/score-within-total]} (:pg.public/users registry)) "the override replaces the :pg/check")))
 
-(deftest not-valid-checks-are-reported-not-enforced
+(deftest not-valid-checks-are-enforced-and-marked
   (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
                                                                                     {:name "b" :position 2 :data_type "integer" :is_nullable false}]
-                                                                          :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))]
-    (is (= [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]] [:b [:pg/integer {:pg/type "integer"}]]] (:pg.public/t registry)))
-    (is (= [{:fact :table-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered)))))
+                                                                          :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))
+        reg (registry-with registry)]
+    (is (= [:and [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]] [:b [:pg/integer {:pg/type "integer"}]]]
+            [:pg/check {:pg/constraint "k" :error/message "k" :pg/not-valid true} [:<= :a :b]]]
+           (:pg.public/t registry))
+        "the database enforces it for new rows, so the schema does; rows from before it may not validate")
+    (is (not (m/validate :pg.public/t {:a 2 :b 1} {:registry reg})))
+    (is (empty? unrendered))))
 
 (deftest checks-that-lose-a-fact-are-evaluated-whole
   (let [table (fn [& checks] {:name "public" :types {}
@@ -203,8 +208,9 @@
     (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                             :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
                                                               :tables {}}))]
-      (is (= [:maybe :pg/integer] (:pg.public/pos registry)) "a NOT VALID domain CHECK is not applied")
-      (is (= [{:fact :domain-check :valid? false}] (map #(select-keys % [:fact :valid?]) unrendered))))
+      (is (= [:maybe [:and :pg/integer [:pg/check-value {:pg/constraint "pos_check" :error/message "pos_check" :pg/not-valid true} [:> :VALUE 0]]]] (:pg.public/pos registry))
+        "a NOT VALID domain CHECK is enforced (the database enforces it for every new value), marked")
+      (is (empty? unrendered)))
     (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
                                                                                           :constraints [{:name "d_check" :definition "CHECK (VALUE >= '2020-01-01'::date)"}]}}
                                                               :tables {}}))]
@@ -403,3 +409,25 @@
     (is (not (m/validate :pg.public/t {:a 30 :b nil :p nil} {:registry reg})) "30 * 2 is not below 50")
     (is (not (m/validate :pg.public/t {:a 5 :b nil :p nil} {:registry reg})) "5 - 10 is not positive")
     (is (empty? unrendered))))
+
+(deftest an-alternative-no-row-can-match-is-left-out
+  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "id" :position 1 :data_type "bigint" :is_nullable false}]
+                                                               ;; as a partition whose parent was re-attached above it renders: 30 <= id < 30
+                                                               :constraints {"p" {:name "p" :type "CHECK"
+                                                                                  :check_clause "CHECK (((id >= 0) AND (id < 10)) OR ((id >= 30) AND (id < 40) AND (id >= 20) AND (id < 30)))"}}}}}))
+        reg (registry-with registry)]
+    (is (= [:or {:error/message "p"} [:map [:id [:int {:min 0 :max 9 :error/message "p"}]]]] (nth (:pg.public/t registry) 2)))
+    (is (m/validate :pg.public/t {:id 5} {:registry reg}))
+    (is (not (m/validate :pg.public/t {:id 30} {:registry reg})))))
+
+(deftest nested-list-partitions-pin-their-common-values
+  (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}]
+                                                               ;; a LIST partition (1, 2) sub-partitioned by LIST: leaf (1), leaf (2)
+                                                               :constraints {"p" {:name "p" :type "CHECK"
+                                                                                  :check_clause "CHECK (((a IS NOT NULL) AND (a = ANY (ARRAY[1, 2])) AND (a IS NOT NULL) AND (a = 1)) OR ((a IS NOT NULL) AND (a = ANY (ARRAY[1, 2])) AND (a IS NOT NULL) AND (a = 2)) OR ((a IS NOT NULL) AND (a = 3)))"}}}}}))
+        reg (registry-with registry)]
+    (is (= [1 2 3 :malli.core/default] (map first (drop 2 (nth (:pg.public/t registry) 2)))) "each value once")
+    (is (m/validate :pg.public/t {:a 2} {:registry reg}))
+    (is (not (m/validate :pg.public/t {:a 4} {:registry reg})))))

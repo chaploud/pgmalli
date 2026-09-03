@@ -181,11 +181,19 @@
   (let [alts (if (and (vector? e) (= :or (first e))) (rest e) [e])
         analyse (fn [alt]
                   (let [ts (terms alt)
-                        d (some dispatch-term ts)
+                        ;; several pins of one column (a IN (1, 2) AND a = 1, as nested LIST partitions
+                        ;; render) pin their common values
+                        ds (keep dispatch-term ts)
+                        same (filter #(= (:column (first ds)) (:column %)) ds)
+                        d (when (seq same)
+                            (if (and (< 1 (count same)) (every? :values same))
+                              (assoc (first same) :values (vec (reduce (fn [acc vs] (filter (set vs) acc)) (:values (first same)) (map :values (rest same)))))
+                              (first same)))
                         n (some null-term ts)
                         pin (or d (when n {:column n :null true}))
-                        rest-facts (when pin
-                                     (let [others (remove #(or (= pin (dispatch-term %)) (and (:null pin) (= n (null-term %)))) ts)
+                        ;; pins with no common value match nothing: no branch
+                        rest-facts (when (and pin (not (and (contains? pin :values) (empty? (:values pin)))))
+                                     (let [others (remove #(or (some (fn [s] (= s (dispatch-term %))) same) (and (:null pin) (= n (null-term %)))) ts)
                                            fs (map match-columns others)]
                                        (when (every? some? fs) (vec (apply concat fs)))))]
                     (when (and pin rest-facts) (assoc pin :facts rest-facts))))

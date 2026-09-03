@@ -256,6 +256,15 @@
      :unrendered (mapcat :unrendered parts)
      :skipped (mapcat :skipped parts)}))
 
+(defn- impossible?
+  "Whether a fragment can match no row: a column whose bounds crossed (min above max), as a
+   partition left unreachable by its parent's bounds renders."
+  [fragment]
+  (boolean (some (fn [f] (and (vector? f) (map? (second f))
+                              (let [{:keys [min max]} (second f)]
+                                (and (number? min) (number? max) (> min max)))))
+                 (tree-seq coll? seq fragment))))
+
 (defn- pg-check [{:keys [constraint expr]}]
   [:pg/check {:pg/constraint constraint :error/message constraint} expr])
 
@@ -274,16 +283,21 @@
                           bs (for [b branches, v (if (:null b) [nil] (:values b))] (assoc (frag (:facts b)) :value v))
                           d (when default (frag default))]
                       (whole {:schema (into [:multi {:dispatch (ident-key dispatch) :error/message constraint}]
-                                            ;; without a branch of its own, a value passes the CHECK only by being NULL
-                                            (concat (map (juxt :value :schema) bs)
+                                            ;; two alternatives pinning the same value: either may hold; without a
+                                            ;; branch of its own, a value passes the CHECK only by being NULL
+                                            (concat (for [[v group] (group-by :value bs)]
+                                                      [v (if (= 1 (count group)) (:schema (first group)) (into [:or] (map :schema group)))])
                                                     [[:malli.core/default (if d (:schema d) [:map [(ident-key dispatch) :nil]])]]))
                               :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
                               :skipped (mapcat :skipped (cond-> bs d (conj d)))}))
-      :or-check (let [alts (map frag (:alternatives f))]
-                  (whole {:schema (into [:or {:error/message constraint}] (map :schema alts))
+      ;; an alternative no row can match is left out (a generator would look for one forever)
+      :or-check (let [alts (remove (comp impossible? :schema) (map frag (:alternatives f)))]
+                  (whole {:schema (if (seq alts) (into [:or {:error/message constraint}] (map :schema alts)) [:not {:error/message constraint} :any])
                           :unrendered (mapcat :unrendered alts)
                           :skipped (mapcat :skipped alts)}))
-      :table-check {:schema (when (and (not (false? (:valid? f))) (check/supported? (:expr f) types)) (pg-check f))}
+      ;; NOT VALID: the database enforces it for new rows all the same, so it is enforced, marked
+      :table-check {:schema (when (check/supported? (:expr f) types)
+                              (cond-> (pg-check f) (false? (:valid? f)) (assoc-in [1 :pg/not-valid] true)))}
       {})))
 
 (defn- order [f] [(or (:table f) (:type-name f) "") (or (:constraint f) "") (or (:column f) "")])
@@ -361,8 +375,9 @@
         results (for [c checks :let [ov (override-for overrides c)]]
                   (cond (and (map? ov) (:skip ov)) {:skipped [c]}
                         ov {:schema ov}
-                        (and (= :domain-check (:fact c)) (not (false? (:valid? c))) (check/supported? (:expr c) types))
-                        {:schema [:pg/check-value {:pg/constraint (:constraint c) :error/message (:constraint c)} (:expr c)]}
+                        ;; NOT VALID: enforced for every new value all the same, so enforced, marked
+                        (and (= :domain-check (:fact c)) (check/supported? (:expr c) types))
+                        {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (:constraint c)} (false? (:valid? c)) (assoc :pg/not-valid true)) (:expr c)]}
                         :else {:unrendered [c]}))
         extras (keep :schema results)
         s (cond (empty? extras) schema

@@ -236,6 +236,8 @@
                 ;; a type pgmalli cannot write a value of generates NULL; a NOT NULL column of it
                 ;; leaves its table short, with the reason, rather than carrying a value the
                 ;; database refuses
+                ;; an array of a type pgmalli cannot write a value of: empty, which every array type takes
+                :vector (when (= :any (last s)) {:gen/elements [[]]})
                 (:any :some) (cond (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value}
                                    (opaque-literals (type-name p)) {:gen/elements (opaque-literals (type-name p))}
                                    (:pg/type p) {:gen/elements [nil]})
@@ -564,7 +566,11 @@
                   :multi (let [dk (:dispatch (second part))
                                branches (remove #(= :malli.core/default (first %)) (drop 2 part))
                                hit (some (fn [[v s]] (when (= v (get row dk)) s)) branches)
-                               [v frag] (if hit [(get row dk) hit] (when (seq branches) (nth branches (mod (hash [seed i]) (count branches)))))]
+                               [v frag] (if hit [(get row dk) hit] (when (seq branches) (nth branches (mod (hash [seed i]) (count branches)))))
+                               ;; a branch of several alternatives: one of them
+                               frag (if (and (vector? frag) (= :or (first frag)))
+                                      (let [alts (filterv fragment? (rest frag))] (when (seq alts) (nth alts (mod (hash [seed i 1]) (count alts)))))
+                                      frag)]
                            (if (fragment? frag) (fill (assoc row dk v) frag (* 100 i) dk) row))
                   :or (let [alts (filterv fragment? (drop 2 part))]
                         (if (seq alts) (fill row (nth alts (mod (hash [seed i]) (count alts))) (* 100 i) nil) row))

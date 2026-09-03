@@ -77,12 +77,12 @@ cons AS (
     AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conindid = i.indexrelid)
   UNION ALL
   -- a partitioned table takes a row only when one of its leaf partitions does: their bounds
-  -- (each including its ancestors') as one CHECK
+  -- (each including its ancestors') and the leaf's own CHECKs, as one CHECK; none, false
   SELECT p.oid AS relid,
          json_build_object(
            'name', p.relname || ' (partitions)',
            'type', 'CHECK',
-           'check_clause', 'CHECK (' || leaves.clause || ')',
+           'check_clause', 'CHECK (' || COALESCE(leaves.clause, 'false') || ')',
            'is_valid', true
          ) AS con
   FROM pg_catalog.pg_class p
@@ -93,11 +93,14 @@ cons AS (
       UNION ALL
       SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.inhrelid
     )
-    SELECT string_agg('(' || pg_catalog.pg_get_partition_constraintdef(t.inhrelid) || ')', ' OR ') AS clause
+    SELECT string_agg('(' || pg_catalog.pg_get_partition_constraintdef(t.inhrelid)
+                          || COALESCE((SELECT string_agg(' AND (' || pg_catalog.pg_get_expr(k.conbin, k.conrelid) || ')', '')
+                                       FROM pg_catalog.pg_constraint k WHERE k.conrelid = t.inhrelid AND k.contype = 'c'), '')
+                          || ')', ' OR ') AS clause
     FROM tree t JOIN pg_catalog.pg_class l ON l.oid = t.inhrelid
     WHERE l.relkind IN ('r', 'f')
   ) leaves ON true
-  WHERE n.nspname = :'schema' AND p.relkind = 'p' AND leaves.clause IS NOT NULL
+  WHERE n.nspname = :'schema' AND p.relkind = 'p'
 ),
 tables AS (
   SELECT c.relname,

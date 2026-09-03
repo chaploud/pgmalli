@@ -115,7 +115,11 @@
         _ (psql! "postgres" (str "CREATE DATABASE " dbname))
         ;; regression scripts drop their objects at the end; keep them
         _ (psql! dbname (str/replace (slurp f) #"(?m)^\s*DROP\b" "-- DROP"))
-        findings (vec (for [s (schemas dbname) f (sweep-schema dbname s)] (assoc f :schema s)))]
+        ;; a schema whose pipeline does not finish in time is a finding, not a stall
+        findings (vec (for [s (schemas dbname)
+                            f (let [r (deref (future (vec (sweep-schema dbname s))) 120000 ::timeout)]
+                                (if (= ::timeout r) [{:kind :error :step :timeout :message "120 s passed"}] r))]
+                        (assoc f :schema s)))]
     (psql! "postgres" (str "DROP DATABASE " dbname " WITH (FORCE)"))
     findings))
 
