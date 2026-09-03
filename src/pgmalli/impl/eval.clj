@@ -10,7 +10,8 @@
    whether an expression is inside it, and render leaves the others unrendered."
   (:require [clojure.string :as str]
             [pgmalli.impl.expr :as x]
-            [pgmalli.impl.json :as json])
+            [pgmalli.impl.json :as json]
+            [pgmalli.impl.pghash :as pghash])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneId ZoneOffset)
            (java.util UUID)))
 
@@ -168,7 +169,7 @@
 
 ;;; casts
 
-(def ^:private integer-types #{:smallint :integer :bigint :int2 :int4 :int8})
+(def ^:private integer-types #{:oid :smallint :integer :bigint :int2 :int4 :int8})
 (def ^:private exact-types #{:numeric :decimal})
 (def ^:private float-types #{:real :double-precision :float4 :float8})
 (def ^:private text-types #{:text :varchar :character-varying :char :character :bpchar :name})
@@ -420,6 +421,8 @@
           :least (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (cmp :< %2 %1) %2 %1) vs)))
           :coalesce (first (filter some? (all)))
           :concat (apply str (remove nil? (all)))
+          ;; a hash partition's bound: the row's key hashed as the database hashes it
+          :satisfies_hash_partition (let [[_ modulus remainder & vs] (all)] (pghash/satisfies-hash-partition? modulus remainder vs))
           :case (let [[clauses else] (if (= :else (last (butlast args)))
                                        [(butlast (butlast args)) (last args)]
                                        [args nil])
@@ -434,7 +437,7 @@
   (into (set (keys strict))
         [:cast :array :raw :now :transaction_timestamp :statement_timestamp :clock_timestamp
          :and :or :not := :<> :< :> :<= :>= :is :is-not :is-distinct-from :is-not-distinct-from
-         :in :not-in :between :between-symmetric :nullif :greatest :least :coalesce :concat :case]))
+         :in :not-in :between :between-symmetric :nullif :greatest :least :coalesce :concat :case :satisfies_hash_partition]))
 
 (defn- literal-arg [v] (if (and (vector? v) (= :cast (first v))) (second v) v))
 

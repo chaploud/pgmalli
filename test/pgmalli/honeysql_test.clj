@@ -153,3 +153,10 @@
       "its own columns still are")
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry '(cond-> {:select [:nope] :from [:users]} deep? (assoc :limit 1)) opts))
       "a statement built in code at the top is still the statement"))
+
+(deftest a-cte-body-bound-apart-from-its-with
+  (is (= [] (h/check registry '(let [paged (cond-> {:select [:id] :from [[:f :user_skills]]} (:limit page) (assoc :limit (:limit page)))]
+                                  {:with [[:f filtered-query :materialized] [:p paged]]
+                                   :select [:total/n]
+                                   :from [[{:select [[[:count :*] :n]] :from [:f]} :total]]}) opts))
+      "a CTE body bound in a let sees its sibling CTEs"))

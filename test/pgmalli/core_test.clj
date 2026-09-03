@@ -96,15 +96,20 @@
                                           nick text NOT NULL CHECK (nick <> ''),
                                           nick_upper text GENERATED ALWAYS AS (upper(nick)) STORED,
                                           tags text[] NOT NULL DEFAULT '{}',
-                                          meta jsonb);")
+                                          meta jsonb);
+                  CREATE TABLE ins.hashed (k integer NOT NULL, s text NOT NULL, u uuid) PARTITION BY HASH (k, s, u);
+                  CREATE TABLE ins.hashed_0 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 0);
+                  CREATE TABLE ins.hashed_1 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+                  CREATE TABLE ins.hashed_3 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 3);")
       (pgmalli/generate! (assoc config :schemas ["ins"]))
       (let [registry (pgmalli/registry (gen/load-file* (gen/path-for config "ins")))
             dataset (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 4}) 30 7)
             statements (pgmalli/inserts registry dataset)
-            counts (fn [] (str/join " " (for [t ["ins.groups" "ins.users"]]
+            counts (fn [] (str/join " " (for [t ["ins.groups" "ins.users" "ins.hashed"]]
                                           (str "IF (SELECT count(*) FROM " t ") <> " (count (get dataset t))
                                                " THEN RAISE EXCEPTION '" t " has the wrong number of rows'; END IF;"))))]
-        (is (= [:ins.groups [{:overriding-value :system} :ins.users]] (map :insert-into statements)))
+        (is (= [:ins.groups :ins.hashed [{:overriding-value :system} :ins.users]] (map :insert-into statements)))
+        (is (= 4 (count (get dataset "ins.hashed"))) "every generated row lands in one of the three partitions (remainder 2 has none): routed as the database routes")
         (exec-sql! (str (str/join ";\n" (map #(first (honey.sql/format % {:inline true})) statements)) ";\n"
                         "DO $$ BEGIN " (counts) " END $$;"))
         (is true "every INSERT ran, identity ids kept, generated column left to the database")))))

@@ -162,12 +162,14 @@
    followed by those of the statements enclosing it. A CTE is visible to the statement whose
    :with defines it and to the statements inside it, not outside. A statement found inside a
    vector of a code form, not under a statement (a subquery a helper adds to a query built
-   elsewhere), has an enclosing statement this data does not show: its chain ends in :open,
-   and a column it cannot resolve is taken to be the enclosing statement's."
+   elsewhere, or a CTE body bound apart from its :with), has an enclosing statement this data
+   does not show: its chain ends in :open, a column it cannot resolve is taken to be the
+   enclosing statement's, and every CTE the query defines anywhere is visible to it."
   [registry body opts]
   (letfn [(walk [x outer ctes in-vector?]
-            (cond (statement? x) (let [ctes (into ctes (keep cte-name) (cte-entries x))
-                                       outer (if (and (empty? outer) in-vector?) (list :open) outer)
+            (cond (statement? x) (let [open? (and (empty? outer) in-vector?)
+                                       ctes (into (if open? (cte-names body) ctes) (keep cte-name) (cte-entries x))
+                                       outer (if open? (list :open) outer)
                                        chain (cons (scope registry x ctes opts) outer)]
                                    (cons [x chain] (mapcat #(walk % chain ctes false) (vals x))))
                   (coll? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x))) (seq x))))]

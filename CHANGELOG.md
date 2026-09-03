@@ -31,6 +31,9 @@ All notable changes to this project are documented here. The format follows
 - A unique index bearing a CHECK constraint's name is read as well as the constraint.
 - A partitioned table's row schema carries the OR of its leaf partitions' bounds as a CHECK,
   so a generated row lands in a partition (a sub-partitioned child with no leaves takes none).
+  A hash partition's bound (`satisfies_hash_partition`) is evaluated with PostgreSQL's own hash
+  functions (`pgmalli.impl.pghash`, checked against the database), for integer, text, boolean,
+  date, timestamp, uuid and bytea keys.
 - A CHECK reading a generated column, and a domain on a generated column, are checked on the
   column's expression, as the database computes it: `b GENERATED ALWAYS AS (a * 2)` with
   `CHECK (b < 50)` bounds `a`.

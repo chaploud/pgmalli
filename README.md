@@ -289,7 +289,9 @@ Kept compatible; a change bumps the minor version.
 
 ## Scope
 
-Tables (regular and partition parents, whose partitions' bounds become a CHECK), views and
+Tables (regular and partition parents, whose partitions' bounds become a CHECK; a hash
+partition's bound is computed as the database computes it, with its own hash functions,
+checked against every supported version), views and
 materialized views, columns, CHECK, PRIMARY KEY, UNIQUE and FOREIGN KEY constraints, unique
 indexes, enum and domain types. A
 generated column is left to the database, except that a range built from two columns
