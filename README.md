@@ -56,11 +56,18 @@ Both read `pgmalli.edn` in the working directory when present:
  :db {:host "localhost" :port 5432 :db "app_dev" :user "app"}}   ; optional; :password too, else PGPASSWORD or ~/.pgpass
 ```
 
-The same from Clojure: `(pgmalli/generate! config)` and `(pgmalli/stale config)`.
+The same from Clojure, in `pgmalli.generate`: `(generate/generate! config)` and
+`(generate/check config)`, which returns `{:stale :unrendered :diagnostics}` in one read
+(`{:db? false}` reads the files alone).
 
 Convention: regenerate right after migrating and commit the files; in CI assert
-`(nil? (pgmalli/stale config))`, or run `check`, which prints one line per column, property
-or CHECK that differs between the file and the database.
+`(nil? (:stale (generate/check config)))`, or run `check`, which prints one line per column,
+property or CHECK that differs between the file and the database, then the unrendered facts
+and the diagnostics.
+
+Three namespaces, by what they need: `pgmalli.core` reads the generated files and needs
+nothing else; `pgmalli.generate` needs `psql`; `pgmalli.data` (datasets) needs test.check;
+`pgmalli.honeysql` reads HoneySQL query data.
 
 ## What you get
 
@@ -118,14 +125,14 @@ the database has it.
 | `json`, `jsonb` | `:any` (`:map` or `[:sequential :any]` when a CHECK pins the type) |
 | `bytea` | `bytes?`; with `CHECK (octet_length(col) = n)` `[:pg/bytes {:min n :max n}]`, a type that generates byte arrays of that length |
 | `T[]` | `[:vector <T>]`; `varchar(n)[]` bounds the elements |
-| `oid`, `xid`, `xid8`, `cid` | `:int` |
+| `oid` | `:int` |
 | `bit(n)`, `bit varying(n)` | `[:string {:min n :max n}]` / `[:string {:max n}]`, generated as digits |
 | `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, `tsquery`, `jsonpath`, geometric, range, multirange, `pg_lsn`, `reg*` | `[:any {:pg/type "..."}]`: the driver hands these over as its own objects; a dataset generates them as literals the database reads |
 | a partitioned table | its row schema carries a CHECK named `<table> (partitions)`, the OR of its partitions' bounds: a row it takes is one some partition takes |
-| other types (ranges, `inet`, `money`, `xml`, extensions) | `[:any {:pg/type ...}]`, listed in `:unrendered` |
+| a composite type, an extension's type | `[:any {:pg/type ...}]`, listed in `:unrendered` |
 
-`(pgmalli/unrendered "public")` lists the facts that have no rendering, each with the
-constraint's expression as data. Give them one through `:overrides`, keyed by constraint name:
+`(:unrendered (pgmalli/generated "public"))` lists the facts that have no rendering, each
+with the constraint's expression as data. Give them one through `:overrides`, keyed by constraint name:
 a malli schema (`[:ref :app/name]` defined in your own registry, for instance) or
 `{:skip "reason"}`.
 
@@ -150,6 +157,8 @@ into Instants (the JVM's, unless you configured otherwise), so both read the sam
 
 ```clojure
 (pgmalli/registry "public" "auth")          ; several schemas, plus malli's defaults, malli.util and malli.experimental.time
+(pgmalli/generated "public")                ; the file as data: :schema :database-version :diagnostics :registry :unrendered :skipped
+(pgmalli/install! "public")                 ; the registry as malli's default one: :pg.public/users everywhere, no registry to pass
 (pgmalli/columns registry :pg.public/users) ; the [:map ...] alone, for malli.util
 (m/decode :pg.public/users jdbc-row {:registry registry} (pgmalli/transformer))
                                             ; JDBC (java.sql.Date / Timestamp, Instant) and string values into the registry's types
@@ -172,7 +181,9 @@ qualified by the table, NULL columns may be missing, timestamps may arrive as In
 ;; => [:map {...} [:users/id [:pg/integer ...]] [:users/nick {:optional true} [:string ...]] ...]
 ```
 
-`:kebab? true` matches the kebab builders; `:time :local` matches read-as-local.
+`:kebab? true` matches the kebab builders; `:time :local` matches read-as-local. The options
+of a next.jdbc builder come from its name: `(pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps)`
+is `{:kebab? true :nil-columns :absent}`. `pgmalli.honeysql` takes the same options.
 
 ### Queries checked against the registry
 
@@ -202,19 +213,33 @@ subquery's columns are resolved in the subquery first, then in the statements ar
 ```
 
 Options: `:schema` for unqualified table names (default `"public"`); `:qualified?`, `:kebab?`,
-`:nil-columns` and `:time` as in `as-read`. Without options the schema is one `:malli/schema`
-metadata can take: date and timestamp columns are `inst?` (what the driver returns, and a
-schema malli's default registry reads). `:time :instant` or `:local` gives the
-`malli.experimental.time` types instead, for a registry that has them. An ambiguous column
-comes with the tables it could belong to, under `:candidates`.
+`:nil-columns` and `:time` as in `as-read`; `:result :one` for a function returning one row
+or nil (`[:maybe row]`). Without `:time` the schema is one `:malli/schema` metadata can take:
+date and timestamp columns are `inst?` (what the driver returns, and a schema malli's default
+registry reads). `:time :instant` or `:local` gives the `malli.experimental.time` types
+instead, for a registry that has them. An ambiguous column comes with the tables it could
+belong to, under `:candidates`. `check`, `query-schema`, `row-schema` and `arg-types` are the
+functions to use; the rest of the namespace are their parts, for taking a query apart.
+
+Every query of a project checked in one test, whatever holds the queries (here, a var per
+query with the HoneySQL map in its metadata):
+
+```clojure
+(deftest queries-agree-with-the-database
+  (doseq [v (vals (ns-publics 'app.queries)) :let [q (:query (meta v))] :when q]
+    (is (= [] (h/check registry q)) (str v))))
+```
 
 ### Schemas where the registry cannot follow
 
 `:malli/schema` metadata, `malli.dev/start!` and other tools read schemas through malli's
-default registry. `portable` gives the named schema as data that registry reads (with
-`malli.experimental.time` added for the time types): the schema's own enums and domains
-inlined, pgmalli's types as their malli counterparts, generation hints dropped. The CHECKs
-only pgmalli evaluates (`:pg/check`, `:pg/check-value`) are left out.
+default registry. `(pgmalli/install! "public")` makes pgmalli's registry that default, so
+`:pg.public/users` and the other names work there directly; it is process-wide, as the
+default registry is. Where that is not wanted, `portable` gives the named schema as data
+malli's default registry reads (with `malli.experimental.time` added for the time types): the
+schema's own enums and domains inlined, pgmalli's types as their malli counterparts,
+generation hints dropped. The CHECKs only pgmalli evaluates (`:pg/check`, `:pg/check-value`)
+are left out.
 
 ```clojure
 (defn find-user
@@ -233,23 +258,28 @@ cycle are not supported. When a registry is loaded it adds generation hints (`:g
 and times recent.
 
 ```clojure
-(def dataset (pgmalli/dataset-schema registry))          ; {"public.groups" [...] "public.users" [...]}
+(require '[pgmalli.data :as data])
+
+(def dataset (data/dataset-schema registry))             ; {"public.groups" [...] "public.users" [...]}
 (m/validate dataset {"public.groups" [{:id 1 ...}] "public.users" [{:group_id 1 ...}]} {:registry registry})
-(def sample (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 5 :except #{"public.audit_log"}}) 30 42))
+(def sample (clojure.test.check.generators/generate (data/dataset-generator registry {:rows 5 :except #{"public.audit_log"}}) 30 42))
 ;; :rows wanted per table, picked from many more candidates; a reference that finds no fitting
 ;; row grows its target table; :except leaves tables out (no kept table may reference them)
-(-> sample meta :pgmalli/short)
+(data/short-tables sample)
 ;; => {"public.jobs" {:wanted 5 :got 0 :reasons [["{:params [\"chk_jobs_params\"]}" 200]]}}
-;; tables that came out short, with what their candidate rows failed on
+;; tables that came out short, with what their candidate rows failed on; nil when none
 ```
 
 Rows come from the column schemas, with the branch of a `:multi` or `:or` filled in from its
 own fragment; a `:pg/check` holds by rejection, so a CHECK that wants structured jsonb leaves
-its table short. A dataset of 71 tables and 250 rows takes about a second; for a fixture,
-generate once with a fixed seed, keep the result as EDN, and let tests read that.
+its table short. A dataset of 71 tables and 250 rows takes about a second. For a fixture,
+generate once with a fixed seed, keep it in the repository, and let tests read it:
+`write-dataset` and `read-dataset` carry the `java.time` values and byte arrays EDN has no
+literal for under pgmalli's tags (`#pgmalli/instant "..."`, `#pgmalli/bytes "hex"`).
 
 ```clojure
-(clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 5}) 30 42)
+(data/write-dataset "test/resources/fixture.edn" sample)
+(def fixture (data/read-dataset "test/resources/fixture.edn"))
 ```
 
 `inserts` turns a dataset into HoneySQL INSERT maps, one per table, in an order the database
@@ -259,7 +289,7 @@ their type, json written and cast, arrays with their element type, a column a ro
 VALUE`), so the ids the rows refer to each other by hold:
 
 ```clojure
-(doseq [q (pgmalli/inserts registry dataset)]
+(doseq [q (data/inserts registry fixture)]
   (jdbc/execute! db (honey.sql/format q)))
 ```
 
@@ -272,7 +302,7 @@ Some states PostgreSQL keeps are worth a look: a partitioned table with no parti
 no row), a partition its parent's bounds make unreachable, a `CHECK (false)`, CHECKs on one
 column that contradict each other, a constraint left `NOT VALID`, a unique index repeating a
 key, a row-level INSERT trigger (its code may reject or change rows the schema accepts). The
-generated file lists them under `:diagnostics` (`(pgmalli/diagnostics "public")`),
+generated file lists them under `:diagnostics` (`(:diagnostics (pgmalli/generated "public"))`),
 each with a `:kind`, a `:severity` and a `:confidence` (`:proven` when the catalog alone
 shows it), and `check` prints them. Generation goes on regardless: the schemas say what the
 database says.
@@ -282,8 +312,8 @@ database says.
 Kept compatible; a change bumps the minor version.
 
 1. The config keys `:schemas` `:out-dir` `:overrides` `:db`.
-2. The generated file: `{:schema :database-version :registry :unrendered :skipped}` and the
-   registry names above (insert schemas are derived at load time, not stored).
+2. The generated file: `{:schema :database-version :diagnostics :registry :unrendered :skipped}`
+   and the registry names above (insert schemas are derived at load time, not stored).
 3. The fact vocabulary of `:unrendered` (`pgmalli.impl.pattern`).
 
 `pgmalli.impl.*` may change without notice.

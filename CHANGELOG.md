@@ -5,8 +5,27 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- Three namespaces by what they need: `pgmalli.core` reads the generated files (`registry`,
+  `generated`, `install!`, `columns`, `column`, `non-null`, `portable`, `as-read`,
+  `read-options`, `transformer`); `pgmalli.generate` needs psql (`generate!`, `stale`, `check`);
+  `pgmalli.data` needs test.check (`dataset-schema`, `dataset-generator`, `short-tables`,
+  `inserts`, `write-dataset`, `read-dataset`). `unrendered` and `diagnostics` are keys of
+  `generated`'s map.
+- The generated file is written in reading order: `:schema`, `:database-version`,
+  `:diagnostics`, `:registry`, `:unrendered`, `:skipped`. `generate` prints what it found.
+
 ### Added
 
+- `pgmalli.core/install!`: the registry as malli's default one, so `:malli/schema`,
+  `malli.dev/start!` and `malli.instrument` read the generated names directly.
+- `pgmalli.core/read-options`: the reading options of a next.jdbc result set builder, by name.
+- `pgmalli.generate/check`: `{:stale :unrendered :diagnostics}` in one read, what CI asks.
+- `pgmalli.data/write-dataset` and `read-dataset`: a dataset as EDN with `java.time` values
+  and byte arrays under pgmalli's tags, for fixtures kept in the repository.
+- `pgmalli.data/short-tables`: the tables a generated dataset could not fill, and why.
+- `pgmalli.honeysql/query-schema` takes `{:result :one}` for a function returning one row.
 - `:diagnostics` names a table's row-level INSERT triggers: their code may reject or change
   rows the schema accepts, which the catalog does not show.
 

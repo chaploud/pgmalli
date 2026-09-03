@@ -160,3 +160,8 @@
                                    :select [:total/n]
                                    :from [[{:select [[[:count :*] :n]] :from [:f]} :total]]}) opts))
       "a CTE body bound in a let sees its sibling CTEs"))
+
+(deftest one-row-results
+  (is (= [:=> [:cat [:int {:pg/identity :always :pg/type "bigint"}]] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40}]]]]]]
+         (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
+      "{:result :one} for a function returning one row or nil"))

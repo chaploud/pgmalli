@@ -5,6 +5,8 @@
             honey.sql
             [malli.core :as m]
             [pgmalli.core :as pgmalli]
+            [pgmalli.data :as data]
+            [pgmalli.generate :as generate]
             [pgmalli.impl.generate :as gen]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
   (:import (java.io File)))
@@ -42,12 +44,12 @@
                   CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
                   CREATE TRIGGER users_touch BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION touch();")
       (testing "a missing file is stale"
-        (is (every? (comp nil? :file) (get (pgmalli/stale config) "public"))))
+        (is (every? (comp nil? :file) (get (generate/stale config) "public"))))
       (testing "generate, read back, validate"
-        (is (= {"public" out} (pgmalli/generate! config)))
+        (is (= {"public" out} (generate/generate! config)))
         (let [data (gen/load-file* out)]
           (is (= data (get-in (gen/generated-all config) ["public" :data])))
-          (is (= (slurp out) (do (pgmalli/generate! config) (slurp out))) "byte-for-byte deterministic")
+          (is (= (slurp out) (do (generate/generate! config) (slurp out))) "byte-for-byte deterministic")
           (is (empty? (:unrendered data)) "the table CHECK is a :multi")
           (let [reg (pgmalli/registry data)]
             (is (m/validate :pg.public/users {:id 1 :mood "sad" :age 3 :nick "n" :closed_at nil} {:registry reg}))
@@ -71,15 +73,15 @@
                     (str k ": the database draws the line where the schema does")))
               (is (m/validate :pg.public/parted {:k 150 :v nil} {:registry reg}))
               (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
-              (is (every? #(< -1 (:k %) 200) (get (clojure.test.check.generators/generate (pgmalli/dataset-generator reg {:rows 5}) 30 1) "public.parted"))
+              (is (every? #(< -1 (:k %) 200) (get (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1) "public.parted"))
                   "generated rows land in a partition")
               (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"}] (map #(select-keys % [:kind :table]) (:diagnostics data)))
                   "the file says what deserves a look")))))
       (testing "stale and unrendered"
-        (is (nil? (pgmalli/stale config)))
+        (is (nil? (generate/stale config)))
         (is (empty? (:unrendered (gen/load-file* out))))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
-        (let [diffs (get (pgmalli/stale config) "public")]
+        (let [diffs (get (generate/stale config) "public")]
           (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
@@ -103,10 +105,10 @@
                   CREATE TABLE ins.hashed_0 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 0);
                   CREATE TABLE ins.hashed_1 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 1);
                   CREATE TABLE ins.hashed_3 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 3);")
-      (pgmalli/generate! (assoc config :schemas ["ins"]))
+      (generate/generate! (assoc config :schemas ["ins"]))
       (let [registry (pgmalli/registry (gen/load-file* (gen/path-for config "ins")))
-            dataset (clojure.test.check.generators/generate (pgmalli/dataset-generator registry {:rows 4}) 30 7)
-            statements (pgmalli/inserts registry dataset)
+            dataset (clojure.test.check.generators/generate (data/dataset-generator registry {:rows 4}) 30 7)
+            statements (data/inserts registry dataset)
             counts (fn [] (str/join " " (for [t ["ins.groups" "ins.users" "ins.hashed"]]
                                           (str "IF (SELECT count(*) FROM " t ") <> " (count (get dataset t))
                                                " THEN RAISE EXCEPTION '" t " has the wrong number of rows'; END IF;"))))]
@@ -115,3 +117,17 @@
         (exec-sql! (str (str/join ";\n" (map #(first (honey.sql/format % {:inline true})) statements)) ";\n"
                         "DO $$ BEGIN " (counts) " END $$;"))
         (is true "every INSERT ran, identity ids kept, generated column left to the database")))))
+
+(deftest check-reads-everything-once
+  (when *db*
+    (let [out-dir (str (doto (File/createTempFile "pgmalli-chk" "") .delete))
+          config {:db *db* :out-dir out-dir :schemas ["chk"]}]
+      (exec-sql! "CREATE SCHEMA chk; CREATE TABLE chk.empty_parted (k integer) PARTITION BY LIST (k);")
+      (generate/generate! config)
+      (let [{:keys [stale unrendered diagnostics]} (generate/check config)]
+        (is (nil? stale))
+        (is (= {} unrendered))
+        (is (= [:no-partition] (map :kind (get diagnostics "chk")))))
+      (is (nil? (:stale (generate/check config {:db? false}))) "without the database, only the files")
+      (let [data (gen/load-file* (gen/path-for config "chk"))]
+        (is (= [:schema :database-version :diagnostics :registry :unrendered :skipped] (keys data)) "read from the top: what it is, what deserves a look, the schemas")))))

@@ -20,6 +20,7 @@
             [clojure.test.check.generators :as tcg]
             [honey.sql :as sql]
             [pgmalli.core :as pgmalli]
+            [pgmalli.data :as data]
             [pgmalli.impl.generate :as gen]
             [pgmalli.test-db :as db]))
 
@@ -60,7 +61,7 @@
    the rest goes on; the whole is rolled back at the end)."
   [dbname registry dataset]
   (let [dataset (into {} (for [[t rows] dataset] [t (mapv #(into {} (for [[k v] %] [k (literal v)])) rows)]))
-        [stmts err] (try-step :inserts #(vec (pgmalli/inserts registry dataset)))
+        [stmts err] (try-step :inserts #(vec (data/inserts registry dataset)))
         formatted (when-not err (mapv (fn [q] (let [[t e] (try-step :format #(first (sql/format q {:inline true})))]
                                                 (or t (assoc e :table (let [t (:insert-into q)] (if (vector? t) (last t) t)))))) stmts))
         [texts err2] [(filter string? formatted) (seq (remove string? formatted))]
@@ -104,7 +105,7 @@
             [registry e3] (when-not e2 (try-step :load #(pgmalli/registry data)))
             tables (when registry (filter #(and (keyword? %) (= "pg" (subs (namespace %) 0 2)) (not (str/ends-with? (namespace %) "insert"))) (keys (:registry data))))
             [dataset e4] (when (and registry (seq tables))
-                           (try-step :dataset #(tcg/generate (pgmalli/dataset-generator registry {:rows 3}) 20 7)))
+                           (try-step :dataset #(tcg/generate (data/dataset-generator registry {:rows 3}) 20 7)))
             short (for [[t {:keys [wanted got reasons]}] (some-> dataset meta :pgmalli/short)]
                     {:kind :short :table t :wanted wanted :got got :reasons reasons})
             rejected (when dataset (inserts-round-trip dbname registry dataset))]

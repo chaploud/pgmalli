@@ -9,6 +9,7 @@
             malli.experimental.time
             honey.sql
             [pgmalli.core :as pgmalli]
+            [pgmalli.data :as data]
             [pgmalli.impl.json :as json]))
 
 (def registry (pgmalli/registry "sample"))
@@ -110,7 +111,7 @@
                    (assoc user :id 2 :group_name "a" :referrer_id 1)]})
 
 (deftest datasets
-  (let [ds (pgmalli/dataset-schema registry)]
+  (let [ds (data/dataset-schema registry)]
     (is (m/validate ds good opts))
     (is (not (m/validate ds (assoc good "sample.groups" [{:id 1 :name "a"} {:id 1 :name "b"}]) opts)) "duplicate primary key")
     (is (not (m/validate ds (assoc good "sample.groups" [{:id 1 :name "a"} {:id 2 :name "a"}]) opts)) "duplicate unique")
@@ -119,7 +120,7 @@
     (is (m/validate ds (assoc-in good ["sample.users" 0 :group_name] nil) opts) "a NULL in a composite key is not checked")
     (is (not (m/validate ds (assoc-in good ["sample.users" 1 :referrer_id] 9) opts)) "self-reference")
     (testing "generated datasets satisfy all of it"
-      (doseq [sample (tcg/sample (pgmalli/dataset-generator registry {:rows 6}) 8)]
+      (doseq [sample (tcg/sample (data/dataset-generator registry {:rows 6}) 8)]
         (is (m/validate ds sample opts) (pr-str sample))))))
 
 (deftest self-references-with-a-shared-group
@@ -131,14 +132,14 @@
                                                                     [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]
                                                                     [:parent_id [:maybe [:int {:pg/type "integer"}]]]]
                                                               [:pg/check [:or [:is :parent_id nil] [:<> :parent_id :id]]]]}})
-        ds (pgmalli/dataset-schema reg)]
-    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 5}) 20)]
+        ds (data/dataset-schema reg)]
+    (doseq [sample (tcg/sample (data/dataset-generator reg {:rows 5}) 20)]
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 5 (count (get sample "public.folders")))))
-    (is (= #{"public.groups"} (set (keys (first (tcg/sample (pgmalli/dataset-generator reg {:rows 2 :except #{"public.folders"}}) 1)))))
+    (is (= #{"public.groups"} (set (keys (first (tcg/sample (data/dataset-generator reg {:rows 2 :except #{"public.folders"}}) 1)))))
         ":except leaves a table out")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"references public.groups, which :except leaves out"
-                          (doall (tcg/sample (pgmalli/dataset-generator reg {:rows 2 :except #{"public.groups"}}) 1)))
+                          (doall (tcg/sample (data/dataset-generator reg {:rows 2 :except #{"public.groups"}}) 1)))
         "but not one that kept tables reference")))
 
 (deftest children-pinning-a-parent-column
@@ -157,8 +158,8 @@
                                                                   [:content_id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]
                                                                   [:content_type [:ref {:pg/type "kinds"} :pg.public/kinds]] [:score [:int {:pg/type "integer"}]]]
                                                             [:pg/check {:pg/constraint "exams_type"} [:= :content_type [:cast "exam" :kinds]]]]}})
-        ds (pgmalli/dataset-schema reg)]
-    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 3}) 15)]
+        ds (data/dataset-schema reg)]
+    (doseq [sample (tcg/sample (data/dataset-generator reg {:rows 3}) 15)]
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 3 (count (get sample "public.exams"))))
       (is (every? #(= "exam" (:content_type %)) (get sample "public.exams"))))))
@@ -175,8 +176,8 @@
                                                                                               {:columns ["group_id"] :table "public.contract_groups" :to ["group_id"]}]}
                                                                       [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]]
                                                                       [:audience_id [:int {:pg/type "integer"}]] [:sort_order [:int {:pg/type "integer"}]]]}})
-        ds (pgmalli/dataset-schema reg)]
-    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 3}) 20)]
+        ds (data/dataset-schema reg)]
+    (doseq [sample (tcg/sample (data/dataset-generator reg {:rows 3}) 20)]
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 3 (count (get sample "public.audience_blocks")))))))
 
@@ -197,8 +198,8 @@
                                                                            [{:columns ["certification_id" "group_id"] :table "public.certifications" :to ["id" "group_id"]}
                                                                             {:columns ["tag_id" "group_id"] :table "public.tags" :to ["id" "group_id"]}]
                                                                            [[:group_id int] [:certification_id int] [:tag_id int]])}})
-        ds (pgmalli/dataset-schema reg)]
-    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 3}) 12)]
+        ds (data/dataset-schema reg)]
+    (doseq [sample (tcg/sample (data/dataset-generator reg {:rows 3}) 12)]
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 3 (count (get sample "public.certification_tags")))))))
 
@@ -211,7 +212,7 @@
                                                         [:multi {:dispatch :status}
                                                          ["open" [:map [:closed_at :nil]]]
                                                          ["closed" [:map [:closed_at :time/instant] [:note [:string {:min 1}]]]]]]}})
-        sample (first (tcg/sample (pgmalli/dataset-generator reg {:rows 8}) 1))]
+        sample (first (tcg/sample (data/dataset-generator reg {:rows 8}) 1))]
     (is (= 8 (count (get sample "public.t"))) "a branching CHECK is met by construction")
     (is (nil? (-> sample meta :pgmalli/short)))))
 
@@ -231,8 +232,8 @@
                                                                [:multi {:dispatch :status}
                                                                 ["pending" [:map [:approver_id :nil]]]
                                                                 ["approved" [:map [:approver_id [:int {:min 1}]]]]]]}})
-        ds (pgmalli/dataset-schema reg)]
-    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 8)]
+        ds (data/dataset-schema reg)]
+    (doseq [sample (tcg/sample (data/dataset-generator reg {:rows 6}) 8)]
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 6 (count (get sample "public.requests"))) (pr-str (-> sample meta :pgmalli/short))))))
 
@@ -240,14 +241,14 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never" :pg/primary-key ["a"]} [:a [:int {:pg/type "integer"}]]] [:pg/check {:pg/constraint "never" :error/message "never"} [:< 2 1]]]
                                           :pg.public/child [:map {:pg/table "public.child" :pg/foreign-keys [{:columns ["never_a"] :table "public.never" :to ["a"]}]} [:never_a [:int {:pg/type "integer"}]]]
                                           :pg.public/big [:map {:pg/table "public.big" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer" :min 1000000 :max 2147483647}]]]}})
-        sample (first (tcg/sample (pgmalli/dataset-generator reg {:rows 2}) 1))
+        sample (first (tcg/sample (data/dataset-generator reg {:rows 2}) 1))
         short (-> sample meta :pgmalli/short)]
     (is (= [] (get sample "public.never")) "a table no candidate row fits comes out empty")
     (is (= {:wanted 2 :got 0} (dissoc (get short "public.never") :reasons)) "and says so in the metadata")
     (is (str/includes? (get-in short ["public.never" :reasons 0 0]) "never") "naming the constraint")
     (is (= {:wanted 2 :got 0 :reasons [["nothing to reference: public.child [\"never_a\"] references public.never [\"a\"]" 200]]} (get short "public.child"))
         "its children come out short, saying why")
-    (is (m/validate (pgmalli/dataset-schema reg) sample {:registry reg}) "and the dataset is still valid")
+    (is (m/validate (data/dataset-schema reg) sample {:registry reg}) "and the dataset is still valid")
     (is (every? #(>= (:id %) 1000000) (tcg/sample (mg/generator (pgmalli/columns reg :pg.public/big) {:registry reg}) 20))
         "a key bound above the hint range keeps the bound and drops the hint")))
 
@@ -275,7 +276,7 @@
                                                                    ["Parent ID" [:maybe [:int {:pg/type "integer"}]]]]
                                           :pg.public/Parents [:map {:pg/table "public.Parents" :pg/primary-key ["id"]}
                                                               [:id [:int {:pg/type "integer"}]] [:group [:int {:pg/type "integer"}]]]}})
-        ds (pgmalli/dataset-schema reg)
+        ds (data/dataset-schema reg)
         parents {"public.Parents" [{:id 1 :group 1}]}
         valid? (fn [rows] (m/validate ds (assoc parents "public.Order Items" rows) {:registry reg}))
         errors (fn [rows] (me/humanize (m/explain ds (assoc parents "public.Order Items" rows) {:registry reg})))
@@ -300,17 +301,17 @@
                                                                                        {:columns ["sibling_id" "group_id"] :table "public.children" :to ["id" "group_id"]}]}
                                                                [:id [:int {:pg/type "integer"}]] [:group_id [:int {:pg/type "integer"}]] [:parent_id [:int {:pg/type "integer"}]]
                                                                [:sibling_id [:maybe [:int {:pg/type "integer"}]]]]}})
-        ds (pgmalli/dataset-schema reg)]
-    (doseq [sample (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 30)]
+        ds (data/dataset-schema reg)]
+    (doseq [sample (tcg/sample (data/dataset-generator reg {:rows 6}) 30)]
       (is (m/validate ds sample {:registry reg}) (pr-str sample)))
-    (is (some #(seq (get % "public.children")) (tcg/sample (pgmalli/dataset-generator reg {:rows 6}) 10)) "and rows do get generated")))
+    (is (some #(seq (get % "public.children")) (tcg/sample (data/dataset-generator reg {:rows 6}) 10)) "and rows do get generated")))
 
 (deftest views-are-rows-only
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/primary-key ["id"]} [:id [:pg/integer {:pg/type "integer"}]]]
                                           :pg.public/v [:map {:pg/view "public.v"} [:id [:maybe [:pg/integer {:pg/type "integer"}]]]]}})]
     (is (m/validate :pg.public/v {:id nil} {:registry reg}))
     (is (nil? (get reg :pg.public.v/insert)) "no insert schema for a view")
-    (is (= #{"public.t"} (set (keys (first (tcg/sample (pgmalli/dataset-generator reg {:rows 1}) 1))))) "not part of datasets")))
+    (is (= #{"public.t"} (set (keys (first (tcg/sample (data/dataset-generator reg {:rows 1}) 1))))) "not part of datasets")))
 
 (deftest other-shapes-of-the-same-schema
   (testing "portable: what malli's default registry reads"
@@ -345,26 +346,26 @@
 (deftest several-schemas
   (let [registry (pgmalli/registry "sample" "other")
         opts {:registry registry}
-        ds (pgmalli/dataset-schema registry)]
+        ds (data/dataset-schema registry)]
     (is (m/validate :pg.other.notes/insert {:id 1 :user_id 1} opts))
     (is (m/validate ds (assoc good "other.notes" [{:id 1 :user_id 1}]) opts))
     (is (not (m/validate ds (assoc good "other.notes" [{:id 1 :user_id 9}]) opts)) "a reference into another schema")
-    (doseq [sample (tcg/sample (pgmalli/dataset-generator registry {:rows 4}) 4)]
+    (doseq [sample (tcg/sample (data/dataset-generator registry {:rows 4}) 4)]
       (is (m/validate ds sample opts) (pr-str sample)))
-    (is (m/validate (pgmalli/dataset-schema (pgmalli/registry "other")) {"other.notes" [{:id 1 :user_id 9}]} {:registry (pgmalli/registry "other")})
+    (is (m/validate (data/dataset-schema (pgmalli/registry "other")) {"other.notes" [{:id 1 :user_id 9}]} {:registry (pgmalli/registry "other")})
         "a reference to a table outside the registry is not checked")))
 
 (deftest inserts-in-the-order-the-database-accepts
-  (let [ds (tcg/generate (pgmalli/dataset-generator registry {:rows 4}) 30 42)
-        stmts (pgmalli/inserts registry ds)
+  (let [ds (tcg/generate (data/dataset-generator registry {:rows 4}) 30 42)
+        stmts (data/inserts registry ds)
         by-table (into {} (map (juxt #(let [i (:insert-into %)] (if (vector? i) (last i) i)) identity)) stmts)]
     (is (= [:sample.groups [{:overriding-value :system} :sample.users]] (map :insert-into stmts)) "parents first; identity columns kept")
     (is (every? #(and (vector? %) (= [:cast :sample.mood] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
     (is (not-any? #(contains? % :nick_upper) (:values (by-table :sample.users))) "generated columns are left out")
-    (is (= [[{:overriding-value :system} :sample.users]] (map :insert-into (pgmalli/inserts registry (select-keys ds ["sample.users"]))))
+    (is (= [[{:overriding-value :system} :sample.users]] (map :insert-into (data/inserts registry (select-keys ds ["sample.users"]))))
         "a parent left out is already in the database")
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not" (pgmalli/inserts registry {"sample.nope" [{:id 1}]})))
-    (is (= [] (pgmalli/inserts registry {"sample.groups" []})) "no rows, no INSERT")
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"does not" (data/inserts registry {"sample.nope" [{:id 1}]})))
+    (is (= [] (data/inserts registry {"sample.groups" []})) "no rows, no INSERT")
     (is (every? (fn [[i row]] (or (nil? (:referrer_id row)) (= (:referrer_id row) (:id row))
                                   (some #(= (:referrer_id row) (:id %)) (take i (:values (by-table :sample.users))))))
                 (map-indexed vector (:values (by-table :sample.users))))
@@ -375,17 +376,17 @@
                                                            [:id [:int {:pg/type "integer"}]]
                                                            [:body [:any {:pg/type "jsonb"}]]
                                                            [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]]}})
-        [{:keys [values]}] (pgmalli/inserts reg {"public.docs" [{:id 1 :body {"a" 1} :tags ["x"]} {:id 2 :body [] :tags nil}]})]
+        [{:keys [values]}] (data/inserts reg {"public.docs" [{:id 1 :body {"a" 1} :tags ["x"]} {:id 2 :body [] :tags nil}]})]
     (is (= [{:id 1 :body [:cast "{\"a\":1}" :jsonb] :tags [:array ["x"] :text]} {:id 2 :body [:cast "[]" :jsonb] :tags nil}] values)
         "json written and cast, arrays with their element type, NULL as it is")
     (is (every? #(try (json/write %) true (catch Exception _ false))
                 (map :body (tcg/sample (mg/generator :pg.public/docs {:registry reg}) 50)))
         "an unshaped jsonb column generates values JSON can carry")
     (is (= [[{:id 1 :body [:cast "1" :jsonb]} {:id 2 :body [:default]}]]
-           (map :values (pgmalli/inserts reg {"public.docs" [{:id 1 :body 1} {:id 2}]})))
+           (map :values (data/inserts reg {"public.docs" [{:id 1 :body 1} {:id 2}]})))
         "one INSERT per table; a column a row lacks is DEFAULT")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"columns the table does not have"
-                          (doall (pgmalli/inserts reg {"public.docs" [{:id 1 :nope 2}]})))
+                          (doall (data/inserts reg {"public.docs" [{:id 1 :nope 2}]})))
         "a column the table does not have never reaches the database")))
 
 (deftest branches-are-filled-even-when-the-dispatch-column-cannot-be-null
@@ -398,12 +399,12 @@
                                                          ["open" [:map [:result :nil]]]
                                                          ["done" [:map [:result :some]]]
                                                          [:malli.core/default [:map [:status :nil]]]]]}})
-        ds (tcg/generate (pgmalli/dataset-generator reg {:rows 6}) 30 3)
+        ds (tcg/generate (data/dataset-generator reg {:rows 6}) 30 3)
         rows (get ds "public.t")]
     (is (= 6 (count rows)) "no row is lost to the default branch")
     (is (every? #{"open" "done"} (map :status rows)))
     (is (every? #(or (= "open" (:status %)) (some? (:result %))) rows))
-    (is (m/validate (pgmalli/dataset-schema reg) ds {:registry reg}))))
+    (is (m/validate (data/dataset-schema reg) ds {:registry reg}))))
 
 (deftest a-not-null-jsonb-column-still-generates-json
   (let [reg (pgmalli/registry {:database-version "x"
@@ -435,7 +436,7 @@
                                                          ["0000" [:map [:c :string]]]
                                                          ["0005" [:map [:c :string]]]
                                                          [:malli.core/default [:map [:c :nil]]]]]}})
-        ds (tcg/generate (pgmalli/dataset-generator reg {:rows 6}) 30 5)]
+        ds (tcg/generate (data/dataset-generator reg {:rows 6}) 30 5)]
     (is (= 6 (count (get ds "public.t"))) "no row is lost")
     (is (every? #{"0000" "0005"} (map :c (get ds "public.t"))) "the value that picked the branch is not regenerated")))
 
@@ -450,3 +451,32 @@
     (is (every? #(and (decimal? (:a %)) (decimal? (:b %))) rows))
     (is (= [:map {:pg/table "public.t"} [:a [:and {:pg/type "numeric"} 'decimal? [:> 1] [:< 1000]]] [:b [:and {:pg/type "numeric"} 'decimal? [:>= 0.5]]]]
            (pgmalli/portable reg :pg.public/t)) "the hints stay out of portable data; :pg/numeric is decimal? there")))
+
+(deftest reading-options-of-a-next-jdbc-builder
+  (is (= {:qualified? true} (pgmalli/read-options 'next.jdbc/as-maps)))
+  (is (= {} (pgmalli/read-options 'next.jdbc/as-unqualified-lower-maps)))
+  (is (= {:kebab? true :nil-columns :absent} (pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps)))
+  (is (nil? (pgmalli/read-options 'next.jdbc/as-arrays)) "no map, no options")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a next.jdbc" (pgmalli/read-options 'my.ns/as-things)))
+  (is (= (pgmalli/as-read registry :pg.sample/users (pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps))
+         (pgmalli/as-read registry :pg.sample/users {:kebab? true :nil-columns :absent}))
+      "the options are as-read's"))
+
+(deftest a-dataset-kept-as-edn-comes-back-as-it-was
+  (let [ds (tcg/generate (data/dataset-generator registry {:rows 3}) 30 11)
+        path (str (java.io.File/createTempFile "pgmalli-ds" ".edn"))
+        _ (data/write-dataset path ds)
+        back (data/read-dataset path)]
+    (is (= (update-vals ds vec) (update-vals back vec)) "java.time values round-trip under pgmalli's tags")
+    (is (m/validate (data/dataset-schema registry) back opts))
+    (is (nil? (data/short-tables ds)) "nothing short in the sample")
+    (is (re-find #"#pgmalli/" (slurp path)) "the file carries the tags"))
+  (let [bytes-ds {"public.t" [{:id 1 :b (byte-array [1 2 255])}]}
+        path (str (java.io.File/createTempFile "pgmalli-bytes" ".edn"))]
+    (data/write-dataset path bytes-ds)
+    (is (= [1 2 -1] (seq (:b (first (get (data/read-dataset path) "public.t"))))) "bytes as hex")))
+
+(deftest install-makes-the-names-readable-everywhere
+  (pgmalli/install! "sample")
+  (is (m/validate :pg.sample/groups {:id 1 :name "g"}) "no registry passed: malli's default one has it now")
+  (is (not (m/validate :pg.sample/groups {:id "x" :name "g"}))))

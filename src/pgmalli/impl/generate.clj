@@ -7,8 +7,8 @@
       :overrides {constraint-name schema-or-{:skip reason}}
       :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise
 
-   File contents:
-     {:schema \"public\" :database-version \"PostgreSQL 17.6\"
+   File contents, in this order:
+     {:schema \"public\" :database-version \"PostgreSQL 17.6\" :diagnostics [...]
       :registry {name schema} :unrendered [fact ...] :skipped [fact ...]}
 
    Output is deterministic (sorted maps, pprint). Overrides that are not EDN (functions)
@@ -37,10 +37,11 @@
 (defn generated
   "Generated data for one schema."
   [{:keys [db overrides]} schema]
-  (let [ir (ir/from-db (assoc db :schema schema))]
-    (sort-maps
-     (merge {:schema schema :database-version (:database_version ir)}
-            (render/registry (pattern/facts ir) (or overrides {}))))))
+  (let [ir (ir/from-db (assoc db :schema schema))
+        r (sort-maps (render/registry (pattern/facts ir) (or overrides {})))]
+    ;; read from the top: what it is, then what deserves a look, then the schemas
+    (array-map :schema schema :database-version (:database_version ir)
+               :diagnostics (:diagnostics r) :registry (:registry r) :unrendered (:unrendered r) :skipped (:skipped r))))
 
 (defn path-for [c schema]
   (str (io/file (:out-dir (config c)) (str schema ".edn"))))

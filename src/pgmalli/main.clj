@@ -6,7 +6,7 @@
      clojure -M -m pgmalli.main check    [pgmalli.edn]   ; exit 1 when files are stale
      bb -m pgmalli.main ..."
   (:require [clojure.edn :as edn]
-            [pgmalli.core :as pgmalli]
+            [pgmalli.generate :as generate]
             [pgmalli.impl.generate :as gen]))
 
 (defn- read-config [path]
@@ -16,26 +16,32 @@
            (println "no config file at" path "- using defaults (public -> resources/pgmalli)")
            {}))))
 
+(defn- counts [data]
+  (let [entries (vals (:registry data))
+        kind (fn [s] (let [m (if (and (vector? s) (= :and (first s))) (second s) s)
+                           p (when (and (vector? m) (map? (second m))) (second m))]
+                       (cond (:pg/view p) :view (:pg/table p) :table (and (vector? s) (= :enum (first s))) :enum :else :domain)))
+        f (frequencies (map kind entries))]
+    (str (f :table 0) " tables, " (f :view 0) " views, " (f :enum 0) " enums, " (f :domain 0) " domains; "
+         (count (:unrendered data)) " unrendered, " (count (:diagnostics data)) " diagnostics")))
+
 (defn -main [& [command path]]
   (let [config (read-config path)]
     (case (or command "generate")
-      "generate" (doseq [[schema out] (pgmalli/generate! config)]
-                   (println "wrote" out (str "(" schema ")")))
-      "check" (let [stale (pgmalli/stale config)]
+      "generate" (doseq [[schema out] (generate/generate! config)]
+                   (println "wrote" out (str "(" schema ": " (counts (gen/load-file* out)) ")")))
+      "check" (let [{:keys [stale unrendered diagnostics]} (generate/check config)]
                 (when stale
                   (println "generated files are out of date; run generate and commit:")
                   (doseq [[schema ds] stale, {:keys [name column property checks order key file db]} ds]
                     (println " " schema (or key name) (str column (when (and column property) " ") property)
                              (cond checks "checks" order "column order" :else "")
                              "file" (pr-str file) "db" (pr-str db))))
-                (doseq [schema (:schemas (gen/config config))
-                        :let [p (gen/path-for config schema)
-                              {:keys [unrendered diagnostics]} (when (.exists (java.io.File. ^String p)) (gen/load-file* p))]]
-                  (when (seq unrendered)
-                    (println schema ": " (count unrendered) "unrendered fact(s):")
-                    (doseq [f unrendered] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
-                  (when (seq diagnostics)
-                    (println schema ": " (count diagnostics) "diagnostic(s):")
-                    (doseq [d diagnostics] (println "  " (name (:severity d)) (:table d) (:message d)))))
+                (doseq [[schema un] unrendered]
+                  (println schema ": " (count un) "unrendered fact(s):")
+                  (doseq [f un] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
+                (doseq [[schema ds] diagnostics]
+                  (println schema ": " (count ds) "diagnostic(s):")
+                  (doseq [d ds] (println "  " (name (:severity d)) (:table d) (:message d))))
                 (if stale (System/exit 1) (println "generated files match the database")))
       (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))))

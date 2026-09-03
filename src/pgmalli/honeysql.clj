@@ -428,9 +428,11 @@
 
 (defn query-schema
   "[:=> [:cat arg-types...] [:sequential row]] for a function taking args and running body: a
-   malli function schema for instrumentation. A return that cannot be resolved is :any."
+   malli function schema for instrumentation; with {:result :one} the return is [:maybe row],
+   for a function returning one row or nil. A return that cannot be resolved is :any."
   ([registry args body] (query-schema registry args body {}))
-  ([registry args body opts]
+  ([registry args body {:keys [result] :as opts}]
    (let [types (arg-types registry body opts)
          row (when (map? body) (row-schema registry body (cte-names body) opts))]
-     [:=> (into [:cat] (map #(get types % :any)) args) (if row [:sequential row] :any)])))
+     [:=> (into [:cat] (map #(get types % :any)) args)
+      (cond (nil? row) :any (= :one result) [:maybe row] :else [:sequential row])])))
