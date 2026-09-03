@@ -15,7 +15,7 @@ contract without a database at hand.
 
 (def registry (pgmalli/registry "public"))
 
-;; a row as read from the database
+;; a row as read from the database: every column present, NULL ones as nil
 (m/validate :pg.public/users row {:registry registry})
 
 ;; what an INSERT may carry: no identity or generated columns, defaults optional, closed map
@@ -23,8 +23,8 @@ contract without a database at hand.
     me/humanize)
 ;; => {:closed_at ["chk_closed_at_matches_status"]}
 
-;; test data that satisfies the constraints
-(mg/generate :pg.public.users/insert {:registry registry})
+;; test data that satisfies the constraints (a :seed makes it the same every time)
+(mg/generate :pg.public.users/insert {:registry registry :seed 42})
 
 ;; enum values are strings; cast them when the row goes to SQL (HoneySQL shown)
 {:insert-into :users :values [(update row :status #(vector :cast % :user_status))]}
@@ -111,7 +111,7 @@ the database has it.
 | `varchar(n)`, `CHECK (length(col) <= n)` | `[:string {:max n}]`; bounds from several sources only tighten |
 | `CHECK (cardinality(col) BETWEEN a AND b)`, `CHECK (array_length(col, 1) <= n)` | `[:vector {:min a :max b} <T>]` |
 | `CHECK (jsonb_typeof(col) = 'object')` | `:map` (`'array'` becomes `[:sequential :any]`) |
-| `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`; POSIX classes such as `[[:digit:]]` in their Java form) |
+| `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`; POSIX classes such as `[[:digit:]]` in their Java form); generated from the regex on the JVM (test.chuck; babashka draws strings and filters them) |
 | `CHECK (col LIKE 'a%')` | `[:and :string [:re "^\Qa\E.*$"]]` (`ILIKE` adds `(?i)`) |
 | `CHECK (col IS NULL OR <any of the above>)` | `[:maybe ...]` |
 | `CHECK (col IS NOT NULL)` | no `[:maybe ...]` |
@@ -155,6 +155,9 @@ the JVM's zone; give the transformer the zone your JDBC driver used when it turn
 into Instants (the JVM's, unless you configured otherwise), so both read the same clock.
 
 ## Working with the registry
+
+Every function taking a registry takes any malli registry holding the generated names: the
+map `registry` returns, or a `malli.registry/composite-registry` of it and your own.
 
 ```clojure
 (pgmalli/registry "public" "auth")          ; several schemas, plus malli's defaults, malli.util and malli.experimental.time

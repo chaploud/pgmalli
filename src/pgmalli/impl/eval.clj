@@ -273,15 +273,21 @@
     (when (and (not (re-find #"\\[mMyYZA]" re)) (try (re-pattern j) (catch Exception _ nil)))
       j)))
 
+(defn- escape-regex
+  "Literal text as a regex: each metacharacter backslashed (not \\Q...\\E, which a string
+   generator does not read)."
+  [s]
+  (str/replace s #"[\\^$.|?*+()\[\]{}]" "\\\\$0"))
+
 (defn like-regex
   "The anchored Java regex of a LIKE pattern (backslash escapes % and _)."
   [pattern]
   (str "^"
        (str/replace pattern #"\\(.)|%|_|[^%_\\]+"
-                    (fn [[m esc]] (cond esc (java.util.regex.Pattern/quote esc)
+                    (fn [[m esc]] (cond esc (escape-regex esc)
                                         (= m "%") ".*"
                                         (= m "_") "."
-                                        :else (java.util.regex.Pattern/quote m))))
+                                        :else (escape-regex m))))
        "$"))
 
 (defn- matches? [s re] (some? (re-find (re-pattern (str "(?s)" re)) s)))

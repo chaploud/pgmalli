@@ -30,7 +30,7 @@
   "[[column-name schema] ...] of a table (or view) in the registry, in its order; nil when it
    is not there."
   [registry table]
-  (some->> (get registry (table-key table)) rt/column-entries (map (fn [[k _ s]] [(name k) s]))))
+  (some->> (get (rt/schemas-of registry) (table-key table)) rt/column-entries (map (fn [[k _ s]] [(name k) s]))))
 
 (defn- table-columns [registry table] (some->> (column-entries registry table) (into {})))
 
@@ -287,7 +287,7 @@
 
 (defn- enum-values [registry schema]
   (let [s (rt/non-null schema)
-        s (if (and (vector? s) (= :ref (first s))) (get registry (last s)) s)]
+        s (if (and (vector? s) (= :ref (first s))) (get (rt/schemas-of registry) (last s)) s)]
     (when (and (vector? s) (= :enum (first s))) (set (remove map? (rest s))))))
 
 (defn- star? [col] (= "*" (second (split-column col))))
@@ -311,7 +311,7 @@
           ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
           given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
           given-names (set (map name given))
-          required (set (for [[k p] (some->> (table-key table) rt/insert-name (get registry) rt/column-entries)
+          required (set (for [[k p] (some->> (table-key table) rt/insert-name (get (rt/schemas-of registry)) rt/column-entries)
                               :when (not (:optional p))]
                           (name k)))]
       (concat

@@ -10,6 +10,8 @@
             malli.experimental.time
             honey.sql
             [pgmalli.core :as pgmalli]
+            [pgmalli.honeysql :as h]
+            [pgmalli.impl.runtime]
             [pgmalli.data :as data]
             [pgmalli.impl.json :as json]))
 
@@ -492,3 +494,26 @@
     (data/write-dataset path ds)
     (is (= {"public.t" {:wanted 3 :got 1 :reasons [["x" 2]]}} (data/short-tables (data/read-dataset path))))
     (is (= {"public.t" [{:id 1}]} (data/read-dataset path)) "the tables alone are the value")))
+
+(deftest regex-checks-generate-what-matches
+  (when @pgmalli.impl.runtime/regex-generation?
+   (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/email [:and :string [:re "^[^@]+@[^@]+$"]]
+                                          :pg.public/t [:map {:pg/table "public.t"}
+                                                        [:sku [:and {:pg/type "text"} :string [:re "^[A-Z]{3}-[0-9]{4}$"]]]
+                                                        [:mail [:ref {:pg/type "email"} :pg.public/email]]
+                                                        [:code [:and {:pg/type "text"} [:string {:max 10}] [:re "^ab.*$"]]]]}})
+        rows (mg/sample :pg.public/t {:registry reg :size 30})]
+    (is (= 30 (count rows)))
+    (is (every? #(re-matches #"[A-Z]{3}-[0-9]{4}" (:sku %)) rows))
+    (is (every? #(re-matches #"[^@]+@[^@]+" (:mail %)) rows) "a domain with a regex CHECK too")
+    (is (every? #(and (<= (count (:code %)) 10) (str/starts-with? (:code %) "ab")) rows) "a LIKE pattern, within the length")
+    (is (= [:map {:pg/table "public.t"} [:sku [:and {:pg/type "text"} :string [:re "^[A-Z]{3}-[0-9]{4}$"]]] [:mail [:and {:pg/type "email"} :string [:re "^[^@]+@[^@]+$"]]] [:code [:and {:pg/type "text"} [:string {:max 10}] [:re "^ab.*$"]]]]
+           (pgmalli/portable reg :pg.public/t)) "the hint stays out of portable data"))))
+
+(deftest any-malli-registry-will-do
+  (let [composite (malli.registry/composite-registry registry {:app/flag :boolean})]
+    (is (m/validate :pg.sample/groups {:id 1 :name "g"} {:registry composite}))
+    (is (= [] (h/check composite {:select [:id] :from [:groups]} {:schema "sample"})))
+    (is (= 2 (count (keys (tcg/generate (data/dataset-generator composite {:rows 2}) 20 1)))) "datasets from a composite registry")
+    (is (= (pgmalli/column registry :pg.sample/users :nick) (pgmalli/column composite :pg.sample/users :nick)))))

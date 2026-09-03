@@ -167,7 +167,7 @@
         "and exclude")
     (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:not [:enum "x" "y"]]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e <> ALL (ARRAY['x'::text, 'y'::text])") :e)))
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re "^\\Qab\\E.*$"]]
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re "^ab.*$"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e ~~ 'ab%'::text") :e))
         "LIKE is a regex")
     (is (= [:and {:pg/type "text" :pg/constraint ["k0" "k1"]} [:string {:min 2}] [:re "\\S"]]

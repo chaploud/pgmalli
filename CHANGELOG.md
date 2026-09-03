@@ -18,6 +18,12 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A column or domain with a regex CHECK (`col ~ '...'`, `LIKE`) could not be generated: malli
+  drew random strings and filtered them. The registry now generates such a schema from the
+  regex (test.chuck, a dependency now), and an `[:and ...]` holding a reference (an override,
+  a domain) from the reference.
+- Every function taking a registry takes any malli registry (a `composite-registry` of
+  pgmalli's and your own included), not only the map `registry` returns.
 - A NOT NULL column of a domain type let NULL through: the domain rendered `[:maybe ...]`
   unless it was NOT NULL itself, and `[:ref ...]` reads the domain as it is. A domain is now
   what a non-NULL value must be; whether NULL is allowed is the column's.
