@@ -8,19 +8,8 @@
             malli.experimental.time
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
-            [pgmalli.honeysql :as h]))
-
-(def registry (pgmalli/registry "sample"))
-(def opts {:registry registry})
-
-(def ^:private user
-  {:id 1 :group_id 1 :group_name nil :updated_at nil :mood "sad" :nick nil :born nil :closed_at (java.time.Instant/now)
-   :referrer_id nil :seq 1 :nick_upper nil :score 1 :total 2})
-
-(def ^:private good
-  {"sample.groups" [{:id 1 :name "a"} {:id 2 :name "b"}]
-   "sample.users" [(assoc user :group_name "a")
-                   (assoc user :id 2 :group_name "a" :referrer_id 1)]})
+            [pgmalli.honeysql :as h]
+            [pgmalli.sample :refer [good opts registry user]]))
 
 (deftest registry-from-classpath
   (is (m/validate :pg.sample/users user opts))
@@ -98,36 +87,6 @@
   (is (not (m/validate :pg.sample.users/update {:id 1} opts)) "an identity ALWAYS column cannot be set")
   (is (not (m/validate :pg.sample.users/update {:nick_upper "x"} opts)) "nor a generated one")
   (is (not (m/validate :pg.sample.users/update {:nope 1} opts)) "closed"))
-
-(deftest other-shapes-of-the-same-schema
-  (testing "portable: what malli's default registry reads"
-    (let [p (pgmalli/portable registry :pg.sample/users)
-          opts {:registry (merge (m/default-schemas) (malli.experimental.time/schemas))}]
-      (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (get-in p [1 7 1])) "the enum is inlined")
-      (is (= [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] (get-in p [1 4 1])) "integers carry their range")
-      (is (= :multi (first (nth p 2))) "the branching CHECK stays")
-      (is (= 3 (count p)) "the :pg/check constraints are left out")
-      (is (m/validate p (assoc user :group_name "a") opts))
-      (is (not (m/validate p (assoc user :group_id 2147483648) opts)))
-      (is (= 'bytes? (get-in (pgmalli/portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
-      (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
-  (testing "as-read: the map as next.jdbc builds it"
-    (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant})]
-      (is (= [:users/group_name {:optional true} [:string {:pg/type "text"}]] (nth r 5)) "NULL columns absent, keys qualified")
-      (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "timestamps as Instants")
-      (is (= [:users/born {:optional true} ['inst? {:pg/type "date"}]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
-      (is (m/validate r {:users/id 1 :users/group_id 1 :users/mood "sad" :users/seq 1 :users/score 1 :users/total 2} opts)))
-    (is (some #{[:nick-upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]] :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:kebab? true})))
-    (is (= :order-items/line-no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {:qualified? true :kebab? true}) 2)))
-        "the table half is kebab-cased too"))
-  (testing "portable converts what it inlines"
-    (let [reg (pgmalli/registry {:registry {:pg.public/code [:and :string [:pg/check-value {:pg/constraint "c"} [:<> :VALUE ""]]]
-                                            :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
-      (is (= [:map {:pg/table "public.t"} [:c [:string {:pg/type "code"}]]] (pgmalli/portable reg :pg.public/t)))))
-  (testing "column and non-null"
-    (is (= [:maybe [:string {:max 40 :pg/type "character varying"}]] (pgmalli/column registry :pg.sample/users :nick)))
-    (is (= [:string {:max 40 :pg/type "character varying"}] (pgmalli/non-null (pgmalli/column registry :pg.sample/users "nick"))))
-    (is (nil? (pgmalli/column registry :pg.sample/users :nope)))))
 
 (deftest several-schemas
   (let [registry (pgmalli/registry "sample" "other")

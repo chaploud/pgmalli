@@ -11,9 +11,30 @@
   [registry]
   (if (map? registry) registry (mr/-schemas (mr/registry registry))))
 
-(defn row-map [schema] (if (= :and (first schema)) (second schema) schema))
+(defn- generated-names
+  "The generated names of a registry: the pg.* ones, all of them when there are none."
+  [schemas]
+  (let [ks (sort-by str (keys schemas))
+        pg (filter #(str/starts-with? (str %) (if (keyword? %) ":pg." "pg.")) ks)]
+    (vec (or (seq pg) ks))))
 
-(defn entries [schema] (drop (if (map? (second schema)) 2 1) schema))
+(defn schema-of
+  "The schema a registry holds under a name; a name it does not hold is an error naming the
+   ones it does."
+  [registry name]
+  (let [schemas (schemas-of registry)]
+    (when-not (contains? schemas name)
+      (throw (ex-info (str "no schema named " name) {:name name :known (generated-names schemas)})))
+    (get schemas name)))
+
+(defn row-map
+  "The [:map ...] of a row schema, looking through the [:and ...] a table with CHECKs is."
+  [schema] (if (= :and (first schema)) (second schema) schema))
+
+(defn entries
+  "The children of a schema vector: everything after the tag, and after the property map when
+   the second element is one."
+  [schema] (drop (if (map? (second schema)) 2 1) schema))
 
 (defn entry-parts
   "[key props schema] of a map entry, props defaulted to {}."
@@ -77,7 +98,7 @@
     (schema-key schema t)))
 
 (defn non-null
-  "A column schema without its [:maybe ...]: the type a value must have when it is not NULL."
+  "A column schema without its [:maybe ...]; see pgmalli.core/non-null."
   [schema]
   (if (and (vector? schema) (= :maybe (first schema))) (last schema) schema))
 

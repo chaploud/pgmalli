@@ -2,14 +2,8 @@
   "The transformer that decodes what a JDBC driver returns, and the builder table."
   (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
-            [pgmalli.core :as pgmalli]))
-
-(def registry (pgmalli/registry "sample"))
-(def opts {:registry registry})
-
-(def ^:private user
-  {:id 1 :group_id 1 :group_name nil :updated_at nil :mood "sad" :nick nil :born nil :closed_at (java.time.Instant/now)
-   :referrer_id nil :seq 1 :nick_upper nil :score 1 :total 2})
+            [pgmalli.core :as pgmalli]
+            [pgmalli.sample :refer [opts registry user]]))
 
 (deftest transformer-decodes-jdbc-values
   ;; babashka cannot construct java.sql.Timestamp; the JVM run covers this

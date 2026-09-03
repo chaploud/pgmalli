@@ -21,8 +21,8 @@
                   :extra-paths ["dev"]
                   :task (load-file "dev/fixture.clj")}
          test {:doc "Run the test suite with babashka"
-               :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test] [pgmalli.impl.eval-test] [pgmalli.honeysql-test] [pgmalli.impl.render-test] [pgmalli.core-test] [pgmalli.impl.registry-test] [pgmalli.impl.dataset-test] [pgmalli.impl.insert-test] [pgmalli.impl.jdbc-test] [pgmalli.data-test] [pgmalli.fuzz-test] [pgmalli.corpus-test])
-               :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test 'pgmalli.impl.eval-test 'pgmalli.honeysql-test 'pgmalli.impl.render-test 'pgmalli.core-test 'pgmalli.impl.registry-test 'pgmalli.impl.dataset-test 'pgmalli.impl.insert-test 'pgmalli.impl.jdbc-test 'pgmalli.data-test 'pgmalli.fuzz-test 'pgmalli.corpus-test)]
+               :requires ([clojure.test :as t] [pgmalli.impl.ir-test] [pgmalli.impl.expr-test] [pgmalli.impl.pattern-test] [pgmalli.impl.eval-test] [pgmalli.honeysql-test] [pgmalli.impl.render-test] [pgmalli.impl.shape-test] [pgmalli.impl.files-test] [pgmalli.impl.portable-test] [pgmalli.generate-test] [pgmalli.core-test] [pgmalli.impl.registry-test] [pgmalli.impl.dataset-test] [pgmalli.impl.insert-test] [pgmalli.impl.jdbc-test] [pgmalli.data-test] [pgmalli.fuzz-test] [pgmalli.corpus-test])
+               :task (let [{:keys [fail error]} (t/run-tests 'pgmalli.impl.ir-test 'pgmalli.impl.expr-test 'pgmalli.impl.pattern-test 'pgmalli.impl.eval-test 'pgmalli.honeysql-test 'pgmalli.impl.render-test 'pgmalli.impl.shape-test 'pgmalli.impl.files-test 'pgmalli.impl.portable-test 'pgmalli.generate-test 'pgmalli.core-test 'pgmalli.impl.registry-test 'pgmalli.impl.dataset-test 'pgmalli.impl.insert-test 'pgmalli.impl.jdbc-test 'pgmalli.data-test 'pgmalli.fuzz-test 'pgmalli.corpus-test)]
                        (when (pos? (+ fail error)) (System/exit 1)))}
          test:jvm {:doc "Run the test suite on the JVM"
                    :task (shell "clojure -M:test")}}}

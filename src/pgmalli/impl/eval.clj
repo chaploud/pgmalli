@@ -392,6 +392,9 @@
   {"CURRENT_TIMESTAMP" #(Instant/now) "CURRENT_DATE" #(LocalDate/now) "LOCALTIMESTAMP" #(LocalDateTime/now)
    "CURRENT_TIME" #(OffsetTime/now) "LOCALTIME" #(LocalTime/now)})
 
+;; ev's throws ("cannot add" and the like) are control flow, not messages a user sees: an
+;; expression PostgreSQL would fail on fails the row, and checker's try/catch turns that into
+;; false.
 (defn- ev [e row]
   (cond
     (or (string? e) (number? e) (boolean? e) (nil? e)) e

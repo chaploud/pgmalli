@@ -11,6 +11,9 @@
    :alias.col; a column a subquery cannot resolve is looked for in the enclosing statements,
    as PostgreSQL does. An unqualified table is in :schema (default \"public\").
 
+   The entry points are check, arg-types, row-schema and query-schema; the other public vars
+   are the parts they are built from.
+
    Types are data malli's default registry reads (see pgmalli.core/portable). Date and
    timestamp columns are inst? by default; :time :instant or :local gives the
    malli.experimental.time types, as as-read does."

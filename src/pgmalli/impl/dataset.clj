@@ -81,7 +81,7 @@
       done
       (let [deps (into {} (map (fn [t] [(:table t) (map :table (:refs t))]) ts))
             ready (sort (filter #(every? (fn [d] (or (= d %) (not (left d)))) (deps %)) left))]
-        (when (empty? ready) (throw (ex-info "cyclic foreign keys" {:left left})))
+        (when (empty? ready) (throw (ex-info "tables reference each other in a cycle" {:tables (vec (sort left))})))
         (recur (into done ready) (reduce disj left ready))))))
 
 (defn- try-order

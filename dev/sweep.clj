@@ -21,7 +21,7 @@
             [honey.sql :as sql]
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
-            [pgmalli.impl.files :as gen]
+            [pgmalli.impl.files :as files]
             [pgmalli.test-db :as db]))
 
 (def ^:private statement-timeout "20000")
@@ -92,7 +92,7 @@
   "Every finding of one schema of a database."
   [dbname schema]
   (let [config {:db (assoc db/*db* :db dbname)}
-        [data e1] (try-step :generate #(gen/generated config schema))]
+        [data e1] (try-step :generate #(files/from-database config schema))]
     (if e1
       [e1]
       (let [facts-findings (concat (for [f (:unrendered data)]
@@ -101,7 +101,7 @@
                                        (if (= :unknown-type (:fact f))
                                          {:kind :unknown-type :table (:table f) :column (:column f) :type (:type f)}
                                          {:kind :unrendered :table (:table f) :type-name (:type-name f) :column (:column f) :constraint (:constraint f) :fact (:fact f) :expr (:expr f)}))))
-            [_ e2] (try-step :edn #(gen/edn-string data))
+            [_ e2] (try-step :edn #(files/edn-string data))
             [registry e3] (when-not e2 (try-step :load #(pgmalli/registry data)))
             tables (when registry (filter #(and (keyword? %) (= "pg" (subs (namespace %) 0 2)) (not (str/ends-with? (namespace %) "insert"))) (keys (:registry data))))
             [dataset e4] (when (and registry (seq tables))

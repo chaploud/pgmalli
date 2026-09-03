@@ -3,12 +3,8 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.test.check.generators :as tcg]
             [malli.core :as m]
-            [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
-            [pgmalli.generate]))
-
-(def registry (pgmalli/registry "sample"))
-(def opts {:registry registry})
+            [pgmalli.sample :refer [opts registry]]))
 
 (deftest a-dataset-kept-as-edn-comes-back-as-it-was
   (let [ds (tcg/generate (data/dataset-generator registry {:rows 3}) 30 11)
@@ -31,10 +27,3 @@
     (data/write-dataset path ds)
     (is (= {"public.t" {:wanted 3 :got 1 :reasons [["x" 2]]}} (data/short-tables (data/read-dataset path))))
     (is (= {"public.t" [{:id 1}]} (data/read-dataset path)) "the tables alone are the value")))
-
-(deftest a-migration-read-from-two-files
-  (let [before (pgmalli/generated "sample")
-        after (assoc-in before [:registry :pg.sample/groups] (conj (get-in before [:registry :pg.sample/groups]) [:motto [:maybe [:string {:pg/type "text"}]]]))]
-    (is (= [{:name :pg.sample/groups :column :motto :file nil :db [:maybe [:string {:pg/type "text"}]]}]
-           (pgmalli.generate/diff before after)))
-    (is (= [] (pgmalli.generate/diff before before)))))

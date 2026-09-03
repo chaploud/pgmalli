@@ -4,8 +4,9 @@
    psql, are pgmalli.generate; datasets, which need test.check, pgmalli.data; HoneySQL queries
    checked and typed, pgmalli.honeysql.
 
-   The config (pgmalli.generate), the generated file layout and the fact vocabulary
-   (pgmalli.impl.pattern) are the stable contract; pgmalli.impl.* may change without notice."
+   The config (pgmalli.generate) and the generated file layout are the stable contract, and so
+   is the fact vocabulary (pgmalli.impl.pattern), which is the one exception to the rule that
+   pgmalli.impl.* may change without notice."
   (:require [malli.core :as m]
             [malli.registry :as mr]
             [pgmalli.impl.jdbc :as jdbc]
@@ -54,7 +55,8 @@
   (reg/columns registry name))
 
 (defn column
-  "The schema of one column of a row or insert schema, as data, [:maybe ...] included."
+  "The schema of one column of a row or insert schema, as data, [:maybe ...] included; nil for
+   a column the schema does not have. A name the registry does not hold is an error."
   [registry name col]
   (portable/column registry name col))
 
@@ -67,7 +69,7 @@
   "The named schema as data malli's default registry reads (plus malli.experimental.time):
    the schema's own types inlined, pgmalli's types as their malli counterparts, generation
    hints dropped, the CHECKs only pgmalli evaluates left out. For :malli/schema metadata and
-   other places the registry cannot follow."
+   other places the registry cannot follow. A name the registry does not hold is an error."
   [registry name]
   (portable/portable registry name))
 
@@ -87,8 +89,8 @@
    (next.jdbc.date-time/read-as-instant: timestamps as Instants, dates stay java.sql.Date, so
    inst?) or :local (read-as-local: timestamptz as LocalDateTime); without :time every date and
    timestamp is inst?, which malli's default registry reads."
-  [registry name opts]
-  (portable/as-read registry name opts))
+  ([registry name] (as-read registry name {}))
+  ([registry name opts] (jdbc/as-read registry name opts)))
 
 (defn transformer
   "malli transformer decoding JDBC and string values into the registry's types. Instants and

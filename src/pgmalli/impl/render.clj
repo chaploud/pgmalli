@@ -10,7 +10,7 @@
    A row schema is [:map ...] alone, or [:and [:map ...] checks...] when the table has constraints
    across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments,
    and [:pg/check expr] for everything else pgmalli.impl.eval can evaluate; bytea columns with a
-   length CHECK are [:pg/bytes {:min :max}]. Insert schemas are
+   length CHECK are [:pg/bytes {:min :max}]. Insert and update schemas are
    derived from row schemas when a registry is loaded (pgmalli.impl.registry).
 
    Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique
@@ -22,7 +22,7 @@
    overrides is {constraint-name schema-or-{:skip reason}}."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [pgmalli.impl.eval :as check]
+            [pgmalli.impl.eval :as ev]
             [pgmalli.impl.pattern :as pattern]
             [pgmalli.impl.shape :as shape]))
 
@@ -176,11 +176,11 @@
                      "array" (kept [:sequential :any])
                      as-is)
                    as-is)
-      :regex (if-let [re (when string-base? (check/java-regex (:re f)))]
+      :regex (if-let [re (when string-base? (ev/java-regex (:re f)))]
                (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") re)]])
                as-is)
       :like (if string-base?
-              (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") (check/like-regex (:pattern f)))]])
+              (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") (ev/like-regex (:pattern f)))]])
               as-is)
       :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered}
                                             (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f))
@@ -280,7 +280,7 @@
   [schema-name columns by-column {:keys [fact constraint] :as f} overrides types]
   (let [frag #(fragment schema-name columns by-column (map (partial merge (select-keys f [:schema :table :constraint :expr])) %) constraint overrides)
         whole (fn [r] (cond (empty? (:unrendered r)) r
-                            (check/supported? (:expr f) types) {:schema (pg-check f) :skipped (:skipped r)}
+                            (ev/supported? (:expr f) types) {:schema (pg-check f) :skipped (:skipped r)}
                             :else {:schema nil :unrendered [f] :skipped (:skipped r)}))]
     (case fact
       :branch-check (let [{:keys [dispatch branches default]} f
@@ -309,7 +309,7 @@
                                                     "a partition can take no row: its bounds and its parent's do not overlap"
                                                     (str "alternative " (inc i) " of " constraint " can match no row: its bounds cross"))})))
       ;; NOT VALID: the database enforces it for new rows all the same, so it is enforced, marked
-      :table-check {:schema (when (check/supported? (:expr f) types)
+      :table-check {:schema (when (ev/supported? (:expr f) types)
                               (cond-> (pg-check f) (false? (:valid? f)) (assoc-in [1 :pg/not-valid] true)))}
       {})))
 
@@ -355,7 +355,7 @@
   "Names of the CHECKs among unrendered facts that lost a column fact in rendering and that
    the evaluator covers whole: their column facts give way to one :table-check each."
   [unrendered types]
-  (set (keep #(when (and (:expr %) (check/supported? (:expr %) types)) (:constraint %)) unrendered)))
+  (set (keep #(when (and (:expr %) (ev/supported? (:expr %) types)) (:constraint %)) unrendered)))
 
 (defn- as-whole-checks
   "The facts of the CHECKs named in lost replaced by one :table-check each."
@@ -426,7 +426,7 @@
                   (cond (and (map? ov) (:skip ov)) {:skipped [c]}
                         ov {:schema ov}
                         ;; NOT VALID: enforced for every new value all the same, so enforced, marked
-                        (and (= :domain-check (:fact c)) (check/supported? (:expr c) types))
+                        (and (= :domain-check (:fact c)) (ev/supported? (:expr c) types))
                         {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (:constraint c)} (false? (:valid? c)) (assoc :pg/not-valid true)) (:expr c)]}
                         :else {:unrendered [c]}))
         extras (keep :schema results)

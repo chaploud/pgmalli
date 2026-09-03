@@ -1,9 +1,11 @@
 (ns pgmalli.impl.jdbc
   "The JDBC side: the transformer decoding driver and string values into the registry's types,
    and the row shapes next.jdbc's result set builders return."
-  (:require [malli.core :as m]
+  (:require [clojure.string :as str]
+            [malli.core :as m]
             [malli.transform :as mt]
-            [pgmalli.impl.json :as json]))
+            [pgmalli.impl.json :as json]
+            [pgmalli.impl.shape :as shape]))
 
 (defn transformer
   "Decodes JDBC and string values into the registry's types: java.sql.Timestamp and
@@ -41,13 +43,37 @@
    "as-arrays" nil "as-unqualified-arrays" nil "as-lower-arrays" nil "as-unqualified-lower-arrays" nil})
 
 (defn read-options
-  "The reading options (see as-read) of a next.jdbc result set builder named by its symbol:
-   next.jdbc/as-unqualified-lower-maps, next.jdbc.optional/as-kebab-maps (NULL columns absent)
-   and the like. nil for a builder that builds no map (as-arrays); an error for one pgmalli
-   does not know."
+  "The reading options of a next.jdbc result set builder named by its symbol; documented on
+   pgmalli.core/read-options."
   [builder]
   (let [ns (namespace builder) n (name builder)]
     (when-not (contains? builders n)
       (throw (ex-info (str "not a next.jdbc result set builder pgmalli knows: " builder) {:builder builder})))
     (when-let [o (get builders n)]
       (cond-> o (= "next.jdbc.optional" ns) (assoc :nil-columns :absent)))))
+
+(defn- data-columns
+  "The row map of a generated schema as data (columns gives the malli schema)."
+  [registry name]
+  (let [s (shape/schema-of registry name)]
+    (when-not (vector? s) (throw (ex-info (str name " is not a generated schema") {:name name})))
+    (shape/row-map s)))
+
+(defn as-read
+  "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
+   pgmalli.core/as-read."
+  [registry name {:keys [qualified? kebab? nil-columns time]}]
+  (let [m (shape/without-gen (data-columns registry name))
+        props (when (map? (second m)) (second m))
+        kebab (fn [s] (cond-> s kebab? (str/replace "_" "-")))
+        table (some-> (or (:pg/table props) (:pg/view props)) (str/split #"\." 2) second kebab)
+        key* (fn [k] (let [s (kebab (clojure.core/name k))]
+                       (cond (not qualified?) (if (keyword? k) (keyword s) s)
+                             (keyword? k) (keyword table s)
+                             :else (str table "/" s))))
+        entry (fn [[k p s]] (let [s (shape/read-time time s)
+                            absent? (and (= :absent nil-columns) (vector? s) (= :maybe (first s)))
+                            p (cond-> p absent? (assoc :optional true))
+                            s (if absent? (last s) s)]
+                        (if (empty? p) [(key* k) s] [(key* k) p s])))]
+    (into (if props [:map props] [:map]) (map entry (shape/column-entries m)))))

@@ -72,26 +72,28 @@
    Generated columns are left out; a table with an identity column gets OVERRIDING SYSTEM
    VALUE, so the ids the rows carry (and the references to them) hold; a column a row lacks is
    DEFAULT. A table the registry does not have, or a column the table does not have, is an
-   error. Option :on-conflict :nothing adds ON CONFLICT DO NOTHING."
+   error thrown by the call (the vector is built eagerly). Option :on-conflict :nothing adds
+   ON CONFLICT DO NOTHING."
   [registry dataset {:keys [on-conflict]}]
   (let [all (ds/tables registry)
         ts (filter #(seq (get dataset (:table %))) all)]
     (when-let [unknown (seq (remove (set (map :table all)) (keys dataset)))]
       (throw (ex-info (str "dataset holds tables the registry does not: " (pr-str unknown)) {:tables unknown})))
-    (for [{:keys [name table refs]} (parents-first ts)
-          :let [entries (shape/column-entries (get (shape/schemas-of registry) name))
-                columns (into {} (map (fn [[k _ s]] [k s])) entries)
-                generated (set (for [[k _ s] entries :when (:pg/generated (shape/column-props s))] k))
-                identity? (some (fn [[_ _ s]] (= :always (:pg/identity (shape/column-props s)))) entries)
-                self (filter #(= table (:table %)) refs)
-                rows (rows-parents-first (get dataset table) self)
-                unknown (into {} (for [[i row] (map-indexed vector rows)
-                                       :let [u (remove #(contains? columns %) (keys row))] :when (seq u)]
-                                   [i (vec u)]))
-                _ (when (seq unknown)
-                    (throw (ex-info (str table " rows carry columns the table does not have: " (pr-str (distinct (mapcat val unknown))))
-                                    {:table table :rows unknown})))
-                used (remove generated (distinct (mapcat keys rows)))]]
-      (cond-> {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))
-               :values (mapv (fn [row] (into {} (for [k used] [k (if (contains? row k) (insert-value registry (get columns k) (get row k)) [:default])]))) rows)}
-        (= :nothing on-conflict) (assoc :on-conflict [] :do-nothing [])))))
+    (vec
+     (for [{:keys [name table refs]} (parents-first ts)
+           :let [entries (shape/column-entries (get (shape/schemas-of registry) name))
+                 columns (into {} (map (fn [[k _ s]] [k s])) entries)
+                 generated (set (for [[k _ s] entries :when (:pg/generated (shape/column-props s))] k))
+                 identity? (some (fn [[_ _ s]] (= :always (:pg/identity (shape/column-props s)))) entries)
+                 self (filter #(= table (:table %)) refs)
+                 rows (rows-parents-first (get dataset table) self)
+                 unknown (into {} (for [[i row] (map-indexed vector rows)
+                                        :let [u (remove #(contains? columns %) (keys row))] :when (seq u)]
+                                    [i (vec u)]))
+                 _ (when (seq unknown)
+                     (throw (ex-info (str table " rows carry columns the table does not have: " (pr-str (distinct (mapcat val unknown))))
+                                     {:table table :rows unknown})))
+                 used (remove generated (distinct (mapcat keys rows)))]]
+       (cond-> {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))
+                :values (mapv (fn [row] (into {} (for [k used] [k (if (contains? row k) (insert-value registry (get columns k) (get row k)) [:default])]))) rows)}
+           (= :nothing on-conflict) (assoc :on-conflict [] :do-nothing []))))))

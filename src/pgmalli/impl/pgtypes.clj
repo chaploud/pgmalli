@@ -2,7 +2,7 @@
   "The schema types pgmalli registers for PostgreSQL's own: the CHECK types, a bytea of bounded
    length and the bounded numbers, with the ranges the integer types hold."
   (:require [malli.core :as m]
-            [pgmalli.impl.eval :as check]))
+            [pgmalli.impl.eval :as ev]))
 
 (def check-schema
   "[:pg/check expr]: a row passes when the CHECK expression data does (pgmalli.impl.eval).
@@ -10,7 +10,7 @@
   (m/-simple-schema
    {:type :pg/check
     :compile (fn [{:keys [pg/defaults]} [expr] _]
-               (let [pass? (check/checker expr)]
+               (let [pass? (ev/checker expr)]
                  {:pred (fn [row] (and (map? row) (pass? (merge defaults row)))) :min 1 :max 1}))}))
 
 (def bytes-schema
@@ -76,7 +76,7 @@
   (m/-simple-schema
    {:type :pg/check-value
     :compile (fn [_ [expr] _]
-               (let [pass? (check/checker expr)]
+               (let [pass? (ev/checker expr)]
                  {:pred (fn [v] (pass? {:VALUE v})) :min 1 :max 1}))}))
 
 (def schemas

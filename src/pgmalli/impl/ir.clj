@@ -48,7 +48,8 @@
 
 (defn- query-sql []
   (slurp (or (io/resource "pgmalli/ir.sql")
-             (throw (ex-info "pgmalli/ir.sql is not on the classpath" {})))))
+             (throw (ex-info "pgmalli/ir.sql is not on the classpath; the pgmalli jar or its resources path is incomplete"
+                             {:resource "pgmalli/ir.sql"})))))
 
 (defn from-db
   "Structure of the schema named by :schema (default \"public\"). :psql selects the binary."

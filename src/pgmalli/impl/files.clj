@@ -1,11 +1,5 @@
 (ns pgmalli.impl.files
-  "Config -> generated EDN files, one per schema.
-
-   Config:
-     {:schemas [\"public\"]           ; default [\"public\"]
-      :out-dir \"resources/pgmalli\"  ; default; files are <out-dir>/<schema>.edn
-      :overrides {constraint-name schema-or-{:skip reason}}
-      :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise
+  "Config -> generated EDN files, one per schema. The config is documented on pgmalli.generate.
 
    File contents, in this order:
      {:schema \"public\" :database-version \"PostgreSQL 17.6\" :diagnostics [...]
@@ -42,22 +36,27 @@
     (array-map :schema schema :database-version database-version
                :diagnostics (:diagnostics r) :registry (:registry r) :unrendered (:unrendered r) :skipped (:skipped r))))
 
-(defn generated
-  "Generated data for one schema."
+(defn from-database
+  "Generated data for one schema, read from the database."
   [{:keys [db overrides]} schema]
   (let [ir (ir/from-db (assoc db :schema schema))]
     (assemble schema (:database_version ir) (pattern/facts ir) overrides)))
 
-(defn path-for [c schema]
+(defn path-for
+  "Where a schema's file goes: <out-dir>/<schema>.edn."
+  [c schema]
   (str (io/file (:out-dir (config c)) (str schema ".edn"))))
 
 (defn generated-all
   "{schema {:path :data}} for every schema in the config."
   [c]
   (let [c (config c)]
-    (into {} (for [s (:schemas c)] [s {:path (path-for c s) :data (generated c s)}]))))
+    (into {} (for [s (:schemas c)] [s {:path (path-for c s) :data (from-database c s)}]))))
 
-(defn edn-string [data]
+(defn edn-string
+  "The file's text: a deterministic pprint of the data behind the do-not-edit header. Data that
+   does not read back as EDN is an error."
+  [data]
   (let [s (binding [pp/*print-right-margin* 100
                     *print-namespace-maps* false]
             (with-out-str (pp/pprint data)))]
@@ -74,5 +73,7 @@
                  (spit path (edn-string data))
                  [schema path]))))
 
-(defn load-file* [path]
+(defn read-edn
+  "The generated data in a file, by path (pgmalli.impl.registry reads the classpath instead)."
+  [path]
   (edn/read-string (slurp path)))

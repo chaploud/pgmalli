@@ -6,10 +6,8 @@
             honey.sql
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
-            [pgmalli.impl.json :as json]))
-
-(def registry (pgmalli/registry "sample"))
-(def opts {:registry registry})
+            [pgmalli.impl.json :as json]
+            [pgmalli.sample :refer [registry]]))
 
 (deftest inserts-in-the-order-the-database-accepts
   (let [ds (tcg/generate (data/dataset-generator registry {:rows 4}) 30 42)
@@ -44,3 +42,10 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"columns the table does not have"
                           (doall (data/inserts reg {"public.docs" [{:id 1 :nope 2}]})))
         "a column the table does not have never reaches the database")))
+
+(deftest columns-the-table-does-not-have
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"rows carry columns the table does not have"
+                        (data/inserts registry {"sample.groups" [{:id 1 :name "a" :motto "x"}]}))
+      "thrown by the call, not on realizing the result")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dataset holds tables the registry does not"
+                        (data/inserts registry {"sample.nope" [{:id 1}]}))))

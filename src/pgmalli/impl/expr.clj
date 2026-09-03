@@ -70,22 +70,27 @@
 
 ;;; Pratt parser
 
+(def ^:private named-ops
+  "Operators whose symbol is not a readable EDN keyword -> [precedence name]."
+  {"~" [7 :regex] "~*" [7 :iregex] "!~" [7 :not-regex] "!~*" [7 :not-iregex]
+   "~~" [7 :like] "~~*" [7 :ilike] "!~~" [7 :not-like] "!~~*" [7 :not-ilike]
+   "#>" [7 :json-path] "#>>" [7 :json-path-text] "@>" [7 :contains] "<@" [7 :contained-by]
+   "?" [7 :has-key] "?|" [7 :has-any-key] "?&" [7 :has-all-keys] "&&" [7 :overlaps]
+   "%" [9 :mod] "^" [10 :pow]})
+
 (def edn-safe-ops
   "PostgreSQL operators whose keyword form is not readable EDN, and the names used instead."
-  {"~" :regex "~*" :iregex "!~" :not-regex "!~*" :not-iregex
-   "~~" :like "~~*" :ilike "!~~" :not-like "!~~*" :not-ilike
-   "#>" :json-path "#>>" :json-path-text "@>" :contains "<@" :contained-by
-   "?" :has-key "?|" :has-any-key "?&" :has-all-keys "&&" :overlaps "%" :mod "^" :pow})
+  (update-vals named-ops second))
 
 (def ^:private binary-ops
-  ;; operator -> [precedence keyword], following PostgreSQL precedence
+  "operator -> [precedence keyword], following PostgreSQL precedence."
   (merge
    {"OR" [1 :or] "AND" [2 :and]
     "=" [5 :=] "<>" [5 :<>] "!=" [5 :<>] "<" [5 :<] ">" [5 :>] "<=" [5 :<=] ">=" [5 :>=]
     "LIKE" [6 :like] "ILIKE" [6 :ilike]
     "||" [7 :||] "->" [7 :->] "->>" [7 :->>]
     "+" [8 :+] "-" [8 :-] "*" [9 :*] "/" [9 :/]}
-   (into {} (map (fn [[op k]] [op [(case op "^" 10 "%" 9 7) k]]) edn-safe-ops))))
+   named-ops))
 
 (def ^:private prec-not 3)
 (def ^:private prec-is 4)
@@ -327,29 +332,33 @@
   [e]
   (walk/postwalk
    (fn [f]
-     (cond
-       (and (vector? f) (= :cast (first f)) (vector? (second f)) (= :array (first (second f))))
-       (second f)
+     (if-not (vector? f)
+       f
+       (case (first f)
+         :cast (let [[_ x t] f]
+                 (cond (and (vector? x) (= :array (first x))) x
 
-       (and (vector? f) (= :cast (first f)) (string? (second f)) (numeric-types (nth f 2))
-            (re-matches #"-?\d+(\.\d+)?([eE][+-]?\d+)?" (second f)))
-       (let [s (second f)] (if (re-find #"[.eE]" s) (bigdec s) (parse-long s)))
+                       (and (string? x) (numeric-types t)
+                            (re-matches #"-?\d+(\.\d+)?([eE][+-]?\d+)?" x))
+                       (if (re-find #"[.eE]" x) (bigdec x) (parse-long x))
 
-       (and (vector? f) (= := (first f)) (vector? (nth f 2)) (= :any (first (nth f 2)))
-            (vector? (second (nth f 2))) (= :array (first (second (nth f 2)))))
-       [:in (second f) (second (second (nth f 2)))]
+                       :else f))
 
-       (and (vector? f) (= :<> (first f)) (vector? (nth f 2)) (= :all (first (nth f 2)))
-            (vector? (second (nth f 2))) (= :array (first (second (nth f 2)))))
-       [:not-in (second f) (second (second (nth f 2)))]
+         := (let [[_ x y] f]
+              (if (and (vector? y) (= :any (first y)) (vector? (second y)) (= :array (first (second y))))
+                [:in x (second (second y))]
+                f))
 
-       (and (vector? f) (= :in (first f)) (= 1 (count (nth f 2))))
-       [:= (second f) (first (nth f 2))]
+         :<> (let [[_ x y] f]
+               (if (and (vector? y) (= :all (first y)) (vector? (second y)) (= :array (first (second y))))
+                 [:not-in x (second (second y))]
+                 f))
 
-       (and (vector? f) (= :not-in (first f)) (= 1 (count (nth f 2))))
-       [:<> (second f) (first (nth f 2))]
+         :in (if (= 1 (count (nth f 2))) [:= (second f) (first (nth f 2))] f)
 
-       :else f))
+         :not-in (if (= 1 (count (nth f 2))) [:<> (second f) (first (nth f 2))] f)
+
+         f)))
    e))
 
 (defn ->honeysql

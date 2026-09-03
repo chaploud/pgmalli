@@ -1,7 +1,7 @@
 (ns pgmalli.impl.diff
   "Generated files against the database and against each other: what differs, entry by entry."
   (:require [clojure.java.io :as io]
-            [pgmalli.impl.files :as file]
+            [pgmalli.impl.files :as files]
             [pgmalli.impl.shape :as shape]))
 
 (defn- row-parts
@@ -48,13 +48,13 @@
                  {:key k :file (get before k) :db (get after k)}))))
 
 (defn- files [config]
-  (into {} (for [schema (:schemas (file/config config))
-                 :let [p (file/path-for config schema)]
+  (into {} (for [schema (:schemas (files/config config))
+                 :let [p (files/path-for config schema)]
                  :when (.exists (io/file p))]
-             [schema (file/load-file* p)])))
+             [schema (files/read-edn p)])))
 
 (defn- stale* [config files]
-  (let [diffs (for [[schema {:keys [data]}] (file/generated-all config)
+  (let [diffs (for [[schema {:keys [data]}] (files/generated-all config)
                     :let [ds (diff (get files schema) data)]
                     :when (seq ds)]
                 [schema ds])]

@@ -9,19 +9,8 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.impl.json :as json]
-            [pgmalli.impl.registry]))
-
-(def registry (pgmalli/registry "sample"))
-(def opts {:registry registry})
-
-(def ^:private user
-  {:id 1 :group_id 1 :group_name nil :updated_at nil :mood "sad" :nick nil :born nil :closed_at (java.time.Instant/now)
-   :referrer_id nil :seq 1 :nick_upper nil :score 1 :total 2})
-
-(def ^:private good
-  {"sample.groups" [{:id 1 :name "a"} {:id 2 :name "b"}]
-   "sample.users" [(assoc user :group_name "a")
-                   (assoc user :id 2 :group_name "a" :referrer_id 1)]})
+            [pgmalli.impl.registry]
+            [pgmalli.sample :refer [good opts registry]]))
 
 (deftest datasets
   (let [ds (data/dataset-schema registry)]

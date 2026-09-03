@@ -3,10 +3,9 @@
   (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [malli.experimental.time :as time]
-            [pgmalli.core :as pgmalli]
-            [pgmalli.honeysql :as h]))
+            [pgmalli.honeysql :as h]
+            [pgmalli.sample :refer [registry]]))
 
-(def registry (pgmalli/registry "sample"))
 (def opts {:schema "sample"})
 (def malli-opts {:registry (merge (m/default-schemas) (time/schemas))})
 

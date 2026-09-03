@@ -1,5 +1,5 @@
 ;; Writes test/resources/pgmalli/{sample,other}.edn from in-memory schemas (no database needed).
-(require '[pgmalli.impl.pattern :as p] '[pgmalli.impl.files :as gen])
+(require '[pgmalli.impl.pattern :as p] '[pgmalli.impl.files :as files])
 (def sample
   {:name "sample"
    :types {"mood" {:kind "ENUM" :enum_values ["happy" "sad"]}}
@@ -42,5 +42,5 @@
                                                          :references {:schema "sample" :table "users" :columns ["id"]}}}}}})
 (doseq [schema [sample other]]
   (let [path (str "test/resources/pgmalli/" (:name schema) ".edn")]
-    (spit path (gen/edn-string (gen/assemble (:name schema) "none" (p/facts schema) {})))
+    (spit path (files/edn-string (files/assemble (:name schema) "none" (p/facts schema) {})))
     (println "wrote" path)))

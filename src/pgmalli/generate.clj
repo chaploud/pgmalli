@@ -8,12 +8,12 @@
       :overrides {constraint-name schema-or-{:skip reason}}
       :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise"
   (:require [pgmalli.impl.diff :as diff]
-            [pgmalli.impl.files :as file]))
+            [pgmalli.impl.files :as files]))
 
 (defn generate!
   "Writes the generated file for every schema in the config. Returns {schema path}."
   [config]
-  (file/generate! config))
+  (files/generate! config))
 
 (defn stale
   "{schema [difference ...]} for schemas whose file differs from what the database yields now;

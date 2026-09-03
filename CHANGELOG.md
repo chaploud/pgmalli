@@ -17,6 +17,12 @@ All notable changes to this project are documented here. The format follows
 - Dataset generation binds one validator and one row generator per table instead of building
   them per row, and `pgmalli.impl.eval` compiles a CHECK's regexes once instead of once per row;
   generated datasets are unchanged.
+- `as-read` lives in `pgmalli.impl.jdbc` beside the other JDBC row shapes, and
+  `pgmalli.core/as-read` takes the options as every other public function does (default `{}`).
+- `pgmalli.data/inserts` returns a vector, so the errors its docstring names are thrown by the
+  call rather than on realizing the result.
+- `portable`, `column`, `columns` and `as-read` throw `no schema named X` (ex-data `{:name
+  :known}`) for a name the registry does not hold, where two of them returned nil.
 - `bb sweep:report` and `bb fixture` are tasks, `bb harvest` takes the pgschema corpus from
   `PGMALLI_PGSCHEMA_DIR` and leaves it out (saying so) when it is not there.
 
