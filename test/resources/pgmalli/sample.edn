@@ -27,7 +27,7 @@
     [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
     [:mood [:ref {:default "happy", :pg/default "happy", :pg/type "mood"} :pg.sample/mood]]
     [:nick [:maybe [:string {:max 40, :pg/type "character varying"}]]]
-    [:nick_upper [:maybe [:string {:pg/generated true, :pg/type "text"}]]]
+    [:nick_upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]], :pg/type "text"}]]]
     [:referrer_id [:maybe [:int {:pg/type "bigint"}]]]
     [:score [:pg/integer {:pg/type "integer"}]]
     [:seq

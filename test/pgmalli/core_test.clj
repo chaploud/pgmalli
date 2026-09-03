@@ -37,7 +37,7 @@
                   CREATE UNIQUE INDEX users_age_inc_idx ON users (age) INCLUDE (nick);
                   CREATE UNIQUE INDEX closed ON users (closed_at);
                   CREATE TABLE prices (id integer PRIMARY KEY, p1 numeric(3,1), p2 numeric(3,5), p3 numeric(2,-3));
-                  CREATE TABLE parted (k integer NOT NULL, v text) PARTITION BY RANGE (k);
+                  CREATE TABLE parted (k integer NOT NULL, v text, CONSTRAINT k_nonneg CHECK (k >= 0)) PARTITION BY RANGE (k);
                   CREATE TABLE parted_low PARTITION OF parted FOR VALUES FROM (0) TO (100);
                   CREATE TABLE parted_high PARTITION OF parted FOR VALUES FROM (100) TO (200);
                   CREATE TABLE nopart (k integer) PARTITION BY LIST (k);
@@ -57,7 +57,7 @@
             (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))
                 "closed_at only when sad")
             (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
-            (is (= [{:columns ["age"]} {:columns ["closed_at"]} {:columns ["nick"]}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
+            (is (= [{:columns ["age"] :index true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
                 "unique indexes over plain columns count, key columns only, even one named as a constraint is; expression and partial ones do not")
             (is (some #(= "closed" (:error/message (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
             (let [col (fn [k] (pgmalli/non-null (pgmalli/column reg :pg.public/prices k)))]
@@ -75,6 +75,7 @@
               (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
               (is (every? #(< -1 (:k %) 200) (get (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1) "public.parted"))
                   "generated rows land in a partition")
+              (is (= 1 (count (re-seq #"k_nonneg" (pr-str (:pg.public/parted reg))))) "the parent's own CHECK is not repeated from every partition")
               (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"}] (map #(select-keys % [:kind :table]) (:diagnostics data)))
                   "the file says what deserves a look")))))
       (testing "stale and unrendered"

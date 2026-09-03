@@ -56,7 +56,8 @@
           "timestamptz" :time/instant "timestamp with time zone" :time/instant "interval" :time/duration}))
 
 (defn- base-type [data-type]
-  (let [t (str/replace (or data-type "") #"^[^.]+\." "")]
+  ;; without a schema prefix or a typmod: "public.money" and "numeric(12,2)" name numeric
+  (let [t (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" "")]
     (if-let [[_ elem] (re-matches #"(.+)\[\]" t)]
       [:vector (base-type elem)]
       (get base-types t :any))))
@@ -229,7 +230,8 @@
                                    :default (when (some? lit)
                                               (default-value (if-let [d (some #(when (= :domain-ref (:fact %)) %) facts)] (base-type (:base d)) schema) lit))
                                    :pg/identity identity
-                                   :pg/generated (when generated true)
+                                   ;; the expression the database computes it from (true when it could not be read)
+                                   :pg/generated generated
                                    :pg/constraint (when (seq applied) (vec (sort (distinct applied))))})
         not-null-check? (some (comp #{:not-null} :fact) facts)]
     {:schema (if (and nullable? (not not-null-check?)) [:maybe schema] schema)
@@ -316,7 +318,10 @@
     (prune {:pg/table (str schema-name "." table)
          :pg/primary-key (some #(when (= :primary-key (:fact %)) (:columns %)) tfacts)
          :pg/unique (not-empty (vec (for [f (sort-by :columns (filter (comp #{:unique} :fact) tfacts))]
-                                      (cond-> {:columns (:columns f)} (false? (:nulls-distinct? f)) (assoc :nulls-distinct false)))))
+                                      (cond-> {:columns (:columns f)}
+                                        (false? (:nulls-distinct? f)) (assoc :nulls-distinct false)
+                                        ;; from a unique index rather than a constraint
+                                        (:index? f) (assoc :index true)))))
          :pg/foreign-keys (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:references} :fact) tfacts))]
                                             (cond-> {:columns (:columns f)
                                                      :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
@@ -400,7 +405,7 @@
   "{:entry :unrendered :skipped} of a domain: its base type shaped by the CHECKs that matched
    patterns, then [:pg/check-value expr] for the others the evaluator covers. As for tables,
    a CHECK that lost a fact in rendering is evaluated whole."
-  [schema-name {:keys [type-name base not-null? facts]} checks overrides types]
+  [schema-name {:keys [type-name base facts]} checks overrides types]
   (let [first-pass (fold-facts schema-name (base-type base) facts overrides)
         lost (lost-checks (:unrendered first-pass) types)
         facts (if (empty? lost) facts (remove #(lost (:constraint %)) facts))
@@ -418,7 +423,9 @@
         s (cond (empty? extras) schema
                 (and (vector? schema) (= :and (first schema)) (not (map? (second schema)))) (into schema extras)
                 :else (into [:and schema] extras))]
-    {:entry [(schema-key schema-name type-name) (if not-null? s [:maybe s])]
+    ;; a domain is what a non-NULL value must be; whether NULL is allowed is the column's (a
+    ;; domain's own NOT NULL reaches its columns as a fact)
+    {:entry [(schema-key schema-name type-name) s]
      :unrendered (concat unrendered (mapcat :unrendered results))
      :skipped (concat skipped (mapcat :skipped results))}))
 

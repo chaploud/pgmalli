@@ -276,7 +276,8 @@
                     (when (contains? default :expr) {:default (:expr default)})
                     (cond identity {:identity ({"ALWAYS" :always "BY DEFAULT" :default} identity)}
                           (and (vector? (:expr default)) (= :nextval (first (:expr default)))) {:identity :serial})
-                    (when (contains? generated :expr) {:generated (:expr generated)}))]
+                    ;; the expression as data, or true when it could not be read: the column is generated either way
+                    (when generated_expr {:generated (if (contains? generated :expr) (:expr generated) true)}))]
       (:unparsed default) (conj (:unparsed default))
       (:unparsed generated) (conj (:unparsed generated))
       range-check (conj range-check)
@@ -289,10 +290,10 @@
       (and max_length (#{"bit varying" "varbit"} elem-type)) (conj (merge base {:fact :length :fn :length :max max_length}))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced index]}]
   (case type
     "PRIMARY KEY" [(merge base {:fact :primary-key :constraint cname :columns columns})]
-    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct)})]
+    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index)})]
     ;; NOT ENFORCED: the database never checks it, so it is not a reference, only noted
     "FOREIGN KEY" (if (false? is_enforced)
                     [(merge base {:fact :not-enforced :constraint cname :input (str "FOREIGN KEY " (pr-str columns))})]
@@ -313,8 +314,13 @@
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
                        expr {:check (cond-> (assoc check :fact :domain-check) (false? is_valid) (assoc :valid? false))}
                        :else {:check (merge base {:fact :unparsed :constraint cname :input definition :error error})}))
-        dflt (when default (parsed base default))]
-    (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (mapcat :facts checks))})
+        dflt (when default (parsed base default))
+        ;; the base type's typmod: numeric(12,2), varchar(80)
+        typmod (let [[_ p s] (re-find #"^numeric\((\d+)(?:,(-?\d+))?\)" base_type)
+                     [_ n] (re-find #"^(?:character varying|character|varchar|bpchar|char)\((\d+)\)" base_type)]
+                 (cond p [(merge base {:fact :numeric :precision (parse-long p) :scale (if s (parse-long s) 0)})]
+                       n [(merge base {:fact :max-length :max (parse-long n)})]))]
+    (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (concat typmod (mapcat :facts checks)))})
              (contains? dflt :expr) (assoc :default (:expr dflt)))]
           (concat (keep :check checks) (some-> (:unparsed dflt) vector)))))
 

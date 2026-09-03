@@ -97,7 +97,7 @@ cons AS (
     )
     SELECT string_agg('(' || pg_catalog.pg_get_partition_constraintdef(t.inhrelid)
                           || COALESCE((SELECT string_agg(' AND (' || pg_catalog.pg_get_expr(k.conbin, k.conrelid) || ')', '')
-                                       FROM pg_catalog.pg_constraint k WHERE k.conrelid = t.inhrelid AND k.contype = 'c'), '')
+                                       FROM pg_catalog.pg_constraint k WHERE k.conrelid = t.inhrelid AND k.contype = 'c' AND k.conislocal), '')
                           || ')', ' OR ') AS clause
     FROM tree t JOIN pg_catalog.pg_class l ON l.oid = t.inhrelid
     WHERE l.relkind IN ('r', 'f')

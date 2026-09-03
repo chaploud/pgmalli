@@ -16,6 +16,19 @@ All notable changes to this project are documented here. The format follows
 - The generated file is written in reading order: `:schema`, `:database-version`,
   `:diagnostics`, `:registry`, `:unrendered`, `:skipped`. `generate` prints what it found.
 
+### Fixed
+
+- A NOT NULL column of a domain type let NULL through: the domain rendered `[:maybe ...]`
+  unless it was NOT NULL itself, and `[:ref ...]` reads the domain as it is. A domain is now
+  what a non-NULL value must be; whether NULL is allowed is the column's.
+- A domain over `numeric(12,2)` or `varchar(80)` lost the precision or the length.
+- A partitioned table's partition CHECK repeated the parent's own CHECKs from every leaf.
+
+### Changed
+
+- `:pg/generated` holds the expression the database computes the column from (`true` when it
+  could not be read); a unique index in `:pg/unique` is marked `:index true`.
+
 ### Added
 
 - `pgmalli.core/install!`: the registry as malli's default one, so `:malli/schema`,
