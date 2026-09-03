@@ -28,8 +28,10 @@
 (defn -main [& [command path]]
   (let [config (read-config path)]
     (case (or command "generate")
-      "generate" (doseq [[schema out] (generate/generate! config)]
-                   (println "wrote" out (str "(" schema ": " (counts (gen/load-file* out)) ")")))
+      "generate" (doseq [[schema out] (generate/generate! config)
+                         :let [data (gen/load-file* out)]]
+                   (println "wrote" out (str "(" schema ": " (counts data) ")"))
+                   (doseq [d (:diagnostics data)] (println "  " (name (:severity d)) (:table d) (:message d))))
       "check" (let [{:keys [stale unrendered diagnostics]} (generate/check config)]
                 (when stale
                   (println "generated files are out of date; run generate and commit:")

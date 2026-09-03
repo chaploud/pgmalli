@@ -19,7 +19,9 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `pgmalli.core/install!`: the registry as malli's default one, so `:malli/schema`,
-  `malli.dev/start!` and `malli.instrument` read the generated names directly.
+  `malli.dev/start!` and `malli.instrument` read the generated names directly; it returns what
+  the default registry held before, for putting back.
+- `generate` prints the diagnostics after writing a file.
 - `pgmalli.core/read-options`: the reading options of a next.jdbc result set builder, by name.
 - `pgmalli.generate/check`: `{:stale :unrendered :diagnostics}` in one read, what CI asks.
 - `pgmalli.data/write-dataset` and `read-dataset`: a dataset as EDN with `java.time` values

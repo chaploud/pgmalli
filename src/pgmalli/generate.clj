@@ -49,6 +49,8 @@
                       (if (seq ds) ds [{:name name :order true :file (order file) :db (order db)}]))
           :else [{:name name :file file :db db}])))
 
+(declare files stale*)
+
 (defn stale
   "{schema [difference ...]} for schemas whose file differs from what the database yields now;
    nil when everything matches. A difference names the registry entry (:name) and, for a row
@@ -57,8 +59,17 @@
    it); the file's other parts (:unrendered, :skipped, :diagnostics) as wholes under :key. A
    missing file lists every entry with no :file side."
   [config]
-  (let [diffs (for [[schema {:keys [path data]}] (gen/generated-all config)
-                    :let [file (when (.exists (io/file path)) (gen/load-file* path))
+  (stale* config (files config)))
+
+(defn- files [config]
+  (into {} (for [schema (:schemas (gen/config config))
+                 :let [p (gen/path-for config schema)]
+                 :when (.exists (io/file p))]
+             [schema (gen/load-file* p)])))
+
+(defn- stale* [config files]
+  (let [diffs (for [[schema {:keys [data]}] (gen/generated-all config)
+                    :let [file (get files schema)
                           ds (concat (for [k (distinct (concat (keys (:registry file)) (keys (:registry data))))
                                           d (differences k (get-in file [:registry k]) (get-in data [:registry k]))]
                                       d)
@@ -75,10 +86,7 @@
    database. Option {:db? false} skips the database and reports the files alone."
   ([config] (check config {}))
   ([config {:keys [db?] :or {db? true}}]
-   (let [files (for [schema (:schemas (gen/config config))
-                     :let [p (gen/path-for config schema)]
-                     :when (.exists (io/file p))]
-                 [schema (gen/load-file* p)])]
-     {:stale (when db? (stale config))
+   (let [files (files config)]
+     {:stale (when db? (stale* config files))
       :unrendered (into {} (for [[s f] files :when (seq (:unrendered f))] [s (:unrendered f)]))
       :diagnostics (into {} (for [[s f] files :when (seq (:diagnostics f))] [s (:diagnostics f)]))})))

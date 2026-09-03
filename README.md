@@ -315,6 +315,9 @@ Kept compatible; a change bumps the minor version.
 2. The generated file: `{:schema :database-version :diagnostics :registry :unrendered :skipped}`
    and the registry names above (insert schemas are derived at load time, not stored).
 3. The fact vocabulary of `:unrendered` (`pgmalli.impl.pattern`).
+4. The tags `write-dataset` writes (`#pgmalli/instant`, `#pgmalli/date`, `#pgmalli/date-time`,
+   `#pgmalli/time`, `#pgmalli/offset-time`, `#pgmalli/duration`, `#pgmalli/bytes`), since a
+   fixture is kept in a repository as long as a generated file is.
 
 `pgmalli.impl.*` may change without notice.
 

@@ -6,13 +6,16 @@
 
    The config (pgmalli.generate), the generated file layout and the fact vocabulary
    (pgmalli.impl.pattern) are the stable contract; pgmalli.impl.* may change without notice."
-  (:require [malli.registry :as mr]
+  (:require [malli.core :as m]
+            [malli.registry :as mr]
             [pgmalli.impl.runtime :as rt]))
 
 (defn generated
   "The generated file of a schema (from the classpath), as data: {:schema :database-version
    :registry {name schema} :unrendered [fact ...] :skipped [fact ...] :diagnostics [...]}.
-   :unrendered are the facts with no malli rendering; :diagnostics what the database stores but
+   :registry is the map of names to schemas a malli registry is made of (registry builds one
+   from it, with malli's own schemas); :unrendered are the facts with no malli rendering;
+   :diagnostics what the database stores but
    deserves a look (a partitioned table with no partition, a partition its parent's bounds make
    unreachable, a CHECK (false), CHECKs on a column that contradict each other, a NOT VALID or
    NOT ENFORCED constraint, a unique index repeating a key, a row-level INSERT trigger), each
@@ -32,9 +35,12 @@
    schemas, malli.util and malli.experimental.time too), so :malli/schema metadata,
    malli.dev/start! and malli.instrument read :pg.public/users and the other generated names
    directly. Process-wide, like malli's default registry; portable is the way that touches
-   nothing."
+   nothing. Returns the schemas the default registry held before, which
+   malli.registry/set-default-registry! puts back."
   [& schemas]
-  (mr/set-default-registry! (apply rt/registry schemas)))
+  (let [before (mr/-schemas m/default-registry)]
+    (mr/set-default-registry! (apply rt/registry schemas))
+    before))
 
 (defn columns
   "The [:map ...] of a row or insert schema, without the table-level constraints."

@@ -5,6 +5,7 @@
             [clojure.test.check.generators :as tcg]
             [malli.generator :as mg]
             [malli.core :as m]
+            [malli.registry]
             [malli.error :as me]
             malli.experimental.time
             honey.sql
@@ -477,6 +478,9 @@
     (is (= [1 2 -1] (seq (:b (first (get (data/read-dataset path) "public.t"))))) "bytes as hex")))
 
 (deftest install-makes-the-names-readable-everywhere
-  (pgmalli/install! "sample")
-  (is (m/validate :pg.sample/groups {:id 1 :name "g"}) "no registry passed: malli's default one has it now")
-  (is (not (m/validate :pg.sample/groups {:id "x" :name "g"}))))
+  (let [before (pgmalli/install! "sample")]
+    (is (m/validate :pg.sample/groups {:id 1 :name "g"}) "no registry passed: malli's default one has it now")
+    (is (not (m/validate :pg.sample/groups {:id "x" :name "g"})))
+    (is (map? before) "what the default registry held, to put back")
+    (malli.registry/set-default-registry! before)
+    (is (thrown? Exception (m/validate :pg.sample/groups {:id 1 :name "g"})) "put back: the names are gone again")))

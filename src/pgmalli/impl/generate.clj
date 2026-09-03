@@ -34,14 +34,19 @@
 (defn- sort-maps [x]
   (walk/postwalk #(if (map? %) (into (sorted-map-by (fn [a b] (compare (str a) (str b)))) %) %) x))
 
+(defn assemble
+  "The file's data from the rendering of a schema's facts, in reading order: what it is, then
+   what deserves a look, then the schemas, then what was left out."
+  [schema database-version facts overrides]
+  (let [r (sort-maps (render/registry facts (or overrides {})))]
+    (array-map :schema schema :database-version database-version
+               :diagnostics (:diagnostics r) :registry (:registry r) :unrendered (:unrendered r) :skipped (:skipped r))))
+
 (defn generated
   "Generated data for one schema."
   [{:keys [db overrides]} schema]
-  (let [ir (ir/from-db (assoc db :schema schema))
-        r (sort-maps (render/registry (pattern/facts ir) (or overrides {})))]
-    ;; read from the top: what it is, then what deserves a look, then the schemas
-    (array-map :schema schema :database-version (:database_version ir)
-               :diagnostics (:diagnostics r) :registry (:registry r) :unrendered (:unrendered r) :skipped (:skipped r))))
+  (let [ir (ir/from-db (assoc db :schema schema))]
+    (assemble schema (:database_version ir) (pattern/facts ir) overrides)))
 
 (defn path-for [c schema]
   (str (io/file (:out-dir (config c)) (str schema ".edn"))))
