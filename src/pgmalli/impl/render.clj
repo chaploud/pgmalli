@@ -48,7 +48,7 @@
          ;; bit strings are strings of 0 and 1 (bit(1) comes back from pgjdbc as a Boolean, a driver setting)
          (zipmap ["bit" "bit varying" "varbit"] (repeat :string))
          ;; the object identifier types a driver returns as numbers
-         (zipmap ["oid" "xid" "xid8" "cid"] (repeat :int))
+         {"oid" :int}
          {"boolean" :boolean "uuid" :uuid "bytea" 'bytes? "\"char\"" :string
           "date" :time/local-date "time" :time/local-time "time without time zone" :time/local-time
           "timetz" :time/offset-time "time with time zone" :time/offset-time

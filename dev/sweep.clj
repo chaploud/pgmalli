@@ -61,9 +61,12 @@
   [dbname registry dataset]
   (let [dataset (into {} (for [[t rows] dataset] [t (mapv #(into {} (for [[k v] %] [k (literal v)])) rows)]))
         [stmts err] (try-step :inserts #(vec (pgmalli/inserts registry dataset)))
-        [texts err2] (when-not err (try-step :format #(mapv (fn [q] (first (sql/format q {:inline true}))) stmts)))]
+        formatted (when-not err (mapv (fn [q] (let [[t e] (try-step :format #(first (sql/format q {:inline true})))]
+                                                (or t (assoc e :table (let [t (:insert-into q)] (if (vector? t) (last t) t)))))) stmts))
+        [texts err2] [(filter string? formatted) (seq (remove string? formatted))]
+        stmts (when-not err (filterv #(string? (nth formatted (.indexOf ^java.util.List stmts %))) stmts))]
     (cond err [err]
-          err2 [err2]
+          err2 err2
           :else
           ;; the script's own rows would take keys the dataset uses: the tables are emptied first (rolled back too)
           (let [script (str "\\set ON_ERROR_ROLLBACK on\nBEGIN;\n"

@@ -18,8 +18,14 @@ All notable changes to this project are documented here. The format follows
   comparison, `:select-top`, and CTEs as lexical: a `:with` is visible inside its statement
   only.
 - A unique index bearing a CHECK constraint's name is read as well as the constraint.
-- A partitioned table's row schema carries the OR of its partitions' bounds as a CHECK, so a
-  generated row lands in a partition.
+- A partitioned table's row schema carries the OR of its leaf partitions' bounds as a CHECK,
+  so a generated row lands in a partition (a sub-partitioned child with no leaves takes none).
+- A CHECK reading a generated column, and a domain on a generated column, are checked on the
+  column's expression, as the database computes it: `b GENERATED ALWAYS AS (a * 2)` with
+  `CHECK (b < 50)` bounds `a`.
+- `xid`, `xid8` and `cid` are opaque (the database takes no integer for them).
+- A numeric column bounded by CHECKs (`[:and decimal? [:> 1] [:< 1000]]`) generates within the
+  bounds instead of drawing any decimal and failing to find one that fits.
 - More types: `oid`, `xid`, `xid8`, `cid` are `:int`; `"char"` a string; `bit(n)` and `bit
   varying(n)` strings of digits with their length; `inet`, `cidr`, `macaddr`, `money`, `xml`,
   `tsvector`, `tsquery`, `jsonpath`, the geometric, range and multirange types, `pg_lsn` and

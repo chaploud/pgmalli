@@ -61,15 +61,19 @@
    point. s may exceed p, or be negative, as PostgreSQL allows."
   (m/-simple-schema
    {:type :pg/numeric
-    :compile (fn [{:keys [precision scale] :or {scale 0}} _ _]
+    :compile (fn [{:keys [precision scale] :or {scale 0} gen-min :gen/min gen-max :gen/max} _ _]
                (let [limit (.movePointRight 1M (int (- precision scale)))
                      digits (int (clojure.core/min precision 18))
                      bound (dec (long (.longValueExact (.movePointRight 1M digits))))
+                     ;; generated within :gen/min and :gen/max (BigDecimals) when given, at the scale
+                     scaled (fn [d] (.longValueExact (.setScale (.movePointRight (bigdec d) (int scale)) 0 java.math.RoundingMode/HALF_UP)))
                      fmap (requiring-resolve 'clojure.test.check.generators/fmap)
                      large-integer* (requiring-resolve 'clojure.test.check.generators/large-integer*)]
                  {:pred (fn [v] (and (decimal? v) (< (.abs (.setScale ^BigDecimal v (int scale) java.math.RoundingMode/HALF_UP)) limit)))
                   :type-properties {:error/message (str "should fit numeric(" precision ", " scale ")")
-                                    :gen/gen (fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale)) (large-integer* {:min (- bound) :max bound}))}
+                                    :gen/gen (fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale))
+                                                   (large-integer* {:min (clojure.core/max (- bound) (if gen-min (scaled gen-min) (- bound)))
+                                                                    :max (clojure.core/min bound (if gen-max (scaled gen-max) bound))}))}
                   :min 0 :max 0}))}))
 (def integer-schema (bounded-int :pg/integer -2147483648 2147483647))
 
@@ -185,6 +189,7 @@
    "macaddr" ["08:00:2b:01:02:03" "08-00-2b-01-02-04"] "macaddr8" ["08:00:2b:01:02:03:04:05"]
    "money" ["12.34" "0.00" "-5.50"] "xml" ["<a/>" "<a b=\"1\">x</a>"] "tsvector" ["'a' 'b'" "'fat':2 'rat':3"] "tsquery" ["'a' & 'b'" "'fat' | 'rat'"]
    "jsonpath" ["$.a" "$[*] ? (@ > 1)"] "pg_lsn" ["0/16B3748" "1/0"] "tid" ["(0,1)" "(1,2)"] "pg_snapshot" ["10:20:" "10:20:10,14,15"] "txid_snapshot" ["10:20:"]
+   "xid" ["1" "1234"] "xid8" ["1" "1234"] "cid" ["0" "3"]
    "point" ["(1,2)" "(0,0)" "(-1.5,2.5)"] "line" ["{1,-1,0}" "{0,1,-2}"] "lseg" ["[(0,0),(1,1)]"] "box" ["((0,0),(1,1))" "((1,1),(2,3))"]
    "path" ["[(0,0),(1,1),(2,0)]" "((0,0),(1,1),(2,0))"] "polygon" ["((0,0),(1,0),(1,1))"] "circle" ["<(0,0),1>" "<(1,1),2.5>"]
    "int4range" ["[1,10)" "empty" "(,5]"] "int8range" ["[1,10)" "empty"] "numrange" ["[1.5,2.5]" "empty"]
@@ -209,6 +214,15 @@
   [s key?]
   (let [[t p] (if (and (vector? s) (map? (second s))) [(first s) (second s)] [(if (vector? s) (first s) s) {}])
         now (java.time.Instant/now)
+        ;; a numeric bounded by CHECKs ([:and decimal? [:> 1] [:< 1000]]) generates within them: the
+        ;; bounds go to the head as :gen/min and :gen/max, on a :pg/numeric when the head is bare
+        numeric-bounds (when (= :and t)
+                         (let [parts (if (map? (second s)) (drop 2 s) (rest s))
+                               head (first parts)
+                               lo (some (fn [[op v]] (when (and (#{:> :>=} op) (number? v)) v)) (rest parts))
+                               hi (some (fn [[op v]] (when (and (#{:< :<=} op) (number? v)) v)) (rest parts))]
+                           (when (and (or lo hi) (or (= 'decimal? head) (and (vector? head) (= :pg/numeric (first head)))))
+                             [head (cond-> {} lo (assoc :gen/min (bigdec lo)) hi (assoc :gen/max (bigdec hi)))])))
         hints (case t
                 (:int :pg/integer :pg/smallint) (when key?
                        (let [lo (max 1 (:min p Long/MIN_VALUE)) hi (min 100000 (:max p Long/MAX_VALUE))]
@@ -226,9 +240,17 @@
                                    (opaque-literals (type-name p)) {:gen/elements (opaque-literals (type-name p))}
                                    (:pg/type p) {:gen/elements [nil]})
                 nil)]
-    (if (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
+    (cond
+      numeric-bounds
+      (let [[head bounds] numeric-bounds
+            head* (if (= 'decimal? head)
+                    ['decimal? {:gen/schema [:pg/numeric (merge {:precision 18 :scale 4} bounds)]}]
+                    (assoc head 1 (merge (second head) bounds)))
+            i (if (map? (second s)) 2 1)]
+        (assoc s i head*))
+      (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
       (if (map? (second s)) (assoc s 1 (merge p hints)) (into [t hints] (rest s)))
-      s)))
+      :else s)))
 
 (defn- with-gen-hints [row]
   (let [[_ props & entries] (row-map row)
@@ -285,7 +307,12 @@
 (defn- without-gen
   "Schema data without the generation hints the registry added when it was loaded."
   [schema]
-  (walk/postwalk #(if (map? %) (dissoc % :gen/min :gen/max :gen/schema :gen/elements :gen/fmap) %) schema))
+  (walk/postwalk (fn [f] (cond (map? f) (dissoc f :gen/min :gen/max :gen/schema :gen/elements :gen/fmap)
+                               ;; a property map the hints emptied goes too
+                               (and (vector? f) (map? (second f)) (empty? (second f)) (not (#{:map :enum} (first f))))
+                               (if (= 2 (count f)) (first f) (into [(first f)] (drop 2 f)))
+                               :else f))
+                 schema))
 
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."
@@ -327,14 +354,15 @@
       (portable-node registry (merge-props (get registry (last f)) p))
       (and (vector? f) (= :and t))
       ;; without the CHECKs only pgmalli evaluates
-      (let [parts (remove #(and (vector? %) (#{:pg/check :pg/check-value} (first %))) (entries f))]
+      ;; the parts are converted here so two that become the same (decimal? and :pg/numeric) fold
+      (let [parts (distinct (map #(portable-node registry %) (remove #(and (vector? %) (#{:pg/check :pg/check-value} (first %))) (entries f))))]
         (if (= 1 (count parts)) (merge-props (first parts) p) (into (if p [:and p] [:and]) parts)))
       :else f)))
 
 (defn portable-data
   "Schema data from the registry as data malli's default registry reads; see portable."
   [registry schema]
-  (without-gen (walk/prewalk #(portable-node registry %) schema)))
+  (without-gen (walk/prewalk #(portable-node registry %) (without-gen schema))))
 
 (defn portable
   "The schema named in the registry as data malli's default registry reads (with

@@ -438,3 +438,15 @@
         ds (tcg/generate (pgmalli/dataset-generator reg {:rows 6}) 30 5)]
     (is (= 6 (count (get ds "public.t"))) "no row is lost")
     (is (every? #{"0000" "0005"} (map :c (get ds "public.t"))) "the value that picked the branch is not regenerated")))
+
+(deftest a-numeric-bounded-by-checks-generates-within-them
+  (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:a [:and {:pg/type "numeric"} 'decimal? [:> 1] [:< 1000]]]
+                                                        [:b [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 5 :scale 2}] [:>= 0.5]]]]}})
+        rows (tcg/sample (mg/generator :pg.public/t {:registry reg}) 60)]
+    (is (every? #(< 1 (:a %) 1000) (map identity rows)))
+    (is (every? #(<= 0.5M (:b %)) rows))
+    (is (every? #(and (decimal? (:a %)) (decimal? (:b %))) rows))
+    (is (= [:map {:pg/table "public.t"} [:a [:and {:pg/type "numeric"} 'decimal? [:> 1] [:< 1000]]] [:b [:and {:pg/type "numeric"} 'decimal? [:>= 0.5]]]]
+           (pgmalli/portable reg :pg.public/t)) "the hints stay out of portable data; :pg/numeric is decimal? there")))

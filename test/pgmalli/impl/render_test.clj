@@ -377,6 +377,7 @@
         reg (registry-with registry)
         col (fn [k] (last (some #(when (= k (first %)) %) (drop 2 (:pg.public/t registry)))))]
     (is (= [:int {:pg/type "oid"}] (col :o)))
+    (is (nil? (some #(= :xid (last (last %))) (drop 2 (:pg.public/t registry)))) "xid is not an integer to the database")
     (is (= [:string {:pg/type "\"char\""}] (col :c)))
     (is (= [:string {:pg/type "bit" :min 4 :max 4}] (col :b)) "bit(n) is exactly n digits")
     (is (= [:string {:pg/type "bit varying" :max 6}] (col :vb)))
@@ -385,3 +386,20 @@
     (is (empty? unrendered) "none of them is unknown")
     (is (m/validate :pg.public/t {:o 1 :c "x" :b "0101" :vb "01" :ip "10.0.0.1" :tags ["abcde"]} {:registry reg}))
     (is (not (m/validate :pg.public/t {:o 1 :c "x" :b "01" :vb "01" :ip "10.0.0.1" :tags ["abcdef"]} {:registry reg})))))
+
+(deftest a-check-on-a-generated-column-checks-its-expression
+  (let [{:keys [registry unrendered]} (r/registry (p/facts {:name "public" :types {"positive" {:kind "DOMAIN" :base_type "integer" :not_null false
+                                                                                             :constraints [{:name "positive_check" :definition "CHECK (VALUE > 0)"}]}}
+                                                            :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
+                                                                                    {:name "b" :position 2 :data_type "integer" :is_nullable true :generated_expr "(a * 2)"}
+                                                                                    {:name "p" :position 3 :data_type "positive" :type_schema "public" :is_nullable true :generated_expr "(a - 10)"}]
+                                                                          :constraints {"b_small" {:name "b_small" :type "CHECK" :check_clause "CHECK (b < 50)"}}}}}))
+        reg (registry-with registry)]
+    (is (= [:pg/check {:pg/constraint "b_small" :error/message "b_small"} [:< [:* :a 2] 50]] (nth (:pg.public/t registry) 2))
+        "b is a * 2 to the database, so the CHECK is on a")
+    (is (= [:pg/check {:pg/constraint "p positive_check" :error/message "p positive_check"} [:> [:- :a 10] 0]] (nth (:pg.public/t registry) 3))
+        "the domain of a generated column checks the expression's value")
+    (is (m/validate :pg.public/t {:a 20 :b nil :p nil} {:registry reg}))
+    (is (not (m/validate :pg.public/t {:a 30 :b nil :p nil} {:registry reg})) "30 * 2 is not below 50")
+    (is (not (m/validate :pg.public/t {:a 5 :b nil :p nil} {:registry reg})) "5 - 10 is not positive")
+    (is (empty? unrendered))))

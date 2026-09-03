@@ -222,13 +222,13 @@
     "boolean" "text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name" "uuid"
     "timestamp" "timestamptz" "timestamp with time zone" "timestamp without time zone" "date" "time" "timetz"
     "time without time zone" "time with time zone" "interval"
-    "bytea" "json" "jsonb" "oid" "xid" "xid8" "cid" "\"char\"" "bit" "bit varying" "varbit"})
+    "bytea" "json" "jsonb" "oid" "\"char\"" "bit" "bit varying" "varbit"})
 
 (def opaque-types
   "Types a driver hands over as objects of its own (PGobject and the like): rendered :any with
    their :pg/type, and generated from a few literals the database reads."
   #{"inet" "cidr" "macaddr" "macaddr8" "money" "xml" "tsvector" "tsquery" "jsonpath"
-    "point" "line" "lseg" "box" "path" "polygon" "circle" "pg_lsn" "tid" "pg_snapshot" "txid_snapshot"
+    "point" "line" "lseg" "box" "path" "polygon" "circle" "pg_lsn" "tid" "xid" "xid8" "cid" "pg_snapshot" "txid_snapshot"
     "int4range" "int8range" "numrange" "tsrange" "tstzrange" "daterange"
     "int4multirange" "int8multirange" "nummultirange" "tsmultirange" "tstzmultirange" "datemultirange"
     "regclass" "regtype" "regrole" "regproc" "regprocedure" "regoper" "regoperator" "regnamespace" "regconfig" "regdictionary" "regcollation"})
@@ -305,12 +305,22 @@
              (contains? dflt :expr) (assoc :default (:expr dflt)))]
           (concat (keep :check checks) (some-> (:unparsed dflt) vector)))))
 
-(defn- check-facts [base {cname :name :keys [check_clause is_valid]}]
+(defn- substitute
+  "The expression with the columns of subst (keyword -> expression) replaced by their
+   expressions, everywhere but at the head of a form (an operator or function)."
+  [e subst]
+  (cond (vector? e) (into [(first e)] (map #(substitute % subst) (rest e)))
+        (keyword? e) (get subst e e)
+        (sequential? e) (map #(substitute % subst) e)
+        :else e))
+
+(defn- check-facts [base {cname :name :keys [check_clause is_valid]} generated]
   (let [base (assoc base :constraint cname)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try-clause check_clause)]
     (if (contains? parsed :expr)
-      (let [e (:expr parsed)
+      (let [;; a generated column holds its expression's value: the CHECK is on that
+            e (substitute (:expr parsed) generated)
             n (when (not= false is_valid) (normalize e))
             base (assoc base :expr (x/canonical e))]
         (if-let [ms (some-> n match-columns)]
@@ -345,7 +355,19 @@
                       ;; nothing marks a view's column NOT NULL in the catalog, so every one may be NULL
                       (mapcat #(column-facts base (cond-> % view? (assoc :is_nullable true)) enums domains) (sort-by :name (:columns t)))
                       (mapcat #(key-facts base %) constraints)
-                      (mapcat #(check-facts base %) (filter #(= "CHECK" (:type %)) constraints)))]
+                      (let [generated (into {} (for [c (:columns t) :when (:generated_expr c)
+                                                     :let [{:keys [expr]} (parsed base (:generated_expr c))] :when (some? expr)]
+                                                 [(keyword (:name c)) expr]))]
+                        (concat (mapcat #(check-facts base % generated) (filter #(= "CHECK" (:type %)) constraints))
+                                ;; a domain on a generated column checks the expression's value
+                                (for [c (:columns t)
+                                      :let [expr (get generated (keyword (:name c)))
+                                            type-name (str/replace (:data_type c) #"^[^.]+\." "")]
+                                      :when (and expr (contains? domains type-name))
+                                      k (get-in schema [:types type-name :constraints])
+                                      f (check-facts base {:name (str (:name c) " " (:name k)) :check_clause (:definition k) :is_valid (:is_valid k true)}
+                                                     {:VALUE expr})]
+                                  f))))]
         f)))))
 
 (defn coverage
