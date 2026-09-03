@@ -58,15 +58,20 @@
 (defn write-dataset
   "Writes a dataset as EDN, one table per block and one row per line, java.time values and
    bytes under pgmalli's tags (#pgmalli/instant \"...\", #pgmalli/bytes \"hex\"), so a fixture
-   generated once (with a seed) is kept in the repository and read back with read-dataset."
+   generated once (with a seed) is kept in the repository and read back with read-dataset.
+   The tables that came out short (short-tables) are written too, under :pgmalli/short."
   [path dataset]
   (io/make-parents path)
   (spit path
-        (str "{" (str/join "\n " (for [[table rows] (sort-by key dataset)]
-                                   (str (pr-str table) "\n [" (str/join "\n  " (map #(pr-str (into (sorted-map) (map (fn [[k v]] [k (literal v)])) %)) rows)) "]")))
+        (str "{" (str/join "\n " (concat (for [[table rows] (sort-by key dataset)]
+                                            (str (pr-str table) "\n [" (str/join "\n  " (map #(pr-str (into (sorted-map) (map (fn [[k v]] [k (literal v)])) %)) rows)) "]"))
+                                          (when-let [s (short-tables dataset)] [(str ":pgmalli/short " (pr-str s))])))
              "}\n")))
 
 (defn read-dataset
-  "The dataset write-dataset wrote."
+  "The dataset write-dataset wrote, its short tables back in the metadata. Byte arrays compare
+   by identity, so a dataset holding bytea values is not = to itself read back; its rows load
+   the same."
   [path]
-  (edn/read-string {:readers readers} (slurp path)))
+  (let [m (edn/read-string {:readers readers} (slurp path))]
+    (with-meta (dissoc m :pgmalli/short) {:pgmalli/short (:pgmalli/short m)})))

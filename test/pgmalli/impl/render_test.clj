@@ -249,7 +249,8 @@
       (is (m/validate :pg.public/t {:a 1.5M :b 1M :c 32767 :d nil :e nil} {:registry reg}))
       (is (not (m/validate :pg.public/t {:a 1.5M :b 1M :c 32768 :d nil :e nil} {:registry reg})) "smallint keeps its range")
       (is (not (m/validate :pg.public/t {:a 1.5M :b 1M :c 1 :d nil :e 2147483648} {:registry reg})) "so does integer")
-      (is (every? #(<= -32768 (:c %) 32767) (mg/sample :pg.public/t {:registry reg :size 20})) "and generates within it")))
+      (is (every? #(<= -32768 (:c %) 32767) (mg/sample :pg.public/t {:registry (rt/registry {:database-version "x" :registry registry}) :size 20}))
+          "and generates within it (the loaded registry's hints keep the bounded numeric from failing the search)")))
   (let [{:keys [registry]} (r/registry (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "digest" :position 1 :data_type "bytea" :is_nullable false}]
                                                                :constraints {"digest_check" {:name "digest_check" :type "CHECK" :check_clause "CHECK (octet_length(digest) = 32)"}}}}}))

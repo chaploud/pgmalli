@@ -235,7 +235,9 @@ query with the HoneySQL map in its metadata):
 `:malli/schema` metadata, `malli.dev/start!` and other tools read schemas through malli's
 default registry. `(pgmalli/install! "public")` makes pgmalli's registry that default, so
 `:pg.public/users` and the other names work there directly; it is process-wide, as the
-default registry is. Where that is not wanted, `portable` gives the named schema as data
+default registry is, and meant for an application with this one registry (one with a
+registry of its own composes them with `malli.registry/composite-registry`). Where that is
+not wanted, `portable` gives the named schema as data
 malli's default registry reads (with `malli.experimental.time` added for the time types): the
 schema's own enums and domains inlined, pgmalli's types as their malli counterparts,
 generation hints dropped. The CHECKs only pgmalli evaluates (`:pg/check`, `:pg/check-value`)
@@ -279,8 +281,11 @@ literal for under pgmalli's tags (`#pgmalli/instant "..."`, `#pgmalli/bytes "hex
 
 ```clojure
 (data/write-dataset "test/resources/fixture.edn" sample)
-(def fixture (data/read-dataset "test/resources/fixture.edn"))
+(def fixture (data/read-dataset "test/resources/fixture.edn"))   ; short-tables still knows what came out short
 ```
+
+Byte arrays compare by identity, so a dataset holding `bytea` values is not `=` to itself
+read back; its rows load the same.
 
 `inserts` turns a dataset into HoneySQL INSERT maps, one per table, in an order the database
 accepts (parents first, and within a table the rows referred to first), enum values cast to

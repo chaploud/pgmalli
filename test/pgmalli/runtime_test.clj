@@ -471,6 +471,7 @@
     (is (= (update-vals ds vec) (update-vals back vec)) "java.time values round-trip under pgmalli's tags")
     (is (m/validate (data/dataset-schema registry) back opts))
     (is (nil? (data/short-tables ds)) "nothing short in the sample")
+    (is (= (data/short-tables ds) (data/short-tables back)) "what came out short survives the file")
     (is (re-find #"#pgmalli/" (slurp path)) "the file carries the tags"))
   (let [bytes-ds {"public.t" [{:id 1 :b (byte-array [1 2 255])}]}
         path (str (java.io.File/createTempFile "pgmalli-bytes" ".edn"))]
@@ -484,3 +485,10 @@
     (is (map? before) "what the default registry held, to put back")
     (malli.registry/set-default-registry! before)
     (is (thrown? Exception (m/validate :pg.sample/groups {:id 1 :name "g"})) "put back: the names are gone again")))
+
+(deftest a-short-dataset-keeps-its-reasons-through-the-file
+  (let [ds (with-meta {"public.t" [{:id 1}]} {:pgmalli/short {"public.t" {:wanted 3 :got 1 :reasons [["x" 2]]}}})
+        path (str (java.io.File/createTempFile "pgmalli-short" ".edn"))]
+    (data/write-dataset path ds)
+    (is (= {"public.t" {:wanted 3 :got 1 :reasons [["x" 2]]}} (data/short-tables (data/read-dataset path))))
+    (is (= {"public.t" [{:id 1}]} (data/read-dataset path)) "the tables alone are the value")))

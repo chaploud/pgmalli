@@ -34,9 +34,10 @@
   "Makes the registry of the named schemas malli's default registry (it holds malli's own
    schemas, malli.util and malli.experimental.time too), so :malli/schema metadata,
    malli.dev/start! and malli.instrument read :pg.public/users and the other generated names
-   directly. Process-wide, like malli's default registry; portable is the way that touches
-   nothing. Returns the schemas the default registry held before, which
-   malli.registry/set-default-registry! puts back."
+   directly. Process-wide, like malli's default registry: for an application with this one
+   registry; one with a registry of its own composes the two (malli.registry/composite-registry)
+   or uses portable, which touches nothing. Returns the schemas the default registry held
+   before, which malli.registry/set-default-registry! puts back."
   [& schemas]
   (let [before (mr/-schemas m/default-registry)]
     (mr/set-default-registry! (apply rt/registry schemas))
