@@ -1,6 +1,6 @@
 {:paths ["src" "resources" "test" "test/resources"]
- :deps {com.github.seancorfield/honeysql {:mvn/version "2.7.1437"}
-        metosin/malli {:mvn/version "0.20.1"}
+ :deps {com.github.seancorfield/honeysql {:mvn/version "2.7.1479"}
+        metosin/malli {:mvn/version "0.20.3"}
         com.gfredericks/test.chuck {:mvn/version "0.2.15"}}
  :tasks {lint {:doc "clj-kondo over src and test"
                :task (shell "clj-kondo --lint src test dev")}
