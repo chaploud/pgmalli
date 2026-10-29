@@ -83,6 +83,12 @@
                      (from-items stmt from-keys)
                      (map second (join-items stmt)))))
 
+(defn- branch?
+  "Whether a walk of query data goes into x: a collection, but not a value HoneySQL passes as it
+   is ([:lift x], [:inline x]), whose maps are data, not statements or clauses."
+  [x]
+  (and (coll? x) (not (and (vector? x) (#{:lift :inline} (first x))))))
+
 (defn- statement?
   "A query map; one holding only a set operation is one too, its members statements of their own."
   [x]
@@ -92,12 +98,12 @@
   "The nodes of one statement's part, not descending into the statements nested in it: those
    are statements of their own, judged in their own scope."
   [part]
-  (tree-seq #(and (coll? %) (not (statement? %))) seq part))
+  (tree-seq #(and (branch? %) (not (statement? %))) seq part))
 
-(defn statements
+(defn- statements
   "The statements in a query (a map, or Clojure data holding maps); a subquery is one too."
   [body]
-  (into [] (filter statement?) (tree-seq coll? seq body)))
+  (into [] (filter statement?) (tree-seq branch? seq body)))
 
 (defn- cte-name [entry]
   (when (vector? entry)
@@ -142,9 +148,9 @@
                                (mapcat #(cte-names* % with?) (vals (apply dissoc x :insert-into with-keys)))
                                (cte-names* (:select (insert-parts x)) with?))
         (and (cte-pair? x) (cte-name x)) (cons (cte-name x) (cte-names* (second x) with?))
-        (coll? x) (mapcat #(cte-names* % with?) (seq x))))
+        (branch? x) (mapcat #(cte-names* % with?) (seq x))))
 
-(defn cte-names
+(defn- cte-names
   "Names of the CTEs a query defines, at any depth."
   [body]
   (set (cte-names* body true)))
@@ -179,8 +185,10 @@
     (map? x) [nil (str "(subquery " (hash x) ")") nil]
     (vector? x)
     (let [[a b] x
-          ;; [:alias {:columns [...]}]
-          [b listed] (if (and (vector? b) (keyword? (first b)) (map? (second b))) [(first b) (mapv name (:columns (second b)))] [b nil])]
+          ;; [:alias {:columns [...]}]; a column definition list ([:raw "a int"]) names no column read here
+          [b listed] (if (and (vector? b) (keyword? (first b)) (map? (second b)))
+                       [(first b) (let [cs (:columns (second b))] (when (every? #(or (keyword? %) (string? %)) cs) (mapv name cs)))]
+                       [b nil])]
       (cond
         ;; :t / [:t :alias] / INSERT INTO t (columns...)
         (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (name (if (keyword? b) b a)) (written a) listed]
@@ -226,7 +234,7 @@
              {:before (vec from) :nullable #{}}
              (join-items stmt)))))
 
-(defn scope
+(defn- scope
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool :nullable? bool}} of one statement;
    ctes are the query's CTE names, which shadow a table only when the reference is written
    without a schema. :nullable? marks a table an outer join may leave NULL."
@@ -270,7 +278,7 @@
                                           ;; INSERT ... SELECT: the SELECT does not see the table inserted into
                                           (walk (:insert-into x) outer ctes false true)
                                           (mapcat #(walk % chain ctes false true) (vals (dissoc x :insert-into))))))
-                  (coll? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x)) under?) (seq x))))]
+                  (branch? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x)) under?) (seq x))))]
     (walk body () (free-cte-names body) false false)))
 
 (defn- split-column
@@ -314,7 +322,7 @@
           (= :open (first outer)) (if (and alias (contains? sc alias)) hits [[alias nil true]])
           :else (column-hits registry outer col))))
 
-(defn resolve-column
+(defn- resolve-column
   "{:table :column :schema :nullable? :opaque?} for a column keyword in a scope (or the chain of
    scopes of a nested statement), :table the alias for an opaque table and :schema nil there,
    :nullable? when an outer join may leave the table NULL; nil when the column resolves to no
@@ -592,7 +600,7 @@
         v values :when (not (contains? allowed v))]
     {:kind :enum-literal :column col :value v :allowed allowed}))
 
-(defn problems
+(defn- problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
    or compared that are unknown, or ambiguous (unqualified and in more than one known table in
    scope, those under :candidates), in :select, :where, :having, join conditions, :set,
@@ -628,7 +636,7 @@
    :values and :set are not clauses."
   [body]
   (let [clauses (some-> (honeysql 'honey.sql/clause-order) (#(set (%))))
-        maps (tree-seq #(and (coll? %) (not (seq? %)))
+        maps (tree-seq #(and (branch? %) (not (seq? %)))
                        #(if (map? %) (vals (dissoc % :values :set :do-update-set)) (seq %))
                        body)]
     (distinct (for [m maps
@@ -746,7 +754,7 @@
                          (let [k (arg-key x)]
                            (if (and k (untyped? (acc k))) (assoc acc k t) acc)))
                        {} typed)
-         in-data (set (keep arg-key (tree-seq #(and (coll? %) (not (seq? %))) seq body)))]
+         in-data (set (keep arg-key (tree-seq #(and (branch? %) (not (seq? %))) seq body)))]
      (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
 
 (defn- select-row
@@ -783,11 +791,11 @@
             last-of (into {} (map (juxt first identity)) entries)]
         (into [:map] (map last-of) (distinct (map first entries)))))))
 
-(declare row-schema)
+(declare row-schema*)
 
 (defn- set-operation-row [registry members ctes opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (for [m members] (row-schema registry m (into ctes (cte-names m)) (dissoc opts :qualified? :nil-columns)))]
+    (let [rows (for [m members] (row-schema* registry m (into ctes (cte-names m)) (dissoc opts :qualified? :nil-columns)))]
       (when (and (every? some? rows) (apply = (map count rows)))
         (into [:map]
               (for [entries (apply map vector (map rest rows))
@@ -795,35 +803,42 @@
                           inners (distinct (map shape/non-null schemas))]]
                 (jdbc/row-entry (ffirst entries) (if (= 1 (count inners)) (first inners) :any) (some maybe? schemas) opts)))))))
 
+(defn- row-schema*
+  "row-schema of a statement inside a query whose CTE names are ctes."
+  [registry stmt ctes opts]
+  (if-let [members (some stmt set-operation-keys)]
+    (set-operation-row registry members ctes opts)
+    (select-row registry stmt ctes opts)))
+
 (defn row-schema
-  "The [:map ...] of one row a statement returns, as next.jdbc builds it from what the driver
+  "The [:map ...] of one row a query returns, as next.jdbc builds it from what the driver
    returns (the options of pgmalli.core/as-read) and as malli's default registry reads it: the
    columns of the tables, those an outer join may leave NULL nullable; :* and :t/* expanded; an
    expression under an alias, or under the name PostgreSQL gives it, nullable :any. A set
    operation's row is its first member's names, typed where the members agree, nullable where
    one is, unqualified (its columns come from no table). nil when a selected column cannot be
    resolved."
-  ([registry stmt ctes] (row-schema registry stmt ctes {}))
-  ([registry stmt ctes opts]
+  ([registry body] (row-schema registry body {}))
+  ([registry body opts]
    (jdbc/options! opts)
-   (if-let [members (some stmt set-operation-keys)]
-     (set-operation-row registry members ctes opts)
-     (select-row registry stmt ctes opts))))
+   (when (map? body) (row-schema* registry body (cte-names body) opts))))
 
 (defn query-schema
   "[:=> [:cat arg-types...] [:sequential row]], the malli function schema of a function taking
    args (keys of arg-types; a key the query lacks is :any) and running body; with
    {:result :one} the return is [:maybe row]. A return that cannot be resolved is :any. The
-   problems check finds are the schema's :pgmalli/problems property, not an error: a schema in
+   problems check finds, and an argument of the query args lack (:missing-arg, a typo in args
+   most likely), are the schema's :pgmalli/problems property, not an error: a schema in
    :malli/schema metadata is made as its namespace loads, which a typo, or a registry not yet
    generated again, should not stop."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)
    (let [registry (reading registry)
-         problems (check registry body opts)
          types (arg-types registry body opts)
-         row (when (map? body) (row-schema registry body (cte-names body) opts))]
+         problems (into (check registry body opts)
+                          (for [k (sort-by str (keys types)) :when (not (some #{k} args))] {:kind :missing-arg :arg k}))
+         row (row-schema registry body opts)]
      (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
            [(into [:cat] (map #(get types % :any)) args)
             (cond (nil? row) :any (= :one result) [:maybe row] :else [:sequential row])]))))

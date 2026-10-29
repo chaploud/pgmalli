@@ -23,8 +23,8 @@ All notable changes to this project are documented here. The format follows
   `:user` and `:password`) or `:datasource`, with the PostgreSQL driver on the classpath and no
   psql. The query runs in a transaction rolled back after, so a pooled connection keeps its
   search_path.
-- `query-schema` carries the problems `check` finds in its query as the `:pgmalli/problems`
-  property of the function schema.
+- `query-schema` carries the problems `check` finds in its query, and a query argument its
+  args lack (`:missing-arg`), as the `:pgmalli/problems` property of the function schema.
 - `check` reports a clause it reads nowhere (`:unread-clause`: one new to HoneySQL, one
   registered with `register-clause!`, `:join-by`, `{:table :t}`), so a query is never judged on
   part of it in silence; it reads the clauses and operators of the HoneySQL loaded.
@@ -47,7 +47,11 @@ All notable changes to this project are documented here. The format follows
   `[:all x]`, `:any` unless `:write`'s `:array` names what it may be; one in `:in` a non-empty
   vector, list or set of the column's type, as `sql/format` expands it; one the data shows only
   inside code nilable. `:read` types rows alone.
-- `read-options` names next.jdbc's map builders as next.jdbc does
+- `row-schema` takes `(registry body opts)`, as the other functions of `pgmalli.honeysql` do;
+  it took the query's CTE names third, so an options map there went unread. `statements`,
+  `cte-names`, `scope`, `resolve-column` and `problems` are private.
+- A misspelt option names the one meant (`should be spelled :qualified?`).
+- `read-options` takes a builder's var too (`#'rs/as-maps`), and names next.jdbc's map builders as next.jdbc does
   (`'next.jdbc.result-set/as-unqualified-kebab-maps`, `'next.jdbc.optional/as-maps`); it took
   `next.jdbc/...` and `next.jdbc.optional/as-kebab-maps`, which do not exist, and any namespace.
   A modified builder (keys of your functions) and an array builder are an error, and the lower
@@ -82,6 +86,9 @@ All notable changes to this project are documented here. The format follows
 - `pgmalli.honeysql` reads `:except-all`, `:not-in`, `:between`, `:not-like` and the other
   comparisons HoneySQL writes, `[:. a b]`, `:with-ordinality`, and an operator registered with
   `register-op!` (`?column?`, not a function's name).
+- A value HoneySQL passes as it is (`[:lift {...}]`, `[:inline {...}]`) is data, never a
+  statement or a clause; a column definition list (`[:r {:columns [[:raw "a int"]]}]`) does not
+  throw.
 - A LIKE pattern argument is the column's kind without its CHECKs and length: a pattern is no
   value of the column. `INSERT INTO t AS a (columns)` (`[[:t :a] [...]]`), a subquery with no
   alias in `:from`, and an `:update` or `:insert-into` target code names are read.

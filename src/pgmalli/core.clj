@@ -70,7 +70,8 @@
   (portable/portable registry name))
 
 (defn read-options
-  "The reading options (see as-read) of a next.jdbc map builder named by its symbol:
+  "The reading options (see as-read) of a next.jdbc map builder, named by its symbol or var
+   (#'rs/as-maps):
    'next.jdbc.result-set/as-unqualified-kebab-maps, 'next.jdbc.optional/as-maps (NULL columns
    absent) and the like. An error for another (the modified builders key rows by functions of
    yours, the array builders build no map)."

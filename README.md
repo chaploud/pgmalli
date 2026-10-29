@@ -77,10 +77,10 @@ nothing else; `pgmalli.generate` needs `psql` or a JDBC driver; `pgmalli.data` (
 | | supported | how it is held |
 |---|---|---|
 | PostgreSQL | 16 and later | CI runs every test on 16, 17 and 18 |
-| HoneySQL | 2.4.1066 and later | CI runs on that version and the latest; a test checks pgmalli's view of HoneySQL (its clauses, operators, how `sql/format` writes joins, `:in` and named parameters) against the one loaded, so a HoneySQL that changes fails there first. At run time `check` reads the clauses and operators of the HoneySQL loaded: a clause pgmalli reads nowhere (one new to HoneySQL, one of yours) is an `:unread-clause` problem, an operator you register is named as PostgreSQL names it |
-| next.jdbc, PostgreSQL's JDBC driver | 1.3, 42.7 | rows and parameters checked against the real driver in CI |
-| malli | 0.20 | |
-| Clojure, babashka | 1.11 and later, current babashka | CI runs on Clojure 1.11 and the latest; babashka reads everything but JDBC |
+| HoneySQL | 2.4.1066 and later | CI on that version and the latest, with a test of pgmalli's view of HoneySQL against the one loaded; at run time, the clauses and operators of the HoneySQL loaded |
+| next.jdbc, PostgreSQL's JDBC driver | 1.3 and later, 42.7 and later | CI against the real driver |
+| malli | 0.20 and later | CI on 0.20 |
+| Clojure, babashka | 1.11 and later, current babashka | CI on Clojure 1.11 and the latest; babashka reads everything but JDBC |
 
 pgmalli depends on malli, test.check, camel-snake-kebab (the version next.jdbc carries) and
 data.json; HoneySQL, next.jdbc and the JDBC driver are yours.
@@ -213,9 +213,9 @@ refuse a key or value they do not know.
 | `:kebab? true` | kebab-cased keys and tables, as the kebab builders do |
 | `:lower? true` | lower-cased keys and tables, as the lower builders do |
 | `:nil-columns :absent` | NULL columns missing, as `next.jdbc.optional` builds rows |
-| `:time :instant` / `:local` | `next.jdbc.date-time`'s `read-as-instant` / `read-as-local` |
+| `:time :instant` / `:local` | `next.jdbc.date-time`'s `read-as-instant` / `read-as-local` (`:inst`, the default, is none) |
 | `:read {pg-type schema}` | what a `ReadableColumn` extension of yours returns for a `:pg/type` |
-| `:read {:array :vector}` | an extension returning arrays as vectors of their elements |
+| `:read {:array :vector}` | an extension returning arrays as vectors of their elements (`:sequential` for any sequence) |
 | `:read {:json :parsed}` | an extension returning json parsed, as the registry shapes it |
 
 ```clojure
@@ -247,9 +247,13 @@ subquery's columns are resolved in the subquery first, then in the statements ar
 (def find-user-q {:select [:id :nick] :from [:users] :where [:= :id :?id]})
 
 (defn find-user
-  {:malli/schema (h/query-schema registry [:db :id] find-user-q)}   ; :db is not in the query: :any
-  [db id] (jdbc/execute! db (sql/format find-user-q {:params {:id id}})))
+  {:malli/schema (m/schema (h/query-schema registry [:db :id] find-user-q)   ; :db is not in the query: :any
+                           {:registry registry})}
+  [db id]
+  (jdbc/execute! db (sql/format find-user-q {:params {:id id}}) {:builder-fn rs/as-unqualified-maps}))
 ;; => [:=> [:cat :any [:int {...}]] [:sequential [:map [:id [:int {...}]] [:nick [:maybe [:string {...}]]]]]]
+;; the rows of as-unqualified-maps, the default; as next.jdbc's own default (as-maps) builds
+;; them, (h/query-schema registry [:db :id] find-user-q (pgmalli/read-options #'rs/as-maps))
 
 (h/arg-types registry {:select [:id] :from [:users] :where [:in :mood :?moods] :limit :?n})
 ;; => {:moods [:or [:sequential {:min 1} [:enum {...} "happy" "sad"]] [:set {:min 1} ...]], :n :int}
@@ -273,44 +277,33 @@ code (`(when from [:>= :id :?from])`) takes nil too, the code possibly leaving i
 symbol that is not a named parameter is an argument too, for a query written in code with
 locals; where a table goes, a symbol is a table chosen at run time.
 
-Without `:time`, and with no `:read` or `:write` naming them, the schemas are data malli's
-default registry reads; `:time :instant` or `:local`, and `:pg/array`, need pgmalli's registry:
-make the schema an object over it (below). A problem `check` finds in a query is the function
-schema's `:pgmalli/problems` property, its row then `:any` when it cannot be told: the schema
-is made as its namespace loads, which a typo should not stop. An ambiguous column comes with
-the tables it could belong to, under `:candidates`. `check`, `query-schema`, `row-schema` and
-`arg-types` are the functions to use; the rest of the namespace are their parts, for taking a
-query apart.
-
-Every query of a project checked in one test, whatever holds the queries (here, a var per
-query with the HoneySQL map in its metadata):
+`check`, `query-schema`, `row-schema` and `arg-types` are the namespace's functions. What
+`check` finds in a query, and a query argument `query-schema`'s args lack (`:missing-arg`),
+are the function schema's `:pgmalli/problems` property rather than an error: the schema is
+made as its namespace loads, which a typo should not stop. A clause pgmalli reads nowhere (one
+new to HoneySQL, `:join-by`, one you registered) is an `:unread-clause` problem, so no part of
+a query goes unjudged in silence. An ambiguous column comes with the tables it could belong
+to, under `:candidates`. Every query of a project checked in one test:
 
 ```clojure
 (deftest queries-agree-with-the-database
-  (doseq [v (vals (ns-publics 'app.queries)) :let [q (:query (meta v))] :when q]
-    (is (= [] (h/check registry q)) (str v))))
+  (doseq [v (vals (ns-publics 'app.queries)) :let [s (:malli/schema (meta v))] :when s]
+    (is (nil? (:pgmalli/problems (m/properties (m/schema s)))) (str v))))
 ```
 
 ### Schemas for `:malli/schema` and `malli.dev`
 
 `malli.instrument` and `malli.dev/start!` read a var's `:malli/schema` with `m/schema` and no
 options: schema data through malli's default registry, a schema object as it is, with the
-registry it was made over. So an object over pgmalli's registry needs nothing installed, and
-the default registry keeps its names:
+registry it was made over. So an object over pgmalli's registry, as in the example above,
+needs nothing installed and works whatever the options name (`:time :instant`'s
+`malli.experimental.time` types, `:pg/array`); the default registry keeps its names.
 
-```clojure
-(defn find-user
-  {:malli/schema (m/schema (h/query-schema registry [:db :id] find-user-q {:time :instant})
-                           {:registry registry})}
-  [db id] ...)
-```
-
-Data works there too when it names only what the default registry has: `pgmalli.honeysql`'s
-schemas without `:time`, `:read` and `:write` naming other types, and `portable` once
-`malli.experimental.time` is in the default registry (its time columns stay `:time/*`).
-`portable` gives the named schema with its own enums and domains inlined, pgmalli's types as
-their malli counterparts and generation hints dropped; the CHECKs only pgmalli evaluates
-(`:pg/check`, `:pg/check-value`) are left out of it.
+Where the registry cannot follow (another process, generated documentation), `portable` gives
+a named schema as data malli's default registry reads (with `malli.experimental.time` for its
+time columns): its own enums and domains inlined, pgmalli's types as their malli counterparts,
+generation hints dropped, and the CHECKs only pgmalli evaluates (`:pg/check`,
+`:pg/check-value`) left out.
 
 ```clojure
 (defn find-user
@@ -323,6 +316,8 @@ their malli counterparts and generation hints dropped; the CHECKs only pgmalli e
 `:pg.public/users` works in data anywhere. It is process-wide: every schema in the process then
 resolves the `:pg` and `:time` names, including one meant to work without them, whose mistake
 it then hides. Keep it for an application with this one registry.
+
+### Datasets
 
 Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints
 (`NULLS NOT DISTINCT` respected) within a table, foreign keys (`MATCH FULL` respected) across
@@ -376,7 +371,7 @@ VALUE`), so the ids the rows refer to each other by hold:
 `dataset-schema` and `dataset-generator` are built at runtime and contain functions; the
 generated files stay data.
 
-### What the database stores but no row can satisfy
+### Diagnostics: what the database stores but deserves a look
 
 Some states PostgreSQL keeps are worth a look: a partitioned table with no partition (it takes
 no row), a partition its parent's bounds make unreachable, a `CHECK (false)`, CHECKs on one
@@ -398,6 +393,8 @@ Kept compatible; a change bumps the minor version.
 4. The tags `write-dataset` writes (`#pgmalli/instant`, `#pgmalli/date`, `#pgmalli/date-time`,
    `#pgmalli/time`, `#pgmalli/offset-time`, `#pgmalli/duration`, `#pgmalli/bytes`), since a
    fixture is kept in a repository as long as a generated file is.
+5. The public functions of `pgmalli.core`, `pgmalli.generate`, `pgmalli.data` and
+   `pgmalli.honeysql`, and their options (`pgmalli.impl.jdbc/options-schema`).
 
 `pgmalli.impl.*` may change without notice.
 

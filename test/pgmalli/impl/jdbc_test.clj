@@ -41,6 +41,7 @@
 
 (deftest reading-options-of-a-next-jdbc-builder
   (is (= {:qualified? true} (pgmalli/read-options 'next.jdbc.result-set/as-maps)))
+  (is (= {:qualified? true} (pgmalli/read-options (intern (create-ns 'next.jdbc.result-set) 'as-maps))) "or its var")
   (is (= {:lower? true} (pgmalli/read-options 'next.jdbc.result-set/as-unqualified-lower-maps)))
   (is (= {:kebab? true} (pgmalli/read-options 'next.jdbc.result-set/as-unqualified-kebab-maps)))
   (is (= {:nil-columns :absent} (pgmalli/read-options 'next.jdbc.optional/as-unqualified-maps)))

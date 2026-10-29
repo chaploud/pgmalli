@@ -38,7 +38,7 @@
   [opts]
   (if (valid-options? (or opts {}))
     opts
-    (let [errors (me/humanize (m/explain options-schema opts))]
+    (let [errors (-> (m/explain options-schema opts) me/with-spell-checking me/humanize)]
       (throw (ex-info (str "pgmalli options: " (pr-str errors)) {:options opts :errors errors})))))
 
 ;;; what the driver returns and takes
@@ -146,7 +146,7 @@
   "The reading options of a next.jdbc result set builder named by its symbol; documented on
    pgmalli.core/read-options."
   [builder]
-  (or (get builders builder)
+  (or (get builders (if (var? builder) (symbol builder) builder))
       (throw (ex-info (str builder (if (str/includes? (name builder) "modified")
                                      " keys rows by functions of yours: give :qualified? and :kebab? as they do"
                                      " is not one of next.jdbc's map builders pgmalli knows")

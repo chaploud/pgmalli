@@ -37,7 +37,7 @@
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [q queries, builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
               :let [row (first (jdbc/execute! ds (sql/format q) {:builder-fn @(requiring-resolve builder)}))
-                    schema (h/row-schema registry q (h/cte-names q) (pgmalli/read-options builder))]]
+                    schema (h/row-schema registry q (pgmalli/read-options builder))]]
         (if schema
           (do (is (clojure.set/subset? (set (keys row)) (set (map first (rest schema)))) (pr-str builder q))
               (is (clojure.set/subset? (set (for [[k p] (rest schema) :when (not (and (map? p) (:optional p)))] k)) (set (keys row)))
@@ -71,7 +71,7 @@
       (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
       (let [q {:select [:paths :meta] :from [:docs]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
-        (is (m/validate (h/row-schema registry q #{}) row) (pr-str (update-vals row class)))))))
+        (is (m/validate (h/row-schema registry q) row) (pr-str (update-vals row class)))))))
 
 (deftest as-read-is-the-row-the-driver-returns
   (when *db*
