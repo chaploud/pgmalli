@@ -26,21 +26,27 @@
                                              (str path " is not on the classpath; run pgmalli.main generate, and put its :out-dir's parent on :paths")
                                              {:given schema}))))))
 
-(defn- insert-entry [e]
+(defn- insert-entry
+  "A column of an INSERT: optional when the database fills it, unless with a literal default
+   the column itself refuses."
+  [registry e]
   (let [[k p s] (shape/entry-parts e)
         props (shape/column-props s)
-        nullable? (shape/maybe? s)]
+        optional? (if (contains? props :default)
+                    (m/validate s (:default props) {:registry registry})
+                    (or (:pg/identity props) (contains? props :pg/default) (shape/maybe? s)))]
     (when-not (shape/written-by-database? props)
-      [k (cond-> p (or (:pg/identity props) (contains? props :pg/default) nullable?) (assoc :optional true)) s])))
+      [k (cond-> p optional? (assoc :optional true)) s])))
 
 (defn- omitted-values
   "What the database stores for a column left out of an INSERT: {column literal} for literal
-   defaults; columns whose default is an expression are in :unknown."
+   defaults; columns whose default is an expression, identities and generated columns are in
+   :unknown."
   [entries]
   (reduce (fn [acc e]
             (let [[k _ s] (shape/entry-parts e) props (shape/column-props s)]
               (cond (contains? props :default) (assoc-in acc [:literal k] (:default props))
-                    (contains? props :pg/default) (update acc :unknown conj k)
+                    (or (contains? props :pg/default) (:pg/identity props) (:pg/generated props)) (update acc :unknown conj k)
                     :else acc)))
           {:literal {} :unknown #{}}
           entries))
@@ -62,9 +68,17 @@
                 :pg/check (let [[_ p e] (if (map? (second f)) f [:pg/check {} (second f)])]
                             [:pg/check (assoc p :pg/defaults literal) e])
                 :map (if (map? (second f)) f (into [:map] (map entry (rest f))))
+                ;; nil dispatches both a NULL and an absent column, which takes the default's branch
                 :multi (let [f (mapv go f)
-                             absent (some (fn [[v s]] (when (= v (get literal (:dispatch (second f)))) s)) (drop 2 f))]
-                         (cond-> f absent (conj [nil absent])))
+                             k (:dispatch (second f))
+                             absent (when (contains? literal k) (some (fn [[v s]] (when (= v (get literal k)) s)) (drop 2 f)))]
+                         (cond (not absent) f
+                               (some #(nil? (first %)) (drop 2 f))
+                               (mapv #(if (and (vector? %) (nil? (first %)))
+                                        [nil [:or [:and [:map [k {:optional true} [:not :any]]] absent] [:and [:map [k :nil]] (second %)]]]
+                                        %)
+                                     f)
+                               :else (conj f [nil absent])))
                 (mapv go f))))]
     (go schema)))
 
@@ -73,7 +87,7 @@
    default or NULL optional, closed map; then the table constraints, see as-insert-sees-it."
   [row registry]
   (let [[_ props & entries] (shape/row-map row)
-        m (into [:map (assoc props :closed true)] (keep insert-entry entries))
+        m (into [:map (assoc props :closed true)] (keep #(insert-entry registry %) entries))
         omitted (omitted-values entries)]
     (if (= :and (first row))
       (into [:and m] (map #(as-insert-sees-it % omitted registry) (drop 2 row)))
@@ -99,6 +113,13 @@
 (def ^:private json-value
   "What a json or jsonb column with no CHECK to shape it generates: small JSON values."
   [:or :string :int :boolean [:map-of {:max 3} :string [:or :string :int]] [:vector {:max 3} [:or :string :int]]])
+
+(defn- in-values
+  "The numbers of a [:pg/check-value [:in :VALUE [...]]], nil for another part."
+  [part]
+  (when (and (vector? part) (= :pg/check-value (first part)))
+    (let [[op v vs] (last part)]
+      (when (and (= :in op) (= :VALUE v) (every? number? vs)) vs))))
 
 (defn- gen-hints
   "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap) for a column
@@ -126,6 +147,10 @@
                 :time/instant {:gen/min (java.time.Instant/parse "2025-01-01T00:00:00Z") :gen/max (java.time.Instant/parse "2025-12-31T23:59:59Z")}
                 :time/local-date-time {:gen/min (java.time.LocalDateTime/parse "2025-01-01T00:00:00") :gen/max (java.time.LocalDateTime/parse "2025-12-31T23:59:59")}
                 :time/local-date {:gen/min (java.time.LocalDate/parse "2025-01-01") :gen/max (java.time.LocalDate/parse "2025-12-31")}
+                ;; PostgreSQL takes offsets up to 15:59:59, java.time up to 18:00
+                :time/offset-time {:gen/schema [:tuple :time/local-time [:enum -5 0 9]]
+                                   :gen/fmap (fn [[t h]] (java.time.OffsetTime/of t (java.time.ZoneOffset/ofHours h)))}
+                :sequential (when (shape/json-types (:pg/type p)) {:gen/schema [:vector {:max 3} json-value]})
                 ;; a type pgmalli cannot write a value of generates NULL; a NOT NULL column of it
                 ;; leaves its table short, with the reason, rather than carrying a value the
                 ;; database refuses
@@ -139,12 +164,19 @@
       numeric-bounds
       (let [[head bounds] numeric-bounds
             head* (if (= 'decimal? head)
-                    ['decimal? {:gen/schema [:pg/numeric (merge {:precision 18 :scale 4} bounds)]}]
+                    ;; at the column's scale: PostgreSQL rounds a finer value, which may then fail the bound
+                    ['decimal? {:gen/schema [:pg/numeric (merge {:precision 18 :scale 4} (some #(when (and (vector? %) (= :pg/numeric (first %))) (second %)) (shape/entries s)) bounds)]}]
                     (assoc head 1 (merge (second head) bounds)))
             i (if (map? (second s)) 2 1)]
         (assoc s i head*))
       (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
       (cond (not (vector? s)) [t hints] (map? (second s)) (assoc s 1 (merge p hints)) :else (into [t hints] (rest s)))
+      ;; a numeric IN (see render) generates one of its values
+      (and (= :and t) (some in-values (shape/entries s)))
+      (shape/merge-props s {:gen/elements (mapv bigdec (some in-values (shape/entries s)))})
+      ;; an :and generates from its type, an array from its element's
+      (and (= :and t) (seq (shape/entries s))) (let [i (if (map? (second s)) 2 1)] (assoc s i (gen-hints (nth s i) key?)))
+      (and (= :vector t) (vector? s)) (assoc s (dec (count s)) (gen-hints (last s) false))
       :else s)))
 
 (defn- with-column-types
@@ -168,7 +200,18 @@
                              key? (or (key-cols k) (:pg/identity (shape/column-props s)))
                              s (if (shape/maybe? s) [:maybe (gen-hints (last s) key?)] (gen-hints s key?))]
                          (if (empty? p) [k s] [k p s])))
-        m (into [:map props] (map hinted) entries)
+        ;; a column a :multi pins to its branches' values (LIST partitions) generates one of them
+        pinned (into {} (for [c (when (= :and (first row)) (drop 2 row))
+                              :when (and (vector? c) (= :multi (first c)))
+                              :let [k (:dispatch (second c))
+                                    branches (drop 2 c)
+                                    vs (remove #{nil :malli.core/default} (map first branches))]
+                              :when (and (seq vs) (some #(= [:malli.core/default [:map [k :nil]]] %) branches))]
+                          [k (vec vs)]))
+        pin (fn [[k & more :as e]] (if-let [vs (pinned k)]
+                                     (let [s (last more)] (conj (pop e) (if (shape/maybe? s) [:maybe (shape/merge-props (last s) {:gen/elements vs})] (shape/merge-props s {:gen/elements vs}))))
+                                     e))
+        m (into [:map props] (map (comp pin hinted)) entries)
         fragment (fn [f] (if (and (vector? f) (= :map (first f)))
                            (let [[head entries] (if (map? (second f)) [(subvec f 0 2) (drop 2 f)] [[:map] (rest f)])]
                              (into head (map hinted) entries))
@@ -180,6 +223,18 @@
    the JVM (babashka falls back to drawing strings and filtering them)."
   (delay (boolean (try (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex) (catch Exception _ nil)))))
 
+(defn- generatable-regex
+  "A [:re ...] test.chuck generates from whose strings match the one given: that one, or the
+   same without a leading (?i) (which test.chuck refuses); nil when there is none, and the
+   strings are drawn and filtered."
+  [part]
+  (let [string-from-regex (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex)]
+    (loop [re (str (last part))]
+      (cond
+        ;; malli drops the anchors before it calls test.chuck
+        (try (string-from-regex (re-pattern (str/replace re #"^\^?(.*?)(\$?)$" "$1"))) true (catch Exception _ false)) [:re re]
+        (str/starts-with? re "(?i)") (recur (subs re 4))))))
+
 (defn- generate-from-part
   "[:and ...] schemas with a part a generator should start from: a regex (test.chuck makes
    strings that match it, where filtering random strings would not) or a reference (an
@@ -188,10 +243,21 @@
   (if (and (vector? f) (= :and (first f)) (not (and (map? (second f)) (some #{:gen/schema :gen/gen :gen/fmap :gen/elements} (keys (second f))))))
     (let [props (when (map? (second f)) (second f))
           parts (shape/entries f)
-          from (or (when @regex-generation? (some #(when (and (vector? %) (= :re (first %))) %) parts))
-                   (some #(when (and (vector? %) (= :ref (first %))) %) parts))]
+          regexes (when @regex-generation? (keep #(when (and (vector? %) (= :re (first %))) (generatable-regex %)) parts))
+          ;; a regex without its (?i) generates only some of the strings: after a reference
+          from (or (some (set parts) regexes)
+                   (some #(when (and (vector? %) (= :ref (first %))) %) parts)
+                   (first regexes))]
       ;; generated from that part first, the other parts filtering: malli's :and generator
       (if from (into [:and (assoc (or props {}) :gen/schema (into [:and from] (remove #{from} parts)))] parts) f))
+    f))
+
+(defn- dispatch-by-key
+  "A :multi dispatching on a column whose key is a string: malli reads a string :dispatch as
+   code, so it gets a function, the key kept as :pg/dispatch (shape/dispatch-key)."
+  [f]
+  (if (and (vector? f) (= :multi (first f)) (string? (:dispatch (second f))))
+    (let [k (:dispatch (second f))] (assoc f 1 (assoc (second f) :dispatch #(get % k) :pg/dispatch k)))
     f))
 
 (defn registry
@@ -203,8 +269,9 @@
             :let [{:keys [pg/table pg/unique pg/foreign-keys]} (second (shape/row-map s))]
             :when (or (not (str/includes? table ".")) (some vector? unique) (some vector? foreign-keys))]
       (error/fail! :pgmalli.error/not-generated (str k " was generated by an older pgmalli; run pgmalli.main generate again") {:given k}))
-    (let [generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) s))])) generated)]
-      (merge base (with-derived (merge base generated)) generated))))
+    (let [generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints s false)))])) generated)]
+      (merge base (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
+                               #(walk/postwalk dispatch-by-key %))))))
 
 (defn columns
   "The [:map ...] of a row or insert schema, without the table-level constraints."

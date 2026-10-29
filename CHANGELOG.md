@@ -66,8 +66,29 @@ All notable changes to this project are documented here. The format follows
   or a generated data map, is an error.
 - A database that cannot be reached, by psql or JDBC, is one line naming host:port/db, with
   the driver's error as the cause.
+- `pgmalli.catalog-fuzz-test`: random schemas through registry, inserts, as-read and datasets against PostgreSQL (`PGMALLI_FUZZ_SEED`, `PGMALLI_FUZZ_SCHEMAS`, `PGMALLI_FUZZ_CASE`).
 
 ### Fixed
+
+- A NULL in a CHECK's `[:or ...]` or `[:multi ...]` leaves the CHECK NULL, which PostgreSQL takes; `a > 5 OR b < 3` refused `{:a nil :b 5}`.
+- A partitioned table whose only partition is DEFAULT takes every row; it took none.
+- Partitions on an identity or generated column leave it to the database; insert rows needed it.
+- A domain over a domain or enum is a reference to it, its CHECKs kept; it was `:any`.
+- Types with quoted names (`"Mixed Case"`) are found; they were `:unknown-type`.
+- Arrays of enums and domains are `[:vector [:ref ...]]`; they were `[:vector :any]`.
+- `inserts` cast enum and domain values to the type as spelt (`CAST(? AS "s"."Mood")`), also under a CHECK; it upper-cased the name, and an array cast went unqualified.
+- `inserts` leave `char(n)` values uncast (`CAST(x AS CHARACTER)` cut them to one character) and cast strings of `inet`, `bit`, `money` and the like, which pgjdbc's `varchar` cannot be written to.
+- `inserts` write a row of defaults alone as `(col) VALUES (DEFAULT)`; it was `VALUES ()`.
+- A column whose literal default its CHECK refuses is required in an insert.
+- `numeric IN (1, 2, 5)` generates from the list and takes `2.0`; nothing was generated.
+- A `~*` regex generates without test.chuck failing on `(?i)`.
+- `timetz` generates offsets PostgreSQL takes; it went past 15:59.
+- A `jsonb_typeof = 'array'` column generates JSON values; it generated characters and sets.
+- Dates and times in domains and arrays generate within 2025; they were unbounded.
+- A bounded `numeric(p, s)` generates at scale `s`; `0.0001` rounded to `0` and failed `> 0`.
+- LIST partition keys generate their partitions' values.
+- `as-read` reads a domain over a date, time or json as the driver returns it.
+- A branch CHECK on a quoted column (`"Mixed Col" = 1 AND ...`) loads; malli read the string `:dispatch` as code.
 
 - A `regoper` column generates `||/`; `+` names several operators and PostgreSQL refused it.
 - `:string` bounds and `length`, `substr`, `left`, `right`, `strpos` count characters, as

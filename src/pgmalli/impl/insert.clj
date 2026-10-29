@@ -6,30 +6,47 @@
             [pgmalli.impl.json :as json]
             [pgmalli.impl.shape :as shape]))
 
-(defn- sql-type
-  "The type an INSERT casts to: the referenced type's qualified name (:pg.ins/mood is ins.mood;
-   :pg/type carries the name without its schema), else :pg/type."
+(defn- ref-type
+  "The type of the schema a [:ref ...] names, as an entity HoneySQL quotes whatever its options
+   (:pg.ins/mood is \"ins\".\"mood\"); nil for another schema."
   [s]
-  (if (and (vector? s) (= :ref (first s)))
-    (let [k (last s) [ns n] (if (keyword? k) [(namespace k) (name k)] (str/split k #"/" 2))]
-      (str (subs ns 3) "." n))
-    (:pg/type (shape/column-props s))))
+  (when (vector? s)
+    (case (first s)
+      :ref (let [k (last s) [ns n] (if (keyword? k) [(namespace k) (name k)] (str/split k #"/" 2))]
+             [:entity (str (subs ns 3) "." n)])
+      ;; CHECKs narrow a type as [:and type ...]
+      :and (ref-type (first (shape/entries s)))
+      nil)))
+
+(def ^:private cast-type
+  ;; character and bit name char(1) and bit(1) in a cast, which cut a longer value
+  {"character" :bpchar "bit" :varbit})
+
+(defn- builtin-cast
+  "The type a string parameter is cast to for a built-in type a string parameter (typed varchar
+   by the driver) cannot be written to; nil for the string types."
+  [type-name]
+  (when (or (shape/opaque-types type-name) (#{"bit" "bit varying"} type-name))
+    (get cast-type type-name (keyword type-name))))
 
 (defn- insert-value
-  "A dataset value in the form an INSERT needs: an enum cast to its type (a string parameter
-   stays text), json written and cast, an array with its element type; anything else as it is."
-  [registry schema v]
+  "A dataset value in the form an INSERT needs: a value of an enum or domain cast to it, a
+   string of a type strings are not cast to implicitly (inet, bit ...) cast to it, json
+   written and cast, an array with its element type; anything else as it is."
+  [schema v]
   (let [s (shape/non-null schema)
         t (:pg/type (shape/column-props s))
-        base (if (and (vector? s) (= :ref (first s))) (get (shape/schemas-of registry) (last s)) s)
-        kind (when (vector? base) (first base))]
+        type-name (shape/type-name (shape/column-props s))]
     (cond (nil? v) nil
-          (= :enum kind) [:cast v (keyword (sql-type s))]
+          (ref-type s) [:cast v (ref-type s)]
           (shape/json-types t) [:cast (json/write v) (keyword t)]
-          (= :vector kind) (let [elem (shape/non-null (last base))
-                                 elem-type (cond (and (vector? elem) (= :ref (first elem))) (sql-type elem)
-                                                 (and t (str/ends-with? t "[]")) (subs t 0 (- (count t) 2)))]
-                             (if elem-type [:array (vec v) (keyword elem-type)] [:array (vec v)]))
+          (and (vector? s) (= :vector (first s)))
+          (if-let [elem (ref-type (shape/non-null (last s)))]
+            (if (seq v)
+              [:array (mapv #(vector :cast % elem) v)]
+              [:array {:select [[[:cast nil elem]]] :where false}])
+            (if type-name [:array (vec v) (get cast-type type-name (keyword type-name))] [:array (vec v)]))
+          (string? v) (if-let [c (builtin-cast type-name)] [:cast v c] v)
           :else v)))
 
 (defn- parents-first
@@ -93,7 +110,8 @@
                  _ (when (seq unknown)
                      (throw (ex-info (str table " rows carry columns the table does not have: " (pr-str (distinct (mapcat val unknown))))
                                      {:table table :rows unknown})))
-                 used (remove generated (distinct (mapcat keys rows)))]]
+                 ;; rows of defaults alone still name a column: VALUES () is no SQL, DEFAULT VALUES one row only
+                 used (or (seq (remove generated (distinct (mapcat keys rows)))) (take 1 (map first entries)))]]
        (cond-> {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))
-                :values (mapv (fn [row] (into {} (for [k used] [k (if (contains? row k) (insert-value registry (get columns k) (get row k)) [:default])]))) rows)}
+                :values (mapv (fn [row] (into {} (for [k used] [k (if (contains? row k) (insert-value (get columns k) (get row k)) [:default])]))) rows)}
            (= :nothing on-conflict) (assoc :on-conflict [] :do-nothing []))))))

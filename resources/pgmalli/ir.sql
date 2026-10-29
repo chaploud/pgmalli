@@ -95,7 +95,8 @@ cons AS (
       UNION ALL
       SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.inhrelid
     )
-    SELECT string_agg('(' || pg_catalog.pg_get_partition_constraintdef(t.inhrelid)
+    -- a DEFAULT partition with no sibling has no constraint: it takes every row
+    SELECT string_agg('(' || COALESCE(pg_catalog.pg_get_partition_constraintdef(t.inhrelid), 'true')
                           || COALESCE((SELECT string_agg(' AND (' || pg_catalog.pg_get_expr(k.conbin, k.conrelid) || ')', '')
                                        FROM pg_catalog.pg_constraint k WHERE k.conrelid = t.inhrelid AND k.contype = 'c' AND k.conislocal), '')
                           || ')', ' OR ') AS clause

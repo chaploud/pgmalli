@@ -4,6 +4,11 @@
             [clojure.test.check.generators :as tcg]
             [malli.core :as m]
             [malli.error :as me]
+            [malli.generator :as mg]
+            [pgmalli.impl.files :as files]
+            [pgmalli.impl.json :as json]
+            [pgmalli.impl.pattern :as p]
+            [pgmalli.impl.registry :as reg]
             [malli.registry]
             malli.experimental.time
             [pgmalli.core :as pgmalli]
@@ -126,3 +131,72 @@
     (is (= (pgmalli/portable registry :pg.sample/users) (pgmalli/portable composite :pg.sample/users)) "portable inlines references through a composite registry")
     (is (= (h/query-schema registry '[id] {:select [:id] :from [:groups]} {:schema "sample"})
            (h/query-schema composite '[id] {:select [:id] :from [:groups]} {:schema "sample"})))))
+
+(def ^:private generated
+  (let [col (fn [n t & {:as more}] (merge {:name n :position 1 :data_type t :is_nullable false} more))
+        check (fn [n c] [n {:name n :type "CHECK" :check_clause (str "CHECK (" c ")")}])
+        reg (pgmalli/registry
+             (files/assemble "public" "x"
+                             (p/facts {:name "public"
+                                       :types {"day" {:kind "DOMAIN" :base_type "date" :not_null false :constraints []}
+                                               "small" {:kind "DOMAIN" :base_type "numeric" :not_null false
+                                                        :constraints [{:name "small_check" :definition "CHECK (VALUE = ANY (ARRAY[1::numeric, 2::numeric, 5::numeric]))"}]}}
+                                       :tables {"t" {:columns [(col "n" "numeric") (col "sm" "small" :type_schema "public") (col "s" "text")
+                                                               (col "tz" "time with time zone") (col "j" "jsonb") (col "d" "day" :type_schema "public")
+                                                               (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric" :precision 6 :scale 2)]
+                                                     :constraints (into {} (remove nil?) [(check "n_check" "n = ANY (ARRAY[1::numeric, 2::numeric, 5::numeric])")
+                                                                            ;; babashka has no test.chuck: a regex is drawn and filtered there, which ^A defeats
+                                                                            (when @reg/regex-generation? (check "s_check" "s ~* '^A'::text"))
+                                                                            (check "j_check" "jsonb_typeof(j) = 'array'::text")
+                                                                            (check "p_check" "p > 0::numeric")])}}})
+                             {}))]
+    {:registry reg :rows (try (vec (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})) (catch Exception e (ex-message e)))}))
+
+(defn- generated-values [k] (let [rows (:rows generated)] (if (string? rows) [rows] (map k rows))))
+
+(deftest a-numeric-in-a-list-generates-from-the-list-and-takes-any-scale
+  (is (every? #{1M 2M 5M} (map #(some-> % .stripTrailingZeros (.setScale 0)) (generated-values :n))) (pr-str (:rows generated)))
+  (is (every? #{1M 2M 5M} (map #(some-> % .stripTrailingZeros (.setScale 0)) (generated-values :sm))))
+  (is (m/validate :pg.public.t/insert (assoc (first (:rows generated)) :n 2.0M :sm 5.00M) {:registry (:registry generated)}) "2.0 = 2 in PostgreSQL"))
+
+(deftest a-case-insensitive-regex-generates-without-test-chuck-failing
+  (when @reg/regex-generation?
+    (is (every? #(re-find #"^[Aa]" %) (generated-values :s)))))
+
+(deftest a-timetz-generates-an-offset-postgresql-takes
+  (is (every? #(<= (Math/abs (.getTotalSeconds (.getOffset ^java.time.OffsetTime %))) (+ (* 15 3600) (* 59 60) 59)) (generated-values :tz))))
+
+(deftest a-json-array-generates-elements-json-carries
+  (is (every? #(and (sequential? %) (json/write %)) (generated-values :j))))
+
+(deftest dates-in-domains-and-arrays-generate-within-2025
+  (is (every? #(= 2025 (.getYear ^java.time.LocalDate %)) (concat (generated-values :d) (mapcat identity (generated-values :ds))))))
+
+(deftest a-domain-over-a-type-the-driver-returns-otherwise-is-read-as-the-driver-returns-it
+  (let [read (pgmalli/as-read (:registry generated) :pg.public/t)
+        row {:n 1M :sm 2M :s "A" :tz (java.util.Date. 0) :j :pgobject :d (java.util.Date. 0) :ds :array :b :pgobject :p 1.5M}]
+    (is (m/validate read row {:registry (:registry generated)}) (pr-str (me/humanize (m/explain read row {:registry (:registry generated)}))))))
+
+(deftest a-column-whose-default-its-check-refuses-is-carried-by-every-insert
+  (let [reg (pgmalli/registry (files/assemble "public" "x" (p/facts {:name "public" :types {}
+                                                                    :tables {"t" {:columns [{:name "b" :position 1 :data_type "smallint" :is_nullable true :default_value "1"}]
+                                                                                  :constraints {"b_check" {:name "b_check" :type "CHECK" :check_clause "CHECK (b IS NULL OR (b <> ALL (ARRAY[1, 2])))"}}}}})
+                                              {}))]
+    (is (not (m/validate :pg.public.t/insert {} {:registry reg})) "left out, b is 1, which the CHECK refuses")
+    (is (m/validate :pg.public.t/insert {:b nil} {:registry reg}))))
+
+(deftest a-branch-on-a-quoted-column-dispatches-on-its-string-key
+  (let [reg (pgmalli/registry (files/assemble "public" "x" (p/facts {:name "public" :types {}
+                                                                    :tables {"t" {:columns [{:name "Mixed Col" :position 1 :data_type "integer" :is_nullable false}
+                                                                                            {:name "b" :position 2 :data_type "integer" :is_nullable false}]
+                                                                                  :constraints {"c" {:name "c" :type "CHECK" :check_clause "CHECK (\"Mixed Col\" = 1 AND b > 0 OR \"Mixed Col\" = 2 AND b < 0)"}}}}})
+                                              {}))]
+    (is (m/validate :pg.public/t {"Mixed Col" 1 :b 1} {:registry reg}))
+    (is (not (m/validate :pg.public/t {"Mixed Col" 1 :b -1} {:registry reg})))
+    (is (= 2 (count (get (tcg/generate (data/dataset-generator reg {:rows 2}) 20 1) "public.t"))))))
+
+(deftest a-bounded-numeric-generates-at-its-scale
+  (is (every? #(and (<= (.scale ^BigDecimal %) 2) (pos? %)) (generated-values :p))))
+
+(deftest a-bit-string-generates-digits-of-its-length
+  (is (every? #(re-matches #"[01]{3}" %) (generated-values :b))))

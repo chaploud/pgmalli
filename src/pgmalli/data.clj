@@ -34,7 +34,7 @@
 (defn inserts
   "HoneySQL INSERT maps for a dataset, one per table, in an order the database accepts:
    parents before the tables referencing them, and within a table rows before the rows
-   referencing them. Enum values are cast to their type, json written and cast, arrays given
+   referencing them. Enum and domain values are cast to their type, json written and cast, arrays given
    their element type; time values are passed as they are (next.jdbc.date-time for the
    java.time ones); a column a row lacks is DEFAULT. A column the table does not have is an
    error. Option :on-conflict :nothing adds ON CONFLICT DO NOTHING, for a database that already

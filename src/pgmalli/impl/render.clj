@@ -88,18 +88,6 @@
   (let [e (x/strip-casts e)]
     (when (or (string? e) (number? e) (boolean? e)) e)))
 
-(defn- default-value
-  "A literal default as a value of the column's schema (malli's :default), or nil when the
-   literal is not one (a date as a string)."
-  [schema lit]
-  (let [base (if (vector? schema) (first schema) schema)]
-    (cond
-      (and (#{:int :pg/integer :pg/smallint} base) (integer? lit)) lit
-      (and (= :double base) (number? lit)) (double lit)
-      (and (= 'decimal? base) (number? lit)) (bigdec lit)
-      (and (#{:string :ref :enum} base) (string? lit)) lit
-      (and (= :boolean base) (boolean? lit)) lit)))
-
 (defn- schema-base
   "The type at the head of a column schema. Facts append bounds as [:and type ...], never
    prepend, so the type stays reachable."
@@ -107,6 +95,18 @@
   (let [head #(if (vector? %) (first %) %)
         b (head schema)]
     (if (and (= :and b) (not (map? (second schema)))) (head (second schema)) b)))
+
+(defn- default-value
+  "A literal default as a value of the column's schema (malli's :default), or nil when the
+   literal is not one (a date as a string)."
+  [schema lit]
+  (let [base (schema-base schema)]
+    (cond
+      (and (#{:int :pg/integer :pg/smallint} base) (integer? lit)) lit
+      (and (= :double base) (number? lit)) (double lit)
+      (and (= 'decimal? base) (number? lit)) (bigdec lit)
+      (and (#{:string :ref :enum} base) (string? lit)) lit
+      (and (= :boolean base) (boolean? lit)) lit)))
 
 ;;; column facts
 
@@ -119,9 +119,11 @@
 
 (defn- apply-fact
   "{:schema :unrendered} after one fact on a column schema."
-  [{:keys [schema unrendered]} {:keys [fact] :as f} schema-name]
+  [{:keys [schema unrendered ref-base]} {:keys [fact] :as f} schema-name]
   (let [base (schema-base schema)
         string-base? (= :string base)
+        ;; a regex holds on a domain over a string as on the string
+        regex-base? (or string-base? (and (= :ref base) (= :string ref-base)))
         number-base? (#{:int :pg/integer :pg/smallint :double} base)
         decimal-base? (= 'decimal? base)
         enum-base? (or string-base? number-base? (#{:ref :boolean} base))
@@ -132,14 +134,21 @@
                       enum-base? (:values f)
                       (= :enum base) (:values f))]
     (case fact
-      (:enum :domain-ref) (kept [:ref (shape/schema-key schema-name (:type-name f))])
+      (:enum :domain-ref) (assoc (kept (cond->> [:ref (shape/schema-key schema-name (:type-name f))] (:array? f) (vector :vector)))
+                                 :ref-base (when (and (= :domain-ref fact) (not (:array? f))) (base-type (:base f))))
       ;; numeric(p, s): rounded to s places, then fewer than p - s digits before the point
       :numeric (kept (if (and decimal-base? (:precision f))
                        [:and schema [:pg/numeric {:precision (:precision f) :scale (or (:scale f) 0)}]]
                        schema))
-      :in-set (cond (nil? members) as-is
+      ;; a numeric equals one of another scale (2.0 = 2), which an :enum of BigDecimals refuses
+      :in-set (cond (and decimal-base? (every? number? (:values f)))
+                    (kept (conj (if (and (vector? schema) (= :and (first schema))) schema [:and schema])
+                                [:pg/check-value {:pg/constraint (:constraint f) :error/message (:constraint f)} [:in :VALUE (vec (:values f))]]))
+                    (nil? members) as-is
                     ;; a second IN on the same column intersects
                     (= :enum base) (let [vs (filter (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
+                    ;; the type stays: an INSERT casts to it, and a domain's CHECKs hold too
+                    (= :ref base) (kept [:and schema (into [:enum] members)])
                     :else (kept (into [:enum] members)))
       :not-in-set (cond (nil? members) as-is
                         (= :enum base) (let [vs (remove (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
@@ -178,13 +187,13 @@
                      "array" (kept [:sequential :any])
                      as-is)
                    as-is)
-      :regex (if-let [re (when string-base? (ev/java-regex (:re f)))]
+      :regex (if-let [re (when regex-base? (ev/java-regex (:re f)))]
                (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") re)]])
                as-is)
-      :like (if string-base?
+      :like (if regex-base?
               (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") (ev/like-regex (:pattern f)))]])
               as-is)
-      :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered}
+      :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered :ref-base ref-base}
                                             (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f))
                                             schema-name)]
                       (if (= (:unrendered inner) unrendered) (kept (:schema inner)) as-is))
@@ -207,8 +216,9 @@
               (cond
                 (and (map? ov) (:skip ov)) (update acc :skipped conj f)
                 ov (-> acc (assoc :schema [:and schema ov]) (update :applied conj (:constraint f)))
-                :else (let [{s :schema un :unrendered} (apply-fact acc f schema-name)]
+                :else (let [{s :schema un :unrendered rb :ref-base} (apply-fact acc f schema-name)]
                         (cond-> (assoc acc :schema s :unrendered un)
+                          rb (assoc :ref-base rb)
                           (and (= un unrendered) (:constraint f)) (update :applied conj (:constraint f)))))))
           {:schema base :unrendered [] :skipped [] :applied []}
           (sort-by (juxt (comp fact-order :fact) :constraint) facts)))
@@ -255,7 +265,9 @@
   (let [parts (for [[col fs] (sort-by key (group-by :column facts))
                     :let [base (if (some (comp #{:null} :fact) fs) :nil (column-base schema-name (get columns col) by-column overrides))
                           r (fold-facts schema-name base (remove (comp #{:null} :fact) fs) overrides)]]
-                (assoc r :entry [(shape/ident-key col) (with-props (:schema r) {:error/message constraint})]))]
+                ;; a column pattern on NULL is NULL, which leaves its alternative not false
+                (assoc r :entry [(shape/ident-key col) (cond-> (with-props (:schema r) {:error/message constraint})
+                                                         (and (:nullable? (get columns col)) (not (some (comp #{:null :not-null} :fact) fs))) (->> (vector :maybe)))]))]
     {:schema (into [:map] (map :entry parts))
      :unrendered (mapcat :unrendered parts)
      :skipped (mapcat :skipped parts)}))
@@ -268,6 +280,11 @@
                               (let [{:keys [min max]} (second f)]
                                 (and (number? min) (number? max) (> min max)))))
                  (tree-seq coll? seq fragment))))
+
+(defn- unreachable?
+  "Whether a fragment can match no row: a column it holds non-NULL is impossible?."
+  [fragment]
+  (boolean (some #(let [[_ _ s] (shape/entry-parts %)] (and (not (shape/maybe? s)) (impossible? s))) (shape/entries fragment))))
 
 (defn- pg-check [{:keys [constraint expr]}]
   [:pg/check {:pg/constraint constraint :error/message constraint} expr])
@@ -287,21 +304,25 @@
                           bs (for [b branches, v (if (:null b) [nil] (:values b))] (assoc (frag (:facts b)) :value v))
                           d (when default (frag default))]
                       (whole {:schema (into [:multi {:dispatch (shape/ident-key dispatch) :error/message constraint}]
-                                            ;; two alternatives pinning the same value: either may hold; without a
-                                            ;; branch of its own, a value passes the CHECK only by being NULL
-                                            (concat (for [[v group] (group-by :value bs)]
+                                            ;; two alternatives pinning the same value: either may hold; a NULL
+                                            ;; leaves every alternative NULL or false, so one of them is not false;
+                                            ;; another value without a branch of its own fails
+                                            (concat (when (:nullable? (get columns dispatch))
+                                                      [[nil (let [all (distinct (map :schema (cond-> (vec bs) d (conj d))))]
+                                                              (if (= 1 (count all)) (first all) (into [:or] all)))]])
+                                                    (for [[v group] (group-by :value (remove (comp nil? :value) bs))]
                                                       [v (if (= 1 (count group)) (:schema (first group)) (into [:or] (map :schema group)))])
                                                     [[:malli.core/default (if d (:schema d) [:map [(shape/ident-key dispatch) :nil]])]]))
                               :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
                               :skipped (mapcat :skipped (cond-> bs d (conj d)))}))
       ;; an alternative no row can match is left out (a generator would look for one forever)
       :or-check (let [all (map frag (:alternatives f))
-                      alts (remove (comp impossible? :schema) all)
+                      alts (remove (comp unreachable? :schema) all)
                       partitions? (str/ends-with? constraint " (partitions)")]
                   (assoc (whole {:schema (if (seq alts) (into [:or {:error/message constraint}] (map :schema alts)) [:not {:error/message constraint} :any])
                                  :unrendered (mapcat :unrendered alts)
                                  :skipped (mapcat :skipped alts)})
-                         :diagnostics (for [[i a] (map-indexed vector all) :when (impossible? (:schema a))]
+                         :diagnostics (for [[i a] (map-indexed vector all) :when (unreachable? (:schema a))]
                                         {:kind (if partitions? :unreachable-partition :unreachable-alternative) :confidence :proven :severity :warning
                                          :constraint constraint :alternative i
                                          :message (if partitions?

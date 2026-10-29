@@ -92,12 +92,13 @@ dataset with `bytea` values is not `=` to itself read back, though it inserts th
 
 ```clojure
 (first (sql/format (second (data/inserts registry sample))))
-;; => "INSERT INTO public.users (closed_at, created_at, email, group_id, id, nick, status) OVERRIDING SYSTEM VALUE VALUES (?, ?, ?, ?, ?, ?, CAST(? AS PUBLIC.USER_STATUS)), (?, ?, ?, ?, ?, ?, CAST(? AS PUBLIC.USER_STATUS))"
+;; => "INSERT INTO public.users (closed_at, created_at, email, group_id, id, nick, status) OVERRIDING SYSTEM VALUE VALUES (?, ?, ?, ?, ?, ?, CAST(? AS \"public\".\"user_status\")), (?, ?, ?, ?, ?, ?, CAST(? AS \"public\".\"user_status\"))"
 ```
 
-Enum values are cast to their type, json written and cast, and arrays given their element
-type. An identity ALWAYS column gets `OVERRIDING SYSTEM VALUE`. A column a row lacks is
-`DEFAULT`.
+Enum and domain values are cast to their type, quoted as it is spelt; a string of a type the
+driver's text parameter cannot be written to (`inet`, `bit`, `money` ...) is cast to it; json
+is written and cast, and arrays given their element type. An identity ALWAYS column gets
+`OVERRIDING SYSTEM VALUE`. A column a row lacks is `DEFAULT`.
 
 Time values are passed as they are. Require `next.jdbc.date-time` so the driver takes
 `java.time`:

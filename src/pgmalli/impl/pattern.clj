@@ -11,8 +11,8 @@
      :view         a view or materialized view          {:materialized?}; its columns follow, all nullable
      :column       a column                              {:type :position :nullable? :default :identity :generated}
                    :identity is :always, :default or :serial (a nextval default); :generated is the expression
-     :enum         column of an enum type                {:type-name :values}
-     :domain-ref   column of a domain type               {:type-name :base}
+     :enum         column of an enum type (or an array of it) {:type-name :values :array?}
+     :domain-ref   column of a domain type (or an array of it) {:type-name :base (the type under its domains) :array?}
      :unknown-type type outside the mapping table (rendered as :any) {:type}
      :max-length   varchar(n)                            {:max}
      :numeric      numeric(p,s)                          {:precision :scale}
@@ -31,7 +31,8 @@
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
                                                            :index? (from a unique index, not a constraint)}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
-     :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE)}
+     :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE;
+                                                           :enum or :domain-ref for a base type of the schema)}
      :domain-check CHECK of a domain that matched no pattern {:type-name :constraint :expr :valid?}
      :branch-check CHECK of the form col = v AND ... OR col = w AND ...
                                                           {:dispatch :branches [{:values :facts} or {:null true :facts}] :default}
@@ -243,13 +244,34 @@
   (try {:expr (x/check-clause s)}
        (catch Exception e {:error (or (ex-message e) (str (class e)))})))
 
+(defn- type-ident
+  "[name array?] of a type as format_type prints it: the name the catalog keys it by, a quoted
+   one unquoted, the schema of one outside the search path dropped (\"Mixed Case\"[] -> [\"Mixed Case\" true])."
+  [data-type]
+  (let [[_ t brackets] (re-matches #"(.*?)((?:\[\])*)" data-type)]
+    [(if-let [[_ quoted] (re-matches #"(?:.*\.)?\"((?:[^\"]|\"\")*)\"" t)]
+       (str/replace quoted "\"\"" "\"")
+       (str/replace t #"^[^.]+\." ""))
+     (boolean (seq brackets))]))
+
+(defn- type-ref
+  "The :enum or :domain-ref fact of a type the schema defines (nil for another), :array? when
+   the column holds an array of it; a domain's :base is the type under all its domains."
+  [base ident array? enums domains]
+  (cond-> (cond (contains? enums ident) (merge base {:fact :enum :type-name ident :values (get enums ident)})
+                (contains? domains ident) (merge base {:fact :domain-ref :type-name ident :base (:root (get domains ident))}))
+    array? (some-> (assoc :array? true))))
+
 (defn- column-facts [base {cname :name :keys [data_type type_schema is_nullable default_value max_length precision scale identity generated_expr position]} enums domains]
   (let [type-name (str/replace data_type #"^[^.]+\." "")
         elem-type (str/replace type-name #"\[\]$" "")
+        [ident array?] (type-ident data_type)
         builtin? (or (nil? type_schema) (= "pg_catalog" type_schema))
         base (assoc base :column cname)
-        domain (get domains type-name)
-        mapped? (or (contains? enums type-name) (contains? domains type-name) (and builtin? (or (known-types elem-type) (shape/opaque-types elem-type))))
+        ;; an array of a domain takes neither its NOT NULL nor its DEFAULT
+        domain (when-not array? (get domains ident))
+        ref-fact (type-ref base ident array? enums domains)
+        mapped? (or ref-fact (and builtin? (or (known-types elem-type) (shape/opaque-types elem-type))))
         char-type? (#{"varchar" "character varying" "char" "character" "bpchar"} elem-type)
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
         default (cond default_value (parsed base default_value)
@@ -269,8 +291,7 @@
       (:unparsed default) (conj (:unparsed default))
       (:unparsed generated) (conj (:unparsed generated))
       range-check (conj range-check)
-      (contains? enums type-name) (conj (merge base {:fact :enum :type-name type-name :values (get enums type-name)}))
-      domain (conj (merge base {:fact :domain-ref :type-name type-name :base (:base domain)}))
+      ref-fact (conj ref-fact)
       (not mapped?) (conj (merge base {:fact :unknown-type :type data_type}))
       (and max_length char-type?) (conj (merge base {:fact :max-length :max max_length}))
       ;; bit(n) is exactly n digits, bit varying(n) at most n
@@ -292,8 +313,10 @@
 
 (defn- domain-facts
   "The :domain fact, then a :domain-check (or :unparsed) for every CHECK that matched no pattern."
-  [schema-name [tname {:keys [base_type not_null default constraints]}]]
+  [schema-name enums roots [tname {:keys [base_type not_null default constraints]}]]
   (let [base {:schema schema-name :type-name tname}
+        ;; over an enum or a domain of the schema: what that type holds, its CHECKs included
+        over (some-> (type-ref {} (first (type-ident base_type)) false enums roots) (select-keys [:fact :type-name :base]))
         checks (for [{cname :name :keys [definition is_valid]} constraints
                      :let [{:keys [expr error]} (try-clause definition)
                            ;; NOT VALID: existing values may violate it, so it is reported, not applied
@@ -308,7 +331,7 @@
                      [_ n] (re-find #"^(?:character varying|character|varchar|bpchar|char)\((\d+)\)" base_type)]
                  (cond p [(merge base {:fact :numeric :precision (parse-long p) :scale (if s (parse-long s) 0)})]
                        n [(merge base {:fact :max-length :max (parse-long n)})]))]
-    (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (concat typmod (mapcat :facts checks)))})
+    (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (concat (some-> over vector) typmod (mapcat :facts checks)))})
              (contains? dflt :expr) (assoc :default (:expr dflt)))]
           (concat (keep :check checks) (some-> (:unparsed dflt) vector)))))
 
@@ -354,8 +377,14 @@
   [schema]
   (let [schema-name (:name schema)
         enums (into (sorted-map) (keep (fn [[n t]] (when (= "ENUM" (:kind t)) [n (vec (:enum_values t))])) (:types schema)))
-        domain-facts* (mapcat #(domain-facts schema-name %) (sort-by key (filter (comp #{"DOMAIN"} :kind val) (:types schema))))
-        domains (into {} (for [f domain-facts* :when (= :domain (:fact f))] [(:type-name f) (select-keys f [:base :not-null? :default])]))]
+        domain-types (sort-by key (filter (comp #{"DOMAIN"} :kind val) (:types schema)))
+        roots (into {} (for [[n] domain-types]
+                         [n {:root (loop [b (get-in schema [:types n :base_type])]
+                                     (let [[i] (type-ident b)] (if (= "DOMAIN" (get-in schema [:types i :kind])) (recur (get-in schema [:types i :base_type])) b)))}]))
+        domain-facts* (mapcat #(domain-facts schema-name enums roots %) domain-types)
+        declared (into {} (for [f domain-facts* :when (= :domain (:fact f))] [(:type-name f) (merge (select-keys f [:base :not-null? :default]) (get roots (:type-name f)))]))
+        ;; a domain over a domain is NOT NULL when a domain under it is
+        domains (update-vals declared (fn [d] (assoc d :not-null? (boolean (some :not-null? (take-while some? (iterate #(get declared (first (type-ident (:base %)))) d)))))))]
     (vec
      (concat
       (for [[n vs] enums] {:fact :enum-type :schema schema-name :type-name n :values vs})
@@ -377,8 +406,8 @@
                                 ;; a domain on a generated column checks the expression's value
                                 (for [c (:columns t)
                                       :let [expr (get generated (keyword (:name c)))
-                                            type-name (str/replace (:data_type c) #"^[^.]+\." "")]
-                                      :when (and expr (contains? domains type-name))
+                                            [type-name array?] (type-ident (:data_type c))]
+                                      :when (and expr (not array?) (contains? domains type-name))
                                       k (get-in schema [:types type-name :constraints])
                                       f (check-facts base {:name (str (:name c) " " (:name k)) :check_clause (:definition k) :is_valid (:is_valid k true)}
                                                      {:VALUE expr} #{})]

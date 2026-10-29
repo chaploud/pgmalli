@@ -4,6 +4,7 @@
             clojure.test.check.generators
             honey.sql
             [malli.core :as m]
+            [malli.generator :as mg]
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
@@ -175,3 +176,50 @@
       (is (nil? (:stale (generate/check config {:db? false}))) "without the database, only the files")
       (let [data (files/read-edn (files/path-for config "chk"))]
         (is (= [:schema :database-version :diagnostics :registry :unrendered :skipped] (keys data)) "read from the top: what it is, what deserves a look, the schemas")))))
+
+(defn- registry-of [schema ddl]
+  (exec-sql! ddl)
+  (let [data (files/from-database {:db *db*} schema)]
+    [(pgmalli/registry data) data]))
+
+(deftest a-partitioned-table-whose-only-partition-is-default-takes-every-row
+  (when *db*
+    (let [[reg] (registry-of "pdef" "CREATE SCHEMA pdef;
+                                     CREATE TABLE pdef.l (id int, x int) PARTITION BY LIST (id); CREATE TABLE pdef.l1 PARTITION OF pdef.l DEFAULT;
+                                     CREATE TABLE pdef.r (id int, x int) PARTITION BY RANGE (id); CREATE TABLE pdef.r1 PARTITION OF pdef.r DEFAULT;")]
+      (is (m/validate :pg.pdef.l/insert {:id 1 :x 2} {:registry reg}))
+      (is (m/validate :pg.pdef.r/insert {:id nil} {:registry reg})))))
+
+(deftest a-partition-key-the-database-writes-is-left-to-it
+  (when *db*
+    (let [[reg] (registry-of "pid" "CREATE SCHEMA pid;
+                                    CREATE TABLE pid.p (id bigint GENERATED ALWAYS AS IDENTITY, x int) PARTITION BY RANGE (id);
+                                    CREATE TABLE pid.p1 PARTITION OF pid.p FOR VALUES FROM (MINVALUE) TO (100);
+                                    CREATE TABLE pid.p2 PARTITION OF pid.p FOR VALUES FROM (100) TO (MAXVALUE);")]
+      (is (m/validate :pg.pid.p/insert {:x 1} {:registry reg}))
+      (is (some? (mg/generate :pg.pid.p/insert {:registry reg :seed 1}))))))
+
+(deftest types-of-the-schema-are-found-by-any-name-in-arrays-and-under-domains
+  (when *db*
+    (let [[reg data] (registry-of "tn" "CREATE SCHEMA tn;
+                                        CREATE DOMAIN tn.d0 AS varchar(10) CHECK (length(VALUE) > 1); CREATE DOMAIN tn.d1 AS tn.d0;
+                                        CREATE TYPE tn.\"Mixed Case\" AS ENUM ('a'); CREATE TYPE tn.\"Mood\" AS ENUM ('ok', 'bad');
+                                        CREATE TABLE tn.t (d tn.d1, mc tn.\"Mixed Case\", ma tn.\"Mood\"[], da tn.d0[]);")
+          ok? #(m/validate :pg.tn/t (merge {:d nil :mc nil :ma nil :da nil} %) {:registry reg})]
+      (is (empty? (:unrendered data)))
+      (is (ok? {:d "ab" :mc "a" :ma ["ok" "bad"] :da ["xy"]}))
+      (is (not (ok? {:d "a"})) "a domain over a domain keeps the inner domain's CHECK")
+      (is (not (ok? {:mc "b"})))
+      (is (not (ok? {:ma ["nope"]})) "an array of an enum holds its labels")
+      (is (not (ok? {:da ["x"]})) "an array of a domain holds its values"))))
+
+(deftest inserts-name-the-types-of-the-schema-as-they-are-spelt
+  (when *db*
+    (let [[reg] (registry-of "tq" "CREATE SCHEMA tq; CREATE TYPE tq.\"MixedE\" AS ENUM ('a', 'b'); CREATE DOMAIN tq.\"Dom\" AS int CHECK (VALUE > 0);
+                                   CREATE TABLE tq.t (k int PRIMARY KEY, e tq.\"MixedE\" NOT NULL, ea tq.\"MixedE\"[], de tq.\"MixedE\"[], d tq.\"Dom\", da tq.\"Dom\"[], c char(3));
+                                   CREATE TABLE tq.e (id serial PRIMARY KEY);")
+          rows {"tq.t" [{:k 1 :e "b" :ea ["a" "b"] :de [] :d 1 :da [2] :c "bb"}] "tq.e" [{} {}]}]
+      (exec-sql! (str (str/join ";\n" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg rows))) ";\n"
+                      "DO $$ BEGIN IF (SELECT c FROM tq.t) <> 'bb' THEN RAISE EXCEPTION 'char(3) cut'; END IF;"
+                      " IF (SELECT count(*) FROM tq.e) <> 2 THEN RAISE EXCEPTION 'rows of defaults missing'; END IF; END $$;"))
+      (is true "every INSERT ran: quoted types, arrays of them, empty arrays, char(n) whole, rows of defaults"))))

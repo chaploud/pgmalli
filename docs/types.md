@@ -63,7 +63,8 @@ database's spelling.
 | PostgreSQL | malli |
 |---|---|
 | NOT NULL | no `[:maybe ...]` |
-| a column of an enum or domain type | `[:ref :pg.<schema>/<type>]` |
+| a column of an enum or domain type (an array of one) | `[:ref :pg.<schema>/<type>]` (`[:vector [:ref ...]]`) |
+| a domain over an enum or domain | `[:ref ...]` to it, with its own CHECKs |
 | `smallint`, `integer` | `:pg/smallint`, `:pg/integer` (bounded to the type's range) |
 | `bigint` | `:int` |
 | `numeric(p, s)` | `[:and decimal? [:pg/numeric {:precision p :scale s}]]` |
@@ -88,13 +89,14 @@ do; malli's own `:string`, in `portable` output, counts UTF-16 units.
 `p - s` digits before the point. `s` may be negative or larger than `p`, as PostgreSQL allows.
 
 The types without a malli counterpart generate from a fixed list of literals PostgreSQL
-accepts.
+accepts. Dates and times generate within 2025 (in domains and arrays too), `timetz` offsets
+within what PostgreSQL takes, a `jsonb_typeof = 'array'` column an array of JSON values.
 
 ## CHECK constraints
 
 | CHECK | malli |
 |---|---|
-| `col IN (...)`, `col = 'x'` | `[:enum ...]` |
+| `col IN (...)`, `col = 'x'` | `[:enum ...]`; `[:and [:ref ...] [:enum ...]]` on an enum or domain; `[:pg/check-value [:in :VALUE [...]]]` on a `numeric`, which equals `2.0` to `2` |
 | `col NOT IN (...)`, `col <> 'x'` | `[:and <type> [:not [:enum ...]]]` |
 | `col >= a AND col <= b`, `BETWEEN`, one-sided bounds | `{:min a :max b}`; an exclusive bound as `[:> a]` |
 | `length(trim(col)) > 0` | `[:and [:string {:min 1}] [:re "[^ ]"]]` |
@@ -109,6 +111,9 @@ accepts.
 | patterns joined with `AND` | each pattern |
 | `status = 'a' AND ... OR status = 'b' AND ...` | `[:multi {:dispatch :status} ...]` |
 | other ORs of patterns | `[:or [:map ...] [:map ...]]` |
+
+A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a nullable column takes
+`[:maybe ...]`, and a NULL dispatch value takes any branch.
 | any other CHECK (`likes <= views`, arithmetic, `CASE`, jsonb operators) | `[:pg/check expr]` |
 | a domain CHECK no pattern covers | `[:pg/check-value expr]`, `VALUE` as `:VALUE` |
 | `NOT ENFORCED` (PostgreSQL 18) | nothing; listed in `:diagnostics` |
@@ -122,7 +127,8 @@ named `<table> (partitions)`: the OR of its partitions' bounds.
 > from before it may fail; skip the CHECK with an override if such rows must pass.
 
 Strings are generated from a regex on the JVM when `com.gfredericks/test.chuck` is on the
-classpath. Without it, and on babashka, strings are drawn and filtered.
+classpath (a `(?i)` regex, which test.chuck refuses, without the flag). Without it, and on
+babashka, strings are drawn and filtered.
 
 ## How `:pg/check` evaluates
 

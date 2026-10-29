@@ -130,7 +130,7 @@
                                                                   "CHECK (kind = 'a'::text AND since = '2020-01-01'::date OR kind = 'b'::text AND since IS NULL)"
                                                                   "CHECK (since >= '2019-01-01'::date)")))]
     (is (= [:multi {:dispatch :kind :error/message "k0"}
-            ["a" [:map [:tenant [:enum {:error/message "k0"} #uuid "1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"]]]]
+            ["a" [:map [:tenant [:maybe [:enum {:error/message "k0"} #uuid "1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"]]]]]
             ["b" [:map [:tenant [:nil {:error/message "k0"}]]]]
             [:malli.core/default [:map [:kind :nil]]]]
            (nth (:pg.public/t registry) 2))
@@ -287,13 +287,13 @@
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}}}}}))
         reg (registry-with registry)]
     (is (= [:multi {:dispatch :kind :error/message "k"}
-            [nil [:map [:note [:nil {:error/message "k"}]]]]
+            [nil [:or [:map [:note [:nil {:error/message "k"}]]] [:map [:note [:string {:error/message "k"}]]]]]
             ["a" [:map [:note [:string {:error/message "k"}]]]]
             [:malli.core/default [:map [:kind :nil]]]]
            (nth (:pg.public/t registry) 2))
-        "a branch on the column being NULL dispatches on nil; a value with no branch fails the CHECK")
+        "a NULL dispatches on nil to every branch (kind = 'a' is NULL there, not false); a value with no branch fails the CHECK")
     (is (m/validate :pg.public/t {:kind nil :note nil :at nil :tz nil} {:registry reg}))
-    (is (not (m/validate :pg.public/t {:kind nil :note "x" :at nil :tz nil} {:registry reg})))
+    (is (m/validate :pg.public/t {:kind nil :note "x" :at nil :tz nil} {:registry reg}) "NULL AND true is NULL: PostgreSQL takes it")
     (is (not (m/validate :pg.public/t {:kind "b" :note nil :at nil :tz nil} {:registry reg})) "PostgreSQL rejects it too: the OR is false")
     (is (= [:maybe [:time/local-time {:pg/type "time without time zone"}]] (get-in registry [:pg.public/t 1 2 1])))
     (is (= [:maybe [:time/offset-time {:pg/type "time with time zone"}]] (get-in registry [:pg.public/t 1 5 1])))
@@ -521,3 +521,20 @@
     (is (= [:re {:pg/type "inet"} "^[0-9.]+$"] (get-in registry [:pg.public/t 2 1])) "every inet column is what the override says")
     (is (= [:maybe [:vector {:pg/type "inet[]"} :any]] (get-in registry [:pg.public/t 3 1])) "arrays keep their element type as it is")
     (is (empty? unrendered))))
+
+(deftest a-null-leaves-an-alternative-null-and-the-check-not-false
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable true}
+                                                                         {:name "b" :position 2 :data_type "integer" :is_nullable true}]
+                                                               :constraints {"t_check" {:name "t_check" :type "CHECK" :check_clause "CHECK (a > 5 OR b < 3)"}}}
+                                                          "u" {:columns [{:name "u" :position 1 :data_type "integer" :is_nullable true}
+                                                                         {:name "b" :position 2 :data_type "integer" :is_nullable true}]
+                                                               :constraints {"u_check" {:name "u_check" :type "CHECK" :check_clause "CHECK (u = 1 AND b > 0 OR u = 2 AND b < 0)"}}}}}))
+        reg (registry-with registry)
+        ok? #(m/validate %1 %2 {:registry reg})]
+    (is (ok? :pg.public/t {:a nil :b 5}) "NULL OR false is NULL, which PostgreSQL takes")
+    (is (not (ok? :pg.public/t {:a 1 :b 5})))
+    (is (ok? :pg.public/u {:u 1 :b nil}) "true AND NULL is NULL")
+    (is (ok? :pg.public/u {:u nil :b 1}) "a NULL dispatch passes when an alternative is not false")
+    (is (not (ok? :pg.public/u {:u nil :b 0})) "and fails when every alternative is false")
+    (is (not (ok? :pg.public/u {:u 3 :b 1})))))

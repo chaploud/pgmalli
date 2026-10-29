@@ -22,6 +22,7 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.impl.files :as files]
+            [pgmalli.pipeline :as pipeline :refer [try-step]]
             [pgmalli.test-db :as db]))
 
 (def ^:private statement-timeout "20000")
@@ -46,14 +47,6 @@
   (->> (p/sh ["docker" "exec" db/*container* "psql" "-X" "-A" "-t" "-U" "postgres" "-d" dbname "-c"
               "SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' ORDER BY 1"])
        :out str/split-lines (remove str/blank?)))
-
-(defn- try-step
-  "[value finding]: the step's value, or a finding of kind :error naming the step."
-  [step f]
-  (try [(f) nil]
-       (catch Throwable e
-         [nil {:kind :error :step step :message (ex-message e) :class (.getName (class e))
-               :data (let [d (pr-str (ex-data e))] (subs d 0 (min 1200 (count d))))}])))
 
 (defn- inserts-round-trip
   "Findings from loading a generated dataset back into the database: one per statement the
@@ -95,19 +88,13 @@
         [data e1] (try-step :generate #(files/from-database config schema))]
     (if e1
       [e1]
-      (let [facts-findings (concat (for [f (:unrendered data)]
-                                     (if (= :unparsed (:fact f))
-                                       {:kind :unparsed :table (:table f) :type-name (:type-name f) :column (:column f) :constraint (:constraint f) :input (:input f) :error (:error f)}
-                                       (if (= :unknown-type (:fact f))
-                                         {:kind :unknown-type :table (:table f) :column (:column f) :type (:type f)}
-                                         {:kind :unrendered :table (:table f) :type-name (:type-name f) :column (:column f) :constraint (:constraint f) :fact (:fact f) :expr (:expr f)}))))
+      (let [facts-findings (pipeline/catalog-findings data)
             [_ e2] (try-step :edn #(files/edn-string data))
             [registry e3] (when-not e2 (try-step :load #(pgmalli/registry data)))
-            tables (when registry (filter #(and (keyword? %) (= "pg" (subs (namespace %) 0 2)) (not (str/ends-with? (namespace %) "insert"))) (keys (:registry data))))
+            tables (when registry (pipeline/row-names data))
             [dataset e4] (when (and registry (seq tables))
                            (try-step :dataset #(tcg/generate (data/dataset-generator registry {:rows 3}) 20 7)))
-            short (for [[t {:keys [wanted got reasons]}] (some-> dataset meta :pgmalli/short)]
-                    {:kind :short :table t :wanted wanted :got got :reasons reasons})
+            short (pipeline/short-findings dataset)
             rejected (when dataset (inserts-round-trip dbname registry dataset))]
         (concat facts-findings (remove nil? [e2 e3 e4]) short rejected)))))
 

@@ -154,7 +154,7 @@
                 (case (first part)
                   ;; a row whose dispatch value has no branch is moved to a branch (the default only
                   ;; passes a NULL dispatch, which a NOT NULL column cannot hold)
-                  :multi (let [dk (:dispatch (second part))
+                  :multi (let [dk (shape/dispatch-key (second part))
                                branches (remove #(= :malli.core/default (first %)) (drop 2 part))
                                hit (some (fn [[v s]] (when (= v (get row dk)) s)) branches)
                                [v frag] (if hit [(get row dk) hit] (when (seq branches) (nth branches (mod (hash [seed i]) (count branches)))))

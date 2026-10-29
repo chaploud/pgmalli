@@ -122,6 +122,12 @@
     (keyword (str (namespace row-name) "." (name row-name)) suffix)
     (str (str/replace-first row-name "/" ".") "/" suffix)))
 
+(defn dispatch-key
+  "The column a :multi's properties dispatch on: :dispatch, or :pg/dispatch when the registry
+   gave a string key a function."
+  [props]
+  (or (:pg/dispatch props) (:dispatch props)))
+
 (defn plain?
   "Whether an identifier needs no quoting, so it can be a keyword."
   [s]
@@ -183,9 +189,11 @@
         :else [s p]))
 
 (defn without-gen
-  "Schema data without the generation hints the registry added when it was loaded."
+  "Schema data without what the registry added when it was loaded: generation hints, the
+   function a string :dispatch became."
   [schema]
-  (walk/postwalk (fn [f] (cond (map? f) (dissoc f :gen/min :gen/max :gen/schema :gen/elements :gen/fmap)
+  (walk/postwalk (fn [f] (cond (map? f) (cond-> (dissoc f :gen/min :gen/max :gen/schema :gen/elements :gen/fmap :pg/dispatch)
+                                          (:pg/dispatch f) (assoc :dispatch (:pg/dispatch f)))
                                ;; a property map the hints emptied goes too
                                (and (vector? f) (map? (second f)) (empty? (second f)) (not (#{:map :enum} (first f))))
                                (if (= 2 (count f)) (first f) (into [(first f)] (drop 2 f)))

@@ -14,7 +14,7 @@
         stmts (data/inserts registry ds)
         by-table (into {} (map (juxt #(let [i (:insert-into %)] (if (vector? i) (last i) i)) identity)) stmts)]
     (is (= [:sample.groups [{:overriding-value :system} :sample.users]] (map :insert-into stmts)) "parents first; identity columns kept")
-    (is (every? #(and (vector? %) (= [:cast :sample.mood] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
+    (is (every? #(and (vector? %) (= [:cast [:entity "sample.mood"]] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
     (is (not-any? #(contains? % :nick_upper) (:values (by-table :sample.users))) "generated columns are left out")
     (is (= [[{:overriding-value :system} :sample.users]] (map :insert-into (data/inserts registry (select-keys ds ["sample.users"]))))
         "a parent left out is already in the database")
@@ -49,3 +49,24 @@
       "thrown by the call, not on realizing the result")
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dataset holds tables the registry does not"
                         (data/inserts registry {"sample.nope" [{:id 1}]}))))
+
+(def ^:private typed
+  (pgmalli/registry {:database-version "x"
+                     :registry {:pg.public/t [:map {:pg/table "public.t"}
+                                              [:ip [:maybe [:any {:pg/type "inet"}]]]
+                                              [:b [:maybe [:string {:pg/type "bit" :min 3 :max 3}]]]
+                                              [:v [:maybe [:string {:pg/type "bit varying" :max 4}]]]
+                                              [:c [:maybe [:enum {:pg/type "character"} "a" "bb"]]]
+                                              [:ca [:maybe [:vector {:pg/type "character[]"} :string]]]
+                                              [:s [:maybe [:string {:pg/type "text"}]]]]
+                                :pg.public/e [:map {:pg/table "public.e"} [:id [:int {:pg/type "integer" :pg/default [:nextval "e_id_seq"]}]]]}}))
+
+(deftest a-string-of-a-type-a-string-parameter-cannot-be-written-to-is-cast-to-it
+  (is (= [{:ip [:cast "10.0.0.1" :inet] :b [:cast "101" :varbit] :v [:cast "1" (keyword "bit varying")] :s "x"}]
+         (:values (first (data/inserts typed {"public.t" [{:ip "10.0.0.1" :b "101" :v "1" :s "x"}]}))))))
+
+(deftest a-char-n-value-is-not-cut-to-one-character
+  (is (= [{:c "bb" :ca [:array ["bb"] :bpchar]}] (:values (first (data/inserts typed {"public.t" [{:c "bb" :ca ["bb"]}]}))))))
+
+(deftest rows-of-defaults-alone-name-a-column-as-default
+  (is (= ["INSERT INTO public.e (id) VALUES (DEFAULT), (DEFAULT)"] (honey.sql/format (first (data/inserts typed {"public.e" [{} {}]}))))))
