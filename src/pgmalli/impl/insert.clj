@@ -20,6 +20,11 @@
       :and (ref-type (first (shape/entries s)))
       nil)))
 
+(defn- quoted-type
+  "The SQL of a ref-type entity, schema and name each quoted: \"ins\".\"mood\"."
+  [[_ qualified]]
+  (str/join "." (map #(str "\"" (str/replace % "\"" "\"\"") "\"") (str/split qualified #"\." 2))))
+
 (defn- as-text
   "A value the driver takes no parameter of as text the database reads: a Duration in ISO 8601."
   [v]
@@ -41,7 +46,8 @@
           (if-let [elem (ref-type (shape/non-null (last s)))]
             (if (seq v)
               [:array (mapv #(vector :cast % elem) v)]
-              [:array {:select [[[:cast nil elem]]] :where false}])
+              ;; an empty array of the type, in SQL every HoneySQL version since 2.4 passes on as it is
+              [:raw (str "ARRAY[]::" (quoted-type elem) "[]")])
             (if type-name
               (let [e (types/entry type-name)] [:array (mapv as-text v) (or (:array-cast e) (:cast e) (keyword type-name))])
               [:array (vec v)]))
