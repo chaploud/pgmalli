@@ -158,7 +158,7 @@
                          max (conj [(if max-exclusive? :< :<=) max])))
                  :else as-is))
       :non-blank (if string-base?
-                   (kept (if (:trim? f) [:and (with-props schema {:min 1}) [:re "\\S"]] (with-props schema {:min 1})))
+                   (kept (if (:trim? f) [:and (with-props schema {:min 1}) [:re "[^ ]"]] (with-props schema {:min 1})))
                    as-is)
       :max-length (cond string-base? (kept (with-props schema {:max (:max f)}))
                         ;; an array of varchar(n): the bound is the elements'

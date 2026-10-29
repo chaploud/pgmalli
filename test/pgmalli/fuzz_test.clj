@@ -21,7 +21,7 @@
   (sql/register-op! (keyword op)))
 
 (def ^:private columns
-  "n integer, m integer, s text, t text, e mood, b boolean, d numeric(10,2), j jsonb, arr text[], dt date, ts timestamptz, u uuid")
+  "n integer, m integer, s text, t text, e mood, b boolean, d numeric(10,2), j jsonb, arr text[], dt date, ts timestamptz, u uuid, c char(4)")
 
 (def ^:private create-mood
   ;; both tests in this namespace need the type, in either order
@@ -102,6 +102,19 @@
                      [:tuple ::cmp [:tuple [:= :-] [:= :dt] [:tuple [:= :cast] ::date-lit [:= :date]]] ::int-lit]
                      [:tuple ::cmp [:tuple [:= :+] [:= :ts] [:tuple [:= :cast] ::interval-lit [:= :interval]]] [:tuple [:= :cast] ::ts-lit [:= :timestamptz]]]
                      [:tuple [:enum := :<>] [:= :u] [:tuple [:= :cast] [:enum "7c9e6679-7425-40de-944b-e07fc1f90ae7" "16fd2706-8baf-433b-82eb-8c7fada847da"] [:= :uuid]]]
+                     [:tuple ::cmp [:tuple [:= :length] ::str-col] [:int {:min 0 :max 3}]]
+                     [:tuple [:= :=] [:tuple [:= :cast] ::str-col [:= :boolean]] :boolean]
+                     [:tuple [:enum := :<>] [:= :c] [:enum "ab" "a" "ab  " ""]]
+                     [:tuple [:= :=] [:= :c] ::str-col]
+                     [:tuple ::cmp [:tuple [:enum :length :octet_length] [:= :c]] [:int {:min 0 :max 4}]]
+                     [:tuple [:enum :like :not-like] [:= :c] [:enum "a%" "%b" "%b%" "ab__"]]
+                     [:tuple [:enum :regex :not-regex] [:= :c] [:enum "b$" "^a" "b *$"]]
+                     [:tuple [:= :=] [:tuple [:= :||] [:= :c] [:= "x"]] [:enum "abx" "ab  x"]]
+                     [:tuple [:= :>] [:tuple [:= :+] ::int-col [:= 2147483647]] [:= 0]]
+                     [:tuple [:= :<] [:tuple [:= :*] ::int-col [:= 100000000]] [:= 0]]
+                     [:tuple [:= :<] [:tuple [:= :-] ::int-col] ::int-lit]
+                     [:tuple [:= :=] [:tuple [:= :cast] [:= :d] [:= :integer]] [:int {:min -1 :max 10}]]
+                     [:tuple [:= :=] [:tuple [:= :cast] [:tuple [:= :cast] [:= :d] [:= :double-precision]] [:= :integer]] [:int {:min -1 :max 10}]]
                      [:tuple [:= :case] [:tuple [:= :=] [:= :e] [:= "happy"]] [:tuple [:= :>] ::int-col [:= 0]] [:= :else] [:tuple [:= :is] ::int-col :nil]]]
              ::expr [:or
                      ::atom
@@ -158,7 +171,7 @@
 
 (def ^:private row-schema
   [:map [:n [:maybe [:int {:min -6 :max 101}]]] [:m [:maybe [:int {:min -6 :max 101}]]]
-   [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB"]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
+   [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB" "a\n" "😀😀" "tr" "of" "o" " YE "]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
    [:e [:maybe [:enum "happy" "sad"]]] [:b [:maybe :boolean]]
    ;; only values numeric(10,2) can hold, as BigDecimals, as rows read from the database would be
    [:d [:maybe [:enum -1.0M 0.0M 0.01M 0.5M 2.25M 2.5M 9.99M]]]
@@ -167,7 +180,9 @@
    [:arr [:maybe [:enum [] ["a"] ["a" "b"] ["b" "a" "a"] ["it's"]]]]
    [:dt [:maybe [:enum (java.time.LocalDate/parse "2019-12-31") (java.time.LocalDate/parse "2020-01-01") (java.time.LocalDate/parse "2020-01-02") (java.time.LocalDate/parse "2020-06-15")]]]
    [:ts [:maybe [:enum (java.time.Instant/parse "2019-12-31T23:30:00Z") (java.time.Instant/parse "2020-01-01T00:00:00Z") (java.time.Instant/parse "2020-01-02T01:30:00Z") (java.time.Instant/parse "2020-06-15T12:30:00Z")]]]
-   [:u [:maybe [:enum (java.util.UUID/fromString (first uuids)) (java.util.UUID/fromString (second uuids))]]]])
+   [:u [:maybe [:enum (java.util.UUID/fromString (first uuids)) (java.util.UUID/fromString (second uuids))]]]
+   ;; char(4) as pgjdbc reads it (padded) and as an application may write it
+   [:c [:maybe [:enum "ab" "ab  " "a" "abcd" "" " a"]]]])
 
 (defn- quoted [s] (str "'" (str/replace (str s) "'" "''") "'"))
 
@@ -183,14 +198,21 @@
         (double? v) (format "%.2f" v)
         :else (str v)))
 
+(def ^:private column-types
+  "The types the evaluator reads for the columns, as a registry gives them."
+  {:n :integer :m :integer :c [:character 4]})
+
 (defn- postgres-verdicts
-  "For every row, whether each expression IS NOT FALSE according to PostgreSQL."
+  "For every row, whether each expression IS NOT FALSE according to PostgreSQL; an expression
+   that raises an error is false, as a CHECK that raises one rejects the row."
   [exprs rows]
-  (let [cols [:n :m :s :t :e :b :d :j :arr :dt :ts :u]
+  (let [cols [:n :m :s :t :e :b :d :j :arr :dt :ts :u :c]
         values (str/join ",\n" (map (fn [r] (str "(" (str/join ", " (map #(sql-literal % (get r %)) cols)) ")")) rows))
-        selects (str/join ", " (map #(str "((" (to-sql %) ") IS NOT FALSE)") exprs))
+        selects (str/join ", " (map #(str "verdict($q$SELECT (" (to-sql %) ") IS NOT FALSE FROM judge WHERE id = $1$q$, id)") exprs))
         sql (str create-mood "CREATE TABLE judge (id serial, " columns ");\n"
                  "INSERT INTO judge (" (str/join ", " (map name cols)) ") VALUES\n" values ";\n"
+                 "CREATE FUNCTION verdict(q text, rid int) RETURNS boolean LANGUAGE plpgsql AS $f$\n"
+                 "DECLARE r boolean; BEGIN EXECUTE q INTO r USING rid; RETURN r; EXCEPTION WHEN OTHERS THEN RETURN false; END $f$;\n"
                  "SELECT " selects " FROM judge ORDER BY id;")
         {:keys [exit out err]} (p/sh ["docker" "exec" "-i" *container* "psql" "-X" "-q" "-A" "-t" "-F" "\t"
                                       "-v" "ON_ERROR_STOP=1" "-U" "postgres" "-d" (:db *db*)]
@@ -201,11 +223,11 @@
 (deftest evaluated-checks-agree-with-postgres
   (when *db*
     (let [seed (parse-long (or (System/getenv "PGMALLI_FUZZ_SEED") "42"))
-          exprs (vec (distinct (mg/sample expr-schema {:size 160 :seed seed})))
+          exprs (vec (distinct (mg/sample expr-schema {:size 240 :seed seed})))
           rows (vec (distinct (mg/sample row-schema {:size 80 :seed seed})))
           verdicts (postgres-verdicts exprs rows)]
       (testing (str "seed " seed ", " (count exprs) " expressions x " (count rows) " rows")
         (doseq [[j row] (map-indexed vector rows)
                 [i e] (map-indexed vector exprs)]
-          (is (= (get-in verdicts [j i]) (ev/passes? e row))
+          (is (= (get-in verdicts [j i]) (ev/passes? e row column-types))
               (str (pr-str e) " on " (pr-str row))))))))

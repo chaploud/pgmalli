@@ -8,6 +8,7 @@
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.shape :as shape]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
   (:import (java.io File)))
 
@@ -109,6 +110,57 @@
         (exec-sql! (str (str/join ";\n" (map #(first (honey.sql/format % {:inline true})) statements)) ";\n"
                         "DO $$ BEGIN " (counts) " END $$;"))
         (is true "every INSERT ran, identity ids kept, generated column left to the database")))))
+
+(defn- pr-str-sql [s] (str "'" (str/replace s "'" "''") "'"))
+
+(deftest every-opaque-literal-is-one-postgresql-reads
+  (when *db*
+    (exec-sql! (str "SELECT " (str/join ", " (for [[t lits] shape/opaque-literals, l lits] (str "'" (str/replace l "'" "''") "'::" t)))))
+    (is true)))
+
+(deftest char-varchar-and-integer-checks-hold-as-postgresql-holds-them
+  (when *db*
+    (let [out-dir (str (doto (File/createTempFile "pgmalli-ch" "") .delete))
+          config {:db *db* :out-dir out-dir}
+          sql-row (fn [{:keys [c k v n]}] (str "INSERT INTO ch.t VALUES ('" c "', '" k "', '" v "', " n ")"))]
+      (exec-sql! "CREATE SCHEMA ch;
+                  CREATE TABLE ch.t (c char(4) CHECK (length(c) <= 2), k char(4) CHECK (k IN ('ab', 'cd')), v varchar(3),
+                                     n integer, CONSTRAINT no_overflow CHECK (n + 2147483000 > 0));")
+      (generate/generate! (assoc config :schemas ["ch"]))
+      (let [reg (pgmalli/registry (files/read-edn (files/path-for config "ch")))]
+        (doseq [row [{:c "ab  " :k "ab  " :v "😀😀" :n 1} {:c "ab" :k "cd" :v "abc" :n 647}]]
+          (is (m/validate :pg.ch/t row {:registry reg}) (pr-str row))
+          (exec-sql! (sql-row row)))
+        (doseq [row [{:c "abc " :k "ab" :v "a" :n 1} {:c "a" :k "ef" :v "a" :n 1} {:c "a" :k "ab" :v "abcd" :n 1} {:c "a" :k "ab" :v "a" :n 648}]]
+          (is (not (m/validate :pg.ch/t row {:registry reg})) (pr-str row))
+          (is (thrown? clojure.lang.ExceptionInfo (exec-sql! (sql-row row))) (pr-str row)))))))
+
+(deftest column-checks-take-the-strings-postgresql-takes
+  (when *db*
+    (let [out-dir (str (doto (File/createTempFile "pgmalli-cs" "") .delete))
+          config {:db *db* :out-dir out-dir}
+          checks {"r" "r ~ '^a.b$'" "l" "l LIKE 'a%'" "u" "length(trim(u)) > 0" "w" "length(w) <= 2"
+                  "x" "x <> ''" "y" "btrim(y) <> ''" "z" "z ~ '^[[:alpha:]]+$'" "e" "e ~ 'b$'"}
+          strings ["a\nb" "a\tb" "\n" "\t" "\u00a0" "😀😀" "😀😀😀" "ab  " "" " " "a" "ab" "a\n" "ab\n" "abc"]]
+      (exec-sql! (str "CREATE SCHEMA cs; CREATE TABLE cs.t (v varchar(3)"
+                      (apply str (for [[c chk] checks] (str ", " c " text CHECK (" chk ")"))) ");"
+                      "CREATE FUNCTION cs.takes(col text, val text) RETURNS boolean LANGUAGE plpgsql AS $$
+                       BEGIN EXECUTE format('INSERT INTO cs.t (%I) VALUES (%L)', col, val); RETURN true;
+                       EXCEPTION WHEN check_violation OR string_data_right_truncation THEN RETURN false; END $$;"))
+      (generate/generate! (assoc config :schemas ["cs"]))
+      (let [reg (pgmalli/registry (files/read-edn (files/path-for config "cs")))
+            ;; varchar(n) cuts spaces past n off instead of refusing them; the schema refuses them
+            cases (for [c (cons "v" (keys checks)), s strings :when (not= ["v" "ab  "] [c s])] [c s (m/validate :pg.cs/t (assoc (zipmap (map keyword (cons "v" (keys checks))) (repeat nil)) (keyword c) s) {:registry reg})])]
+        (is (= :map (first (:pg.cs/t reg))) "the CHECKs are column schemas, not evaluated")
+        (exec-sql! (str "DO $$ BEGIN "
+                        (apply str (for [[c s ok] cases
+                                         ;; malli's $ matches before a final newline too, PostgreSQL's does not: there
+                                         ;; the schema may only be the more lenient
+                                         :when (not (and ok (#{"r" "z" "e"} c) (str/ends-with? s "\n")))]
+                                     (str "IF cs.takes('" c "', " (pr-str-sql s) ") <> " ok
+                                          " THEN RAISE EXCEPTION 'schema says " ok " for % in " c "', " (pr-str-sql s) "; END IF;")))
+                        " END $$;"))
+        (is true)))))
 
 (deftest check-reads-everything-once
   (when *db*

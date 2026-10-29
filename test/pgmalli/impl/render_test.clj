@@ -68,7 +68,7 @@
             [:score [:pg/integer {:pg/type "integer"}]]
             [:seq [:pg/integer {:pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
             [:since [:time/local-date {:pg/type "date" :pg/default "2020-01-01"}]]
-            [:title [:and {:pg/type "text" :pg/constraint ["title_check"]} [:string {:min 1}] [:re "\\S"]]]
+            [:title [:and {:pg/type "text" :pg/constraint ["title_check"]} [:string {:min 1}] [:re "[^ ]"]]]
             [:total [:pg/integer {:pg/type "integer"}]]]
            (second users)))
     (is (= [:multi {:dispatch :mood :error/message "closed_check"}
@@ -166,10 +166,10 @@
         "and exclude")
     (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:not [:enum "x" "y"]]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e <> ALL (ARRAY['x'::text, 'y'::text])") :e)))
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re "^ab.*$"]]
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re "^ab[\\s\\S]*$"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e ~~ 'ab%'::text") :e))
         "LIKE is a regex")
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0" "k1"]} [:string {:min 2}] [:re "\\S"]]
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0" "k1"]} [:string {:min 2}] [:re "[^ ]"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "length(btrim(e)) > 0" "length(e) >= 2") :e))
         "a bound after an [:and ...] lands on the type, where malli reads it")
     (is (= [:enum {:pg/type "boolean" :pg/constraint ["k0"]} true]

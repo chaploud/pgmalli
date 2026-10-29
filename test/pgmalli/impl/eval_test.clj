@@ -148,6 +148,62 @@
   (is (nil? (ev/java-regex "\\mword\\M")) "PostgreSQL-only escapes are not translated")
   (is (not (ev/supported? (x/check-clause "CHECK (code ~ '\\mword\\M'::text)")))))
 
+(deftest dollar-matches-only-at-the-end-and-dot-matches-a-newline
+  (is (not (passes? "CHECK (s ~ '^abc$'::text)" {:s "abc\n"})))
+  (is (passes? "CHECK (s ~ '^a[$]c$'::text)" {:s "a$c"}) "a $ in brackets is the character")
+  (is (not (passes? "CHECK (s ~~ 'a%'::text)" {:s "b\na"})))
+  (is (not (passes? "CHECK (s ~~ 'a'::text)" {:s "a\n"})))
+  (is (re-find (re-pattern (ev/java-regex "^a.b$")) "a\nb") "the rendered regex too")
+  (is (re-find (re-pattern (ev/like-regex "a%")) "a\nb")))
+
+(deftest lengths-and-positions-count-characters
+  (is (passes? "CHECK (length(s) = 2)" {:s "😀😀"}))
+  (is (passes? "CHECK (substr(s, 2, 1) = 'b'::text)" {:s "😀b"}))
+  (is (passes? "CHECK (\"left\"(s, 1) = '😀'::text AND \"right\"(s, 1) = 'b'::text)" {:s "😀b"}))
+  (is (passes? "CHECK (strpos(s, 'b'::text) = 2)" {:s "😀b"})))
+
+(deftest trim-removes-spaces-only
+  (is (passes? "CHECK (length(TRIM(BOTH FROM s)) > 0)" {:s "\t"}))
+  (is (passes? "CHECK (btrim(s) = s)" {:s "\na\n"}))
+  (is (passes? "CHECK (ltrim(s) = s AND rtrim(s) = s)" {:s "\ta\t"})))
+
+(deftest boolean-input-takes-unique-prefixes
+  (doseq [w ["tr" "TRU" " ye " "on" "1"]] (is (passes? "CHECK ((s)::boolean)" {:s w}) w))
+  (doseq [w ["of" "fA" "n" "0"]] (is (not (passes? "CHECK ((s)::boolean)" {:s w})) w))
+  (doseq [w ["o" "01" "" "tru e"]] (is (not (passes? "CHECK ((s)::boolean IS NOT NULL)" {:s w})) (str w " is no boolean"))))
+
+(deftest casts-to-integer-round-as-postgresql-does
+  (is (passes? "CHECK (((d)::double precision)::integer = 2)" {:d 2.5M}) "float ties to even")
+  (is (passes? "CHECK (((d)::double precision)::integer = 4)" {:d 3.5M}))
+  (is (passes? "CHECK ((d)::integer = 3)" {:d 2.5M}) "numeric ties away from zero")
+  (is (passes? "CHECK ((d)::integer = '-3'::integer)" {:d -2.5M}))
+  (is (not (passes? "CHECK ((d)::integer IS NOT NULL)" {:d 3000000000M})) "integer out of range"))
+
+(deftest integer-arithmetic-overflows-at-its-types-range
+  (let [e (x/check-clause "CHECK ((n + m) > 0)")]
+    (is (not (ev/passes? e {:n 2147483647 :m 1} {:n :integer :m :integer})) "integer + integer")
+    (is (ev/passes? e {:n 2147483647 :m 1} {:n :integer :m :bigint}) "integer + bigint is bigint")
+    (is (ev/passes? e {:n 2147483647 :m 1}) "operand types unknown: no range"))
+  (is (not (ev/passes? (x/check-clause "CHECK ((n * 100000) > 0)") {:n 100000} {:n :integer})))
+  (is (ev/passes? (x/check-clause "CHECK ((n + 1) > 0)") {:n 32767} {:n :smallint}) "smallint + integer literal is integer")
+  (is (not (ev/passes? (x/check-clause "CHECK ((n + m) > 0)") {:n 32767 :m 1} {:n :smallint :m :smallint})))
+  (is (ev/passes? (x/check-clause "CHECK ((- n) < 0)") {:n 5}) "unary minus"))
+
+(deftest char-n-ignores-trailing-spaces-except-where-padded
+  (let [types {:c [:character 4]}
+        ok? (fn [clause v] (ev/passes? (x/check-clause clause) {:c v} types))]
+    (doseq [v ["ab" "ab  "]]
+      (is (ok? "CHECK (c = 'ab'::bpchar)" v))
+      (is (ok? "CHECK (c = 'ab  '::bpchar)" v))
+      (is (ok? "CHECK (length(c) = 2)" v))
+      (is (ok? "CHECK (((c)::text || 'x'::text) = 'abx'::text)" v))
+      (is (ok? "CHECK (octet_length(c) = 4)" v) "octet_length reads it padded")
+      (is (ok? "CHECK (c ~~ 'ab  '::text)" v) "LIKE reads it padded")
+      (is (not (ok? "CHECK (c ~ 'b$'::text)" v)) "a regex reads it padded"))))
+
+(deftest date-plus-interval-is-a-timestamp
+  (is (not (passes? "CHECK ((d + '01:30:00'::interval) <= '2020-06-15'::date)" {:d (java.time.LocalDate/parse "2020-06-15")}))))
+
 (deftest vocabulary
   (is (ev/supported? (x/parse "a <> ALL (ARRAY['x'::text]) AND b IN (1, 2)")))
   (is (not (ev/supported? (x/parse "st_area(geom) > 0")))))

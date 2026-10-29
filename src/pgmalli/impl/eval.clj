@@ -96,13 +96,17 @@
   ;; addition commutes: the date, time or number goes first, the duration or day count second
   (let [[a b] (if (or (instance? Duration a) (and (integer? a) (instance? LocalDate b))) [b a] [a b])]
     (cond (and (number? a) (number? b)) (+ a b)
-          (instance? LocalDate a) (.plusDays ^LocalDate a (if (integer? b) b (.toDays ^Duration b)))
+          ;; date + integer is a date, date + interval a timestamp
+          (and (instance? LocalDate a) (integer? b)) (.plusDays ^LocalDate a b)
+          (instance? LocalDate a) (.plus (.atStartOfDay ^LocalDate a) ^Duration b)
           (instance? Instant a) (.plus ^Instant a ^Duration b)
           (instance? LocalDateTime a) (.plus ^LocalDateTime a ^Duration b)
           (instance? Duration a) (.plus ^Duration a ^Duration b)
           :else (throw (ex-info "cannot add" {:a a :b b})))))
 
-(defn- minus [a b]
+(defn- minus
+  ([a] (if (instance? Duration a) (.negated ^Duration a) (- a)))
+  ([a b]
   (cond (and (number? a) (number? b)) (- a b)
         (instance? Duration b) (plus a (.negated ^Duration b))
         (and (instance? LocalDate a) (integer? b)) (.minusDays ^LocalDate a b)
@@ -115,7 +119,7 @@
         (and (vector? a) (integer? b)) (let [i (if (neg? b) (+ (count a) b) b)]
                                         (if (< -1 i (count a)) (into (subvec a 0 i) (subvec a (inc i))) a))
         (and (vector? a) (string? b)) (vec (remove #(= b %) a))
-        :else (throw (ex-info "cannot subtract" {:a a :b b}))))
+        :else (throw (ex-info "cannot subtract" {:a a :b b})))))
 
 (defn- divide [a b]
   (cond (and (integer? a) (integer? b)) (quot a b)
@@ -140,6 +144,17 @@
 
 (defn- octets [v] (if (string? v) (alength (.getBytes ^String v "UTF-8")) (count v)))
 
+;; PostgreSQL counts and slices strings by character (code point), Java by UTF-16 unit
+(defn- chars* [v] (if (string? v) (.codePointCount ^String v 0 (count v)) (count v)))
+(defn- cp-subs [^String s start end] (subs s (.offsetByCodePoints s 0 (int start)) (.offsetByCodePoints s 0 (int end))))
+
+(defn- bpchar-value
+  "A char(n) value as PostgreSQL reads it: trailing spaces insignificant, or, where LIKE, a
+   regex or octet_length reads it, padded to n."
+  [v n padded?]
+  (let [s (str/replace v #" +$" "")]
+    (if (and padded? n) (apply str s (repeat (- n (chars* s)) \space)) s)))
+
 (defn- trim-chars [chars s]
   (let [cs (set chars)]
     (->> s (drop-while cs) reverse (drop-while cs) reverse (apply str))))
@@ -149,13 +164,13 @@
   ([s from] (substr s from nil))
   ([s from n]
    (when (and n (neg? n)) (throw (ex-info "negative substring length" {})))
-   (let [len (count s)
+   (let [len (chars* s)
          start (min len (max 0 (dec from)))
          end (if n (min len (max start (+ (dec from) n))) len)]
-     (subs s start end))))
+     (cp-subs s start end))))
 
-(defn- left* [s n] (let [len (count s)] (if (neg? n) (subs s 0 (max 0 (+ len n))) (subs s 0 (min len n)))))
-(defn- right* [s n] (let [len (count s)] (if (neg? n) (subs s (min len (- n))) (subs s (max 0 (- len n))))))
+(defn- left* [s n] (let [len (chars* s)] (if (neg? n) (cp-subs s 0 (max 0 (+ len n))) (cp-subs s 0 (min len n)))))
+(defn- right* [s n] (let [len (chars* s)] (if (neg? n) (cp-subs s (min len (- n)) len) (cp-subs s (max 0 (- len n)) len))))
 
 (defn- concat* [a b]
   (cond (and (string? a) (string? b)) (str a b)
@@ -172,8 +187,23 @@
 (def ^:private float-types #{:real :double-precision :float4 :float8})
 (def ^:private text-types #{:text :varchar :character-varying :char :character :bpchar :name})
 (def ^:private temporal-types #{:date :timestamp :timestamp-without-time-zone :timestamptz :timestamp-with-time-zone :time :interval})
-(def ^:private boolean-words {"t" true "true" true "y" true "yes" true "on" true "1" true
-                              "f" false "false" false "n" false "no" false "off" false "0" false})
+(def ^:private int-ranges
+  {:smallint [-32768 32767] :int2 [-32768 32767] :integer [-2147483648 2147483647] :int4 [-2147483648 2147483647]
+   :bigint [Long/MIN_VALUE Long/MAX_VALUE] :int8 [Long/MIN_VALUE Long/MAX_VALUE]})
+
+(defn- in-range [t v]
+  (let [[lo hi] (int-ranges t)]
+    (if (or (nil? lo) (<= lo v hi)) v (throw (ex-info "integer out of range" {:type t :value v})))))
+
+(defn- parse-boolean*
+  "bool_in: trimmed, any case, a prefix of true, false, yes or no, at least two letters of
+   on or off, or 1 or 0."
+  [s]
+  (let [w (str/lower-case (str/trim s))
+        prefix? (fn [word least] (and (<= least (count w)) (str/starts-with? word w)))]
+    (cond (or (prefix? "true" 1) (prefix? "yes" 1) (prefix? "on" 2) (= "1" w)) true
+          (or (prefix? "false" 1) (prefix? "no" 1) (prefix? "off" 2) (= "0" w)) false
+          :else (throw (ex-info "not a boolean" {:value s})))))
 
 (defn- cast-type [t] (if (vector? t) (first t) t))                                  ; [:numeric 10 2] -> :numeric
 (defn- array-elem [t] (when-let [[_ e] (re-matches #"(.+)-array" (name t))] (keyword e)))
@@ -228,20 +258,19 @@
 (defn- cast-to [v t]
   (cond
     (nil? v) nil
-    (integer-types t) (cond (integer? v) v
-                            (number? v) (long (.setScale (bigdec v) 0 java.math.RoundingMode/HALF_UP))
-                            (boolean? v) (if v 1 0)
-                            :else (Long/parseLong (str/trim v)))
+    ;; float to integer rounds ties to even, numeric to integer away from zero
+    (integer-types t) (long (in-range t (cond (integer? v) v
+                                              (number? v) (bigint (.setScale (bigdec v) 0 (if (double? v) java.math.RoundingMode/HALF_EVEN java.math.RoundingMode/HALF_UP)))
+                                              (boolean? v) (if v 1 0)
+                                              :else (Long/parseLong (str/trim v)))))
     (exact-types t) (bigdec (if (number? v) v (str/trim v)))
     (float-types t) (double (if (number? v) v (parse-double (str/trim v))))
+    (#{:char :character :bpchar} t) (str/replace (cast-to v :text) #" +$" "")
     (text-types t) (cond (string? v) v
                          (instance? LocalDateTime v) (str/replace (str v) "T" " ")
                          (instance? Instant v) (-> (str (.atOffset ^Instant v ZoneOffset/UTC)) (str/replace "T" " ") (str/replace #"Z$" "+00"))
                          :else (str v))
-    (= :boolean t) (if (boolean? v)
-                     v
-                     (let [b (boolean-words (str/lower-case (str/trim v)))]
-                       (if (nil? b) (throw (ex-info "not a boolean" {:value v})) b)))
+    (= :boolean t) (if (boolean? v) v (parse-boolean* v))
     (= :date t) (cond (instance? LocalDate v) v
                       (instance? LocalDateTime v) (.toLocalDate ^LocalDateTime v)
                       :else (LocalDate/parse (str/trim v)))
@@ -266,10 +295,17 @@
      (str/replace re #"\[:(alpha|digit|alnum|upper|lower|space|punct|xdigit|cntrl|print|graph|blank):\]"
                   (fn [[_ c]] (str "\\p{" (str/capitalize c) "}"))))))
 
+(defn- outside-brackets
+  "re with each . and $ outside escapes and bracket expressions replaced by (f c)."
+  [re f]
+  (str/replace re #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|[.$]" #(if (#{"." "$"} %) (f %) %)))
+
 (defn java-regex
-  "The Java regex for a PostgreSQL pattern, or nil when it uses syntax Java reads differently."
+  "The Java regex for a PostgreSQL pattern, or nil when it uses syntax Java reads differently.
+   . is [\\s\\S], as PostgreSQL's matches a newline too, without a flag a string generator
+   would not read."
   [re]
-  (let [j (posix-classes re)]
+  (let [j (outside-brackets (posix-classes re) {"." "[\\s\\S]" "$" "$"})]
     (when (and (not (re-find #"\\[mMyYZA]" re)) (try (re-pattern j) (catch Exception _ nil)))
       j)))
 
@@ -285,14 +321,16 @@
   (str "^"
        (str/replace pattern #"\\(.)|%|_|[^%_\\]+"
                     (fn [[m esc]] (cond esc (escape-regex esc)
-                                        (= m "%") ".*"
-                                        (= m "_") "."
+                                        (= m "%") "[\\s\\S]*"
+                                        (= m "_") "[\\s\\S]"
                                         :else (escape-regex m))))
        "$"))
 
 (def ^:private compiled
-  "The regex compiled, memoized over the same finite set of strings as posix-classes."
-  (memoize (fn [re] (re-pattern (str "(?s)" re)))))
+  "The regex compiled, memoized over the same finite set of strings as posix-classes. $ outside
+   a bracket expression is \\z: Java's $ also matches before a final newline, PostgreSQL's only
+   at the end."
+  (memoize (fn [re] (re-pattern (str "(?s)" (outside-brackets re {"." "." "$" "\\z"}))))))
 
 (defn- matches? [s re] (some? (re-find (compiled re) s)))
 
@@ -349,17 +387,18 @@
    result NULL, an exception fails the row. Arities follow PostgreSQL's."
   {:+ plus :- minus :* * :/ divide :mod rem :pow power :abs abs
    :round round* :floor floor* :ceil ceil* :ceiling ceil* :trunc trunc*
-   :length count :char_length count :character_length count :octet_length octets
+   :length chars* :char_length chars* :character_length chars* :octet_length octets
    :lower str/lower-case :upper str/upper-case :reverse str/reverse
    :substr substr :substring substr :left left* :right right*
-   ;; TRIM(BOTH chars FROM x) parses as [:trim chars x]; btrim(x, chars) keeps the call order
-   :trim (fn ([s] (str/trim s)) ([cs s] (trim-chars cs s)))
-   :btrim (fn ([s] (str/trim s)) ([s cs] (trim-chars cs s)))
-   :ltrim (fn ([s] (str/triml s)) ([s cs] (apply str (drop-while (set cs) s))))
-   :rtrim (fn ([s] (str/trimr s)) ([s cs] (apply str (reverse (drop-while (set cs) (reverse s))))))
+   ;; TRIM(BOTH chars FROM x) parses as [:trim chars x]; btrim(x, chars) keeps the call order;
+   ;; without chars, only spaces are trimmed
+   :trim (fn ([s] (trim-chars " " s)) ([cs s] (trim-chars cs s)))
+   :btrim (fn ([s] (trim-chars " " s)) ([s cs] (trim-chars cs s)))
+   :ltrim (fn ([s] (str/replace s #"^ +" "")) ([s cs] (apply str (drop-while (set cs) s))))
+   :rtrim (fn ([s] (str/replace s #" +$" "")) ([s cs] (apply str (reverse (drop-while (set cs) (reverse s))))))
    :replace (fn [s from to] (if (= "" from) s (str/replace s from to)))
    :starts_with (fn [s p] (str/starts-with? s p))
-   :strpos (fn [s p] (inc (or (str/index-of s p) -1)))
+   :strpos (fn [s p] (if-let [i (str/index-of s p)] (inc (.codePointCount ^String s 0 (int i))) 0))
    :|| concat*
    :like (fn [s p] (matches? s (like-regex p)))
    :ilike (fn [s p] (matches? s (str "(?i)" (like-regex p))))
@@ -413,6 +452,8 @@
           :cast (cast-to (a) (cast-type (second args)))
           :array (mapv #(ev % row) (first args))
           :raw ((raw-values (first args)))
+          ::bpchar (let [[col n padded?] args] (some-> (ev col row) (bpchar-value n padded?)))
+          ::int (let [[t x] args] (some->> (ev x row) (in-range t)))
           (:now :transaction_timestamp :statement_timestamp :clock_timestamp) (Instant/now)
           :and (and3 (all))
           :or (or3 (all))
@@ -483,10 +524,66 @@
                      (fn [v] (case (first v) (:in :not-in) (cons (second v) (nth v 2)) :array (second v) :cast [(second v)] (rest v)))
                      (x/canonical e)))))
 
-(defn checker
-  "Row predicate of a CHECK expression: true when the result is true or NULL, as in PostgreSQL."
-  [e]
-  (let [e (x/canonical e)]
-    (fn [row] (not (false? (try (ev e row) (catch Exception _ false)))))))
+(def ^:private bpchar-types #{:char :character :bpchar})
 
-(defn passes? [e row] ((checker e) row))
+(defn column-type
+  "The type the evaluator reads for a column, from its schema's properties (:pg/type, and :max,
+   a char(n)'s n): an integer or char(n) type, nil for the others."
+  [{:keys [pg/type max]}]
+  (let [t (some-> type (str/replace " " "-") keyword)]
+    (cond (int-ranges t) t
+          (bpchar-types t) [t max])))
+
+(defn- int-type
+  "The integer type of an expression whose operand types are known: smallint, integer or
+   bigint columns, integer literals, integer casts and arithmetic over them."
+  [e types]
+  (let [rank {:smallint 0 :int2 0 :integer 1 :int4 1 :bigint 2 :int8 2}
+        widest #(when (and (seq %) (every? rank %)) (apply max-key rank %))]
+    (cond (keyword? e) (let [t (get types e)] (when (rank t) t))
+          (int? e) (if (<= -2147483648 e 2147483647) :integer :bigint)
+          (not (vector? e)) nil
+          :else (case (first e)
+                  ::int (second e)
+                  (:+ :- :* :/ :mod :abs) (widest (map #(int-type % types) (rest e)))
+                  :cast (let [t (cast-type (nth e 2))] (when (rank t) t))
+                  nil))))
+
+(def ^:private padded-ops #{:like :ilike :not-like :not-ilike :regex :iregex :not-regex :not-iregex :octet_length})
+
+(defn- typed
+  "The expression with its columns' types made explicit: char(n) columns as ::bpchar, integer
+   arithmetic as ::int, which fails out of its type's range as PostgreSQL does."
+  [e types]
+  (let [rw #(typed % types)]
+    (cond
+      (keyword? e) (let [t (get types e)]
+                     (if (and (vector? t) (bpchar-types (first t))) [::bpchar e (second t) false] e))
+      (not (vector? e)) e
+      :else
+      (let [[op & args] e
+            e (case op
+                :cast (assoc e 1 (rw (second e)))
+                (:in :not-in) [op (rw (second e)) (mapv rw (nth e 2))]
+                :array [op (mapv rw (second e))]
+                :raw e
+                (into [op] (map #(if (= :else %) % (rw %))) args))
+            bpchar? #(and (vector? %) (= ::bpchar (first %)))
+            e (cond (and (padded-ops op) (bpchar? (second e))) (assoc-in e [1 3] true)
+                    ;; a literal compared with a char(n) is one too
+                    (and (#{:= :<> :< :> :<= :>=} op) (some bpchar? (rest e))) (mapv #(if (string? %) (bpchar-value % nil false) %) e)
+                    :else e)
+            t (when (#{:+ :- :* :/ :mod :abs} op) (int-type e types))]
+        (if t [::int t e] e)))))
+
+(defn checker
+  "Row predicate of a CHECK expression: true when the result is true or NULL, as in PostgreSQL.
+   types are the columns' types as column-type gives them ({:n :integer :c [:character 4]})."
+  ([e] (checker e {}))
+  ([e types]
+   (let [e (typed (x/canonical e) types)]
+     (fn [row] (not (false? (try (ev e row) (catch Exception _ false))))))))
+
+(defn passes?
+  ([e row] ((checker e) row))
+  ([e row types] ((checker e types) row)))

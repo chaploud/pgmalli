@@ -321,7 +321,10 @@
         (sequential? e) (map #(substitute % subst) e)
         :else e))
 
-(defn- check-facts [base {cname :name :keys [check_clause is_valid is_enforced]} generated]
+(defn- check-facts
+  "The facts of a CHECK. One on a char(n) column (in bpchar) matches no pattern: the patterns
+   read text, and char(n) compares and measures without its trailing spaces."
+  [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar]
   (let [base (assoc base :constraint cname)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try-clause check_clause)]
@@ -331,7 +334,7 @@
       (contains? parsed :expr)
       (let [;; a generated column holds its expression's value: the CHECK is on that
             e (substitute (:expr parsed) generated)
-            n (when (not= false is_valid) (normalize e))
+            n (when (and (not= false is_valid) (not-any? bpchar (referenced-columns e))) (normalize e))
             base (assoc base :expr (x/canonical e))]
         (if-let [ms (some-> n match-columns)]
           (mapv #(merge base (stringify %)) ms)
@@ -369,7 +372,8 @@
                       (let [generated (into {} (for [c (:columns t) :when (:generated_expr c)
                                                      :let [{:keys [expr]} (parsed base (:generated_expr c))] :when (some? expr)]
                                                  [(keyword (:name c)) expr]))]
-                        (concat (mapcat #(check-facts base % generated) (filter #(= "CHECK" (:type %)) constraints))
+                        (concat (mapcat #(check-facts base % generated (set (for [c (:columns t) :when (#{"character" "bpchar"} (:data_type c))] (:name c))))
+                                        (filter #(= "CHECK" (:type %)) constraints))
                                 ;; a domain on a generated column checks the expression's value
                                 (for [c (:columns t)
                                       :let [expr (get generated (keyword (:name c)))
@@ -377,7 +381,7 @@
                                       :when (and expr (contains? domains type-name))
                                       k (get-in schema [:types type-name :constraints])
                                       f (check-facts base {:name (str (:name c) " " (:name k)) :check_clause (:definition k) :is_valid (:is_valid k true)}
-                                                     {:VALUE expr})]
+                                                     {:VALUE expr} #{})]
                                   f))))]
         f)))))
 

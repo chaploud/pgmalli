@@ -284,6 +284,6 @@
     (is (= 30 (count rows)))
     (is (every? #(re-matches #"[A-Z]{3}-[0-9]{4}" (:sku %)) rows))
     (is (every? #(re-matches #"[^@]+@[^@]+" (:mail %)) rows) "a domain with a regex CHECK too")
-    (is (every? #(and (<= (count (:code %)) 10) (str/starts-with? (:code %) "ab")) rows) "a LIKE pattern, within the length")
+    (is (every? #(and (<= (.codePointCount ^String (:code %) 0 (count (:code %))) 10) (str/starts-with? (:code %) "ab")) rows) "a LIKE pattern, within the length")
     (is (= [:map {:pg/table "public.t"} [:sku [:and {:pg/type "text"} :string [:re "^[A-Z]{3}-[0-9]{4}$"]]] [:mail [:and {:pg/type "email"} :string [:re "^[^@]+@[^@]+$"]]] [:code [:and {:pg/type "text"} [:string {:max 10}] [:re "^ab.*$"]]]]
            (pgmalli/portable reg :pg.public/t)) "the hint stays out of portable data"))))

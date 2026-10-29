@@ -81,6 +81,9 @@ database's spelling.
 | `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, geometric, range and other types | `[:any {:pg/type "..."}]` |
 | a composite type, an extension's type | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
 
+`:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
+do; malli's own `:string`, in `portable` output, counts UTF-16 units.
+
 `:pg/numeric` rounds to `s` places, half up as PostgreSQL does, then allows fewer than
 `p - s` digits before the point. `s` may be negative or larger than `p`, as PostgreSQL allows.
 
@@ -94,13 +97,13 @@ accepts.
 | `col IN (...)`, `col = 'x'` | `[:enum ...]` |
 | `col NOT IN (...)`, `col <> 'x'` | `[:and <type> [:not [:enum ...]]]` |
 | `col >= a AND col <= b`, `BETWEEN`, one-sided bounds | `{:min a :max b}`; an exclusive bound as `[:> a]` |
-| `length(trim(col)) > 0` | `[:and [:string {:min 1}] [:re "\S"]]` |
+| `length(trim(col)) > 0` | `[:and [:string {:min 1}] [:re "[^ ]"]]` |
 | `col <> ''` | `[:string {:min 1}]` |
 | `length(col) <= n` | `[:string {:max n}]` |
 | `cardinality(col) BETWEEN a AND b`, `array_length(col, 1) <= n` | `[:vector {:min a :max b} <T>]` |
 | `jsonb_typeof(col) = 'object'` (`'array'`) | `:map` (`[:sequential :any]`) |
-| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?i)`) |
-| `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^\Qa\E.*$"]]` (with `(?i)`) |
+| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?i)`; `.` as `[\s\S]`, as it matches a newline) |
+| `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^a[\s\S]*$"]]` (with `(?i)`) |
 | `col IS NULL OR <a pattern>` | the pattern, or NULL |
 | `col IS NOT NULL` | no `[:maybe ...]` |
 | patterns joined with `AND` | each pattern |
@@ -111,7 +114,8 @@ accepts.
 | `NOT ENFORCED` (PostgreSQL 18) | nothing; listed in `:diagnostics` |
 | `NOT VALID` | `[:pg/check {:pg/not-valid true} ...]` |
 
-Several CHECKs on one column only tighten it. A partitioned table's row schema carries a CHECK
+Several CHECKs on one column only tighten it. A CHECK on a `char(n)` column is a `[:pg/check expr]`:
+`char(n)` compares and measures without its trailing spaces. A partitioned table's row schema carries a CHECK
 named `<table> (partitions)`: the OR of its partitions' bounds.
 
 > NOTE: a `NOT VALID` CHECK is enforced, as the database enforces it for every new row. A row
@@ -126,8 +130,12 @@ classpath. Without it, and on babashka, strings are drawn and filtered.
 PostgreSQL does:
 
 - NULL passes; `AND`, `OR` and `COALESCE` stop at the first operand that decides.
-- Integer division truncates. Casts convert: dates, timestamps, fixed-length intervals, uuids,
-  jsonb, arrays, and the schema's own enum and domain literals.
+- Integer division truncates; `smallint`, `integer` and `bigint` arithmetic out of its
+  type's range fails the row. A cast to an integer rounds a float's ties to even, a numeric's
+  away from zero.
+- Casts convert: dates, timestamps, fixed-length intervals, uuids, jsonb, arrays, and the
+  schema's own enum and domain literals.
+- A `char(n)` column's trailing spaces count only for `LIKE`, regexes and `octet_length`.
 - `now()` is the time of validation.
 - An expression the database would fail on (division by zero, a cast that does not parse)
   fails the row.

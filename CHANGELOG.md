@@ -47,6 +47,22 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- A `regoper` column generates `||/`; `+` names several operators and PostgreSQL refused it.
+- `:string` bounds and `length`, `substr`, `left`, `right`, `strpos` count characters, as
+  PostgreSQL does; `varchar(3)` refused `"😀😀"`.
+- A CHECK on a `char(n)` column is evaluated with `char(n)`'s trailing spaces insignificant
+  (except in `LIKE`, regexes, `octet_length`); `length(c) <= 2` refused `"ab  "` as pgjdbc reads it.
+- A regex `$` matches only at the end (`"abc\n" ~ '^abc$'` passed), and `.` and `LIKE`'s `%`
+  and `_` match a newline in the rendered `[:re ...]` (`"a\nb"` was refused).
+- A cast to an integer rounds a float's ties to even (`2.5::float8::int` is 2, it was 3).
+- `smallint`, `integer` and `bigint` arithmetic over columns of those types fails the row out
+  of the type's range, as PostgreSQL raises "integer out of range"; a cast out of range too.
+- A cast to boolean takes what PostgreSQL takes: any unique prefix of `true`, `false`, `yes`,
+  `no`, `on`, `off` (`'tr'`, `'of'`).
+- `trim`, `btrim`, `ltrim` and `rtrim` remove spaces only, and `length(trim(c)) > 0` renders
+  `[:re "[^ ]"]`; a tab or newline was refused.
+- `date + interval` is a timestamp; the interval's hours were dropped. Unary minus is
+  evaluated; it failed the row.
 - A `:seed` gives the same rows in every run: times generate within 2025, not the year before
   now. The columns of a CHECK's branches (`[:multi ...]`) generate as the row's columns do;
   a `closed_at` generated in a branch came out near 1970.

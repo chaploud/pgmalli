@@ -180,7 +180,7 @@
    "tsmultirange" ["{[2020-01-01 00:00,2020-01-02 00:00)}"] "tstzmultirange" ["{[2020-01-01 00:00+00,2020-01-02 00:00+00)}"]
    "datemultirange" ["{[2020-01-01,2020-02-01)}" "{[2021-01-01,2021-06-01)}"]
    "regclass" ["pg_class" "pg_type"] "regtype" ["integer" "text"] "regrole" ["postgres"] "regproc" ["now"] "regprocedure" ["now()"]
-   "regoper" ["+"] "regoperator" ["+(integer,integer)"] "regnamespace" ["public"] "regconfig" ["english"] "regdictionary" ["simple"] "regcollation" ["\"C\""]})
+   "regoper" ["||/" "|/"] "regoperator" ["+(integer,integer)"] "regnamespace" ["public"] "regconfig" ["english"] "regdictionary" ["simple"] "regcollation" ["\"C\""]})
 
 (def opaque-types
   "Types a driver hands over as objects of its own (PGobject and the like): rendered :any with

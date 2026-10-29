@@ -5,13 +5,19 @@
   (:require [malli.core :as m]
             [pgmalli.impl.eval :as ev]))
 
+(def string-schema
+  ":string with :min and :max counting characters (code points), as PostgreSQL's length and
+   varchar(n) do, where malli's counts UTF-16 units."
+  (m/-simple-schema {:type :string :pred string? :property-pred (m/-min-max-pred #(.codePointCount ^String % 0 (count %)))}))
+
 (def check-schema
   "[:pg/check expr]: a row passes when the CHECK expression data does (pgmalli.impl.eval).
-   A column missing from the row is NULL, or its value in the :pg/defaults property."
+   A column missing from the row is NULL, or its value in the :pg/defaults property; the
+   :pg/types property holds the column types the evaluator reads (pgmalli.impl.eval/column-type)."
   (m/-simple-schema
    {:type :pg/check
-    :compile (fn [{:keys [pg/defaults]} [expr] _]
-               (let [pass? (ev/checker expr)]
+    :compile (fn [{:keys [pg/defaults pg/types]} [expr] _]
+               (let [pass? (ev/checker expr types)]
                  {:pred (fn [row] (and (map? row) (pass? (merge defaults row)))) :min 1 :max 1}))}))
 
 (def bytes-schema
@@ -100,5 +106,5 @@
 
 (def schemas
   "The schema types pgmalli registers, by name."
-  {:pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
+  {:string string-schema :pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
    :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema})

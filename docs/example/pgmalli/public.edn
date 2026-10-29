@@ -11,7 +11,7 @@
     [:and
      {:pg/constraint ["groups_name_check"], :pg/type "text"}
      [:string {:min 1}]
-     [:re "\\S"]]]],
+     [:re "[^ ]"]]]],
   :pg.public/posts
   [:and
    [:map
