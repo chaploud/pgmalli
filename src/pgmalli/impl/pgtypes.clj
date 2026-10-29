@@ -21,7 +21,7 @@
                      (let [bounds ((m/-min-max-pred code-points) props)
                            n (:pg/max-length props)
                            bits? (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
-                           bounds (if bits? (fn [s] (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s)))) bounds)]
+                           bounds (if bits? (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s))))) bounds)]
                        (if n
                          (fn [^String s]
                            (let [kept (if (<= (code-points s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]

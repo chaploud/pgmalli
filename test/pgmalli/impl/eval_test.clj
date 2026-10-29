@@ -359,7 +359,7 @@
   (let [registry {:registry (merge (m/default-schemas) pgtypes/schemas)}
         valid? (fn [s v] (m/validate s v registry))]
     (is (valid? [:string {:pg/type "bit(4)" :min 4 :max 4}] "1010"))
-    (is (not (valid? [:string {:pg/type "bit(4)" :min 4 :max 4}] "1012")))
+    (is (false? (valid? [:string {:pg/type "bit(4)" :min 4 :max 4}] "1012")) "false, not nil")
     (is (not (valid? [:string {:pg/type "bit varying(8)"}] "x")))
     (is (valid? [:string {:pg/type "text"}] "x"))
     (is (valid? [:double {:pg/type "real"}] 3.4e38))
