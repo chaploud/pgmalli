@@ -16,7 +16,7 @@
    Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique
    ({:columns} each, :nulls-distinct false for NULLS NOT DISTINCT) and :pg/foreign-keys
    ({:columns :table :to} each, tables schema-qualified, :match :full for MATCH FULL); on columns :pg/type
-   :pg/default :pg/identity :pg/generated :pg/constraint, and malli's :default for literal defaults.
+   :pg/default :pg/identity :pg/generated :pg/constraints, and malli's :default for literal defaults.
 
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
    overrides is {constraint-name schema-or-{:skip reason}}."
@@ -229,7 +229,7 @@
                                    :pg/identity identity
                                    ;; the expression the database computes it from (true when it could not be read)
                                    :pg/generated generated
-                                   :pg/constraint (when (seq applied) (vec (sort (distinct applied))))})
+                                   :pg/constraints (when (seq applied) (vec (sort (distinct applied))))})
         not-null-check? (some (comp #{:not-null} :fact) facts)]
     {:schema (if (and nullable? (not not-null-check?)) [:maybe schema] (rejecting-nil schema))
      :unrendered unrendered :skipped skipped}))

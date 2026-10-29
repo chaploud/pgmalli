@@ -19,6 +19,7 @@ All notable changes to this project are documented here. The format follows
 | `read-options` took `'next.jdbc/as-maps` | the builder's own name or var (`'next.jdbc.result-set/as-maps`) | rename the symbol |
 | nil, a formatted SQL vector, or args not keywords were accepted | an error | pass HoneySQL data and `[:db :id]` |
 | under `:qualified?`, a column through a CTE or subquery was keyed by its alias | nil: the driver keys it by a table pgmalli cannot see | select it from the table |
+| a column's `:pg/constraint` (the CHECKs that shaped it) | `:pg/constraints`; `:pg/constraint` names one CHECK, on that CHECK's schema | read `:pg/constraints` on columns |
 | `:missing-required-column`'s `:column` was a string, `:enum-literal`'s `:allowed` a set | a keyword; a vector in the enum's order | compare with those |
 | `query-schema` was `[:=> in out]` | `[:=> {:pgmalli/problems [...]} in out]` when the query has problems | read the parts with `m/children` |
 | `test.chuck` was a dependency | optional: regex strings use it when on the classpath | add it to your test alias |
@@ -138,7 +139,7 @@ All notable changes to this project are documented here. The format follows
   fix, `:except` leaving out a referenced table names the one to leave out too, and a
   misspelt table or column suggests the one meant. Suggestions count a swap of two letters as
   one edit, in one place (`pgmalli.impl.error`), not through malli's internal spell checker.
-- A row failing a CHECK reads its name and its text, as PostgreSQL's error names it:
+- A row failing a CHECK reads its name and its text (a developer's message, as malli's own are):
   `violates check constraint likes_within_views: CHECK (likes <= views)` (it read the name
   alone); a regex or LIKE pattern pgmalli derived says the same, not "should match regex".
 - EXCLUDE constraints are read: a table's `:pg/exclude`, and a `:diagnostics` entry saying

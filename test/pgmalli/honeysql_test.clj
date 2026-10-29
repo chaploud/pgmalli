@@ -482,7 +482,7 @@
 (def checked
   (pgmalli/registry {:registry {:pg.public/email [:and :string [:pg/check-value {:pg/constraint "email_check"} [:like :VALUE "%@%"]]]
                                 :pg.public/roles [:map {:pg/table "public.roles"}
-                                                  [:role_key [:and {:pg/constraint ["roles_role_key_format"] :pg/type "character varying"}
+                                                  [:role_key [:and {:pg/constraints ["roles_role_key_format"] :pg/type "character varying"}
                                                               [:string {:max 255}] [:re "^[a-z_]+$"]]]
                                                   [:nick [:maybe [:string {:max 40 :pg/type "character varying"}]]]
                                                   [:mail [:ref {:pg/type "email"} :pg.public/email]]
@@ -745,7 +745,7 @@
 (deftest a-string-to-a-text-column-a-check-narrows-is-fine
   (let [reg (pgmalli/registry {:registry {:pg.public/attempts [:map {:pg/table "public.attempts"}
                                                                [:id [:int {:pg/type "bigint"}]]
-                                                               [:status [:enum {:default "active" :pg/constraint ["attempts_status_check"] :pg/default "active" :pg/type "character varying"}
+                                                               [:status [:enum {:default "active" :pg/constraints ["attempts_status_check"] :pg/default "active" :pg/type "character varying"}
                                                                          "active" "submitted"]]]}})]
     (is (= [] (h/check reg {:select [:id] :from [:attempts] :where [:= :status "active"]}))
         "varchar = varchar needs no cast: only an enum type does")
@@ -773,9 +773,9 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/attempts [:map {:pg/table "public.attempts"}
                                                                [:id [:int {:pg/type "bigint"}]]
                                                                [:role [:string {:pg/type "character varying"}]]
-                                                               [:status [:enum {:pg/constraint ["attempts_status_check"] :pg/type "character varying"} "active" "submitted"]]]}})
+                                                               [:status [:enum {:pg/constraints ["attempts_status_check"] :pg/type "character varying"} "active" "submitted"]]]}})
         o {:write {"character varying" [:or :string :keyword] :enum [:string :keyword]}}]
-    (is (= {:status [:enum {:pg/constraint ["attempts_status_check"] :pg/type "character varying"} "active" "submitted" :active :submitted]}
+    (is (= {:status [:enum {:pg/constraints ["attempts_status_check"] :pg/type "character varying"} "active" "submitted" :active :submitted]}
            (update-vals (h/arg-types reg {:select [:id] :from [:attempts] :where [:= :status :?status]} o) m/form))
         "a column with labels keeps them: :enum says how its values are sent")
     (is (= {:role [:or :string :keyword]}

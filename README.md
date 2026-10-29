@@ -177,6 +177,23 @@ Enum values are strings:
 ;; => true
 ```
 
+These messages are for developers: they name tables, columns, types and the CHECK's SQL.
+Before showing an error to the people using your application, word it yourself. A CHECK's
+schema names its constraint in `:pg/constraint`, which humanize's `:wrap` can read:
+
+```clojure
+(def user-messages {"likes_within_views" "A post cannot have more likes than views."})
+
+(defn for-people [{:keys [schema message]}]
+  (if-let [c (:pg/constraint (m/properties schema))]
+    (get user-messages c "Please check what you entered.")
+    message))
+
+(-> (m/explain :pg.public.posts/insert {:author_id 1 :title "Hello" :likes 5 :views 3} {:registry registry})
+    (me/humanize {:wrap for-people}))
+;; => ["A post cannot have more likes than views."]
+```
+
 [docs/types.md](docs/types.md) lists what every type and CHECK becomes.
 
 ## Rows read through next.jdbc

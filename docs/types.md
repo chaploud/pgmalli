@@ -43,7 +43,7 @@ Column schemas carry where they came from:
 | `:default` | malli's default, for a literal default |
 | `:pg/identity` | `:always`, `:default` or `:serial` |
 | `:pg/generated` | the expression the database computes the column from |
-| `:pg/constraint` | the names of the CHECKs that shaped the column |
+| `:pg/constraints` | the names of the CHECKs that shaped the column (a CHECK's own schema carries `:pg/constraint`, its name) |
 
 The table's map carries:
 

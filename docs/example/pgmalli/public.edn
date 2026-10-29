@@ -9,9 +9,9 @@
     :pg/primary-key ["id"],
     :pg/table "public.events"}
    [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
-   [:payload [:map {:pg/constraint ["events_payload_check"], :pg/type "jsonb"}]]
+   [:payload [:map {:pg/constraints ["events_payload_check"], :pg/type "jsonb"}]]
    [:schema_version
-    [:enum {:pg/constraint ["events_schema_version_check"], :pg/type "integer"} 1 2]]
+    [:enum {:pg/constraints ["events_schema_version_check"], :pg/type "integer"} 1 2]]
    [:user_id [:int {:pg/type "bigint"}]]],
   :pg.public/groups
   [:map
@@ -19,7 +19,7 @@
    [:id [:pg/integer {:pg/identity :default, :pg/type "integer"}]]
    [:name
     [:and
-     {:pg/constraint ["groups_name_check"], :pg/type "text"}
+     {:pg/constraints ["groups_name_check"], :pg/type "text"}
      [:string {:min 1}]
      [:re
       {:error/message
@@ -37,7 +37,7 @@
      [:pg/integer
       {:default 0,
        :min 0,
-       :pg/constraint ["posts_likes_check"],
+       :pg/constraints ["posts_likes_check"],
        :pg/default 0,
        :pg/type "integer"}]]
     [:title [:string {:max 200, :pg/type "character varying"}]]

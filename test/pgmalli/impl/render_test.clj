@@ -53,7 +53,7 @@
     (is (= [:and :string [:re {:error/message "violates check constraint email_check: CHECK (VALUE ~ '@'::text)"} "@"]] (:pg.public/email registry)) "domain = what a non-NULL value must be: base type + its CHECK")
     (is (= :and (first users)) "columns, then the table constraints")
     (is (= [:map {:pg/table "public.users" :pg/primary-key ["id"] :pg/unique [{:columns ["nick"]}] :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
-            [:age [:maybe [:pg/integer {:min 0 :max 150 :pg/type "integer" :pg/constraint ["age_check"]}]]]
+            [:age [:maybe [:pg/integer {:min 0 :max 150 :pg/type "integer" :pg/constraints ["age_check"]}]]]
             [:born [:maybe [:time/local-date {:pg/type "date"}]]]
             [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
             [:created_at [:time/instant {:pg/type "timestamptz" :pg/default [:now]}]]
@@ -68,7 +68,7 @@
             [:score [:pg/integer {:pg/type "integer"}]]
             [:seq [:pg/integer {:pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
             [:since [:time/local-date {:pg/type "date" :pg/default "2020-01-01"}]]
-            [:title [:and {:pg/type "text" :pg/constraint ["title_check"]} [:string {:min 1}] [:re {:error/message "violates check constraint title_check: CHECK (length(TRIM(BOTH FROM title)) > 0)"} "[^ ]"]]]
+            [:title [:and {:pg/type "text" :pg/constraints ["title_check"]} [:string {:min 1}] [:re {:error/message "violates check constraint title_check: CHECK (length(TRIM(BOTH FROM title)) > 0)"} "[^ ]"]]]
             [:total [:pg/integer {:pg/type "integer"}]]]
            (second users)))
     (is (= [:multi {:dispatch :mood :pg/constraint "closed_check" :error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}
@@ -152,31 +152,31 @@
                                              :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause (str "CHECK (" c ")")}]) checks))}}})
         column (fn [reg col] (some (fn [[k s]] (when (= k col) s)) (drop 2 (let [r (:pg.public/t reg)] (if (= :and (first r)) (second r) r)))))
         reg (fn [& args] (:registry (r/rendered (p/facts (apply t args)))))]
-    (is (= [:pg/integer {:min 10 :pg/type "integer" :pg/constraint ["k0" "k1"]}]
+    (is (= [:pg/integer {:min 10 :pg/type "integer" :pg/constraints ["k0" "k1"]}]
            (column (reg [{:name "n" :position 1 :data_type "integer" :is_nullable false}] "n >= 10" "n >= 0") :n))
         "the tighter bound wins")
-    (is (= [:string {:max 5 :pg/type "character varying" :pg/constraint ["k0"]}]
+    (is (= [:string {:max 5 :pg/type "character varying" :pg/constraints ["k0"]}]
            (column (reg [{:name "s" :position 1 :data_type "character varying" :is_nullable false :max_length 5}] "length(s) <= 10") :s))
         "a CHECK cannot widen varchar(n)")
-    (is (= [:enum {:pg/type "text" :pg/constraint ["k0" "k1"]} "b"]
+    (is (= [:enum {:pg/type "text" :pg/constraints ["k0" "k1"]} "b"]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e IN ('a'::text, 'b'::text)" "e IN ('b'::text, 'c'::text)") :e))
         "value sets intersect")
-    (is (= [:enum {:pg/type "text" :pg/constraint ["k0" "k1"]} "a"]
+    (is (= [:enum {:pg/type "text" :pg/constraints ["k0" "k1"]} "a"]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e IN ('a'::text, 'b'::text)" "e <> 'b'::text") :e))
         "and exclude")
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:not [:enum "x" "y"]]]
+    (is (= [:and {:pg/type "text" :pg/constraints ["k0"]} :string [:not [:enum "x" "y"]]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e <> ALL (ARRAY['x'::text, 'y'::text])") :e)))
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re {:error/message "violates check constraint k0: CHECK (e ~~ 'ab%'::text)"} "^ab[\\s\\S]*$"]]
+    (is (= [:and {:pg/type "text" :pg/constraints ["k0"]} :string [:re {:error/message "violates check constraint k0: CHECK (e ~~ 'ab%'::text)"} "^ab[\\s\\S]*$"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e ~~ 'ab%'::text") :e))
         "LIKE is a regex")
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0" "k1"]} [:string {:min 2}] [:re {:error/message "violates check constraint k0: CHECK (length(btrim(e)) > 0)"} "[^ ]"]]
+    (is (= [:and {:pg/type "text" :pg/constraints ["k0" "k1"]} [:string {:min 2}] [:re {:error/message "violates check constraint k0: CHECK (length(btrim(e)) > 0)"} "[^ ]"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "length(btrim(e)) > 0" "length(e) >= 2") :e))
         "a bound after an [:and ...] lands on the type, where malli reads it")
-    (is (= [:enum {:pg/type "boolean" :pg/constraint ["k0"]} true]
+    (is (= [:enum {:pg/type "boolean" :pg/constraints ["k0"]} true]
            (column (reg [{:name "b" :position 1 :data_type "boolean" :is_nullable false}] "b = true") :b)))
-    (is (= [:vector {:min 1 :max 3 :pg/type "text[]" :pg/constraint ["k0"]} :string]
+    (is (= [:vector {:min 1 :max 3 :pg/type "text[]" :pg/constraints ["k0"]} :string]
            (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "cardinality(tags) BETWEEN 1 AND 3") :tags)))
-    (is (= [:vector {:max 3 :pg/type "text[]" :pg/constraint ["k0"]} :string]
+    (is (= [:vector {:max 3 :pg/type "text[]" :pg/constraints ["k0"]} :string]
            (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) <= 3") :tags)))
     (is (= [:pg/check {:pg/constraint "k0" :error/message "violates check constraint k0: CHECK (array_length(tags, 1) = 3)"} [:= [:array_length :tags 1] 3]]
            (nth (:pg.public/t (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) = 3")) 2))
@@ -240,7 +240,7 @@
     (is (= {:pg/table "public.t" :pg/unique [{:columns ["d"] :nulls-distinct false}]
             :pg/foreign-keys [{:columns ["e"] :table "public.u" :to ["id"] :match :full}]}
            (second t)))
-    (is (= [:and {:pg/type "numeric" :pg/constraint ["a_check"]} 'decimal? [:pg/numeric {:precision 3 :scale 1}] [:>= 0.5]] (get-in t [2 1]))
+    (is (= [:and {:pg/type "numeric" :pg/constraints ["a_check"]} 'decimal? [:pg/numeric {:precision 3 :scale 1}] [:>= 0.5]] (get-in t [2 1]))
         "numeric(3,1) rounds to one place and holds fewer than two digits before the point; a CHECK narrows further")
     (is (= [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 4 :scale 0}]] (get-in t [3 1])))
     (is (= [:pg/smallint {:pg/type "smallint"}] (get-in t [4 1])))
@@ -254,7 +254,7 @@
                                                  :tables {"t" {:columns [{:name "digest" :position 1 :data_type "bytea" :is_nullable false}]
                                                                :constraints {"digest_check" {:name "digest_check" :type "CHECK" :check_clause "CHECK (octet_length(digest) = 32)"}}}}}))
         reg (registry-with registry)]
-    (is (= [:pg/bytes {:min 32 :max 32 :pg/type "bytea" :pg/constraint ["digest_check"]}] (get-in registry [:pg.public/t 2 1])))
+    (is (= [:pg/bytes {:min 32 :max 32 :pg/type "bytea" :pg/constraints ["digest_check"]}] (get-in registry [:pg.public/t 2 1])))
     (is (m/validate :pg.public/t {:digest (byte-array 32)} {:registry reg}))
     (is (not (m/validate :pg.public/t {:digest (byte-array 31)} {:registry reg})))
     (is (every? #(= 32 (alength ^bytes (:digest %))) (mg/sample :pg.public/t {:registry reg :size 10})) "and generates the length")))
@@ -270,7 +270,7 @@
                                                               "CHECK (kind = 'a'::text AND nm ~ '\\mfoo'::text OR kind = 'b'::text AND nm IS NULL)"
                                                               "CHECK (mood = 'sad'::mood OR score > length(nm))")))
         row (:pg.public/t registry)]
-    (is (= [:string {:min 4 :pg/type "text" :pg/constraint ["k0"]}] (get-in row [1 4 1]))
+    (is (= [:string {:min 4 :pg/type "text" :pg/constraints ["k0"]}] (get-in row [1 4 1]))
         "a CHECK the evaluator cannot take whole keeps its renderable part")
     (is (= [:pg/check {:pg/constraint "k2" :error/message "violates check constraint k2: CHECK (mood = 'sad'::mood OR score > length(nm))"} [:or [:= :mood [:cast "sad" :mood]] [:> :score [:length :nm]]]] (nth row 2))
         "an enum literal is a value the evaluator knows")
@@ -355,7 +355,7 @@
                                                             :tables {"t" {:columns [{:name "payload" :position 1 :data_type "jsonb" :is_nullable true}]
                                                                           :constraints {"nn" {:name "nn" :type "CHECK" :check_clause "CHECK (payload IS NOT NULL)"}
                                                                                         "obj" {:name "obj" :type "CHECK" :check_clause "CHECK (jsonb_typeof(payload) = 'object'::text)"}}}}}))]
-    (is (= [:map {:pg/type "jsonb" :pg/constraint ["nn" "obj"]}] (get-in registry [:pg.public/t 2 1])) "IS NOT NULL and jsonb_typeof together are still [:map]")
+    (is (= [:map {:pg/type "jsonb" :pg/constraints ["nn" "obj"]}] (get-in registry [:pg.public/t 2 1])) "IS NOT NULL and jsonb_typeof together are still [:map]")
     (is (empty? unrendered))))
 
 (deftest numeric-rounds-before-it-counts-digits
