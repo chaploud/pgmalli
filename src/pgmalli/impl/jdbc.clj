@@ -20,26 +20,26 @@
    [:schema {:optional true} :string]
    [:qualified? {:optional true} :boolean]
    [:kebab? {:optional true} :boolean]
+   [:lower? {:optional true} :boolean]
    [:nil-columns {:optional true} [:enum :absent]]
    [:time {:optional true} [:enum :inst :instant :local]]
    [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json]] :any]
                             [:map [:array {:optional true} [:enum :vector :sequential]]
                              [:json {:optional true} [:enum :parsed]]]]]
    [:write {:optional true} [:and [:map-of [:or :string [:enum :array]] :any]
-                             [:map [:array {:optional true} [:or [:enum :pg/array :sequential :vector :set]
-                                                             [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]]]]]
+                             [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]]]]
    [:compare {:optional true} [:enum :strict :lenient]]
    [:result {:optional true} [:enum :one]]])
 
 (def ^:private valid-options? (m/validator options-schema))
 
 (defn options!
-  "opts when options-schema takes them; an error naming what it does not, otherwise."
+  "opts (nil is none) when options-schema takes them; an error naming what it does not, otherwise."
   [opts]
-  (if (valid-options? opts)
+  (if (valid-options? (or opts {}))
     opts
-    (throw (ex-info (str "pgmalli options: " (pr-str (me/humanize (m/explain options-schema opts))))
-                    {:options opts :errors (me/humanize (m/explain options-schema opts))}))))
+    (let [errors (me/humanize (m/explain options-schema opts))]
+      (throw (ex-info (str "pgmalli options: " (pr-str errors)) {:options opts :errors errors})))))
 
 ;;; what the driver returns and takes
 
@@ -70,7 +70,7 @@
    it, malli's default registry having nothing for what the driver takes (:pg/array is
    pgmalli's registry's)."
   [t {:keys [write]}]
-  (if-let [kinds (some-> (:array write) (#(if (keyword? %) [%] %)) seq)]
+  (if-let [kinds (:array write)]
     (let [alts (map #(vector % t) kinds)] (if (next alts) (into [:or] alts) (first alts)))
     :any))
 
@@ -88,9 +88,10 @@
 
 (defn row-key
   "The key next.jdbc gives a column: qualified by its table (the last part of schema.table)
-   under :qualified? when the column has one, kebab-cased as its kebab builders do it."
-  [{:keys [qualified? kebab?]} table column]
-  (let [k (if kebab? csk/->kebab-case-string identity)]
+   under :qualified? when the column has one, kebab-cased (:kebab?) or lower-cased (:lower?)
+   as its builders do it."
+  [table column {:keys [qualified? kebab? lower?]}]
+  (let [k (cond kebab? csk/->kebab-case-string lower? str/lower-case :else identity)]
     (if (and qualified? table)
       (keyword (k (last (str/split table #"\." 2))) (k column))
       (keyword (k column)))))
@@ -134,21 +135,23 @@
                                                       :else x))}}))))
 
 (def ^:private builders
-  "next.jdbc result set builders -> how they shape a row."
-  {"as-maps" {:qualified? true} "as-unqualified-maps" {} "as-lower-maps" {:qualified? true} "as-unqualified-lower-maps" {}
-   "as-modified-maps" {:qualified? true} "as-unqualified-modified-maps" {}
-   "as-kebab-maps" {:qualified? true :kebab? true} "as-unqualified-kebab-maps" {:kebab? true}
-   "as-arrays" nil "as-unqualified-arrays" nil "as-lower-arrays" nil "as-unqualified-lower-arrays" nil})
+  "next.jdbc's map builders -> how they key a row (next.jdbc 1.3)."
+  (let [maps {"as-maps" {:qualified? true} "as-unqualified-maps" {}
+              "as-lower-maps" {:qualified? true :lower? true} "as-unqualified-lower-maps" {:lower? true}}]
+    (merge (update-keys (merge maps {"as-kebab-maps" {:qualified? true :kebab? true} "as-unqualified-kebab-maps" {:kebab? true}})
+                        #(symbol "next.jdbc.result-set" %))
+           (update-keys (update-vals maps #(assoc % :nil-columns :absent)) #(symbol "next.jdbc.optional" %)))))
 
 (defn read-options
   "The reading options of a next.jdbc result set builder named by its symbol; documented on
    pgmalli.core/read-options."
   [builder]
-  (let [ns (namespace builder) n (name builder)]
-    (when-not (contains? builders n)
-      (throw (ex-info (str "not a next.jdbc result set builder pgmalli knows: " builder) {:builder builder})))
-    (when-let [o (get builders n)]
-      (cond-> o (= "next.jdbc.optional" ns) (assoc :nil-columns :absent)))))
+  (or (get builders builder)
+      (throw (ex-info (str builder (if (str/includes? (name builder) "modified")
+                                     " keys rows by functions of yours: give :qualified? and :kebab? as they do"
+                                     " is not one of next.jdbc's map builders pgmalli knows")
+                           "; it knows " (vec (sort (keys builders))))
+                      {:builder builder}))))
 
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."
@@ -166,6 +169,6 @@
         props (when (map? (second m)) (second m))
         table (or (:pg/table props) (:pg/view props))
         entry (fn [[k p s]]
-                (row-entry (row-key opts table (clojure.core/name k)) p (read-type (shape/non-null s) opts)
-                           (and (vector? s) (= :maybe (first s))) opts))]
+                (row-entry (row-key table (clojure.core/name k) opts) p (read-type (shape/non-null s) opts)
+                           (shape/maybe? s) opts))]
     (into (if props [:map props] [:map]) (map entry (shape/column-entries m)))))

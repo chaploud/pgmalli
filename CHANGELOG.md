@@ -41,6 +41,14 @@ All notable changes to this project are documented here. The format follows
   `[:all x]`, `:any` unless `:write`'s `:array` names what it may be; one in `:in` a non-empty
   vector, list or set of the column's type, as `sql/format` expands it; one the data shows only
   inside code nilable. `:read` types rows alone.
+- `read-options` names next.jdbc's map builders as next.jdbc does
+  (`'next.jdbc.result-set/as-unqualified-kebab-maps`, `'next.jdbc.optional/as-maps`); it took
+  `next.jdbc/...` and `next.jdbc.optional/as-kebab-maps`, which do not exist, and any namespace.
+  A modified builder (keys of your functions) and an array builder are an error, and the lower
+  builders give `:lower? true`.
+- Under `:qualified?`, a row selecting a column through an opaque table (a subquery, a CTE) is
+  untold (nil): the driver keys it by the table at the bottom, which pgmalli does not see. It was
+  keyed by the opaque table's alias.
 - `camel-snake-kebab` is a dependency (next.jdbc's kebab builders name keys with it), malli
   0.20.3.
 
@@ -63,6 +71,9 @@ All notable changes to this project are documented here. The format follows
   is); both were nil. A column an outer join may leave NULL is nullable: a `:left-join`'s
   table, the one a `:right-join` attaches to and those joined to it before, both sides of a
   `:full-join`. A name selected twice is one key. `{:select [:*]}` was nil.
+- A LIKE pattern argument is the column's kind without its CHECKs and length: a pattern is no
+  value of the column. `INSERT INTO t AS a (columns)` (`[[:t :a] [...]]`), a subquery with no
+  alias in `:from`, and an `:update` or `:insert-into` target code names are read.
 - The JDBC catalog read reports the query's own failure, not one in rolling back after it, and
   names the driver to add when it is missing (leaving out the URL, which may carry a password).
 - `pgmalli.main` took a minute to exit after running psql (the agent pool's threads).

@@ -24,7 +24,8 @@
     :from [:users] :group-by [:id :nick]}
    {:select [[[:cast :nick :text]]] :from [:users]}
    {:select [:u.id :g.name :g/*] :from [[:users :u]] :left-join [[:groups :g] [:= :g.id -1]]}
-   {:select [:u.nick :g.id] :from [[:users :u]] :right-join [[:groups :g] [:= :g.id -1]]}])
+   {:select [:u.nick :g.id] :from [[:users :u]] :right-join [[:groups :g] [:= :g.id -1]]}
+   {:select [:id [[:count :*] :n]] :from [[{:select [:id] :from [:users]} :sub]] :group-by [:id]}])
 
 (deftest row-schema-keys-are-the-drivers
   (when *db*
@@ -42,8 +43,8 @@
               (is (clojure.set/subset? (set (for [[k p] (rest schema) :when (not (and (map? p) (:optional p)))] k)) (set (keys row)))
                   (pr-str builder q))
               (is (m/validate schema row) (pr-str builder q row)))
-          (is (and (not= 'next.jdbc.result-set/as-unqualified-kebab-maps builder) (= :cast (first (ffirst (:select q)))))
-              (str "only a qualified cast is untold: " (pr-str q))))))))
+          (is (:qualified? (pgmalli/read-options builder))
+              (str "only a qualified row is untold (a cast column, one through a subquery): " (pr-str q))))))))
 
 (deftest pg-array-is-what-the-driver-takes
   (when *db*

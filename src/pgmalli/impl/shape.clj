@@ -41,10 +41,15 @@
   [[k p s]]
   (if (map? p) [k p s] [k {} p]))
 
+(defn maybe?
+  "Whether a column schema takes NULL: [:maybe ...]."
+  [s]
+  (and (vector? s) (= :maybe (first s))))
+
 (defn column-props
   "Properties of a column schema, looking through [:maybe ...]."
   [s]
-  (let [s (if (and (vector? s) (= :maybe (first s))) (last s) s)]
+  (let [s (if (maybe? s) (last s) s)]
     (if (and (vector? s) (map? (second s))) (second s) {})))
 
 (defn column-entries
@@ -94,7 +99,7 @@
 (defn non-null
   "A column schema without its [:maybe ...]; see pgmalli.core/non-null."
   [schema]
-  (if (and (vector? schema) (= :maybe (first schema))) (last schema) schema))
+  (if (maybe? schema) (last schema) schema))
 
 (defn read-as
   "A column schema under :read, {pg-type schema}: the schema a type is read as when a driver

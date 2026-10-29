@@ -19,9 +19,8 @@
    :registry {name schema} :unrendered [fact ...] :skipped [fact ...] :diagnostics [...]}.
    :registry is the map of names to schemas a malli registry is made of (registry builds one
    from it, with malli's own schemas); :unrendered are the facts with no malli rendering;
-   :diagnostics what the database stores but
-   deserves a look (a partitioned table with no partition, a partition its parent's bounds make
-   unreachable, a CHECK (false), CHECKs on a column that contradict each other, a NOT VALID or
+   :diagnostics what the database stores but deserves a look (a partitioned table with no
+   partition, a partition its parent's bounds make unreachable, a CHECK (false), CHECKs on a column that contradict each other, a NOT VALID or
    NOT ENFORCED constraint, a unique index repeating a key, a row-level INSERT trigger), each
    {:table :kind :confidence :severity :message ...}."
   [schema-name]
@@ -71,10 +70,10 @@
   (portable/portable registry name))
 
 (defn read-options
-  "The reading options (see as-read) of a next.jdbc result set builder named by its symbol:
-   next.jdbc/as-unqualified-lower-maps, next.jdbc.optional/as-kebab-maps (NULL columns absent)
-   and the like. nil for a builder that builds no map (as-arrays); an error for one pgmalli
-   does not know."
+  "The reading options (see as-read) of a next.jdbc map builder named by its symbol:
+   'next.jdbc.result-set/as-unqualified-kebab-maps, 'next.jdbc.optional/as-maps (NULL columns
+   absent) and the like. An error for another (the modified builders key rows by functions of
+   yours, the array builders build no map)."
   [builder]
   (jdbc/read-options builder))
 
@@ -82,8 +81,9 @@
   "The [:map ...] of a row as next.jdbc builds it from what PostgreSQL's JDBC driver returns:
    by default plain next.jdbc, keys unqualified, dates and timestamps inst?, arrays, json and
    intervals (driver objects) :any. Options, the ones pgmalli.honeysql takes too (read-options
-   gives them for a next.jdbc builder), a key or value not among them an error: :qualified?
-   (keys as :table/column, as-maps), :kebab? (as the kebab builders), :nil-columns :absent
+   gives them for a next.jdbc builder; its own, :schema :write :compare :result, are taken and
+   do nothing here), a key or value not among them an error: :qualified? (keys as
+   :table/column, as-maps), :kebab? and :lower? (as those builders), :nil-columns :absent
    (next.jdbc.optional), :time :instant or :local (next.jdbc.date-time's read-as-instant,
    read-as-local), :read for what a ReadableColumn extension returns: {pg-type schema} by a
    column's :pg/type, {:array :vector} arrays as vectors, {:json :parsed} json parsed."

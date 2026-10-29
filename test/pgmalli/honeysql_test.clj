@@ -188,8 +188,8 @@
            (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
         "an assigned one keeps the column's bounds")
     (is (= {:ids [:maybe [:sequential [:int {:pg/type "bigint"}]]]}
-           (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :compare :lenient :write {:array :sequential})))
-        "an array's too, and :write's :array takes one kind alone")))
+           (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :compare :lenient :write {:array [:sequential]})))
+        "an array's too")))
 
 (def docs
   (pgmalli/registry {:registry {:pg.public/docs [:map {:pg/table "public.docs"}
@@ -251,7 +251,9 @@
           "a column under an alias keeps its table in the key, as the driver does")
       (is (m/validate row {:users/id 1 :users/g 2} malli-opts) "as malli's default registry reads it"))
     (is (= (h/row-schema registry {:select [:users/*] :from [:users]} #{} opts) (h/row-schema registry {:select [:*] :from [:users]} #{} opts)))
-    (is (= [:map [:sub/id [:maybe :any]]] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} #{} (assoc opts :qualified? true))))
+    (is (nil? (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} #{} (assoc opts :qualified? true)))
+        "the driver keys a column through a subquery by its table at the bottom, which an opaque one hides")
+    (is (= [:map [:id [:maybe :any]]] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} #{} opts)))
     (is (= [:map [:users/group-id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]] (h/row-schema registry '{:select [:group_id] :from [:users]} #{} (assoc opts :qualified? true :kebab? true))))
     (is (= {'x [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]} opts))
         "an untyped use never hides a typed one")
@@ -462,9 +464,9 @@
          (h/row-schema registry {:union [{:select [:id :nick] :from [:users]} {:select [:id :nick] :from [:users]}]} #{} (assoc opts :nil-columns :absent)))))
 
 (deftest an-array-columns-elements-take-overrides
-  (is (= {:p [:maybe [:vector :keyword]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:write {:array :vector "text" :keyword}})))
+  (is (= {:p [:maybe [:vector :keyword]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:write {:array [:vector] "text" :keyword}})))
   (is (= [:map [:paths [:maybe [:vector :keyword]]]] (h/row-schema docs {:select [:paths] :from [:docs]} #{} {:read {:array :vector "text" :keyword}})))
-  (is (= {:p [:maybe [:vector [:string {:pg/type "text"}]]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:read {"text" :keyword} :write {:array :vector}}))
+  (is (= {:p [:maybe [:vector [:string {:pg/type "text"}]]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:read {"text" :keyword} :write {:array [:vector]}}))
       ":read is the rows' alone"))
 
 (deftest query-schema-carries-the-problems-check-finds
@@ -495,3 +497,20 @@
   (is (= [:maybe [:or :string :keyword]]
          (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} {:compare :lenient :write {"character varying" [:or :string :keyword]}})))
       ":write's type stays as it is"))
+
+(deftest nil-options-are-none
+  (is (= [] (h/check registry {:select [:id] :from [:sample.users]} nil)))
+  (is (= (pgmalli/as-read registry :pg.sample/users) (pgmalli/as-read registry :pg.sample/users nil))))
+
+(deftest a-like-pattern-is-no-value-of-the-column
+  (is (m/validate (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:like :role_key :?x]})) "%adm%"))
+  (is (m/validate (:n (h/arg-types registry {:select [:id] :from [:users] :where [:ilike :nick :?n]} opts)) (str "%" (apply str (repeat 40 "a")) "%"))
+      "longer than the column's 40"))
+
+(deftest insert-into-a-table-as-an-alias-with-columns
+  (is (= [] (h/check registry '{:insert-into [[:users :u] [:group_id :mood :score]] :values [[?a "sad" ?c]] :returning [:u.id]} opts)))
+  (is (= [] (h/check registry '{:insert-into (t) :values [{:a 1}]} opts)) "a target code names: its columns are not judged")
+  (is (= [] (h/check registry '{:update (t) :set {:a 1} :where [:= :id 1]} opts))))
+
+(deftest a-subquery-alone-in-from-is-opaque
+  (is (= [] (h/check registry {:select [:id] :from [{:select [:id] :from [:users]}]} opts))))

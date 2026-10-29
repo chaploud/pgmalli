@@ -190,12 +190,14 @@ driver returns, so results can be validated as they come back. By default that i
 next.jdbc: keys unqualified, dates and timestamps `inst?` (`java.sql.Date`, `Timestamp`),
 arrays (`java.sql.Array`), json and jsonb (`PGobject`) and intervals (`PGInterval`) `:any`.
 The options say what your application does differently; `pgmalli.honeysql` takes the same
-ones, for the rows and arguments of queries, and both refuse a key or value they do not know.
+ones for the rows and arguments of queries (`:read` types rows alone, `:time` both), and both
+refuse a key or value they do not know.
 
 | option | for |
 |---|---|
 | `:qualified? true` | keys `:users/id`, as `as-maps` builds them |
 | `:kebab? true` | kebab-cased keys and tables, as the kebab builders do |
+| `:lower? true` | lower-cased keys and tables, as the lower builders do |
 | `:nil-columns :absent` | NULL columns missing, as `next.jdbc.optional` builds rows |
 | `:time :instant` / `:local` | `next.jdbc.date-time`'s `read-as-instant` / `read-as-local` |
 | `:read {pg-type schema}` | what a `ReadableColumn` extension of yours returns for a `:pg/type` |
@@ -206,8 +208,8 @@ ones, for the rows and arguments of queries, and both refuse a key or value they
 (pgmalli/as-read registry :pg.public/users {:qualified? true :nil-columns :absent :time :instant})
 ;; => [:map {...} [:users/id [:pg/integer ...]] [:users/nick {:optional true} [:string ...]] ...]
 
-(pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps)
-;; => {:kebab? true :nil-columns :absent}, the options a builder's name gives
+(pgmalli/read-options 'next.jdbc.result-set/as-unqualified-kebab-maps)
+;; => {:kebab? true}, the options a builder's name gives
 ```
 
 ### Queries checked against the registry
