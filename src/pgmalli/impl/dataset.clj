@@ -13,7 +13,8 @@
   "[{:name :table :key-sets :refs} ...] for every row schema but those in except. A key set is
    {:columns :nulls-distinct? :label}, :generated-only? for one generation keeps and validation
    does not (an EXCLUDE's = columns: distinct, its rows never conflict, though the database
-   takes equal ones whose other elements do not clash); a reference {:columns :table :to :full? :label},
+   takes equal ones whose other elements do not clash; a partial unique index, kept over all
+   rows, though the database takes equal ones its predicate leaves out); a reference {:columns :table :to :full? :label},
    references to tables outside the dataset left out."
   ([registry] (tables registry nil))
   ([registry except]
@@ -25,9 +26,10 @@
               :key-sets (concat (when primary-key
                                   [{:columns (mapv shape/ident-key primary-key) :nulls-distinct? true
                                     :label (str table " primary key " (pr-str primary-key))}])
-                                (for [{:keys [columns nulls-distinct]} unique]
-                                  {:columns (mapv shape/ident-key columns) :nulls-distinct? (not (false? nulls-distinct))
-                                   :label (str table " unique " (pr-str columns))})
+                                (for [{:keys [columns nulls-distinct where]} unique]
+                                  (cond-> {:columns (mapv shape/ident-key columns) :nulls-distinct? (not (false? nulls-distinct))
+                                           :label (str table " unique " (pr-str columns))}
+                                    where (assoc :generated-only? true)))
                                 (for [{:keys [constraint elements where]} exclude
                                       :let [eq (keep #(when (= "=" (:op %)) (:column %)) elements)]
                                       :when (and (seq eq) (not where) (every? :column elements))]

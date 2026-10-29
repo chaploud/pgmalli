@@ -19,8 +19,9 @@
    :type is one of \"CHECK\", \"PRIMARY KEY\", \"UNIQUE\", \"FOREIGN KEY\"; :references is
    {:match :schema :table :columns} for foreign keys, :match one of \"SIMPLE\", \"FULL\", \"PARTIAL\";
    :is_enforced is false for a NOT ENFORCED constraint (PostgreSQL 18);
-   :nulls_not_distinct is set for UNIQUE constraints; a unique index over plain columns with
-   no predicate is listed as a UNIQUE constraint too, with :index true, keyed \"<name> (index)\"
+   :nulls_not_distinct is set for UNIQUE constraints; a unique index over plain columns is
+   listed as a UNIQUE constraint too, with :index true (and :partial true for one with a
+   predicate), keyed \"<name> (index)\"
    since an index may bear a constraint's name. A partitioned table carries a CHECK named
    \"<table> (partitions)\": the OR of its partitions' bounds, since it takes a row only when
    one of them does. :max_length is the typmod of varchar, bpchar, bit and varbit columns,

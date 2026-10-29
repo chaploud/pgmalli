@@ -56,7 +56,7 @@ The table's map carries:
 |---|---|
 | `:pg/table` | `"public.users"` (`:pg/view` for a view) |
 | `:pg/primary-key` | `["id"]` |
-| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index |
+| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, `:where true` for a partial one |
 | `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |
 | `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; `:where true` for a partial one |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
@@ -262,8 +262,10 @@ triggers, enum and domain types.
 
 An EXCLUDE is a table property, not a check: a row it would reject validates all the same,
 and each EXCLUDE is listed in `:diagnostics`. Datasets keep its `=` columns distinct, so their
-rows never conflict, except for one with no `=` column, an expression or a WHERE. A row a
-trigger would reject validates too; a row-level INSERT trigger is listed in `:diagnostics`.
+rows never conflict, except for one with no `=` column, an expression or a WHERE. A partial
+unique index (`... WHERE active`) is not checked by `dataset-schema`; generated datasets keep
+its columns distinct over all rows, so the rows it covers never conflict. A row a trigger
+would reject validates too; a row-level INSERT trigger is listed in `:diagnostics`.
 
 Not read: other indexes, policies and privileges.
 

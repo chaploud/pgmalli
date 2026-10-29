@@ -30,7 +30,8 @@
      :primary-key  table primary key                      {:columns}
      :exclude      EXCLUDE constraint                     {:method :partial? :elements [{:column :op}]}
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
-                                                           :index? (from a unique index, not a constraint)}
+                                                           :index? (from a unique index, not a constraint)
+                                                           :partial? (the index has a predicate)}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
      :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE;
                                                            :enum or :domain-ref for a base type of the schema)
@@ -301,12 +302,12 @@
                                      :max-bits {:fact :length :fn :length :max max_length})))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced index exclude]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced index partial exclude]}]
   (case type
     "EXCLUDE" [(merge base {:fact :exclude :constraint cname :method (:method exclude) :partial? (boolean (:partial exclude))
                             :elements (mapv #(select-keys % [:column :op]) (:elements exclude))})]
     "PRIMARY KEY" [(merge base {:fact :primary-key :constraint cname :columns columns})]
-    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index)})]
+    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index) :partial? (boolean partial)})]
     ;; NOT ENFORCED: the database never checks it, so it is not a reference, only noted
     "FOREIGN KEY" (if (false? is_enforced)
                     [(merge base {:fact :not-enforced :constraint cname :input (str "FOREIGN KEY " (pr-str columns))})]

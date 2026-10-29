@@ -52,8 +52,8 @@
             (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))
                 "closed_at only when sad")
             (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
-            (is (= [{:columns ["age"] :index true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
-                "unique indexes over plain columns count, key columns only, even one named as a constraint is; expression and partial ones do not")
+            (is (= [{:columns ["age"] :index true} {:columns ["age"] :index true :where true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
+                "unique indexes over plain columns count, key columns only, even one named as a constraint is, a partial one marked; expression ones do not")
             (is (some #(= "closed" (:pg/constraint (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
             (let [col (fn [k] (shape/non-null (portable/column reg :pg.public/prices k)))]
               (is (= [[:pg/numeric {:precision 3 :scale 1}] [:pg/numeric {:precision 3 :scale 5}] [:pg/numeric {:precision 2 :scale -3}]]
@@ -71,7 +71,8 @@
               (is (every? #(< -1 (:k %) 200) (get (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1) "public.parted"))
                   "generated rows land in a partition")
               (is (= 1 (count (re-seq #"k_nonneg" (pr-str (:pg.public/parted reg))))) "the parent's own CHECK is not repeated from every partition")
-              (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"}] (map #(select-keys % [:kind :table]) (:diagnostics data)))
+              (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"} {:kind :redundant-unique :constraint "users_age_open_idx"}]
+                     (map #(select-keys % [:kind (if (= :redundant-unique (:kind %)) :constraint :table)]) (:diagnostics data)))
                   "the file says what deserves a look")))))
       (testing "stale and unrendered"
         (is (nil? (:stale (generate/check config))))
@@ -325,3 +326,14 @@
                       "; DO $$ BEGIN IF (SELECT h FROM hs.t WHERE id = 1) <> hstore(ARRAY['color', 'a \"b\\', 'size'], ARRAY['red', '=>,', NULL])"
                       " OR (SELECT h FROM hs.t WHERE id = 2) <> ''::hstore THEN RAISE EXCEPTION 'wrong hstore'; END IF; END $$;"))
       (is true "the map went in as the same hstore"))))
+
+(deftest a-partial-unique-index-keeps-generated-rows-apart
+  (when *db*
+    (let [[reg] (registry-of "pu" "CREATE SCHEMA pu; CREATE TABLE pu.t (id int PRIMARY KEY, kind smallint NOT NULL CHECK (kind BETWEEN 1 AND 8), active boolean NOT NULL);
+                                   CREATE UNIQUE INDEX t_kind_active ON pu.t (kind) WHERE active;")]
+      (doseq [seed (range 20)
+              :let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 seed)]]
+        (is (= 5 (count (distinct (map :kind (get ds "pu.t"))))) (str "seed " seed))
+        (exec-sql! (str (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))) "; DELETE FROM pu.t;")))
+      (is (m/validate (data/dataset-schema reg) {"pu.t" [{:id 1 :kind 1 :active false} {:id 2 :kind 1 :active true}]} {:registry reg})
+          "a dataset the database takes is valid: the rule is for generating"))))

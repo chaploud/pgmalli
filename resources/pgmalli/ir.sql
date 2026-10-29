@@ -65,8 +65,8 @@ cons AS (
   JOIN pg_catalog.pg_namespace n ON n.oid = k.connamespace
   WHERE n.nspname = :'schema' AND k.contype IN ('c', 'p', 'u', 'f', 'x') AND k.conparentid = 0
   UNION ALL
-  -- a unique index over plain columns, without a predicate, constrains rows as a UNIQUE constraint does;
-  -- its key columns only (INCLUDE columns are not part of the key)
+  -- a unique index over plain columns constrains rows as a UNIQUE constraint does, a partial one
+  -- (with a predicate) the rows it covers; its key columns only (INCLUDE columns are not part of the key)
   SELECT i.indrelid AS relid,
          json_build_object(
            'name', ic.relname,
@@ -77,6 +77,7 @@ cons AS (
                        WHERE c.ord <= i.indnkeyatts),
            'is_valid', i.indisvalid,
            'nulls_not_distinct', i.indnullsnotdistinct,
+           'partial', i.indpred IS NOT NULL,
            'index', true
          ) AS con
   FROM pg_catalog.pg_index i
@@ -84,7 +85,7 @@ cons AS (
   JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname = :'schema' AND i.indisunique AND NOT i.indisprimary
-    AND i.indpred IS NULL AND i.indexprs IS NULL
+    AND i.indexprs IS NULL
     AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conindid = i.indexrelid)
   UNION ALL
   -- a partitioned table takes a row only when one of its leaf partitions does: their bounds

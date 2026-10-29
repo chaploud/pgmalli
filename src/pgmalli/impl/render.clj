@@ -14,7 +14,8 @@
    derived from row schemas when a registry is loaded (pgmalli.impl.registry).
 
    Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique
-   ({:columns} each, :nulls-distinct false for NULLS NOT DISTINCT) and :pg/foreign-keys
+   ({:columns} each, :nulls-distinct false for NULLS NOT DISTINCT, :where true for a partial
+   unique index) and :pg/foreign-keys
    ({:columns :table :to} each, tables schema-qualified, :match :full for MATCH FULL); on columns :pg/type
    :pg/default :pg/identity :pg/generated :pg/constraints, and malli's :default for literal defaults.
 
@@ -339,7 +340,9 @@
                                       (cond-> {:columns (:columns f)}
                                         (false? (:nulls-distinct? f)) (assoc :nulls-distinct false)
                                         ;; from a unique index rather than a constraint
-                                        (:index? f) (assoc :index true)))))
+                                        (:index? f) (assoc :index true)
+                                        ;; a partial index: unique among the rows its predicate holds for
+                                        (:partial? f) (assoc :where true)))))
          :pg/foreign-keys (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:references} :fact) tfacts))]
                                             (cond-> {:columns (:columns f)
                                                      :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
@@ -393,7 +396,8 @@
   "The states a table stores that no row can satisfy, or that deserve a look: [{:kind
    :severity :message ...} ...] over its rendered columns, its table constraints and its facts."
   [rendered checks tfacts]
-  (let [keys-of (fn [fact] (map :columns (filter (comp #{fact} :fact) tfacts)))]
+  (let [;; a partial unique index repeats a key on its columns; no key repeats it
+        keys-of (fn [fact] (map :columns (remove :partial? (filter (comp #{fact} :fact) tfacts))))]
     (concat
             (:diagnostics checks)
             (for [[col r] rendered :when (impossible? (:schema r))]
@@ -422,7 +426,7 @@
                :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})
             (for [f (filter (comp #{:unique} :fact) tfacts)
                   :when (or (some #{(:columns f)} (keys-of :primary-key))
-                            (< 1 (count (filter #{(:columns f)} (keys-of :unique)))))]
+                            (< (if (:partial? f) 0 1) (count (filter #{(:columns f)} (keys-of :unique)))))]
               {:kind :redundant-unique :severity :info :constraint (:constraint f)
                :message (str (:constraint f) " repeats a key on the same columns " (pr-str (:columns f)))}))))
 
