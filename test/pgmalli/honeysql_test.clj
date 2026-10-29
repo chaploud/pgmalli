@@ -885,3 +885,9 @@
 
 (deftest information-schema-is-opaque-as-pg-catalog
   (is (= [] (h/check registry {:select [:table_name] :from [:information_schema.tables]} opts))))
+
+(deftest a-date-argument-takes-what-pgjdbc-sends
+  (let [t (:b (h/arg-types registry {:update :users :set {:born :?b} :where [:= :id 1]} opts))]
+    (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))
+    (is (m/validate t (java.util.Date.) malli-opts))
+    (is (not (m/validate t "2020-01-01" malli-opts)))))
