@@ -288,7 +288,8 @@ covers `:except`, short tables and how foreign keys are filled.
 ## Checking HoneySQL queries
 
 `h/check` reads HoneySQL query data against the registry, with no database. It returns the
-problems PostgreSQL would also report:
+problems PostgreSQL would report, and a few it would run without a word but that match no
+row ([docs/queries.md](docs/queries.md#reported-though-postgresql-runs-them)):
 
 ```clojure
 (require '[pgmalli.honeysql :as h])
@@ -330,7 +331,7 @@ The problems it reports:
 | `:not-null-violation` | NULL written into a NOT NULL column |
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
-| `:enum-literal` | an enum literal outside the enum, with `:allowed` |
+| `:enum-literal` | a literal outside an enum type's labels or a CHECK's list, with `:allowed` |
 | `:uncast-enum-string` | a string sent to an enum column as `varchar` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 
@@ -396,12 +397,12 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
 ```
 
 `:db` is not in the query, so it is `:any`; with `{:result :one}` the function returns one
-row or nil. A
-problem `h/check` finds goes in the schema's `:pgmalli/problems` property, not an exception,
+row or nil. A problem `h/check` finds goes in the schema's `:pgmalli/problems` property, not an exception,
 so a namespace still loads with a broken query:
 
 ```clojure
-(m/properties (m/schema (h/query-schema registry [:id] {:select [:mail] :from [:users] :where [:= :id :?id]})))
+(m/properties (m/schema (h/query-schema registry [:id] {:select [:mail] :from [:users] :where [:= :id :?id]})
+                        {:registry registry}))
 ;; => {:pgmalli/problems [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]}
 ```
 
@@ -418,8 +419,8 @@ Instrumentation does not read the property. `h/schema-problems` gathers it from 
     (is (= [] problems) (h/explain problems))))
 ```
 
-The rows and arguments take the options of `as-read`, plus `:write` and `:compare`: see
-[docs/queries.md](docs/queries.md).
+The options of `h/check`, `h/arg-types`, `h/row-schema` and `h/query-schema` are in
+[docs/queries.md](docs/queries.md#options).
 
 ## Keeping the files current
 
@@ -453,7 +454,7 @@ stale: public (differences: 1); run `clojure -M -m pgmalli.main generate` and co
 |---|---|
 | 0 | the files match the database |
 | 1 | a file differs or is missing: run `generate` |
-| 2 | a usage or config error |
+| 2 | a usage, config or other error |
 | 3 | the database or psql is unavailable |
 
 Findings go to stdout; usage, warnings and errors go to stderr, one line each
@@ -530,6 +531,24 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 4. the tags `write-dataset` writes (`#pgmalli/instant` and the others)
 5. the public functions of `pgmalli.core`, `pgmalli.generate`, `pgmalli.data` and
    `pgmalli.honeysql`, and their options
+6. the `:pgmalli/error` kinds of the errors pgmalli throws
+
+| `:pgmalli/error` | when |
+|---|---|
+| `:pgmalli.error/invalid-config` | `pgmalli.edn` or a `:db` map pgmalli cannot use |
+| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
+| `:pgmalli.error/unknown-schema` | a registry name the registry lacks, with the one meant |
+| `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
+| `:pgmalli.error/not-query-data` | a query that is no HoneySQL data |
+| `:pgmalli.error/not-generated` | a generated file missing from the classpath, or older than pgmalli |
+| `:pgmalli.error/invalid-dataset` | a dataset naming tables or columns the registry lacks |
+| `:pgmalli.error/reference-cycle` | tables referencing each other in a cycle |
+| `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |
+| `:pgmalli.error/db-unavailable`, `psql-missing` | the database, or psql, out of reach |
+| `:pgmalli.error/fault` | pgmalli's own fault: please report it |
+
+Each error's ex-data also carries `:cognitect.anomalies/category`, and `:given`, `:known` and
+`:suggest` where they apply.
 
 ## Development
 

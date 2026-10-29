@@ -109,10 +109,8 @@ returns their values as `PGobject`s (`hstore` as a `java.util.Map`), which `as-r
 Every type pgmalli supports is one entry of `types` in
 [src/pgmalli/impl/types.clj](../src/pgmalli/impl/types.clj): its malli schema, the literals
 it generates, the cast on insert and what the driver returns. The types it does not support
-yet are listed under `unsupported` there, each with why. To add one, move it to `types` and
-run `pgmalli.upstream-test`: it creates every extension the PostgreSQL image ships, fails on a
-type that is in neither list, and generates, inserts and reads back a NOT NULL column of every
-entry.
+yet are listed under `unsupported` there, each with why
+([CONTRIBUTING.md](../CONTRIBUTING.md#following-upstream) says how to add one).
 
 ## jsonb columns
 
@@ -183,13 +181,13 @@ Generate a version's rows from its own schema, so the generator need not guess t
 | patterns joined with `AND` | each pattern |
 | `status = 'a' AND ... OR status = 'b' AND ...` | `[:multi {:dispatch :status} ...]` |
 | other ORs of patterns | `[:or [:map ...] [:map ...]]` |
-
-A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a nullable column takes
-`[:maybe ...]`, and a NULL dispatch value takes any branch.
 | any other CHECK (`likes <= views`, arithmetic, `CASE`, jsonb operators) | `[:pg/check expr]` |
 | a domain CHECK no pattern covers | `[:pg/check-value expr]`, `VALUE` as `:VALUE` |
 | `NOT ENFORCED` (PostgreSQL 18) | nothing; listed in `:diagnostics` |
 | `NOT VALID` | `[:pg/check {:pg/not-valid true} ...]` |
+
+A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a nullable column takes
+`[:maybe ...]`, and a NULL dispatch value takes any branch.
 
 Several CHECKs on one column only tighten it. A CHECK on a `char(n)` column is a `[:pg/check expr]`:
 `char(n)` compares and measures without its trailing spaces. A partitioned table's row schema carries a CHECK
@@ -236,9 +234,9 @@ Tables (regular and partitioned), views, materialized views, columns, CHECK, PRI
 UNIQUE, FOREIGN KEY and EXCLUDE constraints, unique indexes over plain columns, row-level
 triggers, enum and domain types.
 
-An EXCLUDE is a table property, not a check: a row it would reject validates all the same.
-Datasets keep its `=` columns distinct, so their rows never conflict; one with no `=` column,
-an expression or a WHERE is listed in `:diagnostics` as one datasets may break. A row a
+An EXCLUDE is a table property, not a check: a row it would reject validates all the same,
+and each EXCLUDE is listed in `:diagnostics`. Datasets keep its `=` columns distinct, so their
+rows never conflict, except for one with no `=` column, an expression or a WHERE. A row a
 trigger would reject validates too; a row-level INSERT trigger is listed in `:diagnostics`.
 
 Not read: other indexes, policies and privileges.

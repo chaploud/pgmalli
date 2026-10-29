@@ -52,3 +52,7 @@
   (is (= (pgmalli/as-read registry :pg.sample/users (pgmalli/read-options 'next.jdbc.optional/as-unqualified-maps))
          (pgmalli/as-read registry :pg.sample/users {:nil-columns :absent}))
       "the options are as-read's"))
+
+(deftest as-read-refuses-the-options-of-query-data
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"compare"
+                        (pgmalli.core/as-read registry :pg.sample/users {:compare :lenient}))))

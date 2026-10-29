@@ -777,7 +777,7 @@
   "Enum literals outside the enum, compared with or assigned to its column; and, under pgjdbc's
    default stringtype (varchar), a string HoneySQL sends as a parameter (not inlined, not cast)
    to an enum column, which PostgreSQL refuses (no enum = varchar)."
-  [registry sc stmt {:keys [schema stringtype format write] :or {schema default-schema}}]
+  [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema}}]
   (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc])
                      (let [target (target-scope sc stmt schema)]
                        (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
@@ -785,11 +785,12 @@
         enum-type (fn [s] (let [inner (shape/non-null s)]
                             (when (and (vector? inner) (= :ref (first inner))) (shape/type-name (shape/column-props s)))))]
    (concat
-    ;; an argument sent to an enum type's column: a String unless :write says what an extension sends
+    ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
+    ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
     (for [[col value scope] uses
           :let [k (param-key value)] :when k
           :let [t (some-> (:schema (resolve-column registry scope col)) enum-type)]
-          :when (and t varchar? (not (:enum write)) (not (get write t)))]
+          :when (and t varchar?)]
       {:kind :uncast-enum-string :column col :arg k :type t})
     (for [[col value scope] uses
         :let [{s :schema} (resolve-column registry scope col)
@@ -1142,15 +1143,14 @@
    :values-arity (fn [{:keys [row columns values]}]
                    (str ":values row " row " has " values " values for " columns " :columns"))
    :enum-literal (fn [{:keys [column value allowed]}]
-                   (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))
-                        " (compared with a text column a CHECK narrows, it matches no row; assigned, the CHECK refuses it)"))
+                   (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
    :uncast-enum-string (fn [{:keys [column value arg type]}]
                          (let [what (if arg (str "argument " arg) (pr-str value))]
                            (str what " reaches enum column " (column-name column) " as varchar, which PostgreSQL refuses"
                                 " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
                                 " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " :" type "], or pass {:stringtype :unspecified}"
                                 " when the connection sets stringtype=unspecified"
-                                (when arg ", or {:write {:enum [...]}} for what an extension of yours sends"))))
+                                )))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"

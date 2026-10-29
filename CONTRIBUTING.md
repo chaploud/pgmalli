@@ -63,6 +63,12 @@ ran. The tests that catch a change upstream, each naming the list to update:
 | `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
 | `pgmalli.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops |
 
+A type of PostgreSQL's or of an extension is one entry of `types` in
+`src/pgmalli/impl/types.clj`, or one of `unsupported` there with why. To add one, move it to
+`types` and run `pgmalli.upstream-test`: it creates every extension the PostgreSQL image ships,
+fails on a type in neither list, and generates, inserts and reads back a NOT NULL column of
+every entry.
+
 A failing weekly run comments on the open issue labelled `upstream` (or opens it) with the
 list; the next passing run closes it. GitHub disables a scheduled workflow after 60 days
 without activity in the repository: `gh workflow enable upstream.yml` turns it back on.

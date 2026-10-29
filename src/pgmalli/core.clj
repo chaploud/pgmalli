@@ -40,8 +40,8 @@
    Returns the schemas the default registry held, for malli.registry/set-default-registry!
    to put back.
 
-   Code using the generated names then validates without {:registry ...}, and no longer shows
-   that it needs them."
+   Code using the generated names then validates without {:registry ...}, and hides that it
+   needs them."
   [& schemas]
   (let [before (mr/-schemas m/default-registry)]
     (mr/set-default-registry! (apply reg/registry schemas))
@@ -89,7 +89,8 @@
    (as-read registry :pg.public/users {:qualified? true})
 
    By default, as as-unqualified-maps builds rows with no extension: dates and timestamps
-   inst?, arrays, json and intervals :any. Options (read-options gives those of a builder):
+   inst?, arrays, json and intervals :any; docs/reading-rows.md lists every type. Options
+   (read-options gives those of a builder):
      :qualified? true       keys as :table/column
      :kebab? true           kebab-case keys and tables
      :lower? true           lower-case keys and tables

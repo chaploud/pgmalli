@@ -700,8 +700,8 @@
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:cast "sad" :mood]]} {})) "a cast is what it takes")
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:stringtype :unspecified})) "or stringtype=unspecified")
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:format {:inline true}})) "or the value inlined")
-    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {:write {:enum [:string]}}))
-        "an argument is reported unless :write says what is sent")))
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {:stringtype :unspecified}))
+        "an argument too is untyped under stringtype=unspecified")))
 
 (deftest an-argument-cast-to-an-enum-is-of-the-enum
   (is (= {:m [:enum "happy" "sad"]}
@@ -797,8 +797,9 @@
   (testing "an argument reaching an enum type's column as a String"
     (is (= [{:kind :uncast-enum-string :column :mood :arg :m :type "mood"}]
            (h/check registry {:select [:id] :from [:users] :where [:= :mood :?m]} (assoc opts :stringtype :varchar))))
-    (is (= [] (h/check registry {:select [:id] :from [:users] :where [:= :mood :?m]} (assoc opts :stringtype :varchar :write {:enum [:keyword]})))
-        "unless :write says what an extension sends")
+    (is (= [{:kind :uncast-enum-string :column :mood :arg :m :type "mood"}]
+           (h/check registry {:select [:id] :from [:users] :where [:= :mood :?m]} (assoc opts :stringtype :varchar :write {:enum [:keyword]})))
+        "an extension sending a keyword as a String sends varchar all the same")
     (is (= [] (h/check registry {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} (assoc opts :stringtype :varchar)))))
   (testing ":join-by leaves its tables open"
     (is (= [{:kind :unread-clause :clause :join-by}]

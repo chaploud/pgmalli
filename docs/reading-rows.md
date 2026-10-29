@@ -34,10 +34,11 @@ keys are column names, dates and timestamps are `java.sql.Date` and `java.sql.Ti
 | `:kebab? true` | kebab-case keys and tables, as the kebab builders do |
 | `:lower? true` | lower-case keys and tables, as the lower builders do |
 | `:nil-columns :absent` | NULL columns left out, as `next.jdbc.optional` builds rows |
+| `:time :inst` | the default: dates and timestamps as `java.sql.Date` and `Timestamp` (`inst?`) |
 | `:time :instant` | `next.jdbc.date-time/read-as-instant` |
 | `:time :local` | `next.jdbc.date-time/read-as-local` |
 | `:read {pg-type schema}` | what a `ReadableColumn` extension of yours returns for a column type |
-| `:read {:array :vector}` | an extension returning arrays as vectors |
+| `:read {:array :vector}` | an extension returning arrays as vectors (`:sequential` for any sequence) |
 | `:read {:json :parsed}` | an extension returning json parsed |
 
 An option pgmalli does not know is an error that suggests the intended name:

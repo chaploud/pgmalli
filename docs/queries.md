@@ -79,8 +79,8 @@ Give `h/check` the options you give `sql/format`, as `:format`:
 A table with a BEFORE row trigger for the statement (`:pg/before-triggers`) gets neither
 `:not-null-violation` nor `:missing-required-column`: the trigger may fill the row.
 
-Arguments are not values in the query: `h/arg-types` gives an argument assigned to a NOT NULL
-column a type without nil.
+`h/check` does not see what an argument holds; `h/arg-types` types one assigned to a NOT NULL
+column without nil.
 
 ## The types of the arguments
 
@@ -144,17 +144,17 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 
 ## Options
 
-Every function of `pgmalli.honeysql` takes the same options map:
+`h/check`, `h/arg-types`, `h/row-schema` and `h/query-schema` take the same options map:
 
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
-| the options of `as-read` | how next.jdbc builds rows and the driver reads values |
+| the options of `as-read` | how next.jdbc builds rows and the driver reads values ([reading-rows.md](reading-rows.md#options)) |
 | `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
 | `:write {:enum [:string :keyword]}` | what an extension sends for a list of labels (an enum type's, a CHECK's): the labels kept, as strings, keywords or both |
-| `:write {:array :vector}` | arrays passed as vectors, not `java.sql.Array` |
-| `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped |
-| `:compare :lenient` | arguments compared with a column take nil too |
+| `:write {:array [:pg/array :sequential :vector :set]}` | what an array argument (`[:any :?ids]`) may be sent as: a Java array, a vector, list or set |
+| `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped (`:varchar`, pgjdbc's default, by default) |
+| `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns` is read |
 | `:result :one` | `h/query-schema` only: the return is one row or nil |
 
@@ -209,16 +209,20 @@ most often a typo:
 ;; => [{:kind :missing-arg, :arg :id}]
 ```
 
+## Reported though PostgreSQL runs them
+
+These match no row or touch none, which is a mistake far more often than intended:
+
+- A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
+  'closed'))`) with a value outside it: an `:enum-literal`.
+- An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
+  `:not-null-violation`, even when it would touch no row.
+
 ## Not checked
 
 - Columns inside code (a list, `(when x [:= :id x])`): what it builds is not data.
 - A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
   reported as `:unread-clause`.
-- A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
-  'closed'))`) with a value outside it is an `:enum-literal`, though PostgreSQL runs it: it
-  matches no row, which is a typo far more often than intended.
-- An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column is a
-  `:not-null-violation` even when it would touch no row, as PostgreSQL then runs it.
 - Values written in the query beyond NULL and enum literals: an empty `[:in :id []]` is not
   reported (an argument in `:in` is typed non-empty).
 - An ON clause naming a table joined after it, which PostgreSQL rejects.

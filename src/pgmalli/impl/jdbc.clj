@@ -15,11 +15,10 @@
 
 ;;; the options
 
-(def options-schema
-  "The options as-read and pgmalli.honeysql take, closed: a misspelt key or value is an error
-   rather than a check silently weakened."
+(def read-options-schema
+  "The options as-read takes, closed: a misspelt key or value is an error rather than a check
+   silently weakened."
   [:map {:closed true}
-   [:schema {:optional true} :string]
    [:qualified? {:optional true} :boolean]
    [:kebab? {:optional true} :boolean]
    [:lower? {:optional true} :boolean]
@@ -27,14 +26,19 @@
    [:time {:optional true} [:enum :inst :instant :local]]
    [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json]] :any]
                             [:map [:array {:optional true} [:enum :vector :sequential]]
-                             [:json {:optional true} [:enum :parsed]]]]]
-   [:write {:optional true} [:and [:map-of [:or :string [:enum :array :enum]] :any]
-                             [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]
-                              [:enum {:optional true} [:vector {:min 1} [:enum :string :keyword]]]]]]
-   [:compare {:optional true} [:enum :strict :lenient]]
-   [:result {:optional true} [:enum :one]]
-   [:format {:optional true} :map]
-   [:stringtype {:optional true} [:enum :varchar :unspecified]]])
+                             [:json {:optional true} [:enum :parsed]]]]]])
+
+(def options-schema
+  "The options pgmalli.honeysql takes: as-read's, and those of query data."
+  (into read-options-schema
+        [[:schema {:optional true} :string]
+         [:write {:optional true} [:and [:map-of [:or :string [:enum :array :enum]] :any]
+                                   [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]
+                                    [:enum {:optional true} [:vector {:min 1} [:enum :string :keyword]]]]]]
+         [:compare {:optional true} [:enum :strict :lenient]]
+         [:result {:optional true} [:enum :one]]
+         [:format {:optional true} :map]
+         [:stringtype {:optional true} [:enum :varchar :unspecified]]]))
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
@@ -214,7 +218,7 @@
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
    pgmalli.core/as-read."
   [registry name opts]
-  (options! opts)
+  (checked! read-options-schema opts)
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         table (or (:pg/table props) (:pg/view props))

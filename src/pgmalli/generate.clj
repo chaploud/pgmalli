@@ -5,7 +5,7 @@
    Config:
      {:schemas [\"public\"]           ; default [\"public\"]
       :out-dir \"resources/pgmalli\"  ; default; files are <out-dir>/<schema>.edn
-      :overrides {constraint-name schema-or-{:skip reason}}
+      :overrides {constraint-name-or-type-keyword schema-or-{:skip reason}}
       :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise
    or, with a PostgreSQL JDBC driver on the classpath and no psql needed,
       :db {:jdbc-url \"jdbc:postgresql://host/db\" :user :password} or {:datasource ds}"
@@ -34,8 +34,8 @@
   (diff/diff before after))
 
 (defn check
-  "What CI wants to know in one read: {:stale {schema [difference ...]} :unrendered {schema
-   [fact ...]} :diagnostics {schema [diagnostic ...]} :missing [schema ...]}, :stale nil when
+  "{:stale {schema [difference ...]} :unrendered {schema [fact ...]} :diagnostics {schema
+   [diagnostic ...]} :missing [schema ...]} for the config's schemas, what CI checks: :stale nil when
    every file matches the database, :missing nil when every schema has a file. Option
    {:db? false} skips the database and reports the files alone."
   ([config] (diff/check config))
