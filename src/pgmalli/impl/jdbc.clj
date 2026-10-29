@@ -29,7 +29,8 @@
    [:write {:optional true} [:and [:map-of [:or :string [:enum :array]] :any]
                              [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]]]]
    [:compare {:optional true} [:enum :strict :lenient]]
-   [:result {:optional true} [:enum :one]]])
+   [:result {:optional true} [:enum :one]]
+   [:values-default-columns {:optional true} [:or [:set :keyword] [:sequential :keyword]]]])
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key

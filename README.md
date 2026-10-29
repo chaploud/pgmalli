@@ -22,7 +22,8 @@ generate test data and check HoneySQL queries, without a database at hand.
 ## Quickstart
 
 The examples use [docs/example/schema.sql](docs/example/schema.sql): `groups`, `users` and
-`posts`, with an enum, identity and generated columns, and CHECKs.
+`posts`, with an enum, identity and generated columns, and CHECKs. Add pgmalli to your
+dependencies ([Installation](#installation)) and keep `resources` on the classpath:
 
 ```shell
 $ psql -f docs/example/schema.sql
@@ -102,7 +103,7 @@ reads through PostgreSQL's JDBC driver instead, no psql needed:
 {:db {:jdbc-url "jdbc:postgresql://localhost/app_dev" :user "app" :password "secret"}}
 ```
 
-`{:datasource ds}` takes a `javax.sql.DataSource`. Generating needs PostgreSQL 16 or later;
+`:db {:datasource ds}` reads through a `javax.sql.DataSource`. Generating needs PostgreSQL 16 or later;
 applications only need the generated files.
 
 The same from Clojure:
@@ -115,7 +116,9 @@ The same from Clojure:
 ;; => {"public" "resources/pgmalli/public.edn"}
 ```
 
-pgmalli runs on babashka too, but for JDBC.
+For strings matching a regex CHECK, add `com.gfredericks/test.chuck` to your test alias;
+without it they are drawn at random and filtered. pgmalli runs on babashka too, except for
+JDBC.
 
 ## Validating rows and writes
 
@@ -191,14 +194,15 @@ gives the row as next.jdbc builds it, to validate results as they come back:
 ;; => true
 ```
 
-Its options say how your application reads rows. `read-options` gives them for a next.jdbc
-builder:
+Its options match the builder your application uses. `read-options` gives them for a
+next.jdbc builder:
 
 ```clojure
 (pgmalli/read-options 'next.jdbc.result-set/as-maps)
 ;; => {:qualified? true}
 
-(map first (drop 2 (pgmalli/as-read registry :pg.public/users {:qualified? true})))
+(mu/keys (m/schema (pgmalli/as-read registry :pg.public/users {:qualified? true})
+                   {:registry registry}))
 ;; => (:users/closed_at :users/created_at :users/email :users/group_id :users/id :users/nick :users/status)
 ```
 
@@ -207,8 +211,8 @@ There are three ways to check a row read from the database:
 | way | for |
 |---|---|
 | `as-read` | the rows of one table, as next.jdbc returns them (recommended) |
-| `h/row-schema` | the rows of a query: a join, some columns |
-| `m/decode` with `pgmalli/transformer`, then the row schema | rows turned into the registry's types first |
+| `h/row-schema` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
+| `m/decode` with `pgmalli/transformer` ([reading rows](docs/reading-rows.md#decoding-instead)) | rows turned into the registry's types first |
 
 [docs/reading-rows.md](docs/reading-rows.md) has every option: `next.jdbc.date-time`,
 `next.jdbc.optional`, and the types a `ReadableColumn` extension of yours returns.
@@ -223,9 +227,6 @@ There are three ways to check a row read from the database:
             {:registry registry})
 ;; => true
 ```
-
-> NOTE: a `:seed` gives the same rows within one process only. Keep a fixture in a file to
-> share it between runs.
 
 A dataset is several tables at once, foreign keys pointing at generated rows:
 
@@ -264,7 +265,7 @@ HoneySQL INSERTs in an order the database accepts:
 ```
 
 `next.jdbc.date-time` lets the driver take the `java.time` values. [docs/datasets.md](docs/datasets.md)
-covers `:except`, short tables and how references are solved.
+covers `:except`, short tables and how foreign keys are filled.
 
 ## Checking HoneySQL queries
 
@@ -296,9 +297,11 @@ The problems it reports:
 | `:unknown-column` | a column no table in scope has |
 | `:ambiguous-column` | an unqualified column of two tables, with `:candidates` |
 | `:missing-required-column` | an INSERT lacking a required column |
+| `:not-null-violation` | NULL written into a NOT NULL column |
+| `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | an enum literal outside the enum, with `:allowed` |
-| `:unread-clause` | a clause pgmalli does not read, so the query is not wholly checked |
+| `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 
 Every query of a project checks in one test:
 
@@ -314,13 +317,13 @@ Every query of a project checks in one test:
     (is (= [] (h/check registry q)) (str k))))
 ```
 
-What a subquery, a CTE or code in the query sees, and how arguments are typed:
+What a subquery, a CTE or code in the query (a list, `(when x ...)`) sees, and how arguments are typed:
 [docs/queries.md](docs/queries.md).
 
 ## Function schemas for queries
 
 `h/query-schema` gives the function schema of a function that runs a query. Arguments are
-HoneySQL's named parameters (`:?id`), under the key `sql/format`'s `:params` takes (`:id`):
+HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id`):
 
 ```clojure
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
@@ -353,7 +356,8 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
 (mi/unstrument!)
 ```
 
-`:db` is not in the query, so it is `:any`; `{:result :one}` returns one row or nil. A
+`:db` is not in the query, so it is `:any`; with `{:result :one}` the function returns one
+row or nil. A
 problem `h/check` finds goes in the schema's `:pgmalli/problems` property, not an exception,
 so a namespace still loads with a broken query:
 
@@ -365,8 +369,8 @@ so a namespace still loads with a broken query:
 > NOTE: the property makes the schema vector one element longer. Read its parts with
 > `m/children`, not by position.
 
-The rows and arguments take the options of `as-read`, and a few of their own for
-extensions of next.jdbc you have: see [docs/queries.md](docs/queries.md).
+The rows and arguments take the options of `as-read`, plus `:write` and `:compare`: see
+[docs/queries.md](docs/queries.md).
 
 ## Keeping the files current
 
@@ -377,12 +381,20 @@ extensions of next.jdbc you have: see [docs/queries.md](docs/queries.md).
 (is (nil? (:stale (generate/check {:schemas ["public"]}))))
 ```
 
-or `clojure -M -m pgmalli.main check`, which exits 1 when a file differs and prints what:
+Without a database, `{:db? false}` reads the files alone; `:missing` lists the schemas with
+no file:
+
+<!-- :test-doc-blocks/skip -->
+```clojure
+(is (nil? (:missing (generate/check {:schemas ["public"]} {:db? false}))))
+```
+
+`clojure -M -m pgmalli.main check` exits 1 when a file differs or is missing, and prints what:
 
 ```shell
 $ clojure -M -m pgmalli.main check
 generated files are out of date; run generate and commit:
-  public :pg.public/posts views file nil db [:pg/integer {:default 0, ...}]
+  public :pg.public/groups motto file nil db [:maybe :string]
 ```
 
 `generate/diff` gives the same differences between two generated files, the effect of a
@@ -418,7 +430,18 @@ it a schema of your own, or skip it with a reason, in `pgmalli.edn`:
              :inet [:re "^[0-9.]+$"]}}
 ```
 
-A constraint name replaces that CHECK; a keyword names a type, for every column of it.
+A constraint name replaces that CHECK; a type keyword (`:inet`) replaces the schema of every
+column of that type. A `[:ref ...]` to a schema of your own needs a registry holding it:
+
+```clojure
+(require '[malli.registry :as mr])
+
+(def app-registry
+  (mr/composite-registry {:app/scores-consistent [:fn map?]} registry))
+
+(m/validate :app/scores-consistent {} {:registry app-registry})
+;; => true
+```
 
 ## Supported versions
 
@@ -435,7 +458,7 @@ and the JDBC driver are yours.
 
 ## Stability
 
-Kept compatible; a change bumps the minor version:
+Changing any of these is breaking; before 1.0 it bumps the minor version:
 
 1. the keys of `pgmalli.edn`
 2. the generated file and the registry names

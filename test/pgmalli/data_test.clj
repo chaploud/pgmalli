@@ -33,3 +33,13 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry does not: \[\"groups\"\]" (data/dataset-generator registry {:except #{"groups"}})))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be :nothing" (data/inserts registry {} {:on-conflict :ignore})))
   (is (some? (data/dataset-generator registry {:except nil})) "an :except of nil leaves nothing out"))
+
+(deftest a-seed-gives-the-same-times-in-every-run
+  (let [times (->> (vals (tcg/generate (data/dataset-generator registry {:rows 5}) 30 3))
+                   (mapcat identity)
+                   (mapcat vals)
+                   (filter #(instance? java.time.temporal.Temporal %)))]
+    (is (seq times))
+    (is (every? #(= 2025 (.get ^java.time.temporal.Temporal % java.time.temporal.ChronoField/YEAR))
+                (map #(if (instance? java.time.Instant %) (.atZone ^java.time.Instant % java.time.ZoneOffset/UTC) %) times))
+        "times come from a fixed range, not from the clock")))

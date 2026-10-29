@@ -56,12 +56,12 @@ default):
 ;; => "public.posts references public.users, which :except leaves out"
 ```
 
-A foreign key is solved by picking a row of the table it references. A cycle of NOT NULL
+A foreign key is filled from a row of the table it references. A cycle of NOT NULL
 foreign keys between tables cannot be generated.
 
 ## Short tables
 
-A table whose CHECKs few values pass may come out with fewer rows than `:rows`.
+A table whose CHECKs reject most candidates may come out with fewer rows than `:rows`.
 `short-tables` lists them with what the candidate rows failed on; nil when every table is
 full:
 
@@ -72,8 +72,8 @@ full:
 
 ## Keeping a fixture
 
-> NOTE: a seed gives the same dataset within one process only. Write a dataset to a file to
-> use the same one across runs.
+A seed gives the same dataset in every run with the same versions of pgmalli and malli.
+Write it to a file to keep it across upgrades:
 
 ```clojure
 (data/write-dataset "target/fixture.edn" sample)
@@ -84,7 +84,7 @@ full:
 
 The file holds one row per line, `java.time` values and bytes under pgmalli's tags
 (`#pgmalli/instant "..."`, `#pgmalli/bytes "hex"`). Byte arrays compare by identity, so a
-dataset with `bytea` values is not `=` to itself read back; it inserts the same.
+dataset with `bytea` values is not `=` to itself read back, though it inserts the same rows.
 
 ## Inserting
 
@@ -120,4 +120,5 @@ For a database that already holds some rows (seeded by migrations), add
 ```
 
 > NOTE: identity sequences do not move with the inserted ids. Before inserting rows without
-> ids into the same tables, set them with `setval`.
+> ids into the same tables, set them:
+> `SELECT setval(pg_get_serial_sequence('users', 'id'), max(id)) FROM users`.

@@ -25,18 +25,27 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - HoneySQL named parameters (`:?id`, `[:param :id]`) in `arg-types` and `query-schema`.
-- `:read`, `:write` and `{:compare :lenient}` for what your next.jdbc does differently
+- `:read`, `:write` and `{:compare :lenient}` for next.jdbc extensions and builders
   ([docs/reading-rows.md](docs/reading-rows.md), [docs/queries.md](docs/queries.md)).
 - `:pg/array`: what the driver takes as an array parameter.
 - `:db` with `:jdbc-url` or `:datasource` reads the catalog over JDBC, without psql.
 - `query-schema` carries the query's problems and a `:missing-arg` as `:pgmalli/problems`.
 - `check` reports a clause it does not read (`:unread-clause`), from the HoneySQL loaded.
+- `check` reports writes PostgreSQL refuses: NULL into a NOT NULL column
+  (`:not-null-violation`), including the NULL HoneySQL writes for a key one `:values` map
+  lacks, and a value into a generated or identity ALWAYS column (`:read-only-column`).
+  `:values-default-columns` takes `sql/format`'s option of that name.
 - Supported versions in the README, the oldest of them run in CI.
-- `bb oracle`: `check` beside PostgreSQL itself on a corpus of queries and mutants of them;
+- `bb oracle`: `check` against PostgreSQL itself on a corpus of queries and mutants of them;
   CI holds its false positives at none.
 
 ### Fixed
 
+- A `:seed` gives the same rows in every run: times generate within 2025, not the year before
+  now. The columns of a CHECK's branches (`[:multi ...]`) generate as the row's columns do;
+  a `closed_at` generated in a branch came out near 1970.
+- `generate/check` lists the schemas with no generated file under `:missing`; with
+  `{:db? false}` a missing file passed.
 - `check` reports no error PostgreSQL does not: `USING` columns, schema-qualified tables,
   identifiers in another case or with `-`, whole-row references, system columns, output
   columns in `:order-by`, an inner alias hiding an outer one, the target of an UPDATE under a

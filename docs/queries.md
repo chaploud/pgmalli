@@ -1,8 +1,7 @@
 # HoneySQL queries
 
 `pgmalli.honeysql` reads a HoneySQL query as data and compares it with the registry. The
-README shows `h/check` and `h/query-schema`; this page covers what they read and their
-options. The examples use [example/schema.sql](example/schema.sql).
+examples use [example/schema.sql](example/schema.sql).
 
 ```clojure
 (require '[pgmalli.core :as pgmalli]
@@ -35,7 +34,7 @@ options. The examples use [example/schema.sql](example/schema.sql).
 ;; => [{:kind :unknown-table, :table "public.accounts"}]
 ```
 
-A clause pgmalli does not read is reported, so a query is never checked only in part:
+A clause pgmalli does not read is reported rather than passed over:
 
 ```clojure
 (h/check registry {:select [:id] :from [:users] :frobnicate [:x]})
@@ -45,10 +44,46 @@ A clause pgmalli does not read is reported, so a query is never checked only in 
 A CTE or subquery has the types of what it selects. An expression (`[:count :*]`) has no
 type: comparisons with it are not checked.
 
+## Writes
+
+An INSERT or UPDATE is checked against what PostgreSQL refuses to write:
+
+```clojure
+(h/check registry {:update :users :set {:email nil} :where [:= :id 1]})
+;; => [{:kind :not-null-violation, :table "public.users", :column :email}]
+
+(h/check registry {:update :posts :set {:title_upper "X"} :where [:= :id 1]})
+;; => [{:kind :read-only-column, :table "public.posts", :column :title_upper}]
+```
+
+HoneySQL writes NULL for a key one map of `:values` lacks and another has. `users.status`
+has a default, but the first row below gets NULL:
+
+```clojure
+(h/check registry {:insert-into :users
+                   :values [{:group_id 1 :email "ann@example.com"}
+                            {:group_id 1 :email "bob@example.com" :status "closed" :closed_at [:now]}]})
+;; => [{:kind :not-null-violation, :table "public.users", :column :status}]
+```
+
+Pass `sql/format`'s `:values-default-columns` to `h/check` too, when you pass it to
+`sql/format`:
+
+```clojure
+(h/check registry {:insert-into :users
+                   :values [{:group_id 1 :email "ann@example.com"}
+                            {:group_id 1 :email "bob@example.com" :status "closed" :closed_at [:now]}]}
+         {:values-default-columns #{:status :closed_at}})
+;; => []
+```
+
+Arguments are not values in the query: `h/arg-types` gives an argument assigned to a NOT NULL
+column a type without nil.
+
 ## The types of the arguments
 
 `h/arg-types` gives `{arg schema}` for a query's named parameters (`:?id`, `[:param :id]`),
-keyed as `sql/format`'s `:params` takes them:
+keyed as in `sql/format`'s `:params`:
 
 ```clojure
 (h/arg-types registry {:select [:id]
@@ -116,11 +151,12 @@ Every function of `pgmalli.honeysql` takes the same options map:
 | `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
 | `:write {:array :vector}` | arrays passed as vectors, not `java.sql.Array` |
 | `:compare :lenient` | arguments compared with a column take any value of its kind and nil |
+| `:values-default-columns #{...}` | the option of `sql/format`: those keys missing from a `:values` map are DEFAULT |
 | `:result :one` | `h/query-schema` only: the return is one row or nil |
 
 ## Function schemas
 
-`h/query-schema` joins the two: the arguments are the function's, in order, and keys the
+`h/query-schema` combines `arg-types` and `row-schema`: the arguments are the function's, in order, and keys the
 query lacks (`:db`) are `:any`:
 
 ```clojure
@@ -130,8 +166,8 @@ query lacks (`:db`) are `:any`:
 ;; => [:=> [:cat :any [:or [:sequential {:min 1} [:int #:pg{:identity :always, :type "bigint"}]] [:set {:min 1} [:int #:pg{:identity :always, :type "bigint"}]]]] [:maybe [:map [:id [:int #:pg{:identity :always, :type "bigint"}]]]]]
 ```
 
-The schema names registry types (`:pg/integer`, refs to enums). Give it the registry when
-you make it, so `:malli/schema` holds a schema that needs none:
+The schema may use types malli's default registry lacks (`:time/instant`). Give it the
+registry when you make it, so `:malli/schema` holds a schema that needs none:
 
 ```clojure
 (def find-users-schema
@@ -160,7 +196,8 @@ property makes the vector one longer, so read its parts with `m/children`:
 ;; => [:cat [:int #:pg{:identity :always, :type "bigint"}]]
 ```
 
-An argument of the query that `args` lacks is `:missing-arg`, most often a typo:
+An argument of the query that the argument vector (`[:db :idd]`) lacks is `:missing-arg`,
+most often a typo:
 
 ```clojure
 (:pgmalli/problems (m/properties (m/schema (h/query-schema registry [:db :idd] {:select [:id] :from [:users] :where [:= :id :?id]})
@@ -172,4 +209,4 @@ An argument of the query that `args` lacks is `:missing-arg`, most often a typo:
 
 - Columns inside code (a list, `(when x [:= :id x])`): what it builds is not data.
 - An ON clause naming a table joined after it, which PostgreSQL rejects.
-- Under ON CONFLICT, which of the target and `excluded` RETURNING and DO UPDATE WHERE see.
+- Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.

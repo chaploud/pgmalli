@@ -156,11 +156,11 @@
 
 (deftest generated-values-look-like-data
   (let [rows (tcg/sample (mg/generator (pgmalli/columns registry :pg.sample/users) opts) 40)
-        year-ago (.minus (java.time.Instant/now) (java.time.Duration/ofDays 366))]
+        y2025 (fn [^java.time.Instant t] (= 2025 (.getYear (.atZone t java.time.ZoneOffset/UTC))))]
     (is (every? #(pos? (:id %)) rows) "keys are positive")
     (is (every? #(<= (:id %) 100000) rows) "and small")
     (is (every? #(or (nil? (:nick %)) (<= (count (:nick %)) 24)) rows) "strings are short")
-    (is (every? #(or (nil? (:closed_at %)) (.isAfter ^java.time.Instant (:closed_at %) year-ago)) rows) "times are recent")
+    (is (every? #(or (nil? (:closed_at %)) (y2025 (:closed_at %))) rows) "times fall in a fixed year, not one read off the clock")
     (is (every? #(pos? (:group_id %)) rows) "referencing columns too")))
 
 (deftest key-and-reference-rules

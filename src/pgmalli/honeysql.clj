@@ -675,6 +675,43 @@
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column c})))))))
 
+(defn- write-problems
+  "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
+   a column only the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
+   VALUE). A column one map of :values lacks and another has is NULL, as HoneySQL writes it,
+   DEFAULT under sql/format's :values-default-columns."
+  [registry scopes stmt {:keys [schema values-default-columns] :or {schema default-schema}}]
+  (let [target (target-scope scopes stmt schema)
+        i (:insert-into stmt)
+        overriding? (and (vector? i) (map? (first i)) (= :system (:overriding-value (first i))))
+        columns (:columns (insert-parts stmt))
+        rows (when (vector? (:values stmt)) (:values stmt))
+        maps (filter map? rows)
+        union (distinct (mapcat keys maps))
+        do-update (:do-update-set stmt)
+        excluded ::excluded
+        written (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [c v :update]))
+                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update)] [c excluded :update])
+                              (map? do-update) (for [[c v] do-update] [c v :update])
+                              (vector? do-update) (for [c do-update] [c excluded :update]))
+                        (for [row maps, c union]
+                          [c (cond (contains? row c) (get row c) (contains? (set values-default-columns) c) :default) :insert])
+                        (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert])))]
+    (when (seq target)
+      (distinct
+       (for [[col v how] written
+             :when (column-keyword? col)
+             :let [{:keys [table] s :schema} (resolve-column registry target col)
+                   cp (some-> s shape/column-props)
+                   p (cond (or (nil? s) (#{:default [:default]} v)) nil
+                           (and (shape/written-by-database? cp)
+                                (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
+                           {:kind :read-only-column :table table :column col}
+                           (and (or (nil? v) (= [:inline nil] v)) (not (shape/maybe? s)))
+                           {:kind :not-null-violation :table table :column col})]
+             :when p]
+         p)))))
+
 (defn- enum-problems [registry sc stmt schema]
   (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc])
                                   (let [target (target-scope sc stmt schema)]
@@ -697,13 +734,14 @@
    the enum (compared with, or assigned to, the column). scope is the statement's (from scope)
    or, for a nested statement, the chain of its own and the enclosing ones. Empty when the
    statement agrees with the registry."
-  [registry stmt scope {:keys [schema] :or {schema default-schema}}]
+  [registry stmt scope {:keys [schema] :or {schema default-schema} :as opts}]
   (let [registry (reading registry)
         scopes (chain scope)]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?]
                    {:kind :unknown-table :table table})
                  (column-problems registry scopes stmt schema)
                  (insert-problems registry stmt schema)
+                 (write-problems registry scopes stmt opts)
                  (enum-problems registry scopes stmt schema)))))
 
 (def ^:private read-clauses
@@ -948,6 +986,7 @@
      :write {pg-type schema}  what a SettableParameter extension takes; also
                               {:array [:pg/array :sequential :set]}
      :compare :lenient        compared arguments take any value of the column's kind, and nil
+     :values-default-columns  sql/format's option, if you pass it there
      :result :one             the return is [:maybe row]
    Throws when args are not keywords or symbols. See docs/queries.md."
   ([registry args body] (query-schema registry args body {}))

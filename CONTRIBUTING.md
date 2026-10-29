@@ -17,7 +17,7 @@ image).
 | `bb test:jvm` | the suite on the JVM |
 | `bb test:matrix` | the suite on every PostgreSQL version CI covers |
 | `bb test:docs` | the code blocks of README.md and docs/, each `;; =>` asserted |
-| `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` beside PostgreSQL itself |
+| `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
 
 ## Documentation
 
@@ -37,8 +37,8 @@ prints where `check` disagrees: a false positive (PostgreSQL takes the query, `c
 it) or a miss (PostgreSQL refuses it, `check` lets it pass). `pgmalli.oracle-test` holds the
 false positives at none in `bb test:jvm`.
 
-A change to how `pgmalli.honeysql` reads scopes or names gets a run with a few seeds. A query
-it got wrong goes into the corpus.
+After changing how `pgmalli.honeysql` resolves scopes or names, run `bb oracle` with a few
+seeds. A query it got wrong goes into the corpus.
 
 ## Other tasks
 

@@ -1,7 +1,6 @@
 # PostgreSQL types and constraints in malli
 
-What each part of a PostgreSQL schema becomes in the registry. The README shows how to use
-them; this page is the reference.
+What each part of a PostgreSQL schema becomes in the registry.
 
 ## Names in the registry
 
@@ -55,7 +54,7 @@ The table's map carries:
 | `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
 
-An identifier that is no plain name (`Order Items`) is a string key. Names keep the
+An identifier that is not a plain name (`Order Items`) is a string key. Names keep the
 database's spelling.
 
 ## Column types
@@ -84,8 +83,8 @@ database's spelling.
 `:pg/numeric` rounds to `s` places, half up as PostgreSQL does, then allows fewer than
 `p - s` digits before the point. `s` may be negative or larger than `p`, as PostgreSQL allows.
 
-The types without a malli counterpart are generated from a fixed list of literals the
-database reads.
+The types without a malli counterpart generate from a fixed list of literals PostgreSQL
+accepts.
 
 ## CHECK constraints
 
@@ -101,7 +100,7 @@ database reads.
 | `jsonb_typeof(col) = 'object'` (`'array'`) | `:map` (`[:sequential :any]`) |
 | `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?i)`) |
 | `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^\Qa\E.*$"]]` (with `(?i)`) |
-| `col IS NULL OR <a pattern>` | the pattern, NULL passing it |
+| `col IS NULL OR <a pattern>` | the pattern, or NULL |
 | `col IS NOT NULL` | no `[:maybe ...]` |
 | patterns joined with `AND` | each pattern |
 | `status = 'a' AND ... OR status = 'b' AND ...` | `[:multi {:dispatch :status} ...]` |
@@ -141,7 +140,8 @@ outside them (a function of your own, a cast to a range type, `AT TIME ZONE`) is
 Values are the registry's types: `java.time`, `UUID`, jsonb as maps and vectors.
 
 > NOTE: a CHECK comparing `timestamp` with `timestamptz` or `now()` converts in the JVM's time
-> zone. Give `transformer` the zone your JDBC driver used (`{:zone ...}`).
+> zone. Give [`transformer`](reading-rows.md#decoding-instead) the zone your JDBC driver
+> used (`{:zone ...}`).
 
 ## What is read
 
@@ -159,8 +159,8 @@ A generated column is left to the database. A range built from two columns
 
 `pgmalli.core/registry` returns a map: malli's default schemas, `malli.util`'s,
 `malli.experimental.time`'s, pgmalli's `:pg/*` types, and the generated and derived names.
-pgmalli's names are all under `:pg`, so it hides none of malli's. Given the same schema twice,
-the later one is kept.
+pgmalli's names are all under `:pg`, so it hides none of malli's. A name defined in two of
+the schemas passed keeps the later schema's.
 
 Every pgmalli function taking a registry takes any malli registry holding the generated
 names, a `malli.registry/composite-registry` included. In a composite registry the first

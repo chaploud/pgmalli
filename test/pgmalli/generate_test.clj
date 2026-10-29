@@ -13,6 +13,10 @@
            (generate/diff before after)))
     (is (= [] (generate/diff before before)))))
 
+(deftest check-without-a-database-reports-a-missing-file
+  (let [out-dir (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete))]
+    (is (= ["sample"] (:missing (generate/check {:out-dir out-dir :schemas ["sample"]} {:db? false}))))))
+
 (deftest check-without-a-database-reads-the-files
   (let [out-dir (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete))
         config {:out-dir out-dir :schemas ["sample"]}
@@ -21,6 +25,7 @@
                     :diagnostics [{:table "sample.users" :kind :row-trigger}])]
     (spit (doto (files/path-for config "sample") (io/make-parents)) (files/edn-string data))
     (is (= {:stale nil
+            :missing nil
             :unrendered {"sample" [{:kind :check :table "sample.users"}]}
             :diagnostics {"sample" [{:table "sample.users" :kind :row-trigger}]}}
            (generate/check config {:db? false})))))

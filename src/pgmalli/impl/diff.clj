@@ -71,5 +71,6 @@
   ([config {:keys [db?] :or {db? true}}]
    (let [files (files config)]
      {:stale (when db? (stale* config files))
+      :missing (not-empty (vec (remove files (:schemas (files/config config)))))
       :unrendered (into {} (for [[s f] files :when (seq (:unrendered f))] [s (:unrendered f)]))
       :diagnostics (into {} (for [[s f] files :when (seq (:diagnostics f))] [s (:diagnostics f)]))})))

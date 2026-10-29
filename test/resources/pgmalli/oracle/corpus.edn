@@ -136,6 +136,18 @@
  [:insert-returning-bad {:insert-into :posts :values [{:user_id 1 :title "x"}] :returning [:nick]}]
  [:insert-select-with {:with [[:c {:select [:id] :from [:users]}]] :insert-into [[:posts [:user_id :title]] {:select [:id [[:cast "t" :text]]] :from [:c]}]}]
  ;; ON CONFLICT
+ ;; writes PostgreSQL refuses: NULL into NOT NULL, a column only the database writes
+ [:update-null {:update :posts :set {:title nil} :where [:= :id 1]}]
+ [:update-nullable {:update :posts :set {:body nil} :where [:= :id 1]}]
+ [:update-identity {:update :audits :set {:id 5}}]
+ [:update-generated {:update :audits :set {:note_upper "x"}}]
+ [:update-generated-default {:update :audits :set {:note_upper [:default]}}]
+ [:insert-identity {:insert-into :audits :values [{:id 1 :note "a"}]}]
+ [:insert-overriding {:insert-into [{:overriding-value :system} :audits] :values [{:id 1 :note "a"}]}]
+ [:insert-generated {:insert-into :audits :values [{:note "a" :note_upper "A"}]}]
+ [:insert-default-null {:insert-into :audits :values [{:note nil}]}]
+ [:insert-hetero-default {:insert-into :groups :values [{:name "a"} {:name "b" :created_at [:now]}]}]
+ [:upsert-null {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name nil}}]
  [:upsert-excluded {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name [:|| :EXCLUDED.name "!"]}}]
  [:upsert-target-ref {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :tags.name}}]
  [:upsert-excluded-bad {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :EXCLUDED.nosuch}}]

@@ -35,7 +35,8 @@
 
 (defn check
   "What CI wants to know in one read: {:stale {schema [difference ...]} :unrendered {schema
-   [fact ...]} :diagnostics {schema [diagnostic ...]}}, :stale nil when every file matches the
-   database. Option {:db? false} skips the database and reports the files alone."
+   [fact ...]} :diagnostics {schema [diagnostic ...]} :missing [schema ...]}, :stale nil when
+   every file matches the database, :missing nil when every schema has a file. Option
+   {:db? false} skips the database and reports the files alone."
   ([config] (diff/check config))
   ([config opts] (diff/check config opts)))

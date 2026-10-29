@@ -34,7 +34,8 @@
                          :let [data (files/read-edn out)]]
                    (println "wrote" out (str "(" schema ": " (counts data) ")"))
                    (doseq [d (:diagnostics data)] (println "  " (name (:severity d)) (:table d) (:message d))))
-      "check" (let [{:keys [stale unrendered diagnostics]} (generate/check config)]
+      "check" (let [{:keys [stale missing unrendered diagnostics]} (generate/check config)]
+                (doseq [schema missing] (println "no generated file for" schema "; run generate and commit"))
                 (when stale
                   (println "generated files are out of date; run generate and commit:")
                   (doseq [[schema ds] stale, {:keys [name column property checks order key file db]} ds]
@@ -47,7 +48,7 @@
                 (doseq [[schema ds] diagnostics]
                   (println schema ": " (count ds) "diagnostic(s):")
                   (doseq [d ds] (println "  " (name (:severity d)) (:table d) (:message d))))
-                (if stale (System/exit 1) (println "generated files match the database")))
+                (if (or stale missing) (System/exit 1) (println "generated files match the database")))
       (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))
     ;; clojure.java.shell runs psql on the agent pool, whose threads keep the JVM up a minute
     (shutdown-agents)))

@@ -99,12 +99,11 @@
 
 (defn- gen-hints
   "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap) for a column
-   schema: key and identity integers are small and positive, strings short, times within the
-   last year, an unshaped json column a JSON value, an opaque type one of a few literals, a bit
-   string digits. Other columns keep the schema's own bounds."
+   schema: key and identity integers are small and positive, strings short, times within 2025
+   (fixed, so a seed gives the same rows in every run), an unshaped json column a JSON value,
+   an opaque type one of a few literals, a bit string digits. Other columns keep the schema's own bounds."
   [s key?]
   (let [[t p] (if (and (vector? s) (map? (second s))) [(first s) (second s)] [(if (vector? s) (first s) s) {}])
-        now (java.time.Instant/now)
         ;; a numeric bounded by CHECKs ([:and decimal? [:> 1] [:< 1000]]) generates within them: the
         ;; bounds go to the head as :gen/min and :gen/max, on a :pg/numeric when the head is bare
         numeric-bounds (when (= :and t)
@@ -121,9 +120,9 @@
                 :string (if (#{"bit" "bit varying" "varbit"} (shape/type-name p))
                           {:gen/schema [:vector {:min (:min p 1) :max (:max p (:min p 8))} [:enum "0" "1"]] :gen/fmap #(apply str %)}
                           (when (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) 24)}))
-                :time/instant {:gen/min (.minus now (java.time.Duration/ofDays 365)) :gen/max now}
-                :time/local-date-time (let [n (java.time.LocalDateTime/now)] {:gen/min (.minusDays n 365) :gen/max n})
-                :time/local-date (let [n (java.time.LocalDate/now)] {:gen/min (.minusDays n 365) :gen/max n})
+                :time/instant {:gen/min (java.time.Instant/parse "2025-01-01T00:00:00Z") :gen/max (java.time.Instant/parse "2025-12-31T23:59:59Z")}
+                :time/local-date-time {:gen/min (java.time.LocalDateTime/parse "2025-01-01T00:00:00") :gen/max (java.time.LocalDateTime/parse "2025-12-31T23:59:59")}
+                :time/local-date {:gen/min (java.time.LocalDate/parse "2025-01-01") :gen/max (java.time.LocalDate/parse "2025-12-31")}
                 ;; a type pgmalli cannot write a value of generates NULL; a NOT NULL column of it
                 ;; leaves its table short, with the reason, rather than carrying a value the
                 ;; database refuses
@@ -142,19 +141,25 @@
             i (if (map? (second s)) 2 1)]
         (assoc s i head*))
       (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
-      (if (map? (second s)) (assoc s 1 (merge p hints)) (into [t hints] (rest s)))
+      (cond (not (vector? s)) [t hints] (map? (second s)) (assoc s 1 (merge p hints)) :else (into [t hints] (rest s)))
       :else s)))
 
-(defn- with-gen-hints [row]
+(defn- with-gen-hints
+  "The row with generation hints on its columns, and on the columns of the :multi and :or
+   fragments its CHECKs became, which generate those columns' values in their branches."
+  [row]
   (let [[_ props & entries] (shape/row-map row)
         key-cols (set (map shape/ident-key (concat (:pg/primary-key props) (mapcat :columns (:pg/unique props)) (mapcat :columns (:pg/foreign-keys props)))))
-        m (into [:map props]
-                (map (fn [e] (let [[k p s] (shape/entry-parts e)
-                                   key? (or (key-cols k) (:pg/identity (shape/column-props s)))
-                                   s (if (shape/maybe? s) [:maybe (gen-hints (last s) key?)] (gen-hints s key?))]
-                               (if (empty? p) [k s] [k p s])))
-                     entries))]
-    (if (= :and (first row)) (into [:and m] (drop 2 row)) m)))
+        hinted (fn [e] (let [[k p s] (shape/entry-parts e)
+                             key? (or (key-cols k) (:pg/identity (shape/column-props s)))
+                             s (if (shape/maybe? s) [:maybe (gen-hints (last s) key?)] (gen-hints s key?))]
+                         (if (empty? p) [k s] [k p s])))
+        m (into [:map props] (map hinted) entries)
+        fragment (fn [f] (if (and (vector? f) (= :map (first f)))
+                           (let [[head entries] (if (map? (second f)) [(subvec f 0 2) (drop 2 f)] [[:map] (rest f)])]
+                             (into head (map hinted) entries))
+                           f))]
+    (if (= :and (first row)) (into [:and m] (map #(walk/postwalk fragment %)) (drop 2 row)) m)))
 
 (def regex-generation?
   "Whether strings can be generated from a regex here: test.chuck's generator, which runs on

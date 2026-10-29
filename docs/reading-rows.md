@@ -5,7 +5,8 @@ PostgreSQL's JDBC driver returns. The examples use [example/schema.sql](example/
 
 ```clojure
 (require '[pgmalli.core :as pgmalli]
-         '[malli.core :as m])
+         '[malli.core :as m]
+         '[malli.util :as mu])
 
 (def registry (pgmalli/registry "public"))
 ```
@@ -38,7 +39,7 @@ keys are column names, dates and timestamps are `java.sql.Date` and `java.sql.Ti
 | `:read {:array :vector}` | an extension returning arrays as vectors |
 | `:read {:json :parsed}` | an extension returning json parsed |
 
-An option pgmalli does not know is an error, with the name meant:
+An option pgmalli does not know is an error that suggests the intended name:
 
 ```clojure
 (try (pgmalli/as-read registry :pg.public/users {:qualifed? true})
@@ -60,19 +61,23 @@ An option pgmalli does not know is an error, with the name meant:
 
 ```clojure
 (-> (pgmalli/as-read registry :pg.public/users (pgmalli/read-options 'next.jdbc.optional/as-maps))
-    (nth 3))
-;; => [:users/created_at [inst? #:pg{:default [:now], :type "timestamp with time zone"}]]
+    (m/schema {:registry registry})
+    (mu/get :users/created_at)
+    (m/form))
+;; => [inst? #:pg{:default [:now], :type "timestamp with time zone"}]
 ```
 
 ## Extensions of yours
 
-A `ReadableColumn` extension changes what a column type comes back as. Name the type as its
-`:pg/type` says, and give the schema the value has:
+A `ReadableColumn` extension changes what a column type comes back as. Key it by the
+`:pg/type` and give the schema of the value returned:
 
 ```clojure
 (-> (pgmalli/as-read registry :pg.public/users {:read {"timestamp with time zone" :time/instant}})
-    (nth 3))
-;; => [:created_at :time/instant]
+    (m/schema {:registry registry})
+    (mu/get :created_at)
+    (m/form))
+;; => :time/instant
 ```
 
 ## Decoding instead
@@ -95,5 +100,4 @@ with `java.time`:
 ;; => true
 ```
 
-An `Instant` landing in a `timestamp` (without time zone) column is read in `:zone`, the JVM's
-by default: `(pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})`.
+A `timestamp` (without time zone) value converts in `:zone`, the JVM's by default: `(pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})`.

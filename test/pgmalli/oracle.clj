@@ -101,7 +101,8 @@
     "42P01" :unknown-table
     "42703" :unknown-column
     "42702" :ambiguous-column
-    "23502" :missing-required-column
+    "23502" :not-null-violation
+    "428C9" :read-only-column
     (if (and (= "22P02" state) (str/includes? message "enum")) :enum-literal :other)))
 
 (defn- verdict
@@ -112,15 +113,19 @@
     (try (jdbc/execute! conn [sql]) {:pg :ok}
          (catch PSQLException e
            (if (= "23502" (.getSQLState e))
-             {:pg :missing-required-column :state "23502" :message (.getMessage e)}
+             {:pg :not-null-violation :state "23502" :message (.getMessage e)}
              {:pg :ok})))
     (catch PSQLException e
       {:pg (pg-kind (.getSQLState e) (.getMessage e)) :state (.getSQLState e) :message (.getMessage e)})
     (finally (.rollback conn))))
 
 ;; PostgreSQL says 42P01 "missing FROM-clause entry for table x" where check says
-;; {:kind :unknown-column :column :x.c}: one class, a name that resolves to nothing
-(defn- name-class [k] (if (#{:unknown-table :unknown-column} k) :unknown-name k))
+;; {:kind :unknown-column :column :x.c}: one class, a name that resolves to nothing; and
+;; 23502 for a NULL written into a NOT NULL column, given or left out
+(defn- name-class [k]
+  (cond (#{:unknown-table :unknown-column} k) :unknown-name
+        (#{:missing-required-column :not-null-violation} k) :not-null-violation
+        :else k))
 
 (defn- outcome [pg problems]
   (let [pg (name-class pg)

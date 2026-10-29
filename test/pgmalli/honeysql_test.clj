@@ -34,8 +34,9 @@
          (h/check registry {:select [:id] :from [:users] :where [:= :mood [:cast "angry" :mood]]} opts)))
   (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
          (h/check registry {:update :users :set {:mood "angry"} :where [:= :id 1]} opts)) "assigned literals too")
-  (is (= [] (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad"} {:group_id 1 :mood "sad" :score 1}]} opts))
-      "a multi-row INSERT carries the union of its columns")
+  (is (= [{:kind :not-null-violation :table "sample.users" :column :score}]
+         (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad"} {:group_id 1 :mood "sad" :score 1}]} opts))
+      "a multi-row INSERT carries the union of its columns, NULL where a row lacks one")
   (is (= [{:kind :ambiguous-column :column :id :candidates ["sample.users" "sample.groups"]}]
          (h/check registry {:select [:id] :from [:users] :join [:groups [:= :groups.id :users.group_id]]} opts)))
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:with [[:users {:select [:id] :from [:groups]}]] :select [:nope] :from [:sample.users]} opts))
@@ -637,3 +638,26 @@
   (is (= [{:kind :unknown-column :column :nosuch}]
          (h/check registry {:with [[:users {:select [[1 :x]]}]] :update :users :set {:nosuch "x"} :where [:= :id 1]} opts))
       "the table an UPDATE names, which a CTE does not hide"))
+
+(deftest a-write-postgresql-refuses-is-a-problem
+  (let [check #(h/check registry % opts)
+        nn (fn [col] {:kind :not-null-violation :table "sample.users" :column col})
+        ro (fn [col] {:kind :read-only-column :table "sample.users" :column col})]
+    (testing "NULL into a NOT NULL column"
+      (is (= [(nn :score)] (check {:update :users :set {:score nil} :where [:= :id 1]})))
+      (is (= [(nn :group_id)] (check {:insert-into :users :values [{:group_id nil :mood "sad" :score 1 :closed_at 'now}]})))
+      (is (= [(nn :group_id)] (check {:insert-into :users :columns [:group_id :mood :score] :values [[nil "happy" 1]]})))
+      (is (= [(nn :score)] (check {:insert-into :users :values [{:group_id 1 :score 1}] :on-conflict [:id] :do-update-set {:score nil}})))
+      (is (= [(nn :mood)] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}))
+          "HoneySQL writes NULL for a key one row of :values lacks and another has")
+      (is (= [] (check {:update :users :set {:nick nil :score :?score} :where [:= :id 1]})) "a nullable column, an argument")
+      (is (= [] (h/check registry {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}
+                         (assoc opts :values-default-columns #{:mood})))
+          "with sql/format's :values-default-columns the missing key is DEFAULT"))
+    (testing "a column only the database writes"
+      (is (= [(ro :id)] (check {:update :users :set {:id 5} :where [:= :id 1]})))
+      (is (= [(ro :nick_upper)] (check {:update :users :set {:nick_upper "X"} :where [:= :id 1]})))
+      (is (= [(ro :id)] (check {:insert-into :users :values [{:id 3 :group_id 1 :score 1}]})))
+      (is (= [] (check {:insert-into [{:overriding-value :system} :users] :values [{:id 3 :group_id 1 :score 1}]}))
+          "OVERRIDING SYSTEM VALUE writes an identity ALWAYS column")
+      (is (= [] (check {:update :users :set {:nick_upper :default :id [:default]} :where [:= :id 1]})) "DEFAULT is allowed"))))
