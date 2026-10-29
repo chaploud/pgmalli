@@ -782,7 +782,11 @@
         ;; every argument is evaluated (an error in any fails the row), then strictness applies
         (let [vs (doall (all))] (when (every? some? vs) (apply f vs)))
         (case op
-          :cast (cast-to (a) (cast-type (second args)))
+          :cast (let [t (second args) v (cast-to (a) (cast-type t))]
+                  ;; an explicit cast to varchar(n) cuts the value to n characters
+                  (if (and (vector? t) (text-types (cast-type t)) (not (bpchar-types (cast-type t))) (integer? (second t)) (string? v))
+                    (let [n (int (second t))] (if (< n (.codePointCount ^String v 0 (count v))) (subs v 0 (.offsetByCodePoints ^String v 0 n)) v))
+                    v))
           :array (mapv #(ev % row) (first args))
           :raw ((raw-values (first args)))
           ::bpchar (let [[col n padded?] args] (some-> (ev col row) (bpchar-value n padded?)))
@@ -850,7 +854,8 @@
     ;; a literal of the schema's own type (an enum) ordered: by labels the evaluator does not have
     (not-any? #(and (vector? %) (= :cast (first %)) (contains? types (name (cast-type (nth % 2))))) (rest e))
     (case op
-      :cast (castable? a t types)
+      ;; a cast to char(n) cuts and pads, which bpchar comparisons then ignore: not evaluated
+      :cast (and (castable? a t types) (not (and (vector? t) (bpchar-types (cast-type t)))))
       (:regex :iregex :not-regex :not-iregex) (let [re (literal-arg t)] (and (string? re) (some? (java-regex re))))
       (:like :ilike :not-like :not-ilike) (string? (literal-arg t))
       :raw (contains? raw-values a)

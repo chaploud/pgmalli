@@ -432,3 +432,8 @@
 (deftest arrays-order-element-by-element-and-uuids-by-unsigned-bytes
   (is (passes? "CHECK ((v < ARRAY[2]))" {:v [1 2 3]}))
   (is (passes? "CHECK ((v > '00000000-0000-0000-0000-000000000000'::uuid))" {:v #uuid "ffffffff-0000-0000-0000-000000000000"})))
+
+(deftest an-explicit-cast-to-varchar-n-cuts-the-value
+  (is (passes? "CHECK (((t)::character varying(3))::text = 'abc'::text)" {:t "abcd"}))
+  (is (passes? "CHECK (length((l)::character varying(2)) = 2)" {:l "abc"}))
+  (is (not (ev/supported? (x/check-clause "CHECK ((t)::character(3) = 'abc'::bpchar)")))))
