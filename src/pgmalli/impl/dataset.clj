@@ -206,15 +206,15 @@
          (map-indexed (fn [i row] (fill-branches registry (:gen-of mem) name row (+ seed (* 1000 i))))))))
 
 (defn- failure-reasons
-  "Why a table came out short, most frequent reason first: what malli explains about the
-   candidate rows on their own, or, for rows fine on their own, the references with no row to
-   point at."
-  [registry {:keys [name refs]} cands ds]
+  "Why a table came out short, most frequent reason first, over the rejected candidates: what
+   malli explains about a row on its own, or, for rows fine on their own, the references with
+   no row to point at, or keys colliding."
+  [registry {:keys [name refs]} rejected ds]
   (let [opts {:registry registry}
-        reasons (for [c cands]
+        reasons (for [c rejected]
                   (or (some-> (m/explain name c opts) me/humanize pr-str)
                       (some (fn [{:keys [label table]}] (when (empty? (get ds table)) (str "nothing to reference: " label))) refs)
-                      "no combination of referenced rows fits, or keys collide"))]
+                      (if (seq refs) "no combination of referenced rows fits, or keys collide" "keys collide")))]
     (->> reasons frequencies (sort-by (comp - val)) (take 5) vec)))
 
 (defn- cannot-make
@@ -243,13 +243,13 @@
         [cands cannot] (cannot-make #(candidates registry mem name (max 200 (* 50 rows)) seed))
         fits? (fn [pool r] (and (valid? r) (= (inc (count pool)) (count (distinct-by-keys (conj pool r) key-sets)))))
         ;; a candidate that fails on its own is dropped before any reference is solved (or grown) for it
-        [pool ds] (reduce (fn [[pool ds] c]
-                            (cond (>= (count pool) (* 3 rows)) (reduced [pool ds])
-                                  (not (valid? c)) [pool ds]
-                                  :else (if-let [[r ds] (solve-refs c others ds #{} table #(fits? pool %) (when (< (count pool) rows) grow))]
-                                          [(conj pool r) ds]
-                                          [pool ds])))
-                          [[] ds] cands)
+        [pool ds rejected] (reduce (fn [[pool ds rejected] c]
+                                     (cond (>= (count pool) (* 3 rows)) (reduced [pool ds rejected])
+                                           (not (valid? c)) [pool ds (conj rejected c)]
+                                           :else (if-let [[r ds] (solve-refs c others ds #{} table #(fits? pool %) (when (< (count pool) rows) grow))]
+                                                   [(conj pool r) ds rejected]
+                                                   [pool ds (conj rejected c)])))
+                                   [[] ds []] cands)
         ;; settling self-references keeps the columns other references fixed; a dropped row may
         ;; be what another row points at, so repeat until the batch is stable
         settle (fn settle [rs]
@@ -262,7 +262,7 @@
                  rs
                  (recur (into rs (take short more)) (drop short more)))))]
     (cond-> (assoc ds table rs)
-      (< (count rs) rows) (vary-meta assoc-in [:pgmalli/short table] {:wanted rows :got (count rs) :reasons (if cannot [[cannot 1]] (failure-reasons registry t (vec cands) ds))}))))
+      (< (count rs) rows) (vary-meta assoc-in [:pgmalli/short table] {:wanted rows :got (count rs) :reasons (if cannot [[cannot 1]] (failure-reasons registry t rejected ds))}))))
 
 (defn dataset-generator
   "test.check generator of datasets that satisfy dataset-schema: tables are generated in

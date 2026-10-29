@@ -139,6 +139,13 @@
       (is (m/validate ds sample {:registry reg}) (pr-str sample))
       (is (= 6 (count (get sample "public.requests"))) (pr-str (-> sample meta :pgmalli/short))))))
 
+(deftest a-table-without-references-short-of-keys-says-they-collide-counting-the-rejected
+  (let [reg (pgmalli/registry {:registry {:pg.public/ue [:map {:pg/table "public.ue" :pg/unique [{:columns ["k"]}]}
+                                                         [:k [:pg/smallint {:pg/type "smallint" :min 1 :max 3}]]]}})
+        sample (tcg/generate (data/dataset-generator reg {:rows 5}) 30 1)
+        cands (* 50 5)]
+    (is (= {:wanted 5 :got 3 :reasons [["keys collide" (- cands 3)]]} (get (data/short-tables sample) "public.ue")))))
+
 (deftest generation-limits-are-recorded
   (let [reg (pgmalli/registry {:registry {:pg.public/never [:and [:map {:pg/table "public.never" :pg/primary-key ["a"]} [:a [:int {:pg/type "integer"}]]] [:pg/check {:pg/constraint "never" :error/message "never"} [:< 2 1]]]
                                           :pg.public/child [:map {:pg/table "public.child" :pg/foreign-keys [{:columns ["never_a"] :table "public.never" :to ["a"]}]} [:never_a [:int {:pg/type "integer"}]]]
