@@ -77,7 +77,6 @@ Generate rows that satisfy every constraint:
 ;; => true
 ```
 
-Tests can now build and check data against the real schema, with no database running.
 Regenerate the file after each migration; [Keeping the files current](#keeping-the-files-current)
 shows how CI catches a forgotten one.
 
@@ -98,7 +97,8 @@ command (`generate ci.edn`):
 ```
 
 It reads the database with `psql`. Without `:db`, psql's own settings apply (`PGHOST`,
-`PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). On the JVM, a `:db` with `:jdbc-url`
+`PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). `:db` takes `:host`, `:port`, `:db`, `:user`,
+`:password`, `:sslmode` and `:psql`, the psql binary to run. On the JVM, a `:db` with `:jdbc-url`
 reads through PostgreSQL's JDBC driver instead, no psql needed:
 
 ```clojure
@@ -118,9 +118,11 @@ The same from Clojure:
 ;; => {"public" "resources/pgmalli/public.edn"}
 ```
 
-For strings matching a regex CHECK, add `com.gfredericks/test.chuck` to your test alias;
-without it they are drawn at random and filtered. pgmalli runs on babashka too, except for
-JDBC.
+On babashka, put the same coordinate in `bb.edn`'s `:deps` and run `bb -m pgmalli.main generate`.
+Everything but JDBC works there.
+
+With `com.gfredericks/test.chuck` on the classpath, strings of a regex CHECK generate from the
+regex ([docs/types.md](docs/types.md#check-constraints)).
 
 ## Validating rows and writes
 
@@ -262,35 +264,20 @@ A dataset is several tables at once, foreign keys pointing at generated rows:
 ;; => true
 ```
 
-`write-dataset` keeps it as EDN, `read-dataset` reads it back, and `inserts` turns it into
-HoneySQL INSERTs in an order the database accepts:
+`inserts` turns it into HoneySQL INSERTs in an order the database accepts:
 
 ```clojure
-(data/write-dataset "target/fixture.edn" sample)
-
-(= sample (data/read-dataset "target/fixture.edn"))
-;; => true
-
 (map :insert-into (data/inserts registry sample))
 ;; => (:public.groups [{:overriding-value :system} :public.users] [{:overriding-value :system} :public.events] [{:overriding-value :system} :public.posts])
 ```
 
-<!-- :test-doc-blocks/skip -->
-```clojure
-(require '[next.jdbc :as jdbc] 'next.jdbc.date-time '[honey.sql :as sql])
-
-(doseq [q (data/inserts registry sample)]
-  (jdbc/execute! db (sql/format q)))
-```
-
-`next.jdbc.date-time` lets the driver take the `java.time` values. [docs/datasets.md](docs/datasets.md)
-covers `:except`, short tables and how foreign keys are filled.
+[docs/datasets.md](docs/datasets.md) covers running them, keeping a dataset as a fixture
+file, `:except`, short tables and how foreign keys are filled.
 
 ## Checking HoneySQL queries
 
 `h/check` reads HoneySQL query data against the registry, with no database. It returns the
-problems PostgreSQL would report, and a few it would run without a word but that match no
-row ([docs/queries.md](docs/queries.md#reported-though-postgresql-runs-them)):
+problems PostgreSQL would report, and a few it runs but that can match no row ([docs/queries.md](docs/queries.md#reported-though-postgresql-runs-them)):
 
 ```clojure
 (require '[pgmalli.honeysql :as h])
@@ -335,6 +322,7 @@ The problems it reports:
 | `:enum-literal` | a literal outside an enum type's labels or a CHECK's list, with `:allowed` |
 | `:uncast-enum-string` | a string, literal or argument, sent as `varchar` to a column of an enum type; not under `:stringtype :unspecified` or `:format {:inline true}` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
+| `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
 `h/explain` says each problem as what is wrong and what to do:
 
@@ -343,7 +331,7 @@ The problems it reports:
 ;; => ["unknown column nik; did you mean nick?"]
 ```
 
-Every query of a project checks in one test, its failures explained:
+Check every query of a project in one test:
 
 ```clojure
 (require '[clojure.test :refer [deftest is]])
@@ -358,8 +346,7 @@ Every query of a project checks in one test, its failures explained:
       (is (= [] problems) (str k ": " (h/explain problems))))))
 ```
 
-What a subquery, a CTE or code in the query (a list, `(when x ...)`) sees, and how arguments are typed:
-[docs/queries.md](docs/queries.md).
+[docs/queries.md](docs/queries.md) covers subqueries, CTEs, code in a query and argument types.
 
 ## Function schemas for queries
 
@@ -398,26 +385,18 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
 ```
 
 `:db` is not in the query, so it is `:any`; with `{:result :one}` the function returns one
-row or nil. A problem `h/check` finds goes in the schema's `:pgmalli/problems` property, not an exception,
-so a namespace still loads with a broken query:
+row or nil. A problem `h/check` finds goes in the schema's `:pgmalli/problems` property, not
+an exception, so a namespace still loads with a broken query; `h/schema-problems` gathers them
+for one test ([docs/queries.md](docs/queries.md#problems-in-function-schemas)).
+
+`pgmalli/portable` gives a named schema as data that malli's default registry and
+`malli.experimental.time` read: pgmalli's types as malli's, the CHECKs only pgmalli evaluates
+left out. Use it where a schema cannot carry the registry, such as `:malli/schema` written as
+data:
 
 ```clojure
-(m/properties (m/schema (h/query-schema registry [:id] {:select [:mail] :from [:users] :where [:= :id :?id]})
-                        {:registry registry}))
-;; => {:pgmalli/problems [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]}
-```
-
-> NOTE: the property makes the schema vector one element longer. Read its parts with
-> `m/children`, not by position.
-
-Instrumentation does not read the property. `h/schema-problems` gathers it from every var's
-`:malli/schema`, for one test:
-
-<!-- :test-doc-blocks/skip -->
-```clojure
-(deftest query-functions-agree-with-the-schema
-  (let [problems (h/schema-problems)]
-    (is (= [] problems) (h/explain problems))))
+(m/validate (pgmalli/portable registry :pg.public/user_status) "closed")
+;; => true
 ```
 
 `pgmalli/describe` reads a schema back as PostgreSQL types, to see what a function takes and
@@ -428,7 +407,7 @@ returns:
 ;; => {:args ["bigint"], :returns [:maybe #:users{:id "bigint", :email "varchar(120)"}]}
 ```
 
-The options of `h/check`, `h/arg-types`, `h/row-schema` and `h/query-schema` are in
+The options of `h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema` and `h/query-schema` are in
 [docs/queries.md](docs/queries.md#options).
 
 ## Keeping the files current
@@ -485,7 +464,8 @@ migration:
 
 The file also lists what pgmalli could not express (`:unrendered`) and what deserves a look
 (`:diagnostics`: a partitioned table with no partition, `CHECK (false)`, CHECKs that
-contradict each other, a constraint left `NOT VALID`, a row-level INSERT trigger):
+contradict each other, a constraint left `NOT VALID`, a row-level INSERT trigger).
+[docs/types.md](docs/types.md#the-generated-file) describes the file:
 
 ```clojure
 (select-keys (pgmalli/generated "public") [:unrendered :diagnostics])
@@ -501,7 +481,7 @@ it a schema of your own, or skip it with a reason, in `pgmalli.edn`:
 ```clojure
 {:overrides {"chk_legacy_flag" {:skip "dropped with the column in 2027"}
              "chk_scores" [:ref :app/scores-consistent]
-             :inet [:re "^[0-9.]+$"]}}
+             :inet [:re "^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$"]}}
 ```
 
 A constraint name replaces that CHECK; a type keyword (`:inet`) replaces the schema of every
@@ -511,9 +491,11 @@ column of that type. A `[:ref ...]` to a schema of your own needs a registry hol
 (require '[malli.registry :as mr])
 
 (def app-registry
-  (mr/composite-registry {:app/scores-consistent [:fn map?]} registry))
+  (mr/composite-registry
+   {:app/scores-consistent [:fn (fn [{:keys [min_score max_score]}] (<= min_score max_score))]}
+   registry))
 
-(m/validate :app/scores-consistent {} {:registry app-registry})
+(m/validate :app/scores-consistent {:min_score 1 :max_score 3} {:registry app-registry})
 ;; => true
 ```
 
@@ -541,6 +523,8 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 5. the public functions of `pgmalli.core`, `pgmalli.generate`, `pgmalli.data` and
    `pgmalli.honeysql`, and their options
 6. the `:pgmalli/error` kinds of the errors pgmalli throws
+7. the command line: the `generate` and `check` commands, `check --edn`'s output and the exit
+   codes 0 to 3
 
 | `:pgmalli/error` | when |
 |---|---|
@@ -554,7 +538,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/reference-cycle` | tables referencing each other in a cycle |
 | `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |
 | `:pgmalli.error/db-unavailable`, `psql-missing` | the database, or psql, out of reach |
-| `:pgmalli.error/fault` | pgmalli's own fault: please report it |
+| `:pgmalli.error/fault` | pgmalli's own fault (please report it), or psql failing to read the catalog: a PostgreSQL before 16, or a user without access to pg_catalog |
 
 Each error's ex-data also carries `:cognitect.anomalies/category`, and `:given`, `:known` and
 `:suggest` where they apply.
