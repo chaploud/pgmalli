@@ -548,3 +548,15 @@
 
 (deftest a-column-definition-list-is-read-or-left-alone
   (is (vector? (h/check registry {:select [:a] :from [[[:jsonb_to_record :x] [:r {:columns [[:raw "a int"]]}]]]} opts))))
+
+(deftest a-local-code-binds-is-no-missing-arg
+  (is (nil? (m/properties (m/schema (h/query-schema registry '[ids] '{:select [:id] :from [:users] :where (into [:or] (for [i ids] [:= :id i]))} opts))))))
+
+(deftest a-call-in-the-wrong-shape-is-an-error
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes the function's args first" (h/query-schema registry {:select [:id] :from [:users]} opts)))
+  (doseq [body ["SELECT 1" ["SELECT 1"] nil]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reads HoneySQL query data" (h/check registry body opts)) (pr-str body))))
+
+(deftest a-row-of-a-table-the-registry-lacks-is-untold
+  (is (nil? (h/row-schema registry {:select [:id] :from [:users]})) ":schema left out: no sample here")
+  (is (= [{:kind :unknown-table :table "public.users"}] (h/check registry {:select [:id] :from [:users]}))))

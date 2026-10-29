@@ -31,15 +31,16 @@
    [:compare {:optional true} [:enum :strict :lenient]]
    [:result {:optional true} [:enum :one]]])
 
-(def ^:private valid-options? (m/validator options-schema))
-
-(defn options!
-  "opts (nil is none) when options-schema takes them; an error naming what it does not, otherwise."
-  [opts]
-  (if (valid-options? (or opts {}))
+(defn checked!
+  "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
+   with the one meant, otherwise."
+  [schema opts]
+  (if (m/validate schema (or opts {}))
     opts
-    (let [errors (-> (m/explain options-schema opts) me/with-spell-checking me/humanize)]
+    (let [errors (-> (m/explain schema opts) me/with-spell-checking me/humanize)]
       (throw (ex-info (str "pgmalli options: " (pr-str errors)) {:options opts :errors errors})))))
+
+(defn options! [opts] (checked! options-schema opts))
 
 ;;; what the driver returns and takes
 
@@ -146,18 +147,22 @@
   "The reading options of a next.jdbc result set builder named by its symbol; documented on
    pgmalli.core/read-options."
   [builder]
-  (or (get builders (if (var? builder) (symbol builder) builder))
-      (throw (ex-info (str builder (if (str/includes? (name builder) "modified")
-                                     " keys rows by functions of yours: give :qualified? and :kebab? as they do"
-                                     " is not one of next.jdbc's map builders pgmalli knows")
-                           "; it knows " (vec (sort (keys builders))))
-                      {:builder builder}))))
+  (let [b (if (var? builder) (symbol builder) builder)]
+    (or (get builders b)
+        (throw (ex-info (str b (if (str/includes? (str b) "modified")
+                                 " keys rows by functions of yours: give :qualified? and :kebab? as they do"
+                                 " is not one of next.jdbc's map builders pgmalli knows")
+                             "; it knows " (vec (sort (keys builders))))
+                        {:builder b})))))
 
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."
   [registry name]
-  (let [s (shape/schema-of registry name)]
-    (when-not (vector? s) (throw (ex-info (str name " is not a generated schema") {:name name})))
+  (let [s (shape/schema-of registry name)
+        props (when (vector? s) (let [m (shape/row-map s)] (when (map? (second m)) (second m))))]
+    (when-not (and (or (:pg/table props) (:pg/view props)) (not (:closed props)))
+      (throw (ex-info (str name " is no table's or view's row schema, which as-read reads (an insert schema is what is sent, not read)")
+                      {:name name})))
     (shape/row-map s)))
 
 (defn as-read

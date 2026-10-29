@@ -5,7 +5,9 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [pgmalli.impl.dataset :as ds]
-            [pgmalli.impl.insert :as insert])
+            [pgmalli.impl.insert :as insert]
+            [pgmalli.impl.jdbc :as jdbc]
+            [pgmalli.impl.shape :as shape])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetTime)))
 
 (defn dataset-schema
@@ -18,8 +20,14 @@
   "test.check generator of datasets satisfying dataset-schema. Options: :rows wanted per table
    (default 5), :except tables (\"schema.table\") to leave out (no kept table may reference them).
    Tables that came out short are listed in the dataset's metadata, see short-tables."
-  ([registry] (ds/dataset-generator registry))
-  ([registry opts] (ds/dataset-generator registry opts)))
+  ([registry] (dataset-generator registry {}))
+  ([registry opts]
+   (jdbc/checked! [:map {:closed true} [:rows {:optional true} pos-int?] [:except {:optional true} [:or [:set :string] [:sequential :string]]]] opts)
+   (let [known (set (for [[_ s] (shape/schemas-of registry) :when (shape/row-schema? s)] (:pg/table (second (shape/row-map s)))))]
+     (when-let [stray (seq (remove known (:except opts)))]
+       (throw (ex-info (str ":except names tables the registry does not: " (vec stray) "; it holds " (vec (sort known)))
+                       {:tables (vec stray) :known (vec (sort known))}))))
+   (ds/dataset-generator registry (or opts {}))))
 
 (defn short-tables
   "{\"schema.table\" {:wanted n :got n :reasons [[reason count] ...]}} for the tables of a
@@ -36,8 +44,10 @@
    java.time ones); a column a row lacks is DEFAULT. A column the table does not have is an
    error. Option :on-conflict :nothing adds ON CONFLICT DO NOTHING, for a database that already
    holds some of the rows (seeded by migrations, say)."
-  ([registry dataset] (insert/inserts registry dataset {}))
-  ([registry dataset opts] (insert/inserts registry dataset opts)))
+  ([registry dataset] (inserts registry dataset {}))
+  ([registry dataset opts]
+   (jdbc/checked! [:map {:closed true} [:on-conflict {:optional true} [:enum :nothing]]] opts)
+   (insert/inserts registry dataset (or opts {}))))
 
 ;;; datasets as EDN: the values EDN has no literal for go under pgmalli's tags
 

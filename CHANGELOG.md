@@ -50,7 +50,14 @@ All notable changes to this project are documented here. The format follows
 - `row-schema` takes `(registry body opts)`, as the other functions of `pgmalli.honeysql` do;
   it took the query's CTE names third, so an options map there went unread. `statements`,
   `cte-names`, `scope`, `resolve-column` and `problems` are private.
-- A misspelt option names the one meant (`should be spelled :qualified?`).
+- A misspelt option names the one meant (`should be spelled :qualified?`), and so do
+  `dataset-generator`'s, `inserts`' and `transformer`'s, which went unread; `:except` naming a
+  table the registry lacks is an error.
+- `pgmalli.honeysql` refuses what is no query data (nil, SQL already formatted) and
+  `query-schema` args that are no list of keywords or symbols, which checked clean or typed
+  nothing; a row selecting from a table the registry lacks (`:schema` left out) is untold.
+- `as-read` refuses what is no table's or view's row schema (an enum, an insert schema), and
+  `columns` what is no row or insert schema.
 - `read-options` takes a builder's var too (`#'rs/as-maps`), and names next.jdbc's map builders as next.jdbc does
   (`'next.jdbc.result-set/as-unqualified-kebab-maps`, `'next.jdbc.optional/as-maps`); it took
   `next.jdbc/...` and `next.jdbc.optional/as-kebab-maps`, which do not exist, and any namespace.

@@ -79,8 +79,10 @@
   (jdbc/read-options builder))
 
 (defn as-read
-  "The [:map ...] of a row as next.jdbc builds it from what PostgreSQL's JDBC driver returns:
-   by default plain next.jdbc, keys unqualified, dates and timestamps inst?, arrays, json and
+  "The [:map ...] of a table's or view's row as next.jdbc builds it from what PostgreSQL's JDBC
+   driver returns, over the registry (validate with {:registry registry}; portable gives schemas
+   without it): by default next.jdbc with no extension and as-unqualified-maps (next.jdbc's own
+   default, as-maps, is :qualified? true), dates and timestamps inst?, arrays, json and
    intervals (driver objects) :any. Options, the ones pgmalli.honeysql takes too (read-options
    gives them for a next.jdbc builder; its own, :schema :write :compare :result, are taken and
    do nothing here), a key or value not among them an error: :qualified? (keys as
@@ -96,4 +98,6 @@
    java.util.Dates that land in date or timestamp (without time zone) columns are read in
    :zone, default the JVM's; JSON text in json and jsonb columns is parsed."
   ([] (jdbc/transformer))
-  ([opts] (jdbc/transformer opts)))
+  ([opts]
+   (jdbc/checked! [:map {:closed true} [:zone {:optional true} [:fn #(instance? java.time.ZoneId %)]]] opts)
+   (jdbc/transformer opts)))

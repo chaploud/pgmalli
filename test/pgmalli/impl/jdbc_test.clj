@@ -48,6 +48,7 @@
   (doseq [b ['next.jdbc.result-set/as-arrays 'next.jdbc.optional/as-kebab-maps 'my.ns/as-maps]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not one of next.jdbc's map builders" (pgmalli/read-options b)) (str b)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"functions of yours" (pgmalli/read-options 'next.jdbc.result-set/as-modified-maps)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"functions of yours" (pgmalli/read-options (intern (create-ns 'next.jdbc.result-set) 'as-modified-maps))))
   (is (= (pgmalli/as-read registry :pg.sample/users (pgmalli/read-options 'next.jdbc.optional/as-unqualified-maps))
          (pgmalli/as-read registry :pg.sample/users {:nil-columns :absent}))
       "the options are as-read's"))

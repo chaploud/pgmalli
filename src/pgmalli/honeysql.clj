@@ -14,8 +14,7 @@
    does. An unqualified table is in :schema (default \"public\"). What code in the query
    builds (a list) is not in the data and is not judged.
 
-   The entry points are check, arg-types, row-schema and query-schema; the other public vars
-   are the parts they are built from. Types are what next.jdbc and PostgreSQL's JDBC driver
+   The functions are check, arg-types, row-schema and query-schema. Types are what next.jdbc and PostgreSQL's JDBC driver
    return and take, under pgmalli.core/as-read's options, plus :schema, :write, :compare and
    :result (see arg-types and query-schema); a key or value not among them is an error."
   (:require [clojure.string :as str]
@@ -249,7 +248,9 @@
                        :let [cte? (boolean (and written (ctes written)))
                              table (when table (catalog-table registry table written))]]
                    [alias (cond-> {:table table :cte? cte?
-                                   :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}
+                                   :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))
+                                   ;; named, but the registry lacks it (pg_catalog's aside): no row can be told of it
+                                   :unknown? (boolean (and table (not cte?) (not (catalog? table)) (nil? (table-columns registry table))))}
                             ;; the columns an alias lists are the ones it has, typeless
                             listed (assoc :columns listed)
                             (nullable alias) (assoc :nullable? true))]))]
@@ -645,6 +646,16 @@
                     :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))]
                 {:kind :unread-clause :clause k}))))
 
+(defn- query!
+  "body when it is HoneySQL query data (a map, or code holding maps); an error saying so for SQL
+   already formatted or for nothing, which would otherwise check clean."
+  [body]
+  (when (or (nil? body) (string? body) (and (vector? body) (string? (first body))))
+    (throw (ex-info (str "pgmalli.honeysql reads HoneySQL query data (a map such as {:select ...}), not "
+                         (if (nil? body) "nil" "SQL already formatted"))
+                    {:query body})))
+  body)
+
 (defn- code-ctes?
   "Whether code (not data) gives a statement some of its CTEs, which may then be any table."
   [stmt]
@@ -659,6 +670,7 @@
   ([registry body] (check registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
+   (query! body)
    (let [registry (reading registry)
          opaque? (some code-ctes? (statements body))
          found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body opts))]
@@ -728,6 +740,12 @@
                   :else t)
       (and lenient? (not (in-ops op))) nullable)))
 
+(defn- data-args
+  "The arguments the data of a query shows, outside code (a list): code may leave its own out
+   at run time, and binds locals of its own, which are no arguments."
+  [body]
+  (set (keep arg-key (tree-seq #(and (branch? %) (not (seq? %))) seq body))))
+
 (defn arg-types
   "{arg schema} for the arguments of a query: its HoneySQL named parameters (:?id, ?id,
    [:param :id]) under the key sql/format's :params takes (:id), and its other symbols. One
@@ -742,6 +760,7 @@
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
    (jdbc/options! opts)
+   (query! body)
    (let [registry (reading registry)
          typed (mapcat (fn [[stmt sc]]
                          (concat (for [[op col value] (comparisons stmt)
@@ -754,7 +773,7 @@
                          (let [k (arg-key x)]
                            (if (and k (untyped? (acc k))) (assoc acc k t) acc)))
                        {} typed)
-         in-data (set (keep arg-key (tree-seq #(and (branch? %) (not (seq? %))) seq body)))]
+         in-data (data-args body)]
      (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
 
 (defn- select-row
@@ -785,7 +804,7 @@
                           (when-not (and qualified? opaque?)
                             ;; a column under an alias is still keyed by its table: the driver reads the table from the field
                             [(entry table (if alias (name alias) column) schema nullable?)]))))]
-    (when (and (seq items) (every? some? items))
+    (when (and (seq items) (every? some? items) (not-any? :unknown? (vals sc)))
       ;; a name selected twice is one key, the driver keeping the last column's value
       (let [entries (apply concat items)
             last-of (into {} (map (juxt first identity)) entries)]
@@ -821,6 +840,7 @@
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
+   (query! body)
    (when (map? body) (row-schema* registry body (cte-names body) opts))))
 
 (defn query-schema
@@ -834,10 +854,14 @@
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)
+   (query! body)
+   (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
+     (throw (ex-info (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
+                     {:args args})))
    (let [registry (reading registry)
          types (arg-types registry body opts)
          problems (into (check registry body opts)
-                          (for [k (sort-by str (keys types)) :when (not (some #{k} args))] {:kind :missing-arg :arg k}))
+                          (for [k (sort-by str (data-args body)) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))
          row (row-schema registry body opts)]
      (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
            [(into [:cat] (map #(get types % :any)) args)

@@ -53,3 +53,8 @@
 
 (deftest as-read-defaults-its-options
   (is (= (pgmalli/as-read registry :pg.sample/users {}) (pgmalli/as-read registry :pg.sample/users))))
+
+(deftest as-read-and-columns-take-row-schemas
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema" (pgmalli/as-read registry :pg.sample/mood)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema" (pgmalli/as-read registry :pg.sample.users/insert)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no row or insert schema" (pgmalli/columns registry :pg.sample/mood))))

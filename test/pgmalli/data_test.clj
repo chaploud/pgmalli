@@ -27,3 +27,8 @@
     (data/write-dataset path ds)
     (is (= {"public.t" {:wanted 3 :got 1 :reasons [["x" 2]]}} (data/short-tables (data/read-dataset path))))
     (is (= {"public.t" [{:id 1}]} (data/read-dataset path)) "the tables alone are the value")))
+
+(deftest a-misspelt-option-or-an-unknown-table-is-an-error
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be spelled :rows" (data/dataset-generator registry {:row 3})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry does not: \[\"groups\"\]" (data/dataset-generator registry {:except #{"groups"}})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be :nothing" (data/inserts registry {} {:on-conflict :ignore}))))

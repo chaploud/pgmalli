@@ -190,6 +190,9 @@
 (defn columns
   "The [:map ...] of a row or insert schema, without the table-level constraints."
   [registry name]
-  (shape/schema-of registry name)
+  (let [d (shape/schema-of registry name)
+        props (when (vector? d) (let [m (shape/row-map d)] (when (map? (second m)) (second m))))]
+    (when-not (or (:pg/table props) (:pg/view props))
+      (throw (ex-info (str name " is no row or insert schema") {:name name}))))
   (let [s (m/deref (m/schema name {:registry registry}))]
     (if (= :and (m/type s)) (first (m/children s)) s)))
