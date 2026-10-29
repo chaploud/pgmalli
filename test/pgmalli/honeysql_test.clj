@@ -8,7 +8,7 @@
             [pgmalli.sample :refer [registry]]))
 
 ;; the sample's enum literals are strings; how pgjdbc sends them is its own test
-(def opts {:schema "sample" :stringtype :unspecified})
+(def opts {:schema "sample" :stringtype :unspecified :qualified? false})
 (def malli-opts {:registry (merge (m/default-schemas) (time/schemas))})
 
 (deftest queries-that-agree-have-no-problems
@@ -202,12 +202,12 @@
 
 (deftest arrays-and-json-are-the-drivers-objects-unless-read-says-otherwise
   (let [body {:select [:paths :meta] :from [:docs]}]
-    (is (= [:map [:paths [:maybe [:any {:pg/type "text[]"}]]] [:meta [:any {:pg/type "jsonb"}]]] (h/row-schema docs body))
+    (is (= [:map [:paths [:maybe [:any {:pg/type "text[]"}]]] [:meta [:any {:pg/type "jsonb"}]]] (h/row-schema docs body {:qualified? false}))
         "a java.sql.Array and a PGobject")
     (is (= [:map [:paths [:maybe [:vector [:string {:pg/type "text"}]]]] [:meta [:map {:pg/type "jsonb"} [:a :int]]]]
-           (h/row-schema docs body {:read {:array :vector :json :parsed}})))
+           (h/row-schema docs body {:qualified? false :read {:array :vector :json :parsed}})))
     (is (= [:map [:paths [:maybe [:sequential :string]]] [:meta [:any {:pg/type "jsonb"}]]]
-           (h/row-schema docs body {:read {"text[]" [:sequential :string]}}))
+           (h/row-schema docs body {:qualified? false :read {"text[]" [:sequential :string]}}))
         "a :pg/type over :array")))
 
 (deftest an-array-columns-argument-is-an-array
@@ -468,7 +468,7 @@
 
 (deftest an-array-columns-elements-take-overrides
   (is (= {:p [:maybe [:vector :keyword]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:write {:array [:vector] "text" :keyword}})))
-  (is (= [:map [:paths [:maybe [:vector :keyword]]]] (h/row-schema docs {:select [:paths] :from [:docs]} {:read {:array :vector "text" :keyword}})))
+  (is (= [:map [:paths [:maybe [:vector :keyword]]]] (h/row-schema docs {:select [:paths] :from [:docs]} {:qualified? false :read {:array :vector "text" :keyword}})))
   (is (= {:p [:maybe [:vector [:string {:pg/type "text"}]]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:read {"text" :keyword} :write {:array [:vector]}}))
       ":read is the rows' alone"))
 

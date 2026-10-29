@@ -237,7 +237,7 @@
                                    CREATE TABLE dr.t (id int PRIMARY KEY, e dr.email, j dr.doc);")]
       (is (= [:map {:pg/primary-key ["id"] :pg/table "dr.t"}
               [:e [:maybe [:any {:pg/type "public.citext"}]]] [:id [:pg/integer {:pg/type "integer"}]] [:j [:maybe [:any {:pg/type "jsonb"}]]]]
-             (pgmalli/as-read reg :pg.dr/t))
+             (pgmalli/as-read reg :pg.dr/t {:qualified? false}))
           "a PGobject, as pgjdbc returns citext and jsonb"))))
 
 (deftest an-exclude-constraint-is-on-the-table-and-datasets-keep-its-equal-columns-apart

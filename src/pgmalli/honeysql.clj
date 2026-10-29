@@ -1038,7 +1038,7 @@
   "The row a SELECT returns. Under :qualified?, a column through an opaque table, or a cast
    column, leaves the row untold: the driver keys it by the table it comes from at the bottom
    (a subquery's, a CTE's), or keeps it when PostgreSQL drops a cast to the column's own type."
-  [registry stmt chain {:keys [qualified?] :as opts}]
+  [registry stmt chain {:keys [qualified?] :or {qualified? true} :as opts}]
   (let [registry (reading registry)
         sc (first chain)
         ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw or code
@@ -1079,7 +1079,7 @@
 
 (defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (dissoc opts :qualified? :nil-columns))) members)]
+    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (-> opts (assoc :qualified? false) (dissoc :nil-columns)))) members)]
       (when (and (every? some? rows) (apply = (map count rows)))
         (into [:map]
               (for [entries (apply map vector (map rest rows))

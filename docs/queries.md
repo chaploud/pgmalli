@@ -127,17 +127,17 @@ join may leave NULL is nullable; an expression is nullable `:any`:
 (h/row-schema registry {:select [:u.email :p.title]
                         :from [[:users :u]]
                         :left-join [[:posts :p] [:= :p.author_id :u.id]]})
-;; => [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
+;; => [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:posts/title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
 
 (h/row-schema registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]})
-;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:maybe :any]]]
+;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:maybe :any]]]
 ```
 
 It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):
 
 ```clojure
 (h/row-schema registry {:select [:id :created_at] :from [:users]} {:time :instant :kebab? true})
-;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:created-at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
+;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/created-at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
 ```
 
 `h/row-schema` returns nil when a selected column cannot be resolved; `h/check` says which.
@@ -167,7 +167,7 @@ query lacks (`:db`) are `:any`:
 (h/query-schema registry [:db :ids]
                 {:select [:id] :from [:users] :where [:in :id :?ids]}
                 {:result :one})
-;; => [:=> [:cat :any [:or [:sequential {:min 1} [:int #:pg{:type "bigint"}]] [:set {:min 1} [:int #:pg{:type "bigint"}]]]] [:maybe [:map [:id [:int #:pg{:identity :always, :type "bigint"}]]]]]
+;; => [:=> [:cat :any [:or [:sequential {:min 1} [:int #:pg{:type "bigint"}]] [:set {:min 1} [:int #:pg{:type "bigint"}]]]] [:maybe [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]]]]]
 ```
 
 The schema may use types malli's default registry lacks (`:time/instant`). Give it the

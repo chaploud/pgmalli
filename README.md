@@ -207,22 +207,22 @@ gives the row as next.jdbc builds it, to validate results as they come back:
 (def user-row (pgmalli/as-read registry :pg.public/users))
 
 (m/validate user-row
-            {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
-             :closed_at nil :created_at (java.sql.Timestamp. 0)}
+            #:users{:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
+                    :closed_at nil :created_at (java.sql.Timestamp. 0)}
             {:registry registry})
 ;; => true
 ```
 
-Its options match the builder your application uses. `read-options` gives them for a
-next.jdbc builder:
+By default the keys are those of next.jdbc's default builder, `as-maps`. Another builder's
+options come from `read-options`:
 
 ```clojure
-(pgmalli/read-options 'next.jdbc.result-set/as-maps)
-;; => {:qualified? true}
+(pgmalli/read-options 'next.jdbc.result-set/as-unqualified-maps)
+;; => {:qualified? false}
 
-(mu/keys (m/schema (pgmalli/as-read registry :pg.public/users {:qualified? true})
+(mu/keys (m/schema (pgmalli/as-read registry :pg.public/users {:qualified? false})
                    {:registry registry}))
-;; => (:users/closed_at :users/created_at :users/email :users/group_id :users/id :users/nick :users/status)
+;; => (:closed_at :created_at :email :group_id :id :nick :status)
 ```
 
 There are three ways to check a row read from the database:
@@ -370,7 +370,7 @@ HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
 
 (h/query-schema registry [:id] find-user-q)
-;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:sequential [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:sequential [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 ```
 
 Put it on the function as a schema object over the registry. `malli.instrument` and
@@ -383,13 +383,13 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
   {:malli/schema (m/schema (h/query-schema registry [:db :id] find-user-q {:result :one})
                            {:registry registry})}
   [db id]
-  {:id id :email "ann@example.com"})
+  #:users{:id id :email "ann@example.com"})
 
 (mi/collect! {:ns (all-ns)})
 (mi/instrument!)
 
 (find-user nil 1)
-;; => {:id 1, :email "ann@example.com"}
+;; => #:users{:id 1, :email "ann@example.com"}
 
 (try (find-user nil "1") (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))
 ;; => :malli.core/invalid-input

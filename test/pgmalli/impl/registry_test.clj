@@ -162,7 +162,7 @@
   (is (every? #(= 2025 (.getYear ^java.time.LocalDate %)) (concat (generated-values :d) (mapcat identity (generated-values :ds))))))
 
 (deftest a-domain-over-a-type-the-driver-returns-otherwise-is-read-as-the-driver-returns-it
-  (let [read (pgmalli/as-read (:registry generated) :pg.public/t)
+  (let [read (pgmalli/as-read (:registry generated) :pg.public/t {:qualified? false})
         row {:n 1M :sm 2M :s "A" :tz (java.util.Date. 0) :j :pgobject :d (java.util.Date. 0) :ds :array :b :pgobject :p 1.5M}]
     (is (m/validate read row {:registry (:registry generated)}) (pr-str (me/humanize (m/explain read row {:registry (:registry generated)}))))))
 

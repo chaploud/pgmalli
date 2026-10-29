@@ -71,7 +71,7 @@
       (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
       (let [q {:select [:paths :meta] :from [:docs]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
-        (is (m/validate (h/row-schema registry q) row) (pr-str (update-vals row class)))))))
+        (is (m/validate (h/row-schema registry q {:qualified? false}) row) (pr-str (update-vals row class)))))))
 
 (deftest as-read-is-the-row-the-driver-returns
   (when *db*

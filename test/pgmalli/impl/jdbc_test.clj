@@ -42,15 +42,15 @@
 (deftest reading-options-of-a-next-jdbc-builder
   (is (= {:qualified? true} (pgmalli/read-options 'next.jdbc.result-set/as-maps)))
   (is (= {:qualified? true} (pgmalli/read-options (intern (create-ns 'next.jdbc.result-set) 'as-maps))) "or its var")
-  (is (= {:lower? true} (pgmalli/read-options 'next.jdbc.result-set/as-unqualified-lower-maps)))
-  (is (= {:kebab? true} (pgmalli/read-options 'next.jdbc.result-set/as-unqualified-kebab-maps)))
-  (is (= {:nil-columns :absent} (pgmalli/read-options 'next.jdbc.optional/as-unqualified-maps)))
+  (is (= {:qualified? false :lower? true} (pgmalli/read-options 'next.jdbc.result-set/as-unqualified-lower-maps)))
+  (is (= {:qualified? false :kebab? true} (pgmalli/read-options 'next.jdbc.result-set/as-unqualified-kebab-maps)))
+  (is (= {:qualified? false :nil-columns :absent} (pgmalli/read-options 'next.jdbc.optional/as-unqualified-maps)))
   (doseq [b ['next.jdbc.result-set/as-arrays 'next.jdbc.optional/as-kebab-maps 'my.ns/as-maps]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not one of next.jdbc's map builders" (pgmalli/read-options b)) (str b)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"functions of yours" (pgmalli/read-options 'next.jdbc.result-set/as-modified-maps)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"functions of yours" (pgmalli/read-options (intern (create-ns 'next.jdbc.result-set) 'as-modified-maps))))
   (is (= (pgmalli/as-read registry :pg.sample/users (pgmalli/read-options 'next.jdbc.optional/as-unqualified-maps))
-         (pgmalli/as-read registry :pg.sample/users {:nil-columns :absent}))
+         (pgmalli/as-read registry :pg.sample/users {:qualified? false :nil-columns :absent}))
       "the options are as-read's"))
 
 (deftest as-read-refuses-the-options-of-query-data

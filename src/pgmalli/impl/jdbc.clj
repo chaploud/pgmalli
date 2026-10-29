@@ -133,9 +133,9 @@
 
 (defn row-key
   "The key next.jdbc gives a column: qualified by its table (the last part of schema.table)
-   under :qualified? when the column has one, kebab-cased (:kebab?) or lower-cased (:lower?)
-   as its builders do it."
-  [table column {:keys [qualified? kebab? lower?]}]
+   when the column has one, unless :qualified? is false; kebab-cased (:kebab?) or lower-cased
+   (:lower?) as its builders do it."
+  [table column {:keys [qualified? kebab? lower?] :or {qualified? true}}]
   (let [k (cond kebab? csk/->kebab-case-string lower? str/lower-case :else identity)]
     (if (and qualified? table)
       (keyword (k (last (str/split table #"\." 2))) (k column))
@@ -181,9 +181,9 @@
 
 (def ^:private builders
   "next.jdbc's map builders -> how they key a row (next.jdbc 1.3)."
-  (let [maps {"as-maps" {:qualified? true} "as-unqualified-maps" {}
-              "as-lower-maps" {:qualified? true :lower? true} "as-unqualified-lower-maps" {:lower? true}}]
-    (merge (update-keys (merge maps {"as-kebab-maps" {:qualified? true :kebab? true} "as-unqualified-kebab-maps" {:kebab? true}})
+  (let [maps {"as-maps" {:qualified? true} "as-unqualified-maps" {:qualified? false}
+              "as-lower-maps" {:qualified? true :lower? true} "as-unqualified-lower-maps" {:qualified? false :lower? true}}]
+    (merge (update-keys (merge maps {"as-kebab-maps" {:qualified? true :kebab? true} "as-unqualified-kebab-maps" {:qualified? false :kebab? true}})
                         #(symbol "next.jdbc.result-set" %))
            (update-keys (update-vals maps #(assoc % :nil-columns :absent)) #(symbol "next.jdbc.optional" %)))))
 

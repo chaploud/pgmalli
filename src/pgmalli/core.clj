@@ -57,12 +57,12 @@
   "The [:map ...] of a table's or view's row as next.jdbc builds it from what PostgreSQL's
    JDBC driver returns. Validate with {:registry registry}.
 
-   (as-read registry :pg.public/users {:qualified? true})
+   (as-read registry :pg.public/users {:qualified? false})
 
-   By default, as as-unqualified-maps builds rows with no extension: dates and timestamps
+   By default, as next.jdbc's default builder (as-maps) builds rows with no extension: dates and timestamps
    inst?, arrays, json and intervals :any; docs/reading-rows.md lists every type. Options
    (read-options gives those of a builder):
-     :qualified? true       keys as :table/column
+     :qualified? false      keys as :column, not :table/column
      :kebab? true           kebab-case keys and tables
      :lower? true           lower-case keys and tables
      :nil-columns :absent   NULL columns left out (next.jdbc.optional)
