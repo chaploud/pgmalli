@@ -223,20 +223,23 @@
   (when *db*
     (let [[reg data] (registry-of "ci" "CREATE SCHEMA ci; CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
                                         CREATE DOMAIN ci.mail AS public.citext CHECK (VALUE ~ '^[a-z]+@x$');
+                                        CREATE DOMAIN ci.tmail AS public.citext CHECK (VALUE::text ~ '^[a-z]+@x$');
                                         CREATE TABLE ci.t (id int PRIMARY KEY, r public.citext CHECK (r ~ '^[a-z]+$'),
-                                                           l public.citext CHECK (l LIKE 'ab%'), c public.citext CHECK (c IN ('Red', 'Blue')), m ci.mail);
+                                                           l public.citext CHECK (l LIKE 'ab%'), c public.citext CHECK (c IN ('Red', 'Blue')), m ci.mail,
+                                                           tr public.citext CHECK (tr::text ~ '^[a-z]+$'), tl public.citext CHECK (tl::text LIKE 'ab%'), tm ci.tmail);
                                         CREATE FUNCTION ci.takes(col text, val text) RETURNS boolean LANGUAGE plpgsql AS $$
                                         BEGIN EXECUTE format('INSERT INTO ci.t (id, %I) VALUES ((SELECT coalesce(max(id), 0) + 1 FROM ci.t), %L)', col, val); RETURN true;
                                         EXCEPTION WHEN check_violation THEN RETURN false; END $$;")
-          verdicts (for [[col v] [[:r "ABC"] [:r "abc"] [:r "a1"] [:l "ABx"] [:l "xab"] [:c "red"] [:m "AB@X"] [:m "ab@y"]]]
-                     [col v (m/validate :pg.ci/t (assoc {:id 1 :r nil :l nil :c nil :m nil} col v) {:registry reg})])]
+          verdicts (for [[col v] [[:r "ABC"] [:r "abc"] [:r "a1"] [:l "ABx"] [:l "xab"] [:c "red"] [:m "AB@X"] [:m "ab@y"]
+                                  [:tr "ABC"] [:tr "abc"] [:tl "ABx"] [:tl "abx"] [:tm "AB@X"] [:tm "ab@x"]]]
+                     [col v (m/validate :pg.ci/t (assoc {:id 1 :r nil :l nil :c nil :m nil :tr nil :tl nil :tm nil} col v) {:registry reg})])]
       (is (= ["t_c_check"] (keep :constraint (:unrendered data))) "IN on citext compares ignoring case: not evaluated")
       (exec-sql! (str "DO $$ BEGIN "
                       (apply str (for [[col v ok] verdicts]
                                    (str "IF ci.takes('" (name col) "', " (sql-literal v) ") <> " ok
                                         " THEN RAISE EXCEPTION 'schema says " ok " for % in " (name col) "', " (sql-literal v) "; END IF;")))
                       " END $$;"))
-      (is true "the schema agrees with PostgreSQL on every value"))))
+      (is true "the schema agrees with PostgreSQL on every value; a citext cast to text compares with case"))))
 
 (deftest names-with-dots-and-domains-over-arrays-insert
   (when *db*
