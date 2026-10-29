@@ -75,12 +75,30 @@
       (throw (ex-info (str "psql failed (exit " exit "): " (str/trim err)) {:exit exit :err err :schema schema})))
     out))
 
+(def ^:private db-keys
+  {:psql (set (concat (keys env-keys) [:psql :dir])) :jdbc #{:jdbc-url :user :password} :datasource #{:datasource}})
+
+(defn- via
+  "How a db map reads the database, :psql, :jdbc or :datasource; a key none of them takes, or
+   keys of two, is an error, since the others would be left out and psql reach the database its
+   environment names."
+  [db]
+  (let [via (cond (contains? db :datasource) :datasource (contains? db :jdbc-url) :jdbc :else :psql)
+        stray (remove (conj (db-keys via) :schema) (keys db))]
+    (when (seq stray)
+      (throw (ex-info (str ":db keys " (vec stray) " do not go with " (name via) ": psql takes " (vec (sort (db-keys :psql)))
+                           ", JDBC :jdbc-url :user :password, or :datasource alone")
+                      {:keys (vec stray) :via via})))
+    (when (and (not= :psql via) (System/getProperty "babashka.version"))
+      (throw (ex-info "babashka has no JDBC: give psql settings, or run on the JVM" {:via via})))
+    via))
+
 (defn from-db
   "Structure of the schema named by :schema (default \"public\"). :psql selects the binary;
-   :jdbc-url or :datasource reads over JDBC instead."
+   :jdbc-url (with :user and :password) or :datasource reads over JDBC instead."
   ([] (from-db {}))
-  ([{:keys [schema jdbc-url datasource] :or {schema "public"} :as db}]
-   (let [out (if (or jdbc-url datasource) ((requiring-resolve 'pgmalli.impl.ir-jdbc/out) db (jdbc-sql schema)) (psql-out (assoc db :schema schema)))
+  ([{:keys [schema] :or {schema "public"} :as db}]
+   (let [out (if (= :psql (via db)) (psql-out (assoc db :schema schema)) ((requiring-resolve 'pgmalli.impl.ir-jdbc/out) db (jdbc-sql schema)))
          ir (keywordize (json/parse (str/trim out)) false)]
      (when-not (:exists ir)
        (throw (ex-info (str "schema does not exist: " schema) {:schema schema})))

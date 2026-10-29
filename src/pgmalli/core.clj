@@ -35,13 +35,9 @@
   (apply reg/registry schemas))
 
 (defn install!
-  "Makes the registry of the named schemas malli's default registry (it holds malli's own
-   schemas, malli.util and malli.experimental.time too), so schema data anywhere reads
-   :pg.public/users and the other generated names. Process-wide: every schema in the process
-   then resolves the :pg and :time names, including one meant to work without them, whose
-   mistake it hides. A :malli/schema that is a schema object over the registry
-   ((m/schema s {:registry registry})) needs none of it: malli.instrument and malli.dev take an
-   object as it is. Returns the schemas the default registry held before, which
+  "Makes the registry of the named schemas malli's default one, so schema data anywhere reads
+   the generated names; process-wide, and so hiding a schema's reliance on them (see the
+   README). Returns the schemas the default registry held before, which
    malli.registry/set-default-registry! puts back."
   [& schemas]
   (let [before (mr/-schemas m/default-registry)]
@@ -83,15 +79,14 @@
   (jdbc/read-options builder))
 
 (defn as-read
-  "The [:map ...] of a row as a JDBC result builder returns it. Options, the ones
-   pgmalli.honeysql takes too (read-options gives them for a next.jdbc builder): :qualified?
-   (keys as :table/column, next.jdbc's as-maps), :kebab? (keys and table names in kebab-case),
-   :nil-columns :absent (NULL columns missing, next.jdbc.optional), :time :instant
-   (next.jdbc.date-time/read-as-instant: timestamps as Instants, dates stay java.sql.Date, so
-   inst?) or :local (read-as-local: timestamptz as LocalDateTime); :read {pg-type schema} for
-   the types a ReadableColumn extension of your own reads otherwise, by their :pg/type
-   ({\"date\" :time/local-date}), over :time. Without them a column is read as the registry
-   types it."
+  "The [:map ...] of a row as next.jdbc builds it from what PostgreSQL's JDBC driver returns:
+   by default plain next.jdbc, keys unqualified, dates and timestamps inst?, arrays, json and
+   intervals (driver objects) :any. Options, the ones pgmalli.honeysql takes too (read-options
+   gives them for a next.jdbc builder), a key or value not among them an error: :qualified?
+   (keys as :table/column, as-maps), :kebab? (as the kebab builders), :nil-columns :absent
+   (next.jdbc.optional), :time :instant or :local (next.jdbc.date-time's read-as-instant,
+   read-as-local), :read for what a ReadableColumn extension returns: {pg-type schema} by a
+   column's :pg/type, {:array :vector} arrays as vectors, {:json :parsed} json parsed."
   ([registry name] (as-read registry name {}))
   ([registry name opts] (jdbc/as-read registry name opts)))
 

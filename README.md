@@ -185,22 +185,30 @@ pgmalli reads from it alike.
 
 ### Rows as the driver returns them
 
-next.jdbc's result builders shape a row differently from the database's: keys may be
-qualified by the table, NULL columns may be missing, timestamps may arrive as Instants.
-`as-read` gives the `[:map ...]` of that shape, so results can be validated as they are.
+`as-read` gives the `[:map ...]` of a row as next.jdbc builds it from what PostgreSQL's JDBC
+driver returns, so results can be validated as they come back. By default that is plain
+next.jdbc: keys unqualified, dates and timestamps `inst?` (`java.sql.Date`, `Timestamp`),
+arrays (`java.sql.Array`), json and jsonb (`PGobject`) and intervals (`PGInterval`) `:any`.
+The options say what your application does differently; `pgmalli.honeysql` takes the same
+ones, for the rows and arguments of queries, and both refuse a key or value they do not know.
+
+| option | for |
+|---|---|
+| `:qualified? true` | keys `:users/id`, as `as-maps` builds them |
+| `:kebab? true` | kebab-cased keys and tables, as the kebab builders do |
+| `:nil-columns :absent` | NULL columns missing, as `next.jdbc.optional` builds rows |
+| `:time :instant` / `:local` | `next.jdbc.date-time`'s `read-as-instant` / `read-as-local` |
+| `:read {pg-type schema}` | what a `ReadableColumn` extension of yours returns for a `:pg/type` |
+| `:read {:array :vector}` | an extension returning arrays as vectors of their elements |
+| `:read {:json :parsed}` | an extension returning json parsed, as the registry shapes it |
 
 ```clojure
-(pgmalli/as-read registry :pg.public/users {:qualified? true        ; :users/id, as as-maps builds
-                                            :nil-columns :absent    ; next.jdbc.optional drops NULLs
-                                            :time :instant})        ; read-as-instant
+(pgmalli/as-read registry :pg.public/users {:qualified? true :nil-columns :absent :time :instant})
 ;; => [:map {...} [:users/id [:pg/integer ...]] [:users/nick {:optional true} [:string ...]] ...]
-```
 
-`:kebab? true` matches the kebab builders; `:time :local` matches read-as-local. A type your
-own `ReadableColumn` extension reads otherwise is named by its `:pg/type` under `:read`:
-`{:read {"date" :time/local-date "interval" :time/duration}}`. The options
-of a next.jdbc builder come from its name: `(pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps)`
-is `{:kebab? true :nil-columns :absent}`. `pgmalli.honeysql` takes the same options.
+(pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps)
+;; => {:kebab? true :nil-columns :absent}, the options a builder's name gives
+```
 
 ### Queries checked against the registry
 
@@ -219,35 +227,44 @@ subquery's columns are resolved in the subquery first, then in the statements ar
 ;; => [{:kind :missing-required-column :table "public.users" :column "score"}
 ;;     {:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
 
+;; arguments are HoneySQL's named parameters, under the key sql/format's :params takes
+(def find-user-q {:select [:id :nick] :from [:users] :where [:= :id :?id]})
+
 (defn find-user
-  {:malli/schema (h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]})}
-  [id] ...)
-;; => [:=> [:cat [:int {...}]] [:sequential [:map [:id [:int {...}]] [:nick [:maybe [:string {...}]]]]]]
+  {:malli/schema (h/query-schema registry [:db :id] find-user-q)}   ; :db is not in the query: :any
+  [db id] (jdbc/execute! db (sql/format find-user-q {:params {:id id}})))
+;; => [:=> [:cat :any [:int {...}]] [:sequential [:map [:id [:int {...}]] [:nick [:maybe [:string {...}]]]]]]
 
-(h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]}
-                {:qualified? true :nil-columns :absent})
-;; => [:=> [:cat [:int {...}]] [:sequential [:map [:users/id [:int {...}]] [:users/nick {:optional true} [:string {...}]]]]]
-
-;; HoneySQL's named parameters are typed under the key sql/format's :params takes
 (h/arg-types registry {:select [:id] :from [:users] :where [:in :mood :?moods] :limit :?n})
 ;; => {:moods [:or [:sequential {:min 1} [:enum {...} "happy" "sad"]] [:set {:min 1} ...]], :n :int}
 ```
 
-Options: `:schema` for unqualified table names (default `"public"`); `:qualified?`, `:kebab?`,
-`:nil-columns`, `:time` and `:read` as in `as-read`; `:write {pg-type schema}` for what a
-`SettableParameter` extension of your own sends (`{"text" [:or :string :keyword]}`), next.jdbc
-sending no keyword without one; `:result :one` for a function returning
-one row or nil (`[:maybe row]`). Without `:time` and `:read` the schema is data malli's default
-registry reads, typed as PostgreSQL's JDBC driver returns values: date and timestamp columns
-are `inst?`, arrays (a `java.sql.Array`), json and jsonb (a `PGobject`) and intervals `:any`.
-`{:read {:array :vector :json :parsed}}` says an extension of yours returns arrays as vectors
-of their elements and json parsed, typed as the registry shapes it; an argument for an array
-column is an array, as `:write`'s `:array` names. `:time
-:instant` or `:local`, or a `:read` naming them, gives the `malli.experimental.time` types
-instead, which the default registry lacks: make the schema an object over pgmalli's registry
-(below). An ambiguous column comes with the tables it could
-belong to, under `:candidates`. `check`, `query-schema`, `row-schema` and `arg-types` are the
-functions to use; the rest of the namespace are their parts, for taking a query apart.
+Rows and arguments are typed as next.jdbc and PostgreSQL's JDBC driver return and take them,
+under the options of `as-read` (above). The ones of queries alone:
+
+| option | for |
+|---|---|
+| `:schema "auth"` | unqualified table names (default `"public"`) |
+| `:write {pg-type schema}` | what a `SettableParameter` extension of yours sends for a `:pg/type` (`{"text" [:or :string :keyword]}`); next.jdbc sends no keyword without one |
+| `:write {:array [:pg/array :sequential :set]}` | what an array argument may be (an array column's, `[:any x]`'s); `:any` without it. `[:pg/array t]` is what the driver takes: a typed Java array of `t`'s or a `java.sql.Array` |
+| `:compare :lenient` | a compared argument takes any value of the column's kind, nil too (not in `:in`): one the column cannot hold matches no row, as NULL does. `:strict` (default) keeps the column's type |
+| `:result :one` | `query-schema` for a function returning one row or nil (`[:maybe row]`) |
+
+A compared argument has the column's type without NULL; one in `:in` a non-empty vector,
+list or set of it, as `sql/format` expands them (`IN ()` is not SQL); an assigned one the
+column's type with NULL; one in `:limit` / `:offset` `:int`. One the data shows only inside
+code (`(when from [:>= :id :?from])`) takes nil too, the code possibly leaving it out. A
+symbol that is not a named parameter is an argument too, for a query written in code with
+locals; where a table goes, a symbol is a table chosen at run time.
+
+Without `:time`, and with no `:read` or `:write` naming them, the schemas are data malli's
+default registry reads; `:time :instant` or `:local`, and `:pg/array`, need pgmalli's registry:
+make the schema an object over it (below). A problem `check` finds in a query is the function
+schema's `:pgmalli/problems` property, its row then `:any` when it cannot be told: the schema
+is made as its namespace loads, which a typo should not stop. An ambiguous column comes with
+the tables it could belong to, under `:candidates`. `check`, `query-schema`, `row-schema` and
+`arg-types` are the functions to use; the rest of the namespace are their parts, for taking a
+query apart.
 
 Every query of a project checked in one test, whatever holds the queries (here, a var per
 query with the HoneySQL map in its metadata):
@@ -260,25 +277,24 @@ query with the HoneySQL map in its metadata):
 
 ### Schemas for `:malli/schema` and `malli.dev`
 
-`malli.instrument` and `malli.dev/start!` make a var's `:malli/schema` a schema with `m/schema`
-and no options (`-collect!` → `m/-register-function-schema!` → `m/function-schema`, malli
-0.20): schema data there is read through malli's default registry, a schema object is taken
-as it is, with the registry it was made over. So an object over pgmalli's registry needs
-nothing installed, and the default registry keeps its names:
+`malli.instrument` and `malli.dev/start!` read a var's `:malli/schema` with `m/schema` and no
+options: schema data through malli's default registry, a schema object as it is, with the
+registry it was made over. So an object over pgmalli's registry needs nothing installed, and
+the default registry keeps its names:
 
 ```clojure
 (defn find-user
-  {:malli/schema (m/schema (h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]}
-                                           {:time :instant})
+  {:malli/schema (m/schema (h/query-schema registry [:db :id] find-user-q {:time :instant})
                            {:registry registry})}
-  [id] ...)
+  [db id] ...)
 ```
 
 Data works there too when it names only what the default registry has: `pgmalli.honeysql`'s
-schemas without `:time` and `:read`, and `portable`, which gives the named schema with its own
-enums and domains inlined, pgmalli's types as their malli counterparts and generation hints
-dropped (time columns stay `:time/*`, so it needs `malli.experimental.time` there). The CHECKs
-only pgmalli evaluates (`:pg/check`, `:pg/check-value`) are left out of it.
+schemas without `:time`, `:read` and `:write` naming other types, and `portable` once
+`malli.experimental.time` is in the default registry (its time columns stay `:time/*`).
+`portable` gives the named schema with its own enums and domains inlined, pgmalli's types as
+their malli counterparts and generation hints dropped; the CHECKs only pgmalli evaluates
+(`:pg/check`, `:pg/check-value`) are left out of it.
 
 ```clojure
 (defn find-user

@@ -1,11 +1,109 @@
 (ns pgmalli.impl.jdbc
-  "The JDBC side: the transformer decoding driver and string values into the registry's types,
-   and the row shapes next.jdbc's result set builders return."
-  (:require [clojure.string :as str]
+  "The JDBC side: the transformer decoding driver and string values into the registry's types;
+   what PostgreSQL's JDBC driver returns and takes for a column, under the options that say what
+   an application's next.jdbc does differently; and the row shapes its result set builders
+   return. as-read and pgmalli.honeysql both read columns and key rows here."
+  (:require [camel-snake-kebab.core :as csk]
+            [clojure.string :as str]
             [malli.core :as m]
+            [malli.error :as me]
             [malli.transform :as mt]
             [pgmalli.impl.json :as json]
             [pgmalli.impl.shape :as shape]))
+
+;;; the options
+
+(def options-schema
+  "The options as-read and pgmalli.honeysql take, closed: a misspelt key or value is an error
+   rather than a check silently weakened."
+  [:map {:closed true}
+   [:schema {:optional true} :string]
+   [:qualified? {:optional true} :boolean]
+   [:kebab? {:optional true} :boolean]
+   [:nil-columns {:optional true} [:enum :absent]]
+   [:time {:optional true} [:enum :inst :instant :local]]
+   [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json]] :any]
+                            [:map [:array {:optional true} [:enum :vector :sequential]]
+                             [:json {:optional true} [:enum :parsed]]]]]
+   [:write {:optional true} [:and [:map-of [:or :string [:enum :array]] :any]
+                             [:map [:array {:optional true} [:or [:enum :pg/array :sequential :vector :set]
+                                                             [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]]]]]
+   [:compare {:optional true} [:enum :strict :lenient]]
+   [:result {:optional true} [:enum :one]]])
+
+(def ^:private valid-options? (m/validator options-schema))
+
+(defn options!
+  "opts when options-schema takes them; an error naming what it does not, otherwise."
+  [opts]
+  (if (valid-options? opts)
+    opts
+    (throw (ex-info (str "pgmalli options: " (pr-str (me/humanize (m/explain options-schema opts))))
+                    {:options opts :errors (me/humanize (m/explain options-schema opts))}))))
+
+;;; what the driver returns and takes
+
+(defn- pg-type [s] (when (and (vector? s) (map? (second s))) (:pg/type (second s))))
+
+(defn array-column?
+  "An array column's schema: [:vector {:pg/type \"text[]\"} :string]."
+  [s]
+  (and (vector? s) (= :vector (first s)) (some-> (pg-type s) (str/ends-with? "[]"))))
+
+(defn read-type
+  "A column's schema (without NULL) as PostgreSQL's JDBC driver returns it through next.jdbc:
+   dates and timestamps under :time (inst? by default), an array a java.sql.Array, json and
+   jsonb a PGobject, an interval a PGInterval (these :any). :read names what a ReadableColumn
+   extension returns instead: a :pg/type's schema, {:array :vector} for arrays as vectors of
+   their elements, {:json :parsed} for json as the data the registry shapes."
+  [schema {:keys [time read] :or {time :inst} :as opts}]
+  (let [driver-object [:any {:pg/type (pg-type schema)}]]
+    (or (shape/read-as read schema)
+        (cond (array-column? schema) (if-let [kind (:array read)] [kind (read-type (last schema) opts)] driver-object)
+              (and (#{"json" "jsonb"} (pg-type schema)) (not= :parsed (:json read))) driver-object
+              (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
+              :else (shape/read-time time schema)))))
+
+(defn array-type
+  "An array argument of elements t: what :write's :array names an application sends
+   ([:pg/array :sequential :set]: a typed Java array, a vector, list or set of t); :any without
+   it, malli's default registry having nothing for what the driver takes (:pg/array is
+   pgmalli's registry's)."
+  [t {:keys [write]}]
+  (if-let [kinds (some-> (:array write) (#(if (keyword? %) [%] %)) seq)]
+    (let [alts (map #(vector % t) kinds)] (if (next alts) (into [:or] alts) (first alts)))
+    :any))
+
+(defn write-type
+  "A column's schema (without NULL) as an argument the driver takes: :write names what a
+   SettableParameter extension sends for a :pg/type; an array column's argument is an array of
+   its elements' (array-type); otherwise what the column reads as without :read, which is the
+   ReadableColumn side (:time extends both)."
+  [schema {:keys [write] :as opts}]
+  (or (shape/read-as write schema)
+      (when (array-column? schema) (array-type (write-type (last schema) opts) opts))
+      (read-type schema (dissoc opts :read))))
+
+;;; rows as next.jdbc builds them
+
+(defn row-key
+  "The key next.jdbc gives a column: qualified by its table (the last part of schema.table)
+   under :qualified? when the column has one, kebab-cased as its kebab builders do it."
+  [{:keys [qualified? kebab?]} table column]
+  (let [k (if kebab? csk/->kebab-case-string identity)]
+    (if (and qualified? table)
+      (keyword (k (last (str/split table #"\." 2))) (k column))
+      (keyword (k column)))))
+
+(defn row-entry
+  "A row map's entry for a column read as inner: NULL a [:maybe], or the key absent under
+   :nil-columns :absent (next.jdbc.optional)."
+  ([k inner nullable? opts] (row-entry k nil inner nullable? opts))
+  ([k props inner nullable? {:keys [nil-columns]}]
+   (let [absent? (and nullable? (= :absent nil-columns))
+         props (cond-> props absent? (assoc :optional true))
+         s (if (and nullable? (not absent?)) [:maybe inner] inner)]
+     (if (empty? props) [k s] [k props s]))))
 
 (defn transformer
   "Decodes JDBC and string values into the registry's types: java.sql.Timestamp and
@@ -62,18 +160,12 @@
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
    pgmalli.core/as-read."
-  [registry name {:keys [qualified? kebab? nil-columns time read]}]
+  [registry name opts]
+  (options! opts)
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
-        kebab (fn [s] (cond-> s kebab? (str/replace "_" "-")))
-        table (some-> (or (:pg/table props) (:pg/view props)) (str/split #"\." 2) second kebab)
-        key* (fn [k] (let [s (kebab (clojure.core/name k))]
-                       (cond (not qualified?) (if (keyword? k) (keyword s) s)
-                             (keyword? k) (keyword table s)
-                             :else (str table "/" s))))
-        entry (fn [[k p s]] (let [s (or (shape/read-as read s) (shape/read-time time s))
-                            absent? (and (= :absent nil-columns) (vector? s) (= :maybe (first s)))
-                            p (cond-> p absent? (assoc :optional true))
-                            s (if absent? (last s) s)]
-                        (if (empty? p) [(key* k) s] [(key* k) p s])))]
+        table (or (:pg/table props) (:pg/view props))
+        entry (fn [[k p s]]
+                (row-entry (row-key opts table (clojure.core/name k)) p (read-type (shape/non-null s) opts)
+                           (and (vector? s) (= :maybe (first s))) opts))]
     (into (if props [:map props] [:map]) (map entry (shape/column-entries m)))))

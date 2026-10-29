@@ -173,16 +173,23 @@
          (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when x [:= :group_id :?g])]} opts))
       "one use in the data is enough"))
 
-(deftest compare-nil-lets-a-compared-argument-be-nil
-  (let [body {:select [:id] :from [:users] :where [:and [:= :id :?id] [:in :group_id :?gs] [:> :score :?min]] :limit :?n}
-        types (h/arg-types registry body (assoc opts :compare-nil true))]
-    (is (= [:maybe [:int {:pg/identity :always :pg/type "bigint"}]] (:id types)))
-    (is (= [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]] (:min types)))
-    (is (= (:gs (h/arg-types registry body opts)) (:gs types)) "not :in's: nil formats as IN ?")
+(deftest a-lenient-comparison-takes-any-value-of-the-columns-kind
+  (let [body {:select [:id] :from [:users] :where [:and [:= :id :?id] [:in :group_id :?gs] [:> :score :?min] [:= :nick :?nick] [:= :mood :?mood]] :limit :?n}
+        types (h/arg-types registry body (assoc opts :compare :lenient))]
+    (is (= [:maybe [:int {:pg/type "bigint"}]] (:id types)))
+    (is (= [:maybe [:int {:pg/type "integer"}]] (:min types)) "no range")
+    (is (= [:maybe [:string {:pg/type "character varying"}]] (:nick types)) "no length")
+    (is (= [:maybe [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] (:mood types))
+        "an enum stays: PostgreSQL refuses a value outside it")
+    (is (= [:or [:sequential {:min 1} [:int {:pg/type "integer"}]] [:set {:min 1} [:int {:pg/type "integer"}]]] (:gs types))
+        "nil not in :in's: it formats as IN ?")
     (is (= :int (:n types)))
     (is (= {:v [:maybe [:string {:max 40 :pg/type "character varying"}]]}
-           (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare-nil true)))
-        "an assigned one as before")))
+           (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
+        "an assigned one keeps the column's bounds")
+    (is (= {:ids [:maybe [:sequential [:int {:pg/type "bigint"}]]]}
+           (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :compare :lenient :write {:array :sequential})))
+        "an array's too, and :write's :array takes one kind alone")))
 
 (def docs
   (pgmalli/registry {:registry {:pg.public/docs [:map {:pg/table "public.docs"}
@@ -216,11 +223,11 @@
     (is (= {:ids [:or [:sequential [:int {:pg/identity :always :pg/type "bigint"}]] [:set [:int {:pg/identity :always :pg/type "bigint"}]]]}
            (select-keys (h/arg-types registry body (assoc opts :write {:array [:sequential :set]})) [:ids]))
         "the collections an extension sends instead; empty is an empty array, which SQL takes")
-    (let [t (:ids (h/arg-types registry body (assoc opts :write {:array [:pg/array :sequential :nil]})))]
-      (doseq [v [(long-array [1 2]) (into-array Long [1]) (long-array []) [1] '() nil]] (is (m/validate t v {:registry registry}) (pr-str v)))
-      (doseq [v [(object-array [1]) (into-array String ["a"]) #{1}]] (is (not (m/validate t v {:registry registry})) (pr-str v)))
-      (is (= [:or [:pg/array [:int {:pg/identity :always :pg/type "bigint"}]] [:sequential [:int {:pg/identity :always :pg/type "bigint"}]] :nil] t)
-          ":pg/array is what the driver takes (Object[] it refuses), :nil the extension's"))
+    (let [t (:ids (h/arg-types registry body (assoc opts :write {:array [:pg/array :sequential]})))]
+      (doseq [v [(long-array [1 2]) (into-array Long [1]) (long-array []) [1] '()]] (is (m/validate t v {:registry registry}) (pr-str v)))
+      (doseq [v [(object-array [1]) (into-array String ["a"]) #{1} nil]] (is (not (m/validate t v {:registry registry})) (pr-str v)))
+      (is (= [:or [:pg/array [:int {:pg/identity :always :pg/type "bigint"}]] [:sequential [:int {:pg/identity :always :pg/type "bigint"}]]] t)
+          ":pg/array is what the driver takes (Object[] it refuses)"))
     (is (= {:ids [:vector [:or :int :string]]}
            (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :write {:array [:vector] "bigint" [:or :int :string]}))))))
 
@@ -275,7 +282,7 @@
       "an unknown :values column is reported once")
   (is (= [] (h/check registry '{:insert-into tbl :values rows} opts)) "a target passed in says nothing")
   (let [with-interval (assoc registry :pg.sample/spans [:map {:pg/table "sample.spans"} [:id :int] [:span [:time/duration {:pg/type "interval"}]]])]
-    (is (= [:map [:span :any]] (h/row-schema with-interval {:select [:span] :from [:spans]} #{} opts)) "an interval is a driver object"))
+    (is (= [:map [:span [:any {:pg/type "interval"}]]] (h/row-schema with-interval {:select [:span] :from [:spans]} #{} opts)) "an interval is a driver object"))
   (is (= {'ids [:int {:pg/identity :always :pg/type "bigint"}]}
          (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:in :nope ids] [:= :id ids]]} opts))
       "an :in on an unknown column gives no type either"))
@@ -398,3 +405,71 @@
                             :do-update-set {:fields [:name] :where [:= :groups.name :EXCLUDED.nope]}} opts))
       "EXCLUDED has the target's columns, no others")
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:name :excluded.name}} opts))))
+
+(deftest a-misspelt-option-is-an-error
+  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:write {:array [:vectr]}} {:compare :loose} {:result :first}]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/arg-types registry {:select [:id] :from [:users]} (merge opts o))) (pr-str o))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/check registry {:select [:id] :from [:users]} (merge opts o))) (pr-str o))))
+
+(deftest insert-into-a-table-as-an-alias
+  (let [body {:insert-into [:users :u] :values [{:group_id :?g :mood "sad" :score 1}] :on-conflict [:id] :do-update-set {:score :?s} :where [:> :u.score 0]}]
+    (is (= [] (h/check registry body opts)))
+    (is (= [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] (:g (h/arg-types registry body opts))))))
+
+(deftest a-from-of-any-shape-is-read-or-left-alone
+  (is (= [] (h/check registry {:select [:*] :from {:select [:id] :from [:users]}} opts)) "a subquery alone")
+  (doseq [f [1 true "users"]] (is (vector? (h/check registry {:select [:id] :from f} opts)) (pr-str f))))
+
+(deftest a-table-code-brings-in-has-the-columns-the-query-names
+  (is (= [] (h/check registry '{:select [:u.id :g.name] :from [[:users :u]] :left-join (when x [[:groups :g] [:= :g.id :u.group_id]])} opts)))
+  (is (= [] (h/check registry '{:select [:u.id] :from (if x [[:users :u]] [[:users :u]])} opts))))
+
+(deftest an-opaque-table-beside-a-known-one-makes-no-column-ambiguous
+  (is (= [] (h/check registry '{:select [:nick] :from [:users] :join [t [:= :t.id :users.id]]} opts)))
+  (is (= [:map [:nick [:maybe :any]]] (h/row-schema registry '{:select [:nick] :from [:users] :join [t [:= :t.id :users.id]]} #{} opts))
+      "untyped: which table PostgreSQL takes it from is not in the data")
+  (is (= [{:kind :unknown-column :column :u.nope}] (h/check registry '{:select [:u.nope] :from [[:users :u]] :join [t [:= 1 1]]} opts))
+      "a known table's unknown column is still one"))
+
+(deftest expression-names-follow-postgresql
+  (let [row #(h/row-schema registry {:select [%] :from [:users]} #{} opts)]
+    (is (nil? (row [[:cast [:+ :id 1] :int]])) "an operation cast is named after the type")
+    (is (nil? (row [[:cast [:case [:= :id 1] 2] :int]])))
+    (is (= [:map [:coalesce [:maybe :any]]] (row [[:cast [:coalesce :id 0] :int]])) "a function cast keeps its name")
+    (is (= [:map [:?column? [:maybe :any]]] (row [[:-> :nick "a"]])) "an operator not an identifier")
+    (is (= [:map [:max [:maybe :any]]] (row :%max.id)) ":%f.args calls f")
+    (is (nil? (row [[:raw "now()"]])) ":raw may be named anything")
+    (is (nil? (row [{:select [1]}])) "a subquery is named after its column"))
+  (is (= [] (h/check registry {:select [:%max.id [:%count.* :c]] :from [:users]} opts)))
+  (is (= [] (h/check registry {:select [[[:lower :nick]]] :from [:users] :order-by [:lower]} opts)) "an expression's name is an output column"))
+
+(deftest a-right-join-nulls-the-tables-it-attaches-to
+  (let [nullable #(into {} (for [[a v] (h/scope registry % #{} opts)] [a (boolean (:nullable? v))]))]
+    (is (= {"u" false "x" true "g" false "i" false}
+           (nullable {:select [:*] :from [[:users :u] [:groups :x]] :right-join [[:groups :g] [:= 1 1]] :inner-join [[:groups :i] [:= 1 1]]}))
+        "a comma binds looser than JOIN: the right join attaches to the last FROM item; an inner join after it nulls nothing")))
+
+(deftest a-symbol-table-in-joins-and-from-alone
+  (is (= [] (h/check registry '{:select [:x] :from table} opts)))
+  (is (= [] (h/check registry '{:select [:t.x :u.id] :from [[:users :u]] :left-join [t [:= :t.uid :u.id]]} opts))))
+
+(deftest a-typed-use-wins-over-a-driver-object
+  (is (= {:x [:int {:pg/type "bigint"}]} (h/arg-types docs {:select [:id] :from [:docs] :where [:and [:= :meta :?x] [:= :id :?x]]}))
+      "[:any {...}] says nothing either"))
+
+(deftest a-set-operations-row-under-absent-nil-columns
+  (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:nick {:optional true} [:string {:max 40 :pg/type "character varying"}]]]
+         (h/row-schema registry {:union [{:select [:id :nick] :from [:users]} {:select [:id :nick] :from [:users]}]} #{} (assoc opts :nil-columns :absent)))))
+
+(deftest an-array-columns-elements-take-overrides
+  (is (= {:p [:maybe [:vector :keyword]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:write {:array :vector "text" :keyword}})))
+  (is (= [:map [:paths [:maybe [:vector :keyword]]]] (h/row-schema docs {:select [:paths] :from [:docs]} #{} {:read {:array :vector "text" :keyword}})))
+  (is (= {:p [:maybe [:vector [:string {:pg/type "text"}]]]} (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} {:read {"text" :keyword} :write {:array :vector}}))
+      ":read is the rows' alone"))
+
+(deftest query-schema-carries-the-problems-check-finds
+  (let [s (h/query-schema registry [:id] {:select [:nick_name] :from [:users] :where [:= :id :?id]} opts)]
+    (is (= {:pgmalli/problems [{:kind :unknown-column :column :nick_name}]} (m/properties (m/schema s))))
+    (is (= :any (last s)) "the row it cannot tell"))
+  (is (nil? (m/properties (m/schema (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} opts) {:registry registry})))
+      "none on a query that agrees"))

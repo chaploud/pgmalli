@@ -1,6 +1,8 @@
 {:paths ["src" "resources" "test" "test/resources"]
  :deps {com.github.seancorfield/honeysql {:mvn/version "2.8.85"}
         metosin/malli {:mvn/version "0.20.3"}
+        ;; next.jdbc's kebab builders name keys with it
+        camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
         com.gfredericks/test.chuck {:mvn/version "0.2.15"}}
  :tasks {lint {:doc "clj-kondo over src and test"
                :task (shell "clj-kondo --lint src test dev")}

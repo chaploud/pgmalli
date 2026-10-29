@@ -1,6 +1,6 @@
 (ns pgmalli.impl.pgtypes
   "The schema types pgmalli registers for PostgreSQL's own: the CHECK types, a bytea of bounded
-   length, the bounded numbers, with the ranges the integer types hold, and the arrays the
+   length, the bounded numbers (with the ranges the integer types hold) and the arrays the
    JDBC driver takes."
   (:require [malli.core :as m]
             [pgmalli.impl.eval :as ev]))

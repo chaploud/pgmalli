@@ -8,74 +8,66 @@ All notable changes to this project are documented here. The format follows
 ### Added
 
 - `pgmalli.honeysql` reads HoneySQL's named parameters (`:?id`, `?id`, `[:param :id]`):
-  `arg-types` types them under the key `sql/format`'s `:params` takes (`:id`), as it types
-  symbols, and `query-schema` takes that key among its args.
-- `:read {pg-type schema}` in `as-read` and `pgmalli.honeysql`: a type a `ReadableColumn`
-  extension reads otherwise, by its `:pg/type` (`{"date" :time/local-date}`), over `:time`.
-- `:write {pg-type schema}` in `pgmalli.honeysql`: what a `SettableParameter` extension sends
-  for a type (`{"text" [:or :string :keyword]}`), over the column's read type, for arguments.
-- `pgmalli.honeysql` types an array column's values (rows, arguments) and a json or jsonb one's
-  rows as PostgreSQL's JDBC driver returns and takes them by default: `:any` (a
-  `java.sql.Array`, a `PGobject`), where it took the registry's `[:vector ...]` and CHECK-shaped
-  map, which the driver's values failed. `{:read {:array :vector :json :parsed}}` gives those
-  back for an extension that returns vectors and parsed json; an array column's argument
-  follows `:write`'s `:array` (`[:pg/array]` for what the driver takes). Checked against the
-  driver.
-- `{:compare-nil true}` in `pgmalli.honeysql`: a compared argument (`=`, `<>`, `<`, `ANY` ...;
-  not `:in`'s, nil formatting as `IN ?`, which is not SQL) may be nil, for code passing nil to
-  match no row: `sql/format` sends it to `= ?`, which no row equals. Assigned arguments are as
-  before.
+  `arg-types` types them under the key `sql/format`'s `:params` takes (`:id`), and
+  `query-schema` takes that key among its args.
+- Options for what an application's next.jdbc does differently, in `as-read` and
+  `pgmalli.honeysql`: `:read` for a `ReadableColumn` extension (`{pg-type schema}` by a
+  column's `:pg/type`, `{:array :vector}`, `{:json :parsed}`); in `pgmalli.honeysql`,
+  `:write` for a `SettableParameter` one (`{pg-type schema}`, `{:array [:pg/array :sequential
+  :set]}` for what an array argument may be) and `{:compare :lenient}`, a compared argument
+  taking any value of the column's kind, and nil but in `:in`, matching no row.
+- `:pg/array` in the registry: `[:pg/array t]` is what PostgreSQL's JDBC driver takes as an
+  array parameter, a typed Java array of `t`'s (not `Object[]`, which it refuses) or a
+  `java.sql.Array`.
 - `generate!`, `stale` and `check` read the catalog over JDBC when `:db` has `:jdbc-url` (with
   `:user` and `:password`) or `:datasource`, with the PostgreSQL driver on the classpath and no
   psql. The query runs in a transaction rolled back after, so a pooled connection keeps its
   search_path.
+- `query-schema` carries the problems `check` finds in its query as the `:pgmalli/problems`
+  property of the function schema.
+
+### Changed
+
+- `as-read` and `pgmalli.honeysql` type a row as next.jdbc builds it from what PostgreSQL's
+  JDBC driver returns, one rule for both: dates and timestamps `inst?` by default (`as-read`
+  kept the registry's `:time/*`), arrays, json and jsonb, and intervals `:any` (they took the
+  registry's vector, CHECK-shaped map and `:time/duration`, which the driver's objects fail).
+  Keys are kebab-cased as next.jdbc's kebab builders do (`line_no2` is `:line-no-2`), and always
+  keywords.
+- An option key or value `as-read` and `pgmalli.honeysql` do not know is an error, and so is a
+  `:db` key `generate!` does not, or keys of psql and JDBC together; they were left out, and
+  psql reached the database its environment names.
+- An argument is typed as the driver takes it: an array column's, and one in `[:any x]` or
+  `[:all x]`, `:any` unless `:write`'s `:array` names what it may be; one in `:in` a non-empty
+  vector, list or set of the column's type, as `sql/format` expands it; one the data shows only
+  inside code nilable. `:read` types rows alone.
+- `camel-snake-kebab` is a dependency (next.jdbc's kebab builders name keys with it), malli
+  0.20.3.
 
 ### Fixed
 
-- `pgmalli.honeysql/check` took a named parameter for an unknown column, also selected
-  (`{:select [[:?id]]}`, as an INSERT ... SELECT passes values).
-- Every table has the system columns (`ctid`, `xmin`, `xmax`, `cmin`, `cmax`, `tableoid`).
-- An unqualified `pg_` name is pg_catalog's first, as on PostgreSQL's search path; a
-  pg_catalog table the registry does not hold is opaque, not unknown.
-- A bare name in `:order-by` is an output column (a select alias, a selected column's name)
-  before an input column; in `:group-by` after one.
-- A symbol where a table goes (`:from`, the joins, `:update`, `:delete-from`, `:insert-into`)
-  is a table chosen at run time: opaque, as a symbol elsewhere is an argument.
-- `row-schema` of `{:select [:*]}` was nil.
-- Code in a query is not read as columns: a `:with` entry built by code leaves unknown tables
-  unjudged as a `:with` built by code does, a list where `:order-by`, `:group-by`, `:columns`
-  or a `:set` key goes is not read, and `check`, `arg-types` and `query-schema` do not throw on
-  it.
-- A table function with no alias (`{:from [[[:f args...]]]}`) is opaque, named after the
-  function; it was read as a table.
-- The `:order-by` of a set operation (`:union` ...) names its first member's output columns.
-- `pgmalli.main` took a minute to exit after running psql (the agent pool's threads).
+- `pgmalli.honeysql` read as PostgreSQL does: every table's system columns (`ctid`, `xmin`,
+  ...); an unqualified `pg_` name as pg_catalog's first, opaque when the registry lacks it; a
+  bare `:order-by` name as an output column first (of a set operation, its first member's),
+  a `:group-by` one after the input columns; a symbol where a table goes as a table chosen at
+  run time; `INSERT INTO t AS a` (`[:t :a]`); a table function with no alias, named after the
+  function; a subquery alone in `:from`.
+- `pgmalli.honeysql/check` reported, for correct queries: a named parameter as a column
+  (selected too, as INSERT ... SELECT passes values); a column an opaque table may hold beside
+  one known table as ambiguous; HoneySQL's `:%max.id`; an SQL word under an alias; a column of
+  a table code brings in (`:left-join (when x [...])`) as unknown. Code in a query is not read
+  as columns, and nothing throws on it.
 - `row-schema` names an expression with no alias as PostgreSQL does (a function's name, `case`,
-  `array`, a cast column's name, `?column?`), where it was nil; an expression's key is
-  unqualified and kebab-cased as the builder does it. A name selected twice is one key. Under
-  `:qualified?`, a cast column is nil: PostgreSQL drops a cast to the column's own type, and
-  the driver then keys it by the table. Checked against next.jdbc's rows over PostgreSQL's JDBC
-  driver.
-- `row-schema` of a set operation is its first member's names, typed where the members agree
-  and nullable where one is; it was nil.
-- An `:in` argument is a non-empty vector, list or set (lazy seqs included) of the column's
-  type, what `sql/format` expands into `IN (?, ...)`; it was a `:sequential`, refusing a set and
-  taking `[]`, which formats as `IN ()`.
-- An SQL word under an alias (`[:current_timestamp :ts]`) is not a column.
-- A column an outer join may leave NULL is nullable in `row-schema` (absent under
-  `:nil-columns :absent`): a `:left-join`'s tables, every table before a `:right-join`'s, both
-  sides of a `:full-join` or `:outer-join`, in the order `sql/format` writes the joins. It was
-  required, and a row the driver returned failed it.
-- An argument the data shows only inside code (`(when from [:>= :id :?from])`) takes nil too.
-- An argument compared through `[:any x]` or `[:all x]` (`= ANY(?)`) is an array of the column's
-  type: `:any` by default, malli's default registry having nothing for what the driver takes,
-  or what `:write`'s `:array` names (`{:array [:pg/array :sequential :set :nil]}`).
-- `:pg/array` in the registry: `[:pg/array t]` is what PostgreSQL's JDBC driver takes as an
-  array parameter, a typed Java array of `t`'s (not `Object[]`, which it refuses) or a
-  `java.sql.Array`; checked against the driver.
-- The README and `install!` say how `:malli/schema` reads a schema (data through malli's default
-  registry, an object as it is), so a schema object over the registry instruments with nothing
-  installed; how `registry` composes and which registry of a composite one wins.
+  `array`, a cast column's or function's name, `?column?` for a value or an operator) and reads
+  set operations (the first member's names, typed where the members agree, nullable where one
+  is); both were nil. A column an outer join may leave NULL is nullable: a `:left-join`'s
+  table, the one a `:right-join` attaches to and those joined to it before, both sides of a
+  `:full-join`. A name selected twice is one key. `{:select [:*]}` was nil.
+- The JDBC catalog read reports the query's own failure, not one in rolling back after it, and
+  names the driver to add when it is missing (leaving out the URL, which may carry a password).
+- `pgmalli.main` took a minute to exit after running psql (the agent pool's threads).
+- The jar carries `resources/pgmalli/ir.sql` alone, not a file generated in the checkout,
+  which would shadow an application's own on the classpath.
 
 ## [0.2.45] - 2026-09-04
 

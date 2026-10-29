@@ -11,6 +11,7 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.ir :as ir]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
@@ -70,3 +71,32 @@
       (let [q {:select [:paths :meta] :from [:docs]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
         (is (m/validate (h/row-schema registry q #{}) row) (pr-str (update-vals row class)))))))
+
+(deftest as-read-is-the-row-the-driver-returns
+  (when *db*
+    (exec-sql! "CREATE TABLE odd_keys (id int PRIMARY KEY, line_no2 int, \"userId\" int, tags text[], doc jsonb, span interval, born date);
+                INSERT INTO odd_keys VALUES (1, 2, 3, '{a}', '{\"a\": 1}', '1 day', '2026-01-01');")
+    (let [{:keys [host port db user password]} *db*
+          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+          registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+      (doseq [builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
+              :let [row (first (jdbc/execute! ds ["SELECT * FROM odd_keys"] {:builder-fn @(requiring-resolve builder)}))
+                    schema (pgmalli/as-read registry :pg.public/odd_keys (pgmalli/read-options builder))]]
+        (is (= (set (keys row)) (set (map first (drop 2 schema)))) (str builder))
+        (is (m/validate schema row {:registry registry}) (str builder " " (pr-str (update-vals row class))))))))
+
+(deftest jdbc-leaves-a-pooled-connection-as-it-was
+  (when *db*
+    (let [{:keys [host port db user password]} *db*
+          c (java.sql.DriverManager/getConnection (str "jdbc:postgresql://" host ":" port "/" db) user password)
+          ;; a pool hands the same connection out again: close is a no-op here
+          kept (java.lang.reflect.Proxy/newProxyInstance (.getClassLoader java.sql.Connection) (into-array Class [java.sql.Connection])
+                                                         (reify java.lang.reflect.InvocationHandler
+                                                           (invoke [_ _ m args] (when-not (= "close" (.getName m)) (.invoke m c args)))))
+          ds (reify javax.sql.DataSource (getConnection [_] kept))
+          path #(with-open [st (.createStatement c)] (let [rs (.executeQuery st "SHOW search_path")] (.next rs) (.getString rs 1)))
+          before (path)]
+      (ir/from-db {:datasource ds :schema "public"})
+      (is (= before (path)))
+      (is (.getAutoCommit c))
+      (.close c))))

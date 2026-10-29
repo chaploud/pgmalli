@@ -84,3 +84,9 @@
           jdbc {:jdbc-url (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password :schema "o'dd\"s"}]
       (is (= (ir/from-db (assoc *db* :schema "o'dd\"s")) (ir/from-db jdbc)))
       (is (= ["id" "name"] (map :name (get-in (ir/from-db jdbc) [:tables "t" :columns])))))))
+
+(deftest a-db-map-is-one-way-to-the-database
+  (doseq [[db re] [[{:jdbc_url "x"} #"do not go with psql"]
+                   [{:jdbc-url "x" :host "h"} #"do not go with jdbc"]
+                   [{:datasource :ds :user "u"} #"do not go with datasource"]]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo re (ir/from-db db)) (pr-str db))))
