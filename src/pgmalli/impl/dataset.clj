@@ -1,7 +1,8 @@
 (ns pgmalli.impl.dataset
   "Datasets: several tables of rows at once, with keys and references checked against the
    registry, and generated so that they hold."
-  (:require [malli.core :as m]
+  (:require [clojure.test.check.generators :as gen]
+            [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
             [pgmalli.impl.error :as error]
@@ -157,8 +158,7 @@
    branch the row falls in (the value of the dispatch column, or an alternative picked by
    seed), so branching CHECKs hold by construction instead of by chance."
   [registry gen-of name row seed]
-  (let [generate (requiring-resolve 'clojure.test.check.generators/generate)
-        schema (get (shape/schemas-of registry) name)
+  (let [schema (get (shape/schemas-of registry) name)
         columns (into {} (map (fn [[k _ s]] [k s])) (shape/column-entries schema))
         fragment? (fn [f] (and (vector? f) (= :map (first f))))
         ;; a fragment saying only "not NULL" generates from the column, not from :some
@@ -166,7 +166,7 @@
         ;; a branch's own dispatch value is kept: the fragment names the column too (col IS NOT NULL)
         fill (fn [row frag i keep]
                (reduce (fn [row [j e]] (let [[k _ s] (shape/entry-parts e)]
-                                         (if (= k keep) row (assoc row k (generate (gen-of (source k s)) 30 (+ seed i j))))))
+                                         (if (= k keep) row (assoc row k (gen/generate (gen-of (source k s)) 30 (+ seed i j))))))
                        row
                        (map-indexed vector (rest frag))))]
     (if (= :and (first schema))
@@ -196,14 +196,11 @@
    table that fills from a few rows never generates the rest; no shrink tree is built, so
    large datasets stay cheap."
   [registry mem name n seed]
-  (let [generate (requiring-resolve 'clojure.test.check.generators/generate)
-        vector-of (requiring-resolve 'clojure.test.check.generators/vector)
-        scale (requiring-resolve 'clojure.test.check.generators/scale)
-        row-gen ((:row-gen mem) name)
+  (let [row-gen ((:row-gen mem) name)
         chunk 25]
     ;; not a range, which is chunked: a table that fills from a few rows generates no more
     (->> (take-while #(< % n) (iterate #(+ % chunk) 0))
-         (mapcat (fn [start] (generate (vector-of (scale #(max % 30) row-gen) (min chunk (- n start))) 30 (+ seed start))))
+         (mapcat (fn [start] (gen/generate (gen/vector (gen/scale #(max % 30) row-gen) (min chunk (- n start))) 30 (+ seed start))))
          (map-indexed (fn [i row] (fill-branches registry (:gen-of mem) name row (+ seed (* 1000 i))))))))
 
 (defn- failure-reasons
@@ -279,8 +276,6 @@
   ([registry {:keys [rows except] :or {rows 5}}]
    (let [ts (tables registry except)
          by-table (into {} (map (juxt :table identity) ts))
-         fmap (requiring-resolve 'clojure.test.check.generators/fmap)
-         choose (requiring-resolve 'clojure.test.check.generators/choose)
          opts {:registry registry}
          ;; one generator and one validator per table (a schema looked up by name is a fresh
          ;; object every time, so memoizing on the schema itself never hits)
@@ -305,9 +300,9 @@
                              (keep settle)
                              (keep fits?)
                              (map (fn [[r ds]] (assoc ds target (conj (get ds target) r))))))))))]
-     (fmap (fn [seed]
+     (gen/fmap (fn [seed]
              (reduce (fn [ds [i table]] (generate-table registry mem (by-table table) ds rows (+ seed i) (grow 4)))
                      {}
                      (map-indexed vector (topological ts))))
            ;; a seed independent of test.check's size, so early samples differ too
-           (choose 0 Long/MAX_VALUE)))))
+           (gen/choose 0 Long/MAX_VALUE)))))

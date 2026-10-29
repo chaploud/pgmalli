@@ -2,7 +2,8 @@
   "The schema types pgmalli registers for PostgreSQL's own: the CHECK types, a bytea of bounded
    length, the bounded numbers (with the ranges the integer types hold) and the arrays the
    JDBC driver takes."
-  (:require [malli.core :as m]
+  (:require [clojure.test.check.generators :as gen]
+            [malli.core :as m]
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.types :as types]))
 
@@ -40,13 +41,10 @@
   (m/-simple-schema
    {:type :pg/bytes
     :compile (fn [{:keys [min max]} _ _]
-               (let [fmap (requiring-resolve 'clojure.test.check.generators/fmap)
-                     vector-of (requiring-resolve 'clojure.test.check.generators/vector)
-                     byte-gen @(requiring-resolve 'clojure.test.check.generators/byte)]
-                 {:pred (fn [v] (and (bytes? v) (<= (or min 0) (alength ^bytes v) (or max Integer/MAX_VALUE))))
-                  :type-properties {:error/message (str "bytes, " (or min 0) " to " (or max "any") " of them")
-                                    :gen/gen (fmap byte-array (vector-of byte-gen (or min 0) (or max (+ (or min 0) 16))))}
-                  :min 0 :max 0}))}))
+               {:pred (fn [v] (and (bytes? v) (<= (or min 0) (alength ^bytes v) (or max Integer/MAX_VALUE))))
+                :type-properties {:error/message (str "bytes, " (or min 0) " to " (or max "any") " of them")
+                                  :gen/gen (gen/fmap byte-array (gen/vector gen/byte (or min 0) (or max (+ (or min 0) 16))))}
+                :min 0 :max 0})}))
 
 (defn- sql-array? [v]
   ;; by name: babashka has no java.sql
@@ -78,11 +76,10 @@
     (m/-simple-schema
      {:type type
       :compile (fn [{:keys [min max] gen-min :gen/min gen-max :gen/max} _ _]
-                 (let [lo (clojure.core/max lo (or min lo)) hi (clojure.core/min hi (or max hi))
-                       large-integer* (requiring-resolve 'clojure.test.check.generators/large-integer*)]
+                 (let [lo (clojure.core/max lo (or min lo)) hi (clojure.core/min hi (or max hi))]
                    {:pred (fn [v] (and (int? v) (<= lo v hi)))
                     :type-properties {:error/message (str "should be an integer between " lo " and " hi)
-                                      :gen/gen (large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})}
+                                      :gen/gen (gen/large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})}
                     :min 0 :max 0}))})))
 
 (def smallint-schema (bounded-int :pg/smallint))
@@ -98,13 +95,11 @@
                      digits (int (clojure.core/min precision 18))
                      bound (dec (long (.longValueExact (.movePointRight 1M digits))))
                      ;; generated within :gen/min and :gen/max (BigDecimals) when given, at the scale
-                     scaled (fn [d] (.longValueExact (.setScale (.movePointRight (bigdec d) (int scale)) 0 java.math.RoundingMode/HALF_UP)))
-                     fmap (requiring-resolve 'clojure.test.check.generators/fmap)
-                     large-integer* (requiring-resolve 'clojure.test.check.generators/large-integer*)]
+                     scaled (fn [d] (.longValueExact (.setScale (.movePointRight (bigdec d) (int scale)) 0 java.math.RoundingMode/HALF_UP)))]
                  {:pred (fn [v] (and (decimal? v) (< (.abs (.setScale ^BigDecimal v (int scale) java.math.RoundingMode/HALF_UP)) limit)))
                   :type-properties {:error/message (str "should fit numeric(" precision ", " scale ")")
-                                    :gen/gen (fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale))
-                                                   (large-integer* {:min (clojure.core/max (- bound) (if gen-min (scaled gen-min) (- bound)))
+                                    :gen/gen (gen/fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale))
+                                                   (gen/large-integer* {:min (clojure.core/max (- bound) (if gen-min (scaled gen-min) (- bound)))
                                                                     :max (clojure.core/min bound (if gen-max (scaled gen-max) bound))}))}
                   :min 0 :max 0}))}))
 

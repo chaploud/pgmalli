@@ -7,6 +7,7 @@
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
+            [clojure.test.check.generators :as gen]
             [clojure.walk :as walk]
             [malli.core :as m]
             [malli.experimental.time :as time]
@@ -127,11 +128,10 @@
   "A generator of no values (malli leaves out an optional key of it, and a [:maybe] generates
    NULL), which throws, naming where, when a value is wanted."
   [where type-name]
-  (let [sized (requiring-resolve 'clojure.test.check.generators/sized)]
-    (with-meta (sized (fn [_] (error/fail! :pgmalli.error/cannot-generate
-                                           (str where ": pgmalli cannot make a value of type " type-name "; give one with :overrides in pgmalli.edn")
-                                           {:given where :type type-name})))
-      {:malli.generator/never-gen true})))
+  (with-meta (gen/sized (fn [_] (error/fail! :pgmalli.error/cannot-generate
+                                             (str where ": pgmalli cannot make a value of type " type-name "; give one with :overrides in pgmalli.edn")
+                                             {:given where :type type-name})))
+    {:malli.generator/never-gen true}))
 
 (defn- gen-hints
   "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap) for a column
