@@ -619,14 +619,20 @@
 
 (defn- loose
   "A column type without the bounds a comparison need not keep (CHECKs, lengths, ranges): its
-   kind and :pg/type. An enum stays: PostgreSQL refuses a value outside it, even compared."
+   kind and :pg/type. A type with other children (an enum, an :or) stays: PostgreSQL refuses a
+   value outside an enum, even compared."
   [t]
-  (let [[h p] (if (vector? t) [(first t) (when (map? (second t)) (second t))] [t nil])]
-    (case h
-      (:enum nil) t
-      :and (loose (second t))
-      (:maybe :vector :sequential :set) [h (loose (last t))]
-      (if-let [pg (:pg/type p)] [h {:pg/type pg}] h))))
+  (if-not (vector? t)
+    t
+    (let [[h & more] t
+          [p & children] (if (map? (first more)) more (cons nil more))]
+      (cond (= :and h) (let [base (loose (first children))]
+                         (if-let [pg (and (vector? base) (not (map? (second base))) (:pg/type p))]
+                           (into [(first base) {:pg/type pg}] (rest base))
+                           (if (and (keyword? base) (:pg/type p)) [base {:pg/type (:pg/type p)}] base)))
+            (#{:maybe :vector :sequential :set} h) [h (loose (last t))]
+            (seq children) t
+            :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 
 (defn- compared-type
   "The type of an argument compared with a column of type t by op: :in's a non-empty vector,

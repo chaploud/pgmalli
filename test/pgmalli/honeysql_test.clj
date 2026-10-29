@@ -473,3 +473,25 @@
     (is (= :any (last s)) "the row it cannot tell"))
   (is (nil? (m/properties (m/schema (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} opts) {:registry registry})))
       "none on a query that agrees"))
+
+(def checked
+  (pgmalli/registry {:registry {:pg.public/email [:and :string [:pg/check-value {:pg/constraint "email_check"} [:like :VALUE "%@%"]]]
+                                :pg.public/roles [:map {:pg/table "public.roles"}
+                                                  [:role_key [:and {:pg/constraint ["roles_role_key_format"] :pg/type "character varying"}
+                                                              [:string {:max 255}] [:re "^[a-z_]+$"]]]
+                                                  [:nick [:maybe [:string {:max 40 :pg/type "character varying"}]]]
+                                                  [:mail [:ref {:pg/type "email"} :pg.public/email]]
+                                                  [:level [:int {:pg/type "integer" :min 1 :max 10}]]
+                                                  [:kind [:enum {:pg/type "kind"} "a" "b"]]]}}))
+
+(deftest a-lenient-comparison-is-a-schema-for-every-kind-of-column
+  (doseq [col [:role_key :nick :mail :level :kind]
+          o [{:compare :lenient} {:compare :lenient :write {"character varying" [:or :string :keyword]}}]
+          :let [t (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= col :?x]} o))]]
+    (is (m/schema t {:registry checked}) (pr-str col o t)))
+  (is (= [:maybe [:string {:pg/type "character varying"}]]
+         (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} {:compare :lenient})))
+      "a CHECKed column's base type, without the CHECK and the length")
+  (is (= [:maybe [:or :string :keyword]]
+         (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} {:compare :lenient :write {"character varying" [:or :string :keyword]}})))
+      ":write's type stays as it is"))
