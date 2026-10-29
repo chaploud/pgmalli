@@ -13,7 +13,16 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
-- `pgmalli.honeysql/check` took a named parameter for an unknown column.
+- `pgmalli.honeysql/check` took a named parameter for an unknown column, also selected
+  (`{:select [[:?id]]}`, as an INSERT ... SELECT passes values).
+- Every table has the system columns (`ctid`, `xmin`, `xmax`, `cmin`, `cmax`, `tableoid`).
+- An unqualified `pg_` name is pg_catalog's first, as on PostgreSQL's search path; a
+  pg_catalog table the registry does not hold is opaque, not unknown.
+- A bare name in `:order-by` is an output column (a select alias, a selected column's name)
+  before an input column; in `:group-by` after one.
+- A symbol where a table goes (`:from`, the joins, `:update`, `:delete-from`, `:insert-into`)
+  is a table chosen at run time: opaque, as a symbol elsewhere is an argument.
+- `row-schema` of `{:select [:*]}` was nil.
 
 ## [0.2.45] - 2026-09-04
 

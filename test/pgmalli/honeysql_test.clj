@@ -44,6 +44,8 @@
 (deftest named-parameters-are-arguments-under-their-params-key
   (let [body {:select [:id] :from [:users] :where [:and [:= :id :?id] [:in :mood :?moods]] :limit :?n}]
     (is (= [] (h/check registry body opts)))
+    (is (= [] (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m :mood] [[:unnest :?s]]]}]} opts))
+        "selected, as INSERT ... SELECT passes values")
     (is (= {:id [:int {:pg/identity :always :pg/type "bigint"}]
             :moods [:sequential [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]
             :n :int}
@@ -53,6 +55,33 @@
         "a qualified one keeps its namespace, as sql/format's :params does")
     (is (= [:cat [:int {:pg/identity :always :pg/type "bigint"}] :int]
            (second (h/query-schema registry [:id :n] body opts))))))
+
+(deftest every-table-has-the-system-columns
+  (is (= [] (h/check registry {:delete-from :users :where [:in :ctid {:select [:ctid] :from [:users] :where [:= :xmin 1]}]} opts)))
+  (is (= {:t [:int {:pg/type "oid"}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= :tableoid :?t]} opts))))
+
+(deftest an-unqualified-pg-name-is-pg-catalogs-first
+  (is (= [] (h/check registry {:select [:pg_class.relname] :from [:pg_class] :join [:pg_roles [:= :pg_class.relowner :pg_roles.oid]]} opts))
+      "opaque when the registry does not hold pg_catalog")
+  (is (= [] (h/check registry {:select [:relname] :from [:pg_catalog.pg_class]} opts)))
+  (is (= [{:kind :unknown-table :table "sample.nopg_class"}] (h/check registry {:select [:x] :from [:nopg_class]} opts))))
+
+(deftest a-bare-name-in-order-by-is-an-output-column-first
+  (let [body {:select [:u.id [:g.name :gname]] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}]
+    (is (= [] (h/check registry (assoc body :order-by [:id [:gname :desc]]) opts)))
+    (is (= [{:kind :ambiguous-column :column :id :candidates ["sample.users" "sample.groups"]}]
+           (h/check registry (assoc body :select [:u.nick] :order-by [:id]) opts))
+        "a name no output column has is an input column"))
+  (is (= [] (h/check registry {:select [[:nick :n] [[:count :*] :c]] :from [:users] :group-by [:n]} opts))
+      "in :group-by only when no input column has it"))
+
+(deftest a-symbol-where-a-table-goes-is-a-table-chosen-at-run-time
+  (is (= [] (h/check registry '{:select [:id] :from [table] :where [:= :group_id :?g] :for :update} opts)))
+  (is (= [] (h/check registry '{:select [:t.id] :from [[table :t]]} opts)))
+  (is (= [] (h/check registry '{:update table :set {:x :?x} :where [:= :id 1]} opts)))
+  (is (= [] (h/check registry '{:delete-from table :where [:= :id 1]} opts)))
+  (is (= [] (h/check registry '{:insert-into table :values [{:x 1}]} opts)))
+  (is (= [] (h/check registry '{:insert-into [table [:x]] :values [[1]]} opts))))
 
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
@@ -69,6 +98,7 @@
              row)
           "a column under an alias keeps its table in the key, as the driver does")
       (is (m/validate row {:users/id 1 :users/g 2} malli-opts) "as malli's default registry reads it"))
+    (is (= (h/row-schema registry {:select [:users/*] :from [:users]} #{} opts) (h/row-schema registry {:select [:*] :from [:users]} #{} opts)))
     (is (= [:map [:sub/id [:maybe :any]]] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} #{} (assoc opts :qualified? true))))
     (is (= [:map [:users/group-id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]] (h/row-schema registry '{:select [:group_id] :from [:users]} #{} (assoc opts :qualified? true :kebab? true))))
     (is (= {'x [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]} opts))

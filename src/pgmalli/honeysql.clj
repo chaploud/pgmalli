@@ -7,8 +7,9 @@
 
    Scope: tables come from :from, :using, :cross-join, the joins (:join, :left-join,
    :right-join, :inner-join, :full-join, :outer-join; :join-by is not read), :insert-into,
-   :update and :delete-from, under their aliases. CTEs (:with), subqueries and table functions are opaque tables: their
-   columns exist but have no type. A column is :col (unique in the scope), :alias/col or
+   :update and :delete-from, under their aliases. CTEs (:with), subqueries, table functions,
+   a symbol where a table goes and a pg_catalog table the registry lacks are opaque tables:
+   their columns exist but have no type. Every table has the system columns (ctid, xmin, ...). A column is :col (unique in the scope), :alias/col or
    :alias.col; a column a subquery cannot resolve is looked for in the enclosing statements,
    as PostgreSQL does. An unqualified table is in :schema (default \"public\").
 
@@ -30,6 +31,11 @@
   [registry table]
   (some->> (get (::schemas registry) (shape/table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s]))))
 
+(def ^:private system-columns
+  "The columns every table has besides its own."
+  {"ctid" [:some {:pg/type "tid"}] "xmin" [:some {:pg/type "xid"}] "xmax" [:some {:pg/type "xid"}]
+   "cmin" [:some {:pg/type "cid"}] "cmax" [:some {:pg/type "cid"}] "tableoid" [:int {:pg/type "oid"}]})
+
 (defn- reading
   "The registry as this namespace reads it: its schemas taken once (a composite registry merges
    them on every lookup) and the columns of a table memoized, since a column is looked for in
@@ -39,7 +45,7 @@
   (if (::schemas registry)
     registry
     (let [r {::schemas (shape/schemas-of registry)}]
-      (assoc r ::table-columns (memoize #(some->> (column-entries r %) (into {})))))))
+      (assoc r ::table-columns (memoize #(some->> (column-entries r %) (into system-columns)))))))
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
 
@@ -82,15 +88,15 @@
 (defn- insert-parts
   "{:table :columns :select} of :insert-into in its HoneySQL shapes: :t, [:t [:a :b]],
    [target {:select ...}], any of them behind an option map ({:overriding-value :system}); the
-   statement's :columns when the target lists none. nil when the target is not a table name
-   (a symbol, rows built elsewhere)."
+   statement's :columns when the target lists none; the table a symbol when it is chosen at
+   run time. nil when the target is neither (rows built elsewhere)."
   [stmt]
   (let [i (:insert-into stmt)
         i (if (and (vector? i) (map? (first i))) (vec (rest i)) i)
         i (if (and (vector? i) (= 1 (count i))) (first i) i)
         [target select] (if (and (vector? i) (map? (second i))) [(first i) (second i)] [i nil])
         [table listed] (if (and (vector? target) (keyword? (first target))) [(first target) (second target)] [target nil])]
-    (when (keyword? table)
+    (when (or (keyword? table) (symbol? table))
       {:table table :columns (or listed (let [c (:columns stmt)] (when (vector? c) c))) :select select})))
 
 (defn- cte-names*
@@ -129,11 +135,12 @@
 (defn- table-ref
   "[table alias written columns] of a :from / join / target item: the table's qualified name,
    its alias, the name as written (nil when qualified by a schema), and the columns an alias
-   lists ([:v {:columns [:id :n]}] over a VALUES); an opaque item (subquery, function) has no
-   table."
+   lists ([:v {:columns [:id :n]}] over a VALUES); an opaque item (subquery, function, a symbol
+   naming a table chosen at run time) has no table."
   [x schema]
   (cond
     (keyword? x) [(qualified x schema) (name x) (written x)]
+    (symbol? x) [nil (str x) nil]
     (vector? x)
     (let [[a b] x
           ;; [:alias {:columns [...]}]
@@ -147,17 +154,30 @@
 
 (defn- insert-target [stmt] (:table (insert-parts stmt)))
 
+(defn- catalog-table
+  "The table an unqualified name means: pg_catalog, implicitly first on the search path, holds
+   the pg_ relations; one the registry lacks is \"pg_catalog.<name>\" all the same, opaque."
+  [registry table written]
+  (if-let [catalog (when (and written (str/starts-with? written "pg_")) (str "pg_catalog." written))]
+    (cond (table-columns registry catalog) catalog
+          (table-columns registry table) table
+          :else catalog)
+    table))
+
+(defn- catalog? [table] (str/starts-with? table "pg_catalog."))
+
 (defn scope
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool}} of one statement; ctes are the
    query's CTE names, which shadow a table only when the reference is written without a schema."
   [registry stmt ctes {:keys [schema] :or {schema "public"}}]
   (let [registry (reading registry)
-        refs (concat (for [k [:from :using :cross-join] :let [f (get stmt k)] :when f, t (if (keyword? f) [f] f)] t)
+        refs (concat (for [k [:from :using :cross-join] :let [f (get stmt k)] :when f, t (if (or (keyword? f) (symbol? f)) [f] f)] t)
                      (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] t)
                      [(insert-target stmt) (:update stmt) (:delete-from stmt)])
         sc (into {}
                  (for [[table alias written listed] (keep #(table-ref % schema) refs)
-                       :let [cte? (boolean (and written (ctes written)))]]
+                       :let [cte? (boolean (and written (ctes written)))
+                             table (when table (catalog-table registry table written))]]
                    [alias (cond-> {:table table :cte? cte?
                                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))}
                             ;; the columns an alias lists are the ones it has, typeless
@@ -270,8 +290,9 @@
    expression, which has no column."
   [item]
   (cond
-    (keyword? item) (when (column-keyword? item) [item nil])
+    (keyword? item) (when (or (= :* item) (column-keyword? item)) [item nil])
     (not (vector? item)) nil
+    (param-key (first item)) (when (keyword? (second item)) [nil (second item)])
     (and (keyword? (first item)) (keyword? (second item))) [(first item) (second item)]
     (keyword? (first item)) [(first item) nil]
     (keyword? (second item)) [nil (second item)]))
@@ -323,16 +344,31 @@
 
 (defn- star? [col] (= "*" (second (split-column col))))
 
+(defn- output-name
+  "The name of the output column a bare :col of :order-by or :group-by may mean (a select
+   alias, or a selected column's name), nil when there is none."
+  [stmt col]
+  (when-not (first (split-column col))
+    (some (fn [item]
+            (let [[c alias] (select-parts item)]
+              (when (= (name col) (if alias (name alias) (some-> c split-column second))) col)))
+          (selected-items stmt))))
+
 (defn- ordering-columns
-  "The columns :order-by and :group-by name as they are (:col, or [:col :asc]); expressions
-   there are not read."
-  [stmt]
-  (concat (for [c (:group-by stmt) :when (column-keyword? c)] c)
-          (for [o (:order-by stmt) :let [c (if (vector? o) (first o) o)] :when (column-keyword? c)] c)))
+  "The input columns :order-by and :group-by name as they are (:col, or [:col :asc]);
+   expressions there are not read. As PostgreSQL reads them, a bare name in :order-by is an
+   output column first, one in :group-by an input column first."
+  [registry sc stmt]
+  (concat (for [c (:group-by stmt)
+                :when (and (column-keyword? c) (not (and (output-name stmt c) (empty? (column-hits registry sc c)))))]
+            c)
+          (for [o (:order-by stmt) :let [c (if (vector? o) (first o) o)]
+                :when (and (column-keyword? c) (not (output-name stmt c)))]
+            c)))
 
 (defn- column-problems [registry sc stmt schema]
   (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
-                                      (for [c (ordering-columns stmt)] [c sc])
+                                      (for [c (ordering-columns registry sc stmt)] [c sc])
                                       (for [[_ c] (comparisons stmt)] [c sc])
                                       (for [c (:columns (insert-parts stmt))] [c (target-scope sc stmt schema)])
                                       (for [[c] (assignments stmt)] [c (target-scope sc stmt schema)])))
@@ -343,23 +379,24 @@
       {:kind :unknown-column :column col})))
 
 (defn- insert-problems [registry stmt schema]
-  (when-let [{:keys [table columns]} (insert-parts stmt)]
-    (let [[table] (table-ref table schema)
-          values (:values stmt)
-          rows (when (vector? values) values)
-          ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
-          given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
-          given-names (set (map name given))
-          required (set (for [[k p] (some-> (get (::schemas registry) (shape/derived-name (shape/table-key table) "insert")) shape/column-entries)
-                              :when (not (:optional p))]
-                          (name k)))]
-      (concat
-       (when columns
-         (for [[i row] (map-indexed vector (filter vector? rows)) :when (not= (count row) (count columns))]
-           {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
-       (when (seq given)
-         (for [c required :when (not (given-names c))]
-           {:kind :missing-required-column :table table :column c}))))))
+  (let [{:keys [table columns]} (insert-parts stmt)
+        [table] (some-> table (table-ref schema))]
+    (when table
+      (let [values (:values stmt)
+           rows (when (vector? values) values)
+           ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
+           given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
+           given-names (set (map name given))
+           required (set (for [[k p] (some-> (get (::schemas registry) (shape/derived-name (shape/table-key table) "insert")) shape/column-entries)
+                               :when (not (:optional p))]
+                           (name k)))]
+       (concat
+        (when columns
+          (for [[i row] (map-indexed vector (filter vector? rows)) :when (not= (count row) (count columns))]
+            {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
+        (when (seq given)
+          (for [c required :when (not (given-names c))]
+            {:kind :missing-required-column :table table :column c})))))))
 
 (defn- enum-problems [registry sc stmt schema]
   (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (#{:= :<> :in} op)] [col value sc])
@@ -386,7 +423,7 @@
   (let [registry (reading registry)
         scopes (if (map? scope) [scope] scope)]
     (vec (concat (for [[_ {:keys [table cte?]}] (first scopes)
-                       :when (and table (not cte?) (nil? (table-columns registry table)))]
+                       :when (and table (not cte?) (not (catalog? table)) (nil? (table-columns registry table)))]
                    {:kind :unknown-table :table table})
                  (column-problems registry scopes stmt schema)
                  (insert-problems registry stmt schema)
