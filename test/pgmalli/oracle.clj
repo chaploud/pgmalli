@@ -116,8 +116,10 @@
     (jdbc/execute! conn (into [(str "EXPLAIN " sql)] params))
     (try (jdbc/execute! conn sqlvec) {:pg :ok}
          (catch PSQLException e
-           (if (= "23502" (.getSQLState e))
-             {:pg :not-null-violation :state "23502" :message (.getMessage e)}
+           (case (.getSQLState e)
+             "23502" {:pg :not-null-violation :state "23502" :message (.getMessage e)}
+             ;; a value outside a CHECK's list, which check reports as an enum literal
+             "23514" {:pg :enum-literal :state "23514" :message (.getMessage e)}
              {:pg :ok})))
     (catch PSQLException e
       {:pg (pg-kind (.getSQLState e) (.getMessage e)) :state (.getSQLState e) :message (.getMessage e)})

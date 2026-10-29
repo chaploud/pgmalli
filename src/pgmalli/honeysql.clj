@@ -224,7 +224,9 @@
         ;; :t / [:t :alias] / INSERT INTO t (columns...)
         (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (folded (if (keyword? b) (name b) (last (str/split (name a) #"\.")))) (written a) listed]
         (keyword? a) [nil (folded (name a)) nil listed]
-        (keyword? b) [nil (folded (name b)) nil listed]
+        ;; [[:unnest ...] [:t {:columns [:x]}]]: t.f reads as f(t), the function on a scalar result,
+        ;; so a function's alias is not held to the columns it lists
+        (keyword? b) [nil (folded (name b)) nil (when-not (vector? a) listed)]
         ;; [[:f args...]]: a table function, named after the function
         (and (nil? b) (vector? a) (keyword? (first a))) [nil (folded (last (str/split (name (first a)) #"\."))) nil]
         ;; [subquery]: one with no alias
@@ -786,7 +788,9 @@
                            (and (vector? value) (= :cast (first value)) (string? (second value))) [(second value)]
                            (and (vector? value) (every? string? value)) value)
               allowed (when s (enum-values registry s))
-              uncast? (and (not= :unspecified stringtype) (not (:inline format))
+              ;; an enum type, not a text column a CHECK narrows to a list: varchar = varchar needs no cast
+              enum-type? (let [inner (shape/non-null s)] (and (vector? inner) (= :ref (first inner))))
+              uncast? (and enum-type? (not= :unspecified stringtype) (not (:inline format))
                            (or (string? value) (and (vector? value) (every? string? value))))]
         :when (and allowed (seq values))
         v values
@@ -1119,7 +1123,8 @@
    :values-arity (fn [{:keys [row columns values]}]
                    (str ":values row " row " has " values " values for " columns " :columns"))
    :enum-literal (fn [{:keys [column value allowed]}]
-                   (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
+                   (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))
+                        " (compared with a text column a CHECK narrows, it matches no row; assigned, the CHECK refuses it)"))
    :uncast-enum-string (fn [{:keys [column value type]}]
                          (str (pr-str value) " reaches enum column " (column-name column) " as varchar, which PostgreSQL refuses"
                               " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"

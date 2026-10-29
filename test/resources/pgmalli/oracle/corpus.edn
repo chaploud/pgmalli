@@ -170,6 +170,10 @@
  [:bare-select {:select :nick :from :users}]
  [:bare-order-by {:select [:id] :from :users :order-by :nick}]
  [:bare-returning {:update :users :set {:nick "a"} :where [:= :id 0] :returning :nick}]
+ ;; a text column a CHECK narrows to a list takes a varchar parameter, cast or not
+ [:check-in-compare {:select [:id] :from [:tickets] :where [:and [:= :state "open"] [:in :kind ["bug" "task"]]]}]
+ [:check-in-set {:update :tickets :set {:state "closed" :kind "task"} :where [:= :id 1]}]
+ [:check-in-insert {:insert-into :tickets :values [{:state "closed" :kind "bug"}]}]
  [:upsert-excluded {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name [:|| :EXCLUDED.name "!"]}}]
  [:upsert-target-ref {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :tags.name}}]
  [:upsert-excluded-bad {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :EXCLUDED.nosuch}}]

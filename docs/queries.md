@@ -213,6 +213,9 @@ most often a typo:
 - Columns inside code (a list, `(when x [:= :id x])`): what it builds is not data.
 - A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
   reported as `:unread-clause`.
+- A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
+  'closed'))`) with a value outside it is an `:enum-literal`, though PostgreSQL runs it: it
+  matches no row, which is a typo far more often than intended.
 - Values written in the query beyond NULL and enum literals: an empty `[:in :id []]` is not
   reported (an argument in `:in` is typed non-empty).
 - An ON clause naming a table joined after it, which PostgreSQL rejects.

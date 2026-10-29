@@ -741,3 +741,19 @@
 (deftest schema-problems-finds-what-instrumentation-does-not-show
   (is (= [{:kind :unknown-column :column :nik :did-you-mean [:nick] :var #'a-broken-query-fn}]
          (h/schema-problems {:ns 'pgmalli.honeysql-test}))))
+
+(deftest a-string-to-a-text-column-a-check-narrows-is-fine
+  (let [reg (pgmalli/registry {:registry {:pg.public/attempts [:map {:pg/table "public.attempts"}
+                                                               [:id [:int {:pg/type "bigint"}]]
+                                                               [:status [:enum {:default "active" :pg/constraint ["attempts_status_check"] :pg/default "active" :pg/type "character varying"}
+                                                                         "active" "submitted"]]]}})]
+    (is (= [] (h/check reg {:select [:id] :from [:attempts] :where [:= :status "active"]}))
+        "varchar = varchar needs no cast: only an enum type does")
+    (is (= [] (h/check reg {:update :attempts :set {:status "submitted"} :where [:= :id 1]})))
+    (is (= [{:kind :enum-literal :column :status :value "gone" :allowed ["active" "submitted"]}]
+           (h/check reg {:select [:id] :from [:attempts] :where [:= :status "gone"]}))
+        "a value outside the CHECK's list is still reported")))
+
+(deftest a-function-alias-is-not-held-to-the-columns-it-lists
+  (is (= [] (h/check registry {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]} opts))
+      "PostgreSQL reads t.name as name(t)"))
