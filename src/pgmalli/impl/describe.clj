@@ -24,7 +24,7 @@
 
 (defn- leaf [s]
   (cond (keyword? s) (name s)
-        (symbol? s) (str s)
+        (symbol? s) (get '{decimal? "numeric" double? "float8"} s (str s))
         (vector? s) (name (first s))
         :else (pr-str s)))
 
@@ -54,7 +54,7 @@
       (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children))
       (let [elem (describe schemas (last (first children)))]
         (str elem "[] (" (str/join ", " (map #(name (first %)) children)) ")"))
-      (= :or head) (str/join " | " (map #(let [d (describe schemas %)] (if (string? d) d (pr-str d))) children))
+      (= :or head) (str/join " | " (distinct (map #(let [d (describe schemas %)] (if (string? d) d (pr-str d))) children)))
       (= :ref head) (let [target (get schemas (last s))]
                       (if (and (vector? target) (= :enum (first target)))
                         (str (or (type-label p) "enum") ": " (str/join " | " (shape/entries target)))

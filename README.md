@@ -28,6 +28,7 @@ dependencies ([Installation](#installation)) and keep `resources` on the classpa
 ```shell
 $ psql -f docs/example/schema.sql
 $ clojure -M -m pgmalli.main generate
+pgmalli: no pgmalli.edn here; using the defaults (schema public, files in resources/pgmalli)
 wrote resources/pgmalli/public.edn (public: 4 tables, 0 views, 1 enums, 0 domains; 0 unrendered, 0 diagnostics)
 done: files written: 1; commit them, and run `clojure -M -m pgmalli.main check` in CI
 ```
@@ -105,7 +106,7 @@ reads through PostgreSQL's JDBC driver instead, no psql needed:
 {:db {:jdbc-url "jdbc:postgresql://localhost/app_dev" :user "app" :password "secret"}}
 ```
 
-`:db {:datasource ds}` reads through a `javax.sql.DataSource`. Generating needs PostgreSQL 16 or later;
+From Clojure, `generate!` also takes `:db {:datasource ds}`, a `javax.sql.DataSource`. Generating needs PostgreSQL 16 or later;
 applications only need the generated files.
 
 The same from Clojure:
@@ -227,6 +228,9 @@ options come from `read-options`:
 ;; => (:closed_at :created_at :email :group_id :id :nick :status)
 ```
 
+When every key of a row is reported missing, the row came from another builder: pass its
+`read-options`.
+
 There are three ways to check a row read from the database:
 
 | way | for |
@@ -277,7 +281,7 @@ file, `:except`, short tables and how foreign keys are filled.
 ## Checking HoneySQL queries
 
 `h/check` reads HoneySQL query data against the registry, with no database. It returns the
-problems PostgreSQL would report, and a few it runs but that can match no row ([docs/queries.md](docs/queries.md#reported-though-postgresql-runs-them)):
+problems PostgreSQL would report, and a few queries PostgreSQL runs that match no row ([docs/queries.md](docs/queries.md#reported-though-postgresql-runs-them)):
 
 ```clojure
 (require '[pgmalli.honeysql :as h])
@@ -407,8 +411,7 @@ returns:
 ;; => {:args ["bigint"], :returns [:maybe #:users{:id "bigint", :email "varchar(120)"}]}
 ```
 
-The options of `h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema` and `h/query-schema` are in
-[docs/queries.md](docs/queries.md#options).
+The options of `pgmalli.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
 
 ## Keeping the files current
 
@@ -432,6 +435,7 @@ run:
 
 ```shell
 $ clojure -M -m pgmalli.main check
+pgmalli: no pgmalli.edn here; using the defaults (schema public, files in resources/pgmalli)
 public :pg.public/groups :motto
   file: nil
   db:   [:maybe [:string {:pg/type "text"}]]
@@ -518,7 +522,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 
 1. the keys of `pgmalli.edn`
 2. the generated file and the registry names
-3. the kinds of `:unrendered` entries and of `check`'s problems
+3. the kinds of `:unrendered` entries and of `h/check`'s problems
 4. the tags `write-dataset` writes (`#pgmalli/instant` and the others)
 5. the public functions of `pgmalli.core`, `pgmalli.generate`, `pgmalli.data` and
    `pgmalli.honeysql`, and their options
@@ -530,7 +534,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 |---|---|
 | `:pgmalli.error/invalid-config` | `pgmalli.edn` or a `:db` map pgmalli cannot use |
 | `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
-| `:pgmalli.error/unknown-schema` | a registry name the registry lacks, with the one meant |
+| `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
 | `:pgmalli.error/not-query-data` | a query that is no HoneySQL data |
 | `:pgmalli.error/not-generated` | a generated file missing from the classpath |

@@ -4,6 +4,7 @@
    psql, are pgmalli.generate; datasets, pgmalli.data; HoneySQL queries checked and typed,
    pgmalli.honeysql."
   (:require [pgmalli.impl.describe :as d]
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.registry :as reg]
@@ -95,5 +96,10 @@
 
    (describe (h/query-schema registry [:id] q))
    (describe registry :pg.public/users)"
-  ([schema] (d/describe {} schema))
-  ([registry schema] (d/describe (shape/schemas-of registry) schema)))
+  ([schema]
+   (when (shape/generated-name? schema)
+     (error/fail! :pgmalli.error/invalid-options (str "describe reads " (pr-str schema) " through a registry: (describe registry " (pr-str schema) ")") {:given schema}))
+   (d/describe {} schema))
+  ([registry schema]
+   (when (shape/generated-name? schema) (shape/schema-of registry schema))
+   (d/describe (shape/schemas-of registry) schema)))

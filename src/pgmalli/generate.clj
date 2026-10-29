@@ -6,12 +6,12 @@
      {:schemas [\"public\"]           ; default [\"public\"]
       :out-dir \"resources/pgmalli\"  ; default; files are <out-dir>/<schema>.edn
       :overrides {constraint-name-or-type-keyword schema-or-{:skip reason}}
-      :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise
+      :db {:host :port :db :user :password :sslmode :psql}}  ; optional; psql's environment otherwise
    or, with a PostgreSQL JDBC driver on the classpath and no psql needed,
       :db {:jdbc-url \"jdbc:postgresql://host/db\" :user :password} or {:datasource ds}"
   (:require [pgmalli.impl.diff :as diff]
             [pgmalli.impl.files :as files]
-            [pgmalli.impl.jdbc :as jdbc]))
+            [pgmalli.impl.error :as error]))
 
 (defn generate!
   "Writes the generated file for every schema in the config. Returns {schema path}."
@@ -23,8 +23,11 @@
    (:file the first, :db the second): a migration's effect on the schemas, read from the files
    alone."
   [before after]
-  (doseq [x [before after]]
-    (jdbc/checked! [:map [:registry :map]] x :pgmalli.error/invalid-options "a generated data map (pgmalli.core/generated)"))
+  (doseq [x [before after] :when (not (and (map? x) (map? (:registry x))))]
+    (error/fail! :pgmalli.error/invalid-options
+                 (str "diff takes two generated data maps, such as (pgmalli.core/generated \"public\"); given "
+                      (if (map? x) "a map without :registry (a registry?)" (pr-str x)))
+                 {}))
   (diff/diff before after))
 
 (defn check

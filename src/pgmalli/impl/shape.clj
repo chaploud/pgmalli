@@ -37,6 +37,12 @@
                        (str "not a registry: " (pr-str (type registry)) "; pass (pgmalli.core/registry \"<schema>\")")
                        {:given (type registry)}))))
 
+(defn generated-name?
+  "Whether x is a name pgmalli generates: :pg.public/users, \"pg.public/Order Items\"."
+  [x]
+  (boolean (or (and (keyword? x) (some-> (namespace x) (str/starts-with? "pg.")))
+               (and (string? x) (re-find #"^pg\.[^/]+/" x)))))
+
 (defn- generated-names
   "The generated names of a registry: the pg.* ones, all of them when there are none."
   [schemas]

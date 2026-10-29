@@ -65,12 +65,11 @@
   [env]
   (str (get env "PGHOST" "local socket") ":" (get env "PGPORT" "5432") "/" (get env "PGDATABASE" (get env "PGUSER" (System/getProperty "user.name")))))
 
-(defn- psql-out [{:keys [schema psql dir] :or {psql "psql"} :as db}]
+(defn- psql-out [{:keys [schema psql] :or {psql "psql"} :as db}]
   (let [;; shell/sh replaces the whole environment, so layer the overrides on the current one
         env (into (into {} (System/getenv)) (keep (fn [[k e]] (when-some [v (get db k)] [e (str v)])) env-keys))
         args (cond-> [psql "-X" "-q" "-A" "-t" "-v" "ON_ERROR_STOP=1" "-v" (str "schema=" schema) "-f" "-"
-                      :in (query-sql) :env env]
-               dir (conj :dir dir))
+                      :in (query-sql) :env env])
         {:keys [exit out err]} (try (apply shell/sh args)
                                     (catch java.io.IOException e
                                       (error/fail! :pgmalli.error/psql-missing
@@ -91,7 +90,7 @@
                              {:given schema :exit exit :err err}))))
 
 (def ^:private db-keys
-  {:psql (set (concat (keys env-keys) [:psql :dir])) :jdbc #{:jdbc-url :user :password} :datasource #{:datasource}})
+  {:psql (set (concat (keys env-keys) [:psql])) :jdbc #{:jdbc-url :user :password} :datasource #{:datasource}})
 
 (defn- via
   "How a db map reads the database, :psql, :jdbc or :datasource; a key none of them takes, or
@@ -102,8 +101,9 @@
         stray (remove (conj (db-keys via) :schema) (keys db))]
     (when (seq stray)
       (error/fail! :pgmalli.error/invalid-config
-                   (str ":db keys " (vec stray) " do not go with " (name via) ": psql takes " (vec (sort (db-keys :psql)))
-                        ", JDBC :jdbc-url :user :password, or :datasource alone")
+                   (str ":db keys " (vec stray) " do not go with " (name via)
+                        (error/did-you-mean (some #(error/suggest % (db-keys via)) stray))
+                        "; psql takes " (vec (sort (db-keys :psql))) ", JDBC :jdbc-url :user :password, or :datasource alone")
                    {:given (vec stray) :known (vec (sort (db-keys via)))}))
     (when (and (not= :psql via) (System/getProperty "babashka.version"))
       (error/fail! :pgmalli.error/invalid-config "babashka has no JDBC: give :db psql settings instead, or run on the JVM" {:given via}))
