@@ -31,6 +31,10 @@ All notable changes to this project are documented here. The format follows
 - `:db` with `:jdbc-url` or `:datasource` reads the catalog over JDBC, without psql.
 - `query-schema` carries the query's problems and a `:missing-arg` as `:pgmalli/problems`.
 - `check` reports a clause it does not read (`:unread-clause`), from the HoneySQL loaded.
+- `check` reports a string literal compared with or assigned to an enum column without a cast
+  (`:uncast-enum-string`): HoneySQL sends it as a parameter, which pgjdbc sends as `varchar`
+  unless the connection has `stringtype=unspecified` (`{:stringtype :unspecified}`). An
+  argument cast to an enum (`[:cast :?s :status]`) is typed as the enum.
 - `check` reports writes PostgreSQL refuses: NULL into a NOT NULL column
   (`:not-null-violation`), including the NULL HoneySQL writes for a key one `:values` map
   lacks, and a value into a generated or identity ALWAYS column (`:read-only-column`).

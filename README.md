@@ -275,11 +275,23 @@ problems PostgreSQL would also report:
 ```clojure
 (require '[pgmalli.honeysql :as h])
 
-(h/check registry {:select [:id :email] :from [:users] :where [:= :status "active"]})
+(h/check registry {:select [:id :email] :from [:users] :where [:= :status [:cast "active" :user_status]]})
 ;; => []
 
-(h/check registry {:select [:id :mail] :from [:users] :where [:= :status "gone"]})
+(h/check registry {:select [:id :mail] :from [:users] :where [:= :status [:cast "gone" :user_status]]})
 ;; => [{:kind :unknown-column, :column :mail} {:kind :enum-literal, :column :status, :value "gone", :allowed #{"active" "closed"}}]
+```
+
+HoneySQL sends a string as a parameter, and PostgreSQL's JDBC driver sends it as `varchar`,
+which no enum column takes. Cast it, or tell `h/check` your connection has
+`stringtype=unspecified`:
+
+```clojure
+(h/check registry {:select [:id] :from [:users] :where [:= :status "active"]})
+;; => [{:kind :uncast-enum-string, :column :status, :value "active"}]
+
+(h/check registry {:select [:id] :from [:users] :where [:= :status "active"]} {:stringtype :unspecified})
+;; => []
 ```
 
 An INSERT must carry the columns its insert schema requires:
@@ -301,6 +313,7 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | an enum literal outside the enum, with `:allowed` |
+| `:uncast-enum-string` | a string sent to an enum column as `varchar` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 
 Every query of a project checks in one test:
@@ -309,7 +322,7 @@ Every query of a project checks in one test:
 (require '[clojure.test :refer [deftest is]])
 
 (def queries
-  {:active-users {:select [:id :email] :from [:users] :where [:= :status "active"]}
+  {:active-users {:select [:id :email] :from [:users] :where [:= :status [:cast "active" :user_status]]}
    :user-posts {:select [:p.title] :from [[:posts :p]] :join [[:users :u] [:= :u.id :p.author_id]]}})
 
 (deftest queries-agree-with-the-schema

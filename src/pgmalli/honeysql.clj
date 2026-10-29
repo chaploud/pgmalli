@@ -739,7 +739,11 @@
              :when p]
          p)))))
 
-(defn- enum-problems [registry sc stmt schema]
+(defn- enum-problems
+  "Enum literals outside the enum, compared with or assigned to its column; and, under pgjdbc's
+   default stringtype (varchar), a string HoneySQL sends as a parameter (not inlined, not cast)
+   to an enum column, which PostgreSQL refuses (no enum = varchar)."
+  [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema}}]
   (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc])
                                   (let [target (target-scope sc stmt schema)]
                                     (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
@@ -747,10 +751,15 @@
               values (cond (string? value) [value]
                            (and (vector? value) (= :cast (first value)) (string? (second value))) [(second value)]
                            (and (vector? value) (every? string? value)) value)
-              allowed (when s (enum-values registry s))]
+              allowed (when s (enum-values registry s))
+              uncast? (and (not= :unspecified stringtype) (not (:inline format))
+                           (or (string? value) (and (vector? value) (every? string? value))))]
         :when (and allowed (seq values))
-        v values :when (not (contains? allowed v))]
-    {:kind :enum-literal :column col :value v :allowed allowed}))
+        v values
+        p [(when (not (contains? allowed v)) {:kind :enum-literal :column col :value v :allowed allowed})
+           (when uncast? {:kind :uncast-enum-string :column col :value v})]
+        :when p]
+    p))
 
 (defn- problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
@@ -769,7 +778,7 @@
                  (column-problems registry scopes stmt schema)
                  (insert-problems registry stmt schema)
                  (write-problems registry scopes stmt opts)
-                 (enum-problems registry scopes stmt schema)))))
+                 (enum-problems registry scopes stmt opts)))))
 
 (def ^:private read-clauses
   "The clauses check, arg-types and row-schema read."
@@ -930,6 +939,15 @@
                                        :let [x (array-arg value)]]
                                    [(or x value) (compared-type op (column-type registry sc col false opts) x opts)])
                                  (for [[_ v] (select-keys stmt [:limit :offset])] [v :int])
+                                 ;; [:cast :?x :mood]: an argument cast to an enum is a value of it
+                                 (for [x (tree-seq branch? seq stmt)
+                                       :when (and (vector? x) (= :cast (first x)) (= 3 (count x)) (arg-key (second x)) (ident? (nth x 2)))
+                                       :let [parts (str/split (name (nth x 2)) #"\." 2)
+                                             [sch n] (if (next parts) parts [schema (first parts)])
+                                             k (keyword (str "pg." sch) n)
+                                             s (get (::schemas registry) k)]
+                                       :when (and (vector? s) (= :enum (first s)))]
+                                   [(second x) (driver-type registry jdbc/write-type [:ref k] opts)])
                                  (for [[col v] (assignments stmt)] [v (column-type registry (target-scope sc stmt schema) col true opts)])))
                        (statement-chains registry body opts))
          types (reduce (fn [acc [x t]]
@@ -1020,6 +1038,7 @@
      :write {pg-type schema}  what a SettableParameter extension takes; also
                               {:array [:pg/array :sequential :set]}
      :compare :lenient        compared arguments take any value of the column's kind, and nil
+     :stringtype :unspecified the connection's stringtype (pgjdbc's default :varchar)
      :format {...}            the options you pass to sql/format (:values-default-columns)
      :result :one             the return is [:maybe row]
    Throws when args are not keywords or symbols. See docs/queries.md."

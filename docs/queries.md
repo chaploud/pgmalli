@@ -62,7 +62,7 @@ has a default, but the first row below gets NULL:
 ```clojure
 (h/check registry {:insert-into :users
                    :values [{:group_id 1 :email "ann@example.com"}
-                            {:group_id 1 :email "bob@example.com" :status "closed" :closed_at [:now]}]})
+                            {:group_id 1 :email "bob@example.com" :status [:cast "closed" :user_status] :closed_at [:now]}]})
 ;; => [{:kind :not-null-violation, :table "public.users", :column :status}]
 ```
 
@@ -71,7 +71,7 @@ Give `h/check` the options you give `sql/format`, as `:format`:
 ```clojure
 (h/check registry {:insert-into :users
                    :values [{:group_id 1 :email "ann@example.com"}
-                            {:group_id 1 :email "bob@example.com" :status "closed" :closed_at [:now]}]}
+                            {:group_id 1 :email "bob@example.com" :status [:cast "closed" :user_status] :closed_at [:now]}]}
          {:format {:values-default-columns #{:status :closed_at}}})
 ;; => []
 ```
@@ -152,6 +152,7 @@ Every function of `pgmalli.honeysql` takes the same options map:
 | the options of `as-read` | how next.jdbc builds rows and the driver reads values |
 | `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
 | `:write {:array :vector}` | arrays passed as vectors, not `java.sql.Array` |
+| `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped |
 | `:compare :lenient` | arguments compared with a column take any value of its kind and nil |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns` is read |
 | `:result :one` | `h/query-schema` only: the return is one row or nil |

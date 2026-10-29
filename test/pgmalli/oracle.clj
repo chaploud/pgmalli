@@ -151,9 +151,10 @@
         (jdbc/execute! conn ["SET statement_timeout = 3000"])
         (.setAutoCommit conn false)
         (vec (for [{:keys [query] :as c} (cases columns seed per-query)
-                   :let [sql (first (sql/format query {:inline true}))
+                   :let [fmt {:inline true}
+                         sql (first (sql/format query fmt))
                          v (verdict conn sql)
-                         problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query)))]]
+                         problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query {:format fmt})))]]
                (merge c v {:sql sql :problems problems :outcome (outcome (:pg v) problems)})))))))
 
 (defn -main

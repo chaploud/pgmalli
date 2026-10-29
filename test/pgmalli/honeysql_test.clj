@@ -7,7 +7,8 @@
             [pgmalli.honeysql :as h]
             [pgmalli.sample :refer [registry]]))
 
-(def opts {:schema "sample"})
+;; the sample's enum literals are strings; how pgjdbc sends them is its own test
+(def opts {:schema "sample" :stringtype :unspecified})
 (def malli-opts {:registry (merge (m/default-schemas) (time/schemas))})
 
 (deftest queries-that-agree-have-no-problems
@@ -687,3 +688,19 @@
     (is (= [{:kind :unread-clause :clause 'select} {:kind :unread-clause :clause 'from}] (check '{select [nope] from [users]}))
         "a statement keyed by symbols, as HoneySQL takes it, is said to be unread")
     (is (= [] (check {:update :users :set {:nick :group_name} :where [:= :id 1]})))))
+
+(deftest a-string-reaches-an-enum-column-as-varchar
+  (let [check #(h/check registry %1 (merge opts {:stringtype :varchar} %2))
+        uncast (fn [v] {:kind :uncast-enum-string :column :mood :value v})]
+    (is (= [(uncast "sad")] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {}))
+        "pgjdbc sends a String as varchar, which no enum takes without a cast")
+    (is (= [(uncast "sad")] (check {:update :users :set {:mood "sad"} :where [:= :id 1]} {})))
+    (is (= [(uncast "sad") (uncast "happy")] (check {:select [:id] :from [:users] :where [:in :mood ["sad" "happy"]]} {})))
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:cast "sad" :mood]]} {})) "a cast is what it takes")
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:stringtype :unspecified})) "or stringtype=unspecified")
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:format {:inline true}})) "or the value inlined")
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {})) "an argument may be an object the driver sends typed")))
+
+(deftest an-argument-cast-to-an-enum-is-of-the-enum
+  (is (= {:m [:enum "happy" "sad"]}
+         (update-vals (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} opts) m/form))))
