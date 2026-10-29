@@ -4,7 +4,7 @@
         ;; next.jdbc's kebab builders name keys with it
         camel-snake-kebab/camel-snake-kebab {:mvn/version "0.4.3"}
         com.gfredericks/test.chuck {:mvn/version "0.2.15"}}
- :tasks {lint {:doc "clj-kondo over src and test"
+ :tasks {lint {:doc "clj-kondo over src, test and dev"
                :task (shell "clj-kondo --lint src test dev")}
          test:matrix {:doc "bb test against the PostgreSQL versions CI covers"
                       :requires ([clj-yaml.core :as yaml])
@@ -28,9 +28,16 @@
          fixture {:doc "Rewrite test/resources/pgmalli/{sample,other}.edn from dev/fixture.clj (no database)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/fixture.clj")}
-         test {:doc "Run the test suite with babashka (the namespaces babashka runs: no JDBC)"
-               :requires ([clojure.test :as t])
-               :task (let [nss '[pgmalli.impl.ir-test pgmalli.impl.expr-test pgmalli.impl.pattern-test pgmalli.impl.eval-test pgmalli.honeysql-test pgmalli.honeysql-robust-test pgmalli.honeysql-contract-test pgmalli.impl.render-test pgmalli.impl.shape-test pgmalli.impl.files-test pgmalli.impl.portable-test pgmalli.generate-test pgmalli.main-test pgmalli.core-test pgmalli.impl.registry-test pgmalli.impl.dataset-test pgmalli.impl.insert-test pgmalli.impl.jdbc-test pgmalli.data-test pgmalli.fuzz-test pgmalli.corpus-test pgmalli.docs-example-test]
+         test {:doc "Run the test suite with babashka (every test/**/*_test.clj but the ones that need next.jdbc)"
+               :requires ([clojure.test :as t] [clojure.string :as str] [babashka.fs :as fs])
+               :task (let [skip #{"pgmalli.catalog-fuzz-test" "pgmalli.driver-types-test" "pgmalli.oracle-test" "pgmalli.row-keys-test" "pgmalli.upstream-test"}
+                           nss (->> (fs/glob "test" "**/*_test.clj")
+                                    (map (fn [f] (-> (str (fs/strip-ext (fs/relativize "test" f)))
+                                                    (str/replace "/" ".")
+                                                    (str/replace "_" "-"))))
+                                    (remove skip)
+                                    sort
+                                    (map symbol))
                            _ (apply require nss)
                            {:keys [fail error]} (apply t/run-tests nss)]
                        (when (pos? (+ fail error)) (System/exit 1)))}
