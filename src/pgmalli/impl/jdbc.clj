@@ -52,19 +52,35 @@
   [s]
   (and (vector? s) (= :vector (first s)) (some-> (pg-type s) (str/ends-with? "[]"))))
 
+(defn- driver-type
+  "What read-type and write-type share: dates and timestamps under :time, arrays, json and
+   intervals the driver's objects (:any)."
+  [schema {:keys [time read] :or {time :inst} :as opts} element]
+  (let [driver-object [:any {:pg/type (pg-type schema)}]]
+    (cond (array-column? schema) (if-let [kind (:array read)] [kind (element (last schema) opts)] driver-object)
+          (and (shape/json-types (pg-type schema)) (not= :parsed (:json read))) driver-object
+          (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
+          :else (shape/read-time time schema))))
+
 (defn read-type
   "A column's schema (without NULL) as PostgreSQL's JDBC driver returns it through next.jdbc:
    dates and timestamps under :time (inst? by default), an array a java.sql.Array, json and
-   jsonb a PGobject, an interval a PGInterval (these :any). :read names what a ReadableColumn
-   extension returns instead: a :pg/type's schema, {:array :vector} for arrays as vectors of
-   their elements, {:json :parsed} for json as the data the registry shapes."
-  [schema {:keys [time read] :or {time :inst} :as opts}]
-  (let [driver-object [:any {:pg/type (pg-type schema)}]]
+   jsonb a PGobject, an interval a PGInterval, citext, bit(n > 1) and bit varying a PGobject
+   (these :any); real a Float, bit(1) a Boolean, numeric a Double for NaN, time and timetz a
+   java.sql.Time under every :time (next.jdbc.date-time converts dates and timestamps alone).
+   :read names what a ReadableColumn extension returns instead: a :pg/type's schema,
+   {:array :vector} for arrays as vectors of their elements, {:json :parsed} for json as the
+   data the registry shapes."
+  [schema {:keys [read] :as opts}]
+  (let [t (pg-type schema)
+        head (if (vector? schema) (first schema) schema)]
     (or (shape/read-as read schema)
-        (cond (array-column? schema) (if-let [kind (:array read)] [kind (read-type (last schema) opts)] driver-object)
-              (and (shape/json-types (pg-type schema)) (not= :parsed (:json read))) driver-object
-              (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
-              :else (shape/read-time time schema)))))
+        (cond (= "real" t) ['float? {:pg/type t}]
+              (= "bit" t) (if (= 1 (:max (second schema))) [:boolean {:pg/type t}] [:any {:pg/type t}])
+              (#{"bit varying" "citext"} t) [:any {:pg/type t}]
+              (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
+              (= "numeric" t) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
+              :else (driver-type schema opts read-type)))))
 
 (defn array-type
   "An array argument of elements t: what :write's :array names an application sends
@@ -79,12 +95,12 @@
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: :write names what a
    SettableParameter extension sends for a :pg/type; an array column's argument is an array of
-   its elements' (array-type); otherwise what the column reads as without :read, which is the
-   ReadableColumn side (:time extends both)."
+   its elements' (array-type); otherwise the types read-type shares with it (:time extends
+   both sides)."
   [schema {:keys [write] :as opts}]
   (or (shape/read-as write schema)
       (when (array-column? schema) (array-type (write-type (last schema) opts) opts))
-      (read-type schema (dissoc opts :read))))
+      (driver-type schema (dissoc opts :read) write-type)))
 
 ;;; rows as next.jdbc builds them
 

@@ -15,7 +15,8 @@ PostgreSQL's JDBC driver returns. The examples use [example/schema.sql](example/
 
 With no options, the row is what next.jdbc's `as-unqualified-maps` builds with no extension:
 keys are column names, dates and timestamps are `java.sql.Date` and `java.sql.Timestamp`
-(`inst?`), and arrays, json and intervals are the driver's own objects (`:any`):
+(`inst?`), and arrays, json, intervals, `citext` and `bit varying` are the driver's own objects
+(`:any`). `real` is a `Float`, `bit(1)` a `Boolean`, and a numeric `NaN` a `Double`:
 
 ```clojure
 (m/validate (pgmalli/as-read registry :pg.public/users)

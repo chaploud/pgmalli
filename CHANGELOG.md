@@ -55,6 +55,10 @@ All notable changes to this project are documented here. The format follows
   in any comparison, code-built joins making tables nullable.
 - `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
   `{:select [:*]}`, and makes outer-joined columns nullable.
+- `as-read` and `row-schema` type what the driver returns for `real` (`Float`), `bit(1)`
+  (`Boolean`), `bit(n)`, `bit varying` and `citext` (`PGobject`), a numeric `NaN` (`Double`),
+  and `time` and `timetz` under `:time :instant` / `:local` (`java.sql.Time`): those rows
+  failed. A test reads one row of every type through every builder and `:time`.
 - The JDBC catalog read reports the query's own failure and names a missing driver.
 - `pgmalli.main` no longer takes a minute to exit after psql.
 - The jar carries no file generated in the checkout.
