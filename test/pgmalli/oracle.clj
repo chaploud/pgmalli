@@ -18,6 +18,7 @@
             [clojure.pprint :as pp]
             [clojure.string :as str]
             [honey.sql :as sql]
+            [malli.generator :as mg]
             [next.jdbc :as jdbc]
             next.jdbc.result-set
             [pgmalli.core :as pgmalli]
@@ -169,7 +170,10 @@
         (.setAutoCommit conn false)
         (vec (for [{:keys [query] :as c} (cases columns seed per-query)
                    [mode fmt] formats
-                   :let [sqlvec (sql/format query fmt)
+                   :let [;; a named argument takes a value of the type arg-types gives it
+                         args (into {} (for [[k s] (h/arg-types registry query {:format fmt})]
+                                         [k (when-not (= :any s) (mg/generate s {:registry registry :seed seed :size 3}))]))
+                         sqlvec (sql/format query (assoc fmt :params args))
                          v (verdict conn sqlvec)
                          problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query {:format fmt})))]]
                (merge c v {:format mode :sql (first sqlvec) :params (vec (rest sqlvec)) :problems problems :outcome (outcome (:pg v) problems)})))))))

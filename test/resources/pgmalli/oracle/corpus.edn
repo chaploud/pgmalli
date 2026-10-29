@@ -12,6 +12,18 @@
  [:unknown-table {:select [:id] :from [:nosuch]}]
  [:qualified-star {:select [:u.* :p.title] :from [[:users :u]] :join [[:posts :p] [:= :p.user_id :u.id]]}]
  [:star-unknown-alias {:select [:x.*] :from [[:users :u]]}]
+ ;; domains: over an integer and a text take a parameter as their base does, over an enum as an enum
+ [:domain-int {:select [:id] :from [:profiles] :where [:= :rank 3]}]
+ [:domain-text {:select [:id] :from [:profiles] :where [:= :tag "a"]}]
+ [:domain-enum {:select [:id] :from [:profiles] :where [:= :feel "happy"]}]
+ [:domain-insert {:insert-into :profiles :values [{:rank 2 :tag "b" :feel [:cast "sad" :mood_d]}]}]
+ [:domain-update {:update :profiles :set {:tag "c" :rank 5} :where [:= :id 1]}]
+ [:domain-int-arg {:select [:id] :from [:profiles] :where [:= :rank :?r]}]
+ [:domain-text-arg {:select [:id] :from [:profiles] :where [:= :tag :?t]}]
+ [:domain-enum-arg {:select [:id] :from [:profiles] :where [:= :feel :?f]}]
+ [:domain-insert-arg {:insert-into :profiles :values [{:rank :?r :tag :?t}]}]
+ [:enum-arg {:select [:id] :from [:users] :where [:= :mood :?m]}]
+ [:update-args {:update :users :set {:score :?s :nick :?n} :where [:= :id :?id]}]
  ;; enum literals
  [:enum-bad {:select [:id] :from [:users] :where [:= :mood "angry"]}]
  [:enum-in {:select [:id] :from [:users] :where [:in :mood ["happy" "angry"]]}]

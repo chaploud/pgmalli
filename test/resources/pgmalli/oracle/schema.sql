@@ -9,6 +9,10 @@ CREATE TABLE notes (id serial PRIMARY KEY, body text NOT NULL, owner text NOT NU
 CREATE FUNCTION fill_owner() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.owner := coalesce(NEW.owner, current_user); RETURN NEW; END $$;
 CREATE TRIGGER notes_owner BEFORE INSERT ON notes FOR EACH ROW EXECUTE FUNCTION fill_owner();
 CREATE TABLE tickets (id serial PRIMARY KEY, state varchar(16) NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'closed')), kind text CHECK (kind IN ('bug', 'task')));
+CREATE DOMAIN posint AS integer CHECK (VALUE > 0);
+CREATE DOMAIN label AS text;
+CREATE DOMAIN mood_d AS mood;
+CREATE TABLE profiles (id serial PRIMARY KEY, rank posint, tag label, feel mood_d);
 CREATE VIEW active_users AS SELECT id, nick, group_id, mood FROM users WHERE score > 0;
 INSERT INTO groups (name) VALUES ('g1'), ('g2');
 INSERT INTO users (group_id, nick, name, mood, score) VALUES (1, 'a', 'A', 'happy', 1), (2, 'b', 'B', 'sad', 0);
@@ -17,3 +21,4 @@ INSERT INTO tags (name) VALUES ('x'), ('y');
 INSERT INTO post_tags VALUES (1, 1), (2, 2);
 INSERT INTO notes (body) VALUES ('n1');
 INSERT INTO tickets (state, kind) VALUES ('open', 'bug');
+INSERT INTO profiles (rank, tag, feel) VALUES (1, 'a', 'happy');

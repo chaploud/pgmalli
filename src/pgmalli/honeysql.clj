@@ -625,11 +625,17 @@
 ;;; problems
 
 (defn- enum-values
-  "The labels of an enum column, in the enum's order."
+  "The labels of an enum column, in the enum's order: of a CHECK's list, an enum type or a
+   domain over one."
   [registry schema]
-  (let [s (shape/non-null schema)
-        s (if (and (vector? s) (= :ref (first s))) (get (::schemas registry) (last s)) s)]
-    (when (and (vector? s) (= :enum (first s))) (vec (remove map? (rest s))))))
+  (let [s (shape/non-null schema)]
+    (when (vector? s)
+      (case (first s)
+        :enum (vec (remove map? (rest s)))
+        :ref (enum-values registry (get (::schemas registry) (last s)))
+        ;; a domain's CHECKs narrow its base as [:and base ...]
+        :and (enum-values registry (first (shape/entries s)))
+        nil))))
 
 (defn- star? [col] (= "*" (second (split-column col))))
 
@@ -782,8 +788,10 @@
                      (let [target (target-scope sc stmt schema)]
                        (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
         varchar? (and (not= :unspecified stringtype) (not (:inline format)))
+        ;; an enum type, or a domain over one: PostgreSQL has no = varchar for either
         enum-type (fn [s] (let [inner (shape/non-null s)]
-                            (when (and (vector? inner) (= :ref (first inner))) (shape/type-name (shape/column-props s)))))]
+                            (when (and (vector? inner) (= :ref (first inner)) (enum-values registry inner))
+                              (shape/type-name (shape/column-props s)))))]
    (concat
     ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
     ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
