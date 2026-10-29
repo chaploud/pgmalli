@@ -217,6 +217,10 @@ subquery's columns are resolved in the subquery first, then in the statements ar
 (h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]}
                 {:qualified? true :nil-columns :absent})
 ;; => [:=> [:cat [:int {...}]] [:sequential [:map [:users/id [:int {...}]] [:users/nick {:optional true} [:string {...}]]]]]
+
+;; HoneySQL's named parameters are typed under the key sql/format's :params takes
+(h/arg-types registry {:select [:id] :from [:users] :where [:in :mood :?moods] :limit :?n})
+;; => {:moods [:sequential [:enum {...} "happy" "sad"]], :n :int}
 ```
 
 Options: `:schema` for unqualified table names (default `"public"`); `:qualified?`, `:kebab?`,

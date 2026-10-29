@@ -3,6 +3,18 @@
 All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- `pgmalli.honeysql` reads HoneySQL's named parameters (`:?id`): `arg-types` types them under
+  the key `sql/format`'s `:params` takes (`:id`), as it types symbols, and `query-schema` takes
+  that key among its args.
+
+### Fixed
+
+- `pgmalli.honeysql/check` took a named parameter for an unknown column.
+
 ## [0.2.45] - 2026-09-04
 
 ### Changed

@@ -41,6 +41,19 @@
       "a CTE shadows a table only when the reference is written without a schema")
   (is (= [] (h/check registry {:select [:id] :from [:users] :where [:in :mood ["happy" "sad"]]} opts))))
 
+(deftest named-parameters-are-arguments-under-their-params-key
+  (let [body {:select [:id] :from [:users] :where [:and [:= :id :?id] [:in :mood :?moods]] :limit :?n}]
+    (is (= [] (h/check registry body opts)))
+    (is (= {:id [:int {:pg/identity :always :pg/type "bigint"}]
+            :moods [:sequential [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]
+            :n :int}
+           (h/arg-types registry body opts)))
+    (is (= {:g/id [:maybe [:string {:max 40 :pg/type "character varying"}]]}
+           (h/arg-types registry {:update :users :set {:nick :?g/id} :where [:= :id 1]} opts))
+        "a qualified one keeps its namespace, as sql/format's :params does")
+    (is (= [:cat [:int {:pg/identity :always :pg/type "bigint"}] :int]
+           (second (h/query-schema registry [:id :n] body opts))))))
+
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
     (is (= {'id [:int {:pg/identity :always :pg/type "bigint"}]

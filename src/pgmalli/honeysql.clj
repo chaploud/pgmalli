@@ -247,7 +247,14 @@
   #{:current_timestamp :current_date :current_time :localtime :localtimestamp :current_user :session_user :current_role
     :current_catalog :current_schema :user :true :false :null :default :*})
 
-(defn- column-keyword? [x] (and (keyword? x) (not (sql-values x))))
+(defn- param-key
+  "The :params key of a HoneySQL named parameter (:?id is :id, :?a/b is :a/b); nil for anything else."
+  [x]
+  (when (keyword? x)
+    (let [c (subs (str x) 1)]
+      (when (str/starts-with? c "?") (keyword (subs c 1))))))
+
+(defn- column-keyword? [x] (and (keyword? x) (not (sql-values x)) (not (param-key x))))
 
 (defn- selected-items
   "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
@@ -414,10 +421,11 @@
     :any))
 
 (defn arg-types
-  "{symbol schema} for the symbols of a query: a symbol compared with a column has the
-   column's type (:in a :sequential of it), one assigned to it the column's type with NULL,
-   one in :limit / :offset :int. The first typed use wins; a use that gives no type (:any)
-   never hides one that does."
+  "{arg schema} for the arguments of a query: its symbols, and its HoneySQL named parameters
+   under their :params key (:?id is :id). An argument compared with a column has the column's
+   type (:in a :sequential of it), one assigned to it the column's type with NULL, one in
+   :limit / :offset :int. The first typed use wins; a use that gives no type (:any) never
+   hides one that does."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema "public"} :as opts}]
    (let [registry (reading registry)
@@ -428,7 +436,10 @@
                                   (for [[_ v] (select-keys stmt [:limit :offset])] [v :int])
                                   (for [[col v] (assignments stmt)] [v (column-type registry (target-scope sc stmt schema) col true opts)]))]
                  pair)]
-     (reduce (fn [acc [sym t]] (if (and (symbol? sym) (contains? #{nil :any} (acc sym))) (assoc acc sym t) acc)) {} typed))))
+     (reduce (fn [acc [x t]]
+               (let [k (if (symbol? x) x (param-key x))]
+                 (if (and k (contains? #{nil :any} (acc k))) (assoc acc k t) acc)))
+             {} typed))))
 
 (defn row-schema
   "The [:map ...] of one row a statement returns, as the driver builds it (as-read's
@@ -464,7 +475,8 @@
        (into [:map] cat items)))))
 
 (defn query-schema
-  "[:=> [:cat arg-types...] [:sequential row]] for a function taking args and running body: a
+  "[:=> [:cat arg-types...] [:sequential row]] for a function taking args (keys of arg-types)
+   and running body: a
    malli function schema for instrumentation; with {:result :one} the return is [:maybe row],
    for a function returning one row or nil. A return that cannot be resolved is :any."
   ([registry args body] (query-schema registry args body {}))
