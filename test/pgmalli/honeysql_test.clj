@@ -116,6 +116,26 @@
     (is (map? (h/arg-types registry body opts)) (pr-str body))
     (is (vector? (h/query-schema registry '[] body opts)) (pr-str body))))
 
+(deftest an-expression-with-no-alias-has-the-name-postgresql-gives-it
+  (is (= [:map [:count [:maybe :any]] [:?column? [:maybe :any]] [:my_fn [:maybe :any]] [:nick [:maybe :any]] [:case [:maybe :any]]
+          [:exists [:maybe :any]] [:current_timestamp [:maybe :any]] [:coalesce [:maybe :any]]]
+         (h/row-schema registry {:select [[[:count :*]] [[:+ :id 1]] [[:public.my-fn 1]] [[:cast :nick :text]] [[:case [:= :id 1] 2]]
+                                          [[:exists {:select [1]}]] :current_timestamp [[:coalesce :id 0]]]
+                                 :from [:users]} #{} opts))
+      "?column? once: the driver keeps the last of the columns a name repeats")
+  (is (nil? (h/row-schema registry {:select [[[:cast 1 :int]]] :from [:users]} #{} opts)) "a cast value is named after its type, not read here")
+  (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]] [:top-id [:maybe :any]]]
+         (h/row-schema registry {:select [:id [[:max :id] :top_id]] :from [:users]} #{} (assoc opts :qualified? true :kebab? true)))
+      "an expression has no table: its key is unqualified, kebab-cased as the builder does"))
+
+(deftest a-set-operations-row-is-named-by-its-first-member
+  (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]
+    (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:name [:maybe [:string {:max 40 :pg/type "character varying"}]]]]
+           (h/row-schema registry body #{} (assoc opts :qualified? true))))
+    (is (= [:map [:id [:maybe :any]]] (h/row-schema registry {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]} #{} opts))
+        "typed where the members agree, nullable where one is")
+    (is (nil? (h/row-schema registry {:union [{:select [:id] :from [:users]} '(other)]} #{} opts)))))
+
 (deftest read-names-the-types-an-extension-reads-otherwise
   (is (= [:map [:born [:maybe :time/local-date]] [:closed_at [:maybe ['inst? {:pg/type "timestamptz"}]]]]
          (h/row-schema registry {:select [:born :closed_at] :from [:users]} #{} (assoc opts :read {"date" :time/local-date})))))

@@ -37,6 +37,12 @@ All notable changes to this project are documented here. The format follows
   function; it was read as a table.
 - The `:order-by` of a set operation (`:union` ...) names its first member's output columns.
 - `pgmalli.main` took a minute to exit after running psql (the agent pool's threads).
+- `row-schema` names an expression with no alias as PostgreSQL does (a function's name, `case`,
+  `array`, a cast column's name, `?column?`), where it was nil; an expression's key is
+  unqualified and kebab-cased as the builder does it. A name selected twice is one key.
+- `row-schema` of a set operation is its first member's names, typed where the members agree
+  and nullable where one is; it was nil.
+- An SQL word under an alias (`[:current_timestamp :ts]`) is not a column.
 
 ## [0.2.45] - 2026-09-04
 

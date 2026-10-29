@@ -296,7 +296,7 @@
   (cond
     (keyword? item) (when (or (= :* item) (column-keyword? item)) [item nil])
     (not (vector? item)) nil
-    (param-key (first item)) (when (keyword? (second item)) [nil (second item)])
+    (and (keyword? (first item)) (not (column-keyword? (first item))) (not= :* (first item))) (when (keyword? (second item)) [nil (second item)])
     (and (keyword? (first item)) (keyword? (second item))) [(first item) (second item)]
     (keyword? (first item)) [(first item) nil]
     (keyword? (second item)) [nil (second item)]))
@@ -339,6 +339,42 @@
   [scopes stmt schema]
   (let [[_ alias] (some-> (or (:update stmt) (insert-target stmt)) (table-ref schema))]
     (select-keys (first scopes) [alias])))
+
+;;; the name PostgreSQL gives an output column
+
+(def ^:private operators
+  "HoneySQL's infix operators and the special syntax that is an operator in SQL: PostgreSQL
+   names their column ?column?."
+  (into #{} (map keyword)
+        ["and" "or" "xor" "<>" "<=" ">=" "||" "<->" "like" "not-like" "regexp" "regex" "~" "&&" "ilike"
+         "not-ilike" "similar-to" "not-similar-to" "is" "is-not" "not=" "!=" "is-distinct-from"
+         "is-not-distinct-from" "+" "-" "*" "%" "|" "&" "^" "=" "<" ">" "/" "in" "not-in" "not"
+         "between" "not-between" "inline" "lift" "param"]))
+
+(def ^:private special-syntax
+  "HoneySQL's special syntax that is not a function call; a column it makes is not named here."
+  #{:entity :alias :at :at-time-zone :call :composite :distinct :escape :filter :get-in
+    :ignore-nulls :interval :join :lateral :nest :object :record :order-by :over :raw
+    :respect-nulls :within-group :xtql :dot :default :foreign-key :references :unique
+    :primary-key :index :constraint})
+
+(defn- expression-name
+  "The column name PostgreSQL gives a select expression with no alias: a function's name, case,
+   array, a cast column's name, ?column? for a value or an operator. nil when this cannot tell
+   (a cast value is named after its type, a subquery after its column, :raw anything)."
+  [x]
+  (cond (or (number? x) (string? x) (boolean? x) (nil? x) (param-key x) (#{:null :true :false} x)) "?column?"
+        (keyword? x) (when (sql-values x) (name x))
+        (not (and (vector? x) (keyword? (first x)))) nil
+        :else (let [[h a] x]
+                (cond (operators h) "?column?"
+                      (#{:case :case-expr} h) "case"
+                      (= :array h) "array"
+                      (= :cast h) (cond (column-keyword? a) (second (split-column a))
+                                        (vector? a) (expression-name a))
+                      (special-syntax h) nil
+                      ;; a function, as HoneySQL writes its name (- is _) and PostgreSQL folds it
+                      :else (-> (name h) (str/split #"\.") last (str/replace "-" "_") str/lower-case)))))
 
 ;;; problems
 
@@ -503,17 +539,28 @@
                  (if (and k (contains? #{nil :any} (acc k))) (assoc acc k t) acc)))
              {} typed))))
 
+(declare select-row set-operation-row)
+
 (defn row-schema
   "The [:map ...] of one row a statement returns, as the driver builds it (as-read's
    :qualified?, :kebab?, :nil-columns and :time; an opaque source's columns under its alias)
    and as malli's default registry reads it; an expression under an alias is nullable :any;
-   :* and :t/* are the columns of the tables. nil when a selected column cannot be resolved."
+   :* and :t/* are the columns of the tables; an expression with no alias is under the name
+   PostgreSQL gives it. A set operation's row is named by its first member, typed where its
+   members agree, nullable where one is, and unqualified: its columns come from no table. nil
+   when a selected column cannot be resolved."
   ([registry stmt ctes] (row-schema registry stmt ctes {}))
-  ([registry stmt ctes {:keys [qualified? kebab? nil-columns] :as opts}]
+  ([registry stmt ctes opts]
+   (if-let [members (some stmt [:union :union-all :intersect :except])]
+     (set-operation-row registry members ctes opts)
+     (select-row registry stmt ctes opts))))
+
+(defn- select-row [registry stmt ctes {:keys [qualified? kebab? nil-columns] :as opts}]
    (let [registry (reading registry)
          sc (scope registry stmt ctes opts)
          kebab (fn [s] (cond-> s kebab? (str/replace "_" "-")))
-         key-of (fn [table column] (if qualified? (keyword (kebab (last (str/split table #"\."))) (kebab column)) (keyword (kebab column))))
+         ;; an expression has no table, so the driver keys it unqualified
+         key-of (fn [table column] (if (and qualified? table) (keyword (kebab (last (str/split table #"\."))) (kebab column)) (keyword (kebab column))))
          entry (fn [k schema]
                  (let [nullable? (or (nil? schema) (= :maybe (first schema)))
                        inner (if schema (read-shape registry (shape/non-null schema) opts) :any)]
@@ -528,13 +575,32 @@
          items (for [item (selected-items stmt)
                      :let [[col alias] (select-parts item)]]
                  (cond
-                   (nil? col) (when alias [(entry alias nil)])
+                   (and alias (nil? col)) [(entry (key-of nil (name alias)) nil)]
+                   (nil? col) (when-let [n (expression-name (if (and (vector? item) (= 1 (count item))) (first item) item))]
+                                [(entry (key-of nil n) nil)])
                    (star? col) (star col)
                    :else (when-let [{:keys [table column schema]} (resolve-column registry sc col)]
                            ;; a column under an alias is still keyed by its table: the driver reads the table from the field
                            [(entry (key-of table (if alias (name alias) column)) schema)])))]
      (when (and (seq items) (every? some? items))
-       (into [:map] cat items)))))
+       ;; a name selected twice is one key, the driver keeping the last column's value
+       (let [entries (apply concat items)
+             last-of (into {} (map (juxt first identity)) entries)]
+         (into [:map] (map last-of) (distinct (map first entries)))))))
+
+(defn- set-operation-row [registry members ctes {:keys [nil-columns] :as opts}]
+  (when (and (vector? members) (seq members) (every? map? members))
+    (let [rows (for [m members] (row-schema registry m (into ctes (cte-names m)) (assoc opts :qualified? false :nil-columns nil)))]
+      (when (and (every? some? rows) (apply = (map count rows)))
+        (into [:map]
+              (for [entries (apply map vector (map rest rows))
+                    :let [k (ffirst entries)
+                          schemas (map last entries)
+                          inners (distinct (map shape/non-null schemas))
+                          inner (if (= 1 (count inners)) (first inners) :any)]]
+                (cond (not-any? #(and (vector? %) (= :maybe (first %))) schemas) [k inner]
+                      (= :absent nil-columns) [k {:optional true} inner]
+                      :else [k [:maybe inner]])))))))
 
 (defn query-schema
   "[:=> [:cat arg-types...] [:sequential row]] for a function taking args (keys of arg-types)
