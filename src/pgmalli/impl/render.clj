@@ -56,11 +56,11 @@
   (if sql (str "violates check constraint " constraint ": " sql) constraint))
 
 (defn- with-props
-  "Properties on a column schema. On [:and type ...] the bounds malli reads (:min, :max) go on
-   the type; provenance stays on the :and, where the insert derivation reads it."
+  "Properties on a column schema. On [:and type ...] the bounds the type reads (:min, :max,
+   :pg/max-length) go on the type; provenance stays on the :and, where the insert derivation reads it."
   [schema props]
   (let [props (prune props)
-        bounds (select-keys props [:min :max])]
+        bounds (select-keys props [:min :max :pg/max-length])]
     (cond
       (empty? props) schema
       (and (vector? schema) (= :and (first schema)) (not (map? (second schema))) (seq bounds))
@@ -105,6 +105,9 @@
         (and (vector? schema) (= :any (first schema))) (assoc schema 0 :some)
         :else schema))
 
+(defn- whole [v rounding]
+  (if (integer? v) v (long (.setScale (bigdec v) 0 (if (= :floor rounding) java.math.RoundingMode/FLOOR java.math.RoundingMode/CEILING)))))
+
 (defn- apply-fact
   "{:schema :unrendered} after one fact on a column schema."
   [{:keys [schema unrendered ref-base]} {:keys [fact] :as f} schema-name]
@@ -145,8 +148,11 @@
                    int? (#{:int :pg/integer :pg/smallint} base)]
                (cond
                  number-base?
-                 (kept (cond-> (with-props schema {:min (when min (if (and min-exclusive? int?) (inc min) (when-not min-exclusive? min)))
-                                                   :max (when max (if (and max-exclusive? int?) (dec max) (when-not max-exclusive? max)))})
+                 (kept (cond-> (with-props schema (if int?
+                                                    ;; the integers past a bound, which may be a numeric (n >= 0.5 is n >= 1)
+                                                    {:min (when min (if min-exclusive? (inc (whole min :floor)) (whole min :ceiling)))
+                                                     :max (when max (if max-exclusive? (dec (whole max :ceiling)) (whole max :floor)))}
+                                                    {:min (when-not min-exclusive? min) :max (when-not max-exclusive? max)}))
                          (and min min-exclusive? (not int?)) (as-> s [:and s [:> min]])
                          (and max max-exclusive? (not int?)) (as-> s [:and s [:< max]])))
                  decimal-base?
@@ -157,9 +163,9 @@
       :non-blank (if string-base?
                    (kept (if (:trim? f) [:and (with-props schema {:min 1}) [:re {:error/message (check-message f)} "[^ ]"]] (with-props schema {:min 1})))
                    as-is)
-      :max-length (cond string-base? (kept (with-props schema {:max (:max f)}))
+      :max-length (cond string-base? (kept (with-props schema {:max (:max f) :pg/max-length (:max f)}))
                         ;; an array of varchar(n): the bound is the elements'
-                        (and (vector? schema) (= :vector (first schema)) (= :string (last schema))) (kept (conj (pop schema) [:string {:max (:max f)}]))
+                        (and (vector? schema) (= :vector (first schema)) (= :string (last schema))) (kept (conj (pop schema) [:string {:max (:max f) :pg/max-length (:max f)}]))
                         :else as-is)
       :length (let [{:keys [fn min max exact]} f
                     bounds {:min (or exact min) :max (or exact max)}]
@@ -176,10 +182,10 @@
                      as-is)
                    as-is)
       :regex (if-let [re (when regex-base? (ev/java-regex (:re f)))]
-               (kept [:and schema [:re {:error/message (check-message f)} (str (when (:case-insensitive? f) "(?i)") re)]])
+               (kept [:and schema [:re {:error/message (check-message f)} (cond-> re (:case-insensitive? f) ev/case-insensitive)]])
                as-is)
       :like (if regex-base?
-              (kept [:and schema [:re {:error/message (check-message f)} (str (when (:case-insensitive? f) "(?i)") (ev/like-regex (:pattern f)))]])
+              (kept [:and schema [:re {:error/message (check-message f)} (cond-> (ev/like-regex (:pattern f)) (:case-insensitive? f) ev/case-insensitive)]])
               as-is)
       :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered :ref-base ref-base}
                                             (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f))
@@ -440,7 +446,7 @@
   "{:entry :unrendered :skipped} of a domain: its base type shaped by the CHECKs that matched
    patterns, then [:pg/check-value expr] for the others the evaluator covers. As for tables,
    a CHECK that lost a fact in rendering is evaluated whole."
-  [schema-name {:keys [type-name base facts]} checks overrides types]
+  [schema-name {:keys [type-name base facts value-type]} checks overrides types]
   (let [first-pass (fold-facts schema-name (base-type base) facts overrides)
         lost (lost-checks (:unrendered first-pass) types)
         facts (if (empty? lost) facts (remove #(lost (:constraint %)) facts))
@@ -452,7 +458,10 @@
                         ov {:schema ov}
                         ;; NOT VALID: enforced for every new value all the same, so enforced, marked
                         (and (= :domain-check (:fact c)) (ev/supported? (:expr c) types))
-                        {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (check-message c)} (false? (:valid? c)) (assoc :pg/not-valid true)) (:expr c)]}
+                        {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (check-message c)}
+                                                    value-type (assoc :pg/types {:VALUE value-type})
+                                                    (false? (:valid? c)) (assoc :pg/not-valid true))
+                                           (:expr c)]}
                         :else {:unrendered [c]}))
         extras (keep :schema results)
         s (cond (empty? extras) schema

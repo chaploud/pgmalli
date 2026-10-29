@@ -9,6 +9,7 @@
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.registry :as registry]
             [pgmalli.test-db :refer [*db* exec-sql! sql-literal with-postgres]])
   (:import (java.io File)))
 
@@ -134,8 +135,9 @@
     (let [out-dir (str (doto (File/createTempFile "pgmalli-cs" "") .delete))
           config {:db *db* :out-dir out-dir}
           checks {"r" "r ~ '^a.b$'" "l" "l LIKE 'a%'" "u" "length(trim(u)) > 0" "w" "length(w) <= 2"
-                  "x" "x <> ''" "y" "btrim(y) <> ''" "z" "z ~ '^[[:alpha:]]+$'" "e" "e ~ 'b$'"}
-          strings ["a\nb" "a\tb" "\n" "\t" "\u00a0" "😀😀" "😀😀😀" "ab  " "" " " "a" "ab" "a\n" "ab\n" "abc"]]
+                  "x" "x <> ''" "y" "btrim(y) <> ''" "z" "z ~ '^[[:alpha:]]+$'" "e" "e ~ 'b$'"
+                  "o" "o ~ '^\\w+$'" "i" "i ~* '^é'" "k" "k ILIKE 'é%'"}
+          strings ["a\nb" "a\tb" "\n" "\t" "\u00a0" "😀😀" "😀😀😀" "ab  " "" " " "a" "ab" "a\n" "ab\n" "abc" "abcd  " "é" "Éa" "ÉA"]]
       (exec-sql! (str "CREATE SCHEMA cs; CREATE TABLE cs.t (v varchar(3)"
                       (apply str (for [[c chk] checks] (str ", " c " text CHECK (" chk ")"))) ");"
                       "CREATE FUNCTION cs.takes(col text, val text) RETURNS boolean LANGUAGE plpgsql AS $$
@@ -143,14 +145,10 @@
                        EXCEPTION WHEN check_violation OR string_data_right_truncation THEN RETURN false; END $$;"))
       (generate/generate! (assoc config :schemas ["cs"]))
       (let [reg (pgmalli/registry (files/read-edn (files/path-for config "cs")))
-            ;; varchar(n) cuts spaces past n off instead of refusing them; the schema refuses them
-            cases (for [c (cons "v" (keys checks)), s strings :when (not= ["v" "ab  "] [c s])] [c s (m/validate :pg.cs/t (assoc (zipmap (map keyword (cons "v" (keys checks))) (repeat nil)) (keyword c) s) {:registry reg})])]
+            cases (for [c (cons "v" (keys checks)), s strings] [c s (m/validate :pg.cs/t (assoc (zipmap (map keyword (cons "v" (keys checks))) (repeat nil)) (keyword c) s) {:registry reg})])]
         (is (= :map (first (:pg.cs/t reg))) "the CHECKs are column schemas, not evaluated")
         (exec-sql! (str "DO $$ BEGIN "
-                        (apply str (for [[c s ok] cases
-                                         ;; malli's $ matches before a final newline too, PostgreSQL's does not: there
-                                         ;; the schema may only be the more lenient
-                                         :when (not (and ok (#{"r" "z" "e"} c) (str/ends-with? s "\n")))]
+                        (apply str (for [[c s ok] cases]
                                      (str "IF cs.takes('" c "', " (sql-literal s) ") <> " ok
                                           " THEN RAISE EXCEPTION 'schema says " ok " for % in " c "', " (sql-literal s) "; END IF;")))
                         " END $$;"))
@@ -233,3 +231,28 @@
       (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts registry ds))))
       (is (m/validate (data/dataset-schema registry) {"ex.slots" [{:id 1 :room 1 :seat 1} {:id 2 :room 1 :seat 1}]} {:registry registry})
           "a dataset the database takes (equal seats in one room) is valid: the rule is for generating"))))
+
+(deftest char-n-integer-and-domain-checks-generate-rows-postgresql-takes-and-hold-as-it-does
+  (when *db*
+    (let [[reg] (registry-of "cn" "CREATE SCHEMA cn;
+                                   CREATE DOMAIN cn.d4 AS char(4) CHECK (char_length(VALUE) <= 2);
+                                   CREATE DOMAIN cn.r4 AS char(4) CHECK (VALUE ~ '^.{4}$');
+                                   CREATE DOMAIN cn.di AS integer CHECK (VALUE * 2 > 0);
+                                   CREATE DOMAIN cn.cc AS char(2) CHECK (VALUE ~ '^[A-Z]{2}$');
+                                   CREATE DOMAIN cn.dom AS integer CHECK (VALUE <> 3);
+                                   CREATE DOMAIN cn.o AS cn.dom CHECK (VALUE IN (1, 2, 5));
+                                   CREATE TABLE cn.t (country char(2) NOT NULL CHECK (country ~ '^[A-Z]{2}$'),
+                                                      cur char(3) NOT NULL CHECK (cur IN ('JPY', 'USD', 'EUR')),
+                                                      d cn.d4, r cn.r4, i cn.di, c cn.cc NOT NULL, o cn.o NOT NULL,
+                                                      a int, b int, CHECK (b = (a * 0.5)::int), n int CHECK (n = 2.5::integer));")
+          base {:country "JP" :cur "JPY" :c "JP" :o 1}
+          takes? (fn [row] (try (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg {"cn.t" [row]})))) true
+                                (catch clojure.lang.ExceptionInfo _ false)))]
+      (doseq [row [{:d "ab  "} {:d "abc"} {:r "ab"} {:i 5} {:i 2000000000} {:a 5 :b 3} {:a 5 :b 2} {:n 3} {:n 2}]
+              :let [row (merge base row)]]
+        (is (= (takes? row) (m/validate :pg.cn.t/insert row {:registry reg})) (pr-str row)))
+      ;; babashka has no test.chuck: strings of a regex are drawn and filtered there, which ^[A-Z]{2}$ defeats
+      (when @registry/regex-generation?
+        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
+          (is (= 5 (count (get ds "cn.t"))) (pr-str (data/short-tables ds)))
+          (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))))

@@ -107,7 +107,7 @@ keyed as in `sql/format`'s `:params`:
 
 ```clojure
 (h/arg-types registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
-;; => {:id [:int #:pg{:type "bigint"}], :nick [:maybe [:string {:max 40, :pg/type "character varying"}]]}
+;; => {:id [:int #:pg{:type "bigint"}], :nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]}
 ```
 
 A comparison with NULL matches no row, so `:?id` above does not take nil. To take nil, pass
@@ -127,7 +127,7 @@ join may leave NULL is nullable; an expression is nullable `:any`:
 (h/row-schema registry {:select [:u.email :p.title]
                         :from [[:users :u]]
                         :left-join [[:posts :p] [:= :p.author_id :u.id]]})
-;; => [:map [:email [:string {:max 120, :pg/type "character varying"}]] [:title [:maybe [:string {:max 200, :pg/type "character varying"}]]]]
+;; => [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
 
 (h/row-schema registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]})
 ;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:maybe :any]]]

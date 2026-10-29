@@ -48,7 +48,7 @@
 
           (or (Character/isDigit c) (and (= c \.) (< (inc i) (count s)) (Character/isDigit (.charAt ^String s (inc i)))))
           (let [m (re-find #"^\d*\.?\d+(?:[eE][+-]?\d+)?" (subs s i))
-                v (if (re-find #"[.eE]" m) (Double/parseDouble m) (try (Long/parseLong m) (catch Exception _ (bigint m))))]
+                v (if (re-find #"[.eE]" m) (bigdec m) (try (Long/parseLong m) (catch Exception _ (bigint m))))]
             (recur (+ i (count m)) (conj out {:t :num :v v})))
 
           (or (Character/isLetter c) (= c \_))

@@ -120,6 +120,21 @@
            (first fs)))
     (is (= [{:fact :column} {:fact :domain-ref :base "text"}] (map #(select-keys % [:fact :base]) (rest fs))))))
 
+(deftest a-cast-of-a-number-literal-is-folded-as-postgresql-casts-it
+  (is (= [{:fact :in-set :column "c" :values [3]}] (check-facts "c = (2.5)::integer"))))
+
+(deftest a-domain-over-char-n-or-an-integer-reads-value-as-its-type
+  (let [domain (fn [base definition]
+                 (first (p/facts {:name "public"
+                                  :types {"d" {:kind "DOMAIN" :base_type base :not_null false
+                                               :constraints [{:name "d_check" :definition definition}]}}
+                                  :tables {}})))]
+    (is (= [:character 4] (:value-type (domain "character(4)" "CHECK (char_length(VALUE) <= 2)"))))
+    (is (= [{:fact :max-length :max 4}] (map #(select-keys % [:fact :max]) (:facts (domain "character(4)" "CHECK (char_length(VALUE) <= 2)"))))
+        "its CHECKs are no patterns: those read text")
+    (is (= :integer (:value-type (domain "integer" "CHECK (VALUE * 2 > 0)"))))
+    (is (nil? (:value-type (domain "character varying(4)" "CHECK (VALUE <> '')"))))))
+
 (deftest branch-checks
   (is (= [{:fact :branch-check :dispatch "status"
            :branches [{:values ["pending"] :facts [{:fact :null :column "closed_at"}]}

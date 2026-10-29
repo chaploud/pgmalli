@@ -200,3 +200,45 @@
 
 (deftest a-bit-string-generates-digits-of-its-length
   (is (every? #(re-matches #"[01]{3}" %) (generated-values :b))))
+
+(defn- registry-of [types columns checks]
+  (pgmalli/registry (files/assemble "public" "x" (p/facts {:name "public" :types types
+                                                          :tables {"t" {:columns columns
+                                                                        :constraints (into {} (for [[n c] checks] [n {:name n :type "CHECK" :check_clause (str "CHECK (" c ")")}]))}}})
+                                    {})))
+
+(deftest a-char-n-column-generates-as-its-check-says-the-evaluator-holding-it
+  (let [col (fn [n len] {:name n :position 1 :data_type "character" :is_nullable false :max_length len})
+        reg (registry-of {} (cond-> [(col "cur" 4)] @reg/regex-generation? (conj (col "country" 2)))
+                         (cond-> [["cur_check" "cur = ANY (ARRAY['JPY'::bpchar, 'ab  '::bpchar])"]]
+                           @reg/regex-generation? (conj ["country_check" "country ~ '^[A-Z]{2}$'::text"])))
+        rows (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})]
+    (is (every? #{"JPY" "ab"} (map :cur rows)) "an IN's values, without their trailing spaces")
+    (when @reg/regex-generation?
+      (is (every? #(re-matches #"[A-Z]{2}" %) (map :country rows))))))
+
+(deftest a-domain-over-char-n-generates-as-its-check-says
+  (let [reg (registry-of {"cc" {:kind "DOMAIN" :base_type "character(3)" :not_null false
+                                :constraints [{:name "cc_check" :definition "CHECK (VALUE = ANY (ARRAY['JPY'::bpchar, 'USD'::bpchar]))"}]}}
+                         [{:name "c" :position 1 :data_type "cc" :type_schema "public" :is_nullable false}] [])]
+    (is (every? #{"JPY" "USD"} (map :c (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1}))))))
+
+(deftest an-in-on-a-domain-generates-from-its-values-not-from-the-domain
+  (let [reg (registry-of {"dom" {:kind "DOMAIN" :base_type "integer" :not_null false :constraints [{:name "dom_check" :definition "CHECK (VALUE <> 3)"}]}
+                          "o" {:kind "DOMAIN" :base_type "dom" :not_null false :constraints [{:name "o_check" :definition "CHECK (VALUE = ANY (ARRAY[1, 2, 5]))"}]}}
+                         [{:name "c" :position 1 :data_type "o" :type_schema "public" :is_nullable false}] [])]
+    (is (every? #{1 2 5} (map :c (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1}))))))
+
+(deftest a-regex-over-a-domain-generates-short-strings-of-either-case-the-domain-keeps
+  (when @reg/regex-generation?
+    (let [reg (registry-of {"dq" {:kind "DOMAIN" :base_type "character varying(5)" :not_null false
+                                  :constraints [{:name "dq_check" :definition "CHECK (VALUE::text ~ '^[[:alpha:]]+$'::text)"}]}
+                            "o" {:kind "DOMAIN" :base_type "dq" :not_null false
+                                 :constraints [{:name "o_check" :definition "CHECK (VALUE::text ~~* 'A%'::text)"}]}
+                            "c3" {:kind "DOMAIN" :base_type "character(3)" :not_null false
+                                  :constraints [{:name "c3_check" :definition "CHECK (VALUE ~ '^[a-z]+$'::text)"}]}}
+                           [{:name "o" :position 1 :data_type "o" :type_schema "public" :is_nullable false}
+                            {:name "c" :position 2 :data_type "c3" :type_schema "public" :is_nullable false}] [])
+          rows (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})]
+      (is (every? #(re-matches #"[aA]\p{IsAlphabetic}{0,4}" %) (map :o rows)))
+      (is (every? #(re-matches #"[a-z]{3}" %) (map :c rows)) "char(3) pads: only three letters match"))))

@@ -40,7 +40,7 @@
        :pg/constraints ["posts_likes_check"],
        :pg/default 0,
        :pg/type "integer"}]]
-    [:title [:string {:max 200, :pg/type "character varying"}]]
+    [:title [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]
     [:title_upper
      [:maybe [:string {:pg/generated [:upper [:cast :title :text]], :pg/type "text"}]]]
     [:views [:pg/integer {:default 0, :pg/default 0, :pg/type "integer"}]]]
@@ -58,10 +58,10 @@
      :pg/unique [{:columns ["email"]}]}
     [:closed_at [:maybe [:time/instant {:pg/type "timestamp with time zone"}]]]
     [:created_at [:time/instant {:pg/default [:now], :pg/type "timestamp with time zone"}]]
-    [:email [:string {:max 120, :pg/type "character varying"}]]
+    [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]
     [:group_id [:pg/integer {:pg/type "integer"}]]
     [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
-    [:nick [:maybe [:string {:max 40, :pg/type "character varying"}]]]
+    [:nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]
     [:status
      [:ref
       {:default "active", :pg/default "active", :pg/type "user_status"}

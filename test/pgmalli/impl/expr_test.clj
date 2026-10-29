@@ -48,6 +48,11 @@
     (is (= [:and [(keyword "~*") :a "x"] [(keyword "@>") [(keyword "#>") :j [:cast "{a}" :text-array]] [:cast "1" :jsonb]]]
            (x/->honeysql e)))))
 
+(deftest a-literal-with-a-point-or-an-exponent-is-a-numeric
+  (is (= [:> :d 0.5M] (x/parse "d > 0.5")))
+  (is (= [:> :d 1E+3M] (x/parse "d > 1e3")))
+  (is (= [:> :d 5] (x/parse "d > 5"))))
+
 (deftest canonical-undoes-deparser-rewrites
   (is (= [:>= :n -1] (x/canonical (x/parse "n >= '-1'::integer"))))
   (is (= [:> :d -0.5M] (x/canonical (x/parse "d > '-0.5'::numeric"))))
@@ -89,7 +94,7 @@
    [[:regex :s "^[a-z]+$"] [:regex :s [:cast "^[a-z]+$" :text]]]
    [[:= [:is :n nil] [:is :big nil]]]
    [[:not [:= :b true]]]
-   [[:> :d 0.5]]
+   [[:> :d 0.5M]]
    [[:= [:coalesce :big 0] 0] [:= [:coalesce :big [:cast 0 :bigint]] 0]]])
 
 (deftest roundtrip-through-postgres

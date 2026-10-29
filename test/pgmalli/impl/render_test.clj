@@ -63,7 +63,7 @@
             [:id [:int {:pg/type "bigint" :pg/identity :always}]]
             [:mail [:maybe [:ref {:pg/type "email"} :pg.public/email]]]
             [:mood [:ref {:pg/type "mood" :pg/default "happy" :default "happy"} :pg.public/mood]]
-            [:nick [:maybe [:string {:max 40 :pg/type "character varying"}]]]
+            [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]
             [:price ['decimal? {:pg/type "numeric" :pg/default 0 :default 0M}]]
             [:score [:pg/integer {:pg/type "integer"}]]
             [:seq [:pg/integer {:pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
@@ -155,7 +155,7 @@
     (is (= [:pg/integer {:min 10 :pg/type "integer" :pg/constraints ["k0" "k1"]}]
            (column (reg [{:name "n" :position 1 :data_type "integer" :is_nullable false}] "n >= 10" "n >= 0") :n))
         "the tighter bound wins")
-    (is (= [:string {:max 5 :pg/type "character varying" :pg/constraints ["k0"]}]
+    (is (= [:string {:max 5 :pg/max-length 5 :pg/type "character varying" :pg/constraints ["k0"]}]
            (column (reg [{:name "s" :position 1 :data_type "character varying" :is_nullable false :max_length 5}] "length(s) <= 10") :s))
         "a CHECK cannot widen varchar(n)")
     (is (= [:enum {:pg/type "text" :pg/constraints ["k0" "k1"]} "b"]
@@ -166,7 +166,7 @@
         "and exclude")
     (is (= [:and {:pg/type "text" :pg/constraints ["k0"]} :string [:not [:enum "x" "y"]]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e <> ALL (ARRAY['x'::text, 'y'::text])") :e)))
-    (is (= [:and {:pg/type "text" :pg/constraints ["k0"]} :string [:re {:error/message "violates check constraint k0: CHECK (e ~~ 'ab%'::text)"} "^ab[\\s\\S]*$"]]
+    (is (= [:and {:pg/type "text" :pg/constraints ["k0"]} :string [:re {:error/message "violates check constraint k0: CHECK (e ~~ 'ab%'::text)"} "^ab[\\s\\S]*\\z"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e ~~ 'ab%'::text") :e))
         "LIKE is a regex")
     (is (= [:and {:pg/type "text" :pg/constraints ["k0" "k1"]} [:string {:min 2}] [:re {:error/message "violates check constraint k0: CHECK (length(btrim(e)) > 0)"} "[^ ]"]]
@@ -195,7 +195,7 @@
                                                       {:name "code" :position 3 :data_type "opaque" :type_schema "public" :is_nullable true}]
                                             :constraints {}}}}))
         reg (registry-with registry)]
-    (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "even_int_check" :error/message "violates check constraint even_int_check: CHECK ((VALUE % 2) = 0)"} [:= [:mod :VALUE 2] 0]]]
+    (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "even_int_check" :error/message "violates check constraint even_int_check: CHECK ((VALUE % 2) = 0)" :pg/types {:VALUE :integer}} [:= [:mod :VALUE 2] 0]]]
            (:pg.public/even_int registry))
         "a domain CHECK outside the patterns is evaluated over the value")
     (is (m/validate :pg.public/even_int 4 {:registry reg}))
@@ -207,7 +207,7 @@
     (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                             :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
                                                               :tables {}}))]
-      (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "pos_check" :error/message "violates check constraint pos_check: CHECK (VALUE > 0) NOT VALID" :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
+      (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "pos_check" :error/message "violates check constraint pos_check: CHECK (VALUE > 0) NOT VALID" :pg/types {:VALUE :integer} :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
         "a NOT VALID domain CHECK is enforced (the database enforces it for every new value), marked")
       (is (empty? unrendered)))
     (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
@@ -225,6 +225,45 @@
                                                      {"opaque_check" [:re "x"]}))))
         "overrides apply to domain CHECKs too")))
 
+(deftest a-domain-over-char-n-or-an-integer-holds-its-checks-as-postgresql-does
+  (let [domain (fn [base definition]
+                 (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type base :not_null false
+                                                                                            :constraints [{:name "d_check" :definition definition}]}}
+                                                                :tables {}}))]
+                   #(m/validate :pg.public/d % {:registry (registry-with registry)})))]
+    (let [valid? (domain "character(4)" "CHECK (char_length(VALUE) <= 2)")]
+      (is (valid? "ab  ") "char(n) measures without its trailing spaces")
+      (is (not (valid? "abc"))))
+    (let [valid? (domain "character(4)" "CHECK (VALUE ~ '^.{4}$'::text)")]
+      (is (valid? "ab") "a regex reads char(n) padded")
+      (is (valid? "abcd")))
+    (let [valid? (domain "integer" "CHECK ((VALUE * 2) > 0)")]
+      (is (valid? 5))
+      (is (not (valid? 2000000000)) "integer arithmetic overflows as the database's does"))))
+
+(deftest a-numeric-bound-on-an-integer-column-is-the-integers-past-it
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "n" :position 1 :data_type "integer" :is_nullable false}
+                                                                         {:name "m" :position 2 :data_type "integer" :is_nullable false}]
+                                                               :constraints {"n_check" {:name "n_check" :type "CHECK" :check_clause "CHECK (n >= 0.5 AND n < 2.5)"}
+                                                                             "m_check" {:name "m_check" :type "CHECK" :check_clause "CHECK (m > 1.5)"}}}}}))]
+    (is (= [:pg/integer {:min 1 :max 2 :pg/type "integer" :pg/constraints ["n_check"]}] (get-in registry [:pg.public/t 3 1])))
+    (is (= [:pg/integer {:min 2 :pg/type "integer" :pg/constraints ["m_check"]}] (get-in registry [:pg.public/t 2 1])))))
+
+(deftest varchar-n-and-char-n-cut-the-spaces-past-n
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "v" :position 1 :data_type "character varying" :is_nullable true :max_length 4}
+                                                                         {:name "c" :position 2 :data_type "character" :is_nullable true :max_length 4}
+                                                                         {:name "s" :position 3 :data_type "character varying" :is_nullable true :max_length 4}]
+                                                               :constraints {"s_check" {:name "s_check" :type "CHECK" :check_clause "CHECK (length((s)::text) <= 2)"}}}}}))
+        valid? #(m/validate :pg.public/t % {:registry (registry-with registry)})]
+    (is (valid? {:v "abcd  " :c "abcd  " :s nil}))
+    (is (valid? {:v "😀😀😀😀 " :c nil :s nil}) "counting characters")
+    (doseq [v ["abcde" "ab  cd" "abcd\t"]]
+      (is (not (valid? {:v v :c nil :s nil})) (pr-str v)))
+    (is (not (valid? {:v nil :c nil :s "ab  "})) "a CHECK reads what is kept, spaces within n included")
+    (is (not (valid? {:v nil :c nil :s "ab    "})))))
+
 (deftest numeric-and-key-shapes
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "a" :position 1 :data_type "numeric" :is_nullable false :precision 3 :scale 1}
@@ -240,7 +279,7 @@
     (is (= {:pg/table "public.t" :pg/unique [{:columns ["d"] :nulls-distinct false}]
             :pg/foreign-keys [{:columns ["e"] :table "public.u" :to ["id"] :match :full}]}
            (second t)))
-    (is (= [:and {:pg/type "numeric" :pg/constraints ["a_check"]} 'decimal? [:pg/numeric {:precision 3 :scale 1}] [:>= 0.5]] (get-in t [2 1]))
+    (is (= [:and {:pg/type "numeric" :pg/constraints ["a_check"]} 'decimal? [:pg/numeric {:precision 3 :scale 1}] [:>= 0.5M]] (get-in t [2 1]))
         "numeric(3,1) rounds to one place and holds fewer than two digits before the point; a CHECK narrows further")
     (is (= [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 4 :scale 0}]] (get-in t [3 1])))
     (is (= [:pg/smallint {:pg/type "smallint"}] (get-in t [4 1])))
@@ -397,7 +436,7 @@
     (is (= [:string {:pg/type "bit" :min 4 :max 4}] (col :b)) "bit(n) is exactly n digits")
     (is (= [:string {:pg/type "bit varying" :max 6}] (col :vb)))
     (is (= [:some {:pg/type "inet"}] (col :ip)) "a type the driver hands over as its own object")
-    (is (= [:vector {:pg/type "character varying[]"} [:string {:max 5}]] (col :tags)) "varchar(5)[] bounds the elements")
+    (is (= [:vector {:pg/type "character varying[]"} [:string {:max 5 :pg/max-length 5}]] (col :tags)) "varchar(5)[] bounds the elements")
     (is (empty? unrendered) "none of them is unknown")
     (is (m/validate :pg.public/t {:o 1 :c "x" :b "0101" :vb "01" :ip "10.0.0.1" :tags ["abcde"]} {:registry reg}))
     (is (not (m/validate :pg.public/t {:o 1 :c "x" :b "01" :vb "01" :ip "10.0.0.1" :tags ["abcdef"]} {:registry reg})))))
@@ -507,8 +546,8 @@
     (is (= [:ref {:pg/type "email"} :pg.public/email] (get-in registry [:pg.public/t 2 1])) "NOT NULL: no [:maybe]")
     (is (not (m/validate :pg.public/t {:email nil :price 1M :nick nil :total nil} {:registry reg})) "and NULL is rejected, since the domain itself is never [:maybe]")
     (is (m/validate :pg.public/t {:email "a@b" :price 1M :nick nil :total nil} {:registry reg}))
-    (is (= [:and 'decimal? [:pg/numeric {:precision 12 :scale 2}] [:>= 0]] (:pg.public/money_amount registry)) "the domain's numeric(12,2) is kept")
-    (is (= [:string {:max 8}] (:pg.public/short_name registry)) "and a varchar(8) domain's length")
+    (is (= [:and 'decimal? [:pg/numeric {:precision 12 :scale 2}] [:>= 0M]] (:pg.public/money_amount registry)) "the domain's numeric(12,2) is kept")
+    (is (= [:string {:max 8 :pg/max-length 8}] (:pg.public/short_name registry)) "and a varchar(8) domain's length")
     (is (= [:* :price [:cast 2 :numeric]] (:pg/generated (second (last (last (get-in registry [:pg.public/t 5])))))) "a generated column carries its expression")
     (is (= [{:columns ["email"]} {:columns ["nick"] :index true}] (:pg/unique (second (:pg.public/t registry)))) "a unique index is marked")))
 

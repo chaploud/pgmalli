@@ -70,7 +70,7 @@ database's spelling.
 | `bigint` | `:int` |
 | `numeric(p, s)` | `[:and decimal? [:pg/numeric {:precision p :scale s}]]` |
 | `real`, `double precision` | `:double` |
-| `text`, `varchar(n)`, `char(n)`, `name`, `"char"` | `:string`, `[:string {:max n}]` |
+| `text`, `varchar(n)`, `char(n)`, `name`, `"char"` | `:string`, `[:string {:max n :pg/max-length n}]` |
 | `boolean` | `:boolean` |
 | `uuid` | `:uuid` |
 | `date`, `time`, `timetz` | `:time/local-date`, `:time/local-time`, `:time/offset-time` |
@@ -86,7 +86,9 @@ database's spelling.
 | a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
 
 `:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
-do; malli's own `:string`, in `portable` output, counts UTF-16 units.
+do; malli's own `:string`, in `portable` output, counts UTF-16 units. `:pg/max-length n` is the
+type's `n`: as PostgreSQL does, it cuts spaces past `n` off (`"abcd  "` fits `varchar(4)`),
+then `:min` and `:max` count what it keeps.
 
 `:pg/numeric` rounds to `s` places, half up as PostgreSQL does, then allows fewer than
 `p - s` digits before the point. `s` may be negative or larger than `p`, as PostgreSQL allows.
@@ -174,8 +176,8 @@ Generate a version's rows from its own schema, so the generator need not guess t
 | `length(col) <= n` | `[:string {:max n}]` |
 | `cardinality(col) BETWEEN a AND b`, `array_length(col, 1) <= n` | `[:vector {:min a :max b} <T>]` |
 | `jsonb_typeof(col) = 'object'` (`'array'`) | `:map` (`[:sequential :any]`) |
-| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?i)`; `.` as `[\s\S]`, as it matches a newline) |
-| `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^a[\s\S]*$"]]` (with `(?i)`) |
+| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?iu)`; `.` as `[\s\S]`, as it matches a newline; `$` as `\z`, as Java's also matches before a final newline; `(?U)` when it has classes, which take every letter of UTF-8) |
+| `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^a[\s\S]*\z"]]` (with `(?iu)`) |
 | `col IS NULL OR <a pattern>` | the pattern, or NULL |
 | `col IS NOT NULL` | no `[:maybe ...]` |
 | patterns joined with `AND` | each pattern |
@@ -189,16 +191,18 @@ Generate a version's rows from its own schema, so the generator need not guess t
 A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a nullable column takes
 `[:maybe ...]`, and a NULL dispatch value takes any branch.
 
-Several CHECKs on one column only tighten it. A CHECK on a `char(n)` column is a `[:pg/check expr]`:
-`char(n)` compares and measures without its trailing spaces. A partitioned table's row schema carries a CHECK
+Several CHECKs on one column only tighten it. A CHECK on a `char(n)` column, or on a domain over
+`char(n)`, is a `[:pg/check expr]` (`[:pg/check-value expr]`): `char(n)` compares and measures
+without its trailing spaces. Its column patterns still say how values generate: one of an
+`IN`'s values, or strings of its regex or `LIKE`. A partitioned table's row schema carries a CHECK
 named `<table> (partitions)`: the OR of its partitions' bounds.
 
 > NOTE: a `NOT VALID` CHECK is enforced, as the database enforces it for every new row. A row
 > from before it may fail; skip the CHECK with an override if such rows must pass.
 
 Strings are generated from a regex on the JVM when `com.gfredericks/test.chuck` is on the
-classpath (a `(?i)` regex, which test.chuck refuses, without the flag). Without it, and on
-babashka, strings are drawn and filtered.
+classpath (without the flags and `\z` test.chuck refuses, and with the ASCII members of a
+class). Without it, and on babashka, strings are drawn and filtered.
 
 ## How `:pg/check` evaluates
 
@@ -209,8 +213,11 @@ PostgreSQL does:
 - Integer division truncates; `smallint`, `integer` and `bigint` arithmetic out of its
   type's range fails the row. A cast to an integer rounds a float's ties to even, a numeric's
   away from zero.
+- A literal with a point or an exponent is a `numeric`, as in PostgreSQL: `round(2.5)` is 3.
 - Casts convert: dates, timestamps, fixed-length intervals, uuids, jsonb, arrays, and the
   schema's own enum and domain literals.
+- A domain's CHECK reads `VALUE` as the domain's type: `char(n)` and the integer types as for
+  a column.
 - A `char(n)` column's trailing spaces count only for `LIKE`, regexes and `octet_length`.
 - `now()` is the time of validation.
 - An expression the database would fail on (division by zero, a cast that does not parse)

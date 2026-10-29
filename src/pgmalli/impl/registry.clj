@@ -14,6 +14,7 @@
             [malli.util :as mu]
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.error :as error]
+            [pgmalli.impl.pattern :as pattern]
             [pgmalli.impl.pgtypes :as pgtypes]
             [pgmalli.impl.shape :as shape]
             [pgmalli.impl.types :as types]))
@@ -192,6 +193,74 @@
       (and (= :vector t) (vector? s)) (assoc s (dec (count s)) (gen-hints (last s) false where))
       :else s)))
 
+(def regex-generation?
+  "Whether strings can be generated from a regex here: test.chuck's generator, which runs on
+   the JVM (babashka falls back to drawing strings and filtering them)."
+  (delay (boolean (try (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex) (catch Exception _ nil)))))
+
+(def ^:private generation-regex
+  "A regex test.chuck generates from, whose strings match the regex given: without the flags,
+   \\z and \\p{Alpha} test.chuck refuses, a case-insensitive one's letters as [aA], repeats at
+   most 4 more than their least; nil when
+   there is none, and the strings are drawn and filtered. Memoized: a registry build asks it
+   of every [:re]."
+  (memoize
+   (fn [re]
+     (let [string-from-regex (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex)
+           ci? (re-find #"^\(\?iu?\)" re)
+           g (cond-> (-> re
+                         (str/replace #"^(?:\(\?iu?\))?(?:\(\?U\))?" "")
+                         (str/replace #"(?<!\\)\\z" "")
+                         ;; inside a bracket expression, where PostgreSQL's classes are: their ASCII members
+                         (str/replace #"\\p\{(Alpha|Digit|Alnum|Upper|Lower|Xdigit|Space|Blank)\}"
+                                      (fn [[_ c]] ({"Alpha" "a-zA-Z" "Digit" "0-9" "Alnum" "a-zA-Z0-9" "Upper" "A-Z" "Lower" "a-z"
+                                                   "Xdigit" "0-9a-fA-F" "Space" " \\t\\n" "Blank" " \\t"} c))))
+               ci? (str/replace #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|\p{L}"
+                                #(if (and (= 1 (count %)) (not= (str/lower-case %) (str/upper-case %)))
+                                   (str "[" (str/lower-case %) (str/upper-case %) "]")
+                                   %))
+               ;; repeats bounded: strings short enough for the other parts (a length, a domain) to keep
+               true (str/replace #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|\*|\+|\{(\d+),\}"
+                                 (fn [[m n]] (case m "*" "{0,4}" "+" "{1,4}" (if n (str "{" n "," (+ 4 (parse-long n)) "}") m)))))]
+       ;; malli drops the anchors before it calls test.chuck
+       (when (try (string-from-regex (re-pattern (str/replace g #"^\^?(.*?)(\$?)$" "$1"))) true (catch Exception _ false))
+         g)))))
+
+(defn- bpchar-hint
+  "Generation hints for the char(n) value k of a CHECK the :pg/check (or :pg/check-value)
+   evaluates, where a column pattern of it shapes the value: one of an IN's values without
+   their trailing spaces, or strings from a regex or LIKE, filtered by schema; nil otherwise."
+  [k expr schema]
+  (some (fn [{:keys [column fact values re pattern case-insensitive?]}]
+          (when (= (name column) (name k))
+            (case fact
+              :in-set (when (every? string? values) {:gen/elements (vec (distinct (map #(str/replace % #" +$" "") values)))})
+              (:regex :like) (when-let [j (and @regex-generation? (if (= :regex fact) (ev/java-regex re) (ev/like-regex pattern)))]
+                               (when-let [g (generation-regex (cond-> j case-insensitive? ev/case-insensitive))]
+                                 {:gen/schema [:and [:re g] schema]}))
+              nil)))
+        (pattern/column-patterns expr)))
+
+(defn- bpchar-hints
+  "{k hints} of the char(n) values the checks among parts read (bpchar-hint), schema-of
+   giving the schema of k."
+  [parts schema-of]
+  (apply merge-with (fn [a _] a)
+         (for [f parts
+               :when (and (vector? f) (#{:pg/check :pg/check-value} (first f)) (map? (second f)))
+               [k t] (:pg/types (second f))
+               :when (vector? t)
+               :let [h (bpchar-hint k (last f) (schema-of k))]
+               :when h]
+           {k h})))
+
+(defn- with-domain-hints
+  "A domain over char(n) generated as its CHECKs' patterns say (bpchar-hint)."
+  [s]
+  (let [h (when (and (vector? s) (= :and (first s)))
+            (get (bpchar-hints (shape/entries s) (constantly s)) :VALUE))]
+    (if h (shape/merge-props s h) s)))
+
 (defn- with-column-types
   "The row with its columns' types on its :pg/checks, as :pg/types: integer arithmetic
    overflows and char(n) compares as in PostgreSQL there."
@@ -225,44 +294,36 @@
         pin (fn [[k & more :as e]] (if-let [vs (pinned k)]
                                      (let [s (last more)] (conj (pop e) (if (shape/maybe? s) [:maybe (shape/merge-props (last s) {:gen/elements vs})] (shape/merge-props s {:gen/elements vs}))))
                                      e))
-        m (into [:map props] (map (comp pin hinted)) entries)
+        ;; a char(n) column whose CHECK only the evaluator holds: generated as its patterns say
+        column-schemas (into {} (for [e entries :let [[k _ s] (shape/entry-parts e)]] [k (shape/non-null s)]))
+        bpchar (when (= :and (first row)) (bpchar-hints (drop 2 row) column-schemas))
+        shaped (fn [e] (let [[k p s] (shape/entry-parts e) h (get bpchar k)]
+                         (cond (or (nil? h) (some #(contains? (shape/column-props s) %) [:gen/schema :gen/elements :gen/gen])) e
+                               (shape/maybe? s) [k p [:maybe (shape/merge-props (last s) h)]]
+                               :else [k p (shape/merge-props s h)])))
+        m (into [:map props] (map (comp pin hinted shaped)) entries)
         fragment (fn [f] (if (and (vector? f) (= :map (first f)))
                            (let [[head entries] (if (map? (second f)) [(subvec f 0 2) (drop 2 f)] [[:map] (rest f)])]
                              (into head (map hinted) entries))
                            f))]
     (if (= :and (first row)) (into [:and m] (map #(walk/postwalk fragment %)) (drop 2 row)) m)))
 
-(def regex-generation?
-  "Whether strings can be generated from a regex here: test.chuck's generator, which runs on
-   the JVM (babashka falls back to drawing strings and filtering them)."
-  (delay (boolean (try (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex) (catch Exception _ nil)))))
-
-(defn- generatable-regex
-  "A [:re ...] test.chuck generates from whose strings match the one given: that one, or the
-   same without a leading (?i) (which test.chuck refuses); nil when there is none, and the
-   strings are drawn and filtered."
-  [part]
-  (let [string-from-regex (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex)]
-    (loop [re (str (last part))]
-      (cond
-        ;; malli drops the anchors before it calls test.chuck
-        (try (string-from-regex (re-pattern (str/replace re #"^\^?(.*?)(\$?)$" "$1"))) true (catch Exception _ false))
-        (if (= re (str (last part))) part [:re re])
-        (str/starts-with? re "(?i)") (recur (subs re 4))))))
-
 (defn- generate-from-part
-  "[:and ...] schemas with a part a generator should start from: a regex (test.chuck makes
+  "[:and ...] schemas with a part a generator should start from, as :gen/schema on the :and: an
+   enum (its values, where those of a reference would be filtered), a regex (test.chuck makes
    strings that match it, where filtering random strings would not) or a reference (an
-   override, a domain), as :gen/schema on the :and."
+   override, a domain)."
   [f]
   (if (and (vector? f) (= :and (first f)) (not (and (map? (second f)) (some #{:gen/schema :gen/gen :gen/fmap :gen/elements} (keys (second f))))))
     (let [props (when (map? (second f)) (second f))
           parts (shape/entries f)
-          regexes (when @regex-generation? (keep #(when (and (vector? %) (= :re (first %))) (generatable-regex %)) parts))
-          ;; a regex without its (?i) generates only some of the strings: after a reference
-          from (or (some (set parts) regexes)
-                   (some #(when (and (vector? %) (= :ref (first %))) %) parts)
-                   (first regexes))]
+          tagged (fn [tag] (some #(when (and (vector? %) (= tag (first %))) %) parts))
+          regex (when @regex-generation?
+                  (some #(when (and (vector? %) (= :re (first %)))
+                           (when-let [re (generation-regex (str (last %)))]
+                             (if (= re (str (last %))) % [:re re])))
+                        parts))
+          from (or (tagged :enum) regex (tagged :ref))]
       ;; generated from that part first, the other parts filtering: malli's :and generator
       (if from (into [:and (assoc (or props {}) :gen/schema (into [:and from] (remove #{from} parts)))] parts) f))
     f))
@@ -284,7 +345,7 @@
             :let [{:keys [pg/table pg/unique pg/foreign-keys]} (second (shape/row-map s))]
             :when (or (not (str/includes? table ".")) (some vector? unique) (some vector? foreign-keys))]
       (error/fail! :pgmalli.error/not-generated (str k " was generated by an older pgmalli; run pgmalli.main generate again") {:given k}))
-    (let [generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints s false (str k))))])) generated)]
+    (let [generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints (with-domain-hints s) false (str k))))])) generated)]
       (merge base (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
                                #(walk/postwalk dispatch-by-key %))))))
 

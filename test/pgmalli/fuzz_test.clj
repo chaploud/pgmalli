@@ -43,7 +43,7 @@
              ::date-lit [:enum "2020-01-01" "2020-06-15" "2021-01-01"]
              ::ts-lit [:enum "2020-01-01 00:00:00+00" "2020-06-15 12:30:00+00"]
              ::interval-lit [:enum "1 day" "01:30:00" "2 days" "00:00:30"]
-             ::like-lit [:enum "a%" "%b" "_" "a\\_b" "%'%" "it%"]
+             ::like-lit [:enum "a%" "%b" "_" "a\\_b" "%'%" "it%" "é%"]
              ::atom [:or
                      [:tuple ::cmp ::int-col ::int-lit]
                      [:tuple ::cmp ::int-col ::int-col]
@@ -81,9 +81,12 @@
                      [:tuple [:= :=] [:tuple [:= :left] ::str-col [:int {:min -2 :max 3}]] ::str-lit]
                      [:tuple [:= :=] [:tuple [:= :replace] ::str-col ::str-lit ::str-lit] ::str-lit]
                      [:tuple [:= :is-distinct-from] ::str-col ::str-col]
-                     [:tuple [:= :regex] ::str-col [:enum "^[[:alpha:]]+$" "^a" "'"]]
+                     [:tuple [:= :regex] ::str-col [:enum "^[[:alpha:]]+$" "^a" "'" "^\\w+$" "^a$"]]
+                     [:tuple [:= :iregex] ::str-col [:enum "^é" "^a$"]]
+                     [:tuple [:= :=] [:tuple [:= :cast] [:tuple [:= :*] ::int-col [:enum 0.5M 1.5M]] [:= :integer]] ::int-lit]
+                     [:tuple [:= :=] [:tuple [:= :round] [:enum 2.5M -0.5M 1.25M]] ::int-lit]
                      [:tuple [:= :not-regex] ::str-col [:enum "^a" "b$"]]
-                     [:tuple [:enum :like :ilike :not-like] ::str-col ::like-lit]
+                     [:tuple [:enum :like :ilike :not-like :not-ilike] ::str-col ::like-lit]
                      [:tuple [:= :=] [:tuple [:= :->>] [:= :j] ::jkey] ::str-lit]
                      [:tuple [:= :=] [:tuple [:= :jsonb_typeof] [:tuple [:= :->] [:= :j] ::jkey]] [:enum "number" "string" "object" "array" "null"]]
                      [:tuple [:= :contains] [:= :j] [:tuple [:= :cast] ::jlit [:= :jsonb]]]
@@ -172,7 +175,7 @@
 
 (def ^:private row-schema
   [:map [:n [:maybe [:int {:min -6 :max 101}]]] [:m [:maybe [:int {:min -6 :max 101}]]]
-   [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB" "a\n" "😀😀" "tr" "of" "o" " YE "]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
+   [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB" "a\n" "😀😀" "tr" "of" "o" " YE " "é" "É" "Éa"]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
    [:e [:maybe [:enum "happy" "sad"]]] [:b [:maybe :boolean]]
    ;; only values numeric(10,2) can hold, as BigDecimals, as rows read from the database would be
    [:d [:maybe [:enum -1.0M 0.0M 0.01M 0.5M 2.25M 2.5M 9.99M]]]
@@ -183,7 +186,7 @@
    [:ts [:maybe [:enum (java.time.Instant/parse "2019-12-31T23:30:00Z") (java.time.Instant/parse "2020-01-01T00:00:00Z") (java.time.Instant/parse "2020-01-02T01:30:00Z") (java.time.Instant/parse "2020-06-15T12:30:00Z")]]]
    [:u [:maybe [:enum (java.util.UUID/fromString (first uuids)) (java.util.UUID/fromString (second uuids))]]]
    ;; char(4) as pgjdbc reads it (padded) and as an application may write it
-   [:c [:maybe [:enum "ab" "ab  " "a" "abcd" "" " a"]]]])
+   [:c [:maybe [:enum "ab" "ab  " "a" "abcd" "" " a" "é"]]]])
 
 
 (defn- sql-literal [column v]

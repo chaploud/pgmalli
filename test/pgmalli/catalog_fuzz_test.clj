@@ -43,9 +43,9 @@
    :bigint {:sql "bigint" :vals [0 1 5 9007199254740993]}
    :numeric {:sql "numeric" :vals [0M 1M 2M 5M 1.5M -3.25M 1.0M]}
    :numeric62 {:sql "numeric(6,2)" :vals [0M 1.25M 9999.99M -5M 2M]}
-   :text {:sql "text" :vals ["" "a" "A" "abc" "Abc" " a " "it's" "bb" "ü"]}
-   :varchar5 {:sql "varchar(5)" :vals ["" "a" "abc" "abcdef" "Bb"]}
-   :char3 {:sql "char(3)" :vals ["a" "bb" "abc" "A"]}
+   :text {:sql "text" :vals ["" "a" "A" "abc" "Abc" " a " "it's" "bb" "ü" "é" "É" "a\n"]}
+   :varchar5 {:sql "varchar(5)" :vals ["" "a" "abc" "abcdef" "Bb" "abcde   " "é"]}
+   :char3 {:sql "char(3)" :vals ["a" "bb" "abc" "A" "bb  " "é"]}
    :boolean {:sql "boolean" :vals [true false]}
    :uuid {:sql "uuid" :vals [#uuid "7c9e6679-7425-40de-944b-e07fc1f90ae7" #uuid "16fd2706-8baf-433b-82eb-8c7fada847da"]}
    :date {:sql "date" :vals (mapv #(LocalDate/parse %) ["2025-01-01" "1999-12-31" "2025-06-15"])}
@@ -76,9 +76,11 @@
 
 (def ^:private checks
   "CHECK patterns by kind, $c the column (VALUE in a domain)."
-  {:number ["$c IN (1, 2, 5)" "$c BETWEEN 0 AND 10" "$c > 0" "$c >= 1 AND $c <= 100" "$c <> 3" "$c NOT IN (1, 2)"]
+  {:number ["$c IN (1, 2, 5)" "$c BETWEEN 0 AND 10" "$c > 0" "$c >= 1 AND $c <= 100" "$c <> 3" "$c NOT IN (1, 2)"
+            "$c >= 0.5" "($c * 0.5)::integer <> 1"]
    :string ["$c IN ('a', 'bb')" "length($c) <= 3" "char_length($c) BETWEEN 1 AND 4" "length(btrim($c)) > 0" "$c <> ''"
-            "$c ~ '^[a-z]+$'" "$c ~* '^A'" "$c LIKE 'a%'" "$c ILIKE 'A%'" "$c NOT IN ('x')"]
+            "$c ~ '^[a-z]+$'" "$c ~* '^A'" "$c LIKE 'a%'" "$c ILIKE 'A%'" "$c NOT IN ('x')"
+            "$c ~ '^[[:alpha:]]+$'" "$c ~* '^é'" "$c ~ '^[A-Z]{2}'" "$c ~ '^\\w+$'"]
    :jsonb ["jsonb_typeof($c) = 'object'" "jsonb_typeof($c) = 'array'"]
    :array ["cardinality($c) <= 2" "array_length($c, 1) <= 2" "cardinality($c) > 0"]
    :bytea ["octet_length($c) <= 2"]
@@ -110,7 +112,7 @@
 (def ^:private gen-model
   (tcg/hash-map :enums (tcg/vector (tcg/fmap (comp vec distinct) (tcg/vector (tcg/elements ["a" "bb" "it's" "Ü" "b c" "x\"y" "UPPER"]) 1 4)) 0 2)
                 :enum-names (tcg/shuffle ["e" "Mood" "Mixed Case" "a\"q"])
-                :domains (tcg/vector (tcg/hash-map :base (tcg/elements [:integer :text :varchar5 :numeric :date :prev :prev])
+                :domains (tcg/vector (tcg/hash-map :base (tcg/elements [:integer :text :varchar5 :char3 :numeric :date :prev :prev])
                                                    :check (tcg/frequency [[1 (tcg/return nil)] [2 (tcg/choose 0 50)]])
                                                    :not-null (tcg/frequency [[4 (tcg/return false)] [1 (tcg/return true)]]))
                                      0 3)

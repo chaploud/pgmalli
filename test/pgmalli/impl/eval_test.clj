@@ -90,6 +90,14 @@
   (is (passes? "CHECK (d = 0 OR (t / d) > 1)" {:d 0 :t 5}) "OR stops at the first true operand")
   (is (passes? "CHECK (coalesce(t, t / d) > 1)" {:d 0 :t 5})))
 
+(deftest a-decimal-literal-is-a-numeric-whose-ties-go-away-from-zero
+  (let [check "CHECK (b = ((a)::numeric * 0.5)::integer)"]
+    (is (passes? check {:a 5 :b 3}))
+    (is (not (passes? check {:a 5 :b 2}))))
+  (is (passes? "CHECK (n = round(2.5))" {:n 3M}))
+  (is (not (passes? "CHECK (n = round(2.5))" {:n 2M})))
+  (is (passes? "CHECK (n = (2.5)::integer)" {:n 3})))
+
 (deftest strings-and-numbers
   (is (passes? "CHECK (code ~~ 'ab%'::text)" {:code "abc"}))
   (is (not (passes? "CHECK (code ~~ 'ab\\_'::text)" {:code "abc"})) "an escaped underscore is literal")
@@ -144,9 +152,19 @@
   (is (not (passes? "CHECK (code ~ '^[[:digit:]]+$'::text)" {:code "d"})) "POSIX classes are translated")
   (is (not (passes? "CHECK (code ~ '^[[:alnum:]]+$'::text)" {:code ":::"})))
   (is (passes? "CHECK (code ~* '^ab$'::text)" {:code "AB"}))
-  (is (= "^[\\p{Alpha}]+$" (ev/java-regex "^[[:alpha:]]+$")))
+  (is (= "(?U)^[\\p{Alpha}]+\\z" (ev/java-regex "^[[:alpha:]]+$")))
   (is (nil? (ev/java-regex "\\mword\\M")) "PostgreSQL-only escapes are not translated")
   (is (not (ev/supported? (x/check-clause "CHECK (code ~ '\\mword\\M'::text)")))))
+
+(deftest classes-and-case-take-every-letter-as-a-utf8-database-does
+  (doseq [[check s] [["CHECK (c ~ '^[[:alpha:]]+$'::text)" "é"]
+                     ["CHECK (c ~ '^\\w+$'::text)" "é"]
+                     ["CHECK (c ~* '^é$'::text)" "É"]
+                     ["CHECK (c ~~* 'é%'::text)" "Éa"]]]
+    (is (passes? check {:c s}) check))
+  (is (re-find (re-pattern (ev/java-regex "^[[:alpha:]]+$")) "é") "the rendered regex too")
+  (is (re-find (re-pattern (ev/case-insensitive (ev/like-regex "é%"))) "Éa"))
+  (is (not (passes? "CHECK (c ~ '^[[:alpha:]]+$'::text)" {:c "1"}))))
 
 (deftest dollar-matches-only-at-the-end-and-dot-matches-a-newline
   (is (not (passes? "CHECK (s ~ '^abc$'::text)" {:s "abc\n"})))
@@ -154,7 +172,9 @@
   (is (not (passes? "CHECK (s ~~ 'a%'::text)" {:s "b\na"})))
   (is (not (passes? "CHECK (s ~~ 'a'::text)" {:s "a\n"})))
   (is (re-find (re-pattern (ev/java-regex "^a.b$")) "a\nb") "the rendered regex too")
-  (is (re-find (re-pattern (ev/like-regex "a%")) "a\nb")))
+  (is (not (re-find (re-pattern (ev/java-regex "^abc$")) "abc\n")))
+  (is (re-find (re-pattern (ev/like-regex "a%")) "a\nb"))
+  (is (not (re-find (re-pattern (ev/like-regex "a")) "a\n"))))
 
 (deftest lengths-and-positions-count-characters
   (is (passes? "CHECK (length(s) = 2)" {:s "😀😀"}))

@@ -53,7 +53,7 @@
             :moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
             :n :int}
            (h/arg-types registry body opts)))
-    (is (= {:g/id [:maybe [:string {:max 40 :pg/type "character varying"}]]}
+    (is (= {:g/id [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?g/id} :where [:= :id 1]} opts))
         "a qualified one keeps its namespace, as sql/format's :params does")
     (is (= (h/arg-types registry body opts)
@@ -136,7 +136,7 @@
 
 (deftest a-set-operations-row-is-named-by-its-first-member
   (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]
-    (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:name [:maybe [:string {:max 40 :pg/type "character varying"}]]]]
+    (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:name [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
            (h/row-schema registry body (assoc opts :qualified? true))))
     (is (= [:map [:id [:maybe :any]]] (h/row-schema registry {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]} opts))
         "typed where the members agree, nullable where one is")
@@ -187,7 +187,7 @@
     (is (= [:or [:sequential {:min 1} [:int {:pg/type "integer"}]] [:set {:min 1} [:int {:pg/type "integer"}]]] (:gs types))
         "nil not in :in's: it formats as IN ?")
     (is (= :int (:n types)))
-    (is (= {:v [:maybe [:string {:max 40 :pg/type "character varying"}]]}
+    (is (= {:v [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
         "an assigned one keeps the column's bounds")
     (is (= {:ids [:maybe [:sequential [:int {:pg/type "bigint"}]]]}
@@ -247,7 +247,7 @@
            (h/arg-types registry body opts)))
     (let [row (h/row-schema registry body (assoc opts :qualified? true :nil-columns :absent :time :instant))]
       (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]]
-              [:users/nick {:optional true} [:string {:max 40 :pg/type "character varying"}]]
+              [:users/nick {:optional true} [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]
               [:users/closed_at {:optional true} [:time/instant {:pg/type "timestamptz"}]]
               [:users/g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
              row)
@@ -397,7 +397,7 @@
       "a CTE body bound in a let sees its sibling CTEs"))
 
 (deftest one-row-results
-  (is (= [:=> [:cat [:int {:pg/type "bigint"}]] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40}]]]]]]
+  (is (= [:=> [:cat [:int {:pg/type "bigint"}]] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
@@ -463,7 +463,7 @@
       "[:any {...}] says nothing either"))
 
 (deftest a-set-operations-row-under-absent-nil-columns
-  (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:nick {:optional true} [:string {:max 40 :pg/type "character varying"}]]]
+  (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:nick {:optional true} [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]
          (h/row-schema registry {:union [{:select [:id :nick] :from [:users]} {:select [:id :nick] :from [:users]}]} (assoc opts :nil-columns :absent)))))
 
 (deftest an-array-columns-elements-take-overrides

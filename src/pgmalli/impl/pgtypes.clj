@@ -6,10 +6,23 @@
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.types :as types]))
 
+(defn- code-points [^String s] (.codePointCount s 0 (count s)))
+
 (def string-schema
   ":string with :min and :max counting characters (code points), as PostgreSQL's length and
-   varchar(n) do, where malli's counts UTF-16 units."
-  (m/-simple-schema {:type :string :pred string? :property-pred (m/-min-max-pred #(.codePointCount ^String % 0 (count %)))}))
+   varchar(n) do, where malli's counts UTF-16 units. :pg/max-length n is a varchar(n) or
+   char(n): it cuts spaces past n off, then :min and :max count what it keeps."
+  (m/-simple-schema
+   {:type :string :pred string?
+    :property-pred (fn [props]
+                     (let [bounds ((m/-min-max-pred code-points) props)
+                           n (:pg/max-length props)]
+                       (if n
+                         (fn [^String s]
+                           (let [kept (if (<= (code-points s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]
+                             (boolean (and (or (identical? kept s) (re-matches #" *" (subs s (count kept))))
+                                           (or (nil? bounds) (bounds kept))))))
+                         bounds)))}))
 
 (def check-schema
   "[:pg/check expr]: a row passes when the CHECK expression data does (pgmalli.impl.eval).
@@ -98,11 +111,12 @@
 (def integer-schema (bounded-int :pg/integer))
 
 (def check-value-schema
-  "[:pg/check-value expr]: a domain CHECK, the value standing for VALUE."
+  "[:pg/check-value expr]: a domain CHECK, the value standing for VALUE, whose type the
+   :pg/types property holds as :pg/check's does ({:VALUE :integer})."
   (m/-simple-schema
    {:type :pg/check-value
-    :compile (fn [_ [expr] _]
-               (let [pass? (ev/checker expr)]
+    :compile (fn [{:keys [pg/types]} [expr] _]
+               (let [pass? (ev/checker expr types)]
                  {:pred (fn [v] (pass? {:VALUE v})) :min 1 :max 1}))}))
 
 (def schemas

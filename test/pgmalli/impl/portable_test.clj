@@ -33,8 +33,8 @@
                                             :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
       (is (= [:map {:pg/table "public.t"} [:c [:string {:pg/type "code"}]]] (pgmalli/portable reg :pg.public/t)))))
   (testing "column and non-null"
-    (is (= [:maybe [:string {:max 40 :pg/type "character varying"}]] (pgmalli/column registry :pg.sample/users :nick)))
-    (is (= [:string {:max 40 :pg/type "character varying"}] (pgmalli/non-null (pgmalli/column registry :pg.sample/users "nick"))))
+    (is (= [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]] (pgmalli/column registry :pg.sample/users :nick)))
+    (is (= [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] (pgmalli/non-null (pgmalli/column registry :pg.sample/users "nick"))))
     (is (nil? (pgmalli/column registry :pg.sample/users :nope)))))
 
 (deftest unknown-names-are-an-error

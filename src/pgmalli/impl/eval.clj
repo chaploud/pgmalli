@@ -9,6 +9,7 @@
    Only the vocabulary that occurs in CHECK constraints is implemented; supported? tells
    whether an expression is inside it, and render leaves the others unrendered."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.json :as json]
             [pgmalli.impl.pghash :as pghash]
@@ -288,29 +289,42 @@
     (array-elem t) (if (string? v) (mapv #(cast-to % (array-elem t)) (parse-array v)) v)
     :else v))
 
+(defn fold-casts
+  "The expression with its casts of number literals to number types done: (2.5)::integer is 3."
+  [e]
+  (walk/postwalk (fn [f]
+                   (let [t (when (and (vector? f) (= :cast (first f)) (number? (second f))) (cast-type (nth f 2)))]
+                     (if (or (integer-types t) (exact-types t) (float-types t))
+                       (try (cast-to (second f) t) (catch Exception _ f))
+                       f)))
+                 e))
+
 ;;; patterns
 
-(def ^:private posix-classes
-  "[[:digit:]] and friends as the \\p{Digit} classes Java understands. Memoized: the keys are the
-   regexes of a schema, a finite set, and this runs once per row otherwise."
-  (memoize
-   (fn [re]
-     (str/replace re #"\[:(alpha|digit|alnum|upper|lower|space|punct|xdigit|cntrl|print|graph|blank):\]"
-                  (fn [[_ c]] (str "\\p{" (str/capitalize c) "}"))))))
+(defn- posix-classes
+  "[[:digit:]] and friends as the \\p{Digit} classes Java understands."
+  [re]
+  (str/replace re #"\[:(alpha|digit|alnum|upper|lower|space|punct|xdigit|cntrl|print|graph|blank):\]"
+               (fn [[_ c]] (str "\\p{" (str/capitalize c) "}"))))
 
 (defn- outside-brackets
   "re with each . and $ outside escapes and bracket expressions replaced by (f c)."
   [re f]
   (str/replace re #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|[.$]" #(if (#{"." "$"} %) (f %) %)))
 
-(defn java-regex
+(def java-regex
   "The Java regex for a PostgreSQL pattern, or nil when it uses syntax Java reads differently.
-   . is [\\s\\S], as PostgreSQL's matches a newline too, without a flag a string generator
-   would not read."
-  [re]
-  (let [j (outside-brackets (posix-classes re) {"." "[\\s\\S]" "$" "$"})]
-    (when (and (not (re-find #"\\[mMyYZA]" re)) (try (re-pattern j) (catch Exception _ nil)))
-      j)))
+   (?U) where it has classes: the database's classes and \\w take every letter of UTF-8, Java's
+   only ASCII ones. . is [\\s\\S], as PostgreSQL's matches a newline too, without a flag a
+   string generator would not read; $ is \\z, as Java's $ also matches before a final newline.
+   Memoized: the keys are the regexes of a schema, a finite set, and this runs once per row
+   otherwise."
+  (memoize
+   (fn [re]
+     (let [classes (posix-classes re)
+           j (str (when (re-find #"\\[wWdDsSbBp]" classes) "(?U)") (outside-brackets classes {"." "[\\s\\S]" "$" "\\z"}))]
+       (when (and (not (re-find #"\\[mMyYZA]" re)) (try (re-pattern j) (catch Exception _ nil)))
+         j)))))
 
 (defn- escape-regex
   "Literal text as a regex: each metacharacter backslashed (not \\Q...\\E, which a string
@@ -318,22 +332,24 @@
   [s]
   (str/replace s #"[\\^$.|?*+()\[\]{}]" "\\\\$0"))
 
-(defn like-regex
-  "The anchored Java regex of a LIKE pattern (backslash escapes % and _)."
-  [pattern]
-  (str "^"
-       (str/replace pattern #"\\(.)|%|_|[^%_\\]+"
-                    (fn [[m esc]] (cond esc (escape-regex esc)
-                                        (= m "%") "[\\s\\S]*"
-                                        (= m "_") "[\\s\\S]"
-                                        :else (escape-regex m))))
-       "$"))
+(def like-regex
+  "The anchored Java regex of a LIKE pattern (backslash escapes % and _), memoized as java-regex is."
+  (memoize
+   (fn [pattern]
+     (str "^"
+          (str/replace pattern #"\\(.)|%|_|[^%_\\]+"
+                       (fn [[m esc]] (cond esc (escape-regex esc)
+                                           (= m "%") "[\\s\\S]*"
+                                           (= m "_") "[\\s\\S]"
+                                           :else (escape-regex m))))
+          "\\z"))))
 
-(def ^:private compiled
-  "The regex compiled, memoized over the same finite set of strings as posix-classes. $ outside
-   a bracket expression is \\z: Java's $ also matches before a final newline, PostgreSQL's only
-   at the end."
-  (memoize (fn [re] (re-pattern (str "(?s)" (outside-brackets re {"." "." "$" "\\z"}))))))
+(defn case-insensitive
+  "A Java regex matching regardless of case, of every letter as in the database (~*, ILIKE)."
+  [re]
+  (str "(?iu)" re))
+
+(def ^:private compiled (memoize re-pattern))
 
 (defn- matches? [s re] (some? (re-find (compiled re) s)))
 
@@ -404,13 +420,13 @@
    :strpos (fn [s p] (if-let [i (str/index-of s p)] (inc (.codePointCount ^String s 0 (int i))) 0))
    :|| concat*
    :like (fn [s p] (matches? s (like-regex p)))
-   :ilike (fn [s p] (matches? s (str "(?i)" (like-regex p))))
+   :ilike (fn [s p] (matches? s (case-insensitive (like-regex p))))
    :not-like (fn [s p] (not (matches? s (like-regex p))))
-   :not-ilike (fn [s p] (not (matches? s (str "(?i)" (like-regex p)))))
-   :regex (fn [s re] (matches? s (posix-classes re)))
-   :iregex (fn [s re] (matches? s (str "(?i)" (posix-classes re))))
-   :not-regex (fn [s re] (not (matches? s (posix-classes re))))
-   :not-iregex (fn [s re] (not (matches? s (str "(?i)" (posix-classes re)))))
+   :not-ilike (fn [s p] (not (matches? s (case-insensitive (like-regex p)))))
+   :regex (fn [s re] (matches? s (java-regex re)))
+   :iregex (fn [s re] (matches? s (case-insensitive (java-regex re))))
+   :not-regex (fn [s re] (not (matches? s (java-regex re))))
+   :not-iregex (fn [s re] (not (matches? s (case-insensitive (java-regex re)))))
    :subscript (fn [v i] (when (<= 1 i (count v)) (nth v (dec i))))
    :array_length (fn [v dim] (when (and (= 1 dim) (seq v)) (count v)))
    :cardinality count
@@ -528,12 +544,12 @@
                      (x/canonical e)))))
 
 (defn column-type
-  "The type the evaluator reads for a column, from its schema's properties (:pg/type, and :max,
-   a char(n)'s n): an integer or char(n) type, nil for the others."
-  [{:keys [pg/type max]}]
+  "The type the evaluator reads for a column, from its schema's properties (:pg/type, and
+   :pg/max-length, a char(n)'s n): an integer or char(n) type, nil for the others."
+  [{:keys [pg/type pg/max-length]}]
   (let [t (some-> type (str/replace " " "-") keyword)]
     (cond (int-ranges t) t
-          (bpchar-types t) [t max])))
+          (bpchar-types t) [t max-length])))
 
 (defn- int-type
   "The integer type of an expression whose operand types are known: smallint, integer or

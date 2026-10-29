@@ -33,7 +33,8 @@
                                                            :index? (from a unique index, not a constraint)}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
      :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE;
-                                                           :enum or :domain-ref for a base type of the schema)}
+                                                           :enum or :domain-ref for a base type of the schema)
+                                                           :value-type (what its CHECKs read VALUE as, pgmalli.impl.eval/column-type)}
      :domain-check CHECK of a domain that matched no pattern {:type-name :constraint :expr :valid?}
      :branch-check CHECK of the form col = v AND ... OR col = w AND ...
                                                           {:dispatch :branches [{:values :facts} or {:null true :facts}] :default}
@@ -50,6 +51,7 @@
    existing rows may violate them."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
+            [pgmalli.impl.eval :as ev]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.types :as types]))
 
@@ -173,7 +175,7 @@
 (defn- normalize
   "The form the matchers read: PostgreSQL's rewrites undone, casts removed."
   [e]
-  (x/strip-casts (x/canonical e)))
+  (x/strip-casts (ev/fold-casts (x/canonical e))))
 
 (defn- match-columns
   "All column facts of an expression, or nil if any AND branch matches nothing."
@@ -183,6 +185,12 @@
     (when (and (vector? e) (= :and (first e)))
       (let [ms (map match-columns (rest e))]
         (when (every? some? ms) (vec (apply concat ms)))))))
+
+(defn column-patterns
+  "The column patterns of an expression, every AND branch one, the columns as keywords; nil
+   when a branch matches none."
+  [e]
+  (some-> e normalize match-columns))
 
 (defn- match-branches
   "CHECK whose alternatives each pin one column to literal values (or its nullness) and constrain
@@ -313,10 +321,13 @@
   (let [base {:schema schema-name :type-name tname}
         ;; over an enum or a domain of the schema: what that type holds, its CHECKs included
         over (some-> (type-ref {} (first (type-ident base_type)) false enums roots) (select-keys [:fact :type-name :base]))
+        root (:root (get roots tname))
+        value-type (ev/column-type {:pg/type (str/replace root #"\(.*\)$" "") :pg/max-length (some-> (re-find #"\((\d+)\)$" root) second parse-long)})
         checks (for [{cname :name :keys [definition is_valid]} constraints
                      :let [{:keys [expr error]} (try-clause definition)
-                           ;; NOT VALID: existing values may violate it, so it is reported, not applied
-                           ms (when (not= false is_valid) (some-> expr normalize match-columns))
+                           ;; NOT VALID: existing values may violate it, so it is reported, not applied;
+                           ;; over char(n) the patterns, which read text, do not apply
+                           ms (when (and (not= false is_valid) (not (vector? value-type))) (some-> expr normalize match-columns))
                            check (when expr (merge base {:constraint cname :sql definition :expr (x/canonical expr)}))]]
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
                        expr {:check (cond-> (assoc check :fact :domain-check) (false? is_valid) (assoc :valid? false))}
@@ -328,7 +339,8 @@
                  (cond p [(merge base {:fact :numeric :precision (parse-long p) :scale (if s (parse-long s) 0)})]
                        n [(merge base {:fact :max-length :max (parse-long n)})]))]
     (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (concat (some-> over vector) typmod (mapcat :facts checks)))})
-             (contains? dflt :expr) (assoc :default (:expr dflt)))]
+             (contains? dflt :expr) (assoc :default (:expr dflt))
+             value-type (assoc :value-type value-type))]
           (concat (keep :check checks) (some-> (:unparsed dflt) vector)))))
 
 (defn- substitute
