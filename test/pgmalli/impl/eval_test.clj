@@ -447,3 +447,8 @@
 (deftest a-real-casts-to-numeric-as-its-shortest-decimal
   (is (ev/passes? (x/check-clause "CHECK ((x)::numeric = 0.1)") {:x 0.1} {:x :real})))
 
+
+(deftest floats-go-to-numeric-and-to-real-as-postgresql-converts-them
+  (is (passes? "CHECK ((x)::numeric(2,0) = 3::numeric)" {:x 2.4999999999999996}) "15 significant digits: 2.50000000000000")
+  (is (ev/passes? (x/check-clause "CHECK (x = (0.105)::real)") {:x 0.105} {:x :real}))
+  (is (m/validate [:double {:pg/type "real"}] (float 0.5) {:registry (merge (m/default-schemas) pgtypes/schemas)}) "a Float, as pgjdbc reads a real"))

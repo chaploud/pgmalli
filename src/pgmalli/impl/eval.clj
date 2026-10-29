@@ -466,9 +466,10 @@
     (not (or (and (Float/isInfinite f) (not (Double/isInfinite d))) (and (zero? f) (not (zero? d)))))))
 
 (defn- float4
-  "A real as PostgreSQL makes it from a number: single precision."
+  "A real as PostgreSQL makes it from a number: single precision, kept a Float, so a cast to
+   numeric reads it as float4_numeric does."
   [d]
-  (if (float4? d) (double (unchecked-float d)) (throw (ex-info "value out of range for type real" {}))))
+  (if (float4? d) (Float/valueOf (unchecked-float d)) (throw (ex-info "value out of range for type real" {}))))
 
 (def ^:private real-types #{:real :float4})
 
@@ -480,7 +481,10 @@
                                               (number? v) (bigint (.setScale (bigdec v) 0 (if (double? v) java.math.RoundingMode/HALF_EVEN java.math.RoundingMode/HALF_UP)))
                                               (boolean? v) (if v 1 0)
                                               :else (Long/parseLong (str/trim v)))))
-    (exact-types t) (bigdec (if (number? v) v (str/trim v)))
+    ;; a float goes to numeric with 15 significant digits (a real 6), as float8_numeric and
+    ;; float4_numeric write it
+    (exact-types t) (bigdec (cond (instance? Float v) (format "%.6g" (double v)) (double? v) (format "%.15g" v)
+                                  (number? v) v :else (str/trim v)))
     (float-types t) (cond-> (double (if (number? v) v (parse-double (str/trim v)))) (real-types t) float4)
     (bpchar-types t) (str/replace (cast-to v :text) #" +$" "")
     (text-types t) (text-out v true)
@@ -879,8 +883,7 @@
 (defn column-type
   "The type the evaluator reads for a column, from its schema's properties (:pg/type, and
    :pg/max-length, a char(n)'s n): an integer or char(n) type; :real, whose value PostgreSQL
-   stores in single precision before its CHECKs read it (as its shortest decimal, which a cast
-   to numeric takes); :unordered for a type pgmalli
+   stores in single precision before its CHECKs read it; :unordered for a type pgmalli
    has no entry for (an enum, whose order is its labels', or a domain); nil for the others."
   [{:keys [pg/type pg/max-length]}]
   (let [t (some-> type (str/replace " " "-") keyword)]
@@ -957,7 +960,7 @@
    (let [e (typed (x/canonical e) types)
          reals (seq (for [[k t] types :when (= :real t)] k))
          stored (if reals
-                  (fn [row] (reduce (fn [r k] (let [v (get r k)] (if (and (number? v) (float4? v)) (assoc r k (Double/parseDouble (str (unchecked-float v)))) r))) row reals))
+                  (fn [row] (reduce (fn [r k] (let [v (get r k)] (if (and (number? v) (float4? v)) (assoc r k (Float/valueOf (unchecked-float v))) r))) row reals))
                   identity)]
      (fn [row] (not (false? (try (ev e (stored row)) (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
 

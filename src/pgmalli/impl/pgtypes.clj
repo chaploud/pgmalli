@@ -33,7 +33,7 @@
   ":double, a real (:pg/type) within single precision's range: PostgreSQL rejects a value that
    overflows it or underflows to zero."
   (m/-simple-schema
-   {:type :double :pred double?
+   {:type :double :pred #(or (double? %) (instance? Float %))
     :property-pred (fn [props]
                      (let [bounds ((m/-min-max-pred nil) props)]
                        (if (#{"real" "float4"} (shape/type-name props))
