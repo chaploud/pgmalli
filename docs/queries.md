@@ -165,10 +165,20 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 
 `h/row-schema` returns nil when a selected column cannot be resolved; `h/check` says which.
 
+## The tables a query uses
+
+`h/tables` gives the tables and views a query reads and writes, in every subquery and CTE,
+aliases and CTE names resolved: which queries a change to a table reaches.
+
+```clojure
+(h/tables registry {:update :users :set {:nick "a"} :from [[:groups :g]] :where [:= :g.id :users.group_id]})
+;; => {:reads #{"public.groups"}, :writes #{"public.users"}}
+```
+
 ## Options
 
-`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema` and `h/query-schema` take the same
-options map:
+`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema`, `h/query-schema` and `h/tables`
+take the same options map:
 
 | option | for |
 |---|---|
