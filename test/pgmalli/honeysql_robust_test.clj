@@ -8,7 +8,8 @@
             [clojure.test.check.generators :as gen]
             [clojure.test.check.properties :as prop]
             [pgmalli.honeysql :as h]
-            [pgmalli.sample :refer [registry]]))
+            [pgmalli.sample :refer [registry]]
+            [pgmalli.test-seed :as ts]))
 
 (def ^:private corpus
   (mapv second (edn/read-string (slurp (io/resource "pgmalli/oracle/corpus.edn")))))
@@ -33,18 +34,23 @@
             v part]
     (if (seq p) (assoc-in q (vec p) v) v)))
 
-(defn- clean?
-  "Whether f returns data or throws ex-info on q."
+(defn- crash
+  "The exception other than ex-info f throws on q, nil when there is none."
   [f q]
-  (try (f q) true (catch clojure.lang.ExceptionInfo _ true)))
+  (try (f q) nil (catch clojure.lang.ExceptionInfo _ nil) (catch Throwable e e)))
 
 (deftest a-broken-query-returns-data-or-throws-ex-info
   (let [opts {:schema "sample"}
-        fs [#(h/check registry % opts) #(h/arg-types registry % opts) #(h/row-schema registry % opts)
-            #(h/query-schema registry [:x] % opts)]
-        result (tc/quick-check 1500 (prop/for-all [q broken-query] (every? #(clean? % q) fs))
-                               :seed (or (some-> (System/getenv "PGMALLI_FUZZ_SEED") parse-long) 42))]
-    (is (:pass? result) (pr-str (-> result :shrunk :smallest)))))
+        fs {'check #(h/check registry % opts) 'arg-types #(h/arg-types registry % opts)
+            'row-schema #(h/row-schema registry % opts) 'query-schema #(h/query-schema registry [:x] % opts)}
+        seed (ts/seed)
+        result (tc/quick-check 1500 (prop/for-all [q broken-query] (not-any? #(crash % q) (vals fs))) :seed seed)]
+    (is (:pass? result)
+        (let [[q] (-> result :shrunk :smallest)]
+          (str "seed " seed ", case " (:failing-size result) ", shrunk to\n  " (pr-str q) "\n"
+               (apply str (for [[n f] fs :let [e (crash f q)] :when e]
+                            (str "  h/" n ": " (.getName (class e)) " " (ex-message e) "\n    at " (or (first (filter #(.startsWith (.getClassName ^StackTraceElement %) "pgmalli") (.getStackTrace e))) (first (.getStackTrace e))) "\n")))
+               "  " (ts/rerun #'a-broken-query-returns-data-or-throws-ex-info seed))))))
 
 (deftest a-registry-that-is-none-is-said-so
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry" (h/check "public" {:select [:id] :from [:users]})))

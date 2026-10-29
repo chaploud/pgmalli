@@ -13,7 +13,8 @@
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.ir :as ir]
             [pgmalli.impl.json :as json]
-            [pgmalli.test-db :refer [*container* *db* exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*container* *db* exec-sql! with-postgres]]
+            [pgmalli.test-seed :as ts]))
 
 (use-fixtures :once with-postgres)
 
@@ -153,7 +154,7 @@
 
 (deftest expression-roundtrip
   (when *db*
-    (let [seed (parse-long (or (System/getenv "PGMALLI_FUZZ_SEED") "42"))
+    (let [seed (ts/seed)
           ;; identical constraint definitions collapse into one, so keep the expressions distinct
           exprs (vec (distinct (mg/sample expr-schema {:size 120 :seed seed})))
           ddl (str create-mood "CREATE TABLE fz (" columns
@@ -165,9 +166,9 @@
         (doseq [[i e] (map-indexed vector exprs)]
           (let [clause (get-in constraints [(str "c" i) :check_clause])
                 parsed (if clause (x/try-parse (subs clause 6)) {:error "constraint missing from the catalog"})]
-            (is (nil? (:error parsed)) (str "c" i " " (pr-str e) " " clause))
+            (is (nil? (:error parsed)) (str "c" i " " (pr-str e) " " clause "\n" (ts/rerun #'expression-roundtrip seed)))
             (is (= (normalize e) (normalize (:expr parsed)))
-                (str "input " (pr-str e) "\npg    " clause))))))))
+                (str "input " (pr-str e) "\npg    " clause "\n" (ts/rerun #'expression-roundtrip seed)))))))))
 
 (def ^:private row-schema
   [:map [:n [:maybe [:int {:min -6 :max 101}]]] [:m [:maybe [:int {:min -6 :max 101}]]]
@@ -222,7 +223,7 @@
 
 (deftest evaluated-checks-agree-with-postgres
   (when *db*
-    (let [seed (parse-long (or (System/getenv "PGMALLI_FUZZ_SEED") "42"))
+    (let [seed (ts/seed)
           exprs (vec (distinct (mg/sample expr-schema {:size 240 :seed seed})))
           rows (vec (distinct (mg/sample row-schema {:size 80 :seed seed})))
           verdicts (postgres-verdicts exprs rows)]
@@ -230,4 +231,6 @@
         (doseq [[j row] (map-indexed vector rows)
                 [i e] (map-indexed vector exprs)]
           (is (= (get-in verdicts [j i]) (ev/passes? e row column-types))
-              (str (pr-str e) " on " (pr-str row))))))))
+              (str "CHECK " (to-sql e) "\n  data  " (pr-str e) "\n  row   " (pr-str row)
+                   "\n  PostgreSQL " (get-in verdicts [j i]) ", pgmalli " (not (get-in verdicts [j i]))
+                   "\n  " (ts/rerun #'evaluated-checks-agree-with-postgres seed))))))))

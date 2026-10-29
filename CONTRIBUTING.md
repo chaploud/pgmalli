@@ -29,6 +29,12 @@ before it.
 When a change touches what a type or CHECK becomes, update [docs/types.md](docs/types.md)
 and add a CHANGELOG entry.
 
+## Randomized tests
+
+`fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a seed, 42 in CI.
+`PGMALLI_FUZZ_SEED=<n> bb test:jvm` runs other seeds. A failure prints its seed, the case
+(shrunk where test.check shrinks it), where it failed and the command that runs it again.
+
 ## The PostgreSQL oracle
 
 `bb oracle` (default seed 42, 8 mutants per query, about 2000 queries) runs the queries of

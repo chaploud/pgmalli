@@ -15,4 +15,7 @@
     (let [results (oracle/run *db* 42 3)]
       (is (< 500 (count results)) "the corpus and its mutants ran")
       (doseq [r (filter #(= :false-positive (:outcome %)) results)]
-        (is false (str "PostgreSQL takes " (:sql r) " but check reports " (pr-str (:problems r))))))))
+        (is false (str "PostgreSQL takes " (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r))
+                       "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
+                       "\n  check:  " (pr-str (:problems r))
+                       "\n  re-run: bb oracle 42 3 (the case is under :false-positive)"))))))
