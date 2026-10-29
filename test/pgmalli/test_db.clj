@@ -8,7 +8,7 @@
 (def ^:dynamic *db* nil)
 (def ^:dynamic *container* nil)
 
-(def image (or (System/getenv "PGMALLI_PG_IMAGE") "postgres:17-alpine"))
+(def image (or (System/getenv "PGMALLI_PG_IMAGE") "postgres:18-alpine"))
 
 (defn- free-port []
   (with-open [s (ServerSocket. 0)] (.getLocalPort s)))
