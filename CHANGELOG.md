@@ -36,6 +36,7 @@ All notable changes to this project are documented here. The format follows
 - A table function with no alias (`{:from [[[:f args...]]]}`) is opaque, named after the
   function; it was read as a table.
 - The `:order-by` of a set operation (`:union` ...) names its first member's output columns.
+- `pgmalli.main` took a minute to exit after running psql (the agent pool's threads).
 
 ## [0.2.45] - 2026-09-04
 

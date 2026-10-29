@@ -48,4 +48,6 @@
                   (println schema ": " (count ds) "diagnostic(s):")
                   (doseq [d ds] (println "  " (name (:severity d)) (:table d) (:message d))))
                 (if stale (System/exit 1) (println "generated files match the database")))
-      (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))))
+      (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))
+    ;; clojure.java.shell runs psql on the agent pool, whose threads keep the JVM up a minute
+    (shutdown-agents)))
