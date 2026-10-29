@@ -44,6 +44,9 @@ prints where `check` disagrees: a false positive (PostgreSQL takes the query, `c
 it) or a miss (PostgreSQL refuses it, `check` lets it pass). `pgmalli.oracle-test` holds the
 false positives at none in `bb test:jvm`.
 
+`a-query-wrapped-keeps-its-problems` asks no database: each case wrapped in a FROM subquery,
+a CTE or EXISTS must have the problems it had alone.
+
 After changing how `pgmalli.honeysql` resolves scopes or names, run `bb oracle` with a few
 seeds. A query it got wrong goes into the corpus.
 

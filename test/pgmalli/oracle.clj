@@ -141,6 +141,13 @@
           (empty? ks) :miss
           :else :mismatch)))
 
+(defn columns
+  "The column names of the oracle schema, which mutants draw from."
+  [db]
+  (let [ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db)) :user (:user db) :password (:password db)})]
+    (mapv :column_name (jdbc/execute! ds ["SELECT DISTINCT column_name FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1"]
+                                      {:builder-fn next.jdbc.result-set/as-unqualified-maps}))))
+
 (def formats
   "How a case is sent: its values inlined, and as HoneySQL sends them by default, parameters,
    which pgjdbc types as it does (a String as varchar)."
@@ -155,8 +162,7 @@
         ds (jdbc/get-datasource {:jdbcUrl url :user (:user db) :password (:password db)})
         registry (pgmalli/registry (files/from-database {:db db} "public"))]
     (with-open [conn (jdbc/get-connection ds)]
-      (let [columns (mapv :column_name (jdbc/execute! conn ["SELECT DISTINCT column_name FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1"]
-                                                      {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
+      (let [columns (columns db)]
         (jdbc/execute! conn ["SET statement_timeout = 3000"])
         (.setAutoCommit conn false)
         (vec (for [{:keys [query] :as c} (cases columns seed per-query)

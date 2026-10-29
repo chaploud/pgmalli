@@ -52,6 +52,8 @@ All notable changes to this project are documented here. The format follows
   A table with a BEFORE row trigger (`:pg/before-triggers`, a new table property) gets neither
   these nor `:missing-required-column`: the trigger may fill the row.
 - Supported versions in the README, the oldest of them run in CI.
+- A query wrapped in a FROM subquery, a CTE or EXISTS keeps its problems: a test asserts it
+  over the oracle's cases.
 - `bb oracle`: `check` against PostgreSQL itself on a corpus of queries and mutants of them;
   CI holds its false positives at none.
 - `bb upstream` and a weekly workflow: the suite against the newest HoneySQL, next.jdbc, pgjdbc,
