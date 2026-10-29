@@ -9,7 +9,7 @@
     {
       "description": "Test and build dependencies in one PR",
       "matchFileNames": ["deps.edn", "bb.edn"],
-      "matchDepNames": ["metosin/malli", "com.github.seancorfield/honeysql", "babashka/process", "io.github.clojure/tools.build", "slipset/deps-deploy"],
+      "matchDepNames": ["metosin/malli", "com.github.seancorfield/honeysql", "com.github.seancorfield/next.jdbc", "org.postgresql/postgresql", "babashka/process", "io.github.clojure/tools.build", "slipset/deps-deploy"],
       "groupName": "dev deps"
     },
     {
