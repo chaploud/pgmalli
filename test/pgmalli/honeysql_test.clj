@@ -666,6 +666,14 @@
           "OVERRIDING USER VALUE ignores the value given")
       (is (= [] (check {:update :users :set {:nick_upper :default :id [:default]} :where [:= :id 1]})) "DEFAULT is allowed"))))
 
+(deftest a-before-trigger-may-fill-what-a-write-leaves-null
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
+                                                        [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]]]}})]
+    (is (= [] (h/check reg {:insert-into :t :values [{:id 1}]})) "no :missing-required-column")
+    (is (= [] (h/check reg {:insert-into :t :values [{:id 1 :g nil}]})) "no :not-null-violation")
+    (is (= [{:kind :not-null-violation :table "public.t" :column :g}] (h/check reg {:update :t :set {:g nil}}))
+        "an UPDATE has no BEFORE UPDATE trigger here")))
+
 (deftest names-as-honeysql-writes-them
   (let [check #(h/check registry % opts)]
     (is (= [] (check {:select [:system_user :current_user :current_role] :from [:users]})) "SQL value functions are no columns")

@@ -328,7 +328,12 @@
                                             (cond-> {:columns (:columns f)
                                                      :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
                                                      :to (get-in f [:to :columns])}
-                                              (= :full (:match f)) (assoc :match :full)))))})))
+                                              (= :full (:match f)) (assoc :match :full)))))
+         ;; a BEFORE row trigger runs before NOT NULL and CHECK are: it may fill what a write leaves out
+         :pg/before-triggers (not-empty (into {} (for [event [:insert :update]
+                                                       :let [names (vec (for [f tfacts :when (and (= :trigger (:fact f)) (:before f) (event f))] (:name f)))]
+                                                       :when (seq names)]
+                                                   [event names])))})))
 
 (defn- table-checks
   "{:schemas :unrendered :skipped} of the constraints that span columns."

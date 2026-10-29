@@ -672,6 +672,12 @@
         {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
         {:kind :unknown-column :column col}))))
 
+(defn- filled-by-trigger?
+  "Whether a BEFORE row trigger runs on the table for event (:insert, :update): it may fill a
+   column before NOT NULL is checked."
+  [registry table event]
+  (boolean (get-in (shape/row-props (get (::schemas registry) (shape/table-key table))) [:pg/before-triggers event])))
+
 (defn- insert-problems [registry stmt schema]
   (let [{:keys [table columns]} (insert-parts stmt)
         [table] (some-> table (table-ref schema))]
@@ -690,7 +696,7 @@
          (when columns
            (for [[i row] (map-indexed vector (filter vector? rows)) :when (not= (count row) (count columns))]
              {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
-         (when (seq given)
+         (when (and (seq given) (not (filled-by-trigger? registry table :insert)))
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column c})))))))
 
@@ -728,7 +734,7 @@
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
-                           (and (or (nil? v) (= [:inline nil] v)) (not (shape/maybe? s)))
+                           (and (or (nil? v) (= [:inline nil] v)) (not (shape/maybe? s)) (not (filled-by-trigger? registry table how)))
                            {:kind :not-null-violation :table table :column col})]
              :when p]
          p)))))

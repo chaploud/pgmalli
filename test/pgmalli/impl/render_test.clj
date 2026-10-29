@@ -482,6 +482,16 @@
     (is (= [{:kind :row-trigger :trigger "t_audit" :table "public.t"}] (map #(select-keys % [:kind :trigger :table]) diagnostics))
         "the INSERT trigger is noted, a DELETE one is no concern of a dataset")))
 
+(deftest a-before-row-trigger-is-on-the-table
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}]
+                                                               :constraints {}
+                                                               :triggers [{:name "fill" :before true :insert true :update false :delete false}
+                                                                          {:name "audit" :before false :insert true :update true :delete false}
+                                                                          {:name "touch" :before true :insert false :update true :delete false}]}}}))]
+    (is (= {:insert ["fill"] :update ["touch"]} (:pg/before-triggers (second (:pg.public/t registry))))
+        "a BEFORE trigger may fill a row before NOT NULL is checked; an AFTER one cannot")))
+
 (deftest a-domain-column-that-is-not-null-rejects-null
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public"
                                                  :types {"email" {:kind "DOMAIN" :base_type "text" :not_null false :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)"}]}

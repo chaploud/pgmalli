@@ -40,7 +40,7 @@
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
                    (also lower <= upper for a generated range column, named <column>_generated)
      :not-enforced a NOT ENFORCED CHECK or FOREIGN KEY   {:constraint :input} (nothing to render)
-     :trigger      a row-level trigger left enabled       {:name :insert :update :delete} (nothing to render)
+     :trigger      a row-level trigger left enabled       {:name :before :insert :update :delete} (nothing to render)
      :unparsed     expression that could not be read     {:input :error}
 
    One CHECK can yield several facts (column patterns joined by AND); every fact from a CHECK
@@ -362,7 +362,7 @@
                   view? (contains? #{"VIEW" "MATERIALIZED VIEW"} (:kind t))
                   constraints (sort-by :name (vals (:constraints t)))]
             f (concat (when view? [(assoc base :fact :view :materialized? (= "MATERIALIZED VIEW" (:kind t)))])
-                      (for [tr (:triggers t)] (merge base {:fact :trigger} (select-keys tr [:name :insert :update :delete])))
+                      (for [tr (:triggers t)] (merge base {:fact :trigger} (select-keys tr [:name :before :insert :update :delete])))
                       ;; nothing marks a view's column NOT NULL in the catalog, so every one may be NULL
                       (mapcat #(column-facts base (cond-> % view? (assoc :is_nullable true)) enums domains) (sort-by :name (:columns t)))
                       (mapcat #(key-facts base %) constraints)

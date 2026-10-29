@@ -76,6 +76,9 @@ Give `h/check` the options you give `sql/format`, as `:format`:
 ;; => []
 ```
 
+A table with a BEFORE row trigger for the statement (`:pg/before-triggers`) gets neither
+`:not-null-violation` nor `:missing-required-column`: the trigger may fill the row.
+
 Arguments are not values in the query: `h/arg-types` gives an argument assigned to a NOT NULL
 column a type without nil.
 

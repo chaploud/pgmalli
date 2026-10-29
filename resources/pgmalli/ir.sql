@@ -113,7 +113,7 @@ tables AS (
            -- an index may bear a constraint's name (they are different namespaces), so it is keyed apart
            'constraints', (SELECT COALESCE(json_object_agg(CASE WHEN (con->>'index')::boolean THEN con->>'name' || ' (index)' ELSE con->>'name' END, con), '{}'::json) FROM cons WHERE cons.relid = c.oid),
            -- row-level triggers a user wrote and left enabled: their code may reject or change a row
-           'triggers', (SELECT COALESCE(json_agg(json_build_object('name', t.tgname,
+           'triggers', (SELECT COALESCE(json_agg(json_build_object('name', t.tgname, 'before', (t.tgtype & 2) = 2,
                                                                     'insert', (t.tgtype & 4) = 4, 'update', (t.tgtype & 16) = 16, 'delete', (t.tgtype & 8) = 8)
                                                   ORDER BY t.tgname), '[]'::json)
                         FROM pg_catalog.pg_trigger t

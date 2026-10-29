@@ -52,6 +52,7 @@ The table's map carries:
 | `:pg/table` | `"public.users"` (`:pg/view` for a view) |
 | `:pg/primary-key` | `["id"]` |
 | `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index |
+| `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
 
 An identifier that is not a plain name (`Order Items`) is a string key. Names keep the

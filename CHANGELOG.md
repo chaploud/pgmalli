@@ -35,6 +35,8 @@ All notable changes to this project are documented here. The format follows
   (`:not-null-violation`), including the NULL HoneySQL writes for a key one `:values` map
   lacks, and a value into a generated or identity ALWAYS column (`:read-only-column`).
   `:format` takes the options you pass to `sql/format` (`:values-default-columns` is read).
+  A table with a BEFORE row trigger (`:pg/before-triggers`, a new table property) gets neither
+  these nor `:missing-required-column`: the trigger may fill the row.
 - Supported versions in the README, the oldest of them run in CI.
 - `bb oracle`: `check` against PostgreSQL itself on a corpus of queries and mutants of them;
   CI holds its false positives at none.
