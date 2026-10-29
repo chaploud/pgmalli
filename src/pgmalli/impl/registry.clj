@@ -302,7 +302,8 @@
   "One regex for several (Java regex strings) whose strings match each: the one anchored at the
    start, then the unanchored ones, then the one anchored at the end, in turn (^a, b and z\\z as
    ^(?:a)[\\s\\S]*(?:b)[\\s\\S]*(?:z)\\z; a LIKE's ^a[\\s\\S]*\\z anchored at the start alone). nil when that
-   is not sure to hold: an alternation, flags, two anchored at one end, one anchored at both."
+   is not sure to hold: an alternation, flags, two anchored at one end, one anchored at both.
+   The first part alone is the other alternative, for strings where the parts overlap."
   [res]
   (let [any "[\\s\\S]*"
         parts (for [r res
@@ -319,8 +320,10 @@
                (not-any? #(or (str/includes? % "|") (str/includes? % "(?")) res)
                (<= (count starts) 1) (<= (count ends) 1)
                (not-any? #(and (:start? %) (:end? %)) parts))
-      (str (when (seq starts) "^") (str/join any (map group (concat starts (remove #(or (:start? %) (:end? %)) parts) ends)))
-           (when (seq ends) "\\z")))))
+      ;; or the first part alone, as the parts may overlap (x% and %x take "x")
+      (let [ordered (concat starts (remove #(or (:start? %) (:end? %)) parts) ends)]
+        (str (when (seq starts) "^") "(?:" (str/join any (map group ordered)) "|" (group (first ordered)) ")"
+             (when (seq ends) "\\z"))))))
 
 (defn- generate-from-part
   "[:and ...] schemas with a part a generator should start from, as :gen/schema on the :and: an

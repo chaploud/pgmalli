@@ -437,3 +437,9 @@
   (is (passes? "CHECK (((t)::character varying(3))::text = 'abc'::text)" {:t "abcd"}))
   (is (passes? "CHECK (length((l)::character varying(2)) = 2)" {:l "abc"}))
   (is (not (ev/supported? (x/check-clause "CHECK ((t)::character(3) = 'abc'::bpchar)")))))
+
+(deftest a-real-is-checked-as-stored-and-casts-that-round-are-not-evaluated
+  (is (ev/passes? (x/check-clause "CHECK (ag >= 0::double precision AND ag <= 1::double precision)") {:ag 1.0000000001} {:ag :real}))
+  (is (passes? "CHECK ((x)::numeric(2,0) = 1::numeric)" {:x 1.4M}) "numeric(p,s) rounds")
+  (is (not (passes? "CHECK ((x)::numeric(2,0) = 1::numeric)" {:x 1.5M})))
+  (is (not (ev/supported? (x/check-clause "CHECK ((t)::timestamp(0) without time zone = '2020-01-01 10:00:01'::timestamp without time zone)")))))

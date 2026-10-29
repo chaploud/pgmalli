@@ -157,6 +157,15 @@
                     (do (next-tok! st) (recur (conj ws (:v n))))
                     ws)))
         mods (when (= :lparen (:t (peek-tok st))) (next-tok! st) (vec (parse-list st :rparen)))
+        ;; timestamp(0) without time zone: the typmod comes before the words
+        words (loop [ws words]
+                (let [n (peek-tok st) nv (some-> (:v n) str/lower-case) prev (str/lower-case (peek ws))]
+                  (if (and mods (#{:ident :kw} (:t n))
+                           (or (and (#{"timestamp" "time"} prev) (#{"with" "without"} nv))
+                               (and (#{"with" "without"} prev) (= nv "time"))
+                               (and (= "time" prev) (= nv "zone"))))
+                    (do (next-tok! st) (recur (conj ws (:v n))))
+                    ws)))
         dims (loop [n 0]
                (if (= :lbracket (:t (peek-tok st)))
                  (do (next-tok! st) (expect! st #(= :rbracket (:t %)) "']'") (recur (inc n)))

@@ -862,13 +862,15 @@
            :when (and t (not (and assigned? (shape/maybe? s)))
                       (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
-     (for [[col value scope] uses
+     (for [[col value scope assigned?] uses
            :let [{s :schema} (resolve-column registry scope col)
                  strings? (or (string? value) (and (vector? value) (every? string? value)))
                  values (cond strings? (if (string? value) [value] value)
                               (and (vector? value) (#{:cast :inline} (first value)) (string? (second value))) [(second value)])
                  allowed (when s (enum-values registry s))
-                 uncast (when (and s varchar? strings?) (uncast-type registry s))]
+                 ;; text casts to a reg* type (regclass ...) implicitly, so an assignment takes it
+                 uncast (when (and s varchar? strings? (not (and assigned? (some->> s shape/column-props shape/type-name (re-matches #"reg\w+")))))
+                          (uncast-type registry s))]
            :when (seq values)
            v values
            :let [invalid? (and allowed (not (some #{v} allowed)))]

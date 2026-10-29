@@ -784,9 +784,14 @@
         (case op
           :cast (let [t (second args) v (cast-to (a) (cast-type t))]
                   ;; an explicit cast to varchar(n) cuts the value to n characters
-                  (if (and (vector? t) (text-types (cast-type t)) (not (bpchar-types (cast-type t))) (integer? (second t)) (string? v))
-                    (let [n (int (second t))] (if (< n (.codePointCount ^String v 0 (count v))) (subs v 0 (.offsetByCodePoints ^String v 0 n)) v))
-                    v))
+                  (cond (and (vector? t) (text-types (cast-type t)) (not (bpchar-types (cast-type t))) (integer? (second t)) (string? v))
+                        (let [n (int (second t))] (if (< n (.codePointCount ^String v 0 (count v))) (subs v 0 (.offsetByCodePoints ^String v 0 n)) v))
+                        ;; numeric(p,s) rounds to s places, and fails past p digits
+                        (and (vector? t) (exact-types (cast-type t)) (integer? (second t)) (decimal? v))
+                        (let [[_ p sc] t
+                              r (.setScale ^BigDecimal v (int (or sc 0)) java.math.RoundingMode/HALF_UP)]
+                          (if (< (- (.precision r) (.scale r)) (inc (- p (or sc 0)))) r (throw (ex-info "numeric field overflow" {}))))
+                        :else v))
           :array (mapv #(ev % row) (first args))
           :raw ((raw-values (first args)))
           ::bpchar (let [[col n padded?] args] (some-> (ev col row) (bpchar-value n padded?)))
@@ -854,8 +859,8 @@
     ;; a literal of the schema's own type (an enum) ordered: by labels the evaluator does not have
     (not-any? #(and (vector? %) (= :cast (first %)) (contains? types (name (cast-type (nth % 2))))) (rest e))
     (case op
-      ;; a cast to char(n) cuts and pads, which bpchar comparisons then ignore: not evaluated
-      :cast (and (castable? a t types) (not (and (vector? t) (bpchar-types (cast-type t)))))
+      ;; a cast to char(n) cuts and pads, one to time(p) or timestamp(p) rounds: not evaluated
+      :cast (and (castable? a t types) (not (and (vector? t) (or (bpchar-types (cast-type t)) (temporal-types (cast-type t))))))
       (:regex :iregex :not-regex :not-iregex) (let [re (literal-arg t)] (and (string? re) (some? (java-regex re))))
       (:like :ilike :not-like :not-ilike) (string? (literal-arg t))
       :raw (contains? raw-values a)
@@ -873,12 +878,14 @@
 
 (defn column-type
   "The type the evaluator reads for a column, from its schema's properties (:pg/type, and
-   :pg/max-length, a char(n)'s n): an integer or char(n) type; :unordered for a type pgmalli
+   :pg/max-length, a char(n)'s n): an integer or char(n) type; :real, whose value PostgreSQL
+   stores in single precision before its CHECKs read it; :unordered for a type pgmalli
    has no entry for (an enum, whose order is its labels', or a domain); nil for the others."
   [{:keys [pg/type pg/max-length]}]
   (let [t (some-> type (str/replace " " "-") keyword)]
     (cond (int-ranges t) t
           (bpchar-types t) [t max-length]
+          (real-types t) :real
           (and type (nil? (types/entry (str/replace type #"\(.*\)|\[\]" "")))) :unordered)))
 
 (defn- int-type
@@ -946,8 +953,12 @@
    types are the columns' types as column-type gives them ({:n :integer :c [:character 4]})."
   ([e] (checker e {}))
   ([e types]
-   (let [e (typed (x/canonical e) types)]
-     (fn [row] (not (false? (try (ev e row) (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
+   (let [e (typed (x/canonical e) types)
+         reals (seq (for [[k t] types :when (= :real t)] k))
+         stored (if reals
+                  (fn [row] (reduce (fn [r k] (let [v (get r k)] (if (and (number? v) (float4? v)) (assoc r k (double (unchecked-float v))) r))) row reals))
+                  identity)]
+     (fn [row] (not (false? (try (ev e (stored row)) (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
 
 (defn unknowable?
   "Whether the row's verdict depends on what the evaluator does not know, so checker passes it."

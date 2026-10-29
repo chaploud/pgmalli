@@ -35,6 +35,21 @@
 (defn- temporal? [v]
   (or (instance? java.time.temporal.TemporalAccessor v) (instance? java.time.Duration v) (instance? java.util.Date v)))
 
+(defn- pg-text
+  "A java.time value as text PostgreSQL reads: a year before 1 as BC, one past 9999 without
+   ISO 8601's +, which it refuses; others as ISO 8601."
+  [v]
+  (let [day (fn [^java.time.LocalDate d]
+              (let [y (.getYear d)]
+                [(format "%04d-%02d-%02d" (if (pos? y) y (- 1 y)) (.getMonthValue d) (.getDayOfMonth d)) (when-not (pos? y) " BC")]))]
+    (cond (instance? java.time.LocalDate v) (apply str (day v))
+          (instance? java.time.LocalDateTime v) (let [[d bc] (day (.toLocalDate ^java.time.LocalDateTime v))]
+                                                  (str d " " (.toLocalTime ^java.time.LocalDateTime v) bc))
+          (instance? java.time.Instant v) (let [u (java.time.LocalDateTime/ofInstant v java.time.ZoneOffset/UTC)
+                                                [d bc] (day (.toLocalDate u))]
+                                            (str d " " (.toLocalTime u) "+00" bc))
+          :else (str v))))
+
 (defn- as-text
   "A value the driver takes no parameter of, or HoneySQL's :inline writes unquoted (a date as
    2025-01-01, arithmetic), as text the database reads: a Duration in ISO 8601, a date or time
@@ -46,12 +61,12 @@
      v
      (let [v (if (= java.util.Date (class v)) (.toInstant ^java.util.Date v) v)
            zone (java.time.ZoneId/systemDefault)]
-       (str (if (instance? java.time.Instant v)
-              (case (:name (types/entry type-name))
-                "date" (.toLocalDate (.atZone ^java.time.Instant v zone))
-                "timestamp without time zone" (java.time.LocalDateTime/ofInstant v zone)
-                v)
-              v))))))
+       (pg-text (if (instance? java.time.Instant v)
+                  (case (:name (types/entry type-name))
+                    "date" (.toLocalDate (.atZone ^java.time.Instant v zone))
+                    "timestamp without time zone" (java.time.LocalDateTime/ofInstant v zone)
+                    v)
+                  v))))))
 
 (defn- hstore-text
   "A map as hstore text: {\"a\" \"1\" \"b\" nil} is \"a\"=>\"1\", \"b\"=>NULL."
@@ -79,15 +94,19 @@
           (and (vector? s) (= :vector (first s)))
           (if-let [elem (ref-type (shape/non-null (last s)))]
             (if (seq v)
-              [:array (mapv #(vector :cast % [:raw elem]) v)]
+              [:array (mapv #(vector :cast (as-text %) [:raw elem]) v)]
               ;; an empty array of the type, in SQL every HoneySQL version since 2.4 passes on as it is
               [:raw (str "ARRAY[]::" elem "[]")])
             (if type-name
-              (let [e (types/entry type-name)] [:array (mapv #(as-text % type-name) v) (or (:array-cast e) (:cast e) (keyword type-name))])
+              (let [e (types/entry type-name)]
+                [:array (mapv #(cond (nil? %) nil (types/json? type-name) (json/write %) :else (as-text % type-name)) v)
+                 (or (:array-cast e) (:cast e) (keyword type-name))])
               [:array (vec v)]))
           (and (or (string? v) (instance? java.time.Duration v)) (:cast (types/entry type-name)))
           [:cast (as-text v) (:cast (types/entry type-name))]
           (and (temporal? v) t) [:cast (as-text v type-name) [:raw t]]
+          ;; :inline writes a byte array as its Java name
+          (bytes? v) [:cast (apply str "\\x" (map #(format "%02x" (bit-and % 0xff)) v)) :bytea]
           :else v)))
 
 (defn- parents-first

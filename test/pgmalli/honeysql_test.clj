@@ -916,3 +916,8 @@
         t (:d (h/arg-types reg {:update :t :set {:d :?d}}))]
     (is (m/validate t (java.util.Date.) malli-opts))
     (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))))
+
+(deftest a-string-assigned-to-a-regclass-column-is-taken
+  (let [reg (pgmalli/registry {:registry {:pg.public/rc [:map {:pg/table "public.rc"} [:id :int] [:r [:any {:pg/type "regclass"}]]]}})]
+    (is (= [] (h/check reg {:update :rc :set {:r "w"}})))
+    (is (= [:uncast-string] (map :kind (h/check reg {:select [:id] :from [:rc] :where [:= :r "w"]}))))))
