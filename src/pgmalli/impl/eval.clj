@@ -331,7 +331,7 @@
 (def ^:private text-types (eval-types :text))
 (def ^:private json-types (eval-types :json))
 (def ^:private bpchar-types (types/keywords #(= "character" (:name %))))
-(def ^:private temporal-types #{:date :timestamp :timestamp-without-time-zone :timestamptz :timestamp-with-time-zone :time :time-without-time-zone :interval})
+(def ^:private temporal-types (eval-types :temporal))
 (def ^:private int-ranges
   (update-vals (types/by-keyword :range) :range))
 

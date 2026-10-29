@@ -6,7 +6,7 @@
      :schema     the malli schema of a value; :any for a type the driver hands over as an
                  object of its own
      :eval       the casts pgmalli.impl.eval computes: :integer (with :range), :exact, :float,
-                 :text, :json
+                 :text, :json, :temporal (a date, time, timestamp or interval)
      :typmod     what the typmod n of a column bounds: :max-length (varchar(n), char(n)),
                  :bits (bit(n): exactly n), :max-bits (bit varying(n))
      :gen        how a value is generated when the schema alone does not: :bits (0s and 1s)
@@ -41,13 +41,13 @@
    "boolean" {:schema :boolean}
    "uuid" {:schema :uuid}
    "bytea" {:schema 'bytes?}
-   "date" {:schema :time/local-date}
-   "time without time zone" {:aliases ["time"] :schema :time/local-time}
+   "date" {:schema :time/local-date :eval :temporal}
+   "time without time zone" {:aliases ["time"] :schema :time/local-time :eval :temporal}
    "time with time zone" {:aliases ["timetz"] :schema :time/offset-time}
-   "timestamp without time zone" {:aliases ["timestamp"] :schema :time/local-date-time}
-   "timestamp with time zone" {:aliases ["timestamptz"] :schema :time/instant}
+   "timestamp without time zone" {:aliases ["timestamp"] :schema :time/local-date-time :eval :temporal}
+   "timestamp with time zone" {:aliases ["timestamptz"] :schema :time/instant :eval :temporal}
    ;; pgjdbc takes no Duration: it goes as text, in ISO 8601
-   "interval" {:schema :time/duration :cast :interval}
+   "interval" {:schema :time/duration :cast :interval :eval :temporal}
    "json" {:schema :any :eval :json}
    "jsonb" {:schema :any :eval :json}
 
