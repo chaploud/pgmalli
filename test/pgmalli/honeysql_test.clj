@@ -514,3 +514,22 @@
 
 (deftest a-subquery-alone-in-from-is-opaque
   (is (= [] (h/check registry {:select [:id] :from [{:select [:id] :from [:users]}]} opts))))
+
+(deftest every-comparison-honeysql-writes-types-its-arguments
+  (let [types (h/arg-types registry {:select [:id] :from [:users]
+                                     :where [:and [:not-in :id :?ids] [:between :score :?lo :?hi] [:not-like :nick :?p] [:is-distinct-from :group_id :?g]]} opts)]
+    (is (= [:sequential {:min 1} [:int {:pg/identity :always :pg/type "bigint"}]] (second (:ids types))) ":not-in as :in")
+    (is (= (:lo types) (:hi types) (:g types) [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]))
+    (is (= [:string {:pg/type "character varying"}] (:p types)))))
+
+(deftest a-select-of-every-set-operation-and-the-dot
+  (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]
+         (h/row-schema registry {:except-all [{:select [:id] :from [:users]} {:select [:id] :from [:users]}]} #{} opts)))
+  (is (= [:map [:nick [:maybe :any]]] (h/row-schema registry {:select [[[:. :u :nick]]] :from [[:users :u]]} #{} opts))
+      "[:. a b] is a.b, named b"))
+
+(deftest a-clause-read-nowhere-is-a-problem
+  (is (= [{:kind :unread-clause :clause :join-by}] (h/check registry {:select [:id] :from [:users] :join-by [:left [:groups [:= 1 1]]]} opts)))
+  (is (= [] (h/check registry {:select [:id] :from [:users] :for :update :window [:w {:partition-by [:id]}]} opts)) "clauses that change nothing read here")
+  (is (= [{:kind :unknown-column :column :table}] (h/check registry {:insert-into :users :values [{:table 1 :group_id 1 :mood "sad" :score 1}]} opts))
+      "a row's column named like a clause is a column"))

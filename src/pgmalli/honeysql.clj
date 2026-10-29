@@ -51,7 +51,7 @@
 
 ;;; statements, CTEs and scope
 
-(def ^:private set-operation-keys [:union :union-all :intersect :except])
+(def ^:private set-operation-keys [:union :union-all :intersect :except :except-all])
 (def ^:private with-keys [:with :with-recursive])
 (def ^:private statement-keys
   (into #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top
@@ -379,7 +379,10 @@
     (keyword? (first item)) [(first item) nil]
     (keyword? (second item)) [nil (second item)]))
 
-(def ^:private comparison-ops #{:= :<> :< :> :<= :>= :in :like :ilike})
+(def ^:private in-ops #{:in :not-in})
+(def ^:private like-ops #{:like :ilike :not-like :not-ilike})
+(def ^:private comparison-ops
+  (into #{:= :<> :not= :!= :< :> :<= :>= :is-distinct-from :is-not-distinct-from} (concat in-ops like-ops)))
 
 (defn- comparisons
   "[op column other] for each column side of the comparisons in a statement's conditions: a
@@ -388,9 +391,12 @@
   (for [x (own-nodes (cond-> (select-keys stmt (into [:where :having :on-conflict] join-keys))
                        ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
                        (map? (:do-update-set stmt)) (assoc :do-update-where (:where (:do-update-set stmt)))))
-        :when (and (vector? x) (= 3 (count x)) (comparison-ops (first x)))
-        :let [[op a b] x]
-        [col other] (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a]))]
+        :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
+                                   (and (= 4 (count x)) (#{:between :not-between} (first x)))))
+        :let [[op a b c] x]
+        [col other] (if (= 4 (count x))
+                      (when (column-keyword? a) [[a b] [a c]])
+                      (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a])))]
     [op col other]))
 
 (defn- assignments
@@ -420,21 +426,35 @@
 
 ;;; the name PostgreSQL gives an output column
 
+(defn- honeysql
+  "A var of the HoneySQL on the classpath, deref'd; nil when it is not there, or too old to
+   have it (registered-op? came in 2.4.1066)."
+  [sym]
+  (try (some-> (requiring-resolve sym) deref) (catch Exception _ nil)))
+
 (def ^:private operators
   "HoneySQL's infix operators and the special syntax that is an operator in SQL: PostgreSQL
-   names their column ?column?."
+   names their column ?column?. The operators of the HoneySQL loaded (register-op! included)
+   are read from it as well; this is what is known without it."
   (into #{} (map keyword)
         ["and" "or" "xor" "<>" "<=" ">=" "||" "<->" "like" "not-like" "regexp" "regex" "~" "&&" "ilike"
          "not-ilike" "similar-to" "not-similar-to" "is" "is-not" "not=" "!=" "is-distinct-from"
          "is-not-distinct-from" "+" "-" "*" "%" "|" "&" "^" "=" "<" ">" "/" "in" "not-in" "not"
-         "between" "not-between" "inline" "lift" "param"]))
+         "between" "not-between" "inline" "lift" "param" "with-ordinality"]))
 
 (def ^:private special-syntax
   "HoneySQL's special syntax that is not a function call; a column it makes is not named here."
   #{:entity :alias :at :at-time-zone :call :composite :distinct :escape :filter :get-in
     :ignore-nulls :interval :join :lateral :nest :object :record :order-by :over :raw
-    :respect-nulls :within-group :xtql :dot :default :foreign-key :references :unique
+    :respect-nulls :within-group :xtql :default :foreign-key :references :unique
     :primary-key :index :constraint})
+
+(defn- operator?
+  "Whether HoneySQL writes [h ...] as an operator: a name not an identifier (:->, :@>), one of
+   operators, or one the loaded HoneySQL has registered."
+  [h]
+  (boolean (or (operators h) (not (re-find #"^[A-Za-z_]" (name h)))
+               (some-> (honeysql 'honey.sql/registered-op?) (#(% h))))))
 
 (defn- cast-of-column? [x]
   (and (vector? x) (= :cast (first x))
@@ -457,7 +477,8 @@
         (keyword? x) (when (sql-values x) (name x))
         (not (and (vector? x) (keyword? (first x)))) nil
         :else (let [[h a] x]
-                (cond (or (operators h) (not (re-find #"^[A-Za-z_]" (name h)))) "?column?"
+                (cond (= :. h) (some-> (last x) (#(when (keyword? %) (function-name (name %)))))
+                      (operator? h) "?column?"
                       (#{:case :case-expr} h) "case"
                       (= :array h) "array"
                       (= :cast h) (cond (column-keyword? a) (second (split-column a))
@@ -559,7 +580,7 @@
              {:kind :missing-required-column :table table :column c})))))))
 
 (defn- enum-problems [registry sc stmt schema]
-  (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (#{:= :<> :in} op)] [col value sc])
+  (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (#{:= :<> :not= :!= :in :not-in} op)] [col value sc])
                                   (let [target (target-scope sc stmt schema)]
                                     (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
         :let [{s :schema} (resolve-column registry scope col)
@@ -590,22 +611,50 @@
                  (insert-problems registry stmt schema)
                  (enum-problems registry scopes stmt schema)))))
 
+(def ^:private read-clauses
+  "The clauses check, arg-types and row-schema read."
+  (into statement-keys (concat with-keys from-keys join-keys
+                               [:where :having :group-by :order-by :limit :offset :values :columns :set
+                                :on-conflict :do-update-set :returning])))
+
+(def ^:private ignored-clauses
+  "Clauses that change no table, column or type these read."
+  #{:do-nothing :on-constraint :for :lock :fetch :window :partition-by :frame})
+
+(defn- unread-clauses
+  "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
+   what it does goes unjudged: in a statement, and, when HoneySQL is loaded, in a map of
+   HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). Rows of
+   :values and :set are not clauses."
+  [body]
+  (let [clauses (some-> (honeysql 'honey.sql/clause-order) (#(set (%))))
+        maps (tree-seq #(and (coll? %) (not (seq? %)))
+                       #(if (map? %) (vals (dissoc % :values :set :do-update-set)) (seq %))
+                       body)]
+    (distinct (for [m maps
+                    :when (and (map? m) (seq m) (or (statement? m) (and clauses (every? clauses (keys m)))))
+                    k (keys m)
+                    :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))]
+                {:kind :unread-clause :clause k}))))
+
 (defn- code-ctes?
   "Whether code (not data) gives a statement some of its CTEs, which may then be any table."
   [stmt]
   (some #(let [w (get stmt %)] (and (some? w) (or (not (vector? w)) (not-every? vector? w)))) with-keys))
 
 (defn check
-  "The problems of every statement of a query. A query whose :with, or one of its entries, is
-   built elsewhere (not data) cannot have its unknown tables judged, so those are left out for
-   it. Code in the query is never read as columns: what it builds is not in the data."
+  "The problems of every statement of a query, and the clauses it uses that are read nowhere
+   here (:unread-clause: a HoneySQL clause pgmalli does not know, or one of your own), so a
+   query is never judged on part of it in silence. A query whose :with, or one of its entries,
+   is built elsewhere (not data) cannot have its unknown tables judged, so those are left out
+   for it. Code in the query is never read as columns: what it builds is not in the data."
   ([registry body] (check registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
    (let [registry (reading registry)
          opaque? (some code-ctes? (statements body))
          found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body opts))]
-     (vec (if opaque? (remove #(= :unknown-table (:kind %)) found) found)))))
+     (vec (concat (if opaque? (remove #(= :unknown-table (:kind %)) found) found) (unread-clauses body))))))
 
 ;;; types
 
@@ -665,11 +714,11 @@
    formats as IN ?): one the column cannot hold matches no row, as NULL does."
   [op t array? {:keys [compare] :as opts}]
   (let [lenient? (= :lenient compare)
-        t (cond-> t (or lenient? (#{:like :ilike} op)) loose)]
+        t (cond-> t (or lenient? (like-ops op)) loose)]
     (cond-> (cond array? (jdbc/array-type t opts)
-                  (and (= :in op) (not (untyped? t))) [:or [:sequential {:min 1} t] [:set {:min 1} t]]
+                  (and (in-ops op) (not (untyped? t))) [:or [:sequential {:min 1} t] [:set {:min 1} t]]
                   :else t)
-      (and lenient? (not= :in op)) nullable)))
+      (and lenient? (not (in-ops op))) nullable)))
 
 (defn arg-types
   "{arg schema} for the arguments of a query: its HoneySQL named parameters (:?id, ?id,

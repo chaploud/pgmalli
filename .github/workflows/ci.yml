@@ -40,3 +40,23 @@ jobs:
       - run: bb test
       - run: bb test:jvm
       - run: clojure -T:build jar
+  floor:
+    # the oldest versions README supports; here, not in deps.edn, where Renovate would raise them
+    runs-on: ubuntu-latest
+    env:
+      PGMALLI_PG_IMAGE: postgres:16-alpine
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: DeLaGuardo/setup-clojure@13.6.1
+        with:
+          cli: latest
+      - name: pull postgres image
+        run: docker pull $PGMALLI_PG_IMAGE
+      # fuzz-test builds its CHECKs with HoneySQL, which 2.4.1066 writes IS DISTINCT FROM in wrong
+      - run: >-
+          clojure -Sdeps '{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version "2.4.1066"}
+          org.clojure/clojure {:mvn/version "1.11.4"}}}}}' -M:test:floor -r 'pgmalli\.(?!fuzz-test).*'

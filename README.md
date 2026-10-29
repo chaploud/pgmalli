@@ -72,6 +72,19 @@ Four namespaces, by what they need: `pgmalli.core` reads the generated files and
 nothing else; `pgmalli.generate` needs `psql` or a JDBC driver; `pgmalli.data` (datasets) needs test.check;
 `pgmalli.honeysql` reads HoneySQL query data.
 
+### Supported versions
+
+| | supported | how it is held |
+|---|---|---|
+| PostgreSQL | 16 and later | CI runs every test on 16, 17 and 18 |
+| HoneySQL | 2.4.1066 and later | CI runs on that version and the latest; a test checks pgmalli's view of HoneySQL (its clauses, operators, how `sql/format` writes joins, `:in` and named parameters) against the one loaded, so a HoneySQL that changes fails there first. At run time `check` reads the clauses and operators of the HoneySQL loaded: a clause pgmalli reads nowhere (one new to HoneySQL, one of yours) is an `:unread-clause` problem, an operator you register is named as PostgreSQL names it |
+| next.jdbc, PostgreSQL's JDBC driver | 1.3, 42.7 | rows and parameters checked against the real driver in CI |
+| malli | 0.20 | |
+| Clojure, babashka | 1.11 and later, current babashka | CI runs on Clojure 1.11 and the latest; babashka reads everything but JDBC |
+
+pgmalli depends on malli, test.check, camel-snake-kebab (the version next.jdbc carries) and
+data.json; HoneySQL, next.jdbc and the JDBC driver are yours.
+
 ## What you get
 
 For a schema `public`, the registry contains:
@@ -115,7 +128,7 @@ the database has it.
 | `varchar(n)`, `CHECK (length(col) <= n)` | `[:string {:max n}]`; bounds from several sources only tighten |
 | `CHECK (cardinality(col) BETWEEN a AND b)`, `CHECK (array_length(col, 1) <= n)` | `[:vector {:min a :max b} <T>]` |
 | `CHECK (jsonb_typeof(col) = 'object')` | `:map` (`'array'` becomes `[:sequential :any]`) |
-| `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`; POSIX classes such as `[[:digit:]]` in their Java form); generated from the regex on the JVM (test.chuck; babashka draws strings and filters them) |
+| `CHECK (col ~ 're')` | `[:and :string [:re "re"]]` (`~*` adds `(?i)`; POSIX classes such as `[[:digit:]]` in their Java form); generated from the regex on the JVM with `com.gfredericks/test.chuck` on the classpath (it brings clj-time and instaparse, so pgmalli leaves it to you); without it, and on babashka, strings are drawn and filtered |
 | `CHECK (col LIKE 'a%')` | `[:and :string [:re "^\Qa\E.*$"]]` (`ILIKE` adds `(?i)`) |
 | `CHECK (col IS NULL OR <any of the above>)` | the inner pattern applied to the column (NULL passes it); `[:maybe ...]` comes from the column being nullable |
 | `CHECK (col IS NOT NULL)` | no `[:maybe ...]` |
@@ -186,9 +199,10 @@ pgmalli reads from it alike.
 ### Rows as the driver returns them
 
 `as-read` gives the `[:map ...]` of a row as next.jdbc builds it from what PostgreSQL's JDBC
-driver returns, so results can be validated as they come back. By default that is plain
-next.jdbc: keys unqualified, dates and timestamps `inst?` (`java.sql.Date`, `Timestamp`),
-arrays (`java.sql.Array`), json and jsonb (`PGobject`) and intervals (`PGInterval`) `:any`.
+driver returns, so results can be validated as they come back. By default that is next.jdbc
+with no extension and `as-unqualified-maps` (its own default, `as-maps`, is `:qualified?
+true`): dates and timestamps `inst?` (`java.sql.Date`, `Timestamp`), arrays
+(`java.sql.Array`), json and jsonb (`PGobject`) and intervals (`PGInterval`) `:any`.
 The options say what your application does differently; `pgmalli.honeysql` takes the same
 ones for the rows and arguments of queries (`:read` types rows alone, `:time` both), and both
 refuse a key or value they do not know.

@@ -25,6 +25,12 @@ All notable changes to this project are documented here. The format follows
   search_path.
 - `query-schema` carries the problems `check` finds in its query as the `:pgmalli/problems`
   property of the function schema.
+- `check` reports a clause it reads nowhere (`:unread-clause`: one new to HoneySQL, one
+  registered with `register-clause!`, `:join-by`, `{:table :t}`), so a query is never judged on
+  part of it in silence; it reads the clauses and operators of the HoneySQL loaded.
+- The README states the supported versions (PostgreSQL 16+, HoneySQL 2.4.1066+, next.jdbc 1.3,
+  malli 0.20, Clojure 1.11+); CI runs the oldest of them, and a test checks pgmalli's view of
+  HoneySQL against the HoneySQL loaded.
 
 ### Changed
 
@@ -49,6 +55,8 @@ All notable changes to this project are documented here. The format follows
 - Under `:qualified?`, a row selecting a column through an opaque table (a subquery, a CTE) is
   untold (nil): the driver keys it by the table at the bottom, which pgmalli does not see. It was
   keyed by the opaque table's alias.
+- `test.chuck` is no dependency: regex generation uses it when it is on the classpath (it
+  brings clj-time, joda-time and instaparse).
 - `camel-snake-kebab` is a dependency (next.jdbc's kebab builders name keys with it), malli
   0.20.3.
 
@@ -71,6 +79,9 @@ All notable changes to this project are documented here. The format follows
   is); both were nil. A column an outer join may leave NULL is nullable: a `:left-join`'s
   table, the one a `:right-join` attaches to and those joined to it before, both sides of a
   `:full-join`. A name selected twice is one key. `{:select [:*]}` was nil.
+- `pgmalli.honeysql` reads `:except-all`, `:not-in`, `:between`, `:not-like` and the other
+  comparisons HoneySQL writes, `[:. a b]`, `:with-ordinality`, and an operator registered with
+  `register-op!` (`?column?`, not a function's name).
 - A LIKE pattern argument is the column's kind without its CHECKs and length: a pattern is no
   value of the column. `INSERT INTO t AS a (columns)` (`[[:t :a] [...]]`), a subquery with no
   alias in `:from`, and an `:update` or `:insert-into` target code names are read.
