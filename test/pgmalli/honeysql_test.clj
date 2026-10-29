@@ -909,3 +909,10 @@
     (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))
     (is (m/validate t (java.util.Date.) malli-opts))
     (is (not (m/validate t "2020-01-01" malli-opts)))))
+
+(deftest a-domain-argument-takes-what-pgjdbc-takes-for-its-base
+  (let [reg (pgmalli/registry {:registry {:pg.public/day [:time/local-date {:pg/type "date"}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:d [:ref {:pg/type "day"} :pg.public/day]]]}})
+        t (:d (h/arg-types reg {:update :t :set {:d :?d}}))]
+    (is (m/validate t (java.util.Date.) malli-opts))
+    (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))))

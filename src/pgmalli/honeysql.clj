@@ -1004,7 +1004,7 @@
   (let [typed #(portable/portable-data (::schemas registry)
                                        (if (= f jdbc/read-type)
                                          (jdbc/column-read-type (::schemas registry) (shape/non-null s) %)
-                                         (f (shape/non-null s) %)))
+                                         (jdbc/column-write-type (::schemas registry) (shape/non-null s) %)))
         ;; a column with labels (an enum type's, a CHECK's) keeps them under :write's :enum, the
         ;; more particular of the two, even where :write names its type
         labels (when (and (= f jdbc/write-type) (get-in opts [:write :enum]))
