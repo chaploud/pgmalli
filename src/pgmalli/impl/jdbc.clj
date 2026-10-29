@@ -206,13 +206,19 @@
 
 (defn- through-domain
   "A column of a domain whose type the driver returns as something else (a date as a
-   java.sql.Date) as that type, without the domain's CHECKs, which read the registry's types; a
-   domain the driver returns as the registry holds it stays a reference."
+   java.sql.Date, a citext as a PGobject) as that type, without the domain's CHECKs, which read
+   the registry's types; a domain the driver returns as the registry holds it stays a reference."
   [schemas s opts]
   (if-let [d (when (and (vector? s) (= :ref (first s))) (get schemas (last s)))]
     (let [base (through-domain schemas (if (and (vector? d) (= :and (first d))) (first (shape/entries d)) d) opts)]
-      (if (= base (read-type base opts)) s (shape/merge-props (shape/without-gen base) (shape/column-props s))))
+      (if (= base (read-type base opts)) s (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))
+
+(defn column-read-type
+  "read-type of a column schema (without NULL) of a registry's schemas, a domain read as the
+   driver reads its base; :read may still name the domain's type."
+  [schemas s {:keys [read] :as opts}]
+  (or (shape/read-as read s) (read-type (through-domain schemas s opts) opts)))
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
@@ -224,6 +230,6 @@
         table (or (:pg/table props) (:pg/view props))
         schemas (shape/schemas-of registry)
         entry (fn [[k p s]]
-                (row-entry (row-key table (clojure.core/name k) opts) p (read-type (through-domain schemas (shape/non-null s) opts) opts)
+                (row-entry (row-key table (clojure.core/name k) opts) p (column-read-type schemas (shape/non-null s) opts)
                            (shape/maybe? s) opts))]
     (into (if props [:map props] [:map]) (map entry (shape/column-entries m)))))

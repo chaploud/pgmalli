@@ -216,6 +216,27 @@
                       " IF (SELECT count(*) FROM tq.e) <> 2 THEN RAISE EXCEPTION 'rows of defaults missing'; END IF; END $$;"))
       (is true "every INSERT ran: quoted types, arrays of them, empty arrays, char(n) whole, rows of defaults"))))
 
+(deftest names-with-dots-and-domains-over-arrays-insert
+  (when *db*
+    (let [[reg] (registry-of "a.b" "CREATE SCHEMA \"a.b\"; CREATE TYPE \"a.b\".\"m.x\" AS ENUM ('x', 'y');
+                                   CREATE DOMAIN \"a.b\".ma AS \"a.b\".\"m.x\"[]; CREATE DOMAIN \"a.b\".ia AS int[] CHECK (cardinality(VALUE) < 4);
+                                   CREATE TABLE \"a.b\".\"T\" (id int PRIMARY KEY, v \"a.b\".\"m.x\"[] NOT NULL, s \"a.b\".\"m.x\", d \"a.b\".ma NOT NULL, i \"a.b\".ia);")
+          rows {"a.b.T" [{:id 1 :v ["x"] :s "y" :d ["x" "y"] :i [1 2]} {:id 2 :v [] :s nil :d [] :i []}]}
+          generated (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 4}) 30 3)]
+      (is (nil? (m/explain (data/dataset-schema reg) rows {:registry reg})))
+      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (concat (data/inserts reg rows) (data/inserts reg (update generated "a.b.T" (partial map #(update % :id + 10))))))))
+      (is true "every INSERT ran"))))
+
+(deftest a-domain-reads-as-the-driver-reads-its-base
+  (when *db*
+    (let [[reg] (registry-of "dr" "CREATE SCHEMA dr; CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
+                                   CREATE DOMAIN dr.email AS public.citext CHECK (VALUE ~ '@'); CREATE DOMAIN dr.doc AS jsonb;
+                                   CREATE TABLE dr.t (id int PRIMARY KEY, e dr.email, j dr.doc);")]
+      (is (= [:map {:pg/primary-key ["id"] :pg/table "dr.t"}
+              [:e [:maybe [:any {:pg/type "public.citext"}]]] [:id [:pg/integer {:pg/type "integer"}]] [:j [:maybe [:any {:pg/type "jsonb"}]]]]
+             (pgmalli/as-read reg :pg.dr/t))
+          "a PGobject, as pgjdbc returns citext and jsonb"))))
+
 (deftest an-exclude-constraint-is-on-the-table-and-datasets-keep-its-equal-columns-apart
   (when *db*
     (exec-sql! "CREATE EXTENSION IF NOT EXISTS btree_gist; CREATE SCHEMA ex;

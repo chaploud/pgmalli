@@ -50,7 +50,7 @@
   (let [{:keys [registry unrendered]} (r/rendered facts)
         users (:pg.public/users registry)]
     (is (= [:enum "happy" "sad"] (:pg.public/mood registry)))
-    (is (= [:and :string [:re {:error/message "violates check constraint email_check: CHECK (VALUE ~ '@'::text)"} "@"]] (:pg.public/email registry)) "domain = what a non-NULL value must be: base type + its CHECK")
+    (is (= [:and [:string {:pg/type "text"}] [:re {:error/message "violates check constraint email_check: CHECK (VALUE ~ '@'::text)"} "@"]] (:pg.public/email registry)) "domain = what a non-NULL value must be: base type + its CHECK")
     (is (= :and (first users)) "columns, then the table constraints")
     (is (= [:map {:pg/table "public.users" :pg/primary-key ["id"] :pg/unique [{:columns ["nick"]}] :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
             [:age [:maybe [:pg/integer {:min 0 :max 150 :pg/type "integer" :pg/constraints ["age_check"]}]]]
@@ -195,30 +195,30 @@
                                                       {:name "code" :position 3 :data_type "opaque" :type_schema "public" :is_nullable true}]
                                             :constraints {}}}}))
         reg (registry-with registry)]
-    (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "even_int_check" :error/message "violates check constraint even_int_check: CHECK ((VALUE % 2) = 0)" :pg/types {:VALUE :integer}} [:= [:mod :VALUE 2] 0]]]
+    (is (= [:and [:pg/integer {:pg/type "integer"}] [:pg/check-value {:pg/constraint "even_int_check" :error/message "violates check constraint even_int_check: CHECK ((VALUE % 2) = 0)" :pg/types {:VALUE :integer}} [:= [:mod :VALUE 2] 0]]]
            (:pg.public/even_int registry))
         "a domain CHECK outside the patterns is evaluated over the value")
     (is (m/validate :pg.public/even_int 4 {:registry reg}))
     (is (not (m/validate :pg.public/even_int 3 {:registry reg})))
-    (is (= :string (:pg.public/mandatory registry)) "a domain is never [:maybe]: NULL is the column's business")
+    (is (= [:string {:pg/type "text"}] (:pg.public/mandatory registry)) "a domain is never [:maybe]: NULL is the column's business")
     (is (= [:ref {:pg/type "mandatory" :pg/default "n/a" :default "n/a"} :pg.public/mandatory] (get-in registry [:pg.public/t 4 1]))
         "the domain's NOT NULL and DEFAULT reach its columns")
-    (is (= :string (:pg.public/opaque registry)) "a domain whose CHECK cannot be evaluated still exists")
+    (is (= [:string {:pg/type "text"}] (:pg.public/opaque registry)) "a domain whose CHECK cannot be evaluated still exists")
     (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                             :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
                                                               :tables {}}))]
-      (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "pos_check" :error/message "violates check constraint pos_check: CHECK (VALUE > 0) NOT VALID" :pg/types {:VALUE :integer} :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
+      (is (= [:and [:pg/integer {:pg/type "integer"}] [:pg/check-value {:pg/constraint "pos_check" :error/message "violates check constraint pos_check: CHECK (VALUE > 0) NOT VALID" :pg/types {:VALUE :integer} :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
         "a NOT VALID domain CHECK is enforced (the database enforces it for every new value), marked")
       (is (empty? unrendered)))
     (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
                                                                                           :constraints [{:name "d_check" :definition "CHECK (VALUE >= '2020-01-01'::date)"}]}}
                                                               :tables {}}))]
-      (is (= [:and :time/local-date [:pg/check-value {:pg/constraint "d_check" :error/message "violates check constraint d_check: CHECK (VALUE >= '2020-01-01'::date)"} [:>= :VALUE [:cast "2020-01-01" :date]]]]
+      (is (= [:and [:time/local-date {:pg/type "date"}] [:pg/check-value {:pg/constraint "d_check" :error/message "violates check constraint d_check: CHECK (VALUE >= '2020-01-01'::date)"} [:>= :VALUE [:cast "2020-01-01" :date]]]]
              (:pg.public/d registry))
           "a domain CHECK that loses its fact is evaluated whole too")
       (is (empty? unrendered)))
     (is (= [{:fact :domain-check :type-name "opaque" :constraint "opaque_check"}] (map #(select-keys % [:fact :type-name :constraint]) unrendered)))
-    (is (= [:and :string [:re "x"]]
+    (is (= [:and [:string {:pg/type "text"}] [:re "x"]]
            (:pg.public/opaque (:registry (r/rendered (p/facts {:name "public" :types {"opaque" {:kind "DOMAIN" :base_type "text" :not_null false
                                                                                                     :constraints [{:name "opaque_check" :definition "CHECK (validate(VALUE))"}]}}
                                                                :tables {}})
@@ -546,8 +546,8 @@
     (is (= [:ref {:pg/type "email"} :pg.public/email] (get-in registry [:pg.public/t 2 1])) "NOT NULL: no [:maybe]")
     (is (not (m/validate :pg.public/t {:email nil :price 1M :nick nil :total nil} {:registry reg})) "and NULL is rejected, since the domain itself is never [:maybe]")
     (is (m/validate :pg.public/t {:email "a@b" :price 1M :nick nil :total nil} {:registry reg}))
-    (is (= [:and 'decimal? [:pg/numeric {:precision 12 :scale 2}] [:>= 0M]] (:pg.public/money_amount registry)) "the domain's numeric(12,2) is kept")
-    (is (= [:string {:max 8 :pg/max-length 8}] (:pg.public/short_name registry)) "and a varchar(8) domain's length")
+    (is (= [:and ['decimal? {:pg/type "numeric(12,2)"}] [:pg/numeric {:precision 12 :scale 2}] [:>= 0M]] (:pg.public/money_amount registry)) "the domain's numeric(12,2) is kept")
+    (is (= [:string {:pg/type "character varying(8)" :max 8 :pg/max-length 8}] (:pg.public/short_name registry)) "and a varchar(8) domain's length")
     (is (= [:* :price [:cast 2 :numeric]] (:pg/generated (second (last (last (get-in registry [:pg.public/t 5])))))) "a generated column carries its expression")
     (is (= [{:columns ["email"]} {:columns ["nick"] :index true}] (:pg/unique (second (:pg.public/t registry)))) "a unique index is marked")))
 

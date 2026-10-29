@@ -101,7 +101,7 @@ keyed as in `sql/format`'s `:params`:
 | in `:in` | a non-empty vector, list or set of the column's type |
 | assigned to a column (`:set`, `:values`) | the column's type, NULL allowed when the column allows it |
 | a `LIKE` pattern | the column's kind (`:string`) |
-| in `:limit`, `:offset` | `:int` |
+| in `:limit`, `:offset` | `[:int {:min 0}]` |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 

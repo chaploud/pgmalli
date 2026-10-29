@@ -917,7 +917,10 @@
   "A column schema as jdbc's read-type or write-type (f) gives it, without NULL, as malli's
    default registry reads it."
   [registry f s opts]
-  (let [typed #(portable/portable-data (::schemas registry) (f (shape/non-null s) %))
+  (let [typed #(portable/portable-data (::schemas registry)
+                                       (if (= f jdbc/read-type)
+                                         (jdbc/column-read-type (::schemas registry) (shape/non-null s) %)
+                                         (f (shape/non-null s) %)))
         ;; a column with labels (an enum type's, a CHECK's) keeps them under :write's :enum, the
         ;; more particular of the two, even where :write names its type
         labels (when (and (= f jdbc/write-type) (get-in opts [:write :enum]))
@@ -998,8 +1001,8 @@
    ;; => {:email [:string {:pg/type \"character varying\"}]}
 
    An argument compared with a column has the column's kind without NULL; one in :in a
-   non-empty collection of it; one assigned to a column the column's type; one in :limit
-   :int; any other :any. The first typed use wins. Options: see query-schema.
+   non-empty collection of it; one assigned to a column the column's type; one in :limit or
+   :offset an :int of at least 0; any other :any. The first typed use wins. Options: see query-schema.
    See docs/queries.md."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
@@ -1010,7 +1013,7 @@
                          (concat (for [[op col value] (comparisons stmt)
                                        :let [x (array-arg value)]]
                                    [(or x value) (compared-type op (column-type registry sc col false opts) x opts)])
-                                 (for [[_ v] (select-keys stmt [:limit :offset])] [v :int])
+                                 (for [[_ v] (select-keys stmt [:limit :offset])] [v [:int {:min 0}]])
                                  ;; [:cast :?x :mood]: an argument cast to an enum is a value of it
                                  (for [x (tree-seq branch? seq stmt)
                                        :when (and (vector? x) (= :cast (first x)) (= 3 (count x)) (arg-key (second x)) (ident? (nth x 2)))
@@ -1022,10 +1025,12 @@
                                    [(second x) (driver-type registry jdbc/write-type [:ref k] opts)])
                                  (for [[col v] (assignments stmt)] [v (column-type registry (target-scope sc stmt schema) col true opts)])))
                        (statement-chains registry body opts))
+         ;; an argument no use types, a function's or an operator's, is :any
+         untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
          types (reduce (fn [acc [x t]]
                          (let [k (arg-key x)]
                            (if (and k (untyped? (acc k))) (assoc acc k t) acc)))
-                       {} typed)
+                       untyped typed)
          in-data (data-args body)]
      (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
 

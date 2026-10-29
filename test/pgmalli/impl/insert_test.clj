@@ -14,7 +14,7 @@
         stmts (data/inserts registry ds)
         by-table (into {} (map (juxt #(let [i (:insert-into %)] (if (vector? i) (last i) i)) identity)) stmts)]
     (is (= [:sample.groups [{:overriding-value :system} :sample.users]] (map :insert-into stmts)) "parents first; identity columns kept")
-    (is (every? #(and (vector? %) (= [:cast [:entity "sample.mood"]] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
+    (is (every? #(and (vector? %) (= [:cast [:raw "\"sample\".\"mood\""]] [(first %) (last %)])) (keep :mood (:values (by-table :sample.users)))) "an enum is cast")
     (is (not-any? #(contains? % :nick_upper) (:values (by-table :sample.users))) "generated columns are left out")
     (is (= [[{:overriding-value :system} :sample.users]] (map :insert-into (data/inserts registry (select-keys ds ["sample.users"]))))
         "a parent left out is already in the database")

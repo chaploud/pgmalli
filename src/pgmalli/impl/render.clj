@@ -447,12 +447,14 @@
    patterns, then [:pg/check-value expr] for the others the evaluator covers. As for tables,
    a CHECK that lost a fact in rendering is evaluated whole."
   [schema-name {:keys [type-name base facts value-type]} checks overrides types]
-  (let [first-pass (fold-facts schema-name (base-type base) facts overrides)
+  (let [;; the base's name, which says how the driver returns a value (citext and jsonb as a PGobject)
+        base-schema (with-props (base-type base) {:pg/type base})
+        first-pass (fold-facts schema-name base-schema facts overrides)
         lost (lost-checks (:unrendered first-pass) types)
         facts (if (empty? lost) facts (remove #(lost (:constraint %)) facts))
         checks (concat checks (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) (:unrendered first-pass))]]
                                 (assoc (select-keys f [:schema :type-name :constraint :sql :expr]) :fact :domain-check)))
-        {:keys [schema unrendered skipped]} (if (empty? lost) first-pass (fold-facts schema-name (base-type base) facts overrides))
+        {:keys [schema unrendered skipped]} (if (empty? lost) first-pass (fold-facts schema-name base-schema facts overrides))
         results (for [c checks :let [ov (override-for overrides c)]]
                   (cond (and (map? ov) (:skip ov)) {:skipped [c]}
                         ov {:schema ov}

@@ -51,7 +51,7 @@
         "selected, as INSERT ... SELECT passes values")
     (is (= {:id [:int {:pg/type "bigint"}]
             :moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
-            :n :int}
+            :n [:int {:min 0}]}
            (h/arg-types registry body opts)))
     (is (= {:g/id [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?g/id} :where [:= :id 1]} opts))
@@ -60,7 +60,7 @@
            (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :id [:param :id]] [:in :mood ?moods]] :limit ?n} opts))
         "[:param :id] and ?id are the same parameters")
     (let [s (h/query-schema registry [:id :n] body opts)]
-      (is (= [:cat [:int {:pg/type "bigint"}] :int] (nth s 2)))
+      (is (= [:cat [:int {:pg/type "bigint"}] [:int {:min 0}]] (nth s 2)))
       (is (= {:pgmalli/problems [{:kind :missing-arg :arg :moods}]} (second s)) "the one left out of args"))))
 
 (deftest every-table-has-the-system-columns
@@ -186,7 +186,7 @@
         "an enum stays: PostgreSQL refuses a value outside it")
     (is (= [:or [:sequential {:min 1} [:int {:pg/type "integer"}]] [:set {:min 1} [:int {:pg/type "integer"}]]] (:gs types))
         "nil not in :in's: it formats as IN ?")
-    (is (= :int (:n types)))
+    (is (= [:int {:min 0}] (:n types)))
     (is (= {:v [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
         "an assigned one keeps the column's bounds")
@@ -243,7 +243,7 @@
     (is (= {'id [:int {:pg/type "bigint"}]
             'moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
             'min [:int {:pg/type "integer"}]
-            'n :int}
+            'n [:int {:min 0}]}
            (h/arg-types registry body opts)))
     (let [row (h/row-schema registry body (assoc opts :qualified? true :nil-columns :absent :time :instant))]
       (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]]
@@ -812,3 +812,6 @@
   (let [nullable? (fn [q] (every? #(= :maybe (first (last %))) (drop 1 (h/row-schema registry q opts))))]
     (is (nullable? {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:right [[:groups :g] [:= :g.id 9]]]}))
     (is (nullable? {:select [:group_id] :from [:users] :group-by [[:raw "CUBE(group_id)"]]}))))
+
+(deftest an-argument-no-use-types-is-any
+  (is (= {:e :any :n [:int {:min 0}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= [:lower :nick] :?e] :offset :?n} opts))))

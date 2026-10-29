@@ -320,7 +320,8 @@
   [schema-name enums roots [tname {:keys [base_type not_null default constraints]}]]
   (let [base {:schema schema-name :type-name tname}
         ;; over an enum or a domain of the schema: what that type holds, its CHECKs included
-        over (some-> (type-ref {} (first (type-ident base_type)) false enums roots) (select-keys [:fact :type-name :base]))
+        over (let [[ident array?] (type-ident base_type)]
+               (some-> (type-ref {} ident array? enums roots) (select-keys [:fact :type-name :base :array?])))
         root (:root (get roots tname))
         value-type (ev/column-type {:pg/type (str/replace root #"\(.*\)$" "") :pg/max-length (some-> (re-find #"\((\d+)\)$" root) second parse-long)})
         checks (for [{cname :name :keys [definition is_valid]} constraints
