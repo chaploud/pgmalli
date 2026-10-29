@@ -331,4 +331,11 @@
  [:jsonb-insert {:insert-into :hosts :values [{:doc "{}"}]}]
  [:jsonb-insert-cast {:insert-into :hosts :values [{:doc [:cast "{}" :jsonb]}]}]
  [:enum-inline-bad {:select [:id] :from [:users] :where [:= :mood [:inline "zz"]]}]
+ [:timestamptz-literal {:select [:id] :from [:groups] :where [:= :created_at "2020-01-01"]}]
+ [:timestamptz-between {:select [:id] :from [:posts] :where [:between :created_at "2020-01-01" "2030-01-01"]}]
+ [:timestamptz-cast {:select [:id] :from [:posts] :where [:> :created_at [:cast "2020-01-01" :timestamptz]]}]
+ [:integer-literal {:select [:id] :from [:users] :where [:= :score "1"]}]
+ [:integer-update {:update :users :set {:score "1"} :where [:= :id 1]}]
+ ;; NULL that DO UPDATE sets, where no row conflicts
+ [:upsert-null-no-conflict {:insert-into :tags :values [{:name "z"}] :on-conflict [:id] :do-update-set {:name nil}}]
 ]

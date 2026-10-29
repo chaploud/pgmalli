@@ -37,7 +37,20 @@
    {:select [:id] :from [[:users :u]] :full-join [[:posts :p] [:using :id]]}
    {:select [:*] :from [[:users :u]] :join [[:likes :l] [:using :id]]}
    {:select [:id] :from [[:users :u]] :right-join [[:likes :l] [:using :id]]}
-   {:select [:id] :from [[:users :u]] :left-join [[:likes :l] [:using :id]]}])
+   {:select [:id] :from [[:users :u]] :left-join [[:likes :l] [:using :id]]}
+   ;; a chain of USING joins: each merges what the joins before it merged
+   {:select [:id] :from [[:users :a]] :join [[:posts :b] [:using :id]] :left-join [[:users :c] [:using :id]]}
+   {:select [:*] :from [[:users :a]] :join [[:posts :b] [:using :id]] :left-join [[:users :c] [:using :id]]}])
+
+(def using-chains
+  "Three tables USING one column, every pair of joins, the columns of one type (likes) or not
+   (posts' bigint)."
+  (for [t [:likes :posts] j1 [:join :left-join :right-join :full-join] j2 [:join :left-join :right-join :full-join]
+        sel [[:id] [:*]]
+        :let [q {:select sel :from [[:users :a]]}]]
+    (if (= j1 j2)
+      (assoc q j1 [[t :b] [:using :id] [:likes :c] [:using :id]])
+      (assoc q j1 [[t :b] [:using :id]] j2 [[:likes :c] [:using :id]]))))
 
 (deftest row-schema-keys-are-the-drivers
   (when *db*
@@ -50,7 +63,7 @@
     (let [{:keys [host port db user password]} *db*
           ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
-      (doseq [q queries, builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
+      (doseq [q (concat queries using-chains), builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
               row (jdbc/execute! ds (sql/format q) {:builder-fn @(requiring-resolve builder)})
               :let [schema (h/row-schema registry q (pgmalli/read-options builder))
                     entries (m/children (m/schema schema))

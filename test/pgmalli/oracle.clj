@@ -10,7 +10,8 @@
    part check does not judge by design, code or an opaque table), :mismatch (both refuse, for
    different reasons), :other-silent / :other-flagged (PostgreSQL refuses it for something
    check does not judge, a type or syntax), :reported-by-design (PostgreSQL runs it, check
-   reports a literal outside a CHECK's list, which matches no row).
+   reports a literal outside a CHECK's list, which matches no row, or NULL that ON CONFLICT DO
+   UPDATE sets into a NOT NULL column, which fails once a row conflicts).
 
    bb oracle [seed] [mutants-per-query] prints the counts and every case but the agreeing ones;
    pgmalli.oracle-test holds the false positives at none."
@@ -139,9 +140,12 @@
   (let [pg (name-class pg)
         ks (set (map (comp name-class :kind) problems))]
     (cond (and (= :ok pg) (empty? ks)) :agree-ok
-          ;; a literal outside a CHECK's list matches no row, which check reports by design
-          ;; (docs/queries.md "Reported though PostgreSQL runs them")
-          (and (= :ok pg) (= #{:enum-literal} ks)) :reported-by-design
+          ;; a literal outside a CHECK's list matches no row, and NULL set into a NOT NULL
+          ;; column by ON CONFLICT DO UPDATE fails once a row conflicts, which check reports by
+          ;; design (docs/queries.md "Reported though PostgreSQL runs them")
+          (and (= :ok pg) (seq problems)
+               (every? #(or (= :enum-literal (:kind %)) (= [:not-null-violation :do-update-set] ((juxt :kind :clause) %))) problems))
+          :reported-by-design
           (= :ok pg) :false-positive
           (= :other pg) (if (empty? ks) :other-silent :other-flagged)
           (contains? ks pg) :agree-error

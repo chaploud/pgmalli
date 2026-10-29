@@ -6,7 +6,7 @@
    as malli schemas.
 
    Scope: tables come from :from, :using, :cross-join, the joins (:join-by is not read),
-   :insert-into, :update and :delete-from, under their aliases. CTEs (:with), subqueries,
+   :insert-into, :update, :delete-from and :truncate, under their aliases. CTEs (:with), subqueries,
    table functions, a symbol where a table goes and a pg_catalog or information_schema table
    the registry lacks are opaque tables: their columns exist but have no type. Every table has the system columns
    (ctid, xmin, ...). A column is :col (unique in the scope), :alias/col or :alias.col; a
@@ -63,7 +63,7 @@
 (def ^:private with-keys [:with :with-recursive])
 (def ^:private statement-keys
   (into #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top
-          :insert-into :update :delete-from} set-operation-keys))
+          :insert-into :update :delete-from :truncate} set-operation-keys))
 (def ^:private default-schema "public")
 (def ^:private from-keys [:from :using :cross-join])
 (def ^:private join-keys
@@ -95,7 +95,7 @@
    tables, whose columns the data then does not show."
   [stmt]
   (boolean (or (contains? stmt :join-by)
-               (some seq? (concat (keep stmt (concat from-keys join-keys [:update :delete-from :insert-into]))
+               (some seq? (concat (keep stmt (concat from-keys join-keys [:update :delete-from :insert-into :truncate]))
                                   (from-items stmt from-keys)
                                   (map second (join-items stmt))))
                ;; an :insert-into target insert-parts finds no table in
@@ -246,6 +246,15 @@
   (let [{:keys [table alias]} (insert-parts stmt)]
     (if (and table alias) [table alias] table)))
 
+(defn- write-targets
+  "The tables a statement writes, as :from items: INSERT INTO's, UPDATE's, DELETE FROM's and
+   TRUNCATE's (:t, [:t options...] or [[:t ...] options...])."
+  [stmt]
+  (let [t (:truncate stmt)
+        t (if (vector? t) (first t) t)]
+    (remove nil? (concat [(insert-target stmt) (:update stmt) (:delete-from stmt)]
+                         (cond (vector? t) t (some? t) [t])))))
+
 (defn- catalog-table
   "The table an unqualified name means: pg_catalog, implicitly first on the search path, holds
    the pg_ relations; one the registry lacks is \"pg_catalog.<name>\" all the same, opaque."
@@ -287,10 +296,10 @@
   (let [registry (reading registry)
         refs (concat (from-items stmt from-keys)
                      (map second (join-items stmt))
-                     [(insert-target stmt) (:update stmt) (:delete-from stmt)])
+                     (write-targets stmt))
         nullable (outer-aliases stmt schema)
         ;; UPDATE, DELETE FROM and INSERT INTO name a table, which a CTE of the same name does not hide
-        targets (set (keep identity [(insert-target stmt) (:update stmt) (:delete-from stmt)]))
+        targets (set (write-targets stmt))
         using (set (for [[_ j] (join-items* stmt) :when (and (vector? j) (= :using (first j))) c (rest j) :when (keyword? c)]
                      (folded (name c))))
         sc (into (with-meta {} {::using using})
@@ -783,16 +792,16 @@
         union (distinct (mapcat keys maps))
         defaults (set (:values-default-columns format))
         do-update (:do-update-set stmt)
-        writes (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update]))
-                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c ::excluded :update])
-                              (map? do-update) (for [[c v] do-update] [(target-column c) v :update])
-                              (vector? do-update) (for [c do-update] [c ::excluded :update]))
+        writes (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update :set]))
+                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c ::excluded :update :do-update-set])
+                              (map? do-update) (for [[c v] do-update] [(target-column c) v :update :do-update-set])
+                              (vector? do-update) (for [c do-update] [c ::excluded :update :do-update-set]))
                         (for [row maps, c (if columns (keys row) union)]
-                          [c (cond (contains? row c) (get row c) (defaults c) :default) :insert])
-                        (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert])))]
+                          [c (cond (contains? row c) (get row c) (defaults c) :default) :insert :values])
+                        (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert :values])))]
     (when (seq target)
       (distinct
-       (for [[col v how] writes
+       (for [[col v how clause] writes
              :when (column-keyword? col)
              :let [{:keys [table] s :schema} (resolve-column registry target col)
                    cp (some-> s shape/column-props)
@@ -801,7 +810,7 @@
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
                            (and (or (nil? v) (= [:inline nil] v)) (not (shape/maybe? s)) (not (filled-by-trigger? registry table how)))
-                           {:kind :not-null-violation :table table :column col})]
+                           {:kind :not-null-violation :table table :column col :clause clause})]
              :when p]
          p)))))
 
@@ -814,15 +823,20 @@
 
 (defn- uncast-type
   "The type a string is to be cast to for a column that takes no varchar: an enum type (or a
-   domain over one), json, or a type of types' :cast (bit takes varbit, which keeps its
-   length); nil for a column that takes one."
+   domain over one), an array, a type of types' :cast (bit takes varbit, which keeps its
+   length), or any other type types has but the string ones (text, varchar, char, name,
+   citext); nil for a column that takes one, or of a type types lacks (a domain over a base
+   type among them)."
   [registry s]
-  (let [t (shape/type-name (shape/column-props s))
-        c (some-> (:cast (types/entry t)) name)]
+  (let [p (shape/column-props s)
+        e (types/entry (shape/type-name p))
+        ;; :bit-varying or :timestamp-with-time-zone is no type HoneySQL writes; its alias is
+        written #(if (str/includes? % " ") (first (:aliases (types/entry %))) %)]
     (or (enum-type registry s)
-        (when (types/json? t) t)
-        ;; :bit-varying is no type HoneySQL writes; its alias is
-        (when c (if (str/includes? c " ") (first (:aliases (types/entry c))) c)))))
+        (when e
+          (cond (str/ends-with? (:pg/type p) "[]") (str (written (:name e)) "[]")
+                (:cast e) (written (name (:cast e)))
+                (not= :string (:schema e)) (written (:name e)))))))
 
 (declare driver-type)
 
@@ -960,7 +974,8 @@
 
 (defn tables
   "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
-   joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM),
+   joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM,
+   TRUNCATE),
    aliases and CTE names resolved as PostgreSQL resolves them. A table code in the query
    brings in is not seen. Options: docs/queries.md#options.
 
@@ -973,7 +988,7 @@
    (let [registry (reading registry)
          found (for [[stmt scopes] (statement-chains registry body opts)
                      :let [own (first scopes)
-                           targets (set (keep #(some-> % (table-ref schema) second) [(insert-target stmt) (:update stmt) (:delete-from stmt)]))]
+                           targets (set (keep #(some-> % (table-ref schema) second) (write-targets stmt)))]
                      [alias {:keys [table cte? excluded?]}] (when (map? own) own)
                      :when (and table (not cte?) (not excluded?))]
                  [(if (targets alias) :writes :reads) table])]
@@ -1104,46 +1119,48 @@
      (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
 
 (defn- using-merges
-  "{column merge} of a statement's JOIN ... USING, the last join merging a column winning:
-   {:join k :left alias :right alias :tables [alias ...]}, :left the earlier table holding the
-   column (nil when several do: a merge of merges), :tables every table it merges."
+  "{column {:tables [alias ...] :sides [alias ...] :schema s :nullable? bool}} of a
+   statement's JOIN ... USING, each join merging its left side (a table's column, or what an
+   earlier join merged) with the right table's in turn: :tables every table merged, :sides
+   the tables next.jdbc may key it by (nil: unqualified), :schema nil when the types differ.
+   PostgreSQL takes the left column (INNER JOIN the right one when only the left is cast to
+   the merged type), RIGHT JOIN the right one, FULL JOIN neither: a COALESCE; a column cast
+   to the merged type keeps no table."
   [registry stmt sc schema]
   (let [alias #(second (table-ref % schema))
-        joins (for [k join-keys :let [j (get stmt k)] :when (vector? j), [t c] (partition 2 j)] [k (alias t) c])]
+        joins (for [k join-keys :let [j (get stmt k)] :when (vector? j), [t c] (partition 2 j)] [k (alias t) c])
+        col-schema (fn [a column]
+                     (when-let [{:keys [table opaque?]} (get sc a)]
+                       (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (folded column)))))))
+        ;; the type without what does not change it (a default, constraints)
+        type-of #(let [s (shape/non-null %)] (if (and (vector? s) (map? (second s))) (assoc s 1 (select-keys (second s) [:pg/type :pg/max-length :min :max])) s))
+        table-side (fn [a column] (let [s (col-schema a column)] {:sides [a] :schema s :nullable? (boolean (or (nil? s) (maybe? s) (:nullable? (get sc a))))}))
+        merged-with (fn [join l r]
+                ;; ponytail: a timestamp's or time's precision is not in the registry, so (3) and (6) read as one type
+                (let [same? (and (:schema l) (:schema r) (= (type-of (:schema l)) (type-of (:schema r))))
+                      side (case join (:join :inner-join :left-join) l :right-join r nil)]
+                  (cond (nil? side) {:sides [nil] :schema (when same? (:schema l)) :nullable? true}
+                        same? side
+                        ;; one side cast to the merged type: which one, the registry does not say
+                        :else {:sides (distinct (concat (if (#{:join :inner-join} join) (concat (:sides l) (:sides r)) (:sides side)) [nil]))
+                               :schema nil :nullable? true})))]
     (:merges
      (reduce (fn [{:keys [before] :as acc} [k right c]]
                (-> (if (and (vector? c) (= :using (first c)))
                      (reduce (fn [acc col]
                                (let [col (folded (name col))
-                                     holders (filter #(when-let [e (get sc %)] (has-column? registry e col)) before)]
-                                 (assoc-in acc [:merges col] {:join k :right right :left (when (= 1 (count holders)) (first holders))
-                                                              :tables (conj (vec holders) right)})))
+                                     earlier (get-in acc [:merges col])
+                                     holders (filter #(when-let [e (get sc %)] (has-column? registry e col)) before)
+                                     l (cond earlier earlier
+                                             (= 1 (count holders)) (table-side (first holders) col)
+                                             :else {:sides holders :schema nil :nullable? true})]
+                                 (assoc-in acc [:merges col] (assoc (merged-with k l (table-side right col))
+                                                                    :tables (conj (vec (or (:tables earlier) holders)) right)))))
                              acc (filter keyword? (rest c)))
                      acc)
                    (update :before conj right)))
              {:before (vec (take-last 1 (map alias (from-items stmt [:from :using])))) :merges {}}
              joins))))
-
-(defn- merged-column
-  "[sides schema nullable?] of a column JOIN ... USING merges: the aliases of the tables
-   next.jdbc may key it by (nil: unqualified), its schema (nil when the two differ) and whether
-   it may be NULL. PostgreSQL keeps the column of the table it takes the value from (INNER and
-   LEFT JOIN the left one, RIGHT JOIN the right, FULL JOIN neither: a COALESCE), unless a cast
-   to the merged type hides it."
-  [registry sc column {:keys [join left right tables]}]
-  (let [col-schema #(when-let [{:keys [table opaque?]} (get sc %)]
-                      (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (folded column))))))
-        ;; the type without what does not change it (a default, constraints)
-        type-of #(let [s (shape/non-null %)] (if (and (vector? s) (map? (second s))) (assoc s 1 (select-keys (second s) [:pg/type :pg/max-length :min :max])) s))
-        side (case join (:join :inner-join :left-join) left :right-join right nil)
-        ls (some-> left col-schema)
-        rs (col-schema right)]
-    (cond (#{:full-join :outer-join} join) [[nil] nil true]
-          ;; ponytail: a timestamp's or time's precision is not in the registry, so (3) and (6) read as one type
-          (and side ls rs (= (type-of ls) (type-of rs)))
-          (let [s (if (= side left) ls rs)] [[side] s (or (maybe? s) (:nullable? (get sc side)))])
-          ;; one side cast to the merged type: which one, the registry does not say
-          :else [(distinct (concat (if (#{:join :inner-join} join) tables (remove nil? [side])) [nil])) nil true])))
 
 (defn- select-row
   "The row a SELECT returns. Under :qualified?, a column through an opaque table, or a cast
@@ -1170,7 +1187,7 @@
         merged (fn [label m]
                  (if (and qualified? (some #(:opaque? (get sc %)) (:tables m)))
                    (untold label)
-                   (let [[sides s nullable?] (merged-column registry sc label m)
+                   (let [{:keys [sides nullable?] s :schema} m
                          by-key (into {} (for [a sides :let [t (some-> a sc :table)]] [(jdbc/row-key t label opts) t]))
                          ;; keys the driver may give it: each optional
                          props (when (next by-key) {:optional true})]
@@ -1306,7 +1323,9 @@
                     (let [what (if arg (str "argument " arg) (pr-str value))]
                       (str what " reaches column " (column-name column) " as varchar, which its type " type " does not take"
                            " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
-                           " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " :" type "], or pass {:stringtype :unspecified}"
+                           " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
+                           (if (str/ends-with? type "[]") (str "[:raw " (pr-str type) "]") (str ":" type))
+                           "], or pass {:stringtype :unspecified}"
                            " when the connection sets stringtype=unspecified")))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]

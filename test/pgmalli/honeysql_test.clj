@@ -35,7 +35,7 @@
          (h/check registry {:select [:id] :from [:users] :where [:= :mood [:cast "angry" :mood]]} opts)))
   (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
          (h/check registry {:update :users :set {:mood "angry"} :where [:= :id 1]} opts)) "assigned literals too")
-  (is (= [{:kind :not-null-violation :table "sample.users" :column :score}]
+  (is (= [{:kind :not-null-violation :table "sample.users" :column :score :clause :values}]
          (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad"} {:group_id 1 :mood "sad" :score 1}]} opts))
       "a multi-row INSERT carries the union of its columns, NULL where a row lacks one")
   (is (= [{:kind :ambiguous-column :column :id :candidates ["sample.users" "sample.groups"]}]
@@ -643,14 +643,14 @@
 
 (deftest a-write-postgresql-refuses-is-a-problem
   (let [check #(h/check registry % opts)
-        nn (fn [col] {:kind :not-null-violation :table "sample.users" :column col})
+        nn (fn [col clause] {:kind :not-null-violation :table "sample.users" :column col :clause clause})
         ro (fn [col] {:kind :read-only-column :table "sample.users" :column col})]
     (testing "NULL into a NOT NULL column"
-      (is (= [(nn :score)] (check {:update :users :set {:score nil} :where [:= :id 1]})))
-      (is (= [(nn :group_id)] (check {:insert-into :users :values [{:group_id nil :mood "sad" :score 1 :closed_at 'now}]})))
-      (is (= [(nn :group_id)] (check {:insert-into :users :columns [:group_id :mood :score] :values [[nil "happy" 1]]})))
-      (is (= [(nn :score)] (check {:insert-into :users :values [{:group_id 1 :score 1}] :on-conflict [:id] :do-update-set {:score nil}})))
-      (is (= [(nn :mood)] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}))
+      (is (= [(nn :score :set)] (check {:update :users :set {:score nil} :where [:= :id 1]})))
+      (is (= [(nn :group_id :values)] (check {:insert-into :users :values [{:group_id nil :mood "sad" :score 1 :closed_at 'now}]})))
+      (is (= [(nn :group_id :values)] (check {:insert-into :users :columns [:group_id :mood :score] :values [[nil "happy" 1]]})))
+      (is (= [(nn :score :do-update-set)] (check {:insert-into :users :values [{:group_id 1 :score 1}] :on-conflict [:id] :do-update-set {:score nil}})))
+      (is (= [(nn :mood :values)] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}))
           "HoneySQL writes NULL for a key one row of :values lacks and another has")
       (is (= [] (check {:update :users :set {:nick nil :score :?score} :where [:= :id 1]})) "a nullable column, an argument")
       (is (= [] (h/check registry {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}
@@ -673,7 +673,7 @@
                                                         [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]]]}})]
     (is (= [] (h/check reg {:insert-into :t :values [{:id 1}]})) "no :missing-required-column")
     (is (= [] (h/check reg {:insert-into :t :values [{:id 1 :g nil}]})) "no :not-null-violation")
-    (is (= [{:kind :not-null-violation :table "public.t" :column :g}] (h/check reg {:update :t :set {:g nil}}))
+    (is (= [{:kind :not-null-violation :table "public.t" :column :g :clause :set}] (h/check reg {:update :t :set {:g nil}}))
         "an UPDATE has no BEFORE UPDATE trigger here")))
 
 (deftest names-as-honeysql-writes-them
@@ -831,6 +831,8 @@
   (is (= {:reads #{"sample.users"} :writes #{}}
          (h/tables registry {:with [[:groups {:select [:id] :from [:users]}]] :select [:*] :from [:groups]} opts)) "a CTE is no table")
   (is (= {:reads #{} :writes #{"sample.users"}} (h/tables registry {:insert-into :users :values [{:id 1}] :on-conflict [:id] :do-update-set [:nick]} opts)))
+  (is (= {:reads #{} :writes #{"sample.users"}} (h/tables registry {:truncate :users} opts)))
+  (is (= {:reads #{} :writes #{"sample.users" "sample.groups"}} (h/tables registry {:truncate [[:users :groups] :cascade]} opts)))
   (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:select [:excluded.id] :from [[:users :excluded]]} opts))
       "excluded is a table's alias outside ON CONFLICT"))
 
@@ -847,8 +849,20 @@
                                                             [:flags [:string {:min 4 :max 4 :pg/type "bit"}]]
                                                             [:mask [:maybe [:string {:pg/type "bit"}]]]
                                                             [:doc [:any {:pg/type "jsonb"}]]
-                                                            [:note [:string {:pg/type "text"}]]]}})
+                                                            [:note [:string {:pg/type "text"}]]
+                                                            [:born [:maybe [inst? {:pg/type "date"}]]]
+                                                            [:seen [:maybe [inst? {:pg/type "timestamp with time zone"}]]]
+                                                            [:paths [:maybe [:any {:pg/type "text[]"}]]]]}})
         check #(h/check reg %1 (merge {:schema "public"} %2))]
+    (testing "a type of types but the string ones"
+      (is (= [{:kind :uncast-string :column :born :value "2020-01-01" :type "date"}] (check {:select [:id] :from [:hosts] :where [:= :born "2020-01-01"]} {})))
+      (is (= [{:kind :uncast-string :column :seen :value "2020-01-01" :type "timestamptz"}
+              {:kind :uncast-string :column :seen :value "2021-01-01" :type "timestamptz"}]
+             (check {:select [:id] :from [:hosts] :where [:between :seen "2020-01-01" "2021-01-01"]} {})))
+      (is (= [{:kind :uncast-string :column :id :value "1" :type "integer"}] (check {:update :hosts :set {:id "1"}} {})))
+      (is (= [{:kind :uncast-string :column :paths :value "{a}" :type "text[]"}] (check {:update :hosts :set {:paths "{a}"}} {})) "an array")
+      (is (= [] (check {:select [:id] :from [:hosts] :where [:= :born "2020-01-01"]} {:stringtype :unspecified})) "sent untyped")
+      (is (= [] (check {:select [:id] :from [:hosts] :where [:= :born :?b]} {})) "an argument arg-types types as a date"))
     (is (= [{:kind :uncast-string :column :ip :value "10.0.0.1" :type "inet"}] (check {:select [:id] :from [:hosts] :where [:= :ip "10.0.0.1"]} {})))
     (is (= [{:kind :uncast-string :column :flags :value "1010" :type "varbit"}] (check {:update :hosts :set {:flags "1010"}} {}))
         "bit takes varbit, which keeps the length")
@@ -859,6 +873,10 @@
         "an argument assigned to a nullable column may be nil, which PostgreSQL takes")
     (is (= [] (check {:select [:id] :from [:hosts] :where [:and [:= :ip [:cast "10.0.0.1" :inet]] [:= :note "a"]]} {})))
     (is (= [] (check {:select [:id] :from [:hosts] :where [:= :ip "10.0.0.1"]} {:format {:inline true}})))))
+
+(deftest truncate-names-tables
+  (is (= [] (h/check registry {:truncate [:users :restart :identity]} opts)))
+  (is (= [{:kind :unknown-table :table "sample.nosuch"}] (h/check registry {:truncate [[:users :nosuch]]} opts))))
 
 (deftest an-inlined-enum-literal-is-one-too
   (is (= [{:kind :enum-literal :column :mood :value "zz" :allowed ["happy" "sad"]}]

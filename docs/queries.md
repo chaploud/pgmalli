@@ -65,7 +65,7 @@ An INSERT or UPDATE is checked against what PostgreSQL refuses to write:
 
 ```clojure
 (h/check registry {:update :users :set {:email nil} :where [:= :id 1]})
-;; => [{:kind :not-null-violation, :table "public.users", :column :email}]
+;; => [{:kind :not-null-violation, :table "public.users", :column :email, :clause :set}]
 
 (h/check registry {:update :posts :set {:title_upper "X"} :where [:= :id 1]})
 ;; => [{:kind :read-only-column, :table "public.posts", :column :title_upper}]
@@ -78,7 +78,7 @@ has a default, but the first row below gets NULL:
 (h/check registry {:insert-into :users
                    :values [{:group_id 1 :email "ann@example.com"}
                             {:group_id 1 :email "bob@example.com" :status [:cast "closed" :user_status] :closed_at [:now]}]})
-;; => [{:kind :not-null-violation, :table "public.users", :column :status}]
+;; => [{:kind :not-null-violation, :table "public.users", :column :status, :clause :values}]
 ```
 
 Give `h/check` the options you give `sql/format`, as `:format`:
@@ -263,7 +263,7 @@ These match or touch no row, which is almost always a mistake:
 - A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
   'closed'))`) with a value outside it: an `:enum-literal`.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
-  `:not-null-violation`, even when it would touch no row.
+  `:not-null-violation`, even when it would touch no row or no row conflicts.
 
 ## Not checked
 
@@ -281,9 +281,9 @@ These match or touch no row, which is almost always a mistake:
   (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`. Write the name as a
   symbol (`'events_2026`), a table chosen at run time, to leave it unjudged.
 - The columns of a CTE or a subquery: they exist, untyped.
-- A string sent as `varchar` to a column of a type `:uncast-string` does not cover (an
-  integer, a date, a uuid), which PostgreSQL refuses too; and an argument whose type
-  `h/arg-types` leaves `:any` (an `inet` column's), which may be an object of the type.
+- A string sent as `varchar` to a column of a domain over a type other than an enum (a
+  domain over `integer`), which PostgreSQL refuses; and an argument whose type `h/arg-types`
+  leaves `:any` (an `inet` column's), which may be an object of the type.
 - Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
   PostgreSQL folds it to lower case, and check takes it as written.
 - Under qualified keys, the key of a column next.jdbc qualifies by a table the data does not
