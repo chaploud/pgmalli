@@ -284,6 +284,13 @@
 (defn- pg-check [{:keys [constraint expr] :as f}]
   [:pg/check {:pg/constraint constraint :error/message (check-message f)} expr])
 
+(defn- between-symmetric?
+  "Whether an expression is how PostgreSQL writes x BETWEEN SYMMETRIC a AND b, one of whose two
+   alternatives is empty unless a = b."
+  [e]
+  (let [[x a b] (map #(get-in e %) [[1 1 1] [1 1 2] [1 2 2]])]
+    (= e [:or [:and [:>= x a] [:<= x b]] [:and [:>= x b] [:<= x a]]])))
+
 (defn- table-constraint
   "{:schema :unrendered :skipped} for a table-level check fact; :schema nil when it cannot be
    rendered. A branch that lost a fact is never enforced partially: the CHECK is evaluated
@@ -318,9 +325,9 @@
                   (assoc (whole {:schema (if (seq alts) (into [:or {:pg/constraint constraint :error/message message}] (map :schema alts)) [:not {:pg/constraint constraint :error/message message} :any])
                                  :unrendered (mapcat :unrendered alts)
                                  :skipped (mapcat :skipped alts)})
-                         :diagnostics (for [[i a] (map-indexed vector all) :when (unreachable? (:schema a))]
+                         :diagnostics (for [[i a] (map-indexed vector all) :when (and (unreachable? (:schema a)) (not (between-symmetric? (:expr f))))]
                                         {:kind (if partitions? :unreachable-partition :unreachable-alternative) :severity :warning
-                                         :constraint constraint :alternative i
+                                         :constraint constraint :alternative (inc i)
                                          :message (if partitions?
                                                     "a partition can take no row: its bounds and its parent's do not overlap"
                                                     (str "alternative " (inc i) " of " constraint " can match no row: its bounds cross"))})))

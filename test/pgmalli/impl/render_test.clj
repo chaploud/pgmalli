@@ -498,6 +498,21 @@
     (is (= 5 (count diagnostics)))
     (is (every? #(and (keyword? (:severity %)) (string? (:message %))) diagnostics))))
 
+(deftest a-not-valid-foreign-key-is-noted-and-between-symmetric-is-no-unreachable-alternative
+  (let [{:keys [diagnostics]} (r/rendered (p/facts {:name "public" :types {}
+                                                    :tables {"p" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}]
+                                                                  :constraints {"p_pkey" {:name "p_pkey" :type "PRIMARY KEY" :columns ["id"]}}}
+                                                             "t" {:columns [{:name "n" :position 1 :data_type "integer" :is_nullable false}
+                                                                            {:name "p_id" :position 2 :data_type "integer" :is_nullable true}]
+                                                                  :constraints {"sym" {:name "sym" :type "CHECK" :is_valid true
+                                                                                       :check_clause "CHECK (n >= 1000 AND n <= 1 OR n >= 1 AND n <= 1000)"}
+                                                                                "crossed" {:name "crossed" :type "CHECK" :is_valid true
+                                                                                           :check_clause "CHECK (n = 9 OR n >= 5 AND n <= 1)"}
+                                                                                "t_p_id_fkey" {:name "t_p_id_fkey" :type "FOREIGN KEY" :columns ["p_id"] :is_valid false
+                                                                                               :references {:schema "public" :table "p" :columns ["id"]}}}}}}))]
+    (is (= [[:unreachable-alternative "crossed" 2] [:not-valid "t_p_id_fkey" nil]] (map (juxt :kind :constraint :alternative) diagnostics)))
+    (is (re-find #"^alternative 2 of crossed" (:message (first diagnostics))))))
+
 (deftest a-not-enforced-constraint-is-noted-not-applied
   (let [{:keys [registry unrendered diagnostics]} (r/rendered (p/facts {:name "public" :types {}
                                                                         :tables {"p" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}]

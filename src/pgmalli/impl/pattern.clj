@@ -32,7 +32,7 @@
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
                                                            :index? (from a unique index, not a constraint)
                                                            :partial? (the index has a predicate)}
-     :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
+     :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns} :valid? (false for NOT VALID)}
      :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE;
                                                            :enum or :domain-ref for a base type of the schema)
                                                            :value-type (what its CHECKs read VALUE as, pgmalli.impl.eval/column-type)}
@@ -317,7 +317,7 @@
                                      :max-bits {:fact :length :fn :length :max max_length})))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced index partial exclude]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial exclude]}]
   (case type
     "EXCLUDE" [(merge base {:fact :exclude :constraint cname :method (:method exclude) :partial? (boolean (:partial exclude))
                             :elements (mapv #(select-keys % [:column :op]) (:elements exclude))})]
@@ -326,9 +326,10 @@
     ;; NOT ENFORCED: the database never checks it, so it is not a reference, only noted
     "FOREIGN KEY" (if (false? is_enforced)
                     [(merge base {:fact :not-enforced :constraint cname :input (str "FOREIGN KEY " (pr-str columns))})]
-                    [(merge base {:fact :references :constraint cname :columns columns
-                                  :match (if (= "FULL" (:match references)) :full :simple)
-                                  :to (select-keys references [:schema :table :columns])})])
+                    [(cond-> (merge base {:fact :references :constraint cname :columns columns
+                                          :match (if (= "FULL" (:match references)) :full :simple)
+                                          :to (select-keys references [:schema :table :columns])})
+                       (false? is_valid) (assoc :valid? false))])
     []))
 
 (defn- citext? [type-name] (boolean (re-find #"(?:^|\.)citext$" (str/replace (str type-name) #"\(.*\)$" ""))))
