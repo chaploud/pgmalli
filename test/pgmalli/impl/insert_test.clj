@@ -47,7 +47,7 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"rows carry columns the table does not have"
                         (data/inserts registry {"sample.groups" [{:id 1 :name "a" :motto "x"}]}))
       "thrown by the call, not on realizing the result")
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dataset holds tables the registry does not"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"dataset names tables the registry does not"
                         (data/inserts registry {"sample.nope" [{:id 1}]}))))
 
 (def ^:private typed
@@ -82,3 +82,9 @@
 
 (deftest rows-of-defaults-alone-name-a-column-as-default
   (is (= ["INSERT INTO public.e (id) VALUES (DEFAULT), (DEFAULT)"] (honey.sql/format (first (data/inserts typed {"public.e" [{} {}]}))))))
+
+(deftest a-misspelt-column-or-table-in-a-dataset-names-the-one-meant
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[:nmae\]; did you mean :name\?"
+                        (data/inserts registry {"sample.groups" [{:id 1 :nmae "x"}]})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean sample.groups\?"
+                        (data/inserts registry {"sample.group" [{:id 1}]}))))

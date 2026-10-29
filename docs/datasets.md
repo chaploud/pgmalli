@@ -53,7 +53,7 @@ default):
 
 (try (data/dataset-generator registry {:except #{"public.users"}})
      (catch clojure.lang.ExceptionInfo e (ex-message e)))
-;; => "public.events references public.users, which :except leaves out"
+;; => "public.events references public.users, which :except leaves out; leave public.events out too, or keep public.users"
 ```
 
 A foreign key is filled from a row of the table it references. A cycle of NOT NULL

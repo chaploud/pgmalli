@@ -3,6 +3,7 @@
    the database accepts and its values in the form the driver needs."
   (:require [clojure.string :as str]
             [pgmalli.impl.dataset :as ds]
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.json :as json]
             [pgmalli.impl.shape :as shape]
             [pgmalli.impl.types :as types]))
@@ -58,7 +59,9 @@
       (let [placed (set (map :table out))
             ready (filter (fn [t] (every? #(or (= (:table %) (:table t)) (not (given (:table %))) (placed (:table %))) (:refs t))) left)]
         (when (empty? ready)
-          (throw (ex-info "tables reference each other in a cycle" {:tables (mapv :table left)})))
+          (error/fail! :pgmalli.error/reference-cycle
+                       (str "tables reference each other in a cycle: " (mapv :table left) "; insert those rows yourself, deferring the foreign keys")
+                       {:given (mapv :table left)}))
         (recur (into out ready) (remove (set ready) left) given)))))
 
 (defn- rows-parents-first
@@ -94,7 +97,11 @@
   (let [all (ds/tables registry)
         ts (filter #(seq (get dataset (:table %))) all)]
     (when-let [unknown (seq (remove (set (map :table all)) (keys dataset)))]
-      (throw (ex-info (str "dataset holds tables the registry does not: " (pr-str unknown)) {:tables unknown})))
+      (let [known (vec (sort (map :table all)))]
+        (error/fail! :pgmalli.error/invalid-dataset
+                     (str "the dataset names tables the registry does not: " (vec unknown)
+                          (some->> (error/suggest (first unknown) known) (format "; did you mean %s?")) "; it holds " known)
+                     {:given (vec unknown) :known known})))
     (vec
      (for [{:keys [name table refs]} (parents-first ts)
            :let [entries (shape/column-entries (get (shape/schemas-of registry) name))
@@ -107,8 +114,12 @@
                                         :let [u (remove #(contains? columns %) (keys row))] :when (seq u)]
                                     [i (vec u)]))
                  _ (when (seq unknown)
-                     (throw (ex-info (str table " rows carry columns the table does not have: " (pr-str (distinct (mapcat val unknown))))
-                                     {:table table :rows unknown})))
+                     (let [given (vec (distinct (mapcat val unknown)))
+                           known (vec (sort (keys columns)))]
+                       (error/fail! :pgmalli.error/invalid-dataset
+                                    (str table " rows carry columns the table does not have: " given
+                                         (some->> (error/suggest (clojure.core/name (first given)) (map clojure.core/name known)) (format "; did you mean :%s?")) "; it has " known)
+                                    {:given given :known known :table table :rows unknown})))
                  ;; rows of defaults alone still name a column: VALUES () is no SQL, DEFAULT VALUES one row only
                  used (or (seq (remove generated (distinct (mapcat keys rows)))) (take 1 (map first entries)))]]
        (cond-> {:insert-into (if identity? [{:overriding-value :system} (keyword table)] (keyword table))

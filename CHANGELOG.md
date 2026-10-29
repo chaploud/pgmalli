@@ -134,6 +134,10 @@ All notable changes to this project are documented here. The format follows
   in any comparison, code-built joins making tables nullable.
 - `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
   `{:select [:*]}`, and makes outer-joined columns nullable.
+- Dataset and insert errors say what to do: a cycle of references names its tables and the
+  fix, `:except` leaving out a referenced table names the one to leave out too, and a
+  misspelt table or column suggests the one meant. Suggestions count a swap of two letters as
+  one edit, in one place (`pgmalli.impl.error`), not through malli's internal spell checker.
 - A row failing a CHECK reads its name and its text, as PostgreSQL's error names it:
   `violates check constraint likes_within_views: CHECK (likes <= views)` (it read the name
   alone); a regex or LIKE pattern pgmalli derived says the same, not "should match regex".

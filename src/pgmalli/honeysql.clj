@@ -658,15 +658,6 @@
   (let [[a column] (split-column col)]
     (boolean (and (nil? a) (some #(and (map? %) (contains? % (folded column))) (chain scope))))))
 
-(defn- edit-distance [^String a ^String b]
-  (let [n (count b)]
-    (peek (reduce (fn [prev [i ca]]
-                    (reduce (fn [row j]
-                              (conj row (min (inc (peek row)) (inc (nth prev (inc j)))
-                                             (+ (nth prev j) (if (= ca (.charAt b j)) 0 1)))))
-                            [(inc i)] (range n)))
-                  (vec (range (inc n))) (map-indexed vector a)))))
-
 (defn- near-columns
   "Up to three columns of the scope's tables spelled close to col's name: what it likely meant."
   [registry scope col]
@@ -679,9 +670,9 @@
                               [alias {:keys [table]}] sc :when (and table (or (nil? a) (= a alias)))
                               n (keys (table-columns registry table)) :when (not (system-columns n))]
                           n))
-        limit (if (<= 5 (count c)) 2 1)]
+        limit (error/close-enough c)]
     (->> names
-         (keep #(let [d (edit-distance c %)] (when (<= d limit) [% d])))
+         (keep #(let [d (error/edit-distance c %)] (when (<= d limit) [% d])))
          (sort-by second) (take 3) (mapv (comp keyword first)) not-empty)))
 
 (defn- column-problems [registry sc stmt schema]

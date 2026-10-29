@@ -4,6 +4,7 @@
   (:require [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.registry :as reg]
             [pgmalli.impl.shape :as shape]))
 
@@ -38,10 +39,15 @@
          excepted (set except)
          all (into known (for [[_ s] (shape/schemas-of registry) :when (shape/row-schema? s)] (:pg/table (second (shape/row-map s)))))]
      (when-let [stray (seq (remove all excepted))]
-       (throw (ex-info (str ":except names tables the registry does not: " (vec stray) "; it holds " (vec (sort all)))
-                       {:tables (vec stray) :known (vec (sort all))})))
+       (error/fail! :pgmalli.error/invalid-options
+                    (str ":except names tables the registry does not: " (vec stray)
+                         (some->> (error/suggest (first stray) all) (format "; did you mean %s?"))
+                         "; it holds " (vec (sort all)))
+                    {:given (vec stray) :known (vec (sort all))}))
      (doseq [t ts, r (:refs t) :when (excepted (:table r))]
-       (throw (ex-info (str (:table t) " references " (:table r) ", which :except leaves out") {:table (:table t) :references (:table r)})))
+       (error/fail! :pgmalli.error/invalid-options
+                    (str (:table t) " references " (:table r) ", which :except leaves out; leave " (:table t) " out too, or keep " (:table r))
+                    {:given (:table t) :table (:table t) :references (:table r)}))
      (mapv (fn [t] (update t :refs #(vec (filter (comp known :table) %)))) ts))))
 
 (defn key-of [row columns] (mapv #(get row %) columns))
@@ -92,7 +98,9 @@
       done
       (let [deps (into {} (map (fn [t] [(:table t) (map :table (:refs t))]) ts))
             ready (sort (filter #(every? (fn [d] (or (= d %) (not (left d)))) (deps %)) left))]
-        (when (empty? ready) (throw (ex-info "tables reference each other in a cycle" {:tables (vec (sort left))})))
+        (when (empty? ready) (error/fail! :pgmalli.error/reference-cycle
+                                       (str "tables reference each other in a cycle: " (vec (sort left)) "; leave one out with :except")
+                                       {:given (vec (sort left))}))
         (recur (into done ready) (reduce disj left ready))))))
 
 (defn- try-order
