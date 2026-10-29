@@ -79,7 +79,10 @@
   (println "  db:  " (pr-str db)))
 
 (defn- generate! [config path]
-  (let [written (generate/generate! config)]
+  (let [written (generate/generate! config)
+        out-dir (:out-dir (files/config config))]
+    (when-not (= "pgmalli" (last (str/split (str/replace out-dir #"/+$" "") #"/")))
+      (warn (str ":out-dir " out-dir " does not end in pgmalli: pgmalli.core/registry reads pgmalli/<schema>.edn from the classpath")))
     (doseq [[schema out] written
             :let [data (files/read-edn out)]]
       (println "wrote" out (str "(" schema ": " (counts data) ")"))
@@ -113,7 +116,11 @@
     (cond (#{"help" "-h" "--help"} cmd) (do (println usage) 0)
           (or (not (#{"generate" "check"} cmd)) (seq extra)
               (seq (remove (if (= "check" cmd) #{"--edn"} #{}) flags)))
-          (do (binding [*out* *err*] (println usage)) 2)
+          (do (binding [*out* *err*]
+                (when (and cmd (not (#{"generate" "check"} cmd)) (not (str/starts-with? cmd "-")))
+                  (println (str "pgmalli: unknown command " cmd (error/did-you-mean (error/suggest cmd ["generate" "check"])))))
+                (println usage))
+              2)
           :else (let [config (read-config path)]
                   (if (= "check" cmd)
                     (check! config path (some #{"--edn"} flags))

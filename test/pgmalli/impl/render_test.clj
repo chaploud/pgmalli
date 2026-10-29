@@ -74,7 +74,7 @@
     (is (= [:multi {:dispatch :mood :pg/constraint "closed_check" :error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}
             ["sad" [:map [:closed_at [:time/instant {:error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
             ["happy" [:map [:closed_at [:nil {:error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
-            [:malli.core/default [:map [:mood :nil]]]]
+            [:malli.core/default [:map [:mood [:nil {:error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]]
            (nth users 2)) "a branch check becomes :multi")
     (is (empty? unrendered))
     (is (= [:pg/check {:pg/constraint "score_check" :error/message "violates check constraint score_check: CHECK (score <= total)"} [:<= :score :total]] (nth users 3))
@@ -132,7 +132,7 @@
     (is (= [:multi {:dispatch :kind :pg/constraint "k0" :error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}
             ["a" [:map [:tenant [:maybe [:enum {:error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"} #uuid "1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"]]]]]
             ["b" [:map [:tenant [:nil {:error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}]]]]
-            [:malli.core/default [:map [:kind :nil]]]]
+            [:malli.core/default [:map [:kind [:nil {:error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}]]]]]
            (nth (:pg.public/t registry) 2))
         "a uuid value set is an enum of uuids")
     (is (= [:pg/check {:pg/constraint "k1" :error/message "violates check constraint k1: CHECK (kind = 'a'::text AND since = '2020-01-01'::date OR kind = 'b'::text AND since IS NULL)"}
@@ -328,7 +328,7 @@
     (is (= [:multi {:dispatch :kind :pg/constraint "k" :error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}
             [nil [:or [:map [:note [:nil {:error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}]]] [:map [:note [:string {:error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}]]]]]
             ["a" [:map [:note [:string {:error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}]]]]
-            [:malli.core/default [:map [:kind :nil]]]]
+            [:malli.core/default [:map [:kind [:nil {:error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}]]]]]
            (nth (:pg.public/t registry) 2))
         "a NULL dispatches on nil to every branch (kind = 'a' is NULL there, not false); a value with no branch fails the CHECK")
     (is (m/validate :pg.public/t {:kind nil :note nil :at nil :tz nil} {:registry reg}))
@@ -364,7 +364,7 @@
                                                                                     {:name "result" :position 2 :data_type "jsonb" :is_nullable true}]
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (status = 'open'::text AND result IS NULL OR status = 'done'::text AND result IS NOT NULL)"}}}}}))
         reg (registry-with registry)]
-    (is (= [:malli.core/default [:map [:status :nil]]] (last (nth (:pg.public/t registry) 2)))
+    (is (= [:malli.core/default [:map [:status [:nil {:error/message "violates check constraint k: CHECK (status = 'open'::text AND result IS NULL OR status = 'done'::text AND result IS NOT NULL)"}]]]] (last (nth (:pg.public/t registry) 2)))
         "a NOT NULL dispatch column can only take the values that have a branch")
     (is (not (m/validate :pg.public/t {:status "other" :result nil} {:registry reg})))
     (is (= [:map [:result [:some {:error/message "violates check constraint k: CHECK (status = 'open'::text AND result IS NULL OR status = 'done'::text AND result IS NOT NULL)"}]]] (get-in registry [:pg.public/t 2 3 1])) "IS NOT NULL on a jsonb column is :some, not :any")

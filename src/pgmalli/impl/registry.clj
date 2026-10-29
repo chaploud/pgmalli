@@ -23,6 +23,8 @@
 (defn read-generated
   "The generated data for a schema name, from the classpath (pgmalli/<schema>.edn)."
   [schema]
+  (when-not (string? schema)
+    (error/fail! :pgmalli.error/invalid-options (str "a schema name is a string, such as \"public\"; given " (pr-str schema)) {:given schema}))
   (let [path (str "pgmalli/" schema ".edn")]
     (edn/read-string (slurp (or (io/resource path)
                                 (error/fail! :pgmalli.error/not-generated
@@ -289,7 +291,9 @@
                               :let [k (:dispatch (second c))
                                     branches (drop 2 c)
                                     vs (remove #{nil :malli.core/default} (map first branches))]
-                              :when (and (seq vs) (some #(= [:malli.core/default [:map [k :nil]]] %) branches))]
+                              :when (and (seq vs) (some (fn [[v m]] (and (= :malli.core/default v) (vector? m) (= 2 (count m))
+                                                                        (let [[ek es] (second m)] (and (= k ek) (= :nil (if (vector? es) (first es) es))))))
+                                               branches))]
                           [k (vec vs)]))
         pin (fn [[k & more :as e]] (if-let [vs (pinned k)]
                                      (let [s (last more)] (conj (pop e) (if (shape/maybe? s) [:maybe (shape/merge-props (last s) {:gen/elements vs})] (shape/merge-props s {:gen/elements vs}))))

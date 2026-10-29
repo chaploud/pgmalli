@@ -307,7 +307,7 @@
                                                               (if (= 1 (count all)) (first all) (into [:or] all)))]])
                                                     (for [[v group] (group-by :value (remove (comp nil? :value) bs))]
                                                       [v (if (= 1 (count group)) (:schema (first group)) (into [:or] (map :schema group)))])
-                                                    [[:malli.core/default (if d (:schema d) [:map [(shape/ident-key dispatch) :nil]])]]))
+                                                    [[:malli.core/default (if d (:schema d) [:map [(shape/ident-key dispatch) [:nil {:error/message message}]]])]]))
                               :unrendered (mapcat :unrendered (cond-> bs d (conj d)))
                               :skipped (mapcat :skipped (cond-> bs d (conj d)))}))
       ;; an alternative no row can match is left out (a generator would look for one forever)

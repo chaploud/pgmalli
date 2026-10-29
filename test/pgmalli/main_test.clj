@@ -22,7 +22,8 @@
 
 (deftest an-unknown-command-prints-usage-on-stderr-and-exits-2
   (is (= {:code 2 :out ""} (dissoc (cli "frob") :err)))
-  (is (str/starts-with? (:err (cli "frob")) "usage:"))
+  (is (str/starts-with? (:err (cli "frob")) "pgmalli: unknown command frob\nusage:"))
+  (is (str/starts-with? (:err (cli "genrate")) "pgmalli: unknown command genrate; did you mean generate?"))
   (is (= 2 (:code (cli "generate" "--edn"))) "--edn is check's"))
 
 (deftest a-config-path-that-does-not-exist-exits-2
