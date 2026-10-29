@@ -5,6 +5,7 @@
   (:require [clojure.test.check.generators :as gen]
             [malli.core :as m]
             [pgmalli.impl.eval :as ev]
+            [pgmalli.impl.shape :as shape]
             [pgmalli.impl.types :as types]))
 
 (defn- code-points [^String s] (.codePointCount s 0 (count s)))
@@ -12,17 +13,31 @@
 (def string-schema
   ":string with :min and :max counting characters (code points), as PostgreSQL's length and
    varchar(n) do, where malli's counts UTF-16 units. :pg/max-length n is a varchar(n) or
-   char(n): it cuts spaces past n off, then :min and :max count what it keeps."
+   char(n): it cuts spaces past n off, then :min and :max count what it keeps. A bit string
+   (:pg/type bit or bit varying) holds 0s and 1s alone."
   (m/-simple-schema
    {:type :string :pred string?
     :property-pred (fn [props]
                      (let [bounds ((m/-min-max-pred code-points) props)
-                           n (:pg/max-length props)]
+                           n (:pg/max-length props)
+                           bits? (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
+                           bounds (if bits? (fn [s] (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s)))) bounds)]
                        (if n
                          (fn [^String s]
                            (let [kept (if (<= (code-points s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]
                              (boolean (and (or (identical? kept s) (re-matches #" *" (subs s (count kept))))
                                            (or (nil? bounds) (bounds kept))))))
+                         bounds)))}))
+
+(def double-schema
+  ":double, a real (:pg/type) within single precision's range: PostgreSQL rejects a value that
+   overflows it or underflows to zero."
+  (m/-simple-schema
+   {:type :double :pred double?
+    :property-pred (fn [props]
+                     (let [bounds ((m/-min-max-pred nil) props)]
+                       (if (#{"real" "float4"} (shape/type-name props))
+                         (fn [d] (and (ev/float4? d) (or (nil? bounds) (bounds d))))
                          bounds)))}))
 
 (def check-schema
@@ -116,5 +131,5 @@
 
 (def schemas
   "The schema types pgmalli registers, by name."
-  {:string string-schema :pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
+  {:string string-schema :double double-schema :pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
    :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema})

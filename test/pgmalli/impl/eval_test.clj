@@ -1,7 +1,9 @@
 (ns pgmalli.impl.eval-test
   (:require [clojure.test :refer [deftest is testing]]
+            [malli.core :as m]
             [pgmalli.impl.eval :as ev]
-            [pgmalli.impl.expr :as x]))
+            [pgmalli.impl.expr :as x]
+            [pgmalli.impl.pgtypes :as pgtypes]))
 
 (defn- passes? [clause row] (ev/passes? (x/check-clause clause) row))
 
@@ -353,3 +355,14 @@
     (is (passes? "CHECK ((ts)::date = d)" {:ts now :d (.toLocalDate (.atZone now (java.time.ZoneId/systemDefault)))}))
     (is (passes? "CHECK ((ts)::timestamp without time zone = l)" {:ts now :l (java.time.LocalDateTime/ofInstant now (java.time.ZoneId/systemDefault))}))))
 
+(deftest bit-strings-hold-0s-and-1s-and-a-real-fits-single-precision
+  (let [registry {:registry (merge (m/default-schemas) pgtypes/schemas)}
+        valid? (fn [s v] (m/validate s v registry))]
+    (is (valid? [:string {:pg/type "bit(4)" :min 4 :max 4}] "1010"))
+    (is (not (valid? [:string {:pg/type "bit(4)" :min 4 :max 4}] "1012")))
+    (is (not (valid? [:string {:pg/type "bit varying(8)"}] "x")))
+    (is (valid? [:string {:pg/type "text"}] "x"))
+    (is (valid? [:double {:pg/type "real"}] 3.4e38))
+    (is (not (valid? [:double {:pg/type "real"}] 3.5e38)))
+    (is (not (valid? [:double {:pg/type "real"}] 1e-46)))
+    (is (valid? [:double {:pg/type "double precision"}] 3.5e38))))
