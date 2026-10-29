@@ -63,5 +63,8 @@
                       (if (and (vector? target) (= :enum (first target)))
                         (str (or (type-label p) "enum") ": " (str/join " | " (shape/entries target)))
                         (or (type-label p) (describe schemas (last s)))))
-      (= :and head) (or (type-label p) (describe schemas (first children)))
+      (= :and head) (let [n (some #(when (and (vector? %) (= :pg/numeric (first %))) (second %)) children)
+                          label (or (type-label p) (describe schemas (first children)))]
+                      ;; numeric(p,s) keeps its typmod in a [:pg/numeric ...] part, not in :pg/type
+                      (if (and n (= "numeric" label)) (str "numeric(" (:precision n) "," (:scale n) ")") label))
       :else (or (type-label p) (leaf s)))))

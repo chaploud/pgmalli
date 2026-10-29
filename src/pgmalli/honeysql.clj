@@ -1248,7 +1248,8 @@
 
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc builds it; nil when a selected
-   column cannot be resolved (check says which).
+   column cannot be resolved (check says which), or a whole row is selected ({:select [:t]}),
+   which next.jdbc reads as one PGobject.
 
    Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
    operation's row is its first member's names. Under qualified keys, a column next.jdbc keys

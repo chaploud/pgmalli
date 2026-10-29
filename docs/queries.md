@@ -114,7 +114,7 @@ keyed as in `sql/format`'s `:params`:
 |---|---|
 | compared with a column | the column's kind (an enum's labels kept), without NULL; its CHECKs and lengths are left out, as PostgreSQL compares a value beyond them and matches no row |
 | in `:in` | a non-empty vector, list or set of the column's type |
-| assigned to a column (`:set`, `:values`) | the column's type, NULL allowed when the column allows it |
+| assigned to a column (`:set`, `:values`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | `[:int {:min 0}]` |
 | used only inside code (`(when x ...)`) | its type or nil |
@@ -163,7 +163,8 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 ;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/created-at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
 ```
 
-`h/row-schema` returns nil when a selected column cannot be resolved; `h/check` says which.
+`h/row-schema` returns nil when a selected column cannot be resolved (`h/check` says which), or
+when a whole row is selected (`{:select [:u] :from [[:users :u]]}`).
 
 ## The tables a query uses
 
