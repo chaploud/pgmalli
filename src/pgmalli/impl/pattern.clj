@@ -182,14 +182,67 @@
     (str/replace p (re-pattern (str "(?s)" (when (seq e) (str (java.util.regex.Pattern/quote e) "(.)|")) "\\\\"))
                  #(if-let [c (when (vector? %) (second %))] (str "\\" c) "\\\\"))))
 
+(defn- type-key
+  "A type's name as a cast and a column spell it alike: no schema, no quotes, an alias as its
+   type (bpchar -> character)."
+  [t]
+  (let [n (-> (if (keyword? t) (name t) (str t)) (str/replace #"^[^.\"]+\.|\"" "") str/lower-case)]
+    (or (some-> (types/entry (str/replace n "-" " ")) :name) n)))
+
+(defn- column-type-info
+  "What normalize needs of a column of type t (under its domains): its type-key, the types a
+   cast to keeps its value in (:keeps: text and varchar for a text, varchar, name, citext or enum
+   value; bit and varbit for a bit string), whether it is a float (:float?), and :not-null?."
+  [t enum? not-null?]
+  (let [t (str/replace t #"\(.*\)$" "")
+        e (types/entry t)]
+    {:type (type-key t)
+     :keeps (cond (or enum? (= "citext" (:name e)) (and (= :text (:eval e)) (not= "character" (:name e)))) #{"text" "character varying"}
+                  (#{"bit" "bit varying"} (:name e)) #{"bit" "bit varying"}
+                  :else #{})
+     :float? (= :float (:eval e))
+     :not-null? (boolean not-null?)}))
+
+(defn- value-preserving-casts
+  "The expression without the casts that keep the value the patterns compare: a literal to text
+   or varchar or to a column's own type, a column to its own type or to one its :keeps names.
+   Any other cast is kept, so the CHECK matches no pattern."
+  [e types]
+  (walk/postwalk
+   (fn [f]
+     (if-not (and (vector? f) (= :cast (first f)) (= 3 (count f)) (keyword? (nth f 2)))
+       f
+       (let [[_ v t] f
+             t (type-key t)]
+         (cond (literal? v) (if (or (#{"text" "character varying"} t) (some #(= t (:type %)) (vals types))) v f)
+               (column-ref? v) (let [c (get types v)]
+                                 (if (and c (or (= t (:type c)) (contains? (:keeps c) t))) v f))
+               :else f))))
+   e))
+
+(def ^:private pattern-ops #{:like :ilike :regex :iregex})
+
 (defn- normalize
-  "The form the matchers read: PostgreSQL's rewrites undone, casts removed, LIKE ... ESCAPE
-   (like_escape) as a pattern escaped with a backslash."
-  [e]
-  (walk/postwalk #(if (and (vector? %) (= :like_escape (first %)) (string? (second %)) (string? (last %)) (= 3 (count %)))
-                    (backslash-escaped (second %) (last %))
-                    %)
-                 (x/strip-casts (ev/fold-casts (x/canonical e)))))
+  "The form the matchers read: PostgreSQL's rewrites undone, value-preserving casts removed,
+   LIKE ... ESCAPE (like_escape) as a pattern escaped with a backslash, a pattern on a NOT NULL
+   column IS TRUE as the pattern. A comparison of a float column is left unmatchable: NaN, which
+   PostgreSQL orders above every number, is no bound of malli's. types is {column keyword
+   column-type-info}."
+  [e types]
+  (walk/postwalk (fn [f]
+                   (cond (and (vector? f) (= :like_escape (first f)) (string? (second f)) (string? (last f)) (= 3 (count f)))
+                         (backslash-escaped (second f) (last f))
+
+                         (and (vector? f) (= [:is true] [(first f) (last f)]) (= 3 (count f))
+                              (vector? (second f)) (pattern-ops (first (second f)))
+                              (:not-null? (get types (second (second f)))))
+                         (second f)
+
+                         (and (vector? f) (#{:< :> :<= :>= :between} (first f)) (some #(:float? (get types %)) (rest f)))
+                         [::float f]
+
+                         :else f))
+                 (value-preserving-casts (ev/fold-casts (x/canonical e)) types)))
 
 (defn- match-columns
   "All column facts of an expression, or nil if any AND branch matches nothing."
@@ -202,9 +255,9 @@
 
 (defn column-patterns
   "The column patterns of an expression, every AND branch one, the columns as keywords; nil
-   when a branch matches none."
-  [e]
-  (some-> e normalize match-columns))
+   when a branch matches none. types as normalize reads it."
+  [e types]
+  (some-> e (normalize types) match-columns))
 
 (defn- match-branches
   "CHECK whose alternatives each pin one column to literal values (or its nullness) and constrain
@@ -372,7 +425,7 @@
                            citext-value? (and (citext? root) (contains? (uncast-columns (some-> expr x/canonical)) :VALUE))
                            ;; NOT VALID: existing values may violate it, so it is reported, not applied;
                            ;; over char(n) the patterns, which read text, do not apply
-                           ms (when (and (not= false is_valid) (not (vector? value-type))) (some-> expr normalize match-columns))
+                           ms (when (and (not= false is_valid) (not (vector? value-type))) (some-> expr (normalize {:VALUE (column-type-info root (contains? enums (first (type-ident root))) not_null)}) match-columns))
                            ms (if citext-value? (let [cs (map citext-fact ms)] (when (every? some? cs) cs)) ms)
                            check (when expr (merge base {:constraint cname :sql definition :expr (x/canonical expr)}))]]
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
@@ -404,7 +457,7 @@
    read text, and char(n) compares and measures without its trailing spaces. On a citext
    column (in citext) read without a cast a regex or LIKE ignores case, and a CHECK comparing it otherwise is not
    evaluated."
-  [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar citext]
+  [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar citext types]
   (let [base (assoc base :constraint cname :sql check_clause)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try-clause check_clause)]
@@ -415,7 +468,7 @@
       (let [;; a generated column holds its expression's value: the CHECK is on that
             e (substitute (:expr parsed) generated)
             citext (set (filter (comp (uncast-columns (x/canonical e)) keyword) citext))
-            n (when (and (not= false is_valid) (not-any? bpchar (referenced-columns e))) (normalize e))
+            n (when (and (not= false is_valid) (not-any? bpchar (referenced-columns e))) (normalize e types))
             base (assoc base :expr (x/canonical e))]
         (if-let [ms (some->> (some-> n match-columns)
                              (map #(if (citext (name (:column %))) (citext-fact %) %))
@@ -467,7 +520,13 @@
                                                       (set (for [c (:columns t) :when (#{"character" "bpchar"} (:data_type c))] (:name c)))
                                                       (set (for [c (:columns t) :let [[i] (type-ident (:data_type c))]
                                                                  :when (or (citext? i) (citext? (get-in roots [i :root])))]
-                                                             (:name c))))
+                                                             (:name c)))
+                                                      (into {} (for [c (:columns t)
+                                                                     :let [[i] (type-ident (:data_type c))
+                                                                           root (get-in roots [i :root] (:data_type c))]]
+                                                                 [(keyword (:name c))
+                                                                  (column-type-info root (contains? enums (first (type-ident root)))
+                                                                                    (or (false? (:is_nullable c)) (get-in domains [i :not-null?])))])))
                                         (filter #(= "CHECK" (:type %)) constraints))
                                 ;; a domain on a generated column checks the expression's value
                                 (for [c (:columns t)
@@ -476,7 +535,7 @@
                                       :when (and expr (not array?) (contains? domains type-name))
                                       k (get-in schema [:types type-name :constraints])
                                       f (check-facts base {:name (str (:name c) " " (:name k)) :check_clause (:definition k) :is_valid (:is_valid k true)}
-                                                     {:VALUE expr} #{} #{})]
+                                                     {:VALUE expr} #{} #{} {})]
                                   f))))]
         f)))))
 

@@ -226,7 +226,8 @@
               nil)))
         ;; col IS NULL OR <pattern>: a value that is there takes the pattern
         (map #(if (= :when-present (:fact %)) (assoc (:fact-when-present %) :column (:column %)) %)
-             (pattern/column-patterns expr))))
+             ;; a hint, filtered by schema: k's casts to text are taken as keeping its value
+             (pattern/column-patterns expr {(keyword (name k)) {:type "character" :keeps #{"text" "character varying"}}}))))
 
 (defn- bpchar-hints
   "{k hints} of the char(n) values the checks among parts read (bpchar-hint), schema-of
@@ -297,6 +298,30 @@
                            f))]
     (if (= :and (first row)) (into [:and m] (map #(walk/postwalk fragment %)) (drop 2 row)) m)))
 
+(defn- joined-regex
+  "One regex for several (Java regex strings) whose strings match each: the one anchored at the
+   start, then the unanchored ones, then the one anchored at the end, in turn (^a, b and z\\z as
+   ^(?:a)[\\s\\S]*(?:b)[\\s\\S]*(?:z)\\z; a LIKE's ^a[\\s\\S]*\\z anchored at the start alone). nil when that
+   is not sure to hold: an alternation, flags, two anchored at one end, one anchored at both."
+  [res]
+  (let [any "[\\s\\S]*"
+        parts (for [r res
+                    :let [start? (str/starts-with? r "^")
+                          end? (str/ends-with? r "\\z")
+                          core (subs r (if start? 1 0) (- (count r) (if end? 2 0)))
+                          [core end?] (if (and start? end? (str/ends-with? core any)) [(subs core 0 (- (count core) (count any))) false] [core end?])
+                          [core start?] (if (and start? end? (str/starts-with? core any)) [(subs core (count any)) false] [core start?])]]
+                {:core core :start? start? :end? end?})
+        starts (filter :start? parts)
+        ends (filter :end? parts)
+        group #(str "(?:" (:core %) ")")]
+    (when (and (next res)
+               (not-any? #(or (str/includes? % "|") (str/includes? % "(?")) res)
+               (<= (count starts) 1) (<= (count ends) 1)
+               (not-any? #(and (:start? %) (:end? %)) parts))
+      (str (when (seq starts) "^") (str/join any (map group (concat starts (remove #(or (:start? %) (:end? %)) parts) ends)))
+           (when (seq ends) "\\z")))))
+
 (defn- generate-from-part
   "[:and ...] schemas with a part a generator should start from, as :gen/schema on the :and: an
    enum (its values, where those of a reference would be filtered), a regex (test.chuck makes
@@ -307,11 +332,17 @@
     (let [props (when (map? (second f)) (second f))
           parts (shape/entries f)
           tagged (fn [tag] (some #(when (and (vector? %) (= tag (first %))) %) parts))
+          res (filter #(and (vector? %) (= :re (first %))) parts)
+          ;; CHECKs on one column nest: [:and [:and type [:re a]] [:re b]]
+          nested-res (fn nested [ps] (mapcat #(cond (and (vector? %) (= :re (first %))) [%]
+                                                     (and (vector? %) (= :and (first %))) (nested (shape/entries %)))
+                                              ps))
           regex (when @regex-generation?
-                  (some #(when (and (vector? %) (= :re (first %)))
-                           (when-let [re (generation-regex (str (last %)))]
-                             (if (= re (str (last %))) % [:re re])))
-                        parts))
+                  ;; several: strings of all of them at once, which one alone seldom makes
+                  (or (some->> (joined-regex (distinct (map (comp str last) (nested-res parts)))) generation-regex (vector :re))
+                      (some #(when-let [re (generation-regex (str (last %)))]
+                               (if (= re (str (last %))) % [:re re]))
+                            res)))
           from (or (tagged :enum) regex (tagged :ref))]
       ;; generated from that part first, the other parts filtering: malli's :and generator
       (if from (into [:and (assoc (or props {}) :gen/schema (into [:and from] (remove #{from} parts)))] parts) f))

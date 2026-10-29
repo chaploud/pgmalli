@@ -54,7 +54,8 @@
          (check-facts "c IS NULL OR c = ANY (ARRAY[1, 2])")))
   (is (= [{:fact :in-set :column "c" :values ["a" "b"]}] (check-facts "c IN ('a'::text, 'b'::text)")))
   (is (= [{:fact :in-set :column "c" :values ["a"]}] (check-facts "c = 'a'::mood")))
-  (is (= [{:fact :in-set :column "c" :values ["a" "b"]}] (check-facts "c::text IN ('a'::character varying, 'b'::character varying)")))
+  (is (= [{:fact :in-set :column "v" :values ["a" "b"]}] (check-facts "v::text IN ('a'::character varying, 'b'::character varying)")))
+  (is (= [{:fact :in-set :column "m" :values ["happy"]}] (check-facts "(m)::text = 'happy'::text")) "an enum's label is its text")
   (is (= [{:fact :in-set :column "c" :values ["a" "b" "c"]}] (check-facts "c = ANY (ARRAY['a'::text, 'b'::text, 'c'::text])")))
   (is (= [{:fact :in-set :column "c" :values [0 1 2]}] (check-facts "c = ANY (ARRAY[0, 1, 2])")))
   (is (= [{:fact :range :column "c" :min 1 :min-exclusive? false :max 5 :max-exclusive? false}] (check-facts "c >= 1 AND c <= 5")))
@@ -63,7 +64,7 @@
   (is (= [{:fact :range :column "c" :min -1 :min-exclusive? false}] (check-facts "c >= '-1'::integer")))
   (is (= [{:fact :range :column "c" :max 10 :max-exclusive? false}] (check-facts "10 >= c")))
   (is (= [{:fact :non-blank :column "c" :trim? true}] (check-facts "length(TRIM(BOTH FROM c)) > 0")))
-  (is (= [{:fact :non-blank :column "c" :trim? true}] (check-facts "c::text = btrim(c::text) AND c::text <> ''::text")))
+  (is (= [{:fact :non-blank :column "v" :trim? true}] (check-facts "v::text = btrim(v::text) AND v::text <> ''::text")))
   (is (= [{:fact :non-blank :column "c" :trim? false}] (check-facts "c <> ''::text")))
   (is (= [{:fact :length :column "c" :fn :octet_length :exact 32}] (check-facts "octet_length(c) = 32")))
   (is (= [{:fact :length :column "c" :fn :length :max 9}] (check-facts "length(c) < 10")))
@@ -120,6 +121,38 @@
            (first fs)))
     (is (= [{:fact :column} {:fact :domain-ref :base "text"}] (map #(select-keys % [:fact :base]) (rest fs))))))
 
+(deftest a-cast-that-changes-the-value-matches-no-pattern
+  (doseq [chk ["c::numeric(3,0) = 3" "v::character varying(3) = 'abc'::text" "length((v)::character varying(2)) = 2"
+               "(v)::character(3) = 'abc'::bpchar" "(v)::bpchar = 'abc'::bpchar" "(c)::text = '1'::text" "(c)::bigint = ANY (ARRAY[(1)::bigint, (2)::bigint])"
+               "v = 'abc'::character varying(2)" "v = 'abc  '::bpchar"
+               ;; text orders by the collation, which malli's bounds do not know
+               "(v)::text >= 'a'::text" "(v)::text >= 'a'::text AND (v)::text <= 'z'::text" "v BETWEEN 'a' AND 'z'"]]
+    (is (= [:table-check] (map :fact (check-facts chk))) chk)))
+
+(deftest a-pattern-is-true-on-a-not-null-column-is-the-pattern
+  (let [facts (fn [nullable? chk]
+                (->> (p/facts {:name "public" :types {}
+                               :tables {"t" {:columns [{:name "v" :position 1 :data_type "text" :is_nullable nullable?}]
+                                             :constraints {"k" {:name "k" :type "CHECK" :check_clause (str "CHECK (" chk ")")}}}}})
+                     (filter :constraint) (map :fact)))]
+    (is (= [:like] (facts false "(v ~~ like_escape('a#%'::text, '#'::text)) IS TRUE")))
+    (is (= [:table-check] (facts true "(v ~~ like_escape('a#%'::text, '#'::text)) IS TRUE")) "a NULL is false IS TRUE, which v ~~ 'a%' takes")))
+
+(deftest a-bit-string-cast-to-bit-is-the-same-bits
+  (is (= [:length] (->> (p/facts {:name "public" :types {}
+                                  :tables {"t" {:columns [{:name "a" :position 1 :data_type "bit varying" :is_nullable false :max_length 4}]
+                                                :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (length(a::\"bit\") = 3)"}}}}})
+                        (filter :constraint) (map :fact)))))
+
+(deftest a-comparison-of-a-float-column-matches-no-pattern-since-postgresql-orders-nan-above-numbers
+  (let [facts (fn [chk]
+                (->> (p/facts {:name "public" :types {}
+                               :tables {"t" {:columns [{:name "w" :position 1 :data_type "double precision" :is_nullable true}]
+                                             :constraints {"k" {:name "k" :type "CHECK" :check_clause (str "CHECK (" chk ")")}}}}})
+                     (filter :constraint) (map :fact)))]
+    (is (= [:table-check] (facts "w >= (0)::double precision")))
+    (is (= [:in-set] (facts "w = ANY (ARRAY[(1)::double precision, (2)::double precision])")))))
+
 (deftest a-cast-of-a-number-literal-is-folded-as-postgresql-casts-it
   (is (= [{:fact :in-set :column "c" :values [3]}] (check-facts "c = (2.5)::integer"))))
 
@@ -136,15 +169,15 @@
     (is (nil? (:value-type (domain "character varying(4)" "CHECK (VALUE <> '')"))))))
 
 (deftest branch-checks
-  (is (= [{:fact :branch-check :dispatch "status"
-           :branches [{:values ["pending"] :facts [{:fact :null :column "closed_at"}]}
-                      {:values ["approved" "rejected"] :facts [{:fact :not-null :column "closed_at"}]}]
+  (is (= [{:fact :branch-check :dispatch "m"
+           :branches [{:values ["happy"] :facts [{:fact :null :column "closed_at"}]}
+                      {:values ["sad" "x"] :facts [{:fact :not-null :column "closed_at"}]}]
            :default nil}]
-         (check-facts "status = 'pending'::approval_status AND closed_at IS NULL OR (status IN ('approved'::approval_status, 'rejected'::approval_status)) AND closed_at IS NOT NULL")))
-  (is (= [{:fact :branch-check :dispatch "status"
-           :branches [{:values ["approved" "rejected"] :facts [{:fact :not-null :column "approver"}]}]
+         (check-facts "m = 'happy'::mood AND closed_at IS NULL OR (m IN ('sad'::mood, 'x'::mood)) AND closed_at IS NOT NULL")))
+  (is (= [{:fact :branch-check :dispatch "m"
+           :branches [{:values ["sad" "x"] :facts [{:fact :not-null :column "approver"}]}]
            :default [{:fact :null :column "approver"}]}]
-         (check-facts "(status IN ('approved'::t, 'rejected'::t)) AND approver IS NOT NULL OR (status <> ALL (ARRAY['approved'::t, 'rejected'::t])) AND approver IS NULL")))
+         (check-facts "(m IN ('sad'::mood, 'x'::mood)) AND approver IS NOT NULL OR (m <> ALL (ARRAY['sad'::mood, 'x'::mood])) AND approver IS NULL")))
   (is (= [{:fact :or-check
            :alternatives [[{:fact :null :column "pin"}]
                           [{:fact :in-set :column "kind" :values ["skill"]} {:fact :in-set :column "verb" :values ["acquired"]}]]}]

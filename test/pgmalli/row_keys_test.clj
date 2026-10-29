@@ -116,6 +116,16 @@
         (is (= (set (keys row)) (set (map first (drop 2 schema)))) (str builder))
         (is (m/validate schema row {:registry registry}) (str builder " " (pr-str (update-vals row class))))))))
 
+(deftest as-read-keys-a-table-of-a-schema-with-a-dot-by-the-table-alone
+  (when *db*
+    (exec-sql! "CREATE SCHEMA \"My.S\"; CREATE TABLE \"My.S\".\"T.t\" (id int PRIMARY KEY); INSERT INTO \"My.S\".\"T.t\" VALUES (1);")
+    (let [{:keys [host port db user password]} *db*
+          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+          registry (pgmalli/registry (files/from-database {:db *db*} "My.S"))
+          row (first (jdbc/execute! ds ["SELECT * FROM \"My.S\".\"T.t\""]))]
+      (is (= [:T.t/id] (keys row)))
+      (is (= (keys row) (map first (drop 2 (pgmalli/as-read registry "pg.My.S/T.t" {}))))))))
+
 (deftest jdbc-leaves-a-pooled-connection-as-it-was
   (when *db*
     (let [{:keys [host port db user password]} *db*

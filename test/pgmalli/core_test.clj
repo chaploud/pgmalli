@@ -374,3 +374,38 @@
         (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
           (is (= 5 (count (get ds "le.t"))) (pr-str (data/short-tables ds)))
           (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))))
+
+(deftest a-check-through-a-cast-that-changes-the-value-takes-what-postgresql-takes
+  (when *db*
+    (let [cases [["f" "float8" "f::integer = 2" 2.5] ["n" "numeric" "n::integer = 3" 2.5M] ["t" "text" "t::varchar(3) = 'abc'" "abcd"]
+                 ["l" "text" "length(l::varchar(2)) = 2" "abc"] ["c" "text" "c::char(3) IN ('abc')" "abc  "] ["b" "boolean" "b::text = 'true'" true]
+                 ["r" "real" "r::text = '0.1'" (float 0.1)] ["g" "numeric" "g::bigint IN (1, 2)" 1.4M] ["w" "float8" "w >= 0" ##NaN]]
+          [reg data] (registry-of "vc" (str "CREATE SCHEMA vc; CREATE TABLE vc.t (id int PRIMARY KEY"
+                                            (apply str (for [[c t chk] cases] (str ", " c " " t " CHECK (" chk ")"))) ");"))
+          unrendered (set (keep :constraint (:unrendered data)))
+          base (zipmap (cons :id (map (comp keyword first) cases)) (cons 1 (repeat nil)))]
+      (doseq [[i [c _ chk v]] (map-indexed vector cases)]
+        (exec-sql! (str "INSERT INTO vc.t (id, " c ") VALUES (" (+ 10 i) ", " (cond (string? v) (sql-literal v) (and (float? v) (Double/isNaN v)) "'NaN'" :else v) ")"))
+        (is (or (unrendered (str "t_" c "_check")) (m/validate :pg.vc/t (assoc base (keyword c) v) {:registry reg}))
+            (str chk " takes " (pr-str v)))))))
+
+(deftest dates-and-times-insert-inline-and-as-parameters
+  (when *db*
+    (let [[reg] (registry-of "dt" "CREATE SCHEMA dt; CREATE DOMAIN dt.day AS date CHECK (VALUE > '2000-01-01');
+                                   CREATE TABLE dt.t (id int PRIMARY KEY, d date NOT NULL, ts timestamp NOT NULL, tz timestamptz NOT NULL,
+                                                      tm time NOT NULL, tt timetz NOT NULL, iv interval NOT NULL, ds date[] NOT NULL, dd dt.day NOT NULL);")
+          ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 5)
+          sql (fn [opts] (str/join ";" (map #(first (honey.sql/format % opts)) (data/inserts reg ds))))]
+      (is (= 3 (count (get ds "dt.t"))))
+      (exec-sql! (sql {:inline true}))
+      (is (re-find #"CAST\(\? AS date\)" (first (honey.sql/format (first (data/inserts reg ds))))) "a parameter cast from its text"))))
+
+(deftest a-like-is-true-on-a-not-null-column-and-two-regexes-generate-rows-postgresql-takes
+  (when (and *db* @registry/regex-generation?)
+    (let [[reg data] (registry-of "lt" "CREATE SCHEMA lt; CREATE TABLE lt.t (id int PRIMARY KEY,
+                                          a text NOT NULL CHECK ((a LIKE 'a#%' ESCAPE '#') IS TRUE),
+                                          r text NOT NULL CHECK (r ~ '^a' AND r ~ 'z$'), k text NOT NULL CHECK (k LIKE 'b%' AND k ~ 'y$'));")
+          ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
+      (is (empty? (:unrendered data)))
+      (is (= 5 (count (get ds "lt.t"))) (pr-str (data/short-tables ds)))
+      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))

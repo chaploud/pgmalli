@@ -32,10 +32,26 @@
       :and (ref-type (first (shape/entries s)))
       nil)))
 
+(defn- temporal? [v]
+  (or (instance? java.time.temporal.TemporalAccessor v) (instance? java.time.Duration v) (instance? java.util.Date v)))
+
 (defn- as-text
-  "A value the driver takes no parameter of as text the database reads: a Duration in ISO 8601."
-  [v]
-  (if (instance? java.time.Duration v) (str v) v))
+  "A value the driver takes no parameter of, or HoneySQL's :inline writes unquoted (a date as
+   2025-01-01, arithmetic), as text the database reads: a Duration in ISO 8601, a date or time
+   in ISO 8601, an Instant or java.util.Date into a date or timestamp (without time zone)
+   column (type-name) in the JVM's zone, as pgjdbc sends it."
+  ([v] (as-text v nil))
+  ([v type-name]
+   (if-not (temporal? v)
+     v
+     (let [v (if (= java.util.Date (class v)) (.toInstant ^java.util.Date v) v)
+           zone (java.time.ZoneId/systemDefault)]
+       (str (if (instance? java.time.Instant v)
+              (case (:name (types/entry type-name))
+                "date" (.toLocalDate (.atZone ^java.time.Instant v zone))
+                "timestamp without time zone" (java.time.LocalDateTime/ofInstant v zone)
+                v)
+              v))))))
 
 (defn- hstore-text
   "A map as hstore text: {\"a\" \"1\" \"b\" nil} is \"a\"=>\"1\", \"b\"=>NULL."
@@ -56,7 +72,7 @@
           (and (ref-type s) (sequential? v)) (if (seq v)
                                                [:cast [:array (mapv as-text v)] [:raw (ref-type s)]]
                                                [:raw (str "CAST('{}' AS " (ref-type s) ")")])
-          (ref-type s) [:cast v [:raw (ref-type s)]]
+          (ref-type s) [:cast (as-text v) [:raw (ref-type s)]]
           (types/json? t) [:cast (json/write v) (keyword t)]
           ;; pgjdbc reads an hstore as a Map
           (and (instance? java.util.Map v) (= "hstore" (:name (types/entry type-name)))) [:cast (hstore-text v) :hstore]
@@ -67,10 +83,11 @@
               ;; an empty array of the type, in SQL every HoneySQL version since 2.4 passes on as it is
               [:raw (str "ARRAY[]::" elem "[]")])
             (if type-name
-              (let [e (types/entry type-name)] [:array (mapv as-text v) (or (:array-cast e) (:cast e) (keyword type-name))])
+              (let [e (types/entry type-name)] [:array (mapv #(as-text % type-name) v) (or (:array-cast e) (:cast e) (keyword type-name))])
               [:array (vec v)]))
           (and (or (string? v) (instance? java.time.Duration v)) (:cast (types/entry type-name)))
           [:cast (as-text v) (:cast (types/entry type-name))]
+          (and (temporal? v) t) [:cast (as-text v type-name) [:raw t]]
           :else v)))
 
 (defn- parents-first
@@ -139,10 +156,13 @@
                                     [i (vec u)]))
                  _ (when (seq unknown)
                      (let [given (vec (distinct (mapcat val unknown)))
-                           known (vec (sort (keys columns)))]
+                           ;; keyword and string keys side by side
+                           known (vec (sort-by str (keys columns)))
+                           suggest (some-> (error/suggest (clojure.core/name (first given)) (map clojure.core/name known))
+                                           (#(some (fn [k] (when (= % (clojure.core/name k)) k)) known)))]
                        (error/fail! :pgmalli.error/invalid-dataset
                                     (str table " rows carry columns the table does not have: " given
-                                         (error/did-you-mean (some->> (error/suggest (clojure.core/name (first given)) (map clojure.core/name known)) (str ":"))) "; it has " known)
+                                         (error/did-you-mean (some-> suggest pr-str)) "; it has " known)
                                     {:given given :known known :table table :rows unknown})))
                  ;; rows of defaults alone still name a column: VALUES () is no SQL, DEFAULT VALUES one row only
                  used (or (seq (remove generated (distinct (mapcat keys rows)))) (take 1 (map first entries)))

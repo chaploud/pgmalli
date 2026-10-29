@@ -72,6 +72,10 @@ full:
 ;; => nil
 ```
 
+A CHECK in `:unrendered` is not in the schema, so nothing generates values for it: the
+rows may be ones PostgreSQL refuses. Give the column a schema with `:overrides`
+([Overrides](../README.md#overrides)) that keeps the values to what the CHECK takes.
+
 ## Keeping a fixture
 
 A seed gives the same dataset in every run with the same versions of pgmalli and malli.

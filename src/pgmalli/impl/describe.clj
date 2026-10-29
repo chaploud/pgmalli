@@ -28,6 +28,8 @@
         (vector? s) (name (first s))
         :else (pr-str s)))
 
+(def ^:private ^:dynamic *described* #{})
+
 (defn- ordered [pairs] (apply array-map (mapcat identity pairs)))
 
 (defn describe
@@ -39,13 +41,15 @@
         children (when (vector? s) (shape/entries s))]
     (cond
       ;; a name the registry defines as data; malli's own types (:int, :any) are their names
-      (and (or (keyword? s) (string? s)) (vector? (get schemas s))) (describe schemas (get schemas s))
+      ;; a recursive schema: a name already being described is the name
+      (and (or (keyword? s) (string? s)) (vector? (get schemas s)))
+      (if (*described* s) s (binding [*described* (conj *described* s)] (describe schemas (get schemas s))))
       (= :maybe head) (let [d (describe schemas (first children))] (if (string? d) (str d "?") [:maybe d]))
       (= :map head) (ordered (for [[k ep v] (map shape/entry-parts children)]
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))
       ;; a table with CHECKs: its columns
       (and (= :and head) (vector? (first children)) (= :map (ffirst children))) (describe schemas (first children))
-      (#{:sequential :vector :set} head) [(describe schemas (first children))]
+      (#{:sequential :vector :set} head) (or (type-label p) [(describe schemas (first children))])
       (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " children))
       (= :=> head) {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
       (= :function head) (mapv #(describe schemas %) children)

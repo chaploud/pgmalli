@@ -3,6 +3,8 @@
   (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [pgmalli.core :as pgmalli]
+            [pgmalli.impl.jdbc :as jdbc]
+            [pgmalli.impl.shape :as shape]
             [pgmalli.sample :refer [opts registry user]]))
 
 (deftest transformer-decodes-jdbc-values
@@ -25,6 +27,18 @@
         (is (= (java.time.LocalDateTime/ofInstant at (java.time.ZoneId/systemDefault))
                (:updated_at (decode (assoc row :updated_at at) (pgmalli/transformer))))
             "default: the JVM's zone, as JDBC's read-as-instant used")))))
+
+(deftest a-domain-over-a-date-or-timestamp-takes-what-the-driver-takes-for-its-base
+  (let [reg (pgmalli/registry {:registry {:pg.public/at [:and [:time/instant {:pg/type "timestamptz"}] [:fn {:pg/constraint "c"} 'any?]]
+                                          :pg.public/day [:time/local-date {:pg/type "date"}]}})
+        schemas (shape/schemas-of reg)
+        takes? (fn [k v] (m/validate (jdbc/column-write-type schemas [:ref k] {}) v {:registry reg}))]
+    (is (takes? :pg.public/at (java.util.Date.)))
+    (is (takes? :pg.public/at (java.time.OffsetDateTime/now)))
+    (is (takes? :pg.public/at (java.time.Instant/now)))
+    (is (takes? :pg.public/day (java.util.Date.)))
+    (is (takes? :pg.public/day (java.time.LocalDate/now)))
+    (is (not (takes? :pg.public/day "2026-01-01")))))
 
 (deftest transformer-parses-json-text
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:params [:any {:pg/type "jsonb"}]] [:note [:maybe [:string {:pg/type "text"}]]]]}})

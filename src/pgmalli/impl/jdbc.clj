@@ -146,13 +146,13 @@
 ;;; rows as next.jdbc builds them
 
 (defn row-key
-  "The key next.jdbc gives a column: qualified by its table (the last part of schema.table)
-   when the column has one, unless :qualified? is false; kebab-cased (:kebab?) or lower-cased
+  "The key next.jdbc gives a column: qualified by its table when the column has one, unless
+   :qualified? is false; table is [schema name], or \"schema.table\" split at its first dot; kebab-cased (:kebab?) or lower-cased
    (:lower?) as its builders do it."
   [table column {:keys [qualified? kebab? lower?] :or {qualified? true}}]
   (let [k (cond kebab? csk/->kebab-case-string lower? str/lower-case :else identity)]
     (if (and qualified? table)
-      (keyword (k (last (str/split table #"\." 2))) (k column))
+      (keyword (k (if (vector? table) (second table) (last (str/split table #"\." 2)))) (k column))
       (keyword (k column)))))
 
 (defn row-entry
@@ -226,18 +226,25 @@
 (defn- through-domain
   "A column of a domain whose type the driver returns as something else (a date as a
    java.sql.Date, a citext as a PGobject) as that type, without the domain's CHECKs, which read
-   the registry's types; a domain the driver returns as the registry holds it stays a reference."
-  [schemas s opts]
+   the registry's types; a domain the driver returns (or, f write-type, takes) as the registry
+   holds it stays a reference."
+  [schemas s opts f]
   (if-let [d (when (and (vector? s) (= :ref (first s))) (get schemas (last s)))]
-    (let [base (through-domain schemas (if (and (vector? d) (= :and (first d))) (first (shape/entries d)) d) opts)]
-      (if (= base (read-type base opts)) s (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
+    (let [base (through-domain schemas (if (and (vector? d) (= :and (first d))) (first (shape/entries d)) d) opts f)]
+      (if (= base (f base opts)) s (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))
 
 (defn column-read-type
   "read-type of a column schema (without NULL) of a registry's schemas, a domain read as the
    driver reads its base; :read may still name the domain's type."
   [schemas s {:keys [read] :as opts}]
-  (or (shape/read-as read s) (read-type (through-domain schemas s opts) opts)))
+  (or (shape/read-as read s) (read-type (through-domain schemas s opts read-type) opts)))
+
+(defn column-write-type
+  "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the
+   driver takes its base; :write may still name the domain's type."
+  [schemas s {:keys [write] :as opts}]
+  (or (shape/read-as write s) (write-type (through-domain schemas s opts write-type) opts)))
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
@@ -246,7 +253,7 @@
   (checked! @read-options* opts)
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
-        table (or (:pg/table props) (:pg/view props))
+        table (when (or (:pg/table props) (:pg/view props)) (shape/schema-and-name name))
         schemas (shape/schemas-of registry)
         entry (fn [[k p s]]
                 (row-entry (row-key table (clojure.core/name k) opts) p (column-read-type schemas (shape/non-null s) opts)
