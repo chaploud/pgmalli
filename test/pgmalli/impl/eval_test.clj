@@ -443,3 +443,7 @@
   (is (passes? "CHECK ((x)::numeric(2,0) = 1::numeric)" {:x 1.4M}) "numeric(p,s) rounds")
   (is (not (passes? "CHECK ((x)::numeric(2,0) = 1::numeric)" {:x 1.5M})))
   (is (not (ev/supported? (x/check-clause "CHECK ((t)::timestamp(0) without time zone = '2020-01-01 10:00:01'::timestamp without time zone)")))))
+
+(deftest a-real-casts-to-numeric-as-its-shortest-decimal
+  (is (ev/passes? (x/check-clause "CHECK ((x)::numeric = 0.1)") {:x 0.1} {:x :real})))
+

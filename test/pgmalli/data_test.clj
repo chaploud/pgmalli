@@ -3,6 +3,7 @@
   (:require [clojure.test :refer [deftest is]]
             [clojure.test.check.generators :as tcg]
             [malli.core :as m]
+            pgmalli.core
             [pgmalli.data :as data]
             pgmalli.impl.dataset
             [pgmalli.sample :refer [opts registry]]))
@@ -61,3 +62,7 @@
 
 (deftest a-dataset-naming-a-table-the-registry-lacks-is-invalid
   (is (not (m/validate (data/dataset-schema registry) {"sample.grups" []} opts))))
+
+(deftest an-instant-beyond-local-date-time-goes-to-postgresql-as-it-is
+  (let [reg (pgmalli.core/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:tz [:time/instant {:pg/type "timestamp with time zone"}]]]}})]
+    (is (= 1 (count (data/inserts reg {"public.t" [{:tz java.time.Instant/MAX}]}))))))

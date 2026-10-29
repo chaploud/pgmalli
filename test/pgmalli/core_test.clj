@@ -412,12 +412,13 @@
 
 (deftest overlapping-likes-and-dates-outside-iso-years-insert
   (when (and *db* @registry/regex-generation?)
-    (let [[reg] (registry-of "ol" "CREATE SCHEMA ol; CREATE DOMAIN ol.dd AS date; CREATE DOMAIN ol.di AS interval;
+    (let [[reg] (registry-of "ol" "CREATE SCHEMA ol; CREATE DOMAIN ol.dd AS date; CREATE DOMAIN ol.di AS interval; CREATE DOMAIN ol.bd AS bytea;
                                    CREATE TABLE ol.a (id int PRIMARY KEY, v varchar(1) NOT NULL CHECK (v LIKE 'x%') CHECK (v LIKE '%x'),
-                                                      d date, ds ol.dd[], di ol.di[], b bytea, j jsonb[]);")
+                                                      d date, ds ol.dd[], di ol.di[], b bytea, j jsonb[], bd ol.bd, ba bytea[], tz timestamptz);")
           ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 1)
           rows {"ol.a" [{:id 100 :v "x" :d (java.time.LocalDate/of -5 1 1) :ds [(java.time.LocalDate/of 10000 1 1)]
-                         :di [(java.time.Duration/ofHours 2)] :b (byte-array [1 255]) :j [{"a" 1} nil]}]}]
+                         :di [(java.time.Duration/ofHours 2)] :b (byte-array [1 255]) :j [{"a" 1} nil]
+                         :bd (byte-array [0]) :ba [(byte-array [2 3])] :tz nil}]}]
       (is (= 3 (count (get ds "ol.a"))) "x% and %x generate x")
       (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (concat (data/inserts reg ds) (data/inserts reg rows)))))
       (is true "inserted"))))

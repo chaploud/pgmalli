@@ -45,20 +45,24 @@
     (cond (instance? java.time.LocalDate v) (apply str (day v))
           (instance? java.time.LocalDateTime v) (let [[d bc] (day (.toLocalDate ^java.time.LocalDateTime v))]
                                                   (str d " " (.toLocalTime ^java.time.LocalDateTime v) bc))
-          (instance? java.time.Instant v) (let [u (java.time.LocalDateTime/ofInstant v java.time.ZoneOffset/UTC)
-                                                [d bc] (day (.toLocalDate u))]
-                                            (str d " " (.toLocalTime u) "+00" bc))
+          ;; one beyond LocalDateTime's range goes as it is, for PostgreSQL to refuse
+          (instance? java.time.Instant v) (if-let [u (try (java.time.LocalDateTime/ofInstant v java.time.ZoneOffset/UTC) (catch java.time.DateTimeException _ nil))]
+                                            (let [[d bc] (day (.toLocalDate u))] (str d " " (.toLocalTime u) "+00" bc))
+                                            (str v))
           :else (str v))))
 
 (defn- as-text
   "A value the driver takes no parameter of, or HoneySQL's :inline writes unquoted (a date as
-   2025-01-01, arithmetic), as text the database reads: a Duration in ISO 8601, a date or time
+   2025-01-01, arithmetic), as text the database reads: bytes as \\x hex, a Duration in ISO 8601, a date or time
    in ISO 8601, an Instant or java.util.Date into a date or timestamp (without time zone)
    column (type-name) in the JVM's zone, as pgjdbc sends it."
   ([v] (as-text v nil))
   ([v type-name]
-   (if-not (temporal? v)
-     v
+   (cond
+     ;; :inline writes a byte array as its Java name
+     (bytes? v) (apply str "\\x" (map #(format "%02x" (bit-and % 0xff)) v))
+     (not (temporal? v)) v
+     :else
      (let [v (if (= java.util.Date (class v)) (.toInstant ^java.util.Date v) v)
            zone (java.time.ZoneId/systemDefault)]
        (pg-text (if (instance? java.time.Instant v)
@@ -105,8 +109,7 @@
           (and (or (string? v) (instance? java.time.Duration v)) (:cast (types/entry type-name)))
           [:cast (as-text v) (:cast (types/entry type-name))]
           (and (temporal? v) t) [:cast (as-text v type-name) [:raw t]]
-          ;; :inline writes a byte array as its Java name
-          (bytes? v) [:cast (apply str "\\x" (map #(format "%02x" (bit-and % 0xff)) v)) :bytea]
+          (bytes? v) [:cast (as-text v) :bytea]
           :else v)))
 
 (defn- parents-first

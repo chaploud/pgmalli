@@ -879,7 +879,8 @@
 (defn column-type
   "The type the evaluator reads for a column, from its schema's properties (:pg/type, and
    :pg/max-length, a char(n)'s n): an integer or char(n) type; :real, whose value PostgreSQL
-   stores in single precision before its CHECKs read it; :unordered for a type pgmalli
+   stores in single precision before its CHECKs read it (as its shortest decimal, which a cast
+   to numeric takes); :unordered for a type pgmalli
    has no entry for (an enum, whose order is its labels', or a domain); nil for the others."
   [{:keys [pg/type pg/max-length]}]
   (let [t (some-> type (str/replace " " "-") keyword)]
@@ -956,7 +957,7 @@
    (let [e (typed (x/canonical e) types)
          reals (seq (for [[k t] types :when (= :real t)] k))
          stored (if reals
-                  (fn [row] (reduce (fn [r k] (let [v (get r k)] (if (and (number? v) (float4? v)) (assoc r k (double (unchecked-float v))) r))) row reals))
+                  (fn [row] (reduce (fn [r k] (let [v (get r k)] (if (and (number? v) (float4? v)) (assoc r k (Double/parseDouble (str (unchecked-float v)))) r))) row reals))
                   identity)]
      (fn [row] (not (false? (try (ev e (stored row)) (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
 
