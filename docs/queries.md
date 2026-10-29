@@ -187,9 +187,9 @@ take the same options map:
 | `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
 | `:write {:enum [:string :keyword]}` | what an extension sends for a list of labels (an enum type's, a CHECK's): the labels kept, as strings, keywords or both |
 | `:write {:array [:pg/array :sequential :vector :set]}` | what an array argument (`[:any :?ids]`) may be sent as: a Java array, a vector, list or set |
-| `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped (default `:varchar`, as pgjdbc's) |
+| `:stringtype :unspecified` | your connection's `stringtype`: strings reach every column untyped (default `:varchar`, as pgjdbc's) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
-| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns` and `:inline` are read |
+| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
 | `:result :one` | `h/query-schema` only: the return is one row or nil |
 
 ## Function schemas

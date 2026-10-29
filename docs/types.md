@@ -87,7 +87,7 @@ spelling.
 | `oid` | `[:int {:min 0 :max 4294967295}]` |
 | `bit(n)`, `bit varying(n)` | `[:string {:min n :max n}]`, `[:string {:max n}]` |
 | `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, geometric, range, multirange, `reg*` and other types | `[:any {:pg/type "..."}]` |
-| `citext` | `:string` |
+| `citext` | `:string`; its `~` and `LIKE` CHECKs ignore case, an `=` or `IN` CHECK is `:unrendered` |
 | `hstore`, `ltree`, `lquery`, `ltxtquery`, `cube`, `seg`, `query_int`, `isbn`, `isbn13`, `ean13`, `ismn`, `ismn13`, `issn`, `issn13`, `upc` | `[:any {:pg/type "..."}]` |
 | a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
 
@@ -210,8 +210,8 @@ Generate a version's rows from its own schema, so the generator need not guess t
 
 Outside ASCII, a class's members depend on the server's C library and locale: `[[:punct:]]`
 takes `€` on glibc but not under the C locale. So a class takes every non-ASCII character
-when a value is checked, and none when one is generated; a `[:pg/check]` whose result depends on
-it is NULL, and passes.
+when a value is checked, and none when one is generated
+([how `:pg/check` evaluates](#how-pgcheck-evaluates)).
 
 A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a nullable column takes
 `[:maybe ...]`, and a NULL dispatch value takes any branch.
@@ -248,6 +248,9 @@ PostgreSQL does:
 - An expression the database would fail on (division by zero, a cast that does not parse)
   fails the row.
 - A column missing from the map is NULL, or its literal default in an insert schema.
+- A CHECK whose result depends on what pgmalli cannot know passes: an enum compared by its
+  order, the text of a numeric, float or interval (`::text`, `||`), a regex class outside
+  ASCII.
 
 The operators covered are comparison, logic, `IN`, `BETWEEN`, `IS DISTINCT FROM`, arithmetic,
 `LIKE`, regexes, `CASE`, and the common string, numeric, array and jsonb functions. A CHECK
@@ -322,4 +325,6 @@ A diagnostic is `{:table :kind :severity :message}`, with `:constraint`, `:colum
 | `:redundant-unique` | `:info` | a UNIQUE on the columns of the primary key or of another UNIQUE |
 
 An `:unrendered` or `:skipped` entry is `{:kind :table :column :constraint :sql :type
-:type-schema}`, the keys that apply; a domain's has `:domain` in place of `:table`.
+:type-schema}`, the keys that apply; a domain's has `:domain` in place of `:table`. `:kind` is
+`:check` (a constraint pgmalli reads but cannot express), `:unparsed` (one it cannot read) or
+`:type` (a column type it has no schema for).

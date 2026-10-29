@@ -27,7 +27,7 @@
     (error/fail! :pgmalli.error/invalid-options
                  (str "diff takes two generated data maps, such as (pgmalli.core/generated \"public\"); given "
                       (if (map? x) "a map without :registry (a registry?)" (pr-str x)))
-                 {}))
+                 {:given (if (map? x) (vec (take 5 (keys x))) x)}))
   (diff/diff before after))
 
 (defn check

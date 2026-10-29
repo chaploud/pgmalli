@@ -343,8 +343,8 @@
     (exec-sql! "CREATE SCHEMA catalog; CREATE SCHEMA wh;
                 CREATE DOMAIN catalog.sku AS text CHECK (VALUE ~ '^[A-Z]{3}$'); CREATE TYPE catalog.kind AS ENUM ('a', 'b');
                 CREATE TABLE wh.stock (id int PRIMARY KEY, sku catalog.sku NOT NULL, k catalog.kind);")
-    (is (= [{:kind :unknown-type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}
-            {:kind :unknown-type :table "wh.stock" :column "sku" :type "catalog.sku" :type-schema "catalog"}]
+    (is (= [{:kind :type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}
+            {:kind :type :table "wh.stock" :column "sku" :type "catalog.sku" :type-schema "catalog"}]
            (:unrendered (files/from-database {:db *db*} "wh"))))
     (let [config {:db *db* :overrides {:sku [:ref :pg.catalog/sku] :kind [:ref :pg.catalog/kind]}}
           reg (pgmalli/registry (files/from-database config "catalog") (files/from-database config "wh"))]

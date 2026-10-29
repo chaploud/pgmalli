@@ -40,9 +40,11 @@
   (walk/postwalk #(if (map? %) (into (sorted-map-by (fn [a b] (compare (str a) (str b)))) %) %) x))
 
 (defn- left-out
-  "An :unrendered or :skipped entry as the file keeps it: what was left out and where."
+  "An :unrendered or :skipped entry as the file keeps it: what was left out and where. :kind is
+   :unparsed (a constraint pgmalli cannot read), :type (a column type it has no schema for) or
+   :check (a constraint it reads but cannot express)."
   [{:keys [schema table type-name column constraint sql input type type-schema fact]}]
-  (cond-> {:kind fact}
+  (cond-> {:kind (case fact :unparsed :unparsed :unknown-type :type :check)}
     table (assoc :table (str schema "." table))
     (and type-name (not table)) (assoc :domain (str schema "." type-name))
     column (assoc :column column)

@@ -51,10 +51,14 @@
      (let [errors (-> (m/explain schema opts) me/with-spell-checking me/humanize)
            known (when (= :map (m/type schema)) (map first (m/children (m/schema schema))))
            ;; malli's spelling check leaves out short keys (:dbb for :db)
-           suggest (when (map? opts) (some #(when-not (some #{%} known) (error/suggest % known)) (keys opts)))]
-       (error/fail! kind (str label ": " (pr-str errors) (when-not (str/includes? (pr-str errors) "should be spelled") (error/did-you-mean suggest)))
+           stray (when (map? opts) (remove (set known) (keys opts)))
+           suggest (some #(error/suggest % known) stray)]
+       (error/fail! kind (str label ": " (pr-str errors)
+                              (cond (str/includes? (pr-str errors) "should be spelled") ""
+                                    suggest (error/did-you-mean suggest)
+                                    (and (seq stray) (seq known)) (str "; it takes " (str/join ", " known))))
                     (cond-> {:given (cond-> opts (map? opts) (dissoc :db)) :errors errors}
-                      (= :map (m/type schema)) (assoc :known (vec (map first (m/children (m/schema schema)))))))))))
+                      known (assoc :known (vec known))))))))
 
 ;; compiled once: malli keeps a schema's validator, and these are checked on every call
 (def ^:private options (delay (m/schema options-schema)))
@@ -66,7 +70,7 @@
 
 (defn- pg-type [s] (when (and (vector? s) (map? (second s))) (:pg/type (second s))))
 
-(defn array-column?
+(defn- array-column?
   "An array column's schema: [:vector {:pg/type \"text[]\"} :string]."
   [s]
   (and (vector? s) (= :vector (first s)) (some-> (pg-type s) (str/ends-with? "[]"))))

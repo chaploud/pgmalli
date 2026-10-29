@@ -50,7 +50,7 @@
                (let [pass? (ev/checker expr types)]
                  {:pred (fn [row] (and (map? row) (pass? (merge defaults row)))) :min 1 :max 1}))}))
 
-(def bytes-schema
+(def ^:private bytes-schema
   "[:pg/bytes {:min n :max n}]: a byte array of bounded length, generated as such (malli's bytes?
    has no length)."
   (m/-simple-schema
@@ -65,7 +65,7 @@
   ;; by name: babashka has no java.sql
   (boolean (some #(= "java.sql.Array" (.getName ^Class %)) (supers (class v)))))
 
-(def array-schema
+(def ^:private array-schema
   "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a typed Java array
    (long[], Long[], String[] ...; not Object[], which it refuses) of t's, or a java.sql.Array,
    whose elements are not read."

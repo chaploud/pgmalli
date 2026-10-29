@@ -15,6 +15,7 @@
             [pgmalli.generate :as generate]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.render :as render]
             [pgmalli.impl.shape :as shape]))
 
 (def ^:private usage "usage: pgmalli.main generate [pgmalli.edn] | check [--edn] [pgmalli.edn]")
@@ -55,7 +56,7 @@
 (defn- override-key
   "What :overrides takes for an unrendered entry: its constraint's name, or its type as a keyword."
   [{:keys [constraint type]}]
-  (if constraint constraint (keyword (str/replace (str/replace (str type) #"^[^.]+\." "") #"\(.*\)$" ""))))
+  (or constraint (render/type-key type)))
 
 (defn- print-unrendered [schema facts]
   (when (seq facts)
@@ -136,7 +137,7 @@
       (when-not kind (warn "set PGMALLI_DEBUG=1 for the stack trace")))
     (if (#{:pgmalli.error/db-unavailable :pgmalli.error/psql-missing} kind) 3 2)))
 
-(defn run
+(defn ^:no-doc run
   "Runs a command line, printing to *out* and *err*; returns the exit code."
   [args]
   (binding [*print-namespace-maps* false]

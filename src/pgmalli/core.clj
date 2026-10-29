@@ -14,7 +14,7 @@
   "The generated file of a schema, read from the classpath, as data:
    {:schema :database-version :registry {name schema} :unrendered [entry ...]
     :skipped [entry ...] :diagnostics [{:table :kind :severity :message ...} ...]},
-   an entry being {:kind :table or :domain :column :constraint :sql :type}, the keys that apply.
+   its entries and diagnostics as docs/types.md#the-generated-file lists them.
 
    :unrendered lists the constraints pgmalli cannot express in malli; :diagnostics what
    deserves a look in the database (a NOT VALID constraint, an unreachable partition, a
@@ -62,19 +62,11 @@
 
    (as-read registry :pg.public/users {:qualified? false})
 
-   By default, as next.jdbc's default builder (as-maps) builds rows with no extension: dates and timestamps
-   inst?, arrays, json and intervals :any; docs/reading-rows.md lists every type. Options
-   (read-options gives those of a builder):
-     :qualified? false      keys as :column, not :table/column
-     :kebab? true           kebab-case keys and tables
-     :lower? true           lower-case keys and tables
-     :nil-columns :absent   NULL columns left out (next.jdbc.optional)
-     :time :instant/:local  next.jdbc.date-time's read-as-instant / read-as-local
-     :read {pg-type schema} what a ReadableColumn extension returns; also {:array :vector},
-                            {:json :parsed}
+   By default, as next.jdbc's default builder (as-maps) builds rows with no extension: keys
+   :table/column, the types docs/reading-rows.md lists. Options: docs/reading-rows.md#options;
+   read-options gives a builder's.
 
-   Throws when an option is unknown, or name is no table's or view's row schema.
-   See docs/reading-rows.md."
+   Throws when an option is unknown, or name is no table's or view's row schema."
   ([registry name] (as-read registry name {}))
   ([registry name opts] (jdbc/as-read registry name opts)))
 

@@ -962,7 +962,7 @@
   "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
    joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM),
    aliases and CTE names resolved as PostgreSQL resolves them. A table code in the query
-   brings in is not seen. Options: see query-schema.
+   brings in is not seen. Options: docs/queries.md#options.
 
    (tables registry {:update :users :set {:nick \"a\"} :from [[:groups :g]] :where [:= :g.id :users.group_id]})
    ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"

@@ -218,11 +218,17 @@
           {:schema base :unrendered [] :skipped [] :applied []}
           (sort-by (juxt (comp fact-order :fact) :constraint) facts)))
 
+(defn type-key
+  "The :overrides key of a type: its name without schema or typmod, as a keyword
+   (\"public.inet\" and \"numeric(12,2)\" are :inet and :numeric)."
+  [data-type]
+  (keyword (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" "")))
+
 (defn- type-override
   "The schema an override gives every column of a type (keyword keys of :overrides name types:
    {:inet [:re ...]}), nil when there is none."
   [overrides data-type]
-  (get overrides (keyword (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" ""))))
+  (get overrides (type-key data-type)))
 
 (defn- column-schema
   "Schema of one column with provenance properties; nullable columns wrapped in [:maybe ...]."

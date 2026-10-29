@@ -47,7 +47,7 @@
   "The generated names of a registry: the pg.* ones, all of them when there are none."
   [schemas]
   (let [ks (sort-by str (keys schemas))
-        pg (filter #(str/starts-with? (str %) (if (keyword? %) ":pg." "pg.")) ks)]
+        pg (filter generated-name? ks)]
     (vec (or (seq pg) ks))))
 
 (defn schema-of
@@ -152,6 +152,11 @@
   (if (and (plain? schema-name) (plain? s))
     (keyword (str "pg." schema-name) s)
     (str "pg." schema-name "/" s)))
+
+(defn schema-and-name
+  "[schema name] of a registry key: :pg.ins/mood and \"pg.a.b/m\" are [\"ins\" \"mood\"] and [\"a.b\" \"m\"]."
+  [k]
+  (let [[ns n] (if (keyword? k) [(namespace k) (name k)] (str/split k #"/" 2))] [(subs ns 3) n]))
 
 (defn table-key
   "\"public.users\" -> :pg.public/users: schema-key over a qualified name."

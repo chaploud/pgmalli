@@ -20,11 +20,6 @@
   [s]
   (and (re-matches #"[a-z_][a-z0-9_$]*" s) (not (reserved s))))
 
-(defn- schema-and-name
-  "[schema name] of a registry key: :pg.ins/mood and \"pg.a.b/m\" are [\"ins\" \"mood\"] and [\"a.b\" \"m\"]."
-  [k]
-  (let [[ns n] (if (keyword? k) [(namespace k) (name k)] (str/split k #"/" 2))] [(subs ns 3) n]))
-
 (defn- ref-type
   "The SQL of the type the schema a [:ref ...] names, schema and name each quoted whatever
    HoneySQL's options and whatever dots they hold (:pg.ins/mood is \"ins\".\"mood\"); nil for
@@ -32,7 +27,7 @@
   [s]
   (when (vector? s)
     (case (first s)
-      :ref (let [[sch n] (schema-and-name (last s))] (str (quoted sch) "." (quoted n)))
+      :ref (let [[sch n] (shape/schema-and-name (last s))] (str (quoted sch) "." (quoted n)))
       ;; CHECKs narrow a type as [:and type ...]
       :and (ref-type (first (shape/entries s)))
       nil)))
@@ -152,7 +147,7 @@
                  ;; rows of defaults alone still name a column: VALUES () is no SQL, DEFAULT VALUES one row only
                  used (or (seq (remove generated (distinct (mapcat keys rows)))) (take 1 (map first entries)))
                  value (fn [row k] (if (contains? row k) (insert-value (get columns k) (get row k)) [:default]))]]
-       (cond-> (into {:insert-into (let [[sch t] (schema-and-name name)
+       (cond-> (into {:insert-into (let [[sch t] (shape/schema-and-name name)
                                          target (if (every? bare? [sch t])
                                                   (keyword table)
                                                   [:raw (str (quoted sch) "." (quoted t))])]

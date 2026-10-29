@@ -10,16 +10,17 @@ listed; the [README](README.md) describes what this one does.
 
 * PostgreSQL schemas as malli: rows, insert and update schemas, enums, domains, keys,
   EXCLUDE constraints and triggers, and CHECKs as malli or evaluated as PostgreSQL evaluates
-  them. Generated over psql or JDBC (`generate!`, `pgmalli.main`).
+  them. Generated over psql or JDBC (`generate!`, `pgmalli.main`), read as a registry
+  (`registry`, `generated`, `columns`, `portable`), read back as PostgreSQL types (`describe`).
 * Rows and datasets generated as the database takes them, written as HoneySQL INSERTs and
-  kept as EDN fixtures (`pgmalli.data`).
+  kept as EDN fixtures (`pgmalli.data`: `dataset-schema`, `dataset-generator`, `short-tables`,
+  `inserts`, `write-dataset`, `read-dataset`, `readers`).
 * Rows typed as next.jdbc builds them from what pgjdbc returns (`as-read`, `read-options`,
   `transformer`).
 * HoneySQL queries checked against the schema with no database, their arguments and rows
   typed, and each problem said as what to do (`pgmalli.honeysql`: `check`, `arg-types`,
-  `params-schema`, `row-schema`, `query-schema`, `tables`, `schema-problems`, `explain`); any schema read back as
-  PostgreSQL types (`describe`).
-* Generated files kept current in CI (`generate/check`, `pgmalli.main check`).
+  `params-schema`, `row-schema`, `query-schema`, `tables`, `schema-problems`, `explain`).
+* Generated files kept current in CI (`generate/check`, `generate/diff`, `pgmalli.main check`).
 
 Supported, each and later: PostgreSQL 16, HoneySQL 2.4.1066, next.jdbc 1.3, pgjdbc 42.7,
 malli 0.20 and Clojure 1.11; babashka for everything but JDBC.
