@@ -550,12 +550,12 @@
   (when (and (vector? v) (= 2 (count v)) (#{:any :all} (first v)) (arg-key (second v))) (second v)))
 
 (defn- array-type
-  "An array argument of elements t: what :write's :array names a driver extension sends
-   instead ([:sequential :set] is a vector, list or set of t), else :any (the driver takes
-   typed Java arrays, which schema data cannot name)."
+  "An array argument of elements t: what :write's :array names ([:pg/array :sequential :set :nil]
+   is a typed Java array, a vector, list or set of t, or nil), else :any, as malli's default
+   registry has nothing for what the driver takes (:pg/array, pgmalli's registry's)."
   [t {:keys [write]}]
   (if-let [kinds (seq (:array write))]
-    (let [alts (map #(vector % t) kinds)] (if (next alts) (into [:or] alts) (first alts)))
+    (let [alts (map #(if (= :nil %) :nil [% t]) kinds)] (if (next alts) (into [:or] alts) (first alts)))
     :any))
 
 (defn- column-type

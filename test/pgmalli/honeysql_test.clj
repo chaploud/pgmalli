@@ -178,6 +178,11 @@
     (is (= {:ids [:or [:sequential [:int {:pg/identity :always :pg/type "bigint"}]] [:set [:int {:pg/identity :always :pg/type "bigint"}]]]}
            (select-keys (h/arg-types registry body (assoc opts :write {:array [:sequential :set]})) [:ids]))
         "the collections an extension sends instead; empty is an empty array, which SQL takes")
+    (let [t (:ids (h/arg-types registry body (assoc opts :write {:array [:pg/array :sequential :nil]})))]
+      (doseq [v [(long-array [1 2]) (into-array Long [1]) (long-array []) [1] '() nil]] (is (m/validate t v {:registry registry}) (pr-str v)))
+      (doseq [v [(object-array [1]) (into-array String ["a"]) #{1}]] (is (not (m/validate t v {:registry registry})) (pr-str v)))
+      (is (= [:or [:pg/array [:int {:pg/identity :always :pg/type "bigint"}]] [:sequential [:int {:pg/identity :always :pg/type "bigint"}]] :nil] t)
+          ":pg/array is what the driver takes (Object[] it refuses), :nil the extension's"))
     (is (= {:ids [:vector [:or :int :string]]}
            (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :write {:array [:vector] "bigint" [:or :int :string]}))))))
 

@@ -57,8 +57,11 @@ All notable changes to this project are documented here. The format follows
   required, and a row the driver returned failed it.
 - An argument the data shows only inside code (`(when from [:>= :id :?from])`) takes nil too.
 - An argument compared through `[:any x]` or `[:all x]` (`= ANY(?)`) is an array of the column's
-  type: `:any` by default, the driver taking typed Java arrays, or the collections `:write`'s
-  `:array` names (`{:array [:sequential :set]}`).
+  type: `:any` by default, malli's default registry having nothing for what the driver takes,
+  or what `:write`'s `:array` names (`{:array [:pg/array :sequential :set :nil]}`).
+- `:pg/array` in the registry: `[:pg/array t]` is what PostgreSQL's JDBC driver takes as an
+  array parameter, a typed Java array of `t`'s (not `Object[]`, which it refuses) or a
+  `java.sql.Array`; checked against the driver.
 - The README and `install!` say how `:malli/schema` reads a schema (data through malli's default
   registry, an object as it is), so a schema object over the registry instruments with nothing
   installed; how `registry` composes and which registry of a composite one wins.

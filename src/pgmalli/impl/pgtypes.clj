@@ -1,6 +1,7 @@
 (ns pgmalli.impl.pgtypes
   "The schema types pgmalli registers for PostgreSQL's own: the CHECK types, a bytea of bounded
-   length and the bounded numbers, with the ranges the integer types hold."
+   length, the bounded numbers, with the ranges the integer types hold, and the arrays the
+   JDBC driver takes."
   (:require [malli.core :as m]
             [pgmalli.impl.eval :as ev]))
 
@@ -26,6 +27,24 @@
                   :type-properties {:error/message (str "bytes, " (or min 0) " to " (or max "any") " of them")
                                     :gen/gen (fmap byte-array (vector-of byte-gen (or min 0) (or max (+ (or min 0) 16))))}
                   :min 0 :max 0}))}))
+
+(defn- sql-array? [v]
+  ;; by name: babashka has no java.sql
+  (boolean (some #(= "java.sql.Array" (.getName ^Class %)) (supers (class v)))))
+
+(def array-schema
+  "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a typed Java array
+   (long[], Long[], String[] ...; not Object[], which it refuses) of t's, or a java.sql.Array,
+   whose elements are not read."
+  (m/-simple-schema
+   {:type :pg/array
+    :compile (fn [_ [child] options]
+               (let [valid? (m/validator child options)]
+                 {:pred (fn [v] (or (sql-array? v)
+                                    (let [c (class v)]
+                                      (boolean (and c (.isArray ^Class c) (not= Object (.getComponentType ^Class c)) (every? valid? v))))))
+                  :type-properties {:error/message "a typed Java array or a java.sql.Array"}
+                  :min 1 :max 1}))}))
 
 (def int-ranges
   "The range each integer type pgmalli registers holds (a bigint is exactly a long, so it is :int)."
@@ -82,4 +101,4 @@
 (def schemas
   "The schema types pgmalli registers, by name."
   {:pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
-   :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema})
+   :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema})

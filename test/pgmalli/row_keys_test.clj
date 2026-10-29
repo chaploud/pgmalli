@@ -43,3 +43,14 @@
               (is (m/validate schema row) (pr-str builder q row)))
           (is (and (not= 'next.jdbc.result-set/as-unqualified-kebab-maps builder) (= :cast (first (ffirst (:select q)))))
               (str "only a qualified cast is untold: " (pr-str q))))))))
+
+(deftest pg-array-is-what-the-driver-takes
+  (when *db*
+    (let [{:keys [host port db user password]} *db*
+          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+          s (m/schema [:pg/array :int] {:registry (pgmalli/registry {:registry {}})})]
+      (with-open [c (jdbc/get-connection ds)]
+        (doseq [v [(long-array [1 2]) (into-array Long [1]) (int-array []) (.createArrayOf c "bigint" (object-array [1]))
+                   (object-array [1]) [1 2] #{1}]
+                :let [taken? (try (jdbc/execute-one! c ["SELECT 1 AS one WHERE 1 = ANY(?)" v]) true (catch Exception _ false))]]
+          (is (= taken? (m/validate s v)) (str (class v))))))))
