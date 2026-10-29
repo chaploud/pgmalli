@@ -85,7 +85,7 @@ shows how CI catches a forgotten one.
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-io.github.chaploud/pgmalli {:mvn/version "0.2.45"}
+io.github.chaploud/pgmalli {:mvn/version "0.3.0"}
 ```
 
 `pgmalli.main` reads `pgmalli.edn` from the working directory, or the file given after the

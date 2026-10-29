@@ -3,7 +3,7 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
-## Unreleased
+## 0.3.0 (2026-10-30)
 
 The first release meant for use. The releases before it were development and are not
 listed; the [README](README.md) describes what this one does.
