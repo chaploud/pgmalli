@@ -11,6 +11,7 @@
    :pgmalli.error/invalid-options :cognitect.anomalies/incorrect
    :pgmalli.error/unknown-schema :cognitect.anomalies/not-found
    :pgmalli.error/not-a-registry :cognitect.anomalies/incorrect
+   :pgmalli.error/not-query-data :cognitect.anomalies/incorrect
    :pgmalli.error/not-generated :cognitect.anomalies/not-found
    :pgmalli.error/db-unavailable :cognitect.anomalies/unavailable
    :pgmalli.error/psql-missing :cognitect.anomalies/unavailable

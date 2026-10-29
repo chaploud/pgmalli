@@ -19,6 +19,7 @@
    :result (see arg-types and query-schema); a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.shape :as shape]))
@@ -856,9 +857,10 @@
    already formatted or for nothing, which would otherwise check clean."
   [body]
   (when (or (nil? body) (string? body) (and (vector? body) (string? (first body))))
-    (throw (ex-info (str "pgmalli.honeysql reads HoneySQL query data (a map such as {:select ...}), not "
-                         (if (nil? body) "nil" "SQL already formatted"))
-                    {:query body})))
+    (error/fail! :pgmalli.error/not-query-data
+                 (str "pgmalli.honeysql reads HoneySQL query data (a map such as {:select ...}), not "
+                      (if (nil? body) "nil" "SQL already formatted") "; pass the map you give sql/format")
+                 {:given body}))
   body)
 
 (defn- code-ctes?
@@ -1087,8 +1089,9 @@
    (jdbc/options! opts)
    (query! body)
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
-     (throw (ex-info (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
-                     {:args args})))
+     (error/fail! :pgmalli.error/invalid-options
+                  (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
+                  {:given args}))
    (let [registry (reading registry)
          types (arg-types registry body opts)
          problems (into (check registry body opts)
