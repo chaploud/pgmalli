@@ -75,8 +75,9 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
 
 ## Other tasks
 
-- `bb harvest` rebuilds the expression corpus (`PGMALLI_PGSCHEMA_DIR` adds a checkout of
-  pgschema's testdata).
+- `bb harvest` rebuilds the expression corpus from checkouts named by env vars:
+  `PGMALLI_PGREGRESS_DIR` (PostgreSQL REL_17_STABLE's `src/test/regress/sql`) and
+  `PGMALLI_PGSCHEMA_DIR` (pgschema's `testdata/diff`).
 - `bb sweep <sql-dir> <out-dir> [glob]` takes SQL files through the whole pipeline and writes
   what did not go through as EDN; `bb sweep:report <out-dir>` groups it for reading.
 - `bb fixture` rewrites the checked-in `test/resources/pgmalli/*.edn` the tests read.
