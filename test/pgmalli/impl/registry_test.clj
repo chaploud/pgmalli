@@ -206,6 +206,12 @@
     (when @reg/regex-generation?
       (is (every? #(re-matches #"[A-Z]{2}" %) (map :country rows))))))
 
+(deftest a-char-n-column-whose-check-allows-null-generates-as-its-pattern-says
+  (when @reg/regex-generation?
+    (let [reg (registry-of {} [{:name "c" :position 1 :data_type "character" :is_nullable false :max_length 3}]
+                           [["c_check" "c IS NULL OR c ~* '^A'::text"]])]
+      (is (every? #(re-find #"^[aA]" %) (map :c (mg/sample :pg.public.t/insert {:registry reg :size 20 :seed 1})))))))
+
 (deftest a-domain-over-char-n-generates-as-its-check-says
   (let [reg (registry-of {"cc" {:kind "DOMAIN" :base_type "character(3)" :not_null false
                                 :constraints [{:name "cc_check" :definition "CHECK (VALUE = ANY (ARRAY['JPY'::bpchar, 'USD'::bpchar]))"}]}}

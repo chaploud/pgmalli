@@ -237,7 +237,9 @@
                                (when-let [g (generation-regex (cond-> j case-insensitive? ev/case-insensitive))]
                                  {:gen/schema [:and [:re g] schema]}))
               nil)))
-        (pattern/column-patterns expr)))
+        ;; col IS NULL OR <pattern>: a value that is there takes the pattern
+        (map #(if (= :when-present (:fact %)) (assoc (:fact-when-present %) :column (:column %)) %)
+             (pattern/column-patterns expr))))
 
 (defn- bpchar-hints
   "{k hints} of the char(n) values the checks among parts read (bpchar-hint), schema-of
