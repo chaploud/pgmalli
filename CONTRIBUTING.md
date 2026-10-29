@@ -89,9 +89,9 @@ versioning: patch for fixes, minor for additions and, before 1.0, any change to 
 contract; what is breaking is the README's [Stability](README.md#stability) list.
 
 1. On main, in one commit: add the version's section to CHANGELOG.md, `## X.Y.Z (date)`,
-   one short bullet per change a user meets, a breaking one saying what to do (fixes made
-   a fix to something not yet released gets no entry), and set the installation coordinate in README.md to
-   the new version.
+   one short bullet per change a user meets, a breaking one saying what to do (a fix to
+   something not yet released gets no entry), and set the installation coordinate in
+   README.md to the new version.
 2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The release workflow checks that the tag is on main, runs `bb test:jvm`, builds the jar
    and deploys it to Clojars; a second job then creates the GitHub release with the jar and
