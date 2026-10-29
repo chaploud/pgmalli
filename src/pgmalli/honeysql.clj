@@ -18,6 +18,7 @@
    return and take, under pgmalli.core/as-read's options, plus :schema, :write, :compare and
    :result (see arg-types and query-schema); a key or value not among them is an error."
   (:require [clojure.string :as str]
+            [malli.registry :as mr]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.shape :as shape]))
@@ -29,7 +30,7 @@
    and the case folded. Only where the name as it is matches nothing (a quoted mixed-case one
    matches as it is)."
   [s]
-  (-> s (str/replace "-" "_") str/lower-case))
+  (some-> s (str/replace "-" "_") str/lower-case))
 
 (defn- column-entries
   "[[column-name schema] ...] of a table (or view) in the registry, in its order; nil when it
@@ -48,6 +49,9 @@
    every table in scope. The public functions take a registry and make one of it; one passed on
    again is left as it is."
   [registry]
+  (when-not (or (map? registry) (satisfies? mr/Registry registry))
+    (throw (ex-info (str "pgmalli.honeysql takes a registry ((pgmalli.core/registry \"public\")), not " (pr-str registry))
+                    {:registry registry})))
   (if (::schemas registry)
     registry
     (let [r {::schemas (shape/schemas-of registry)}]
@@ -216,7 +220,7 @@
     (let [[a b] x
           ;; [:alias {:columns [...]}]; a column definition list ([:raw "a int"]) names no column read here
           [b listed] (if (and (vector? b) (keyword? (first b)) (map? (second b)))
-                       [(first b) (let [cs (:columns (second b))] (when (every? #(or (keyword? %) (string? %)) cs) (mapv name cs)))]
+                       [(first b) (let [cs (:columns (second b))] (when (and (sequential? cs) (every? #(or (keyword? %) (string? %)) cs)) (mapv name cs)))]
                        [b nil])]
       (cond
         ;; :t / [:t :alias] / INSERT INTO t (columns...)
@@ -517,7 +521,7 @@
             (concat (when (map? (:set stmt)) (:set stmt))
                     ;; ON CONFLICT DO UPDATE SET: a map of assignments, the columns taken from EXCLUDED, or
                     ;; {:fields [...] :where ...} (the columns taken from EXCLUDED, under a condition)
-                    (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update) :when (keyword? c)] [c nil])
+                    (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update)) :when (keyword? c)] [c nil])
                           (map? do-update) do-update
                           (vector? do-update) (for [c do-update :when (keyword? c)] [c nil]))
                     (when (vector? values)
@@ -721,7 +725,7 @@
         do-update (:do-update-set stmt)
         excluded ::excluded
         writes (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update]))
-                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update)] [c excluded :update])
+                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c excluded :update])
                               (map? do-update) (for [[c v] do-update] [(target-column c) v :update])
                               (vector? do-update) (for [c do-update] [c excluded :update]))
                         (for [row maps, c (if columns (keys row) union)]

@@ -77,6 +77,8 @@ All notable changes to this project are documented here. The format follows
   in any comparison, code-built joins making tables nullable.
 - `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
   `{:select [:*]}`, and makes outer-joined columns nullable.
+- `pgmalli.honeysql` throws ex-info, not another exception, on a query of any shape (a test
+  breaks the oracle corpus at random), and on a registry that is none (`"public"`, nil).
 - kebab and camel names as PostgreSQL folds them: an INSERT's `:group-id` key is `group_id`
   (it was a `:missing-required-column`), an alias in `:order-by` / `:group-by` matches its
   folded name, and `row-schema` keys an aliased column as next.jdbc does (`:user_id` for
