@@ -29,6 +29,7 @@ dependencies ([Installation](#installation)) and keep `resources` on the classpa
 $ psql -f docs/example/schema.sql
 $ clojure -M -m pgmalli.main generate
 wrote resources/pgmalli/public.edn (public: 3 tables, 0 views, 1 enums, 0 domains; 0 unrendered, 0 diagnostics)
+done: files written: 1; commit them, and run `clojure -M -m pgmalli.main check` in CI
 ```
 
 Load the generated file as a registry and validate an INSERT:
@@ -420,13 +421,28 @@ no file:
 (is (nil? (:missing (generate/check {:schemas ["public"]} {:db? false}))))
 ```
 
-`clojure -M -m pgmalli.main check` exits 1 when a file differs or is missing, and prints what:
+`clojure -M -m pgmalli.main check` prints each difference, then a line with the command to
+run:
 
 ```shell
 $ clojure -M -m pgmalli.main check
-generated files are out of date; run generate and commit:
-  public :pg.public/groups motto file nil db [:maybe :string]
+public :pg.public/groups :motto
+  file: nil
+  db:   [:maybe [:string {:pg/type "text"}]]
+stale: public (differences: 1); run `clojure -M -m pgmalli.main generate` and commit the files
 ```
+
+| exit | when |
+|---|---|
+| 0 | the files match the database |
+| 1 | a file differs or is missing: run `generate` |
+| 2 | a usage or config error |
+| 3 | the database or psql is unavailable |
+
+Findings go to stdout; usage, warnings and errors go to stderr, one line each
+(`PGMALLI_DEBUG=1` adds the stack trace). `check --edn` prints `generate/check`'s map instead.
+A config path that does not exist is an error; only with no path does a missing `pgmalli.edn`
+mean the defaults.
 
 `generate/diff` gives the same differences between two generated files, the effect of a
 migration:

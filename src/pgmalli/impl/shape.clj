@@ -3,13 +3,34 @@
    properties, the names derived from a row's, and the rewrites other namespaces read it by."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [malli.registry :as mr]))
+            [malli.core :as m]
+            [malli.registry :as mr]
+            [pgmalli.impl.error :as error]))
+
+(defn- schema-form? [x]
+  (or (vector? x) (keyword? x) (string? x) (symbol? x) (fn? x) (map? x) (m/schema? x) (m/into-schema? x)))
 
 (defn schemas-of
   "The name -> schema map of a registry: a map as it is, a malli Registry (a composite one, say)
-   through its schemas."
+   through its schemas. Anything else is an error: a generated data map, a map whose values are
+   not schemas."
   [registry]
-  (if (map? registry) registry (mr/-schemas (mr/registry registry))))
+  (cond (and (map? registry) (contains? registry :registry) (contains? registry :schema))
+        (error/fail! :pgmalli.error/not-a-registry
+                     (str "given the generated data of schema " (pr-str (:schema registry)) ", not a registry; pass (pgmalli.core/registry " (pr-str (:schema registry)) ")")
+                     {:given (:schema registry)})
+        (map? registry)
+        (if-let [[k v] (first (remove (comp schema-form? val) registry))]
+          (error/fail! :pgmalli.error/not-a-registry
+                       (str "not a registry: " (pr-str k) " maps to " (pr-str v) ", not a schema; pass (pgmalli.core/registry \"<schema>\")")
+                       {:given k})
+          registry)
+        :else
+        (if-let [r (mr/registry registry)]
+          (mr/-schemas r)
+          (error/fail! :pgmalli.error/not-a-registry
+                       (str "not a registry: " (pr-str (type registry)) "; pass (pgmalli.core/registry \"<schema>\")")
+                       {:given (type registry)}))))
 
 (defn- generated-names
   "The generated names of a registry: the pg.* ones, all of them when there are none."
@@ -24,7 +45,14 @@
   [registry name]
   (let [schemas (schemas-of registry)]
     (when-not (contains? schemas name)
-      (throw (ex-info (str "no schema named " name) {:name name :known (generated-names schemas)})))
+      (let [known (generated-names schemas)
+            suggest (error/suggest name known)]
+        (error/fail! :pgmalli.error/unknown-schema
+                     (str "the registry has no schema named " (pr-str name)
+                          (if suggest
+                            (str "; did you mean " (pr-str suggest) "?")
+                            (str "; it has " (pr-str (vec (take 5 known))) (when (< 5 (count known)) " ..."))))
+                     (cond-> {:given name :known known} suggest (assoc :suggest suggest)))))
     (get schemas name)))
 
 (defn row-map
@@ -117,6 +145,20 @@
   [table]
   (let [[schema t] (str/split table #"\." 2)]
     (schema-key schema t)))
+
+(defn not-a-row!
+  "The error for a schema that is no table's or view's row: an insert or update schema names
+   its row, anything else the rows the registry holds."
+  [registry name what]
+  (let [s (get (schemas-of registry) name)
+        props (row-props s)
+        rows (vec (sort-by str (for [[k s] (schemas-of registry) :when (read-row? s)] k)))
+        row (when (:closed props) (some-> (:pg/table props) table-key))]
+    (error/fail! :pgmalli.error/unknown-schema
+                 (if row
+                   (str (pr-str name) " is the schema of what is sent to " (:pg/table props) "; " what " takes its row schema " (pr-str row))
+                   (str (pr-str name) " is no table's or view's row schema; " what " takes one such as " (pr-str (vec (take 3 rows)))))
+                 (cond-> {:given name :known rows} row (assoc :suggest row)))))
 
 (defn non-null
   "A column schema without its [:maybe ...]; see pgmalli.core/non-null."

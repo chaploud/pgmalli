@@ -8,6 +8,7 @@
             [malli.core :as m]
             [malli.error :as me]
             [malli.transform :as mt]
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.json :as json]
             [pgmalli.impl.shape :as shape]))
 
@@ -35,12 +36,15 @@
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
-   with the one meant, otherwise."
-  [schema opts]
-  (if (m/validate schema (or opts {}))
-    opts
-    (let [errors (-> (m/explain schema opts) me/with-spell-checking me/humanize)]
-      (throw (ex-info (str "pgmalli options: " (pr-str errors)) {:options opts :errors errors})))))
+   with the one meant, otherwise. kind and label say whose they are (options by default).
+   A config's :db, which may hold a password, is left out of the error."
+  ([schema opts] (checked! schema opts :pgmalli.error/invalid-options "pgmalli options"))
+  ([schema opts kind label]
+   (if (m/validate schema (or opts {}))
+     opts
+     (let [errors (-> (m/explain schema opts) me/with-spell-checking me/humanize)]
+       (error/fail! kind (str label ": " (pr-str errors))
+                    {:given (cond-> opts (map? opts) (dissoc :db)) :errors errors :known (vec (map first (m/children (m/schema schema))))})))))
 
 (defn options! [opts] (checked! options-schema opts))
 
@@ -167,19 +171,20 @@
   [builder]
   (let [b (if (var? builder) (symbol builder) builder)]
     (or (get builders b)
-        (throw (ex-info (str b (if (str/includes? (str b) "modified")
-                                 " keys rows by functions of yours: give :qualified? and :kebab? as they do"
-                                 " is not one of next.jdbc's map builders pgmalli knows")
-                             "; it knows " (vec (sort (keys builders))))
-                        {:builder b})))))
+        (let [known (vec (sort (keys builders)))
+              suggest (error/suggest b known)]
+          (error/fail! :pgmalli.error/invalid-options
+                       (str b (cond (str/includes? (str b) "modified") " keys rows by functions of yours: give :qualified? and :kebab? as they do"
+                                    suggest (str " is not one of next.jdbc's map builders; did you mean " suggest "?")
+                                    :else (str " is not one of next.jdbc's map builders pgmalli knows; it knows " known)))
+                       (cond-> {:given b :known known} suggest (assoc :suggest suggest)))))))
 
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."
   [registry name]
   (let [s (shape/schema-of registry name)]
     (when-not (shape/read-row? s)
-      (throw (ex-info (str name " is no table's or view's row schema, which as-read reads (an insert or update schema is what is sent, not read)")
-                      {:name name})))
+      (shape/not-a-row! registry name "as-read"))
     (shape/row-map s)))
 
 (defn as-read

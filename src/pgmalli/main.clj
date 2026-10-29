@@ -1,21 +1,43 @@
 (ns pgmalli.main
   "Command line entry point. Config comes from pgmalli.edn in the working directory or
-   the path given as second argument.
+   the path given after the command.
 
      clojure -M -m pgmalli.main generate [pgmalli.edn]
-     clojure -M -m pgmalli.main check    [pgmalli.edn]   ; exit 1 when files are stale
-     bb -m pgmalli.main ..."
+     clojure -M -m pgmalli.main check [--edn] [pgmalli.edn]
+     bb -m pgmalli.main ...
+
+   Exit codes: 0 the files are current; 1 a file is stale or missing (run generate);
+   2 a usage, config or other error; 3 the database or psql is unavailable. Findings go to
+   stdout, usage, warnings and errors to stderr (PGMALLI_DEBUG=1 adds the stack trace)."
   (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]
             [pgmalli.generate :as generate]
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.shape :as shape]))
 
+(def ^:private usage "usage: pgmalli.main generate [pgmalli.edn] | check [--edn] [pgmalli.edn]")
+
+(defn- warn [& xs] (binding [*out* *err*] (apply println "pgmalli:" xs)))
+
+(defn- command [& args]
+  (str/join " " (concat [(if (System/getProperty "babashka.version") "bb -m pgmalli.main" "clojure -M -m pgmalli.main")]
+                        (remove nil? args))))
+
 (defn- read-config [path]
-  (let [path (or path "pgmalli.edn")]
-    (try (edn/read-string (slurp path))
-         (catch java.io.FileNotFoundException _
-           (println "no config file at" path "- using defaults (public -> resources/pgmalli)")
-           {}))))
+  (let [file (io/file (or path "pgmalli.edn"))]
+    (cond (.exists file)
+          (try (edn/read-string (slurp file))
+               (catch Exception e
+                 (error/fail! :pgmalli.error/invalid-config (str "cannot read " file " as EDN: " (ex-message e)) {:given (str file)})))
+          path
+          (error/fail! :pgmalli.error/invalid-config
+                       (str "no config file at " path "; give the path of an existing pgmalli.edn, or none for the defaults")
+                       {:given path})
+          :else
+          (do (warn "no pgmalli.edn here; using the defaults (schema public, files in resources/pgmalli)")
+              {}))))
 
 (defn- counts [data]
   (let [entries (vals (:registry data))
@@ -27,28 +49,92 @@
     (str (f :table 0) " tables, " (f :view 0) " views, " (f :enum 0) " enums, " (f :domain 0) " domains; "
          (count (:unrendered data)) " unrendered, " (count (:diagnostics data)) " diagnostics")))
 
-(defn -main [& [command path]]
-  (let [config (read-config path)]
-    (case (or command "generate")
-      "generate" (doseq [[schema out] (generate/generate! config)
-                         :let [data (files/read-edn out)]]
-                   (println "wrote" out (str "(" schema ": " (counts data) ")"))
-                   (doseq [d (:diagnostics data)] (println "  " (name (:severity d)) (:table d) (:message d))))
-      "check" (let [{:keys [stale missing unrendered diagnostics]} (generate/check config)]
-                (doseq [schema missing] (println "no generated file for" schema "; run generate and commit"))
-                (when stale
-                  (println "generated files are out of date; run generate and commit:")
-                  (doseq [[schema ds] stale, {:keys [name column property checks order key file db]} ds]
-                    (println " " schema (or key name) (str column (when (and column property) " ") property)
-                             (cond checks "checks" order "column order" :else "")
-                             "file" (pr-str file) "db" (pr-str db))))
-                (doseq [[schema un] unrendered]
-                  (println schema ": " (count un) "unrendered fact(s):")
-                  (doseq [f un] (println "  " (:table f) (:constraint f (:column f)) (:fact f))))
-                (doseq [[schema ds] diagnostics]
-                  (println schema ": " (count ds) "diagnostic(s):")
-                  (doseq [d ds] (println "  " (name (:severity d)) (:table d) (:message d))))
-                (if (or stale missing) (System/exit 1) (println "generated files match the database")))
-      (do (println "usage: pgmalli.main (generate|check) [pgmalli.edn]") (System/exit 2)))
+(defn- override-key
+  "What :overrides takes for an unrendered fact: its constraint's name, or its type as a keyword."
+  [{:keys [constraint type]}]
+  (if constraint constraint (keyword (str/replace (str/replace (str type) #"^[^.]+\." "") #"\(.*\)$" ""))))
+
+(defn- print-unrendered [schema facts]
+  (when (seq facts)
+    (println (str schema ": unrendered (" (count facts) "), left out of the schemas:"))
+    (doseq [{:keys [table type-name constraint column expr type fact] :as f} facts
+            :let [k (override-key f)]]
+      (println (str "  " (str/join "." (remove nil? [schema (or table type-name)])) " " (or constraint column) ": "
+                    (cond expr (str "CHECK " (pr-str expr)) type (str "type " type) :else (name fact))))
+      (println (str "    to keep it, add to pgmalli.edn :overrides {" (pr-str k) " <malli schema>}"
+                    (when (string? k) (str ", or {" (pr-str k) " {:skip \"<why>\"}} to silence it")))))))
+
+(defn- print-diagnostics [schema ds]
+  (when (seq ds)
+    (println (str schema ": diagnostics (" (count ds) "):"))
+    (doseq [d ds] (println (str "  " (name (:severity d)) " " (:table d) ": " (:message d))))))
+
+(defn- print-difference [schema {:keys [name key column property checks order file db]}]
+  (println (str/join " " (remove nil? [schema (pr-str (or key name)) (some-> column pr-str) (some-> property pr-str)
+                                       (cond checks "CHECKs" order "column order")])))
+  (println "  file:" (pr-str file))
+  (println "  db:  " (pr-str db)))
+
+(defn- generate! [config path]
+  (let [written (generate/generate! config)]
+    (doseq [[schema out] written
+            :let [data (files/read-edn out)]]
+      (println "wrote" out (str "(" schema ": " (counts data) ")"))
+      (print-diagnostics schema (:diagnostics data))
+      (print-unrendered schema (:unrendered data)))
+    (println (str "done: files written: " (count written) "; commit them, and run `" (command "check" path) "` in CI"))
+    0))
+
+(defn- check! [config path edn?]
+  (let [{:keys [stale missing unrendered diagnostics] :as result} (generate/check config)
+        ;; a missing file differs in every entry; saying it is missing says it all
+        stale (not-empty (apply dissoc stale missing))]
+    (if edn?
+      (prn result)
+      (do (doseq [schema missing]
+            (println (str schema ": no generated file at " (files/path-for config schema))))
+          (doseq [[schema ds] stale, d ds] (print-difference schema d))
+          (doseq [[schema un] unrendered] (print-unrendered schema un))
+          (doseq [[schema ds] diagnostics] (print-diagnostics schema ds))
+          (println (if (or stale missing)
+                     (str (str/join ", " (concat (for [[schema ds] stale] (str "stale: " schema " (differences: " (count ds) ")"))
+                                                 (for [schema missing] (str "missing: " schema))))
+                          "; run `" (command "generate" path) "` and commit the files")
+                     (str "ok: the files of " (str/join ", " (:schemas (files/config config))) " match the database")))))
+    (if (or stale missing) 1 0)))
+
+(defn- run* [args]
+  (let [[cmd & more] args
+        flags (filter #(str/starts-with? % "-") more)
+        [path & extra] (remove (set flags) more)]
+    (cond (#{"help" "-h" "--help"} cmd) (do (println usage) 0)
+          (or (not (#{nil "generate" "check"} cmd)) (seq extra)
+              (seq (remove (if (= "check" cmd) #{"--edn"} #{}) flags)))
+          (do (binding [*out* *err*] (println usage)) 2)
+          :else (let [config (read-config path)]
+                  (if (= "check" cmd)
+                    (check! config path (some #{"--edn"} flags))
+                    (generate! config path))))))
+
+(defn- report
+  "Prints an error on one line of stderr; the exit code for it."
+  [^Throwable e]
+  (let [kind (:pgmalli/error (ex-data e))]
+    (warn (if kind (ex-message e) (str (.getName (class e)) ": " (ex-message e))))
+    (if (System/getenv "PGMALLI_DEBUG")
+      (binding [*out* *err*] (.printStackTrace e (java.io.PrintWriter. ^java.io.Writer *out* true)))
+      (when-not kind (warn "set PGMALLI_DEBUG=1 for the stack trace")))
+    (if (#{:pgmalli.error/db-unavailable :pgmalli.error/psql-missing} kind) 3 2)))
+
+(defn run
+  "Runs a command line, printing to *out* and *err*; returns the exit code."
+  [args]
+  (binding [*print-namespace-maps* false]
+    (try (run* args) (catch Throwable e (report e)))))
+
+(defn -main [& args]
+  (let [code (run args)]
+    (flush)
     ;; clojure.java.shell runs psql on the agent pool, whose threads keep the JVM up a minute
-    (shutdown-agents)))
+    (shutdown-agents)
+    (System/exit code)))

@@ -30,6 +30,7 @@
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.json :as json]))
 
 (def ^:private named-maps #{:tables :constraints :types})
@@ -50,8 +51,7 @@
 
 (defn- query-sql []
   (slurp (or (io/resource "pgmalli/ir.sql")
-             (throw (ex-info "pgmalli/ir.sql is not on the classpath; the pgmalli jar or its resources path is incomplete"
-                             {:resource "pgmalli/ir.sql"})))))
+             (error/fail! :pgmalli.error/fault "pgmalli/ir.sql is not on the classpath: the pgmalli jar or its resources path is incomplete; reinstall pgmalli"))))
 
 (defn- jdbc-sql
   "ir.sql with its psql variables written in: :\"schema\" an identifier, :'schema' a literal."
@@ -59,6 +59,11 @@
   (-> (query-sql)
       (str/replace ":\"schema\"" (str "\"" (str/replace schema "\"" "\"\"") "\""))
       (str/replace ":'schema'" (str "'" (str/replace schema "'" "''") "'"))))
+
+(defn- target
+  "host:port/db psql reaches, from the db map or psql's environment."
+  [env]
+  (str (get env "PGHOST" "local socket") ":" (get env "PGPORT" "5432") "/" (get env "PGDATABASE" (get env "PGUSER" (System/getProperty "user.name")))))
 
 (defn- psql-out [{:keys [schema psql dir] :or {psql "psql"} :as db}]
   (let [;; shell/sh replaces the whole environment, so layer the overrides on the current one
@@ -68,12 +73,22 @@
                dir (conj :dir dir))
         {:keys [exit out err]} (try (apply shell/sh args)
                                     (catch java.io.IOException e
-                                      (throw (ex-info (str "cannot run psql (" psql "): " (ex-message e)
-                                                           ". Install the PostgreSQL client, set :psql, or give :jdbc-url")
-                                                      {:psql psql} e))))]
-    (when-not (zero? exit)
-      (throw (ex-info (str "psql failed (exit " exit "): " (str/trim err)) {:exit exit :err err :schema schema})))
-    out))
+                                      (error/fail! :pgmalli.error/psql-missing
+                                                   (str "cannot run psql (" psql "): " (ex-message e)
+                                                        "; install the PostgreSQL client, set :db :psql to its path, or give :db :jdbc-url")
+                                                   {:given psql} e)))
+        ;; psql tells each address it tried in turn: the first says it
+        first-err (str/replace (or (first (remove str/blank? (str/split-lines (str err)))) "") #"^psql: (error: )?" "")]
+    (cond (zero? exit) out
+          ;; psql exits 2 when it cannot connect, 3 when the script fails
+          (= 2 exit) (error/fail! :pgmalli.error/db-unavailable
+                                  (str "cannot connect to " (target env) " with psql: " first-err
+                                       "; check :db in pgmalli.edn (or PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD) and that PostgreSQL is running")
+                                  {:given (target env) :exit exit :err err})
+          :else (error/fail! :pgmalli.error/fault
+                             (str "psql failed reading schema " schema " on " (target env) " (exit " exit "): " first-err
+                                  "; pgmalli needs PostgreSQL 16 or later and a user that can read pg_catalog")
+                             {:given schema :exit exit :err err}))))
 
 (def ^:private db-keys
   {:psql (set (concat (keys env-keys) [:psql :dir])) :jdbc #{:jdbc-url :user :password} :datasource #{:datasource}})
@@ -86,11 +101,12 @@
   (let [via (cond (contains? db :datasource) :datasource (contains? db :jdbc-url) :jdbc :else :psql)
         stray (remove (conj (db-keys via) :schema) (keys db))]
     (when (seq stray)
-      (throw (ex-info (str ":db keys " (vec stray) " do not go with " (name via) ": psql takes " (vec (sort (db-keys :psql)))
-                           ", JDBC :jdbc-url :user :password, or :datasource alone")
-                      {:keys (vec stray) :via via})))
+      (error/fail! :pgmalli.error/invalid-config
+                   (str ":db keys " (vec stray) " do not go with " (name via) ": psql takes " (vec (sort (db-keys :psql)))
+                        ", JDBC :jdbc-url :user :password, or :datasource alone")
+                   {:given (vec stray) :known (vec (sort (db-keys via)))}))
     (when (and (not= :psql via) (System/getProperty "babashka.version"))
-      (throw (ex-info "babashka has no JDBC: give psql settings, or run on the JVM" {:via via})))
+      (error/fail! :pgmalli.error/invalid-config "babashka has no JDBC: give :db psql settings instead, or run on the JVM" {:given via}))
     via))
 
 (defn from-db
@@ -101,5 +117,5 @@
    (let [out (if (= :psql (via db)) (psql-out (assoc db :schema schema)) ((requiring-resolve 'pgmalli.impl.ir-jdbc/out) db (jdbc-sql schema)))
          ir (keywordize (json/parse (str/trim out)) false)]
      (when-not (:exists ir)
-       (throw (ex-info (str "schema does not exist: " schema) {:schema schema})))
+       (error/fail! :pgmalli.error/invalid-config (str "schema " (pr-str schema) " does not exist in the database; check :schemas in pgmalli.edn") {:given schema}))
      (dissoc ir :exists))))

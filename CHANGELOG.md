@@ -22,6 +22,11 @@ All notable changes to this project are documented here. The format follows
 | `:missing-required-column`'s `:column` was a string, `:enum-literal`'s `:allowed` a set | a keyword; a vector in the enum's order | compare with those |
 | `query-schema` was `[:=> in out]` | `[:=> {:pgmalli/problems [...]} in out]` when the query has problems | read the parts with `m/children` |
 | `test.chuck` was a dependency | optional: regex strings use it when on the classpath | add it to your test alias |
+| `pgmalli.main` exited 1 on any failure, with a stack trace | 1 stale or missing, 2 usage or config, 3 database or psql unavailable; one line on stderr | read the exit code |
+| a config path that does not exist meant the defaults | an error | give an existing path, or none |
+| `pgmalli.main` printed usage on stdout | stderr | |
+| a config value of the wrong shape (`:schemas "public"`) was read | an error | fix the value |
+| ex-data keys `:name`, `:unknown`, `:options`, `:builder` | `:given`, `:known`, `:suggest`, with `:pgmalli/error` and `:cognitect.anomalies/category` | dispatch on `:pgmalli/error` |
 
 ### Added
 
@@ -51,6 +56,14 @@ All notable changes to this project are documented here. The format follows
   CI holds its false positives at none.
 - `bb upstream` and a weekly workflow: the suite against the newest HoneySQL, next.jdbc, pgjdbc,
   malli and PostgreSQL, each failure naming the upstream change and the pgmalli list to update.
+- `pgmalli.main check --edn` prints `generate/check`'s map.
+- `pgmalli.main` lists unrendered facts with their expression and the override to write, and
+  ends with a summary and the command to run next.
+- Errors say what to do in one line: a misspelt registry name, config key or builder suggests
+  the one meant; `as-read` of an insert schema names its row schema; a map that is no registry,
+  or a generated data map, is an error.
+- A database that cannot be reached, by psql or JDBC, is one line naming host:port/db, with
+  the driver's error as the cause.
 
 ### Fixed
 

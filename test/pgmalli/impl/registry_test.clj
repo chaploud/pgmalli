@@ -29,6 +29,15 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/unique [["a"]]} [:a :int]]}}))
       "so are files with the older key shapes"))
 
+(deftest a-map-of-no-schemas-is-not-a-registry
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a registry: :a maps to 1, not a schema; pass \(pgmalli.core/registry"
+                                (h/check {:a 1} {:select [:*] :from [:users]})))]
+    (is (= :pgmalli.error/not-a-registry (:pgmalli/error (ex-data e))))))
+
+(deftest generated-data-in-place-of-a-registry-names-the-call-to-make
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"given the generated data of schema \"sample\", not a registry; pass \(pgmalli.core/registry \"sample\"\)"
+                        (pgmalli/as-read (pgmalli/generated "sample") :pg.sample/users))))
+
 (deftest insert-schemas
   (let [insert (fn [row] (m/validate :pg.sample.users/insert row opts))]
     (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1}) "defaults, serials and nullable columns may be omitted")

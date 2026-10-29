@@ -43,8 +43,13 @@
                     :columns #(pgmalli/columns registry :pg.sample/nope)
                     :as-read #(pgmalli/as-read registry :pg.sample/nope)}]
     (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no schema named" (f)) (str what))]
-      (is (= :pg.sample/nope (:name (ex-data e))) (str what))
+      (is (= :pgmalli.error/unknown-schema (:pgmalli/error (ex-data e))) (str what))
+      (is (= :pg.sample/nope (:given (ex-data e))) (str what))
       (is (some #{:pg.sample/users} (:known (ex-data e))) (str what)))))
+
+(deftest a-misspelt-name-suggests-the-one-meant
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean :pg.sample.users/insert\?" (pgmalli/columns registry :pg.sample/users_insert)))]
+    (is (= :pg.sample.users/insert (:suggest (ex-data e))))))
 
 (deftest read-names-the-types-an-extension-reads-otherwise
   (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant :read {"date" :time/local-date}})]
@@ -55,6 +60,10 @@
   (is (= (pgmalli/as-read registry :pg.sample/users {}) (pgmalli/as-read registry :pg.sample/users))))
 
 (deftest as-read-and-columns-take-row-schemas
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema" (pgmalli/as-read registry :pg.sample/mood)))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema" (pgmalli/as-read registry :pg.sample.users/insert)))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no row or insert schema" (pgmalli/columns registry :pg.sample/mood))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema; as-read takes one such as \[:pg.sample/" (pgmalli/as-read registry :pg.sample/mood)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema; columns takes one" (pgmalli/columns registry :pg.sample/mood))))
+
+(deftest as-read-given-an-insert-schema-names-the-row-schema
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"what is sent to sample.users; as-read takes its row schema :pg.sample/users"
+                                (pgmalli/as-read registry :pg.sample.users/insert)))]
+    (is (= :pg.sample/users (:suggest (ex-data e))))))

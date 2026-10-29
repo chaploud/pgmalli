@@ -1,5 +1,6 @@
 (ns pgmalli.impl.ir-test
-  (:require [clojure.test :refer [deftest is use-fixtures]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is use-fixtures]]
             [pgmalli.impl.ir :as ir]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
 
@@ -71,10 +72,27 @@
 
 (deftest unknown-schema
   (when *db*
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema does not exist" (ir/from-db (assoc *db* :schema "nope"))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema \"nope\" does not exist in the database; check :schemas" (ir/from-db (assoc *db* :schema "nope"))))))
 
 (deftest missing-psql
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot run psql" (ir/from-db {:psql "/nonexistent/psql"}))))
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot run psql \(/nonexistent/psql\).*install the PostgreSQL client" (ir/from-db {:psql "/nonexistent/psql"})))]
+    (is (= :pgmalli.error/psql-missing (:pgmalli/error (ex-data e))))
+    (is (instance? java.io.IOException (ex-cause e)) "the cause is kept")))
+
+(deftest psql-that-cannot-connect-names-the-target-on-one-line
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope with psql: [^\n]*; check :db in pgmalli.edn"
+                                (ir/from-db {:host "localhost" :port 1 :db "nope" :user "u" :password "s3cret"})))]
+    (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
+    (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e))) "s3cret")))))
+
+(deftest jdbc-that-cannot-connect-names-the-target-and-keeps-the-cause
+  (when-not (System/getProperty "babashka.version")
+    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope: .*; check :db :jdbc-url"
+                                  (ir/from-db {:jdbc-url "jdbc:postgresql://localhost:1/nope?password=s3cret" :user "u" :password "s3cret"})))]
+      (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
+      (is (= :cognitect.anomalies/unavailable (:cognitect.anomalies/category (ex-data e))))
+      (is (= "org.postgresql.util.PSQLException" (.getName (class (ex-cause e)))))
+      (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e))) "s3cret"))))))
 
 (deftest jdbc-reads-what-psql-reads
   ;; babashka has no java.sql
