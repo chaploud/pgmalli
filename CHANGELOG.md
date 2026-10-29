@@ -103,6 +103,13 @@ All notable changes to this project are documented here. The format follows
   `IS DISTINCT FROM` ...), as arguments are typed. A subquery in a row of `:values` or `:set` is
   read for unread clauses. A RIGHT or FULL JOIN code builds makes the tables before it
   nullable.
+- Each part of a statement sees what PostgreSQL lets it: a subquery in `:from` or a join no
+  table beside it nor its own alias (LATERAL its own statement's), a `:with` entry the entries
+  before it (`:with-recursive` all), a row of `:values` not the table inserted into; a mistake
+  there was taken for a column of the scope and went unreported. Rows are told per statement
+  where it sits, the same statement in two places in its own scope each. `:t.*` must name a
+  table of the scope; code anywhere in a query (an `:insert-into` target, a CTE name) leaves
+  its part unjudged, and clauses inside code are read.
 - A value HoneySQL passes as it is (`[:lift {...}]`, `[:inline {...}]`) is data, never a
   statement or a clause; a column definition list (`[:r {:columns [[:raw "a int"]]}]`) does not
   throw.

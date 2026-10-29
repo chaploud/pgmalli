@@ -73,6 +73,13 @@
   [schema]
   (map entry-parts (filter vector? (entries (row-map schema)))))
 
+(defn read-row?
+  "Whether a schema is a row a query returns: a table's or a view's, not an insert or update
+   schema (closed)."
+  [s]
+  (let [props (row-props s)]
+    (boolean (and (or (:pg/table props) (:pg/view props)) (not (:closed props))))))
+
 (defn row-schema?
   "Row schemas carry :pg/table; their inserts do too, but closed."
   [s]

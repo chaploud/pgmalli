@@ -74,13 +74,17 @@
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] [k t]))
 
+(declare insert-parts)
+
 (defn- code-sources?
   "Whether code (a list) brings in some of a statement's tables, whose columns the data then
    does not show."
   [stmt]
-  (some seq? (concat (keep stmt (concat from-keys join-keys [:update :delete-from :insert-into]))
-                     (from-items stmt from-keys)
-                     (map second (join-items stmt)))))
+  (boolean (or (some seq? (concat (keep stmt (concat from-keys join-keys [:update :delete-from :insert-into]))
+                                  (from-items stmt from-keys)
+                                  (map second (join-items stmt))))
+               ;; an :insert-into target insert-parts finds no table in
+               (and (contains? stmt :insert-into) (nil? (insert-parts stmt))))))
 
 (defn- branch?
   "Whether a walk of query data goes into x: a collection, but not a value HoneySQL passes as it
@@ -207,7 +211,9 @@
         (keyword? a) [nil (name a) nil listed]
         (keyword? b) [nil (name b) nil listed]
         ;; [[:f args...]]: a table function, named after the function
-        (and (nil? b) (vector? a) (keyword? (first a))) [nil (name (first a)) nil]))))
+        (and (nil? b) (vector? a) (keyword? (first a))) [nil (name (first a)) nil]
+        ;; [subquery]: one with no alias
+        (and (nil? b) (map? a)) (table-ref a schema)))))
 
 (defn- insert-target
   "The target of :insert-into as a :from item: the table, under its alias when it has one."
@@ -274,29 +280,56 @@
       (let [target (assoc (get sc alias) :excluded? true)] (assoc sc "EXCLUDED" target "excluded" target))
       sc)))
 
+(defn- lateral? [item]
+  (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (= :lateral (ffirst item))))))
+
 (defn- statement-chains
-  "[[statement scopes] ...] for the statements of a query, scopes the statement's own scope
-   followed by those of the statements enclosing it. A CTE is visible to the statement whose
-   :with defines it and to the statements inside it, not outside. A statement found inside a
-   vector of a code form, not under a statement (a subquery a helper adds to a query built
-   elsewhere, or a CTE body bound apart from its :with), has an enclosing statement this data
-   does not show: its chain ends in :open, a column it cannot resolve is taken to be the
-   enclosing statement's, and every CTE the query defines anywhere is visible to it."
+  "[[statement scopes path] ...] for the statements of a query, scopes the statement's own scope
+   followed by those of the statements enclosing it, path where it sits in the query. What a
+   part of a statement sees is decided here alone: its conditions, select and assignments its
+   own tables and the enclosing ones; a table item of :from or a join (a subquery), the body of
+   a CTE and the rows of :values only the enclosing ones (LATERAL its own too); a :with entry
+   the entries before it, a :with-recursive one all of them. A statement found inside a vector
+   of a code form, not under a statement (a subquery a helper adds to a query built elsewhere,
+   or a CTE body bound apart from its :with), has an enclosing statement this data does not
+   show: its chain ends in :open, a column it cannot resolve is taken to be the enclosing
+   statement's, and every CTE the query defines anywhere is visible to it."
   [registry body opts]
-  (letfn [(walk [x outer ctes in-vector? under?]
-            (cond (statement? x) (let [open? (and (empty? outer) in-vector? (not under?))
-                                       ctes (into (if open? (query-ctes body) ctes) (keep cte-name) (cte-entries x))
-                                       outer (if open? (list :open) outer)
-                                       ;; a column of a table code brings in is the enclosing data's, untyped
-                                       chain (cons (scope registry x ctes opts) (cond->> outer (code-sources? x) (cons :open)))]
-                                   (cons [x chain]
-                                         (concat
-                                          ;; INSERT ... SELECT does not see the table inserted into, nor a CTE body
-                                          ;; the tables of the statement its :with belongs to
-                                          (mapcat #(walk % outer ctes false true) (keep x (cons :insert-into with-keys)))
-                                          (mapcat #(walk % chain ctes false true) (vals (apply dissoc x :insert-into with-keys))))))
-                  (branch? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x)) under?) (seq x))))]
-    (walk body () (into (free-cte-names body) (code-ctes body)) false false)))
+  (letfn [(walk [x path outer ctes in-vector? under?]
+            (cond (statement? x)
+                  (let [open? (and (empty? outer) in-vector? (not under?))
+                        base (if open? (query-ctes body) ctes)
+                        ctes (into base (keep cte-name) (cte-entries x))
+                        outer (if open? (list :open) outer)
+                        ;; a column of a table code brings in is the enclosing data's, untyped
+                        chain (cons (scope registry x ctes opts) (cond->> outer (code-sources? x) (cons :open)))
+                        part (fn [k v scopes cs] (walk v (conj path k) scopes cs false true))
+                        items (fn [k v]
+                                (if (vector? v)
+                                  (apply concat (map-indexed (fn [i t] (walk t (conj path k i) (if (lateral? t) chain outer) ctes false true)) v))
+                                  (part k v outer ctes)))]
+                    (cons [x chain path]
+                          (concat
+                           (for [k with-keys :let [w (get x k)] :when (some? w)
+                                 found (if (vector? w)
+                                         (apply concat (map-indexed (fn [i e] (walk e (conj path k i) outer (into base (keep cte-name) (if (= :with-recursive k) w (take i w))) false true)) w))
+                                         (part k w outer ctes))]
+                             found)
+                           ;; INSERT ... SELECT, and the rows of :values, do not see the table inserted into
+                           (mapcat #(part % (get x %) outer ctes) (filter #(contains? x %) [:insert-into :values]))
+                           (mapcat #(items % (get x %)) (filter #(contains? x %) from-keys))
+                           (for [k join-keys :let [j (get x k)] :when (some? j)
+                                 found (if (vector? j)
+                                         (apply concat (map-indexed (fn [i t] (if (even? i)
+                                                                                (walk t (conj path k i) (if (lateral? t) chain outer) ctes false true)
+                                                                                (walk t (conj path k i) chain ctes false true)))
+                                                                    j))
+                                         (part k j outer ctes))]
+                             found)
+                           (mapcat (fn [[k v]] (part k v chain ctes))
+                                   (apply dissoc x :insert-into :values (concat with-keys from-keys join-keys))))))
+                  (branch? x) (apply concat (map-indexed (fn [i c] (walk c (conj path i) outer ctes (or in-vector? (vector? x)) under?)) (seq x)))))]
+    (walk body [] () (into (free-cte-names body) (code-ctes body)) false false)))
 
 (defn- split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table, :b does not."
@@ -576,7 +609,11 @@
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c] (comparisons stmt)] [c sc])
                                         (for [c assigned] [c target])))
-          :when (and (not (star? col)) (nil? (resolve-column registry scope col)))
+          :when (if (star? col)
+                  ;; :t.* names a table of the scope, unless the data does not show them all
+                  (let [[a] (split-column col)]
+                    (and a (not (some #{:open} (chain scope))) (not-any? #(and (map? %) (contains? % a)) (chain scope))))
+                  (nil? (resolve-column registry scope col)))
           :let [hits (column-hits registry scope col)]]
       (if (< 1 (count hits))
         {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
@@ -657,7 +694,7 @@
                         r (concat (when (vector? (:values st)) (:values st)) [(:set st) (:do-update-set st)])
                         :when (map? r)]
                     r))
-        maps (tree-seq #(and (branch? %) (not (seq? %))) seq body)]
+        maps (tree-seq branch? seq body)]
     (distinct (for [m maps
                     :when (and (map? m) (seq m) (not (rows m)) (or (statement? m) (and clauses (every? clauses (keys m)))))
                     k (keys m)
@@ -677,7 +714,7 @@
 (defn- code-ctes?
   "Whether code (not data) gives a statement some of its CTEs, which may then be any table."
   [stmt]
-  (some #(let [w (get stmt %)] (and (some? w) (or (not (vector? w)) (not-every? vector? w)))) with-keys))
+  (some #(let [w (get stmt %)] (and (some? w) (or (not (vector? w)) (some (comp nil? cte-name) w)))) with-keys))
 
 (defn check
   "The problems of every statement of a query, and the clauses it uses that are read nowhere
@@ -829,9 +866,9 @@
 
 (declare row-schema*)
 
-(defn- set-operation-row [registry members chains opts]
+(defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (for [m members] (row-schema* registry m chains (dissoc opts :qualified? :nil-columns)))]
+    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (dissoc opts :qualified? :nil-columns))) members)]
       (when (and (every? some? rows) (apply = (map count rows)))
         (into [:map]
               (for [entries (apply map vector (map rest rows))
@@ -840,12 +877,12 @@
                 (jdbc/row-entry (ffirst entries) (if (= 1 (count inners)) (first inners) :any) (some maybe? schemas) opts)))))))
 
 (defn- row-schema*
-  "row-schema of a statement of a query, chains its statements' scope chains (statement-chains),
-   which alone say which tables and CTEs a statement sees."
-  [registry stmt chains opts]
-  (if-let [members (some stmt set-operation-keys)]
-    (set-operation-row registry members chains opts)
-    (select-row registry stmt (get chains stmt) opts)))
+  "row-schema of the statement at path in a query, chains its statements' scope chains by path
+   (statement-chains), which alone say which tables and CTEs a statement sees."
+  [registry stmt path chains opts]
+  (if-let [k (some #(when (contains? stmt %) %) set-operation-keys)]
+    (set-operation-row registry (get stmt k) (conj path k) chains opts)
+    (select-row registry stmt (get chains path) opts)))
 
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc builds it from what the driver
@@ -859,7 +896,7 @@
   ([registry body opts]
    (jdbc/options! opts)
    (query! body)
-   (when (map? body) (row-schema* registry body (into {} (statement-chains (reading registry) body opts)) opts))))
+   (when (map? body) (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts))))
 
 (defn query-schema
   "[:=> [:cat arg-types...] [:sequential row]], the malli function schema of a function taking

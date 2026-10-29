@@ -19,7 +19,7 @@
 
 (defn- counts [data]
   (let [entries (vals (:registry data))
-        kind (fn [s] (cond (and (vector? s) (:pg/view (second (shape/row-map s)))) :view
+        kind (fn [s] (cond (:pg/view (shape/row-props s)) :view
                            (shape/row-schema? s) :table
                            (and (vector? s) (= :enum (first s))) :enum
                            :else :domain))

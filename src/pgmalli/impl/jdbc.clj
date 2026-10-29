@@ -158,9 +158,8 @@
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."
   [registry name]
-  (let [s (shape/schema-of registry name)
-        props (shape/row-props s)]
-    (when-not (and (or (:pg/table props) (:pg/view props)) (not (:closed props)))
+  (let [s (shape/schema-of registry name)]
+    (when-not (shape/read-row? s)
       (throw (ex-info (str name " is no table's or view's row schema, which as-read reads (an insert or update schema is what is sent, not read)")
                       {:name name})))
     (shape/row-map s)))

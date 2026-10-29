@@ -586,3 +586,33 @@
 (deftest a-right-join-code-builds-nulls-the-tables-before-it
   (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]]
          (h/row-schema registry '{:select [:users.id] :from [:users] :right-join (when x [[:groups :g] [:= 1 1]])} opts))))
+
+(deftest each-part-of-a-statement-sees-what-postgresql-lets-it
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:s.id] :from [[{:select [:id :nope] :from :users} :s]]} opts))
+      "a subquery in :from sees no table beside it, nor its own alias")
+  (is (= [{:kind :unknown-column :column :name}] (h/check registry {:select [:id] :from [:groups [{:select [:mood] :from :users :where [:= :name "x"]} :s]]} opts)))
+  (is (= [] (h/check registry {:select [:u.id :x.n] :from [[:users :u]] :join [[[:lateral {:select [[:u.id :n]]}] :x] true]} opts))
+      "LATERAL does")
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:with [[:users {:select [:nope] :from :users}]] :select [:id] :from :users} opts))
+      "a :with entry does not see itself")
+  (is (= [{:kind :unknown-table :table "sample.b"}] (h/check registry {:with [[:a {:select [:id] :from :b}] [:b {:select [:id] :from :users}]] :select [:id] :from :a} opts))
+      "nor the entries after it")
+  (is (= [] (h/check registry {:with-recursive [[:t {:union-all [{:select [:id] :from :users} {:select [:id] :from :t}]}]] :select [:id] :from :t} opts))
+      "a :with-recursive one does")
+  (is (= [{:kind :unknown-column :column :groups.id}]
+         (h/check registry {:insert-into :groups :values [{:id {:select [:id] :from :users :where [:= :users.id :groups.id]} :name "x"}]} opts))
+      "a row of :values does not see the table inserted into"))
+
+(deftest rows-read-each-statement-where-it-sits
+  (let [q {:select [:id] :from :groups}]
+    (is (= [:map [:id :any]] (h/row-schema registry {:union [q {:with [[:groups {:select [:id] :from :users}]] :select [:id] :from :users :where [:in :id q]}]} opts))
+        "the same statement twice, each in its own scope")))
+
+(deftest code-anywhere-leaves-its-part-unjudged
+  (is (= [{:kind :unread-clause :clause :frob}] (h/check registry '(cond-> {:select [:id] :from [:users] :frob 1} x (assoc :limit 1)) opts)))
+  (is (= [] (h/check registry '{:insert-into [(tbl) [:a]] :values [[1]] :returning [:a]} opts)))
+  (is (= [] (h/check registry '{:with [[(nm) {:select [:id] :from :users}]] :select [:id] :from :c} opts))))
+
+(deftest a-star-names-a-table-of-the-scope
+  (is (= [{:kind :unknown-column :column :x.*}] (h/check registry {:select [:x.*] :from :users} opts)))
+  (is (= [] (h/check registry {:select [:id] :from [[{:select [:id] :from :users}]]} opts)) "[subquery] has no alias"))
