@@ -324,7 +324,7 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels or a CHECK's list, with `:allowed` |
-| `:uncast-string` | a string sent as `varchar` to a column whose type takes none: a literal to an enum, `bit`, `inet`, `jsonb` (...) column, an argument to an enum or `bit` one; not under `:stringtype :unspecified` or `:format {:inline true}` |
+| `:uncast-string` | a string sent as `varchar` to a column whose type takes none: a literal to any type but `text`, `varchar`, `char`, `name` and `citext` (an enum, a number, a date, `jsonb`, an array ...), an argument to an enum or `bit` one; not under `:stringtype :unspecified` or `:format {:inline true}` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
