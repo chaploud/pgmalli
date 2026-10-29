@@ -39,10 +39,16 @@ All notable changes to this project are documented here. The format follows
 - `pgmalli.main` took a minute to exit after running psql (the agent pool's threads).
 - `row-schema` names an expression with no alias as PostgreSQL does (a function's name, `case`,
   `array`, a cast column's name, `?column?`), where it was nil; an expression's key is
-  unqualified and kebab-cased as the builder does it. A name selected twice is one key.
+  unqualified and kebab-cased as the builder does it. A name selected twice is one key. Under
+  `:qualified?`, a cast column is nil: PostgreSQL drops a cast to the column's own type, and
+  the driver then keys it by the table. Checked against next.jdbc's rows over PostgreSQL's JDBC
+  driver.
 - `row-schema` of a set operation is its first member's names, typed where the members agree
   and nullable where one is; it was nil.
 - An SQL word under an alias (`[:current_timestamp :ts]`) is not a column.
+- The README and `install!` say how `:malli/schema` reads a schema (data through malli's default
+  registry, an object as it is), so a schema object over the registry instruments with nothing
+  installed; how `registry` composes and which registry of a composite one wins.
 
 ## [0.2.45] - 2026-09-04
 

@@ -126,7 +126,9 @@
   (is (nil? (h/row-schema registry {:select [[[:cast 1 :int]]] :from [:users]} #{} opts)) "a cast value is named after its type, not read here")
   (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]] [:top-id [:maybe :any]]]
          (h/row-schema registry {:select [:id [[:max :id] :top_id]] :from [:users]} #{} (assoc opts :qualified? true :kebab? true)))
-      "an expression has no table: its key is unqualified, kebab-cased as the builder does"))
+      "an expression has no table: its key is unqualified, kebab-cased as the builder does")
+  (is (nil? (h/row-schema registry {:select [[[:cast :nick :text]]] :from [:users]} #{} (assoc opts :qualified? true)))
+      "a cast to the column's own type is dropped and the key keeps the table: not told without the types"))
 
 (deftest a-set-operations-row-is-named-by-its-first-member
   (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]

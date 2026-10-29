@@ -36,12 +36,13 @@
 
 (defn install!
   "Makes the registry of the named schemas malli's default registry (it holds malli's own
-   schemas, malli.util and malli.experimental.time too), so :malli/schema metadata,
-   malli.dev/start! and malli.instrument read :pg.public/users and the other generated names
-   directly. Process-wide, like malli's default registry: for an application with this one
-   registry; one with a registry of its own composes the two (malli.registry/composite-registry)
-   or uses portable, which touches nothing. Returns the schemas the default registry held
-   before, which malli.registry/set-default-registry! puts back."
+   schemas, malli.util and malli.experimental.time too), so schema data anywhere reads
+   :pg.public/users and the other generated names. Process-wide: every schema in the process
+   then resolves the :pg and :time names, including one meant to work without them, whose
+   mistake it hides. A :malli/schema that is a schema object over the registry
+   ((m/schema s {:registry registry})) needs none of it: malli.instrument and malli.dev take an
+   object as it is. Returns the schemas the default registry held before, which
+   malli.registry/set-default-registry! puts back."
   [& schemas]
   (let [before (mr/-schemas m/default-registry)]
     (mr/set-default-registry! (apply reg/registry schemas))

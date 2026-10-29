@@ -16,9 +16,10 @@
    The entry points are check, arg-types, row-schema and query-schema; the other public vars
    are the parts they are built from.
 
-   Types are data malli's default registry reads (see pgmalli.core/portable). Date and
-   timestamp columns are inst? by default; :time :instant or :local gives the
-   malli.experimental.time types, as as-read does."
+   Types are data malli's default registry reads (see pgmalli.core/portable): date and
+   timestamp columns are inst?. :time :instant or :local, or :read, gives the types they name
+   (the malli.experimental.time ones), as as-read does; the default registry lacks those, so
+   such a schema is made an object over pgmalli's registry."
   (:require [clojure.string :as str]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.shape :as shape]))
@@ -358,6 +359,10 @@
     :respect-nulls :within-group :xtql :dot :default :foreign-key :references :unique
     :primary-key :index :constraint})
 
+(defn- cast-of-column? [x]
+  (and (vector? x) (= :cast (first x))
+       (or (column-keyword? (second x)) (cast-of-column? (second x)))))
+
 (defn- expression-name
   "The column name PostgreSQL gives a select expression with no alias: a function's name, case,
    array, a cast column's name, ?column? for a value or an operator. nil when this cannot tell
@@ -576,8 +581,11 @@
                      :let [[col alias] (select-parts item)]]
                  (cond
                    (and alias (nil? col)) [(entry (key-of nil (name alias)) nil)]
-                   (nil? col) (when-let [n (expression-name (if (and (vector? item) (= 1 (count item))) (first item) item))]
-                                [(entry (key-of nil n) nil)])
+                   (nil? col) (let [x (if (and (vector? item) (= 1 (count item))) (first item) item)]
+                                ;; a cast PostgreSQL drops (to the column's own type) leaves the column, keyed
+                                ;; by its table, so whether the key is qualified is not told here
+                                (when-let [n (when-not (and qualified? (cast-of-column? x)) (expression-name x))]
+                                  [(entry (key-of nil n) nil)]))
                    (star? col) (star col)
                    :else (when-let [{:keys [table column schema]} (resolve-column registry sc col)]
                            ;; a column under an alias is still keyed by its table: the driver reads the table from the field

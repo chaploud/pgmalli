@@ -164,10 +164,16 @@ into Instants (the JVM's, unless you configured otherwise), so both read the sam
 Every function taking a registry takes any malli registry holding the generated names: the
 map `registry` returns, or a `malli.registry/composite-registry` of it and your own.
 
+`registry` returns a plain map: malli's default schemas, `malli.util`'s, `malli.experimental.time`'s,
+pgmalli's `:pg/*` types, the generated names (`:pg.<schema>/<name>`) and the ones derived from
+them (`:pg.<schema>.<table>/insert`, `/update`). Everything pgmalli adds is under `:pg`, so it
+hides none of malli's names; a schema given twice, the later one is kept. In a composite
+registry the first registry holding a name wins, for malli's lookups and for the schemas
+pgmalli reads from it alike.
+
 ```clojure
 (pgmalli/registry "public" "auth")          ; several schemas, plus malli's defaults, malli.util and malli.experimental.time
 (pgmalli/generated "public")                ; the file as data: :schema :database-version :diagnostics :registry :unrendered :skipped
-(pgmalli/install! "public")                 ; the registry as malli's default one: :pg.public/users everywhere, no registry to pass
 (pgmalli/columns registry :pg.public/users) ; the [:map ...] alone: what malli.util's select-keys, optional-keys and the like take
 (m/decode :pg.public/users jdbc-row {:registry registry} (pgmalli/transformer))
                                             ; JDBC (java.sql.Date / Timestamp, Instant) and string values into the registry's types
@@ -228,11 +234,12 @@ subquery's columns are resolved in the subquery first, then in the statements ar
 ```
 
 Options: `:schema` for unqualified table names (default `"public"`); `:qualified?`, `:kebab?`,
-`:nil-columns` and `:time` as in `as-read`; `:result :one` for a function returning one row
-or nil (`[:maybe row]`). Without `:time` the schema is one `:malli/schema` metadata can take:
-date and timestamp columns are `inst?` (what the driver returns, and a schema malli's default
-registry reads). `:time :instant` or `:local` gives the `malli.experimental.time` types
-instead, for a registry that has them. An ambiguous column comes with the tables it could
+`:nil-columns`, `:time` and `:read` as in `as-read`; `:result :one` for a function returning
+one row or nil (`[:maybe row]`). Without `:time` and `:read` the schema is data malli's default
+registry reads: date and timestamp columns are `inst?` (what the driver returns). `:time
+:instant` or `:local`, or a `:read` naming them, gives the `malli.experimental.time` types
+instead, which the default registry lacks: make the schema an object over pgmalli's registry
+(below). An ambiguous column comes with the tables it could
 belong to, under `:candidates`. `check`, `query-schema`, `row-schema` and `arg-types` are the
 functions to use; the rest of the namespace are their parts, for taking a query apart.
 
@@ -245,18 +252,27 @@ query with the HoneySQL map in its metadata):
     (is (= [] (h/check registry q)) (str v))))
 ```
 
-### Schemas where the registry cannot follow
+### Schemas for `:malli/schema` and `malli.dev`
 
-`:malli/schema` metadata, `malli.dev/start!` and other tools read schemas through malli's
-default registry. `(pgmalli/install! "public")` makes pgmalli's registry that default, so
-`:pg.public/users` and the other names work there directly; it is process-wide, as the
-default registry is, and meant for an application with this one registry (one with a
-registry of its own composes them with `malli.registry/composite-registry`). Where that is
-not wanted, `portable` gives the named schema as data
-malli's default registry reads (with `malli.experimental.time` added for the time types): the
-schema's own enums and domains inlined, pgmalli's types as their malli counterparts,
-generation hints dropped. The CHECKs only pgmalli evaluates (`:pg/check`, `:pg/check-value`)
-are left out.
+`malli.instrument` and `malli.dev/start!` make a var's `:malli/schema` a schema with `m/schema`
+and no options (`-collect!` → `m/-register-function-schema!` → `m/function-schema`, malli
+0.20): schema data there is read through malli's default registry, a schema object is taken
+as it is, with the registry it was made over. So an object over pgmalli's registry needs
+nothing installed, and the default registry keeps its names:
+
+```clojure
+(defn find-user
+  {:malli/schema (m/schema (h/query-schema registry '[id] '{:select [:id :nick] :from [:users] :where [:= :id id]}
+                                           {:time :instant})
+                           {:registry registry})}
+  [id] ...)
+```
+
+Data works there too when it names only what the default registry has: `pgmalli.honeysql`'s
+schemas without `:time` and `:read`, and `portable`, which gives the named schema with its own
+enums and domains inlined, pgmalli's types as their malli counterparts and generation hints
+dropped (time columns stay `:time/*`, so it needs `malli.experimental.time` there). The CHECKs
+only pgmalli evaluates (`:pg/check`, `:pg/check-value`) are left out of it.
 
 ```clojure
 (defn find-user
@@ -264,6 +280,11 @@ are left out.
                   [:maybe (pgmalli/portable registry :pg.public/users)]]}
   [id] ...)
 ```
+
+`(pgmalli/install! "public")` makes pgmalli's registry malli's default one instead, so
+`:pg.public/users` works in data anywhere. It is process-wide: every schema in the process then
+resolves the `:pg` and `:time` names, including one meant to work without them, whose mistake
+it then hides. Keep it for an application with this one registry.
 
 Datasets (fixtures, seeds) are checked as a whole: primary keys and unique constraints
 (`NULLS NOT DISTINCT` respected) within a table, foreign keys (`MATCH FULL` respected) across
