@@ -84,7 +84,7 @@
                      [:tuple [:= :regex] ::str-col [:enum "^[[:alpha:]]+$" "^a" "'" "^\\w+$" "^a$"]]
                      [:tuple [:= :iregex] ::str-col [:enum "^é" "^a$"]]
                      [:tuple [:= :=] [:tuple [:= :cast] [:tuple [:= :*] ::int-col [:enum 0.5M 1.5M]] [:= :integer]] ::int-lit]
-                     [:tuple [:= :=] [:tuple [:= :round] [:enum 2.5M -0.5M 1.25M]] ::int-lit]
+                     [:tuple [:= :=] [:tuple [:= :round] [:tuple [:= :+] [:= :d] [:enum 2.5M -0.5M 1.25M]]] ::int-lit]
                      [:tuple [:= :not-regex] ::str-col [:enum "^a" "b$"]]
                      [:tuple [:enum :like :ilike :not-like :not-ilike] ::str-col ::like-lit]
                      [:tuple [:= :=] [:tuple [:= :->>] [:= :j] ::jkey] ::str-lit]

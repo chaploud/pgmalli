@@ -255,3 +255,9 @@
     (doseq [op (remove (set (keys @#'ev/strict)) @#'ev/supported-ops)]
       (is (evaluated? op) (str op " is in supported-ops but ev does not evaluate it")))
     (is (not (evaluated? :no-such-op)) "an op in neither is unsupported, as the check needs")))
+
+(deftest a-json-null-is-not-sql-null
+  (is (not (passes? "CHECK (jsonb_typeof(j -> 'a') = 'string')" {:j {"a" nil}})) "jsonb_typeof is 'null'")
+  (is (passes? "CHECK (jsonb_typeof(j -> 'b') = 'string')" {:j {"a" nil}}) "a missing key is SQL NULL")
+  (is (passes? "CHECK ((j ->> 'a') IS NULL)" {:j {"a" nil}}))
+  (is (passes? "CHECK ((j -> 'a') = 'null'::jsonb)" {:j {"a" nil}})))

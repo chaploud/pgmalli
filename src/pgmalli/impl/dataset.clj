@@ -87,11 +87,11 @@
 
 (defn dataset-schema
   "Schema for {\"schema.table\" [row ...] ...} covering every table of the registry: rows validate
-   against their row schemas, and every primary key, unique constraint and foreign key is a
+   against their row schemas, a table the registry does not hold is an error, and every primary key, unique constraint and foreign key is a
    check of its own, named in its error. The result contains functions, so it is built at runtime."
   [registry]
   (let [ts (tables registry)]
-    (into [:and (into [:map] (for [t ts] [(:table t) {:optional true} [:vector (:name t)]]))]
+    (into [:and (into [:map {:closed true}] (for [t ts] [(:table t) {:optional true} [:vector (:name t)]]))]
           (concat (for [t ts, k (:key-sets t) :when (not (:generated-only? k))]
                     [:fn {:error/message (:label k)} (fn [ds] (not (duplicate-keys? (get ds (:table t)) k)))])
                   (for [t ts, r (:refs t)]

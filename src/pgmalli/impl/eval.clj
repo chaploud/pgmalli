@@ -259,6 +259,10 @@
                             :else e)))
             (re-seq #"\"(?:[^\"\\]|\\.)*\"|[^,]+" inner)))))
 
+(def ^:private json-null
+  "A JSON null inside a jsonb value, as -> returns it: not SQL NULL, which a missing key gives."
+  ::json-null)
+
 (defn- cast-to [v t]
   (cond
     (nil? v) nil
@@ -285,7 +289,7 @@
     (= :time t) (if (instance? LocalTime v) v (LocalTime/parse (str/trim v)))
     (= :interval t) (if (instance? Duration v) v (parse-interval v))
     (= :uuid t) (if (instance? UUID v) v (UUID/fromString (str/trim v)))
-    (json-types t) (if (string? v) (json/parse v) v)
+    (json-types t) (if (string? v) (let [p (json/parse v)] (if (nil? p) json-null p)) v)
     (array-elem t) (if (string? v) (mapv #(cast-to % (array-elem t)) (parse-array v)) v)
     :else v))
 
@@ -401,7 +405,7 @@
 (defn- json-text
   "->> and #>>: scalars as text, containers as PostgreSQL prints jsonb (keys by length, then bytes)."
   [v]
-  (cond (nil? v) nil
+  (cond (or (nil? v) (= json-null v)) nil
         (string? v) v
         (boolean? v) (str v)
         (number? v) (let [d (json-number v)] (if (zero? (.scale d)) (str (.toBigInteger d)) (.toPlainString d)))
@@ -409,8 +413,8 @@
         (sequential? v) (str "[" (str/join ", " (map json-text* v)) "]")))
 
 (defn- json-get [v k]
-  (cond (and (map? v) (string? k)) (get v k)
-        (and (sequential? v) (integer? k)) (let [i (if (neg? k) (+ (count v) k) k)] (when (< -1 i (count v)) (nth v i)))
+  (cond (and (map? v) (string? k)) (if (and (contains? v k) (nil? (get v k))) json-null (get v k))
+        (and (sequential? v) (integer? k)) (let [i (if (neg? k) (+ (count v) k) k)] (when (< -1 i (count v)) (or (nth v i) json-null)))
         :else nil))
 
 (defn- json-path [v path]
@@ -432,7 +436,7 @@
         :else (= k v)))
 
 (defn- json-type [v]
-  (cond (nil? v) nil (map? v) "object" (sequential? v) "array" (string? v) "string"
+  (cond (nil? v) nil (= json-null v) "null" (map? v) "object" (sequential? v) "array" (string? v) "string"
         (number? v) "number" (boolean? v) "boolean"))
 
 ;;; evaluation

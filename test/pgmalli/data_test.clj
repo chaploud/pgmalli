@@ -58,3 +58,6 @@
 
 (deftest byte-array-keys-compare-by-their-bytes
   (is (= (pgmalli.impl.dataset/key-of {:k (byte-array [1])} [:k]) (pgmalli.impl.dataset/key-of {:k (byte-array [1])} [:k]))))
+
+(deftest a-dataset-naming-a-table-the-registry-lacks-is-invalid
+  (is (not (m/validate (data/dataset-schema registry) {"sample.grups" []} opts))))
