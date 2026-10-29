@@ -10,6 +10,16 @@
 
 (defn- quoted [s] (str "\"" (str/replace s "\"" "\"\"") "\""))
 
+(def ^:private reserved
+  "SELECT word FROM pg_get_keywords() WHERE catcode IN ('R', 'T'): words that name no column unquoted."
+  (set (str/split "all analyse analyze and any array as asc asymmetric authorization binary both case cast check collate collation column concurrently constraint create cross current_catalog current_date current_role current_schema current_time current_timestamp current_user default deferrable desc distinct do else end except false fetch for foreign freeze from full grant group having ilike in initially inner intersect into is isnull join lateral leading left like limit localtime localtimestamp natural not notnull null offset on only or order outer overlaps placing primary references returning right select session_user similar some symmetric system_user table tablesample then to trailing true union unique user using variadic verbose when where window with" #" ")))
+
+(defn- bare?
+  "Whether a name reaches PostgreSQL as it is spelt unquoted: HoneySQL quotes nothing unless
+   told to, and splits a name at its dots."
+  [s]
+  (and (re-matches #"[a-z_][a-z0-9_$]*" s) (not (reserved s))))
+
 (defn- schema-and-name
   "[schema name] of a registry key: :pg.ins/mood and \"pg.a.b/m\" are [\"ins\" \"mood\"] and [\"a.b\" \"m\"]."
   [k]
@@ -132,14 +142,18 @@
                                          (error/did-you-mean (some->> (error/suggest (clojure.core/name (first given)) (map clojure.core/name known)) (str ":"))) "; it has " known)
                                     {:given given :known known :table table :rows unknown})))
                  ;; rows of defaults alone still name a column: VALUES () is no SQL, DEFAULT VALUES one row only
-                 used (or (seq (remove generated (distinct (mapcat keys rows)))) (take 1 (map first entries)))]]
-       (cond-> {:insert-into (let [[sch t] (schema-and-name name)
-                                   ;; a name a keyword carries unquoted, or each part quoted
-                                   target (if (every? #(re-matches #"[a-z_][a-z0-9_$]*" %) [sch t])
-                                            (keyword table)
-                                            [:raw (str (quoted sch) "." (quoted t))])]
-                               (cond identity? [{:overriding-value :system} target]
-                                     (vector? target) [target]
-                                     :else target))
-                :values (mapv (fn [row] (into {} (for [k used] [k (if (contains? row k) (insert-value (get columns k) (get row k)) [:default])]))) rows)}
-           (= :nothing on-conflict) (assoc :on-conflict [] :do-nothing []))))))
+                 used (or (seq (remove generated (distinct (mapcat keys rows)))) (take 1 (map first entries)))
+                 value (fn [row k] (if (contains? row k) (insert-value (get columns k) (get row k)) [:default]))]]
+       (cond-> (into {:insert-into (let [[sch t] (schema-and-name name)
+                                         target (if (every? bare? [sch t])
+                                                  (keyword table)
+                                                  [:raw (str (quoted sch) "." (quoted t))])]
+                                     (cond identity? [{:overriding-value :system} target]
+                                           (vector? target) [target]
+                                           :else target))}
+                     ;; rows as maps of keywords while every column is bare; else a column list, those quoted
+                     (if (every? (comp bare? clojure.core/name) used)
+                       {:values (mapv (fn [row] (into {} (for [k used] [k (value row k)]))) rows)}
+                       {:columns (mapv #(if (bare? (clojure.core/name %)) % [:raw (quoted (clojure.core/name %))]) used)
+                        :values (mapv (fn [row] (mapv #(value row %) used)) rows)}))
+         (= :nothing on-conflict) (assoc :on-conflict [] :do-nothing []))))))

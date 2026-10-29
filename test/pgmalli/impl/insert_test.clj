@@ -69,11 +69,11 @@
   (let [reg (pgmalli/registry {:database-version "x"
                                :registry {:pg.public/t [:map {:pg/table "public.t"}
                                                         [:i [:maybe [:time/duration {:pg/type "interval"}]]]
-                                                        [:is [:maybe [:vector {:pg/type "interval[]"} :time/duration]]]
+                                                        [:ia [:maybe [:vector {:pg/type "interval[]"} :time/duration]]]
                                                         [:r [:maybe [:any {:pg/type "tstzrange"}]]]
                                                         [:l [:maybe [:any {:pg/type "ltree"}]]]]}})]
-    (is (= [{:i [:cast "PT1H" :interval] :is [:array ["PT2S"] :interval] :r [:cast "[2020-01-01 00:00+00,)" :tstzrange] :l [:cast "a.b" :ltree]}]
-           (:values (first (data/inserts reg {"public.t" [{:i (java.time.Duration/parse "PT1H") :is [(java.time.Duration/parse "PT2S")]
+    (is (= [{:i [:cast "PT1H" :interval] :ia [:array ["PT2S"] :interval] :r [:cast "[2020-01-01 00:00+00,)" :tstzrange] :l [:cast "a.b" :ltree]}]
+           (:values (first (data/inserts reg {"public.t" [{:i (java.time.Duration/parse "PT1H") :ia [(java.time.Duration/parse "PT2S")]
                                                            :r "[2020-01-01 00:00+00,)" :l "a.b"}]})))))
     (is (= [{:i [:cast "1 day" :interval]}] (:values (first (data/inserts reg {"public.t" [{:i "1 day"}]})))))))
 

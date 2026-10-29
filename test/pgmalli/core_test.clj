@@ -300,3 +300,16 @@
         (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
           (is (= 5 (count (get ds "cn.t"))) (pr-str (data/short-tables ds)))
           (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))))
+
+(deftest inserts-quote-the-column-names-postgresql-would-fold-split-or-refuse
+  (when *db*
+    (let [[reg] (registry-of "qc" "CREATE SCHEMA qc; CREATE TABLE qc.\"Warehouse\" (\"Code\" int PRIMARY KEY, \"c.d\" int, \"order\" int, plain int);")
+          rows {"qc.Warehouse" [{:Code 1 "c.d" 2 :order 3 :plain 4}]}
+          [stmt] (data/inserts reg rows)]
+      (exec-sql! (str (first (honey.sql/format stmt {:inline true}))
+                      "; DO $$ BEGIN IF (SELECT row(\"Code\", \"c.d\", \"order\", plain)::text FROM qc.\"Warehouse\") <> '(1,2,3,4)'"
+                      " THEN RAISE EXCEPTION 'wrong row'; END IF; END $$;"))
+      (is (= ["INSERT INTO \"qc\".\"Warehouse\" (\"Code\", \"c.d\", \"order\", plain) VALUES (?, ?, ?, ?)" 1 2 3 4]
+             (honey.sql/format stmt)))
+      (is (= [{:plain 4}] (:values (first (data/inserts reg {"qc.Warehouse" [{:plain 4}]}))))
+          "rows stay maps of keywords while no column needs quoting"))))
