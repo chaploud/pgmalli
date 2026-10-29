@@ -14,9 +14,8 @@
    does. An unqualified table is in :schema (default \"public\"). What code in the query
    builds (a list) is not in the data and is not judged.
 
-   The functions are check, arg-types, row-schema and query-schema. Types are what next.jdbc and PostgreSQL's JDBC driver
-   return and take, under pgmalli.core/as-read's options, plus :schema, :write, :compare and
-   :result (see arg-types and query-schema); a key or value not among them is an error."
+   Types are what next.jdbc and PostgreSQL's JDBC driver return and take. The functions take
+   the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
             [pgmalli.impl.error :as error]
@@ -898,8 +897,8 @@
    A problem in a nested statement (a subquery, a CTE) carries :in, where the statement sits:
    (get-in q (:in p)) for data, the position in the form for code. explain says each problem
    as a sentence. Names resolve as PostgreSQL resolves them. A clause pgmalli does not read is an
-   :unread-clause problem. Code in the query (a list) is not read. Options: see query-schema.
-   Throws when body is no HoneySQL data. See docs/queries.md."
+   :unread-clause problem. Code in the query (a list) is not read. Options: docs/queries.md#options.
+   Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
@@ -1024,8 +1023,8 @@
 
    An argument compared with a column has the column's kind without NULL; one in :in a
    non-empty collection of it; one assigned to a column the column's type; one in :limit or
-   :offset an :int of at least 0; any other :any. The first typed use wins. Options: see query-schema.
-   See docs/queries.md."
+   :offset an :int of at least 0; any other :any. The first typed use wins. Options:
+   docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
    (jdbc/options! opts)
@@ -1122,7 +1121,7 @@
    column cannot be resolved (check says which).
 
    Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
-   operation's row is its first member's names. Options: see query-schema."
+   operation's row is its first member's names. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
@@ -1132,7 +1131,7 @@
 (defn params-schema
   "The [:map ...] of sql/format's :params for a query: every named argument, typed as arg-types
    types it, is required, as sql/format refuses a missing one; one that takes nil is
-   [:maybe ...]. Options: see query-schema.
+   [:maybe ...]. Options: docs/queries.md#options.
 
    (params-schema registry {:select [:id] :from [:users] :where [:= :email :?email]})
    ;; => [:map [:email [:string {:pg/type \"character varying\"}]]]"
@@ -1149,16 +1148,8 @@
 
    The problems of check, and a query argument args lack (:missing-arg), are the schema's
    :pgmalli/problems property, not an error: the vector is then one longer, so read its parts
-   with m/children. Options, taken by every function here:
-     :schema \"app\"           the schema of unqualified tables (\"public\")
-     the options of pgmalli.core/as-read, for the row
-     :write {pg-type schema}  what a SettableParameter extension takes; also
-                              {:array [:pg/array :sequential :set]}, {:enum [:string :keyword]}
-     :compare :lenient        compared arguments take nil too
-     :stringtype :unspecified the connection's stringtype (pgjdbc's default :varchar)
-     :format {...}            the options you pass to sql/format (:values-default-columns, :inline)
-     :result :one             the return is [:maybe row]
-   Throws when args are not keywords or symbols. See docs/queries.md."
+   with m/children. {:result :one} makes the return [:maybe row]. Options:
+   docs/queries.md#options. Throws when args are not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)

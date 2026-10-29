@@ -6,7 +6,8 @@ Issues and pull requests are welcome.
 
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the
-image).
+image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb oracle`, `bb docs:example`,
+`bb harvest` and `bb sweep` need it; `bb lint`, `bb test:docs` and `bb fixture` do not.
 
 ## Tests
 
@@ -18,6 +19,10 @@ image).
 | `bb test:matrix` | the suite on every PostgreSQL version CI covers |
 | `bb test:docs` | the code blocks of README.md and docs/, each `;; =>` asserted |
 | `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
+
+`bb test` runs every `*_test` namespace but those that need next.jdbc. One namespace or one
+test on the JVM: `clojure -M:test -n pgmalli.honeysql-test`, `clojure -M:test -v
+pgmalli.honeysql-test/some-test`.
 
 ## Documentation
 
@@ -33,7 +38,8 @@ and add a CHANGELOG entry.
 
 `fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a seed, 42 in CI.
 `PGMALLI_FUZZ_SEED=<n> bb test:jvm` runs other seeds. A failure prints its seed, the case
-(shrunk where test.check shrinks it), where it failed and the command that runs it again.
+(shrunk where test.check shrinks it), where it failed and the command that runs it again, with
+`PGMALLI_FUZZ_SEED`, `PGMALLI_FUZZ_CASE` or `PGMALLI_FUZZ_SCHEMAS` set.
 
 ## The PostgreSQL oracle
 
@@ -80,7 +86,8 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
   `PGMALLI_PGSCHEMA_DIR` (pgschema's `testdata/diff`).
 - `bb sweep <sql-dir> <out-dir> [glob]` takes SQL files through the whole pipeline and writes
   what did not go through as EDN; `bb sweep:report <out-dir>` groups it for reading.
-- `bb fixture` rewrites the checked-in `test/resources/pgmalli/*.edn` the tests read.
+- `bb fixture` rewrites `test/resources/pgmalli/{sample,other}.edn`, which the tests read,
+  from `dev/fixture.clj`. Edit that file, not the EDN.
 
 ## Releases
 

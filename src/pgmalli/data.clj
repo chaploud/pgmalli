@@ -1,6 +1,6 @@
 (ns pgmalli.data
   "Datasets: several tables of rows at once, checked and generated against the registry, loaded
-   into the database, kept as EDN. Needs test.check."
+   into the database, kept as EDN."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
