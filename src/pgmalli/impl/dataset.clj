@@ -204,6 +204,14 @@
                       "no combination of referenced rows fits, or keys collide"))]
     (->> reasons frequencies (sort-by (comp - val)) (take 5) vec)))
 
+(defn- cannot-make
+  "[candidates nil], or [() why] when a table's rows cannot be generated at all (a NOT NULL
+   column of a type pgmalli cannot make a value of)."
+  [candidates]
+  (try (let [cands (candidates)] (dorun (take 1 cands)) [cands nil])
+       (catch clojure.lang.ExceptionInfo e
+         (if (= :pgmalli.error/cannot-generate (:pgmalli/error (ex-data e))) [() (ex-message e)] (throw e)))))
+
 (defn- generate-table
   "The dataset with the rows of one table added: candidates solved one by one (a row fits when
    it validates and collides with no key accepted before it; parents grow only while the batch
@@ -219,7 +227,7 @@
         grow (when grow (fn [target ds pins] (when (pos? @budget) (grow target ds pins))))
         {self true others false} (group-by #(= table (:table %)) refs)
         settled (set (mapcat :columns others))
-        cands (candidates registry mem name (max 200 (* 50 rows)) seed)
+        [cands cannot] (cannot-make #(candidates registry mem name (max 200 (* 50 rows)) seed))
         fits? (fn [pool r] (and (valid? r) (= (inc (count pool)) (count (distinct-by-keys (conj pool r) key-sets)))))
         ;; a candidate that fails on its own is dropped before any reference is solved (or grown) for it
         [pool ds] (reduce (fn [[pool ds] c]
@@ -241,7 +249,7 @@
                  rs
                  (recur (into rs (take short more)) (drop short more)))))]
     (cond-> (assoc ds table rs)
-      (< (count rs) rows) (vary-meta assoc-in [:pgmalli/short table] {:wanted rows :got (count rs) :reasons (failure-reasons registry t (vec cands) ds)}))))
+      (< (count rs) rows) (vary-meta assoc-in [:pgmalli/short table] {:wanted rows :got (count rs) :reasons (if cannot [[cannot 1]] (failure-reasons registry t (vec cands) ds))}))))
 
 (defn dataset-generator
   "test.check generator of datasets that satisfy dataset-schema: tables are generated in

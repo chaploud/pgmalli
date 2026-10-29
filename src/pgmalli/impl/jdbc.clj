@@ -10,7 +10,8 @@
             [malli.transform :as mt]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.json :as json]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 ;;; the options
 
@@ -64,7 +65,7 @@
   [schema {:keys [time read] :or {time :inst} :as opts} element]
   (let [driver-object [:any {:pg/type (pg-type schema)}]]
     (cond (array-column? schema) (if-let [kind (:array read)] [kind (element (last schema) opts)] driver-object)
-          (and (shape/json-types (pg-type schema)) (not= :parsed (:json read))) driver-object
+          (and (types/json? (pg-type schema)) (not= :parsed (:json read))) driver-object
           (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
           :else (shape/read-time time schema))))
 
@@ -79,13 +80,13 @@
    data the registry shapes."
   [schema {:keys [read] :as opts}]
   (let [t (pg-type schema)
-        head (if (vector? schema) (first schema) schema)]
+        head (if (vector? schema) (first schema) schema)
+        driver-read (:read (types/entry t))]
     (or (shape/read-as read schema)
-        (cond (= "real" t) ['float? {:pg/type t}]
-              (= "bit" t) (if (= 1 (:max (second schema))) [:boolean {:pg/type t}] [:any {:pg/type t}])
-              (#{"bit varying" "citext"} t) [:any {:pg/type t}]
+        (cond (= :bit driver-read) (if (= 1 (:max (second schema))) [:boolean {:pg/type t}] [:any {:pg/type t}])
+              (= :or-double driver-read) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
+              driver-read [driver-read {:pg/type t}]
               (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
-              (= "numeric" t) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
               :else (driver-type schema opts read-type)))))
 
 (defn array-type
@@ -155,7 +156,7 @@
       mt/string-transformer
       {:name :pgmalli
        :decoders {:any {:compile (fn [schema _]
-                                  (when (shape/json-types (:pg/type (m/properties schema)))
+                                  (when (types/json? (:pg/type (m/properties schema)))
                                     (fn [x] (if (string? x) (json/parse x) x))))}
                   ;; the bounded numbers, from text as :int and :double are
                   :pg/integer (fn [x] (if (string? x) (or (parse-long x) x) x))

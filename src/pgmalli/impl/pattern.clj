@@ -51,7 +51,7 @@
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [pgmalli.impl.expr :as x]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.types :as types]))
 
 
 ;;; expression helpers
@@ -226,13 +226,6 @@
 
 ;;; facts from columns and constraints
 
-(def ^:private known-types
-  #{"smallint" "integer" "bigint" "int2" "int4" "int8" "numeric" "decimal" "real" "double precision" "float4" "float8"
-    "boolean" "text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name" "uuid"
-    "timestamp" "timestamptz" "timestamp with time zone" "timestamp without time zone" "date" "time" "timetz"
-    "time without time zone" "time with time zone" "interval"
-    "bytea" "json" "jsonb" "oid" "\"char\"" "bit" "bit varying" "varbit"})
-
 (defn- parsed
   "{:expr data} for an expression PostgreSQL printed, or {:unparsed fact} when it cannot be read."
   [base s]
@@ -267,13 +260,12 @@
   (let [type-name (str/replace data_type #"^[^.]+\." "")
         elem-type (str/replace type-name #"\[\]$" "")
         [ident array?] (type-ident data_type)
-        builtin? (or (nil? type_schema) (= "pg_catalog" type_schema))
         base (assoc base :column cname)
         ;; an array of a domain takes neither its NOT NULL nor its DEFAULT
         domain (when-not array? (get domains ident))
         ref-fact (type-ref base ident array? enums domains)
-        mapped? (or ref-fact (and builtin? (or (known-types elem-type) (shape/opaque-types elem-type))))
-        char-type? (#{"varchar" "character varying" "char" "character" "bpchar"} elem-type)
+        mapped? (or ref-fact (types/known? elem-type type_schema))
+        typmod (:typmod (types/entry elem-type))
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
         default (cond default_value (parsed base default_value)
                       (contains? domain :default) {:expr (:default domain)})
@@ -294,10 +286,11 @@
       range-check (conj range-check)
       ref-fact (conj ref-fact)
       (not mapped?) (conj (merge base {:fact :unknown-type :type data_type}))
-      (and max_length char-type?) (conj (merge base {:fact :max-length :max max_length}))
-      ;; bit(n) is exactly n digits, bit varying(n) at most n
-      (and max_length (= "bit" elem-type)) (conj (merge base {:fact :length :fn :length :exact max_length}))
-      (and max_length (#{"bit varying" "varbit"} elem-type)) (conj (merge base {:fact :length :fn :length :max max_length}))
+      (and max_length typmod) (conj (merge base (case typmod
+                                     :max-length {:fact :max-length :max max_length}
+                                     ;; bit(n) is exactly n digits, bit varying(n) at most n
+                                     :bits {:fact :length :fn :length :exact max_length}
+                                     :max-bits {:fact :length :fn :length :max max_length})))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
 (defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced index exclude]}]

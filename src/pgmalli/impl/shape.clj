@@ -69,10 +69,6 @@
   [[k p s]]
   (if (map? p) [k p s] [k {} p]))
 
-(def json-types
-  "The :pg/type of the columns a JSON document is the value of."
-  #{"json" "jsonb"})
-
 (defn written-by-database?
   "Whether the database alone writes a column (a generated one, an identity ALWAYS one): no
    INSERT or UPDATE carries it."
@@ -192,7 +188,7 @@
   "Schema data without what the registry added when it was loaded: generation hints, the
    function a string :dispatch became."
   [schema]
-  (walk/postwalk (fn [f] (cond (map? f) (cond-> (dissoc f :gen/min :gen/max :gen/schema :gen/elements :gen/fmap :pg/dispatch)
+  (walk/postwalk (fn [f] (cond (map? f) (cond-> (dissoc f :gen/min :gen/max :gen/schema :gen/elements :gen/fmap :gen/gen :pg/dispatch)
                                           (:pg/dispatch f) (assoc :dispatch (:pg/dispatch f)))
                                ;; a property map the hints emptied goes too
                                (and (vector? f) (map? (second f)) (empty? (second f)) (not (#{:map :enum} (first f))))
@@ -211,31 +207,6 @@
                            [:local :time/instant] :time/local-date-time
                            (if (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst? f)))
                  schema))
-
-(def opaque-literals
-  "Literals the database reads for the types rendered :any: what a dataset column of such a
-   type generates (any of them, as text; the driver's own objects come back on read)."
-  {"inet" ["10.0.0.1" "192.168.1.0/24" "::1"] "cidr" ["10.0.0.0/8" "192.168.1.0/24" "2001:db8::/32"]
-   "macaddr" ["08:00:2b:01:02:03" "08-00-2b-01-02-04"] "macaddr8" ["08:00:2b:01:02:03:04:05"]
-   "money" ["12.34" "0.00" "-5.50"] "xml" ["<a/>" "<a b=\"1\">x</a>"] "tsvector" ["'a' 'b'" "'fat':2 'rat':3"] "tsquery" ["'a' & 'b'" "'fat' | 'rat'"]
-   "jsonpath" ["$.a" "$[*] ? (@ > 1)"] "pg_lsn" ["0/16B3748" "1/0"] "tid" ["(0,1)" "(1,2)"] "pg_snapshot" ["10:20:" "10:20:10,14,15"] "txid_snapshot" ["10:20:"]
-   "xid" ["1" "1234"] "xid8" ["1" "1234"] "cid" ["0" "3"]
-   "point" ["(1,2)" "(0,0)" "(-1.5,2.5)"] "line" ["{1,-1,0}" "{0,1,-2}"] "lseg" ["[(0,0),(1,1)]"] "box" ["((0,0),(1,1))" "((1,1),(2,3))"]
-   "path" ["[(0,0),(1,1),(2,0)]" "((0,0),(1,1),(2,0))"] "polygon" ["((0,0),(1,0),(1,1))"] "circle" ["<(0,0),1>" "<(1,1),2.5>"]
-   ;; no empty range: a WITHOUT OVERLAPS key refuses one
-   "int4range" ["[1,10)" "[20,30)" "(,5]"] "int8range" ["[1,10)" "[20,30)"] "numrange" ["[1.5,2.5]" "[3,4)"]
-   "tsrange" ["[2020-01-01 00:00,2020-01-02 00:00)" "[2021-01-01 00:00,2021-06-01 00:00)"] "tstzrange" ["[2020-01-01 00:00+00,2020-01-02 00:00+00)" "[2021-01-01 00:00+00,2021-06-01 00:00+00)"]
-   "daterange" ["[2020-01-01,2020-02-01)" "[2021-01-01,2021-06-01)"]
-   "int4multirange" ["{[1,3),[5,7)}" "{[10,20)}"] "int8multirange" ["{[1,3)}" "{[10,20)}"] "nummultirange" ["{[1.5,2.5]}" "{[3,4)}"]
-   "tsmultirange" ["{[2020-01-01 00:00,2020-01-02 00:00)}"] "tstzmultirange" ["{[2020-01-01 00:00+00,2020-01-02 00:00+00)}"]
-   "datemultirange" ["{[2020-01-01,2020-02-01)}" "{[2021-01-01,2021-06-01)}"]
-   "regclass" ["pg_class" "pg_type"] "regtype" ["integer" "text"] "regrole" ["postgres"] "regproc" ["now"] "regprocedure" ["now()"]
-   "regoper" ["||/" "|/"] "regoperator" ["+(integer,integer)"] "regnamespace" ["public"] "regconfig" ["english"] "regdictionary" ["simple"] "regcollation" ["\"C\""]})
-
-(def opaque-types
-  "Types a driver hands over as objects of its own (PGobject and the like): rendered :any with
-   their :pg/type, and generated from those literals."
-  (set (keys opaque-literals)))
 
 (defn type-name
   "The type of a column schema without its typmod or array brackets: \"bit(8)[]\" -> \"bit\"."

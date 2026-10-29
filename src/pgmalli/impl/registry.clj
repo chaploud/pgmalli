@@ -15,7 +15,8 @@
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.pgtypes :as pgtypes]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 (defn read-generated
   "The generated data for a schema name, from the classpath (pgmalli/<schema>.edn)."
@@ -121,12 +122,24 @@
     (let [[op v vs] (last part)]
       (when (and (= :in op) (= :VALUE v) (every? number? vs)) vs))))
 
+(defn- cannot-make
+  "A generator of no values (malli leaves out an optional key of it, and a [:maybe] generates
+   NULL), which throws, naming where, when a value is wanted."
+  [where type-name]
+  (let [sized (requiring-resolve 'clojure.test.check.generators/sized)]
+    (with-meta (sized (fn [_] (error/fail! :pgmalli.error/cannot-generate
+                                           (str where ": pgmalli cannot make a value of type " type-name "; give one with :overrides in pgmalli.edn")
+                                           {:given where :type type-name})))
+      {:malli.generator/never-gen true})))
+
 (defn- gen-hints
   "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap) for a column
    schema: key and identity integers are small and positive, strings short, times within 2025
    (fixed, so a seed gives the same rows in every run), an unshaped json column a JSON value,
-   an opaque type one of a few literals, a bit string digits. Other columns keep the schema's own bounds."
-  [s key?]
+   an opaque type one of a few literals, a bit string digits. A NOT NULL column of a type
+   pgmalli cannot make a value of generates nothing (where names it in the error). Other
+   columns keep the schema's own bounds."
+  [s key? where]
   (let [[t p] (if (and (vector? s) (map? (second s))) [(first s) (second s)] [(if (vector? s) (first s) s) {}])
         ;; a numeric bounded by CHECKs ([:and decimal? [:> 1] [:< 1000]]) generates within them: the
         ;; bounds go to the head as :gen/min and :gen/max, on a :pg/numeric when the head is bare
@@ -141,7 +154,7 @@
                 (:int :pg/integer :pg/smallint) (when key?
                        (let [lo (max 1 (:min p Long/MIN_VALUE)) hi (min 100000 (:max p Long/MAX_VALUE))]
                          (when (<= lo hi) {:gen/min lo :gen/max hi})))
-                :string (if (#{"bit" "bit varying" "varbit"} (shape/type-name p))
+                :string (if (= :bits (:gen (types/entry (shape/type-name p))))
                           {:gen/schema [:vector {:min (:min p 1) :max (:max p (:min p 8))} [:enum "0" "1"]] :gen/fmap #(apply str %)}
                           (when (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) 24)}))
                 :time/instant {:gen/min (java.time.Instant/parse "2025-01-01T00:00:00Z") :gen/max (java.time.Instant/parse "2025-12-31T23:59:59Z")}
@@ -150,15 +163,15 @@
                 ;; PostgreSQL takes offsets up to 15:59:59, java.time up to 18:00
                 :time/offset-time {:gen/schema [:tuple :time/local-time [:enum -5 0 9]]
                                    :gen/fmap (fn [[t h]] (java.time.OffsetTime/of t (java.time.ZoneOffset/ofHours h)))}
-                :sequential (when (shape/json-types (:pg/type p)) {:gen/schema [:vector {:max 3} json-value]})
-                ;; a type pgmalli cannot write a value of generates NULL; a NOT NULL column of it
-                ;; leaves its table short, with the reason, rather than carrying a value the
-                ;; database refuses
+                :sequential (when (types/json? (:pg/type p)) {:gen/schema [:vector {:max 3} json-value]})
                 ;; an array of a type pgmalli cannot write a value of: empty, which every array type takes
                 :vector (when (= :any (last s)) {:gen/elements [[]]})
-                (:any :some) (cond (shape/json-types (:pg/type p)) {:gen/schema json-value}
-                                   (shape/opaque-literals (shape/type-name p)) {:gen/elements (shape/opaque-literals (shape/type-name p))}
-                                   (:pg/type p) {:gen/elements [nil]})
+                (:any :some) (cond (types/json? (:pg/type p)) {:gen/schema json-value}
+                                   (:literals (types/entry (shape/type-name p))) {:gen/elements (:literals (types/entry (shape/type-name p)))}
+                                   ;; NULL where the column takes it; a NOT NULL one has no value to
+                                   ;; generate, which leaves a dataset's table short with the reason
+                                   (= :any t) (when (:pg/type p) {:gen/elements [nil]})
+                                   (:pg/type p) {:gen/gen (cannot-make where (:pg/type p))})
                 nil)]
     (cond
       numeric-bounds
@@ -175,8 +188,8 @@
       (and (= :and t) (some in-values (shape/entries s)))
       (shape/merge-props s {:gen/elements (mapv bigdec (some in-values (shape/entries s)))})
       ;; an :and generates from its type, an array from its element's
-      (and (= :and t) (seq (shape/entries s))) (let [i (if (map? (second s)) 2 1)] (assoc s i (gen-hints (nth s i) key?)))
-      (and (= :vector t) (vector? s)) (assoc s (dec (count s)) (gen-hints (last s) false))
+      (and (= :and t) (seq (shape/entries s))) (let [i (if (map? (second s)) 2 1)] (assoc s i (gen-hints (nth s i) key? where)))
+      (and (= :vector t) (vector? s)) (assoc s (dec (count s)) (gen-hints (last s) false where))
       :else s)))
 
 (defn- with-column-types
@@ -198,7 +211,8 @@
         key-cols (set (map shape/ident-key (concat (:pg/primary-key props) (mapcat :columns (:pg/unique props)) (mapcat :columns (:pg/foreign-keys props)))))
         hinted (fn [e] (let [[k p s] (shape/entry-parts e)
                              key? (or (key-cols k) (:pg/identity (shape/column-props s)))
-                             s (if (shape/maybe? s) [:maybe (gen-hints (last s) key?)] (gen-hints s key?))]
+                             where (str (:pg/table props) "." (name k))
+                             s (if (shape/maybe? s) [:maybe (gen-hints (last s) key? where)] (gen-hints s key? where))]
                          (if (empty? p) [k s] [k p s])))
         ;; a column a :multi pins to its branches' values (LIST partitions) generates one of them
         pinned (into {} (for [c (when (= :and (first row)) (drop 2 row))
@@ -269,7 +283,7 @@
             :let [{:keys [pg/table pg/unique pg/foreign-keys]} (second (shape/row-map s))]
             :when (or (not (str/includes? table ".")) (some vector? unique) (some vector? foreign-keys))]
       (error/fail! :pgmalli.error/not-generated (str k " was generated by an older pgmalli; run pgmalli.main generate again") {:given k}))
-    (let [generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints s false)))])) generated)]
+    (let [generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints s false (str k))))])) generated)]
       (merge base (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
                                #(walk/postwalk dispatch-by-key %))))))
 

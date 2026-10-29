@@ -1,6 +1,8 @@
 (ns pgmalli.impl.pattern-test
-  (:require [clojure.test :refer [deftest is]]
-            [pgmalli.impl.pattern :as p]))
+  (:require [clojure.java.io :as io]
+            [clojure.test :refer [deftest is]]
+            [pgmalli.impl.pattern :as p]
+            [pgmalli.impl.types :as types]))
 
 (defn- schema-with-checks [& clauses]
   {:name "public"
@@ -29,6 +31,20 @@
                                    :constraints {}}}})]
     (is (= [:column :unparsed :unknown-type :column :unknown-type] (map :fact fs)))
     (is (= "CASE WHEN" (:input (second fs))))))
+
+(deftest an-extension-type-is-known-in-its-schema-a-pg-catalog-name-only-in-pg-catalog
+  (let [fs (p/facts {:name "public" :types {}
+                     :tables {"t" {:columns [{:name "c" :position 1 :data_type "citext" :type_schema "public" :is_nullable true}
+                                             {:name "l" :position 2 :data_type "ext.ltree" :type_schema "ext" :is_nullable true}
+                                             {:name "p" :position 3 :data_type "point" :type_schema "public" :is_nullable true}]
+                                   :constraints {}}}})]
+    (is (= [["c" :column] ["l" :column] ["p" :column] ["p" :unknown-type]] (map (juxt :column :fact) fs))
+        "a composite type of the schema named point is not pg_catalog's point")))
+
+(deftest ir-sql-reads-the-typmod-of-the-types-with-one
+  (let [max-length (second (re-find #"(?s)'max_length', CASE(.*?)END" (slurp (io/resource "pgmalli/ir.sql"))))]
+    (is (= (set (for [[t e] types/types :when (:typmod e)] t))
+           (set (map #(:name (types/entry (second %))) (re-seq #"'(\w+)'::regtype" max-length)))))))
 
 (deftest column-patterns
   (is (= [{:fact :not-null :column "c"}] (check-facts "c IS NOT NULL")))

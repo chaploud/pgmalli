@@ -248,6 +248,19 @@
     (is (= [:map {:pg/table "public.t"} [:ip [:any {:pg/type "inet"}]] [:r [:maybe [:any {:pg/type "int4range"}]]] [:b [:string {:pg/type "bit" :min 4 :max 4}]] [:vb [:string {:pg/type "bit varying" :max 3}]]]
            (pgmalli/portable reg :pg.public/t)) "the hints stay out of portable data")))
 
+(deftest a-not-null-column-of-a-type-pgmalli-cannot-make-says-so
+  (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:p [:some {:pg/type "pair"}]]]
+                                          :pg.public/u [:map {:pg/table "public.u"} [:id [:int {:pg/type "integer"}]]
+                                                        [:p [:maybe [:any {:pg/type "pair"}]]] [:d {:optional true} [:some {:pg/type "pair"}]]]}})
+        message "public.t.p: pgmalli cannot make a value of type pair; give one with :overrides in pgmalli.edn"
+        ds (tcg/generate (data/dataset-generator reg {:rows 2}) 30 1)]
+    (is (= {"public.t" {:wanted 2 :got 0 :reasons [[message 1]]}} (data/short-tables ds)))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo (re-pattern (java.util.regex.Pattern/quote message)) (mg/generate :pg.public.t/insert {:registry reg})))
+    (is (= :pgmalli.error/cannot-generate (try (mg/generate :pg.public/t {:registry reg}) (catch clojure.lang.ExceptionInfo e (:pgmalli/error (ex-data e))))))
+    (is (every? #(and (nil? (:p %)) (not (contains? % :d))) (tcg/sample (mg/generator :pg.public/u {:registry reg}) 20))
+        "a nullable column of it is NULL, an optional one left out")))
+
 (deftest a-list-partition-keeps-the-value-that-picked-its-branch
   (let [reg (pgmalli/registry {:database-version "x"
                                :registry {:pg.public/t [:and [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:c [:maybe [:string {:pg/type "text"}]]]]

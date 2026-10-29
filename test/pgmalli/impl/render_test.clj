@@ -391,7 +391,7 @@
                                                                           :constraints {}}}}))
         reg (registry-with registry)
         col (fn [k] (last (some #(when (= k (first %)) %) (drop 2 (:pg.public/t registry)))))]
-    (is (= [:int {:pg/type "oid"}] (col :o)))
+    (is (= [:int {:min 0 :max 4294967295 :pg/type "oid"}] (col :o)))
     (is (nil? (some #(= :xid (last (last %))) (drop 2 (:pg.public/t registry)))) "xid is not an integer to the database")
     (is (= [:string {:pg/type "\"char\""}] (col :c)))
     (is (= [:string {:pg/type "bit" :min 4 :max 4}] (col :b)) "bit(n) is exactly n digits")

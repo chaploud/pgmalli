@@ -3,7 +3,8 @@
    length, the bounded numbers (with the ranges the integer types hold) and the arrays the
    JDBC driver takes."
   (:require [malli.core :as m]
-            [pgmalli.impl.eval :as ev]))
+            [pgmalli.impl.eval :as ev]
+            [pgmalli.impl.types :as types]))
 
 (def string-schema
   ":string with :min and :max counting characters (code points), as PostgreSQL's length and
@@ -54,7 +55,7 @@
 
 (def int-ranges
   "The range each integer type pgmalli registers holds (a bigint is exactly a long, so it is :int)."
-  {:pg/smallint [-32768 32767] :pg/integer [-2147483648 2147483647]})
+  (into {} (for [e (vals types/types) :when (and (:range e) (= "pg" (namespace (:schema e))))] [(:schema e) (:range e)])))
 
 (defn- bounded-int
   "A schema type for an integer type of PostgreSQL: its range, narrowed by :min and :max

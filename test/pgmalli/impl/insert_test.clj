@@ -65,6 +65,18 @@
   (is (= [{:ip [:cast "10.0.0.1" :inet] :b [:cast "101" :varbit] :v [:cast "1" (keyword "bit varying")] :s "x"}]
          (:values (first (data/inserts typed {"public.t" [{:ip "10.0.0.1" :b "101" :v "1" :s "x"}]}))))))
 
+(deftest an-interval-goes-as-iso-8601-text-cast-to-interval
+  (let [reg (pgmalli/registry {:database-version "x"
+                               :registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:i [:maybe [:time/duration {:pg/type "interval"}]]]
+                                                        [:is [:maybe [:vector {:pg/type "interval[]"} :time/duration]]]
+                                                        [:r [:maybe [:any {:pg/type "tstzrange"}]]]
+                                                        [:l [:maybe [:any {:pg/type "ltree"}]]]]}})]
+    (is (= [{:i [:cast "PT1H" :interval] :is [:array ["PT2S"] :interval] :r [:cast "[2020-01-01 00:00+00,)" :tstzrange] :l [:cast "a.b" :ltree]}]
+           (:values (first (data/inserts reg {"public.t" [{:i (java.time.Duration/parse "PT1H") :is [(java.time.Duration/parse "PT2S")]
+                                                           :r "[2020-01-01 00:00+00,)" :l "a.b"}]})))))
+    (is (= [{:i [:cast "1 day" :interval]}] (:values (first (data/inserts reg {"public.t" [{:i "1 day"}]})))))))
+
 (deftest a-char-n-value-is-not-cut-to-one-character
   (is (= [{:c "bb" :ca [:array ["bb"] :bpchar]}] (:values (first (data/inserts typed {"public.t" [{:c "bb" :ca ["bb"]}]}))))))
 

@@ -30,6 +30,14 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
+- The types of the `citext`, `hstore`, `ltree`, `cube`, `seg`, `intarray` and `isn`
+  extensions: generated from literals the database reads, cast on insert, read as the
+  driver's objects. A `citext` column in an extension's schema no longer counts as an
+  unknown type.
+- A NOT NULL column of a type pgmalli cannot make a value of: generating says so, with the
+  column (`:pgmalli.error/cannot-generate`), and a dataset's table comes out short with that
+  reason, instead of `"unknown error"` or a NULL.
+
 - HoneySQL named parameters (`:?id`, `[:param :id]`) in `arg-types` and `query-schema`.
 - `:read`, `:write` and `{:compare :lenient}` for next.jdbc extensions and builders
   ([docs/reading-rows.md](docs/reading-rows.md), [docs/queries.md](docs/queries.md)).
@@ -73,6 +81,8 @@ All notable changes to this project are documented here. The format follows
 
 ### Fixed
 
+- `inserts` writes an `interval` as ISO 8601 text cast to it; pgjdbc takes no `Duration`.
+- An `oid` column generates within `0` to `4294967295`; it generated numbers the database refuses.
 - A NULL in a CHECK's `[:or ...]` or `[:multi ...]` leaves the CHECK NULL, which PostgreSQL takes; `a > 5 OR b < 3` refused `{:a nil :b 5}`.
 - A partitioned table whose only partition is DEFAULT takes every row; it took none.
 - Partitions on an identity or generated column leave it to the database; insert rows needed it.

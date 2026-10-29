@@ -61,7 +61,7 @@ ran. The tests that catch a change upstream, each naming the list to update:
 | test | catches |
 |---|---|
 | `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
-| `pgmalli.upstream-test` | a `pg_catalog` type pgmalli neither renders nor treats as opaque; a map builder next.jdbc adds or drops |
+| `pgmalli.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops |
 
 A failing weekly run comments on the open issue labelled `upstream` (or opens it) with the
 list; the next passing run closes it. GitHub disables a scheduled workflow after 60 days

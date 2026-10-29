@@ -70,7 +70,7 @@ database's spelling.
 | `bigint` | `:int` |
 | `numeric(p, s)` | `[:and decimal? [:pg/numeric {:precision p :scale s}]]` |
 | `real`, `double precision` | `:double` |
-| `text`, `varchar(n)`, `char(n)` | `:string`, `[:string {:max n}]` |
+| `text`, `varchar(n)`, `char(n)`, `name`, `"char"` | `:string`, `[:string {:max n}]` |
 | `boolean` | `:boolean` |
 | `uuid` | `:uuid` |
 | `date`, `time`, `timetz` | `:time/local-date`, `:time/local-time`, `:time/offset-time` |
@@ -78,10 +78,12 @@ database's spelling.
 | `json`, `jsonb` | `:any` |
 | `bytea` | `bytes?` |
 | `T[]` | `[:vector <T>]` |
-| `oid` | `:int` |
+| `oid` | `[:int {:min 0 :max 4294967295}]` |
 | `bit(n)`, `bit varying(n)` | `[:string {:min n :max n}]`, `[:string {:max n}]` |
-| `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, geometric, range and other types | `[:any {:pg/type "..."}]` |
-| a composite type, an extension's type | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
+| `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, geometric, range, multirange, `reg*` and other types | `[:any {:pg/type "..."}]` |
+| `citext` | `:string` |
+| `hstore`, `ltree`, `lquery`, `ltxtquery`, `cube`, `seg`, `query_int`, `isbn`, `isbn13`, `ean13`, `ismn`, `ismn13`, `issn`, `issn13`, `upc` | `[:any {:pg/type "..."}]` |
+| a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
 
 `:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
 do; malli's own `:string`, in `portable` output, counts UTF-16 units.
@@ -90,8 +92,27 @@ do; malli's own `:string`, in `portable` output, counts UTF-16 units.
 `p - s` digits before the point. `s` may be negative or larger than `p`, as PostgreSQL allows.
 
 The types without a malli counterpart generate from a fixed list of literals PostgreSQL
-accepts. Dates and times generate within 2025 (in domains and arrays too), `timetz` offsets
-within what PostgreSQL takes, a `jsonb_typeof = 'array'` column an array of JSON values.
+accepts, and are inserted as text cast to the type (an interval too, in ISO 8601). A NOT NULL
+column of a type pgmalli cannot make a value of fails to generate, naming it:
+`public.t.p: pgmalli cannot make a value of type pair; give one with :overrides in pgmalli.edn`.
+In a dataset its table comes out short with that reason.
+
+Dates and times generate within 2025 (in domains and arrays too), `timetz` offsets within
+what PostgreSQL takes, a `jsonb_typeof = 'array'` column an array of JSON values.
+
+## Extensions
+
+The types of these extensions are supported, in whatever schema the extension is in:
+`citext`, `hstore`, `ltree`, `cube`, `seg`, `intarray` (`query_int`) and `isn`. `pgjdbc`
+returns their values as `PGobject`s (`hstore` as a `java.util.Map`), which `as-read` takes.
+
+Every type pgmalli supports is one entry of `types` in
+[src/pgmalli/impl/types.clj](../src/pgmalli/impl/types.clj): its malli schema, the literals
+it generates, the cast on insert and what the driver returns. The types it does not support
+yet are listed under `unsupported` there, each with why. To add one, move it to `types` and
+run `pgmalli.upstream-test`: it creates every extension the PostgreSQL image ships, fails on a
+type that is in neither list, and generates, inserts and reads back a NOT NULL column of every
+entry.
 
 ## CHECK constraints
 

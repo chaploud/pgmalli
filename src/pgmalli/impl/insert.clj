@@ -4,7 +4,8 @@
   (:require [clojure.string :as str]
             [pgmalli.impl.dataset :as ds]
             [pgmalli.impl.json :as json]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 (defn- ref-type
   "The type of the schema a [:ref ...] names, as an entity HoneySQL quotes whatever its options
@@ -18,35 +19,33 @@
       :and (ref-type (first (shape/entries s)))
       nil)))
 
-(def ^:private cast-type
-  ;; character and bit name char(1) and bit(1) in a cast, which cut a longer value
-  {"character" :bpchar "bit" :varbit})
-
-(defn- builtin-cast
-  "The type a string parameter is cast to for a built-in type a string parameter (typed varchar
-   by the driver) cannot be written to; nil for the string types."
-  [type-name]
-  (when (or (shape/opaque-types type-name) (#{"bit" "bit varying"} type-name))
-    (get cast-type type-name (keyword type-name))))
+(defn- as-text
+  "A value the driver takes no parameter of as text the database reads: a Duration in ISO 8601."
+  [v]
+  (if (instance? java.time.Duration v) (str v) v))
 
 (defn- insert-value
   "A dataset value in the form an INSERT needs: a value of an enum or domain cast to it, a
-   string of a type strings are not cast to implicitly (inet, bit ...) cast to it, json
-   written and cast, an array with its element type; anything else as it is."
+   string of a type strings are not cast to implicitly (inet, bit ...) cast to it, an interval
+   as text cast to it, json written and cast, an array with its element type; anything else as
+   it is."
   [schema v]
   (let [s (shape/non-null schema)
         t (:pg/type (shape/column-props s))
         type-name (shape/type-name (shape/column-props s))]
     (cond (nil? v) nil
           (ref-type s) [:cast v (ref-type s)]
-          (shape/json-types t) [:cast (json/write v) (keyword t)]
+          (types/json? t) [:cast (json/write v) (keyword t)]
           (and (vector? s) (= :vector (first s)))
           (if-let [elem (ref-type (shape/non-null (last s)))]
             (if (seq v)
               [:array (mapv #(vector :cast % elem) v)]
               [:array {:select [[[:cast nil elem]]] :where false}])
-            (if type-name [:array (vec v) (get cast-type type-name (keyword type-name))] [:array (vec v)]))
-          (string? v) (if-let [c (builtin-cast type-name)] [:cast v c] v)
+            (if type-name
+              (let [e (types/entry type-name)] [:array (mapv as-text v) (or (:array-cast e) (:cast e) (keyword type-name))])
+              [:array (vec v)]))
+          (and (or (string? v) (instance? java.time.Duration v)) (:cast (types/entry type-name)))
+          [:cast (as-text v) (:cast (types/entry type-name))]
           :else v)))
 
 (defn- parents-first

@@ -24,35 +24,17 @@
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.pattern :as pattern]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 ;;; types
-
-(def ^:private base-types
-  ;; smallint and integer are schema types pgmalli registers, carrying PostgreSQL's range; a
-  ;; bigint is exactly a long, so it is :int
-  (merge (zipmap ["smallint" "int2"] (repeat :pg/smallint))
-         (zipmap ["integer" "int4"] (repeat :pg/integer))
-         (zipmap ["bigint" "int8"] (repeat :int))
-         (zipmap ["numeric" "decimal"] (repeat 'decimal?))
-         (zipmap ["real" "double precision" "float4" "float8"] (repeat :double))
-         (zipmap ["text" "varchar" "character varying" "char" "character" "bpchar" "citext" "name"] (repeat :string))
-         ;; bit strings are strings of 0 and 1 (bit(1) comes back from pgjdbc as a Boolean, a driver setting)
-         (zipmap ["bit" "bit varying" "varbit"] (repeat :string))
-         ;; the object identifier types a driver returns as numbers
-         {"oid" :int}
-         {"boolean" :boolean "uuid" :uuid "bytea" 'bytes? "\"char\"" :string
-          "date" :time/local-date "time" :time/local-time "time without time zone" :time/local-time
-          "timetz" :time/offset-time "time with time zone" :time/offset-time
-          "timestamp" :time/local-date-time "timestamp without time zone" :time/local-date-time
-          "timestamptz" :time/instant "timestamp with time zone" :time/instant "interval" :time/duration}))
 
 (defn- base-type [data-type]
   ;; without a schema prefix or a typmod: "public.money" and "numeric(12,2)" name numeric
   (let [t (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" "")]
     (if-let [[_ elem] (re-matches #"(.+)\[\]" t)]
       [:vector (base-type elem)]
-      (get base-types t :any))))
+      (:schema (types/entry t) :any))))
 
 (defn- tighten
   "Properties merged onto existing ones; :min and :max only ever narrow, since a CHECK cannot

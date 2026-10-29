@@ -11,7 +11,8 @@
   (:require [clojure.string :as str]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.json :as json]
-            [pgmalli.impl.pghash :as pghash])
+            [pgmalli.impl.pghash :as pghash]
+            [pgmalli.impl.types :as types])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneId ZoneOffset)
            (java.util UUID)))
 
@@ -182,14 +183,16 @@
 
 ;;; casts
 
-(def ^:private integer-types #{:oid :smallint :integer :bigint :int2 :int4 :int8})
-(def ^:private exact-types #{:numeric :decimal})
-(def ^:private float-types #{:real :double-precision :float4 :float8})
-(def ^:private text-types #{:text :varchar :character-varying :char :character :bpchar :name})
+(defn- eval-types [kind] (types/keywords #(= kind (:eval %))))
+(def ^:private integer-types (eval-types :integer))
+(def ^:private exact-types (eval-types :exact))
+(def ^:private float-types (eval-types :float))
+(def ^:private text-types (eval-types :text))
+(def ^:private json-types (eval-types :json))
+(def ^:private bpchar-types (types/keywords #(= "character" (:name %))))
 (def ^:private temporal-types #{:date :timestamp :timestamp-without-time-zone :timestamptz :timestamp-with-time-zone :time :interval})
 (def ^:private int-ranges
-  {:smallint [-32768 32767] :int2 [-32768 32767] :integer [-2147483648 2147483647] :int4 [-2147483648 2147483647]
-   :bigint [Long/MIN_VALUE Long/MAX_VALUE] :int8 [Long/MIN_VALUE Long/MAX_VALUE]})
+  (update-vals (types/by-keyword :range) :range))
 
 (defn- in-range [t v]
   (let [[lo hi] (int-ranges t)]
@@ -265,7 +268,7 @@
                                               :else (Long/parseLong (str/trim v)))))
     (exact-types t) (bigdec (if (number? v) v (str/trim v)))
     (float-types t) (double (if (number? v) v (parse-double (str/trim v))))
-    (#{:char :character :bpchar} t) (str/replace (cast-to v :text) #" +$" "")
+    (bpchar-types t) (str/replace (cast-to v :text) #" +$" "")
     (text-types t) (cond (string? v) v
                          (instance? LocalDateTime v) (str/replace (str v) "T" " ")
                          (instance? Instant v) (-> (str (.atOffset ^Instant v ZoneOffset/UTC)) (str/replace "T" " ") (str/replace #"Z$" "+00"))
@@ -281,7 +284,7 @@
     (= :time t) (if (instance? LocalTime v) v (LocalTime/parse (str/trim v)))
     (= :interval t) (if (instance? Duration v) v (parse-interval v))
     (= :uuid t) (if (instance? UUID v) v (UUID/fromString (str/trim v)))
-    (#{:json :jsonb} t) (if (string? v) (json/parse v) v)
+    (json-types t) (if (string? v) (json/parse v) v)
     (array-elem t) (if (string? v) (mapv #(cast-to % (array-elem t)) (parse-array v)) v)
     :else v))
 
@@ -502,7 +505,7 @@
   (let [t (cast-type t)]
     (boolean
      (cond (or (integer-types t) (exact-types t) (float-types t) (text-types t) (= :boolean t)) true
-           (or (temporal-types t) (#{:uuid :json :jsonb} t) (array-elem t))
+           (or (temporal-types t) (= :uuid t) (json-types t) (array-elem t))
            (or (not (string? a)) (try (cast-to a t) true (catch Exception _ false)))
            :else (and (string? a) (contains? types (name t)))))))
 
@@ -523,8 +526,6 @@
            (tree-seq vector?
                      (fn [v] (case (first v) (:in :not-in) (cons (second v) (nth v 2)) :array (second v) :cast [(second v)] (rest v)))
                      (x/canonical e)))))
-
-(def ^:private bpchar-types #{:char :character :bpchar})
 
 (defn column-type
   "The type the evaluator reads for a column, from its schema's properties (:pg/type, and :max,

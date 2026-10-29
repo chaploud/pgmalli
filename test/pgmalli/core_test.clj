@@ -9,7 +9,6 @@
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
             [pgmalli.impl.files :as files]
-            [pgmalli.impl.shape :as shape]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
   (:import (java.io File)))
 
@@ -113,11 +112,6 @@
         (is true "every INSERT ran, identity ids kept, generated column left to the database")))))
 
 (defn- pr-str-sql [s] (str "'" (str/replace s "'" "''") "'"))
-
-(deftest every-opaque-literal-is-one-postgresql-reads
-  (when *db*
-    (exec-sql! (str "SELECT " (str/join ", " (for [[t lits] shape/opaque-literals, l lits] (str "'" (str/replace l "'" "''") "'::" t)))))
-    (is true)))
 
 (deftest char-varchar-and-integer-checks-hold-as-postgresql-holds-them
   (when *db*
