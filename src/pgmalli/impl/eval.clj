@@ -496,6 +496,10 @@
         "(?!)"))
     atom))
 
+(def ^:private regex-token
+  "An escape or a bracket expression of a Java regex: what the rewrites below leave whole."
+  "\\\\.|\\[\\^?\\]?(?:\\\\.|[^\\]\\\\])*\\]")
+
 (def ^:private regex-forms
   "[loose strict] Java regexes for a PostgreSQL pattern, or nil when it uses syntax Java reads
    differently. A class (\\w, [[:alpha:]] ...) takes its POSIX members in ASCII; outside ASCII
@@ -507,7 +511,7 @@
   (memoize
    (fn [re]
      (let [form (fn [extra]
-                  (str/replace (posix-classes re) #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|[.$]"
+                  (str/replace (posix-classes re) (re-pattern (str regex-token "|[.$]"))
                                (fn [t]
                                  (cond (= "." t) "[\\s\\S]"
                                        (= "$" t) "\\z"
@@ -530,6 +534,26 @@
    matches PostgreSQL's pattern matches on any server."
   [re]
   (-> re (str/replace (str "[" non-ascii "]") "(?!)") (str/replace non-ascii "")))
+
+(defn generation-regex
+  "The regex a string generator reads, from java-regex's (case-insensitive or not): its strings
+   match the regex given. Without the flags and \\z, which test.chuck refuses; classes as their
+   ASCII members alone (which every server's classes have); any character a printable ASCII
+   one; a case-insensitive one's letters as [aA]; repeats at most 4 more than their least."
+  [re]
+  (let [ci? (re-find #"^\(\?iu?\)" re)]
+    (cond-> (-> re
+                (str/replace #"^\(\?iu?\)" "")
+                (str/replace #"(?<!\\)\\z" "")
+                strict-regex
+                (str/replace "[\\s\\S]" "[\\x20-\\x7E]"))
+      ci? (str/replace (re-pattern (str regex-token "|\\p{L}"))
+                       #(if (and (= 1 (count %) (count (str/lower-case %)) (count (str/upper-case %))) (not= (str/lower-case %) (str/upper-case %)))
+                          (str "[" (str/lower-case %) (str/upper-case %) "]")
+                          %))
+      ;; repeats bounded: strings short enough for the other parts (a length, a domain) to keep
+      true (str/replace (re-pattern (str regex-token "|\\*|\\+|\\{(\\d+),\\}"))
+                        (fn [[m n]] (case m "*" "{0,4}" "+" "{1,4}" (if n (str "{" n "," (+ 4 (parse-long n)) "}") m)))))))
 
 (defn- escape-regex
   "Literal text as a regex: each metacharacter backslashed (not \\Q...\\E, which a string

@@ -201,27 +201,12 @@
   (delay (boolean (try (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex) (catch Exception _ nil)))))
 
 (def ^:private generation-regex
-  "A regex test.chuck generates from, whose strings match the regex given: without the flags,
-   \\z test.chuck refuses, classes as their ASCII members alone (which every server's classes
-   have) and any character as a printable ASCII one, a case-insensitive one's letters as [aA], repeats at most 4 more than their least;
-   nil when there is none, and the strings are drawn and filtered. Memoized: a registry build
-   asks it of every [:re]."
+  "ev/generation-regex when test.chuck generates from it, nil otherwise (the strings are then
+   drawn and filtered). Memoized: a registry build asks it of every [:re]."
   (memoize
    (fn [re]
      (let [string-from-regex (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex)
-           ci? (re-find #"^\(\?iu?\)" re)
-           g (cond-> (-> re
-                         (str/replace #"^\(\?iu?\)" "")
-                         (str/replace #"(?<!\\)\\z" "")
-                         ev/strict-regex
-                         (str/replace "[\\s\\S]" "[\\x20-\\x7E]"))
-               ci? (str/replace #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|\p{L}"
-                                #(if (and (= 1 (count %) (count (str/lower-case %)) (count (str/upper-case %))) (not= (str/lower-case %) (str/upper-case %)))
-                                   (str "[" (str/lower-case %) (str/upper-case %) "]")
-                                   %))
-               ;; repeats bounded: strings short enough for the other parts (a length, a domain) to keep
-               true (str/replace #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|\*|\+|\{(\d+),\}"
-                                 (fn [[m n]] (case m "*" "{0,4}" "+" "{1,4}" (if n (str "{" n "," (+ 4 (parse-long n)) "}") m)))))]
+           g (ev/generation-regex re)]
        ;; malli drops the anchors before it calls test.chuck
        (when (try (string-from-regex (re-pattern (str/replace g #"^\^?(.*?)(\$?)$" "$1"))) true (catch Exception _ false))
          g)))))
