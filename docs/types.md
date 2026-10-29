@@ -91,6 +91,12 @@ spelling.
 | `hstore`, `ltree`, `lquery`, `ltxtquery`, `cube`, `seg`, `query_int`, `isbn`, `isbn13`, `ean13`, `ismn`, `ismn13`, `issn`, `issn13`, `upc` | `[:any {:pg/type "..."}]` |
 | a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
 
+An enum or domain of another schema (`wh.stock.sku` of type `catalog.sku`) is such a type too:
+each schema's file stands alone and refers to no other, so the column is `[:any]` (`[:some]`
+when NOT NULL) and its `:unrendered` entry names the schema, `:type-schema "catalog"`. With
+both schemas generated and loaded together (`(pgmalli/registry "catalog" "wh")`), a type
+override refers to it: `{:overrides {:sku [:ref :pg.catalog/sku]}}`.
+
 `:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
 do; malli's own `:string`, in `portable` output, counts UTF-16 units. `:pg/max-length n` is the
 type's `n`: as PostgreSQL does, it cuts spaces past `n` off (`"abcd  "` fits `varchar(4)`),
@@ -315,5 +321,5 @@ A diagnostic is `{:table :kind :severity :message}`, with `:constraint`, `:colum
 | `:exclude` | `:info` | an EXCLUDE constraint, which the schemas do not check |
 | `:redundant-unique` | `:info` | a UNIQUE on the columns of the primary key or of another UNIQUE |
 
-An `:unrendered` or `:skipped` entry is `{:kind :table :column :constraint :sql :type}`, the
-keys that apply; a domain's has `:domain` in place of `:table`.
+An `:unrendered` or `:skipped` entry is `{:kind :table :column :constraint :sql :type
+:type-schema}`, the keys that apply; a domain's has `:domain` in place of `:table`.

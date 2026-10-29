@@ -41,14 +41,15 @@
 
 (defn- left-out
   "An :unrendered or :skipped entry as the file keeps it: what was left out and where."
-  [{:keys [schema table type-name column constraint sql input type fact]}]
+  [{:keys [schema table type-name column constraint sql input type type-schema fact]}]
   (cond-> {:kind fact}
     table (assoc :table (str schema "." table))
     (and type-name (not table)) (assoc :domain (str schema "." type-name))
     column (assoc :column column)
     constraint (assoc :constraint constraint)
     (or sql input) (assoc :sql (or sql input))
-    type (assoc :type type)))
+    type (assoc :type type)
+    type-schema (assoc :type-schema type-schema)))
 
 (defn assemble
   "The file's data from the rendering of a schema's facts, in reading order: what it is, then

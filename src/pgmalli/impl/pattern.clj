@@ -13,7 +13,7 @@
                    :identity is :always, :default or :serial (a nextval default); :generated is the expression
      :enum         column of an enum type (or an array of it) {:type-name :values :array?}
      :domain-ref   column of a domain type (or an array of it) {:type-name :base (the type under its domains) :array?}
-     :unknown-type type outside the mapping table (rendered as :any) {:type}
+     :unknown-type type outside the mapping table (rendered as :any) {:type :type-schema (when not pg_catalog's or the schema's own)}
      :max-length   varchar(n)                            {:max}
      :numeric      numeric(p,s)                          {:precision :scale}
      :in-set       col IN (...) / col = v                {:values}
@@ -307,7 +307,9 @@
       (:unparsed generated) (conj (:unparsed generated))
       range-check (conj range-check)
       ref-fact (conj ref-fact)
-      (not mapped?) (conj (merge base {:fact :unknown-type :type data_type}))
+      ;; a type of another schema: each schema's file stands alone, so it cannot refer to it
+      (not mapped?) (conj (cond-> (merge base {:fact :unknown-type :type data_type})
+                            (not (#{nil "pg_catalog" (:schema base)} type_schema)) (assoc :type-schema type_schema)))
       (and max_length typmod) (conj (merge base (case typmod
                                      :max-length {:fact :max-length :max max_length}
                                      ;; bit(n) is exactly n digits, bit varying(n) at most n

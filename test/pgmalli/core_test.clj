@@ -338,6 +338,22 @@
       (is (m/validate (data/dataset-schema reg) {"pu.t" [{:id 1 :kind 1 :active false} {:id 2 :kind 1 :active true}]} {:registry reg})
           "a dataset the database takes is valid: the rule is for generating"))))
 
+(deftest a-type-of-another-schema-says-its-schema-and-an-override-refers-to-it
+  (when *db*
+    (exec-sql! "CREATE SCHEMA catalog; CREATE SCHEMA wh;
+                CREATE DOMAIN catalog.sku AS text CHECK (VALUE ~ '^[A-Z]{3}$'); CREATE TYPE catalog.kind AS ENUM ('a', 'b');
+                CREATE TABLE wh.stock (id int PRIMARY KEY, sku catalog.sku NOT NULL, k catalog.kind);")
+    (is (= [{:kind :unknown-type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}
+            {:kind :unknown-type :table "wh.stock" :column "sku" :type "catalog.sku" :type-schema "catalog"}]
+           (:unrendered (files/from-database {:db *db*} "wh"))))
+    (let [config {:db *db* :overrides {:sku [:ref :pg.catalog/sku] :kind [:ref :pg.catalog/kind]}}
+          reg (pgmalli/registry (files/from-database config "catalog") (files/from-database config "wh"))
+          ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 1)]
+      (is (not (m/validate :pg.wh/stock {:id 1 :sku "abc" :k nil} {:registry reg})))
+      (is (not (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "c"} {:registry reg})))
+      (is (= 3 (count (get ds "wh.stock"))) (pr-str (data/short-tables ds)))
+      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))
+
 (deftest like-with-an-escape-takes-and-generates-what-postgresql-takes
   (when *db*
     (let [[reg data] (registry-of "le" "CREATE SCHEMA le; CREATE TABLE le.t (id int PRIMARY KEY,
