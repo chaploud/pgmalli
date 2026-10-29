@@ -823,3 +823,11 @@
     (is (m/validate s {:id 1 :nick nil} malli-opts))
     (is (not (m/validate s {:id 1} malli-opts)) "a key sql/format would miss")
     (is (= [:map] (h/params-schema registry {:select [:id] :from [:users]} opts)))))
+
+(deftest tables-are-what-a-query-reads-and-writes-not-its-aliases
+  (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:select [:*] :from [[:users :groups]]} opts)) "an alias is not the table it names")
+  (is (= {:reads #{"sample.groups"} :writes #{"sample.users"}}
+         (h/tables registry {:update :users :set {:nick "a"} :from [[:groups :g]] :where [:= :g.id :users.group_id]} opts)))
+  (is (= {:reads #{"sample.users"} :writes #{}}
+         (h/tables registry {:with [[:groups {:select [:id] :from [:users]}]] :select [:*] :from [:groups]} opts)) "a CTE is no table")
+  (is (= {:reads #{} :writes #{"sample.users"}} (h/tables registry {:insert-into :users :values [{:id 1}] :on-conflict [:id] :do-update-set [:nick]} opts))))

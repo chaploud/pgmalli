@@ -38,8 +38,8 @@
         head (when (vector? s) (first s))
         children (when (vector? s) (shape/entries s))]
     (cond
-      (and (keyword? s) (contains? schemas s)) (describe schemas (get schemas s))
-      (string? s) (if (contains? schemas s) (describe schemas (get schemas s)) s)
+      ;; a name the registry defines as data; malli's own types (:int, :any) are their names
+      (and (or (keyword? s) (string? s)) (vector? (get schemas s))) (describe schemas (get schemas s))
       (= :maybe head) (let [d (describe schemas (first children))] (if (string? d) (str d "?") [:maybe d]))
       (= :map head) (ordered (for [[k ep v] (map shape/entry-parts children)]
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))

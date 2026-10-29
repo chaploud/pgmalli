@@ -911,6 +911,28 @@
                        (statement-chains registry body opts))]
      (vec (concat found (unread-clauses body))))))
 
+(defn tables
+  "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
+   joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM),
+   aliases and CTE names resolved as PostgreSQL resolves them. A table code in the query
+   brings in is not seen. Options: see query-schema.
+
+   (tables registry {:update :users :set {:nick \"a\"} :from [[:groups :g]] :where [:= :g.id :users.group_id]})
+   ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
+  ([registry body] (tables registry body {}))
+  ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
+   (jdbc/options! opts)
+   (query! body)
+   (let [registry (reading registry)
+         found (for [[stmt scopes] (statement-chains registry body opts)
+                     :let [own (first scopes)
+                           targets (set (keep #(some-> % (table-ref schema) second) [(insert-target stmt) (:update stmt) (:delete-from stmt)]))]
+                     [alias {:keys [table cte?]}] (when (map? own) own)
+                     :when (and table (not cte?) (not= "excluded" (str/lower-case (str alias))))]
+                 [(if (targets alias) :writes :reads) table])]
+     (merge {:reads #{} :writes #{}}
+            (update-vals (group-by first found) #(set (map second %)))))))
+
 ;;; types
 
 (defn- driver-type

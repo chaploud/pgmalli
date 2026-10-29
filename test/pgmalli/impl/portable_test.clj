@@ -77,4 +77,5 @@
          (pgmalli/describe [:=> [:cat [:int {:pg/type "bigint"}] [:or [:pg/array [:int {:pg/type "integer"}]] [:sequential [:int {:pg/type "integer"}]]]]
                             [:sequential [:map [:id [:int {:pg/type "bigint"}]]]]])))
   (is (= [:id :nick] (take 2 (keys (pgmalli/describe [:map [:id [:int {:pg/type "bigint"}]] [:nick {:optional true} [:maybe [:string {:pg/type "text"}]]]])))))
+  (is (= ["any" "int" "string?"] (map #(pgmalli/describe registry %) [:any [:int {:min 0}] [:maybe :string]])) "malli's own types by their names")
   (is (= "text? (optional)" (:nick (pgmalli/describe [:map [:nick {:optional true} [:maybe [:string {:pg/type "text"}]]]])))))
