@@ -652,12 +652,16 @@
           "HoneySQL writes NULL for a key one row of :values lacks and another has")
       (is (= [] (check {:update :users :set {:nick nil :score :?score} :where [:= :id 1]})) "a nullable column, an argument")
       (is (= [] (h/check registry {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}
-                         (assoc opts :values-default-columns #{:mood})))
-          "with sql/format's :values-default-columns the missing key is DEFAULT"))
+                         (assoc opts :format {:values-default-columns #{:mood}})))
+          "with sql/format's :values-default-columns the missing key is DEFAULT")
+      (is (= [] (check {:insert-into :users :columns [:group_id :score :mood] :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}))
+          "under a column list, the keys reaching each column depend on the HoneySQL version"))
     (testing "a column only the database writes"
       (is (= [(ro :id)] (check {:update :users :set {:id 5} :where [:= :id 1]})))
       (is (= [(ro :nick_upper)] (check {:update :users :set {:nick_upper "X"} :where [:= :id 1]})))
       (is (= [(ro :id)] (check {:insert-into :users :values [{:id 3 :group_id 1 :score 1}]})))
       (is (= [] (check {:insert-into [{:overriding-value :system} :users] :values [{:id 3 :group_id 1 :score 1}]}))
           "OVERRIDING SYSTEM VALUE writes an identity ALWAYS column")
+      (is (= [] (check {:insert-into [{:overriding-value :user} :users] :values [{:id 3 :group_id 1 :score 1}]}))
+          "OVERRIDING USER VALUE ignores the value given")
       (is (= [] (check {:update :users :set {:nick_upper :default :id [:default]} :where [:= :id 1]})) "DEFAULT is allowed"))))

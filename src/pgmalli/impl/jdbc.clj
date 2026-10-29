@@ -30,7 +30,7 @@
                              [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]]]]
    [:compare {:optional true} [:enum :strict :lenient]]
    [:result {:optional true} [:enum :one]]
-   [:values-default-columns {:optional true} [:or [:set :keyword] [:sequential :keyword]]]])
+   [:format {:optional true} :map]])
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key

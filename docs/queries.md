@@ -66,14 +66,13 @@ has a default, but the first row below gets NULL:
 ;; => [{:kind :not-null-violation, :table "public.users", :column :status}]
 ```
 
-Pass `sql/format`'s `:values-default-columns` to `h/check` too, when you pass it to
-`sql/format`:
+Give `h/check` the options you give `sql/format`, as `:format`:
 
 ```clojure
 (h/check registry {:insert-into :users
                    :values [{:group_id 1 :email "ann@example.com"}
                             {:group_id 1 :email "bob@example.com" :status "closed" :closed_at [:now]}]}
-         {:values-default-columns #{:status :closed_at}})
+         {:format {:values-default-columns #{:status :closed_at}}})
 ;; => []
 ```
 
@@ -151,7 +150,7 @@ Every function of `pgmalli.honeysql` takes the same options map:
 | `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
 | `:write {:array :vector}` | arrays passed as vectors, not `java.sql.Array` |
 | `:compare :lenient` | arguments compared with a column take any value of its kind and nil |
-| `:values-default-columns #{...}` | the option of `sql/format`: those keys missing from a `:values` map are DEFAULT |
+| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns` is read |
 | `:result :one` | `h/query-schema` only: the return is one row or nil |
 
 ## Function schemas

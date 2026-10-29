@@ -144,6 +144,7 @@
  [:update-generated-default {:update :audits :set {:note_upper [:default]}}]
  [:insert-identity {:insert-into :audits :values [{:id 1 :note "a"}]}]
  [:insert-overriding {:insert-into [{:overriding-value :system} :audits] :values [{:id 1 :note "a"}]}]
+ [:insert-overriding-user {:insert-into [{:overriding-value :user} :audits] :values [{:id 1 :note "a"}]}]
  [:insert-generated {:insert-into :audits :values [{:note "a" :note_upper "A"}]}]
  [:insert-default-null {:insert-into :audits :values [{:note nil}]}]
  [:insert-hetero-default {:insert-into :groups :values [{:name "a"} {:name "b" :created_at [:now]}]}]

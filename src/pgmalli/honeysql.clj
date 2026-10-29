@@ -678,12 +678,14 @@
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
    a column only the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
-   VALUE). A column one map of :values lacks and another has is NULL, as HoneySQL writes it,
-   DEFAULT under sql/format's :values-default-columns."
-  [registry scopes stmt {:keys [schema values-default-columns] :or {schema default-schema}}]
+   or USER VALUE, which the first writes and the second ignores). A column one map of :values
+   lacks and another has is NULL, as HoneySQL writes it, DEFAULT under sql/format's
+   :values-default-columns (in :format). Under a column list, which map keys reach which column
+   depends on the HoneySQL version (2.8.85 follows the list): missing keys are not judged there."
+  [registry scopes stmt {:keys [schema format] :or {schema default-schema}}]
   (let [target (target-scope scopes stmt schema)
         i (:insert-into stmt)
-        overriding? (and (vector? i) (map? (first i)) (= :system (:overriding-value (first i))))
+        overriding? (and (vector? i) (map? (first i)) (#{:system :user} (:overriding-value (first i))))
         columns (:columns (insert-parts stmt))
         rows (when (vector? (:values stmt)) (:values stmt))
         maps (filter map? rows)
@@ -694,8 +696,8 @@
                         (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update)] [c excluded :update])
                               (map? do-update) (for [[c v] do-update] [c v :update])
                               (vector? do-update) (for [c do-update] [c excluded :update]))
-                        (for [row maps, c union]
-                          [c (cond (contains? row c) (get row c) (contains? (set values-default-columns) c) :default) :insert])
+                        (for [row maps, c (if columns (keys row) union)]
+                          [c (cond (contains? row c) (get row c) (contains? (set (:values-default-columns format)) c) :default) :insert])
                         (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert])))]
     (when (seq target)
       (distinct
@@ -986,7 +988,7 @@
      :write {pg-type schema}  what a SettableParameter extension takes; also
                               {:array [:pg/array :sequential :set]}
      :compare :lenient        compared arguments take any value of the column's kind, and nil
-     :values-default-columns  sql/format's option, if you pass it there
+     :format {...}            the options you pass to sql/format (:values-default-columns)
      :result :one             the return is [:maybe row]
    Throws when args are not keywords or symbols. See docs/queries.md."
   ([registry args body] (query-schema registry args body {}))

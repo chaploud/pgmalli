@@ -34,7 +34,7 @@ All notable changes to this project are documented here. The format follows
 - `check` reports writes PostgreSQL refuses: NULL into a NOT NULL column
   (`:not-null-violation`), including the NULL HoneySQL writes for a key one `:values` map
   lacks, and a value into a generated or identity ALWAYS column (`:read-only-column`).
-  `:values-default-columns` takes `sql/format`'s option of that name.
+  `:format` takes the options you pass to `sql/format` (`:values-default-columns` is read).
 - Supported versions in the README, the oldest of them run in CI.
 - `bb oracle`: `check` against PostgreSQL itself on a corpus of queries and mutants of them;
   CI holds its false positives at none.
