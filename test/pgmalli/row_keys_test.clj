@@ -54,3 +54,19 @@
                    (object-array [1]) [1 2] #{1}]
                 :let [taken? (try (jdbc/execute-one! c ["SELECT 1 AS one WHERE 1 = ANY(?)" v]) true (catch Exception _ false))]]
           (is (= taken? (m/validate s v)) (str (class v))))))))
+
+(deftest arrays-and-json-are-what-the-driver-returns-and-takes
+  (when *db*
+    (exec-sql! "CREATE TABLE docs (id int PRIMARY KEY, paths text[], meta jsonb NOT NULL CHECK (jsonb_typeof(meta) = 'object'));")
+    (let [{:keys [host port db user password]} *db*
+          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+          registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+          ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
+          args (h/arg-types registry ins {:write {:array [:pg/array]}})
+          v (into-array String ["a" "b"])]
+      (is (m/validate (:paths args) v {:registry registry}) "a String[] for a text[] column")
+      (is (not (m/validate (:paths args) ["a"] {:registry registry})) "a vector the driver refuses")
+      (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
+      (let [q {:select [:paths :meta] :from [:docs]}
+            row (first (jdbc/execute! ds (sql/format q) {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
+        (is (m/validate (h/row-schema registry q #{}) row) (pr-str (update-vals row class)))))))

@@ -14,6 +14,13 @@ All notable changes to this project are documented here. The format follows
   extension reads otherwise, by its `:pg/type` (`{"date" :time/local-date}`), over `:time`.
 - `:write {pg-type schema}` in `pgmalli.honeysql`: what a `SettableParameter` extension sends
   for a type (`{"text" [:or :string :keyword]}`), over the column's read type, for arguments.
+- `pgmalli.honeysql` types an array column's values (rows, arguments) and a json or jsonb one's
+  rows as PostgreSQL's JDBC driver returns and takes them by default: `:any` (a
+  `java.sql.Array`, a `PGobject`), where it took the registry's `[:vector ...]` and CHECK-shaped
+  map, which the driver's values failed. `{:read {:array :vector :json :parsed}}` gives those
+  back for an extension that returns vectors and parsed json; an array column's argument
+  follows `:write`'s `:array` (`[:pg/array]` for what the driver takes). Checked against the
+  driver.
 - `{:compare-nil true}` in `pgmalli.honeysql`: a compared argument (`=`, `<>`, `<`, `ANY` ...;
   not `:in`'s, nil formatting as `IN ?`, which is not SQL) may be nil, for code passing nil to
   match no row: `sql/format` sends it to `= ?`, which no row equals. Assigned arguments are as

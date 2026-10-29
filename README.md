@@ -238,7 +238,11 @@ Options: `:schema` for unqualified table names (default `"public"`); `:qualified
 `SettableParameter` extension of your own sends (`{"text" [:or :string :keyword]}`), next.jdbc
 sending no keyword without one; `:result :one` for a function returning
 one row or nil (`[:maybe row]`). Without `:time` and `:read` the schema is data malli's default
-registry reads: date and timestamp columns are `inst?` (what the driver returns). `:time
+registry reads, typed as PostgreSQL's JDBC driver returns values: date and timestamp columns
+are `inst?`, arrays (a `java.sql.Array`), json and jsonb (a `PGobject`) and intervals `:any`.
+`{:read {:array :vector :json :parsed}}` says an extension of yours returns arrays as vectors
+of their elements and json parsed, typed as the registry shapes it; an argument for an array
+column is an array, as `:write`'s `:array` names. `:time
 :instant` or `:local`, or a `:read` naming them, gives the `malli.experimental.time` types
 instead, which the default registry lacks: make the schema an object over pgmalli's registry
 (below). An ambiguous column comes with the tables it could

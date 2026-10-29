@@ -3,6 +3,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [malli.experimental.time :as time]
+            [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.sample :refer [registry]]))
 
@@ -182,6 +183,32 @@
     (is (= {:v [:maybe [:string {:max 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare-nil true)))
         "an assigned one as before")))
+
+(def docs
+  (pgmalli/registry {:registry {:pg.public/docs [:map {:pg/table "public.docs"}
+                                                      [:id [:int {:pg/type "bigint"}]]
+                                                      [:paths [:maybe [:vector {:pg/type "text[]"} [:string {:pg/type "text"}]]]]
+                                                      [:meta [:map {:pg/type "jsonb"} [:a :int]]]]}}))
+
+(deftest arrays-and-json-are-the-drivers-objects-unless-read-says-otherwise
+  (let [body {:select [:paths :meta] :from [:docs]}]
+    (is (= [:map [:paths [:maybe [:any {:pg/type "text[]"}]]] [:meta [:any {:pg/type "jsonb"}]]] (h/row-schema docs body #{}))
+        "a java.sql.Array and a PGobject")
+    (is (= [:map [:paths [:maybe [:vector [:string {:pg/type "text"}]]]] [:meta [:map {:pg/type "jsonb"} [:a :int]]]]
+           (h/row-schema docs body #{} {:read {:array :vector :json :parsed}})))
+    (is (= [:map [:paths [:maybe [:sequential :string]]] [:meta [:any {:pg/type "jsonb"}]]]
+           (h/row-schema docs body #{} {:read {"text[]" [:sequential :string]}}))
+        "a :pg/type over :array")))
+
+(deftest an-array-columns-argument-is-an-array
+  (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
+    (is (= {:paths [:maybe :any] :meta [:any {:pg/type "jsonb"}]} (select-keys (h/arg-types docs body) [:paths :meta]))
+        "an assigned array is one the driver takes, :any by default")
+    (is (= {:paths [:maybe [:or [:pg/array [:string {:pg/type "text"}]] [:vector [:string {:pg/type "text"}]]]]}
+           (select-keys (h/arg-types docs body {:write {:array [:pg/array :vector]}}) [:paths])))
+    (is (= {:p [:or [:pg/array [:string {:pg/type "text"}]] [:vector [:string {:pg/type "text"}]]]}
+           (h/arg-types docs {:select [:id] :from [:docs] :where [:= :paths :?p]} {:write {:array [:pg/array :vector]}}))
+        "compared too")))
 
 (deftest an-any-or-all-argument-is-an-array
   (let [body {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:<> :group_id [:all :?gs]]]}]

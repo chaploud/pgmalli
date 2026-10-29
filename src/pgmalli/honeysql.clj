@@ -532,13 +532,28 @@
 
 ;;; types
 
+(defn- array-column?
+  "An array column's schema: [:vector {:pg/type \"text[]\"} :string]."
+  [s]
+  (and (vector? s) (= :vector (first s)) (map? (second s)) (some-> (:pg/type (second s)) (str/ends-with? "[]"))))
+
 (defn- read-shape
-  "A column schema as a driver returns it and as malli's default registry reads it; an
-   interval is a driver object, :any, unless :read says otherwise."
-  [registry schema {:keys [time read] :or {time :inst}}]
-  (let [t (if (vector? schema) (first schema) schema)]
-    (portable/portable-data (::schemas registry) (or (shape/read-as read schema)
-                                                     (shape/read-time time (if (= :time/duration t) :any schema))))))
+  "A column schema (non-NULL) as the driver returns it and as malli's default registry reads
+   it. PostgreSQL's JDBC driver returns an array as a java.sql.Array, json and jsonb as a
+   PGobject and an interval as a PGInterval, :any here; :read names what an extension returns
+   instead: a :pg/type's schema, {:array :vector} for arrays as vectors of their elements,
+   {:json :parsed} for json as the data the registry shapes."
+  [registry schema {:keys [time read] :or {time :inst} :as opts}]
+  (let [t (if (vector? schema) (first schema) schema)
+        pg-type (when (and (vector? schema) (map? (second schema))) (:pg/type (second schema)))
+        driver-object [:any {:pg/type pg-type}]]
+    (portable/portable-data
+     (::schemas registry)
+     (or (shape/read-as read schema)
+         (cond (array-column? schema) (if-let [kind (:array read)] [kind (read-shape registry (last schema) opts)] driver-object)
+               (and (#{"json" "jsonb"} pg-type) (not= :parsed (:json read))) driver-object
+               (= :time/duration t) :any
+               :else (shape/read-time time schema))))))
 
 (defn- maybe [s] (if (and (vector? s) (= :maybe (first s))) s [:maybe s]))
 
@@ -560,12 +575,18 @@
     (let [alts (map #(if (= :nil %) :nil [% t]) kinds)] (if (next alts) (into [:or] alts) (first alts)))
     :any))
 
+(defn- write-type [registry s {:keys [write] :as opts}]
+  (or (shape/read-as write s)
+      (when (array-column? s) (array-type (write-type registry (last s) opts) opts))
+      (read-shape registry s opts)))
+
 (defn- column-type
   "The type of a column for a value compared with it (NULL never matches, so no [:maybe]) or,
-   with nullable?, assigned to it: under :write when it names the column's type."
-  [registry sc col nullable? {:keys [write] :as opts}]
+   with nullable?, assigned to it: under :write when it names the column's type; for an array
+   column, an array of its elements' (see array-type)."
+  [registry sc col nullable? opts]
   (if-let [s (:schema (resolve-column registry sc col))]
-    (let [inner (or (shape/read-as write (shape/non-null s)) (read-shape registry (shape/non-null s) opts))]
+    (let [inner (write-type registry (shape/non-null s) opts)]
       (if (and nullable? (= :maybe (first s))) [:maybe inner] inner))
     :any))
 
