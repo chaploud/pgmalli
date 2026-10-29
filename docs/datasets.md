@@ -1,5 +1,7 @@
 # Test datasets
 
+Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md) · [datasets](datasets.md)
+
 `pgmalli.data` generates rows for several tables at once: primary keys and unique columns
 distinct, foreign keys pointing at generated rows. The examples use
 [example/schema.sql](example/schema.sql).
@@ -84,7 +86,8 @@ Write it to a file to keep it across upgrades:
 
 The file holds one row per line, `java.time` values and bytes under pgmalli's tags
 (`#pgmalli/instant "..."`, `#pgmalli/bytes "hex"`). Byte arrays compare by identity, so a
-dataset with `bytea` values is not `=` to itself read back, though it inserts the same rows.
+dataset with `bytea` values is not `=` to itself read back, though it inserts the same rows. To read
+the file with `clojure.edn` yourself, give `edn/read-string` the tags as `{:readers data/readers}`.
 
 ## Inserting
 

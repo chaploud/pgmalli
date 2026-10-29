@@ -1,5 +1,7 @@
 # PostgreSQL types and constraints in malli
 
+Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md) · [datasets](datasets.md)
+
 What each part of a PostgreSQL schema becomes in the registry.
 
 ## Names in the registry
@@ -15,6 +17,9 @@ For a schema `public`:
 | `:pg.public/<enum>` | `[:enum ...]` |
 | `:pg.public/<domain>` | a non-NULL value of the domain |
 
+A row schema checks one row. PRIMARY KEY, UNIQUE and FOREIGN KEY hold across rows;
+[`data/dataset-schema`](datasets.md#a-dataset) checks them.
+
 An **insert schema** is a closed map. Identity ALWAYS and generated columns are left out.
 Identity BY DEFAULT, defaulted and nullable columns are optional. The table's CHECKs read an
 omitted column as what the database stores in it: its literal default, else NULL.
@@ -26,8 +31,8 @@ which an UPDATE does not send.
 A **view's** columns are all `[:maybe ...]`. Views have no insert schema and are not part of
 datasets.
 
-A **domain** is its base type with its CHECKs applied. Whether NULL is allowed is the
-column's: a domain's NOT NULL and DEFAULT reach every column of that type.
+A **domain** is its base type with its CHECKs applied. The column decides whether NULL is
+allowed. A domain's NOT NULL and DEFAULT apply to every column of the domain.
 
 pgmalli's own schema types are in the registry too: `:pg/check`, `:pg/check-value`,
 `:pg/bytes`, `:pg/smallint`, `:pg/integer`, `:pg/numeric` and `:pg/array`.
@@ -56,8 +61,9 @@ The table's map carries:
 | `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; `:where true` for a partial one |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
 
-An identifier that is not a plain name (`Order Items`) is a string key. Names keep the
-database's spelling.
+An identifier that is not a plain name (`Order Items`) makes a string key:
+`"pg.public/Order Items"`, `"pg.public.Order Items/insert"`. Names keep the database's
+spelling.
 
 ## Column types
 
@@ -92,6 +98,14 @@ then `:min` and `:max` count what it keeps.
 
 `:pg/numeric` rounds to `s` places, half up as PostgreSQL does, then allows fewer than
 `p - s` digits before the point. `s` may be negative or larger than `p`, as PostgreSQL allows.
+
+A row schema differs from PostgreSQL in a few places:
+
+- An array's elements are not NULL: PostgreSQL takes NULL elements, a row schema refuses them.
+- A `numeric(p, s)` value is checked by the column's CHECKs before PostgreSQL rounds it to `s`
+  places.
+- A `varchar(n)` value with spaces past `n` is checked by its CHECKs before those spaces are
+  cut.
 
 The types without a malli counterpart generate from a fixed list of literals PostgreSQL
 accepts, and are inserted as text cast to the type (an interval too, in ISO 8601). A NOT NULL
@@ -266,3 +280,38 @@ the schemas passed keeps the later schema's.
 Every pgmalli function taking a registry takes any malli registry holding the generated
 names, a `malli.registry/composite-registry` included. In a composite registry the first
 registry holding a name wins.
+
+`pgmalli.core/columns` gives the `[:map ...]` of a row or insert schema without its table
+CHECKs, which is what `malli.util` takes.
+
+## The generated file
+
+`pgmalli.core/generated` reads a schema's file as data:
+
+| key | holds |
+|---|---|
+| `:schema` | the schema's name, `"public"` |
+| `:database-version` | the major version it was read from, `"PostgreSQL 17"` |
+| `:diagnostics` | what deserves a look in the database |
+| `:registry` | `{name schema}`: the rows, enums and domains; the insert and update schemas are derived when it is loaded |
+| `:unrendered` | what pgmalli cannot express, left out of the schemas |
+| `:skipped` | what `:overrides` skips |
+
+A diagnostic is `{:table :kind :severity :message}`, with `:constraint`, `:column` or
+`:trigger` where it applies:
+
+| `:kind` | severity | when |
+|---|---|---|
+| `:contradiction` | `:error` | a column's CHECKs contradict each other: no value fits |
+| `:check-false` | `:warning` | `CHECK (false)`: the table takes no row |
+| `:no-partition` | `:warning` | a partitioned table with no partition |
+| `:unreachable-partition` | `:warning` | a partition whose bounds and its parent's do not overlap |
+| `:unreachable-alternative` | `:warning` | an alternative of an OR CHECK that can match no row |
+| `:not-valid` | `:info` | a `NOT VALID` constraint: rows from before it may violate it |
+| `:not-enforced` | `:info` | a `NOT ENFORCED` CHECK, which the schema leaves out |
+| `:row-trigger` | `:info` | a row-level INSERT trigger, which may reject or change rows |
+| `:exclude` | `:info` | an EXCLUDE constraint, which the schemas do not check |
+| `:redundant-unique` | `:info` | a UNIQUE on the columns of the primary key or of another UNIQUE |
+
+An `:unrendered` or `:skipped` entry is `{:kind :table :column :constraint :sql :type}`, the
+keys that apply; a domain's has `:domain` in place of `:table`.

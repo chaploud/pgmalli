@@ -1,5 +1,7 @@
 # HoneySQL queries
 
+Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md) · [datasets](datasets.md)
+
 `pgmalli.honeysql` reads a HoneySQL query as data and compares it with the registry. The
 examples use [example/schema.sql](example/schema.sql).
 
@@ -34,6 +36,18 @@ examples use [example/schema.sql](example/schema.sql).
 ;; => [{:kind :unknown-table, :table "public.accounts"}]
 ```
 
+A problem in a subquery or CTE carries `:in`, its path into the query:
+
+```clojure
+(def q {:select [:id] :from [[{:select [:id] :from [:users] :where [:= :mail 1]} :s]]})
+
+(h/check registry q)
+;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email], :in [:from 0 0]}]
+
+(get-in q [:from 0 0])
+;; => {:select [:id], :from [:users], :where [:= :mail 1]}
+```
+
 A clause pgmalli does not read is reported rather than passed over:
 
 ```clojure
@@ -41,8 +55,9 @@ A clause pgmalli does not read is reported rather than passed over:
 ;; => [{:kind :unread-clause, :clause :frobnicate}]
 ```
 
-A CTE or subquery has the types of what it selects. An expression (`[:count :*]`) has no
-type: comparisons with it are not checked.
+The columns of a CTE, a subquery, a table function or a `pg_catalog` table the registry lacks
+exist but have no type, nor has an expression (`[:count :*]`): comparisons with them are not
+checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
 
@@ -152,7 +167,8 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 
 ## Options
 
-`h/check`, `h/arg-types`, `h/row-schema` and `h/query-schema` take the same options map:
+`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema` and `h/query-schema` take the same
+options map:
 
 | option | for |
 |---|---|
@@ -193,6 +209,8 @@ registry when you make it, so `:malli/schema` holds a schema that needs none:
 ;; => false
 ```
 
+### Problems in function schemas
+
 A query with problems still gives a schema, carrying them as `:pgmalli/problems`. The
 property makes the vector one longer, so read its parts with `m/children`:
 
@@ -217,9 +235,20 @@ most often a typo:
 ;; => [{:kind :missing-arg, :arg :id}]
 ```
 
+Instrumentation does not read the property. `h/schema-problems` gathers it from the
+`:malli/schema` of every var, each problem naming its `:var`; `{:ns 'app.queries}` (or a list
+of namespaces) limits it to some:
+
+<!-- :test-doc-blocks/skip -->
+```clojure
+(deftest query-functions-agree-with-the-schema
+  (let [problems (h/schema-problems)]
+    (is (= [] problems) (h/explain problems))))
+```
+
 ## Reported though PostgreSQL runs them
 
-These match no row or touch none, which is a mistake far more often than intended:
+These match or touch no row, which is almost always a mistake:
 
 - A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
   'closed'))`) with a value outside it: an `:enum-literal`.
@@ -229,9 +258,12 @@ These match no row or touch none, which is a mistake far more often than intende
 ## Not checked
 
 - Columns inside code (a list, `(when x [:= :id x])`): what it builds is not data.
+- The tables of `:join-by`.
 - A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
   reported as `:unread-clause`.
 - Values written in the query beyond NULL and enum literals: an empty `[:in :id []]` is not
   reported (an argument in `:in` is typed non-empty).
 - An ON clause naming a table joined after it, which PostgreSQL rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.
+- An argument schema with a regex (`[:re ...]`) does not generate with `mg/generate`; it
+  validates only.
