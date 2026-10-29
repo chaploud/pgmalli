@@ -337,3 +337,19 @@
         (exec-sql! (str (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))) "; DELETE FROM pu.t;")))
       (is (m/validate (data/dataset-schema reg) {"pu.t" [{:id 1 :kind 1 :active false} {:id 2 :kind 1 :active true}]} {:registry reg})
           "a dataset the database takes is valid: the rule is for generating"))))
+
+(deftest like-with-an-escape-takes-and-generates-what-postgresql-takes
+  (when *db*
+    (let [[reg data] (registry-of "le" "CREATE SCHEMA le; CREATE TABLE le.t (id int PRIMARY KEY,
+                                          a text NOT NULL CHECK (a LIKE 'a!%%' ESCAPE '!'), b text NOT NULL CHECK (b LIKE 'b\\_%' ESCAPE '\\'),
+                                          c text NOT NULL CHECK (c LIKE 'c\\%' ESCAPE ''), d text NOT NULL CHECK (d ILIKE 'd!!_' ESCAPE '!'));")
+          base {:id 1 :a "a%" :b "b_" :c "c\\" :d "d!x"}
+          row-sql (fn [row] (first (honey.sql/format (first (data/inserts reg {"le.t" [row]})) {:inline true})))]
+      (is (empty? (:unrendered data)))
+      (doseq [[k v ok] [[:a "a%x" true] [:a "ax" false] [:b "b_x" true] [:b "bx" false] [:c "c\\x" true] [:c "cx" false] [:d "D!y" true] [:d "dxy" false]]
+              :let [row (assoc base k v)]]
+        (is (= ok (m/validate :pg.le/t row {:registry reg})) (pr-str row))
+        (is (= ok (try (exec-sql! (str (row-sql row) "; DELETE FROM le.t;")) true (catch clojure.lang.ExceptionInfo _ false))) (pr-str row)))
+      (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
+        (is (= 5 (count (get ds "le.t"))) (pr-str (data/short-tables ds)))
+        (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))))))))

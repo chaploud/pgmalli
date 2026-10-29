@@ -173,10 +173,23 @@
 (defn- null-term [t]
   (when (and (vector? t) (= :is (first t)) (column-ref? (second t)) (nil? (nth t 2))) (second t)))
 
+(defn- backslash-escaped
+  "A LIKE pattern with escape character e as one with the default, the backslash (an empty e
+   escapes nothing): (like_escape 'a!%' '!') is 'a\\%'."
+  [p e]
+  (if (= "\\" e)
+    p
+    (str/replace p (re-pattern (str "(?s)" (when (seq e) (str (java.util.regex.Pattern/quote e) "(.)|")) "\\\\"))
+                 #(if-let [c (when (vector? %) (second %))] (str "\\" c) "\\\\"))))
+
 (defn- normalize
-  "The form the matchers read: PostgreSQL's rewrites undone, casts removed."
+  "The form the matchers read: PostgreSQL's rewrites undone, casts removed, LIKE ... ESCAPE
+   (like_escape) as a pattern escaped with a backslash."
   [e]
-  (x/strip-casts (ev/fold-casts (x/canonical e))))
+  (walk/postwalk #(if (and (vector? %) (= :like_escape (first %)) (string? (second %)) (string? (last %)) (= 3 (count %)))
+                    (backslash-escaped (second %) (last %))
+                    %)
+                 (x/strip-casts (ev/fold-casts (x/canonical e)))))
 
 (defn- match-columns
   "All column facts of an expression, or nil if any AND branch matches nothing."
