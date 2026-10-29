@@ -103,14 +103,18 @@
     "42702" :ambiguous-column
     "23502" :not-null-violation
     "428C9" :read-only-column
-    (if (and (= "22P02" state) (str/includes? message "enum")) :enum-literal :other)))
+    (cond (and (= "22P02" state) (str/includes? message "enum")) :enum-literal
+          ;; a parameter pgjdbc sent as varchar where the column's type takes none
+          (and (#{"42883" "42804"} state) (str/includes? message "character varying")) :uncast-enum-string
+          :else :other)))
 
 (defn- verdict
-  "PostgreSQL's verdict on sql: :ok, or the kind of problem check would report for it, or :other."
-  [^java.sql.Connection conn sql]
+  "PostgreSQL's verdict on [sql & params]: :ok, or the kind of problem check would report for
+   it, or :other."
+  [^java.sql.Connection conn [sql & params :as sqlvec]]
   (try
-    (jdbc/execute! conn [(str "EXPLAIN " sql)])
-    (try (jdbc/execute! conn [sql]) {:pg :ok}
+    (jdbc/execute! conn (into [(str "EXPLAIN " sql)] params))
+    (try (jdbc/execute! conn sqlvec) {:pg :ok}
          (catch PSQLException e
            (if (= "23502" (.getSQLState e))
              {:pg :not-null-violation :state "23502" :message (.getMessage e)}
@@ -137,10 +141,15 @@
           (empty? ks) :miss
           :else :mismatch)))
 
+(def formats
+  "How a case is sent: its values inlined, and as HoneySQL sends them by default, parameters,
+   which pgjdbc types as it does (a String as varchar)."
+  {:inline {:inline true} :params {}})
+
 (defn run
   "Every case's :sql, PostgreSQL's verdict, check's :problems (:unread-clause aside: PostgreSQL
    has none) and :outcome, on db (a pgmalli :db map of a database oracle/schema.sql is loaded
-   into)."
+   into), once per formats entry (:format)."
   [db seed per-query]
   (let [url (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db))
         ds (jdbc/get-datasource {:jdbcUrl url :user (:user db) :password (:password db)})
@@ -151,11 +160,11 @@
         (jdbc/execute! conn ["SET statement_timeout = 3000"])
         (.setAutoCommit conn false)
         (vec (for [{:keys [query] :as c} (cases columns seed per-query)
-                   :let [fmt {:inline true}
-                         sql (first (sql/format query fmt))
-                         v (verdict conn sql)
+                   [mode fmt] formats
+                   :let [sqlvec (sql/format query fmt)
+                         v (verdict conn sqlvec)
                          problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query {:format fmt})))]]
-               (merge c v {:sql sql :problems problems :outcome (outcome (:pg v) problems)})))))))
+               (merge c v {:format mode :sql (first sqlvec) :params (vec (rest sqlvec)) :problems problems :outcome (outcome (:pg v) problems)})))))))
 
 (defn -main
   "bb oracle [seed] [mutants-per-query]: the run on a throwaway PostgreSQL (docker, as the tests
@@ -174,7 +183,7 @@
                   :when (seq rs)]
             (println "\n=====" o (count rs))
             (doseq [r rs]
-              (println (:id r) (or (:mutation r) "") "\n  SQL:" (:sql r)
+              (println (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
                        "\n  PostgreSQL:" (:pg r) (:state r) (some-> (:message r) (str/replace #"\n" " | "))
                        "\n  check:" (pr-str (:problems r))))))))
     (shutdown-agents)))

@@ -32,7 +32,8 @@ and add a CHANGELOG entry.
 ## The PostgreSQL oracle
 
 `bb oracle` (default seed 42, 8 mutants per query, about 2000 queries) runs the queries of
-`test/resources/pgmalli/oracle/corpus.edn`, and seeded mutants of them, on PostgreSQL. It
+`test/resources/pgmalli/oracle/corpus.edn`, and seeded mutants of them, on PostgreSQL, each
+sent twice: its values inlined, and as parameters the way HoneySQL and pgjdbc send them. It
 prints where `check` disagrees: a false positive (PostgreSQL takes the query, `check` faults
 it) or a miss (PostgreSQL refuses it, `check` lets it pass). `pgmalli.oracle-test` holds the
 false positives at none in `bb test:jvm`.

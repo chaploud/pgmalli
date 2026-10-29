@@ -1,6 +1,7 @@
 (ns pgmalli.oracle-test
   "check reports nothing for a query PostgreSQL takes: the corpus and seeded mutants of it,
-   against a real PostgreSQL (see pgmalli.oracle; bb oracle for the misses as well). JVM only:
+   against a real PostgreSQL, sent inlined and as parameters (see pgmalli.oracle; bb oracle for
+   the misses as well). JVM only:
    babashka has no JDBC, so bb test does not list it."
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [pgmalli.oracle :as oracle]
