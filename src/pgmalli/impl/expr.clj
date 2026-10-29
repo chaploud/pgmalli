@@ -51,6 +51,13 @@
                 v (if (re-find #"[.eE]" m) (bigdec m) (try (Long/parseLong m) (catch Exception _ (bigint m))))]
             (recur (+ i (count m)) (conj out {:t :num :v v})))
 
+          ;; an operator of an extension outside the search path: OPERATOR(public.~)
+          (re-find #"^OPERATOR\(\s*(?:\"[^\"]+\"|[\p{L}_][\p{L}\p{N}_$]*)\.([^\s)]+)\s*\)" (subs s i))
+          (let [[m op] (re-find #"^OPERATOR\(\s*(?:\"[^\"]+\"|[\p{L}_][\p{L}\p{N}_$]*)\.([^\s)]+)\s*\)" (subs s i))]
+            (if (some #{op} ops)
+              (recur (+ i (count m)) (conj out {:t :op :v op}))
+              (throw (ex-info (str "unknown operator: " op) {:pos i :input s}))))
+
           (or (Character/isLetter c) (= c \_))
           (let [m (re-find #"^[\p{L}_][\p{L}\p{N}_$]*" (subs s i))
                 up (str/upper-case m)]

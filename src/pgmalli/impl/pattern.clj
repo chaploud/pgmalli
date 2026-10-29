@@ -315,6 +315,20 @@
                                   :to (select-keys references [:schema :table :columns])})])
     []))
 
+(defn- citext? [type-name] (boolean (re-find #"(?:^|\.)citext$" (str/replace (str type-name) #"\(.*\)$" ""))))
+
+(defn- citext-fact
+  "A column pattern over a citext value as citext reads it: ~ and LIKE ignoring case; nil for
+   one citext compares otherwise (=, IN, a range), which pgmalli does not evaluate."
+  [f]
+  (let [present? (= :when-present (:fact f))
+        inner (if present? (:fact-when-present f) f)]
+    (when (#{:regex :like :length :non-blank :not-null :null} (:fact inner))
+      (let [inner (cond-> inner (#{:regex :like} (:fact inner)) (assoc :case-insensitive? true))]
+        (if present? (assoc f :fact-when-present inner) inner)))))
+
+(def ^:private citext-error "it compares a citext value, which ignores case where pgmalli's comparisons do not")
+
 (defn- domain-facts
   "The :domain fact, then a :domain-check (or :unparsed) for every CHECK that matched no pattern."
   [schema-name enums roots [tname {:keys [base_type not_null default constraints]}]]
@@ -329,8 +343,10 @@
                            ;; NOT VALID: existing values may violate it, so it is reported, not applied;
                            ;; over char(n) the patterns, which read text, do not apply
                            ms (when (and (not= false is_valid) (not (vector? value-type))) (some-> expr normalize match-columns))
+                           ms (if (citext? root) (let [cs (map citext-fact ms)] (when (every? some? cs) cs)) ms)
                            check (when expr (merge base {:constraint cname :sql definition :expr (x/canonical expr)}))]]
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
+                       (and expr (citext? root)) {:check (merge base {:fact :unparsed :constraint cname :input definition :error citext-error})}
                        expr {:check (cond-> (assoc check :fact :domain-check) (false? is_valid) (assoc :valid? false))}
                        :else {:check (merge base {:fact :unparsed :constraint cname :input definition :error error})}))
         dflt (when default (parsed base default))
@@ -355,8 +371,10 @@
 
 (defn- check-facts
   "The facts of a CHECK. One on a char(n) column (in bpchar) matches no pattern: the patterns
-   read text, and char(n) compares and measures without its trailing spaces."
-  [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar]
+   read text, and char(n) compares and measures without its trailing spaces. On a citext
+   column (in citext) a regex or LIKE ignores case, and a CHECK comparing it otherwise is not
+   evaluated."
+  [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar citext]
   (let [base (assoc base :constraint cname :sql check_clause)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try-clause check_clause)]
@@ -368,14 +386,18 @@
             e (substitute (:expr parsed) generated)
             n (when (and (not= false is_valid) (not-any? bpchar (referenced-columns e))) (normalize e))
             base (assoc base :expr (x/canonical e))]
-        (if-let [ms (some-> n match-columns)]
+        (if-let [ms (some->> (some-> n match-columns)
+                             (map #(if (citext (name (:column %))) (citext-fact %) %))
+                             (#(when (every? some? %) %)))]
           (mapv #(merge base (stringify %)) ms)
-          (if-let [b (some-> n match-branches)]
+          (if-let [b (when-not (some citext (referenced-columns e)) (some-> n match-branches))]
             [(merge base {:fact :branch-check} (stringify b) {:dispatch (name (:dispatch b))})]
             (if-let [alts (some-> n match-alternatives)]
               [(merge base {:fact :or-check :alternatives (stringify alts)})]
-              [(cond-> (merge base {:fact :table-check :columns (referenced-columns e)})
-                 (false? is_valid) (assoc :valid? false))]))))
+              (if (some citext (referenced-columns e))
+                [(merge base {:fact :unparsed :input check_clause :error citext-error})]
+                [(cond-> (merge base {:fact :table-check :columns (referenced-columns e)})
+                   (false? is_valid) (assoc :valid? false))])))))
       :else [(merge base {:fact :unparsed :input check_clause :error (:error parsed)})])))
 
 ;;; API
@@ -410,7 +432,11 @@
                       (let [generated (into {} (for [c (:columns t) :when (:generated_expr c)
                                                      :let [{:keys [expr]} (parsed base (:generated_expr c))] :when (some? expr)]
                                                  [(keyword (:name c)) expr]))]
-                        (concat (mapcat #(check-facts base % generated (set (for [c (:columns t) :when (#{"character" "bpchar"} (:data_type c))] (:name c))))
+                        (concat (mapcat #(check-facts base % generated
+                                                      (set (for [c (:columns t) :when (#{"character" "bpchar"} (:data_type c))] (:name c)))
+                                                      (set (for [c (:columns t) :let [[i] (type-ident (:data_type c))]
+                                                                 :when (or (citext? i) (citext? (get-in roots [i :root])))]
+                                                             (:name c))))
                                         (filter #(= "CHECK" (:type %)) constraints))
                                 ;; a domain on a generated column checks the expression's value
                                 (for [c (:columns t)
@@ -419,7 +445,7 @@
                                       :when (and expr (not array?) (contains? domains type-name))
                                       k (get-in schema [:types type-name :constraints])
                                       f (check-facts base {:name (str (:name c) " " (:name k)) :check_clause (:definition k) :is_valid (:is_valid k true)}
-                                                     {:VALUE expr} #{})]
+                                                     {:VALUE expr} #{} #{})]
                                   f))))]
         f)))))
 
