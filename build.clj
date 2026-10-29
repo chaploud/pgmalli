@@ -30,7 +30,10 @@
                 :pom-data [[:description "Generate malli schemas from an applied PostgreSQL schema"]
                            [:url "https://github.com/chaploud/pgmalli"]
                            [:licenses [:license [:name "MIT License"] [:url "https://opensource.org/license/mit"]]]]})
-  (b/copy-dir {:src-dirs ["src" "resources"] :target-dir class-dir})
+  (b/copy-dir {:src-dirs ["src"] :target-dir class-dir})
+  ;; resources/pgmalli is also where generate writes by default, so a file generated in this
+  ;; checkout would shadow a user's own pgmalli/<schema>.edn on the classpath
+  (b/copy-dir {:src-dirs ["resources"] :target-dir class-dir :include "pgmalli/ir.sql"})
   (b/jar {:class-dir class-dir :jar-file jar-file})
   (println "built" jar-file "as" (str lib) version))
 
