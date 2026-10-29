@@ -19,7 +19,6 @@
    :result (see arg-types and query-schema); a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
-            [malli.registry :as mr]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.shape :as shape]))
@@ -50,9 +49,6 @@
    every table in scope. The public functions take a registry and make one of it; one passed on
    again is left as it is."
   [registry]
-  (when-not (or (map? registry) (satisfies? mr/Registry registry))
-    (throw (ex-info (str "pgmalli.honeysql takes a registry ((pgmalli.core/registry \"public\")), not " (pr-str registry))
-                    {:registry registry})))
   (if (::schemas registry)
     registry
     (let [r {::schemas (shape/schemas-of registry)}]
