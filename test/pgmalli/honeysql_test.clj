@@ -83,6 +83,10 @@
   (is (= [] (h/check registry '{:insert-into table :values [{:x 1}]} opts)))
   (is (= [] (h/check registry '{:insert-into [table [:x]] :values [[1]]} opts))))
 
+(deftest read-names-the-types-an-extension-reads-otherwise
+  (is (= [:map [:born [:maybe :time/local-date]] [:closed_at [:maybe ['inst? {:pg/type "timestamptz"}]]]]
+         (h/row-schema registry {:select [:born :closed_at] :from [:users]} #{} (assoc opts :read {"date" :time/local-date})))))
+
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
     (is (= {'id [:int {:pg/identity :always :pg/type "bigint"}]

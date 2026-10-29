@@ -10,6 +10,12 @@ All notable changes to this project are documented here. The format follows
 - `pgmalli.honeysql` reads HoneySQL's named parameters (`:?id`): `arg-types` types them under
   the key `sql/format`'s `:params` takes (`:id`), as it types symbols, and `query-schema` takes
   that key among its args.
+- `:read {pg-type schema}` in `as-read` and `pgmalli.honeysql`: a type a `ReadableColumn`
+  extension reads otherwise, by its `:pg/type` (`{"date" :time/local-date}`), over `:time`.
+- `generate!`, `stale` and `check` read the catalog over JDBC when `:db` has `:jdbc-url` (with
+  `:user` and `:password`) or `:datasource`, with the PostgreSQL driver on the classpath and no
+  psql. The query runs in a transaction rolled back after, so a pooled connection keeps its
+  search_path.
 
 ### Fixed
 

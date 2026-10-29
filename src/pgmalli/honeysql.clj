@@ -443,10 +443,11 @@
 
 (defn- read-shape
   "A column schema as a driver returns it and as malli's default registry reads it; an
-   interval is a driver object, :any."
-  [registry schema {:keys [time] :or {time :inst}}]
+   interval is a driver object, :any, unless :read says otherwise."
+  [registry schema {:keys [time read] :or {time :inst}}]
   (let [t (if (vector? schema) (first schema) schema)]
-    (portable/portable-data (::schemas registry) (shape/read-time time (if (= :time/duration t) :any schema)))))
+    (portable/portable-data (::schemas registry) (or (shape/read-as read schema)
+                                                     (shape/read-time time (if (= :time/duration t) :any schema))))))
 
 (defn- column-type
   "The type of a column for a value compared with it (NULL never matches, so no [:maybe]) or,

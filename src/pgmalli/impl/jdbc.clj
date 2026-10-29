@@ -62,7 +62,7 @@
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
    pgmalli.core/as-read."
-  [registry name {:keys [qualified? kebab? nil-columns time]}]
+  [registry name {:keys [qualified? kebab? nil-columns time read]}]
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         kebab (fn [s] (cond-> s kebab? (str/replace "_" "-")))
@@ -71,7 +71,7 @@
                        (cond (not qualified?) (if (keyword? k) (keyword s) s)
                              (keyword? k) (keyword table s)
                              :else (str table "/" s))))
-        entry (fn [[k p s]] (let [s (shape/read-time time s)
+        entry (fn [[k p s]] (let [s (or (shape/read-as read s) (shape/read-time time s))
                             absent? (and (= :absent nil-columns) (vector? s) (= :maybe (first s)))
                             p (cond-> p absent? (assoc :optional true))
                             s (if absent? (last s) s)]

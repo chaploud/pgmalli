@@ -87,8 +87,10 @@
    (keys as :table/column, next.jdbc's as-maps), :kebab? (keys and table names in kebab-case),
    :nil-columns :absent (NULL columns missing, next.jdbc.optional), :time :instant
    (next.jdbc.date-time/read-as-instant: timestamps as Instants, dates stay java.sql.Date, so
-   inst?) or :local (read-as-local: timestamptz as LocalDateTime); without :time every date and
-   timestamp is inst?, which malli's default registry reads."
+   inst?) or :local (read-as-local: timestamptz as LocalDateTime); :read {pg-type schema} for
+   the types a ReadableColumn extension of your own reads otherwise, by their :pg/type
+   ({\"date\" :time/local-date}), over :time. Without them a column is read as the registry
+   types it."
   ([registry name] (as-read registry name {}))
   ([registry name opts] (jdbc/as-read registry name opts)))
 

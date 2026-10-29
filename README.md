@@ -39,7 +39,9 @@ io.github.chaploud/pgmalli {:mvn/version "..."}   ; deps.edn or bb.edn
 Generating needs PostgreSQL 16 or later and `psql`, wherever `generate` or `check` runs
 (the development machine and CI; JVM base images rarely ship it). Connection settings are
 psql's own (`PGHOST`, `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`) or the `:db` map.
-Applications only need the generated files.
+On the JVM, a `:db` of `{:jdbc-url "jdbc:postgresql://..." :user ... :password ...}` or
+`{:datasource ds}` reads over the PostgreSQL JDBC driver on the classpath instead, no psql
+needed. Applications only need the generated files.
 
 ```
 clojure -M -m pgmalli.main generate   # writes resources/pgmalli/<schema>.edn
@@ -67,7 +69,7 @@ and the diagnostics. `(generate/diff before after)` gives the same differences b
 generated files, a migration's effect on the schemas.
 
 Four namespaces, by what they need: `pgmalli.core` reads the generated files and needs
-nothing else; `pgmalli.generate` needs `psql`; `pgmalli.data` (datasets) needs test.check;
+nothing else; `pgmalli.generate` needs `psql` or a JDBC driver; `pgmalli.data` (datasets) needs test.check;
 `pgmalli.honeysql` reads HoneySQL query data.
 
 ## What you get
@@ -188,7 +190,9 @@ qualified by the table, NULL columns may be missing, timestamps may arrive as In
 ;; => [:map {...} [:users/id [:pg/integer ...]] [:users/nick {:optional true} [:string ...]] ...]
 ```
 
-`:kebab? true` matches the kebab builders; `:time :local` matches read-as-local. The options
+`:kebab? true` matches the kebab builders; `:time :local` matches read-as-local. A type your
+own `ReadableColumn` extension reads otherwise is named by its `:pg/type` under `:read`:
+`{:read {"date" :time/local-date "interval" :time/duration}}`. The options
 of a next.jdbc builder come from its name: `(pgmalli/read-options 'next.jdbc.optional/as-unqualified-kebab-maps)`
 is `{:kebab? true :nil-columns :absent}`. `pgmalli.honeysql` takes the same options.
 

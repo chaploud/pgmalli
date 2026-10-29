@@ -1,7 +1,9 @@
 (ns pgmalli.impl.ir
-  "Reads the structure of one schema from pg_catalog through psql.
+  "Reads the structure of one schema from pg_catalog through psql, or through JDBC when the db
+   map has :jdbc-url (with :user and :password) or :datasource (a javax.sql.DataSource); the
+   JDBC driver is then the caller's, on the classpath.
 
-   Connection settings are psql's own (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD,
+   psql's connection settings are its own (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD,
    PGSSLMODE, ~/.pgpass); entries in the db map override them for the call.
 
    Result shape:
@@ -51,23 +53,35 @@
              (throw (ex-info "pgmalli/ir.sql is not on the classpath; the pgmalli jar or its resources path is incomplete"
                              {:resource "pgmalli/ir.sql"})))))
 
+(defn- jdbc-sql
+  "ir.sql with its psql variables written in: :\"schema\" an identifier, :'schema' a literal."
+  [schema]
+  (-> (query-sql)
+      (str/replace ":\"schema\"" (str "\"" (str/replace schema "\"" "\"\"") "\""))
+      (str/replace ":'schema'" (str "'" (str/replace schema "'" "''") "'"))))
+
+(defn- psql-out [{:keys [schema psql dir] :or {psql "psql"} :as db}]
+  (let [;; shell/sh replaces the whole environment, so layer the overrides on the current one
+        env (into (into {} (System/getenv)) (keep (fn [[k e]] (when-some [v (get db k)] [e (str v)])) env-keys))
+        args (cond-> [psql "-X" "-q" "-A" "-t" "-v" "ON_ERROR_STOP=1" "-v" (str "schema=" schema) "-f" "-"
+                      :in (query-sql) :env env]
+               dir (conj :dir dir))
+        {:keys [exit out err]} (try (apply shell/sh args)
+                                    (catch java.io.IOException e
+                                      (throw (ex-info (str "cannot run psql (" psql "): " (ex-message e)
+                                                           ". Install the PostgreSQL client, set :psql, or give :jdbc-url")
+                                                      {:psql psql} e))))]
+    (when-not (zero? exit)
+      (throw (ex-info (str "psql failed (exit " exit "): " (str/trim err)) {:exit exit :err err :schema schema})))
+    out))
+
 (defn from-db
-  "Structure of the schema named by :schema (default \"public\"). :psql selects the binary."
+  "Structure of the schema named by :schema (default \"public\"). :psql selects the binary;
+   :jdbc-url or :datasource reads over JDBC instead."
   ([] (from-db {}))
-  ([{:keys [schema psql dir] :or {schema "public" psql "psql"} :as db}]
-   (let [;; shell/sh replaces the whole environment, so layer the overrides on the current one
-         env (into (into {} (System/getenv)) (keep (fn [[k e]] (when-some [v (get db k)] [e (str v)])) env-keys))
-         args (cond-> [psql "-X" "-q" "-A" "-t" "-v" "ON_ERROR_STOP=1" "-v" (str "schema=" schema) "-f" "-"
-                       :in (query-sql) :env env]
-                dir (conj :dir dir))
-         {:keys [exit out err]} (try (apply shell/sh args)
-                                     (catch java.io.IOException e
-                                       (throw (ex-info (str "cannot run psql (" psql "): " (ex-message e)
-                                                            ". Install the PostgreSQL client or set :psql")
-                                                       {:psql psql} e))))]
-     (when-not (zero? exit)
-       (throw (ex-info (str "psql failed (exit " exit "): " (str/trim err)) {:exit exit :err err :schema schema})))
-     (let [ir (keywordize (json/parse (str/trim out)) false)]
-       (when-not (:exists ir)
-         (throw (ex-info (str "schema does not exist: " schema) {:schema schema})))
-       (dissoc ir :exists)))))
+  ([{:keys [schema jdbc-url datasource] :or {schema "public"} :as db}]
+   (let [out (if (or jdbc-url datasource) ((requiring-resolve 'pgmalli.impl.ir-jdbc/out) db (jdbc-sql schema)) (psql-out (assoc db :schema schema)))
+         ir (keywordize (json/parse (str/trim out)) false)]
+     (when-not (:exists ir)
+       (throw (ex-info (str "schema does not exist: " schema) {:schema schema})))
+     (dissoc ir :exists))))

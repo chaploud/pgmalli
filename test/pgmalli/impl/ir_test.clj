@@ -75,3 +75,12 @@
 
 (deftest missing-psql
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot run psql" (ir/from-db {:psql "/nonexistent/psql"}))))
+
+(deftest jdbc-reads-what-psql-reads
+  ;; babashka has no java.sql
+  (when (and *db* (not (System/getProperty "babashka.version")))
+    (exec-sql! "CREATE SCHEMA \"o'dd\"\"s\"; CREATE TABLE \"o'dd\"\"s\".t (id int PRIMARY KEY CHECK (id > 0), name text);")
+    (let [{:keys [host port db user password]} *db*
+          jdbc {:jdbc-url (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password :schema "o'dd\"s"}]
+      (is (= (ir/from-db (assoc *db* :schema "o'dd\"s")) (ir/from-db jdbc)))
+      (is (= ["id" "name"] (map :name (get-in (ir/from-db jdbc) [:tables "t" :columns])))))))

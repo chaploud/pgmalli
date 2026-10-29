@@ -46,5 +46,10 @@
       (is (= :pg.sample/nope (:name (ex-data e))) (str what))
       (is (some #{:pg.sample/users} (:known (ex-data e))) (str what)))))
 
+(deftest read-names-the-types-an-extension-reads-otherwise
+  (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant :read {"date" :time/local-date}})]
+    (is (= [:users/born {:optional true} :time/local-date] (nth r 2)) "over :time, NULL still allowed")
+    (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "the other types as :time reads them")))
+
 (deftest as-read-defaults-its-options
   (is (= (pgmalli/as-read registry :pg.sample/users {}) (pgmalli/as-read registry :pg.sample/users))))

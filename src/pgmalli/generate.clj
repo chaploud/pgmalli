@@ -1,12 +1,14 @@
 (ns pgmalli.generate
-  "The generation side, which needs psql: the generated files, and whether they still match
+  "The generation side, which needs psql or a JDBC driver: the generated files, and whether they still match
    the database. The application side (pgmalli.core) reads the files alone.
 
    Config:
      {:schemas [\"public\"]           ; default [\"public\"]
       :out-dir \"resources/pgmalli\"  ; default; files are <out-dir>/<schema>.edn
       :overrides {constraint-name schema-or-{:skip reason}}
-      :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise"
+      :db {:host :port :db :user :password :sslmode :psql :dir}}  ; optional; psql's environment otherwise
+   or, with a PostgreSQL JDBC driver on the classpath and no psql needed,
+      :db {:jdbc-url \"jdbc:postgresql://host/db\" :user :password} or {:datasource ds}"
   (:require [pgmalli.impl.diff :as diff]
             [pgmalli.impl.files :as files]))
 
