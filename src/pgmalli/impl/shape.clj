@@ -168,7 +168,7 @@
                  (cond-> {:given name :known rows} row (assoc :suggest row)))))
 
 (defn non-null
-  "A column schema without its [:maybe ...]; see pgmalli.core/non-null."
+  "A column schema without its [:maybe ...]: what a value must be when it is not NULL."
   [schema]
   (if (maybe? schema) (last schema) schema))
 

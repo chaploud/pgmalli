@@ -1,11 +1,13 @@
 (ns pgmalli.core
   "The application side of pgmalli: the schemas generated from a PostgreSQL schema (files on
    the classpath as pgmalli/<schema>.edn), read and used. Generation and freshness, which need
-   psql, are pgmalli.generate; datasets, pgmalli.data; HoneySQL queries
-   checked and typed, pgmalli.honeysql."
-  (:require [pgmalli.impl.jdbc :as jdbc]
+   psql, are pgmalli.generate; datasets, pgmalli.data; HoneySQL queries checked and typed,
+   pgmalli.honeysql."
+  (:require [pgmalli.impl.describe :as d]
+            [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
-            [pgmalli.impl.registry :as reg]))
+            [pgmalli.impl.registry :as reg]
+            [pgmalli.impl.shape :as shape]))
 
 (defn generated
   "The generated file of a schema, read from the classpath, as data:
@@ -83,3 +85,15 @@
   ([opts]
    (jdbc/checked! [:map {:closed true} [:zone {:optional true} [:fn {:error/message "should be a java.time.ZoneId"} #(instance? java.time.ZoneId %)]]] opts)
    (jdbc/transformer opts)))
+
+(defn describe
+  "A schema as short data for people and tools to read: a column as its PostgreSQL type
+   (\"varchar(40)\", \"timestamptz\"), ? when it takes NULL, (optional) when its key may be
+   absent, an enum with its labels (\"status: draft | published\"); a map as {key description}
+   in column order, a sequence as [description], a function schema as {:args [...] :returns
+   ...}. A name, or a reference inside the schema, is read through the registry.
+
+   (describe (h/query-schema registry [:id] q))
+   (describe registry :pg.public/users)"
+  ([schema] (d/describe {} schema))
+  ([registry schema] (d/describe (shape/schemas-of registry) schema)))

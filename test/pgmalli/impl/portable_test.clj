@@ -69,3 +69,12 @@
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"what is sent to sample.users; as-read takes its row schema :pg.sample/users"
                                 (pgmalli/as-read registry :pg.sample.users/insert)))]
     (is (= :pg.sample/users (:suggest (ex-data e))))))
+
+(deftest describe-reads-as-postgresql-types
+  (is (= {:id "bigint" :nick "varchar(40)?"} (select-keys (pgmalli/describe registry :pg.sample/users) [:id :nick])))
+  (is (= "mood: happy | sad" (:mood (pgmalli/describe registry :pg.sample/users))) "an enum reference with its labels")
+  (is (= {:args ["bigint" "integer[] (array, sequential)"] :returns [{:id "bigint"}]}
+         (pgmalli/describe [:=> [:cat [:int {:pg/type "bigint"}] [:or [:pg/array [:int {:pg/type "integer"}]] [:sequential [:int {:pg/type "integer"}]]]]
+                            [:sequential [:map [:id [:int {:pg/type "bigint"}]]]]])))
+  (is (= [:id :nick] (take 2 (keys (pgmalli/describe [:map [:id [:int {:pg/type "bigint"}]] [:nick {:optional true} [:maybe [:string {:pg/type "text"}]]]])))))
+  (is (= "text? (optional)" (:nick (pgmalli/describe [:map [:nick {:optional true} [:maybe [:string {:pg/type "text"}]]]])))))

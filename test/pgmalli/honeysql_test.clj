@@ -815,3 +815,11 @@
 
 (deftest an-argument-no-use-types-is-any
   (is (= {:e :any :n [:int {:min 0}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= [:lower :nick] :?e] :offset :?n} opts))))
+
+(deftest params-schema-is-sql-formats-params-map
+  (let [body {:update :users :set {:nick :?nick} :where [:= :id :?id]}
+        s (h/params-schema registry body opts)]
+    (is (= (into [:map] (sort-by (comp str key) (h/arg-types registry body opts))) s))
+    (is (m/validate s {:id 1 :nick nil} malli-opts))
+    (is (not (m/validate s {:id 1} malli-opts)) "a key sql/format would miss")
+    (is (= [:map] (h/params-schema registry {:select [:id] :from [:users]} opts)))))

@@ -1107,6 +1107,17 @@
    (query! body)
    (when (map? body) (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts))))
 
+(defn params-schema
+  "The [:map ...] of sql/format's :params for a query: every named argument, typed as arg-types
+   types it, is required, as sql/format refuses a missing one; one that takes nil is
+   [:maybe ...]. Options: see query-schema.
+
+   (params-schema registry {:select [:id] :from [:users] :where [:= :email :?email]})
+   ;; => [:map [:email [:string {:pg/type \"character varying\"}]]]"
+  ([registry body] (params-schema registry body {}))
+  ([registry body opts]
+   (into [:map] (sort-by (comp str key) (arg-types registry body opts)))))
+
 (defn query-schema
   "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
    and running body: the args' types from arg-types (:any for a key the query lacks), the

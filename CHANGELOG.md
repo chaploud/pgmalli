@@ -17,7 +17,8 @@ listed; the [README](README.md) describes what this one does.
   `transformer`).
 * HoneySQL queries checked against the schema with no database, their arguments and rows
   typed, and each problem said as what to do (`pgmalli.honeysql`: `check`, `arg-types`,
-  `row-schema`, `query-schema`, `explain`).
+  `params-schema`, `row-schema`, `query-schema`, `explain`); any schema read back as
+  PostgreSQL types (`describe`).
 * Generated files kept current in CI (`generate/check`, `pgmalli.main check`).
 
 Supported, each and later: PostgreSQL 16, HoneySQL 2.4.1066, next.jdbc 1.3, pgjdbc 42.7,

@@ -420,6 +420,14 @@ Instrumentation does not read the property. `h/schema-problems` gathers it from 
     (is (= [] problems) (h/explain problems))))
 ```
 
+`pgmalli/describe` reads a schema back as PostgreSQL types, to see what a function takes and
+returns:
+
+```clojure
+(pgmalli/describe (h/query-schema registry [:id] find-user-q {:result :one}))
+;; => {:args ["bigint"], :returns [:maybe #:users{:id "bigint", :email "varchar(120)"}]}
+```
+
 The options of `h/check`, `h/arg-types`, `h/row-schema` and `h/query-schema` are in
 [docs/queries.md](docs/queries.md#options).
 

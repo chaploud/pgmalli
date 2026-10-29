@@ -118,6 +118,14 @@ A comparison with NULL matches no row, so `:?id` above does not take nil. To tak
 ;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
 ```
 
+`h/params-schema` gives the same types as the `[:map ...]` of `sql/format`'s `:params`. Every
+key is required, as `sql/format` refuses a missing one:
+
+```clojure
+(h/params-schema registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
+;; => [:map [:id [:int #:pg{:type "bigint"}]] [:nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]]
+```
+
 ## The row a query returns
 
 `h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
