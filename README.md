@@ -279,7 +279,7 @@ problems PostgreSQL would also report:
 ;; => []
 
 (h/check registry {:select [:id :mail] :from [:users] :where [:= :status [:cast "gone" :user_status]]})
-;; => [{:kind :unknown-column, :column :mail} {:kind :enum-literal, :column :status, :value "gone", :allowed #{"active" "closed"}}]
+;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]} {:kind :enum-literal, :column :status, :value "gone", :allowed ["active" "closed"]}]
 ```
 
 HoneySQL sends a string as a parameter, and PostgreSQL's JDBC driver sends it as `varchar`,
@@ -288,7 +288,7 @@ which no enum column takes. Cast it, or tell `h/check` your connection has
 
 ```clojure
 (h/check registry {:select [:id] :from [:users] :where [:= :status "active"]})
-;; => [{:kind :uncast-enum-string, :column :status, :value "active"}]
+;; => [{:kind :uncast-enum-string, :column :status, :value "active", :type "user_status"}]
 
 (h/check registry {:select [:id] :from [:users] :where [:= :status "active"]} {:stringtype :unspecified})
 ;; => []
@@ -298,7 +298,7 @@ An INSERT must carry the columns its insert schema requires:
 
 ```clojure
 (h/check registry {:insert-into :users :values [{:email "ann@example.com"}]})
-;; => [{:kind :missing-required-column, :table "public.users", :column "group_id"}]
+;; => [{:kind :missing-required-column, :table "public.users", :column :group_id}]
 ```
 
 The problems it reports:
@@ -316,7 +316,14 @@ The problems it reports:
 | `:uncast-enum-string` | a string sent to an enum column as `varchar` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 
-Every query of a project checks in one test:
+`h/explain` says each problem as what is wrong and what to do:
+
+```clojure
+(h/explain (h/check registry {:select [:nik] :from [:users]}))
+;; => ["unknown column nik; did you mean nick?"]
+```
+
+Every query of a project checks in one test, its failures explained:
 
 ```clojure
 (require '[clojure.test :refer [deftest is]])
@@ -327,7 +334,8 @@ Every query of a project checks in one test:
 
 (deftest queries-agree-with-the-schema
   (doseq [[k q] queries]
-    (is (= [] (h/check registry q)) (str k))))
+    (let [problems (h/check registry q)]
+      (is (= [] problems) (str k ": " (h/explain problems))))))
 ```
 
 What a subquery, a CTE or code in the query (a list, `(when x ...)`) sees, and how arguments are typed:
@@ -376,11 +384,21 @@ so a namespace still loads with a broken query:
 
 ```clojure
 (m/properties (m/schema (h/query-schema registry [:id] {:select [:mail] :from [:users] :where [:= :id :?id]})))
-;; => {:pgmalli/problems [{:kind :unknown-column, :column :mail}]}
+;; => {:pgmalli/problems [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]}
 ```
 
 > NOTE: the property makes the schema vector one element longer. Read its parts with
 > `m/children`, not by position.
+
+Instrumentation does not read the property. `h/schema-problems` gathers it from every var's
+`:malli/schema`, for one test:
+
+<!-- :test-doc-blocks/skip -->
+```clojure
+(deftest query-functions-agree-with-the-schema
+  (let [problems (h/schema-problems)]
+    (is (= [] problems) (h/explain problems))))
+```
 
 The rows and arguments take the options of `as-read`, plus `:write` and `:compare`: see
 [docs/queries.md](docs/queries.md).

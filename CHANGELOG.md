@@ -19,6 +19,7 @@ All notable changes to this project are documented here. The format follows
 | `read-options` took `'next.jdbc/as-maps` | the builder's own name or var (`'next.jdbc.result-set/as-maps`) | rename the symbol |
 | nil, a formatted SQL vector, or args not keywords were accepted | an error | pass HoneySQL data and `[:db :id]` |
 | under `:qualified?`, a column through a CTE or subquery was keyed by its alias | nil: the driver keys it by a table pgmalli cannot see | select it from the table |
+| `:missing-required-column`'s `:column` was a string, `:enum-literal`'s `:allowed` a set | a keyword; a vector in the enum's order | compare with those |
 | `query-schema` was `[:=> in out]` | `[:=> {:pgmalli/problems [...]} in out]` when the query has problems | read the parts with `m/children` |
 | `test.chuck` was a dependency | optional: regex strings use it when on the classpath | add it to your test alias |
 
@@ -31,6 +32,9 @@ All notable changes to this project are documented here. The format follows
 - `:db` with `:jdbc-url` or `:datasource` reads the catalog over JDBC, without psql.
 - `query-schema` carries the query's problems and a `:missing-arg` as `:pgmalli/problems`.
 - `check` reports a clause it does not read (`:unread-clause`), from the HoneySQL loaded.
+- `explain` says each problem as what is wrong and what to do; `schema-problems` gathers the
+  `:pgmalli/problems` of every var's `:malli/schema`, which instrumentation does not read. An
+  `:unknown-column` names the columns it likely meant (`:did-you-mean`).
 - `check` reports a string literal compared with or assigned to an enum column without a cast
   (`:uncast-enum-string`): HoneySQL sends it as a parameter, which pgjdbc sends as `varchar`
   unless the connection has `stringtype=unspecified` (`{:stringtype :unspecified}`). An

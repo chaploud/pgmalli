@@ -18,6 +18,7 @@
    return and take, under pgmalli.core/as-read's options, plus :schema, :write, :compare and
    :result (see arg-types and query-schema); a key or value not among them is an error."
   (:require [clojure.string :as str]
+            malli.core
             [malli.registry :as mr]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
@@ -614,10 +615,12 @@
 
 ;;; problems
 
-(defn- enum-values [registry schema]
+(defn- enum-values
+  "The labels of an enum column, in the enum's order."
+  [registry schema]
   (let [s (shape/non-null schema)
         s (if (and (vector? s) (= :ref (first s))) (get (::schemas registry) (last s)) s)]
-    (when (and (vector? s) (= :enum (first s))) (set (remove map? (rest s))))))
+    (when (and (vector? s) (= :enum (first s))) (vec (remove map? (rest s))))))
 
 (defn- star? [col] (= "*" (second (split-column col))))
 
@@ -656,6 +659,32 @@
   (let [[a column] (split-column col)]
     (boolean (and (nil? a) (some #(and (map? %) (contains? % (folded column))) (chain scope))))))
 
+(defn- edit-distance [^String a ^String b]
+  (let [n (count b)]
+    (peek (reduce (fn [prev [i ca]]
+                    (reduce (fn [row j]
+                              (conj row (min (inc (peek row)) (inc (nth prev (inc j)))
+                                             (+ (nth prev j) (if (= ca (.charAt b j)) 0 1)))))
+                            [(inc i)] (range n)))
+                  (vec (range (inc n))) (map-indexed vector a)))))
+
+(defn- near-columns
+  "Up to three columns of the scope's tables spelled close to col's name: what it likely meant."
+  [registry scope col]
+  (let [[a c] (split-column col)
+        c (folded c)
+        ;; a qualified name looks in the innermost table of its alias, which hides outer ones
+        scopes (filter map? (chain scope))
+        scopes (if a (take 1 (filter #(contains? % a) scopes)) scopes)
+        names (distinct (for [sc scopes
+                              [alias {:keys [table]}] sc :when (and table (or (nil? a) (= a alias)))
+                              n (keys (table-columns registry table)) :when (not (system-columns n))]
+                          n))
+        limit (if (<= 5 (count c)) 2 1)]
+    (->> names
+         (keep #(let [d (edit-distance c %)] (when (<= d limit) [% d])))
+         (sort-by second) (take 3) (mapv (comp keyword first)) not-empty)))
+
 (defn- column-problems [registry sc stmt schema]
   (let [target (target-scope sc stmt schema)
         ;; a target code names is not in the data: its columns are not judged
@@ -676,7 +705,8 @@
           :let [hits (column-hits registry scope col)]]
       (if (< 1 (count hits))
         {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
-        {:kind :unknown-column :column col}))))
+        (let [near (near-columns registry scope col)]
+          (cond-> {:kind :unknown-column :column col} near (assoc :did-you-mean near)))))))
 
 (defn- filled-by-trigger?
   "Whether a BEFORE row trigger runs on the table for event (:insert, :update): it may fill a
@@ -705,7 +735,7 @@
              {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
          (when (and (seq given) (not (filled-by-trigger? registry table :insert)))
            (for [c required :when (not (given-names c))]
-             {:kind :missing-required-column :table table :column c})))))))
+             {:kind :missing-required-column :table table :column (keyword c)})))))))
 
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
@@ -763,8 +793,10 @@
                            (or (string? value) (and (vector? value) (every? string? value))))]
         :when (and allowed (seq values))
         v values
-        p [(when (not (contains? allowed v)) {:kind :enum-literal :column col :value v :allowed allowed})
-           (when uncast? {:kind :uncast-enum-string :column col :value v})]
+        :let [invalid? (not (some #{v} allowed))]
+        p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
+           ;; a value outside the enum fails however it is sent
+           (when (and uncast? (not invalid?)) {:kind :uncast-enum-string :column col :value v :type (shape/type-name (shape/column-props s))})]
         :when p]
     p))
 
@@ -1064,3 +1096,58 @@
      (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
            [(into [:cat] (map #(get types % :any)) args)
             (cond (nil? row) :any (= :one result) [:maybe row] :else [:sequential row])]))))
+
+;;; problems as text
+
+(defn- column-name [c] (if (keyword? c) (subs (str c) 1) (str c)))
+
+(def ^:private explanations
+  "The sentence for each kind of problem: what is wrong, then what to do."
+  {:unknown-table (fn [{:keys [table]}] (str "unknown table " table "; check its name, or :schema when it is in another schema"))
+   :unknown-column (fn [{:keys [column did-you-mean]}]
+                     (str "unknown column " (column-name column)
+                          (if did-you-mean (str "; did you mean " (str/join " or " (map column-name did-you-mean)) "?")
+                              "; no table of the statement has it")))
+   :ambiguous-column (fn [{:keys [column candidates]}]
+                       (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias"))
+   :missing-required-column (fn [{:keys [table column]}]
+                              (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"))
+   :values-arity (fn [{:keys [row columns values]}]
+                   (str ":values row " row " has " values " values for " columns " :columns"))
+   :enum-literal (fn [{:keys [column value allowed]}]
+                   (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
+   :uncast-enum-string (fn [{:keys [column value type]}]
+                         (str (pr-str value) " reaches enum column " (column-name column) " as varchar, which PostgreSQL refuses"
+                              " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
+                              " write [:cast " (pr-str value) " :" type "], or pass {:stringtype :unspecified}"
+                              " when the connection sets stringtype=unspecified"))
+   :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
+   :read-only-column (fn [{:keys [table column]}]
+                       (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
+                            " leave it out, or write :default"))
+   :unread-clause (fn [{:keys [clause]}] (str "clause " clause " is not read by pgmalli, so what it does is not checked"))
+   :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))})
+
+(defn explain
+  "A sentence for each problem of check (or of query-schema's :pgmalli/problems): what is wrong
+   and what to do.
+
+   (is (= [] (check registry q)) (explain (check registry q)))"
+  [problems]
+  (mapv (fn [{:keys [kind] :as p}] (if-let [f (explanations kind)] (f p) (pr-str p))) problems))
+
+(defn schema-problems
+  "[problem ...] of the :malli/schema of every var in the namespaces (all loaded ones by
+   default), each with its :var: query-schema's :pgmalli/problems, which a schema carries
+   rather than throws, so a namespace still loads. One test asserts there are none:
+
+   (is (= [] (schema-problems)))"
+  ([] (schema-problems {}))
+  ([{:keys [ns] :or {ns (all-ns)}}]
+   (vec (for [n (if (sequential? ns) ns [ns])
+              [_ v] (sort-by key (ns-interns (the-ns n)))
+              :let [s (:malli/schema (meta v))
+                    props (cond (satisfies? malli.core/Schema s) (malli.core/properties s)
+                                (and (vector? s) (map? (second s))) (second s))]
+              p (:pgmalli/problems props)]
+          (assoc p :var v)))))

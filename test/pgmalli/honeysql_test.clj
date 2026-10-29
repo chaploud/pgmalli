@@ -28,12 +28,12 @@
   (is (= [{:kind :unknown-column :column :nick_name}] (h/check registry {:select [:nick_name] :from [:users]} opts)))
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:id] :from [:users] :where [:= :nope 1]} opts)) "compared columns too")
   (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:update :users :set {:nope 1} :where [:= :id 1]} opts)) "and set ones")
-  (is (= [{:kind :missing-required-column :table "sample.users" :column "score"}]
+  (is (= [{:kind :missing-required-column :table "sample.users" :column :score}]
          (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad"}]} opts))
       "an INSERT must carry the columns the insert schema requires")
-  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
+  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
          (h/check registry {:select [:id] :from [:users] :where [:= :mood [:cast "angry" :mood]]} opts)))
-  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
+  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
          (h/check registry {:update :users :set {:mood "angry"} :where [:= :id 1]} opts)) "assigned literals too")
   (is (= [{:kind :not-null-violation :table "sample.users" :column :score}]
          (h/check registry {:insert-into :users :values [{:group_id 1 :mood "sad"} {:group_id 1 :mood "sad" :score 1}]} opts))
@@ -320,13 +320,13 @@
      []
      ":columns with positional rows"]
     [{:insert-into :users :columns [:group_id :mood :nope] :values [[1 "sad" 2]]}
-     [{:kind :unknown-column :column :nope} {:kind :missing-required-column :table "sample.users" :column "score"}]
+     [{:kind :unknown-column :column :nope} {:kind :missing-required-column :table "sample.users" :column :score}]
      "an unknown column in :columns leaves the column it stands in for missing"]
     [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad"]]}
      [{:kind :values-arity :table "sample.users" :row 0 :columns 3 :values 2}]
      "a row shorter than the column list"]
     [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "angry" 2]]}
-     [{:kind :enum-literal :column :mood :value "angry" :allowed #{"happy" "sad"}}]
+     [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
      "positional values are assignments"]
     [{:select [:u.id] :from [[:users :u]] :join [[:groups :g] [:= :u.group_id :g.nope]]}
      [{:kind :unknown-column :column :g.nope}]
@@ -691,7 +691,7 @@
 
 (deftest a-string-reaches-an-enum-column-as-varchar
   (let [check #(h/check registry %1 (merge opts {:stringtype :varchar} %2))
-        uncast (fn [v] {:kind :uncast-enum-string :column :mood :value v})]
+        uncast (fn [v] {:kind :uncast-enum-string :column :mood :value v :type "mood"})]
     (is (= [(uncast "sad")] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {}))
         "pgjdbc sends a String as varchar, which no enum takes without a cast")
     (is (= [(uncast "sad")] (check {:update :users :set {:mood "sad"} :where [:= :id 1]} {})))
@@ -721,3 +721,23 @@
     (is (= [{:kind :unknown-column :column :nosuch}] (check {:select [:id] :from :users :order-by :nosuch})))
     (is (= [{:kind :unknown-column :column :nosuch}] (check {:update :users :set {:nick "a"} :returning :nosuch})))
     (is (= [:id] (map first (drop 1 (h/row-schema registry {:select :id :from :users} opts)))))))
+
+(deftest an-unknown-column-names-the-columns-it-likely-meant
+  (is (= [{:kind :unknown-column :column :nik :did-you-mean [:nick]}]
+         (h/check registry {:select [:nik] :from [:users]} opts)))
+  (is (= [{:kind :unknown-column :column :u.scroe :did-you-mean [:score]}]
+         (h/check registry {:select [:u.scroe] :from [[:users :u]]} opts)))
+  (is (= [{:kind :unknown-column :column :zzz}] (h/check registry {:select [:zzz] :from [:users]} opts))
+      "nothing close, nothing suggested"))
+
+(deftest each-problem-reads-as-what-to-do
+  (is (= ["unknown column nik; did you mean nick?"
+          "\"sad\" reaches enum column mood as varchar, which PostgreSQL refuses (HoneySQL sends a string as a parameter, and pgjdbc types it varchar); write [:cast \"sad\" :mood], or pass {:stringtype :unspecified} when the connection sets stringtype=unspecified"]
+         (h/explain (h/check registry {:select [:nik] :from [:users] :where [:= :mood "sad"]} (assoc opts :stringtype :varchar)))))
+  (is (every? string? (h/explain [{:kind :something-new}])) "a kind with no sentence still prints"))
+
+(def ^{:malli/schema (h/query-schema registry [:id] {:select [:nik] :from [:users] :where [:= :id :?id]} opts)} a-broken-query-fn identity)
+
+(deftest schema-problems-finds-what-instrumentation-does-not-show
+  (is (= [{:kind :unknown-column :column :nik :did-you-mean [:nick] :var #'a-broken-query-fn}]
+         (h/schema-problems {:ns 'pgmalli.honeysql-test}))))

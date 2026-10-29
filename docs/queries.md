@@ -193,7 +193,7 @@ property makes the vector one longer, so read its parts with `m/children`:
             {:registry registry}))
 
 (:pgmalli/problems (m/properties broken))
-;; => [{:kind :unknown-column, :column :mail}]
+;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]
 
 (m/form (first (m/children broken)))
 ;; => [:cat [:int #:pg{:identity :always, :type "bigint"}]]
