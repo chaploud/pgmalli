@@ -987,7 +987,7 @@
    :params takes them (:id).
 
    (arg-types registry {:select [:id] :from [:users] :where [:= :email :?email]})
-   ;; => {:email [:string {:max 120, :pg/type \"character varying\"}]}
+   ;; => {:email [:string {:pg/type \"character varying\"}]}
 
    An argument compared with a column has the column's kind without NULL; one in :in a
    non-empty collection of it; one assigned to a column the column's type; one in :limit
