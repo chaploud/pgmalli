@@ -55,6 +55,10 @@ All notable changes to this project are documented here. The format follows
   in any comparison, code-built joins making tables nullable.
 - `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
   `{:select [:*]}`, and makes outer-joined columns nullable.
+- `check` reads names as HoneySQL writes them: `:system_user`, `:'x` (written as `x`), a
+  namespaced column in `:set` and `:values` (the namespace dropped), a `:values` key a column
+  list leaves out (not written); each was reported. A keyword assigned in `:set` is checked as
+  a column, and a statement keyed by symbols (`'{select ...}`) is an `:unread-clause`.
 - `as-read` and `row-schema` type what the driver returns for `real` (`Float`), `bit(1)`
   (`Boolean`), `bit(n)`, `bit varying` and `citext` (`PGobject`), a numeric `NaN` (`Double`),
   and `time` and `timetz` under `:time :instant` / `:local` (`java.sql.Time`): those rows

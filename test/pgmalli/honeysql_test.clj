@@ -665,3 +665,17 @@
       (is (= [] (check {:insert-into [{:overriding-value :user} :users] :values [{:id 3 :group_id 1 :score 1}]}))
           "OVERRIDING USER VALUE ignores the value given")
       (is (= [] (check {:update :users :set {:nick_upper :default :id [:default]} :where [:= :id 1]})) "DEFAULT is allowed"))))
+
+(deftest names-as-honeysql-writes-them
+  (let [check #(h/check registry % opts)]
+    (is (= [] (check {:select [:system_user :current_user :current_role] :from [:users]})) "SQL value functions are no columns")
+    (is (= [] (check {:select [:'nick] :from [:users]})) ":'x is written as x")
+    (is (= [] (check {:update :users :set {:x/nick "a"} :where [:= :id 1]})) "HoneySQL drops the namespace of a SET column")
+    (is (= [] (check {:insert-into :users :values [{:x/group_id 1 :x/score 1}]})) "and of an INSERT column")
+    (is (= [] (check {:insert-into :users :columns [:group_id :score] :values [{:group_id 1 :score 1 :nope 1}]}))
+        "a key the column list lacks is not written")
+    (is (= [{:kind :unknown-column :column :nope}] (check {:update :users :set {:nick :nope} :where [:= :id 1]}))
+        "a keyword assigned is a column")
+    (is (= [{:kind :unread-clause :clause 'select} {:kind :unread-clause :clause 'from}] (check '{select [nope] from [users]}))
+        "a statement keyed by symbols, as HoneySQL takes it, is said to be unread")
+    (is (= [] (check {:update :users :set {:nick :group_name} :where [:= :id 1]})))))

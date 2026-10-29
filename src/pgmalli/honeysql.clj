@@ -355,6 +355,8 @@
    not. The alias is folded as table-ref folds aliases."
   [col]
   (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))
+        ;; HoneySQL writes :'x as x, as it is
+        s (str/replace-first s #"^'" "")
         parts (str/split s #"\.")]
     (if (next parts)
       [(folded (nth parts (- (count parts) 2))) (last parts)]
@@ -423,7 +425,7 @@
 (def ^:private sql-values
   "Keywords HoneySQL writes as SQL words, not columns."
   #{:current_timestamp :current_date :current_time :localtime :localtimestamp :current_user :session_user :current_role
-    :current_catalog :current_schema :user :true :false :null :default :*})
+    :system_user :current_catalog :current_schema :user :true :false :null :default :*})
 
 (defn- param-key
   "The :params key of a HoneySQL named parameter, as sql/format looks it up: :?id and ?id are
@@ -485,6 +487,18 @@
                       (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a])))]
     [op col other]))
 
+(defn- target-column
+  "A column as HoneySQL writes it where a statement assigns it: without its namespace."
+  [c]
+  (if (and (keyword? c) (namespace c)) (keyword (name c)) c))
+
+(defn- value-rows
+  "The maps of :values as HoneySQL writes them under the statement's column list: only the
+   listed keys."
+  [stmt columns]
+  (let [maps (map #(update-keys % target-column) (filter map? (when (vector? (:values stmt)) (:values stmt))))]
+    (if columns (map #(select-keys % (map target-column columns)) maps) maps)))
+
 (defn- assignments
   "[column value] pairs a statement assigns: :set, and the maps of :values (which may be a
    symbol, rows passed in, saying nothing about the columns)."
@@ -493,6 +507,7 @@
         columns (:columns (insert-parts stmt))
         do-update (:do-update-set stmt)]
     (filter (comp column-keyword? first)
+            (map (fn [[c v]] [(target-column c) v])
             (concat (when (map? (:set stmt)) (:set stmt))
                     ;; ON CONFLICT DO UPDATE SET: a map of assignments, the columns taken from EXCLUDED, or
                     ;; {:fields [...] :where ...} (the columns taken from EXCLUDED, under a condition)
@@ -500,9 +515,9 @@
                           (map? do-update) do-update
                           (vector? do-update) (for [c do-update :when (keyword? c)] [c nil]))
                     (when (vector? values)
-                      (concat (mapcat identity (filter map? values))
+                      (concat (mapcat identity (value-rows stmt columns))
                               ;; positional rows under the listed columns
-                              (when columns (mapcat #(map vector columns %) (filter vector? values)))))))))
+                              (when columns (mapcat #(map vector columns %) (filter vector? values))))))))))
 
 (defn- target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
@@ -642,6 +657,10 @@
     (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c] (comparisons stmt)] [c sc])
+                                        ;; a keyword assigned in SET is a column the statement sees
+                                        (for [m [(:set stmt) (:do-update-set stmt)] :when (and (map? m) (not (contains? m :fields)))
+                                              [_ v] m :when (column-keyword? v)]
+                                          [v sc])
                                         (for [c assigned] [c target])))
           :when (if (or (star? col) (whole-row? scope col))
                   ;; :t.* names a table of the scope, unless the data does not show them all
@@ -688,20 +707,20 @@
         overriding? (and (vector? i) (map? (first i)) (#{:system :user} (:overriding-value (first i))))
         columns (:columns (insert-parts stmt))
         rows (when (vector? (:values stmt)) (:values stmt))
-        maps (filter map? rows)
+        maps (value-rows stmt columns)
         union (distinct (mapcat keys maps))
         do-update (:do-update-set stmt)
         excluded ::excluded
-        written (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [c v :update]))
+        writes (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update]))
                         (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update)] [c excluded :update])
-                              (map? do-update) (for [[c v] do-update] [c v :update])
+                              (map? do-update) (for [[c v] do-update] [(target-column c) v :update])
                               (vector? do-update) (for [c do-update] [c excluded :update]))
                         (for [row maps, c (if columns (keys row) union)]
                           [c (cond (contains? row c) (get row c) (contains? (set (:values-default-columns format)) c) :default) :insert])
                         (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert])))]
     (when (seq target)
       (distinct
-       (for [[col v how] written
+       (for [[col v how] writes
              :when (column-keyword? col)
              :let [{:keys [table] s :schema} (resolve-column registry target col)
                    cp (some-> s shape/column-props)
@@ -769,11 +788,18 @@
                         :when (map? r)]
                     r))
         maps (tree-seq branch? seq body)]
-    (distinct (for [m maps
-                    :when (and (map? m) (seq m) (not (rows m)) (or (statement? m) (and clauses (every? clauses (keys m)))))
-                    k (keys m)
-                    :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))]
-                {:kind :unread-clause :clause k}))))
+    (distinct (concat
+               (for [m maps
+                     :when (and (map? m) (seq m) (not (rows m)) (or (statement? m) (and clauses (every? clauses (keys m)))))
+                     k (keys m)
+                     :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))]
+                 {:kind :unread-clause :clause k})
+               ;; HoneySQL takes {select [...]} for {:select [...]}; here a symbol is a value, so
+               ;; such a statement is not read, and said so
+               (for [m maps :when (and (map? m) (not (rows m)))
+                     k (keys m)
+                     :when (and (symbol? k) (or (read-clauses (keyword k)) (some-> clauses (contains? (keyword k)))))]
+                 {:kind :unread-clause :clause k})))))
 
 (defn- query!
   "body when it is HoneySQL query data (a map, or code holding maps); an error saying so for SQL
