@@ -876,7 +876,9 @@
    (check registry {:select [:id :mail] :from [:users]})
    ;; => [{:kind :unknown-column, :column :mail}]
 
-   Names resolve as PostgreSQL resolves them. A clause pgmalli does not read is an
+   A problem in a nested statement (a subquery, a CTE) carries :in, where the statement sits:
+   (get-in q (:in p)) for data, the position in the form for code. explain says each problem
+   as a sentence. Names resolve as PostgreSQL resolves them. A clause pgmalli does not read is an
    :unread-clause problem. Code in the query (a list) is not read. Options: see query-schema.
    Throws when body is no HoneySQL data. See docs/queries.md."
   ([registry body] (check registry body {}))
@@ -884,7 +886,10 @@
    (jdbc/options! opts)
    (query! body)
    (let [registry (reading registry)
-         found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body opts))]
+         found (mapcat (fn [[stmt scopes path]]
+                         ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
+                         (cond->> (problems registry stmt scopes opts) (seq path) (map #(assoc % :in (vec path)))))
+                       (statement-chains registry body opts))]
      (vec (concat found (unread-clauses body))))))
 
 ;;; types
@@ -1134,7 +1139,9 @@
 
    (is (= [] (check registry q)) (explain (check registry q)))"
   [problems]
-  (mapv (fn [{:keys [kind] :as p}] (if-let [f (explanations kind)] (f p) (pr-str p))) problems))
+  (mapv (fn [{:keys [kind in] :as p}]
+          (str (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))
+        problems))
 
 (defn schema-problems
   "[problem ...] of the :malli/schema of every var in the namespaces (all loaded ones by

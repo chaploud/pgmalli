@@ -34,7 +34,8 @@ All notable changes to this project are documented here. The format follows
 - `check` reports a clause it does not read (`:unread-clause`), from the HoneySQL loaded.
 - `explain` says each problem as what is wrong and what to do; `schema-problems` gathers the
   `:pgmalli/problems` of every var's `:malli/schema`, which instrumentation does not read. An
-  `:unknown-column` names the columns it likely meant (`:did-you-mean`).
+  `:unknown-column` names the columns it likely meant (`:did-you-mean`), and a problem in a
+  subquery or CTE says where it sits (`:in`, as `get-in` reads the query).
 - `check` reports a string literal compared with or assigned to an enum column without a cast
   (`:uncast-enum-string`): HoneySQL sends it as a parameter, which pgjdbc sends as `varchar`
   unless the connection has `stringtype=unspecified` (`{:stringtype :unspecified}`). An

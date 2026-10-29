@@ -272,7 +272,7 @@
 (deftest scope-follows-the-statement
   (is (= [] (h/check registry {:delete-from :users :where [:in :group_id {:select [:id] :from [:groups] :where [:= :name 'n]}]} opts))
       "a nested statement's columns are judged in its own scope, not the outer one")
-  (is (= [{:kind :unknown-column :column :nope}]
+  (is (= [{:kind :unknown-column :column :nope :in [:where 2]}]
          (h/check registry {:select [:id] :from [:users] :where [:in :group_id {:select [:id] :from [:groups] :where [:= :nope 1]}]} opts)))
   (is (= [] (h/check registry {:delete-from [:users :u] :using [[:groups :g]] :where [:= :g.id :u.group_id]} opts)) ":using")
   (is (= [] (h/check registry {:update :users :set {:score 1} :from [[:groups :g]] :where [:= :g.id :group_id]} opts)) "UPDATE ... FROM")
@@ -351,7 +351,7 @@
      []
      "a CTE with a qualifier, built in code"]
     [{:insert-into [:groups {:select [:id :name] :from [:users]}]}
-     [{:kind :unknown-column :column :name}]
+     [{:kind :unknown-column :column :name :in [:insert-into 1]}]
      "the SELECT of an INSERT ... SELECT does not see the table inserted into"]
     [{:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:nope 1}}
      [{:kind :unknown-column :column :nope}]
@@ -383,10 +383,10 @@
 (deftest a-subquery-added-to-a-query-built-elsewhere
   (is (= [] (h/check registry '(update query :select conj [[:exists {:select [1] :from [:groups] :where [:= :groups.id :skills/group_id]}] :flag]) opts))
       "the enclosing statement is not in the data: its columns cannot be judged")
-  (is (= [{:kind :unknown-column :column :groups.nope}]
+  (is (= [{:kind :unknown-column :column :groups.nope :in [4 0 1]}]
          (h/check registry '(update query :select conj [[:exists {:select [1] :from [:groups] :where [:= :groups.nope :skills/group_id]}] :flag]) opts))
       "its own columns still are")
-  (is (= [{:kind :unknown-column :column :nope}] (h/check registry '(cond-> {:select [:nope] :from [:users]} deep? (assoc :limit 1)) opts))
+  (is (= [{:kind :unknown-column :column :nope :in [1]}] (h/check registry '(cond-> {:select [:nope] :from [:users]} deep? (assoc :limit 1)) opts))
       "a statement built in code at the top is still the statement"))
 
 (deftest a-cte-body-bound-apart-from-its-with
@@ -574,7 +574,7 @@
     (is (= [] (h/check registry body opts)))
     (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (last (last (h/row-schema registry body opts))))
         "the outer users is the table, as check reads it: the inner :with is not visible outside"))
-  (is (= [{:kind :unknown-column :column :nick}] (h/check registry {:with [[:c {:select [:nick] :from [:groups]}]] :select [:id] :from [:users]} opts))
+  (is (= [{:kind :unknown-column :column :nick :in [:with 0 1]}] (h/check registry {:with [[:c {:select [:nick] :from [:groups]}]] :select [:id] :from [:users]} opts))
       "a CTE body does not see the tables of the statement its :with belongs to"))
 
 (deftest every-comparison-reads-its-value-as-the-columns
@@ -590,18 +590,18 @@
          (h/row-schema registry '{:select [:users.id] :from [:users] :right-join (when x [[:groups :g] [:= 1 1]])} opts))))
 
 (deftest each-part-of-a-statement-sees-what-postgresql-lets-it
-  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [:s.id] :from [[{:select [:id :nope] :from :users} :s]]} opts))
+  (is (= [{:kind :unknown-column :column :nope :in [:from 0 0]}] (h/check registry {:select [:s.id] :from [[{:select [:id :nope] :from :users} :s]]} opts))
       "a subquery in :from sees no table beside it, nor its own alias")
-  (is (= [{:kind :unknown-column :column :name}] (h/check registry {:select [:id] :from [:groups [{:select [:mood] :from :users :where [:= :name "x"]} :s]]} opts)))
+  (is (= [{:kind :unknown-column :column :name :in [:from 1 0]}] (h/check registry {:select [:id] :from [:groups [{:select [:mood] :from :users :where [:= :name "x"]} :s]]} opts)))
   (is (= [] (h/check registry {:select [:u.id :x.n] :from [[:users :u]] :join [[[:lateral {:select [[:u.id :n]]}] :x] true]} opts))
       "LATERAL does")
-  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:with [[:users {:select [:nope] :from :users}]] :select [:id] :from :users} opts))
+  (is (= [{:kind :unknown-column :column :nope :in [:with 0 1]}] (h/check registry {:with [[:users {:select [:nope] :from :users}]] :select [:id] :from :users} opts))
       "a :with entry does not see itself")
-  (is (= [{:kind :unknown-table :table "sample.b"}] (h/check registry {:with [[:a {:select [:id] :from :b}] [:b {:select [:id] :from :users}]] :select [:id] :from :a} opts))
+  (is (= [{:kind :unknown-table :table "sample.b" :in [:with 0 1]}] (h/check registry {:with [[:a {:select [:id] :from :b}] [:b {:select [:id] :from :users}]] :select [:id] :from :a} opts))
       "nor the entries after it")
   (is (= [] (h/check registry {:with-recursive [[:t {:union-all [{:select [:id] :from :users} {:select [:id] :from :t}]}]] :select [:id] :from :t} opts))
       "a :with-recursive one does")
-  (is (= [{:kind :unknown-column :column :groups.id}]
+  (is (= [{:kind :unknown-column :column :groups.id :in [:values 0 0 1]}]
          (h/check registry {:insert-into :groups :values [{:id {:select [:id] :from :users :where [:= :users.id :groups.id]} :name "x"}]} opts))
       "a row of :values does not see the table inserted into"))
 
@@ -630,10 +630,10 @@
     (is (= [] (h/check registry q opts)) (pr-str q))))
 
 (deftest a-scope-hides-what-postgresql-hides
-  (is (= [{:kind :unknown-column :column :nosuch}]
+  (is (= [{:kind :unknown-column :column :nosuch :in [:from 1 0 1]}]
          (h/check registry {:select [:u.id] :from [[:users :u] [[:lateral {:select [:nosuch] :from [:groups]}] :p]]} opts))
       "a LATERAL subquery does not see itself")
-  (is (= [{:kind :unknown-column :column :u.nick}]
+  (is (= [{:kind :unknown-column :column :u.nick :in [:where 1]}]
          (h/check registry {:select [:id] :from [[:users :u]] :where [:exists {:select [1] :from [[:groups :u]] :where [:= :u.nick "x"]}]} opts))
       "an inner alias hides the outer one of its name")
   (is (= [{:kind :unknown-column :column :nosuch}]
