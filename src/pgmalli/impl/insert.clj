@@ -100,7 +100,7 @@
       (let [known (vec (sort (map :table all)))]
         (error/fail! :pgmalli.error/invalid-dataset
                      (str "the dataset names tables the registry does not: " (vec unknown)
-                          (some->> (error/suggest (first unknown) known) (format "; did you mean %s?")) "; it holds " known)
+                          (error/did-you-mean (error/suggest (first unknown) known)) "; it holds " known)
                      {:given (vec unknown) :known known})))
     (vec
      (for [{:keys [name table refs]} (parents-first ts)
@@ -118,7 +118,7 @@
                            known (vec (sort (keys columns)))]
                        (error/fail! :pgmalli.error/invalid-dataset
                                     (str table " rows carry columns the table does not have: " given
-                                         (some->> (error/suggest (clojure.core/name (first given)) (map clojure.core/name known)) (format "; did you mean :%s?")) "; it has " known)
+                                         (error/did-you-mean (some->> (error/suggest (clojure.core/name (first given)) (map clojure.core/name known)) (str ":"))) "; it has " known)
                                     {:given given :known known :table table :rows unknown})))
                  ;; rows of defaults alone still name a column: VALUES () is no SQL, DEFAULT VALUES one row only
                  used (or (seq (remove generated (distinct (mapcat keys rows)))) (take 1 (map first entries)))]]

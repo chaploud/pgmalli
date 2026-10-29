@@ -28,9 +28,12 @@
 (defn- read-config [path]
   (let [file (io/file (or path "pgmalli.edn"))]
     (cond (.exists file)
-          (try (edn/read-string (slurp file))
-               (catch Exception e
-                 (error/fail! :pgmalli.error/invalid-config (str "cannot read " file " as EDN: " (ex-message e)) {:given (str file)})))
+          (let [text (try (slurp file)
+                          (catch Exception e
+                            (error/fail! :pgmalli.error/invalid-config (str "cannot read " file ": " (ex-message e)) {:given (str file)})))]
+            (try (edn/read-string text)
+                 (catch Exception e
+                   (error/fail! :pgmalli.error/invalid-config (str "cannot read " file " as EDN: " (ex-message e)) {:given (str file)}))))
           path
           (error/fail! :pgmalli.error/invalid-config
                        (str "no config file at " path "; give the path of an existing pgmalli.edn, or none for the defaults")
@@ -108,7 +111,7 @@
         flags (filter #(str/starts-with? % "-") more)
         [path & extra] (remove (set flags) more)]
     (cond (#{"help" "-h" "--help"} cmd) (do (println usage) 0)
-          (or (not (#{nil "generate" "check"} cmd)) (seq extra)
+          (or (not (#{"generate" "check"} cmd)) (seq extra)
               (seq (remove (if (= "check" cmd) #{"--edn"} #{}) flags)))
           (do (binding [*out* *err*] (println usage)) 2)
           :else (let [config (read-config path)]

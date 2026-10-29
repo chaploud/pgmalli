@@ -85,14 +85,19 @@
     (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
     (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e))) "s3cret")))))
 
-(deftest jdbc-that-cannot-connect-names-the-target-and-keeps-the-cause
+(deftest jdbc-that-cannot-connect-names-the-target-and-keeps-the-cause-without-the-url
   (when-not (System/getProperty "babashka.version")
     (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope: .*; check :db :jdbc-url"
                                   (ir/from-db {:jdbc-url "jdbc:postgresql://localhost:1/nope?password=s3cret" :user "u" :password "s3cret"})))]
       (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
       (is (= :cognitect.anomalies/unavailable (:cognitect.anomalies/category (ex-data e))))
-      (is (= "org.postgresql.util.PSQLException" (.getName (class (ex-cause e)))))
-      (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e))) "s3cret"))))))
+      (is (some? (.getSQLState (ex-cause e))) "the cause keeps the SQLState")
+      (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) "nor the cause carries the password")))
+  (when-not (System/getProperty "babashka.version")
+    (let [ds ((requiring-resolve 'next.jdbc/get-datasource) {:jdbcUrl "jdbc:nope://u:s3cret@localhost:1/x"})
+          e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect through :db :datasource"
+                                  (ir/from-db {:datasource ds})))]
+      (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) "a DataSource's URL is not printed either"))))
 
 (deftest jdbc-reads-what-psql-reads
   ;; babashka has no java.sql

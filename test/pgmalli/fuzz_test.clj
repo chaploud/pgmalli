@@ -13,7 +13,7 @@
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.ir :as ir]
             [pgmalli.impl.json :as json]
-            [pgmalli.test-db :refer [*container* *db* exec-sql! with-postgres]]
+            [pgmalli.test-db :as test-db :refer [*container* *db* exec-sql! with-postgres]]
             [pgmalli.test-seed :as ts]))
 
 (use-fixtures :once with-postgres)
@@ -185,17 +185,16 @@
    ;; char(4) as pgjdbc reads it (padded) and as an application may write it
    [:c [:maybe [:enum "ab" "ab  " "a" "abcd" "" " a"]]]])
 
-(defn- quoted [s] (str "'" (str/replace (str s) "'" "''") "'"))
 
 (defn- sql-literal [column v]
   (cond (nil? v) "NULL"
-        (= column :j) (str (quoted (json/write v)) "::jsonb")
-        (= column :arr) (if (empty? v) "'{}'::text[]" (str "ARRAY[" (str/join ", " (map quoted v)) "]::text[]"))
-        (= column :e) (str (quoted v) "::mood")
-        (instance? java.time.LocalDate v) (str (quoted v) "::date")
-        (instance? java.time.Instant v) (str (quoted v) "::timestamptz")
-        (instance? java.util.UUID v) (str (quoted v) "::uuid")
-        (string? v) (quoted v)
+        (= column :j) (str (test-db/sql-literal (json/write v)) "::jsonb")
+        (= column :arr) (if (empty? v) "'{}'::text[]" (str "ARRAY[" (str/join ", " (map test-db/sql-literal v)) "]::text[]"))
+        (= column :e) (str (test-db/sql-literal v) "::mood")
+        (instance? java.time.LocalDate v) (str (test-db/sql-literal v) "::date")
+        (instance? java.time.Instant v) (str (test-db/sql-literal v) "::timestamptz")
+        (instance? java.util.UUID v) (str (test-db/sql-literal v) "::uuid")
+        (string? v) (test-db/sql-literal v)
         (double? v) (format "%.2f" v)
         :else (str v)))
 

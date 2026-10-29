@@ -34,7 +34,6 @@
 
 (defn- column [ds sql] (mapv (comp val first) (jdbc/execute! ds [sql])))
 
-(defn- quoted [s] (str "'" (str/replace s "'" "''") "'"))
 
 (deftest every-type-of-postgresql-and-its-extensions-is-supported-or-listed-as-unsupported
   (when *db*
@@ -72,7 +71,7 @@
       (doseq [e (set (keep :extension (vals types/types)))]
         (jdbc/execute! ds [(str "CREATE EXTENSION IF NOT EXISTS \"" e "\"")]))
       (doseq [[t {:keys [literals]}] types/types, l literals
-              :let [err (try (jdbc/execute! ds [(str "SELECT " (quoted l) "::" t)]) nil (catch Exception x (ex-message x)))]]
+              :let [err (try (jdbc/execute! ds [(str "SELECT " (test-db/sql-literal l) "::" t)]) nil (catch Exception x (ex-message x)))]]
         (is (nil? err) (str "PostgreSQL does not read " (pr-str l) " as " t " (" err "): fix its :literals in src/pgmalli/impl/types.clj/types"))))))
 
 (deftest a-not-null-column-of-every-supported-type-generates-inserts-and-reads-back

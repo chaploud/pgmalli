@@ -81,6 +81,11 @@
                 *container* name]
         (t/testing @upstream (f))))))
 
+(defn sql-literal
+  "x as an SQL string literal."
+  [x]
+  (str "'" (str/replace (str x) "'" "''") "'"))
+
 (defn exec-sql!
   "Runs SQL against the namespace's database through the container's psql."
   [sql]

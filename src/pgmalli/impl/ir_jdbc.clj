@@ -1,7 +1,8 @@
 (ns pgmalli.impl.ir-jdbc
   "ir.sql over JDBC, apart from pgmalli.impl.ir since babashka has no java.sql: loaded only
    when a db map asks for JDBC."
-  (:require [pgmalli.impl.error :as error]))
+  (:require [clojure.string :as str]
+            [pgmalli.impl.error :as error]))
 
 (defn- target
   "host:port/db of a JDBC URL, without its user, password or parameters."
@@ -9,13 +10,21 @@
   (let [[_ hosts db] (re-find #"^jdbc:postgresql://(?:[^@/]*@)?([^/?]*)/?([^?]*)" (str url))]
     (if hosts (str hosts "/" db) "the :jdbc-url")))
 
+(defn- without-urls
+  "e as a cause that names no URL: DriverManager's \"No suitable driver\" message carries the
+   URL, and a URL may carry a password. Its message with every jdbc: URL replaced, and its
+   SQLState."
+  ^java.sql.SQLException [^java.sql.SQLException e]
+  (java.sql.SQLException. (str/replace (str (ex-message e)) #"jdbc:\S+" "the URL") (.getSQLState e)))
+
 (defn- connect [{:keys [jdbc-url datasource user password]}]
   (if datasource
     (try (.getConnection ^javax.sql.DataSource datasource)
          (catch java.sql.SQLException e
-           (error/fail! :pgmalli.error/db-unavailable
-                        (str "cannot connect through :db :datasource: " (ex-message e) "; check the DataSource's settings and that PostgreSQL is running")
-                        {} e)))
+           (let [c (without-urls e)]
+             (error/fail! :pgmalli.error/db-unavailable
+                          (str "cannot connect through :db :datasource: " (ex-message c) "; check the DataSource's settings and that PostgreSQL is running")
+                          {} c))))
     (do (try (Class/forName "org.postgresql.Driver")
              (catch ClassNotFoundException _
                (error/fail! :pgmalli.error/invalid-config "PostgreSQL's JDBC driver is not on the classpath: add org.postgresql/postgresql, or give psql settings instead of :jdbc-url")))
@@ -23,11 +32,11 @@
                                                               (cond-> user (.setProperty "user" (str user)))
                                                               (cond-> password (.setProperty "password" (str password)))))
              (catch java.sql.SQLException e
-               (error/fail! :pgmalli.error/db-unavailable
-                            ;; DriverManager's "No suitable driver" message carries the URL, and the URL may carry a password
-                            (str "cannot connect to " (target jdbc-url) ": " (.replace (str (ex-message e)) (str jdbc-url) "the URL")
-                                 "; check :db :jdbc-url, :user and :password in pgmalli.edn and that PostgreSQL is running")
-                            {:given (target jdbc-url)} e))))))
+               (let [c (without-urls e)]
+                 (error/fail! :pgmalli.error/db-unavailable
+                              (str "cannot connect to " (target jdbc-url) ": " (ex-message c)
+                                   "; check :db :jdbc-url, :user and :password in pgmalli.edn and that PostgreSQL is running")
+                              {:given (target jdbc-url)} c)))))))
 
 (defn- document [^java.sql.Statement st sql]
   (loop [result? (.execute st sql)]

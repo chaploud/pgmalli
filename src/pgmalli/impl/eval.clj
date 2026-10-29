@@ -208,7 +208,7 @@
           (or (prefix? "false" 1) (prefix? "no" 1) (prefix? "off" 2) (= "0" w)) false
           :else (throw (ex-info "not a boolean" {:value s})))))
 
-(defn- cast-type [t] (if (vector? t) (first t) t))                                  ; [:numeric 10 2] -> :numeric
+(defn- cast-type [t] (if (vector? t) (first t) t))
 (defn- array-elem [t] (when-let [[_ e] (re-matches #"(.+)-array" (name t))] (keyword e)))
 
 (def ^:private interval-units

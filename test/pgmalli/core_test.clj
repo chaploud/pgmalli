@@ -9,7 +9,7 @@
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
             [pgmalli.impl.files :as files]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
+            [pgmalli.test-db :refer [*db* exec-sql! sql-literal with-postgres]])
   (:import (java.io File)))
 
 (use-fixtures :once with-postgres)
@@ -56,12 +56,12 @@
               (is (= [[:pg/numeric {:precision 3 :scale 1}] [:pg/numeric {:precision 3 :scale 5}] [:pg/numeric {:precision 2 :scale -3}]]
                      (map #(last (col %)) [:p1 :p2 :p3]))
                   "the scale is read as PostgreSQL stores it, signed")
-              (doseq [[k ok bad] [[:p1 99.94M 99.95M] [:p2 0.00999M 0.01M] [:p3 99000M 99500M]]]
+              (doseq [[i [k ok bad]] (map-indexed vector [[:p1 99.94M 99.95M] [:p2 0.00999M 0.01M] [:p3 99000M 99500M]])]
                 (is (m/validate (col k) ok {:registry reg}))
                 (is (not (m/validate (col k) bad {:registry reg})))
-                (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (rand-int 1000000) ", " ok ")"))
+                (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (* 2 i) ", " ok ")"))
                 (is (thrown-with-msg? clojure.lang.ExceptionInfo #"numeric field overflow"
-                                      (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (rand-int 1000000) ", " bad ")")))
+                                      (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (inc (* 2 i)) ", " bad ")")))
                     (str k ": the database draws the line where the schema does")))
               (is (m/validate :pg.public/parted {:k 150 :v nil} {:registry reg}))
               (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
@@ -111,7 +111,6 @@
                         "DO $$ BEGIN " (counts) " END $$;"))
         (is true "every INSERT ran, identity ids kept, generated column left to the database")))))
 
-(defn- pr-str-sql [s] (str "'" (str/replace s "'" "''") "'"))
 
 (deftest char-varchar-and-integer-checks-hold-as-postgresql-holds-them
   (when *db*
@@ -152,8 +151,8 @@
                                          ;; malli's $ matches before a final newline too, PostgreSQL's does not: there
                                          ;; the schema may only be the more lenient
                                          :when (not (and ok (#{"r" "z" "e"} c) (str/ends-with? s "\n")))]
-                                     (str "IF cs.takes('" c "', " (pr-str-sql s) ") <> " ok
-                                          " THEN RAISE EXCEPTION 'schema says " ok " for % in " c "', " (pr-str-sql s) "; END IF;")))
+                                     (str "IF cs.takes('" c "', " (sql-literal s) ") <> " ok
+                                          " THEN RAISE EXCEPTION 'schema says " ok " for % in " c "', " (sql-literal s) "; END IF;")))
                         " END $$;"))
         (is true)))))
 

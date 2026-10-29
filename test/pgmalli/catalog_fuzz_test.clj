@@ -27,7 +27,8 @@
             [pgmalli.impl.json :as json]
             [pgmalli.impl.shape :as shape]
             [pgmalli.pipeline :as pipeline]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
+            [pgmalli.test-db :refer [*db* exec-sql! sql-literal with-postgres]]
+            [pgmalli.test-seed :as ts])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetTime)))
 
 (use-fixtures :once with-postgres)
@@ -120,7 +121,6 @@
 ;;; SQL
 
 (defn- q [s] (str "\"" (str/replace s "\"" "\"\"") "\""))
-(defn- lit [s] (str "'" (str/replace (str s) "'" "''") "'"))
 
 (defn- resolve-model
   "The model with its references resolved: domains on a type or an earlier domain, columns on
@@ -162,7 +162,7 @@
       (when ps
         (let [e (-> (nth ps (mod check (count ps)))
                     (str/replace "$c" (q cname))
-                    (str/replace "$l" (lit (first (get-in model [:enums ref :labels] ["a"])))))]
+                    (str/replace "$l" (sql-literal (first (get-in model [:enums ref :labels] ["a"])))))]
           (if when-present (str (q cname) " IS NULL OR (" e ")") e))))))
 
 (defn- domain-root [model ref] (get-in model [:domains ref :root]))
@@ -172,7 +172,7 @@
     (case t
       (:integer :smallint :bigint :numeric :numeric62) "1"
       (:text :varchar5 :char3) "'a'"
-      :enum (lit (first (get-in model [:enums ref :labels])))
+      :enum (sql-literal (first (get-in model [:enums ref :labels])))
       :boolean "true"
       nil)))
 
@@ -233,7 +233,7 @@
 (defn- ddl [{:keys [schema enums domains tables] :as model}]
   (str "CREATE SCHEMA " (q schema) ";\n"
        (apply str (for [{:keys [name labels]} enums]
-                    (str "CREATE TYPE " (q schema) "." (q name) " AS ENUM (" (str/join ", " (map lit labels)) ");\n")))
+                    (str "CREATE TYPE " (q schema) "." (q name) " AS ENUM (" (str/join ", " (map sql-literal labels)) ");\n")))
        (apply str (for [{:keys [name base not-null check]} domains]
                     (str "CREATE DOMAIN " (q schema) "." (q name) " AS "
                          (if (map? base) (str (q schema) "." (q (get-in model [:domains (:domain base) :name]))) (get-in types [base :sql]))
@@ -264,11 +264,11 @@
 
 (defn- literal [column-type v]
   (cond (nil? v) "NULL"
-        (#{"json" "jsonb"} column-type) (lit (json/write v))
+        (#{"json" "jsonb"} column-type) (sql-literal (json/write v))
         (vector? v) (if (empty? v) "'{}'" (str "ARRAY[" (str/join ", " (map #(literal nil %) v)) "]::" column-type))
-        (bytes? v) (lit (str "\\x" (apply str (map #(format "%02x" (bit-and % 0xff)) v))))
+        (bytes? v) (sql-literal (str "\\x" (apply str (map #(format "%02x" (bit-and % 0xff)) v))))
         (or (number? v) (boolean? v)) (str v)
-        :else (lit v)))
+        :else (sql-literal v)))
 
 (defn- loose-rows
   "Rows from the columns alone: each column a value its type may hold or not, NULL, or left out."
@@ -363,7 +363,6 @@
                                :when refused]
                            (merge {:kind :rejected-dataset :table (let [t (:insert-into stmt)] (name (if (vector? t) (last t) t)))} refused)))))))))))))
 
-(defn- seed [] (parse-long (or (System/getenv "PGMALLI_FUZZ_SEED") "42")))
 
 (defn- cases
   "The case indices to run: PGMALLI_FUZZ_CASE alone, or PGMALLI_FUZZ_SCHEMAS of them (default 30)."
@@ -405,7 +404,7 @@
 
 (deftest random-schemas-go-through-the-pipeline-as-postgresql-decides
   (when *db*
-    (let [seed (seed)
+    (let [seed (ts/seed)
           failed (findings seed (cases))]
       (is (empty? failed)
           (str (count failed) " failing cases; by kind " (pr-str (frequencies (mapcat #(map :kind (:findings %)) failed))) "\n"

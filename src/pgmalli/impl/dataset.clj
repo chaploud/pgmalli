@@ -41,7 +41,7 @@
      (when-let [stray (seq (remove all excepted))]
        (error/fail! :pgmalli.error/invalid-options
                     (str ":except names tables the registry does not: " (vec stray)
-                         (some->> (error/suggest (first stray) all) (format "; did you mean %s?"))
+                         (error/did-you-mean (error/suggest (first stray) all))
                          "; it holds " (vec (sort all)))
                     {:given (vec stray) :known (vec (sort all))}))
      (doseq [t ts, r (:refs t) :when (excepted (:table r))]

@@ -574,7 +574,7 @@
 (defn- function-name
   "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it."
   [s]
-  (-> s (str/split #"\.") last (str/replace "-" "_") str/lower-case))
+  (folded (last (str/split s #"\."))))
 
 (defn- expression-name
   "The column name PostgreSQL gives a select expression with no alias: a function's name, case,
@@ -669,11 +669,8 @@
         names (distinct (for [sc scopes
                               [alias {:keys [table]}] sc :when (and table (or (nil? a) (= a alias)))
                               n (keys (table-columns registry table)) :when (not (system-columns n))]
-                          n))
-        limit (error/close-enough c)]
-    (->> names
-         (keep #(let [d (error/edit-distance c %)] (when (<= d limit) [% d])))
-         (sort-by second) (take 3) (mapv (comp keyword first)) not-empty)))
+                          n))]
+    (some->> (error/suggestions c names 3) (mapv keyword))))
 
 (defn- column-problems [registry sc stmt schema]
   (let [target (target-scope sc stmt schema)
@@ -742,14 +739,14 @@
         rows (when (vector? (:values stmt)) (:values stmt))
         maps (value-rows stmt columns)
         union (distinct (mapcat keys maps))
+        defaults (set (:values-default-columns format))
         do-update (:do-update-set stmt)
-        excluded ::excluded
         writes (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update]))
-                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c excluded :update])
+                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c ::excluded :update])
                               (map? do-update) (for [[c v] do-update] [(target-column c) v :update])
-                              (vector? do-update) (for [c do-update] [c excluded :update]))
+                              (vector? do-update) (for [c do-update] [c ::excluded :update]))
                         (for [row maps, c (if columns (keys row) union)]
-                          [c (cond (contains? row c) (get row c) (contains? (set (:values-default-columns format)) c) :default) :insert])
+                          [c (cond (contains? row c) (get row c) (defaults c) :default) :insert])
                         (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert])))]
     (when (seq target)
       (distinct
@@ -989,7 +986,7 @@
                                        :when (and (vector? x) (= :cast (first x)) (= 3 (count x)) (arg-key (second x)) (ident? (nth x 2)))
                                        :let [parts (str/split (name (nth x 2)) #"\." 2)
                                              [sch n] (if (next parts) parts [schema (first parts)])
-                                             k (keyword (str "pg." sch) n)
+                                             k (shape/schema-key sch n)
                                              s (get (::schemas registry) k)]
                                        :when (and (vector? s) (= :enum (first s)))]
                                    [(second x) (driver-type registry jdbc/write-type [:ref k] opts)])

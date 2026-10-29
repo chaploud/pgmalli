@@ -26,7 +26,7 @@
    (throw (ex-info message (assoc data :pgmalli/error kind :cognitect.anomalies/category (categories kind :cognitect.anomalies/fault))
                    cause))))
 
-(defn edit-distance
+(defn- edit-distance
   "The edits from a to b: insertions, deletions, substitutions and swaps of adjacent letters
    (nmae is one edit from name)."
   [^String a ^String b]
@@ -42,15 +42,25 @@
                   (for [i (range 1 (inc n)), j (range 1 (inc m))] [i j]))]
     (d [n m])))
 
-(defn close-enough
+(defn- close-enough
   "How many edits a name may be from the one meant: 2 for five letters or more, 1 below."
   [s]
   (if (<= 5 (count s)) 2 1))
 
-(defn suggest
-  "The known name closest to a misspelt one, nil when none is close."
-  [given known]
+(defn suggestions
+  "Up to n of the known names closest to a misspelt one, closest first; nil when none is close."
+  [given known n]
   (let [g (str given)]
     (->> known
          (keep #(let [d (edit-distance g (str %))] (when (<= d (close-enough g)) [% d])))
-         (sort-by second) ffirst)))
+         (sort-by second) (take n) (map first) seq)))
+
+(defn suggest
+  "The known name closest to a misspelt one, nil when none is close."
+  [given known]
+  (first (suggestions given known 1)))
+
+(defn did-you-mean
+  "\"; did you mean x?\" for the name x printed as it should appear, \"\" for none."
+  [x]
+  (if x (str "; did you mean " x "?") ""))
