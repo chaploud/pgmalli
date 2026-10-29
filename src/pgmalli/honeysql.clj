@@ -751,11 +751,14 @@
   (some #(let [w (get stmt %)] (and (some? w) (or (not (vector? w)) (some (comp nil? cte-name) w)))) with-keys))
 
 (defn check
-  "The problems of every statement of a query, and the clauses it uses that are read nowhere
-   here (:unread-clause: a HoneySQL clause pgmalli does not know, or one of your own), so a
-   query is never judged on part of it in silence. In a query whose :with, or one of its
-   entries, is built elsewhere (not data), an unqualified table may be a CTE, and is no unknown
-   one. Code in the query is never read as columns: what it builds is not in the data."
+  "[problem ...] of a HoneySQL query against the registry; [] when there are none.
+
+   (check registry {:select [:id :mail] :from [:users]})
+   ;; => [{:kind :unknown-column, :column :mail}]
+
+   Names resolve as PostgreSQL resolves them. A clause pgmalli does not read is an
+   :unread-clause problem. Code in the query (a list) is not read. Options: see query-schema.
+   Throws when body is no HoneySQL data. See docs/queries.md."
   ([registry body] (check registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
@@ -835,16 +838,16 @@
   (set (keep arg-key (tree-seq #(and (branch? %) (not (seq? %))) seq body))))
 
 (defn arg-types
-  "{arg schema} for the arguments of a query: its HoneySQL named parameters (:?id, ?id,
-   [:param :id]) under the key sql/format's :params takes (:id), and its other symbols. One
-   compared with a column has the column's type, without NULL, which matches no row
-   ({:compare :lenient} takes any value of the column's kind, and NULL but in :in); a LIKE
-   pattern the column's kind; one in :in a non-empty vector, list or set of the column's type;
-   one in [:any x] or [:all x], or for an array column, what :write's :array names
-   ({:array [:pg/array :sequential :set]}), :any without it; one assigned to a column the
-   column's type with NULL; one in :limit / :offset :int. The type is what the driver takes
-   (:time, :write; see pgmalli.core/as-read). One used only inside code (a list: (when x
-   [...])) takes nil too, the code possibly leaving it out. The first typed use wins."
+  "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
+   :params takes them (:id).
+
+   (arg-types registry {:select [:id] :from [:users] :where [:= :email :?email]})
+   ;; => {:email [:string {:max 120, :pg/type \"character varying\"}]}
+
+   An argument compared with a column has the column's type without NULL; one in :in a
+   non-empty collection of it; one assigned to a column the column's type; one in :limit
+   :int; any other :any. The first typed use wins. Options: see query-schema.
+   See docs/queries.md."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
    (jdbc/options! opts)
@@ -919,13 +922,11 @@
     (select-row registry stmt (get chains path) opts)))
 
 (defn row-schema
-  "The [:map ...] of one row a query returns, as next.jdbc builds it from what the driver
-   returns (the options of pgmalli.core/as-read) and as malli's default registry reads it: the
-   columns of the tables, those an outer join may leave NULL nullable; :* and :t/* expanded; an
-   expression under an alias, or under the name PostgreSQL gives it, nullable :any. A set
-   operation's row is its first member's names, typed where the members agree, nullable where
-   one is, unqualified (its columns come from no table). nil when a selected column cannot be
-   resolved."
+  "The [:map ...] of one row a query returns, as next.jdbc builds it; nil when a selected
+   column cannot be resolved (check says which).
+
+   Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
+   operation's row is its first member's names. Options: see query-schema."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
@@ -933,14 +934,22 @@
    (when (map? body) (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts))))
 
 (defn query-schema
-  "[:=> [:cat arg-types...] [:sequential row]], the malli function schema of a function taking
-   args (keys of arg-types; a key the query lacks is :any) and running body; with
-   {:result :one} the return is [:maybe row]. A return that cannot be resolved is :any. The
-   problems check finds, and an argument of the query args lack (:missing-arg, a typo in args
-   most likely), are the schema's :pgmalli/problems property, not an error: a schema in
-   :malli/schema metadata is made as its namespace loads, which a typo, or a registry not yet
-   generated again, should not stop. The property makes the vector one longer: read its parts
-   with m/children, not by position."
+  "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
+   and running body: the args' types from arg-types (:any for a key the query lacks), the
+   row from row-schema (:any when it cannot be resolved).
+
+   (query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]})
+
+   The problems of check, and a query argument args lack (:missing-arg), are the schema's
+   :pgmalli/problems property, not an error: the vector is then one longer, so read its parts
+   with m/children. Options, taken by every function here:
+     :schema \"app\"           the schema of unqualified tables (\"public\")
+     the options of pgmalli.core/as-read, for the row
+     :write {pg-type schema}  what a SettableParameter extension takes; also
+                              {:array [:pg/array :sequential :set]}
+     :compare :lenient        compared arguments take any value of the column's kind, and nil
+     :result :one             the return is [:maybe row]
+   Throws when args are not keywords or symbols. See docs/queries.md."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)

@@ -14,6 +14,12 @@
                       ;; strings from regexes, which pgmalli uses when it is on the classpath
                       com.gfredericks/test.chuck {:mvn/version "0.2.15"}}
          :main-opts ["-m" "cognitect.test-runner"]}
+  ;; bb test:docs: README.md and docs/*.md as tests; with :test and :docs to run them, the example
+  ;; registry (docs/example/pgmalli) on the classpath
+  :test-doc-blocks {:replace-deps {com.github.lread/test-doc-blocks {:mvn/version "1.2.22"}}
+                    :exec-fn lread.test-doc-blocks/gen-tests
+                    :exec-args {:docs ["README.md" "docs/reading-rows.md" "docs/queries.md" "docs/datasets.md" "docs/types.md"]}}
+  :docs {:extra-paths ["docs/example" "target/test-doc-blocks/test"]}
   ;; with :test, as bb oracle runs it: pgmalli.oracle's -main instead of the test runner
   :oracle {:main-opts ["-m" "pgmalli.oracle"]}
   :build {:deps {io.github.clojure/tools.build {:git/tag "v0.10.14" :git/sha "1176afd"}}

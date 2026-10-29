@@ -5,132 +5,50 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Breaking
+
+| was | is | to do |
+|---|---|---|
+| `as-read` typed dates as `:time/*`, arrays as vectors, json as maps | the driver's types: `inst?`, `:any` | pass `:time`, `:read` for the next.jdbc extensions you use |
+| kebab keys `:line-no2` | `:line-no-2`, as next.jdbc's kebab builders name them | rename the keys you wrote by hand |
+| an unknown option was ignored | an error naming the option meant | fix the spelling |
+| `(row-schema registry body cte-names)` | `(row-schema registry body opts)` | drop the third argument |
+| `statements`, `cte-names`, `scope`, `resolve-column`, `problems` public | private | use `check`, `row-schema`, `arg-types` |
+| an array argument typed as the column's vector | `:any`, or what `:write`'s `:array` names | pass `{:write {:array [:pg/array :sequential]}}` |
+| an `:in` argument typed as one value | a non-empty vector, list or set | pass a collection |
+| `read-options` took `'next.jdbc/as-maps` | the builder's own name or var (`'next.jdbc.result-set/as-maps`) | rename the symbol |
+| nil, a formatted SQL vector, or args not keywords were accepted | an error | pass HoneySQL data and `[:db :id]` |
+| under `:qualified?`, a column through a CTE or subquery was keyed by its alias | nil: the driver keys it by a table pgmalli cannot see | select it from the table |
+| `query-schema` was `[:=> in out]` | `[:=> {:pgmalli/problems [...]} in out]` when the query has problems | read the parts with `m/children` |
+| `test.chuck` was a dependency | optional: regex strings use it when on the classpath | add it to your test alias |
+
 ### Added
 
-- `pgmalli.honeysql` reads HoneySQL's named parameters (`:?id`, `?id`, `[:param :id]`):
-  `arg-types` types them under the key `sql/format`'s `:params` takes (`:id`), and
-  `query-schema` takes that key among its args.
-- Options for what an application's next.jdbc does differently, in `as-read` and
-  `pgmalli.honeysql`: `:read` for a `ReadableColumn` extension (`{pg-type schema}` by a
-  column's `:pg/type`, `{:array :vector}`, `{:json :parsed}`); in `pgmalli.honeysql`,
-  `:write` for a `SettableParameter` one (`{pg-type schema}`, `{:array [:pg/array :sequential
-  :set]}` for what an array argument may be) and `{:compare :lenient}`, a compared argument
-  taking any value of the column's kind, and nil but in `:in`, matching no row.
-- `:pg/array` in the registry: `[:pg/array t]` is what PostgreSQL's JDBC driver takes as an
-  array parameter, a typed Java array of `t`'s (not `Object[]`, which it refuses) or a
-  `java.sql.Array`.
-- `generate!`, `stale` and `check` read the catalog over JDBC when `:db` has `:jdbc-url` (with
-  `:user` and `:password`) or `:datasource`, with the PostgreSQL driver on the classpath and no
-  psql. The query runs in a transaction rolled back after, so a pooled connection keeps its
-  search_path.
-- `query-schema` carries the problems `check` finds in its query, and a query argument its
-  args lack (`:missing-arg`), as the `:pgmalli/problems` property of the function schema; with
-  it the vector is one longer (`[:=> {...} [:cat ...] out]`), so read it with `m/children`.
-- `check` reports a clause it reads nowhere (`:unread-clause`: one new to HoneySQL, one
-  registered with `register-clause!`, `:join-by`, `{:table :t}`), so a query is never judged on
-  part of it in silence; it reads the clauses and operators of the HoneySQL loaded.
-- The README states the supported versions (PostgreSQL 16+, HoneySQL 2.4.1066+, next.jdbc 1.3,
-  malli 0.20, Clojure 1.11+); CI runs the oldest of them, and a test checks pgmalli's view of
-  HoneySQL against the HoneySQL loaded.
-
-### Changed
-
-- `as-read` and `pgmalli.honeysql` type a row as next.jdbc builds it from what PostgreSQL's
-  JDBC driver returns, one rule for both: dates and timestamps `inst?` by default (`as-read`
-  kept the registry's `:time/*`), arrays, json and jsonb, and intervals `:any` (they took the
-  registry's vector, CHECK-shaped map and `:time/duration`, which the driver's objects fail).
-  Keys are kebab-cased as next.jdbc's kebab builders do (`line_no2` is `:line-no-2`), and always
-  keywords.
-- An option key or value `as-read` and `pgmalli.honeysql` do not know is an error, and so is a
-  `:db` key `generate!` does not, or keys of psql and JDBC together; they were left out, and
-  psql reached the database its environment names.
-- An argument is typed as the driver takes it: an array column's, and one in `[:any x]` or
-  `[:all x]`, `:any` unless `:write`'s `:array` names what it may be; one in `:in` a non-empty
-  vector, list or set of the column's type, as `sql/format` expands it; one the data shows only
-  inside code nilable. `:read` types rows alone.
-- `row-schema` takes `(registry body opts)`, as the other functions of `pgmalli.honeysql` do;
-  it took the query's CTE names third, so an options map there went unread. `statements`,
-  `cte-names`, `scope`, `resolve-column` and `problems` are private.
-- A misspelt option names the one meant (`should be spelled :qualified?`), and so do
-  `dataset-generator`'s, `inserts`' and `transformer`'s, which went unread; `:except` naming a
-  table the registry lacks is an error.
-- `pgmalli.honeysql` refuses what is no query data (nil, SQL already formatted) and
-  `query-schema` args that are no list of keywords or symbols, which checked clean or typed
-  nothing; a row selecting from a table the registry lacks (`:schema` left out) is untold.
-- `as-read` refuses what is no table's or view's row schema (an enum, an insert schema), and
-  `columns` what is no row or insert schema.
-- `read-options` takes a builder's var too (`#'rs/as-maps`), and names next.jdbc's map builders as next.jdbc does
-  (`'next.jdbc.result-set/as-unqualified-kebab-maps`, `'next.jdbc.optional/as-maps`); it took
-  `next.jdbc/...` and `next.jdbc.optional/as-kebab-maps`, which do not exist, and any namespace.
-  A modified builder (keys of your functions) and an array builder are an error, and the lower
-  builders give `:lower? true`.
-- Under `:qualified?`, a row selecting a column through an opaque table (a subquery, a CTE) is
-  untold (nil): the driver keys it by the table at the bottom, which pgmalli does not see. It was
-  keyed by the opaque table's alias.
-- `test.chuck` is no dependency: regex generation uses it when it is on the classpath (it
-  brings clj-time, joda-time and instaparse).
-- `camel-snake-kebab` is a dependency (next.jdbc's kebab builders name keys with it), malli
-  0.20.3.
+- HoneySQL named parameters (`:?id`, `[:param :id]`) in `arg-types` and `query-schema`.
+- `:read`, `:write` and `{:compare :lenient}` for what your next.jdbc does differently
+  ([docs/reading-rows.md](docs/reading-rows.md), [docs/queries.md](docs/queries.md)).
+- `:pg/array`: what the driver takes as an array parameter.
+- `:db` with `:jdbc-url` or `:datasource` reads the catalog over JDBC, without psql.
+- `query-schema` carries the query's problems and a `:missing-arg` as `:pgmalli/problems`.
+- `check` reports a clause it does not read (`:unread-clause`), from the HoneySQL loaded.
+- Supported versions in the README, the oldest of them run in CI.
+- `bb oracle`: `check` beside PostgreSQL itself on a corpus of queries and mutants of them;
+  CI holds its false positives at none.
 
 ### Fixed
 
-- `pgmalli.honeysql` read as PostgreSQL does: every table's system columns (`ctid`, `xmin`,
-  ...); an unqualified `pg_` name as pg_catalog's first, opaque when the registry lacks it; a
-  bare `:order-by` name as an output column first (of a set operation, its first member's),
-  a `:group-by` one after the input columns; a symbol where a table goes as a table chosen at
-  run time; `INSERT INTO t AS a` (`[:t :a]`); a table function with no alias, named after the
-  function; a subquery alone in `:from`.
-- `pgmalli.honeysql/check` reported, for correct queries: a named parameter as a column
-  (selected too, as INSERT ... SELECT passes values); a column an opaque table may hold beside
-  one known table as ambiguous; HoneySQL's `:%max.id`; an SQL word under an alias; a column of
-  a table code brings in (`:left-join (when x [...])`) as unknown. Code in a query is not read
-  as columns, and nothing throws on it. Where code builds some of a query's CTEs (`:with
-  ctes`, or one entry of it), an unqualified table may be one of them; one qualified by a
-  schema is still judged (all of the query's unknown tables went unjudged).
-- `row-schema` names an expression with no alias as PostgreSQL does (a function's name, `case`,
-  `array`, a cast column's or function's name, `?column?` for a value or an operator) and reads
-  set operations (the first member's names, typed where the members agree, nullable where one
-  is); both were nil. A column an outer join may leave NULL is nullable: a `:left-join`'s
-  table, the one a `:right-join` attaches to and those joined to it before, both sides of a
-  `:full-join`. A name selected twice is one key. `{:select [:*]}` was nil.
-- `pgmalli.honeysql` reads `:except-all`, `:not-in`, `:between`, `:not-like` and the other
-  comparisons HoneySQL writes, `[:. a b]`, `:with-ordinality`, and an operator registered with
-  `register-op!` (`?column?`, not a function's name).
-- `row-schema` reads a query's scopes as `check` does, through one judgment of which tables
-  and CTEs a statement sees: an inner `:with` hides no outer table from it, and a table code
-  brings in is untyped there too. A CTE body does not see the tables of the statement its
-  `:with` belongs to. An enum literal is judged in every comparison but LIKE (`<`, `BETWEEN`,
-  `IS DISTINCT FROM` ...), as arguments are typed. A subquery in a row of `:values` or `:set` is
-  read for unread clauses. A RIGHT or FULL JOIN code builds makes the tables before it
-  nullable.
-- Each part of a statement sees what PostgreSQL lets it: a subquery in `:from` or a join no
-  table beside it nor its own alias (LATERAL its own statement's), a `:with` entry the entries
-  before it (`:with-recursive` all), a row of `:values` not the table inserted into; a mistake
-  there was taken for a column of the scope and went unreported. Rows are told per statement
-  where it sits, the same statement in two places in its own scope each. `:t.*` must name a
-  table of the scope; code anywhere in a query (an `:insert-into` target, a CTE name) leaves
-  its part unjudged, and clauses inside code are read.
-- `bb oracle` runs `check` beside PostgreSQL itself on a corpus of queries and seeded mutants
-  of them (`test/resources/pgmalli/oracle/`), and `pgmalli.oracle-test` holds its false
-  positives at none in CI.
-- Checked against PostgreSQL itself (several thousand queries, PREPAREd): `check` reported, for
-  queries it accepts, a column `JOIN ... USING` merges as ambiguous, a column of a
-  schema-qualified table (`:public.users`, `:public.users.id`), an identifier in another case or
-  with `-` (HoneySQL writes `:USERS` and `:group-id` unquoted, PostgreSQL folds them), and a
-  whole-row reference (`SELECT u FROM users u`); it reports none of them. A LATERAL subquery no
-  longer sees itself, an inner alias hides an outer one of its name, and the table an UPDATE or
-  DELETE names is the table even under a CTE of its name.
-- A value HoneySQL passes as it is (`[:lift {...}]`, `[:inline {...}]`) is data, never a
-  statement or a clause; a column definition list (`[:r {:columns [[:raw "a int"]]}]`) does not
-  throw.
-- A LIKE pattern argument is the column's kind without its CHECKs and length: a pattern is no
-  value of the column. `INSERT INTO t AS a (columns)` (`[[:t :a] [...]]`), a subquery with no
-  alias in `:from`, and an `:update` or `:insert-into` target code names are read.
-- The JDBC catalog read reports the query's own failure, not one in rolling back after it, and
-  names the driver to add when it is missing (leaving out the URL, which may carry a password).
-- `pgmalli.main` took a minute to exit after running psql (the agent pool's threads).
-- The jar carries `resources/pgmalli/ir.sql` alone, not a file generated in the checkout,
-  which would shadow an application's own on the classpath.
+- `check` reports no error PostgreSQL does not: `USING` columns, schema-qualified tables,
+  identifiers in another case or with `-`, whole-row references, system columns, output
+  columns in `:order-by`, an inner alias hiding an outer one, the target of an UPDATE under a
+  CTE of its name.
+- `check` reports errors it missed: a name each part of a statement cannot see (a subquery's
+  sibling in `:from`, a later `:with` entry, the insert target in `:values`), an enum literal
+  in any comparison, code-built joins making tables nullable.
+- `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
+  `{:select [:*]}`, and makes outer-joined columns nullable.
+- The JDBC catalog read reports the query's own failure and names a missing driver.
+- `pgmalli.main` no longer takes a minute to exit after psql.
+- The jar carries no file generated in the checkout.
 
 ## [0.2.45] - 2026-09-04
 

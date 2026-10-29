@@ -15,29 +15,33 @@
             [pgmalli.impl.shape :as shape]))
 
 (defn generated
-  "The generated file of a schema (from the classpath), as data: {:schema :database-version
-   :registry {name schema} :unrendered [fact ...] :skipped [fact ...] :diagnostics [...]}.
-   :registry is the map of names to schemas a malli registry is made of (registry builds one
-   from it, with malli's own schemas); :unrendered are the facts with no malli rendering;
-   :diagnostics what the database stores but deserves a look (a partitioned table with no
-   partition, a partition its parent's bounds make unreachable, a CHECK (false), CHECKs on a column that contradict each other, a NOT VALID or
-   NOT ENFORCED constraint, a unique index repeating a key, a row-level INSERT trigger), each
-   {:table :kind :confidence :severity :message ...}."
+  "The generated file of a schema, read from the classpath, as data:
+   {:schema :database-version :registry {name schema} :unrendered [fact ...]
+    :skipped [fact ...] :diagnostics [{:table :kind :severity :message ...} ...]}.
+
+   :unrendered lists the constraints pgmalli cannot express in malli; :diagnostics what
+   deserves a look in the database (a NOT VALID constraint, an unreachable partition, a
+   row-level INSERT trigger ...)."
   [schema-name]
   (reg/read-generated schema-name))
 
 (defn registry
-  "malli registry holding the generated schemas of the named schemas (read from the classpath;
-   generated data maps are accepted too), insert schemas derived from them, plus malli's
-   defaults, malli.util and malli.experimental.time."
+  "A malli registry of the named schemas' generated files, with the insert and update
+   schemas derived from them, malli's default schemas, malli.util and malli.experimental.time.
+
+   (registry \"public\")
+
+   A generated data map (see generated) is taken in place of a name."
   [& schemas]
   (apply reg/registry schemas))
 
 (defn install!
-  "Makes the registry of the named schemas malli's default one, so schema data anywhere reads
-   the generated names; process-wide, and so hiding a schema's reliance on them (see the
-   README). Returns the schemas the default registry held before, which
-   malli.registry/set-default-registry! puts back."
+  "Makes the registry of the named schemas malli's default registry, for the whole process.
+   Returns the schemas the default registry held, for malli.registry/set-default-registry!
+   to put back.
+
+   Code using the generated names then validates without {:registry ...}, and no longer shows
+   that it needs them."
   [& schemas]
   (let [before (mr/-schemas m/default-registry)]
     (mr/set-default-registry! (apply reg/registry schemas))
@@ -79,17 +83,23 @@
   (jdbc/read-options builder))
 
 (defn as-read
-  "The [:map ...] of a table's or view's row as next.jdbc builds it from what PostgreSQL's JDBC
-   driver returns, over the registry (validate with {:registry registry}; portable gives schemas
-   without it): by default next.jdbc with no extension and as-unqualified-maps (next.jdbc's own
-   default, as-maps, is :qualified? true), dates and timestamps inst?, arrays, json and
-   intervals (driver objects) :any. Options, the ones pgmalli.honeysql takes too (read-options
-   gives them for a next.jdbc builder; its own, :schema :write :compare :result, are taken and
-   do nothing here), a key or value not among them an error: :qualified? (keys as
-   :table/column, as-maps), :kebab? and :lower? (as those builders), :nil-columns :absent
-   (next.jdbc.optional), :time :instant or :local (next.jdbc.date-time's read-as-instant,
-   read-as-local), :read for what a ReadableColumn extension returns: {pg-type schema} by a
-   column's :pg/type, {:array :vector} arrays as vectors, {:json :parsed} json parsed."
+  "The [:map ...] of a table's or view's row as next.jdbc builds it from what PostgreSQL's
+   JDBC driver returns. Validate with {:registry registry}.
+
+   (as-read registry :pg.public/users {:qualified? true})
+
+   By default, as as-unqualified-maps builds rows with no extension: dates and timestamps
+   inst?, arrays, json and intervals :any. Options (read-options gives those of a builder):
+     :qualified? true       keys as :table/column
+     :kebab? true           kebab-case keys and tables
+     :lower? true           lower-case keys and tables
+     :nil-columns :absent   NULL columns left out (next.jdbc.optional)
+     :time :instant/:local  next.jdbc.date-time's read-as-instant / read-as-local
+     :read {pg-type schema} what a ReadableColumn extension returns; also {:array :vector},
+                            {:json :parsed}
+
+   Throws when an option is unknown, or name is no table's or view's row schema.
+   See docs/reading-rows.md."
   ([registry name] (as-read registry name {}))
   ([registry name opts] (jdbc/as-read registry name opts)))
 

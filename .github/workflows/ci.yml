@@ -39,6 +39,7 @@ jobs:
       - run: bb lint
       - run: bb test
       - run: bb test:jvm
+      - run: bb test:docs
       - run: clojure -T:build jar
   floor:
     # the oldest versions README supports; here, not in deps.edn, where Renovate would raise them

@@ -1,0 +1,175 @@
+# HoneySQL queries
+
+`pgmalli.honeysql` reads a HoneySQL query as data and compares it with the registry. The
+README shows `h/check` and `h/query-schema`; this page covers what they read and their
+options. The examples use [example/schema.sql](example/schema.sql).
+
+```clojure
+(require '[pgmalli.core :as pgmalli]
+         '[pgmalli.honeysql :as h]
+         '[malli.core :as m])
+
+(def registry (pgmalli/registry "public"))
+```
+
+## What a name refers to
+
+`h/check` resolves names the way PostgreSQL does:
+
+- `:email` is a column of a table in `:from` or `:join`; `:u.email` a column of the alias `u`.
+- A table is looked up in the `:schema` option (`"public"` by default); `:other.t` names its schema.
+- A `:with` entry is a table its later entries and the main statement see.
+- A subquery in `:from` or `:join` sees the outer query's tables, not its siblings; a LATERAL
+  one sees the tables before it.
+- `USING` merges the columns it names; `:users` alone in `:select` is the whole row.
+- Names are compared as HoneySQL formats them: `:group-id` is `group_id`.
+
+```clojure
+(h/check registry {:select [:p.id]
+                   :from [[:posts :p]]
+                   :join [[:users :u] [:= :u.id :p.author_id]]
+                   :where [:= :u.title "x"]})
+;; => [{:kind :unknown-column, :column :u.title}]
+
+(h/check registry {:select [:id] :from [:accounts]})
+;; => [{:kind :unknown-table, :table "public.accounts"}]
+```
+
+A clause pgmalli does not read is reported, so a query is never checked only in part:
+
+```clojure
+(h/check registry {:select [:id] :from [:users] :frobnicate [:x]})
+;; => [{:kind :unread-clause, :clause :frobnicate}]
+```
+
+A CTE or subquery has the types of what it selects. An expression (`[:count :*]`) has no
+type: comparisons with it are not checked.
+
+## The types of the arguments
+
+`h/arg-types` gives `{arg schema}` for a query's named parameters (`:?id`, `[:param :id]`),
+keyed as `sql/format`'s `:params` takes them:
+
+```clojure
+(h/arg-types registry {:select [:id]
+                       :from [:users]
+                       :where [:and [:= :group_id :?group] [:in :status :?statuses]]
+                       :limit :?n})
+;; => {:group [:int {:pg/type "integer", :min -2147483648, :max 2147483647}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n :int}
+```
+
+| where the argument is | its type |
+|---|---|
+| compared with a column | the column's type, without NULL |
+| in `:in` | a non-empty vector, list or set of the column's type |
+| assigned to a column (`:set`, `:values`) | the column's type, NULL allowed when the column allows it |
+| a `LIKE` pattern | the column's kind (`:string`) |
+| in `:limit`, `:offset` | `:int` |
+| used only inside code (`(when x ...)`) | its type or nil |
+| anywhere else | `:any` |
+
+```clojure
+(h/arg-types registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
+;; => {:id [:int #:pg{:identity :always, :type "bigint"}], :nick [:maybe [:string {:max 40, :pg/type "character varying"}]]}
+```
+
+A comparison with NULL matches no row, so `:?id` above does not take nil. To take any value
+of the column's kind, nil included, pass `{:compare :lenient}`:
+
+```clojure
+(h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:compare :lenient})
+;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
+```
+
+## The row a query returns
+
+`h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
+join may leave NULL is nullable; an expression is nullable `:any`:
+
+```clojure
+(h/row-schema registry {:select [:u.email :p.title]
+                        :from [[:users :u]]
+                        :left-join [[:posts :p] [:= :p.author_id :u.id]]})
+;; => [:map [:email [:string {:max 120, :pg/type "character varying"}]] [:title [:maybe [:string {:max 200, :pg/type "character varying"}]]]]
+
+(h/row-schema registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]})
+;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:maybe :any]]]
+```
+
+It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):
+
+```clojure
+(h/row-schema registry {:select [:id :created_at] :from [:users]} {:time :instant :kebab? true})
+;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:created-at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
+```
+
+`h/row-schema` returns nil when a selected column cannot be resolved; `h/check` says which.
+
+## Options
+
+Every function of `pgmalli.honeysql` takes the same options map:
+
+| option | for |
+|---|---|
+| `:schema "app"` | the schema of unqualified tables |
+| the options of `as-read` | how next.jdbc builds rows and the driver reads values |
+| `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
+| `:write {:array :vector}` | arrays passed as vectors, not `java.sql.Array` |
+| `:compare :lenient` | arguments compared with a column take any value of its kind and nil |
+| `:result :one` | `h/query-schema` only: the return is one row or nil |
+
+## Function schemas
+
+`h/query-schema` joins the two: the arguments are the function's, in order, and keys the
+query lacks (`:db`) are `:any`:
+
+```clojure
+(h/query-schema registry [:db :ids]
+                {:select [:id] :from [:users] :where [:in :id :?ids]}
+                {:result :one})
+;; => [:=> [:cat :any [:or [:sequential {:min 1} [:int #:pg{:identity :always, :type "bigint"}]] [:set {:min 1} [:int #:pg{:identity :always, :type "bigint"}]]]] [:maybe [:map [:id [:int #:pg{:identity :always, :type "bigint"}]]]]]
+```
+
+The schema names registry types (`:pg/integer`, refs to enums). Give it the registry when
+you make it, so `:malli/schema` holds a schema that needs none:
+
+```clojure
+(def find-users-schema
+  (m/schema (h/query-schema registry [:db :ids] {:select [:id] :from [:users] :where [:in :id :?ids]})
+            {:registry registry}))
+
+(m/validate (first (m/children find-users-schema)) [nil #{1 2}])
+;; => true
+
+(m/validate (first (m/children find-users-schema)) [nil #{}])
+;; => false
+```
+
+A query with problems still gives a schema, carrying them as `:pgmalli/problems`. The
+property makes the vector one longer, so read its parts with `m/children`:
+
+```clojure
+(def broken
+  (m/schema (h/query-schema registry [:id] {:select [:mail] :from [:users] :where [:= :id :?id]})
+            {:registry registry}))
+
+(:pgmalli/problems (m/properties broken))
+;; => [{:kind :unknown-column, :column :mail}]
+
+(m/form (first (m/children broken)))
+;; => [:cat [:int #:pg{:identity :always, :type "bigint"}]]
+```
+
+An argument of the query that `args` lacks is `:missing-arg`, most often a typo:
+
+```clojure
+(:pgmalli/problems (m/properties (m/schema (h/query-schema registry [:db :idd] {:select [:id] :from [:users] :where [:= :id :?id]})
+                                           {:registry registry})))
+;; => [{:kind :missing-arg, :arg :id}]
+```
+
+## Not checked
+
+- Columns inside code (a list, `(when x [:= :id x])`): what it builds is not data.
+- An ON clause naming a table joined after it, which PostgreSQL rejects.
+- Under ON CONFLICT, which of the target and `excluded` RETURNING and DO UPDATE WHERE see.
