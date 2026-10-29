@@ -38,15 +38,30 @@
     [:total [:pg/integer {:default 10, :pg/default 10, :pg/type "integer"}]]
     [:updated_at [:maybe [:time/local-date-time {:pg/type "timestamp"}]]]]
    [:multi
-    {:dispatch :mood, :error/message "closed_check"}
-    ["sad" [:map [:closed_at [:time/instant {:error/message "closed_check"}]]]]
-    ["happy" [:map [:closed_at [:nil {:error/message "closed_check"}]]]]
+    {:dispatch :mood,
+     :error/message
+     "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)",
+     :pg/constraint "closed_check"}
+    ["sad"
+     [:map
+      [:closed_at
+       [:time/instant
+        {:error/message
+         "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
+    ["happy"
+     [:map
+      [:closed_at
+       [:nil
+        {:error/message
+         "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
     [:malli.core/default [:map [:mood :nil]]]]
    [:pg/check
-    {:error/message "referrer_check", :pg/constraint "referrer_check"}
+    {:error/message "violates check constraint referrer_check: CHECK (referrer_id <> id)",
+     :pg/constraint "referrer_check"}
     [:<> :referrer_id :id]]
    [:pg/check
-    {:error/message "score_check", :pg/constraint "score_check"}
+    {:error/message "violates check constraint score_check: CHECK (score >= 0 AND score <= total)",
+     :pg/constraint "score_check"}
     [:and [:>= :score 0] [:<= :score :total]]]]},
  :unrendered [],
  :skipped []}

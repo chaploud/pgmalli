@@ -134,6 +134,9 @@ All notable changes to this project are documented here. The format follows
   in any comparison, code-built joins making tables nullable.
 - `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
   `{:select [:*]}`, and makes outer-joined columns nullable.
+- A row failing a CHECK reads its name and its text, as PostgreSQL's error names it:
+  `violates check constraint likes_within_views: CHECK (likes <= views)` (it read the name
+  alone); a regex or LIKE pattern pgmalli derived says the same, not "should match regex".
 - EXCLUDE constraints are read: a table's `:pg/exclude`, and a `:diagnostics` entry saying
   the schemas do not check it. Datasets keep its `=` columns distinct, so generated rows never
   conflict (`dataset-schema` still takes what the database takes).

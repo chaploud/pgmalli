@@ -23,10 +23,10 @@
                             {:columns ["group_id"] :table "sample.groups" :to ["id"]}
                             {:columns ["referrer_id"] :table "sample.users" :to ["id"]}]}
          (m/properties (pgmalli/columns registry :pg.sample/users))))
-  (is (= {:closed_at ["closed_check"]}
+  (is (= {:closed_at ["violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"]}
          (me/humanize (m/explain :pg.sample/users (assoc user :closed_at nil) opts)))
       "errors name the constraint")
-  (is (= ["score_check"]
+  (is (= ["violates check constraint score_check: CHECK (score >= 0 AND score <= total)"]
          (me/humanize (m/explain :pg.sample/users (assoc user :score 3) opts))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope")))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "t"} [:a :int]]}}))

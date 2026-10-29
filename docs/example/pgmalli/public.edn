@@ -21,7 +21,10 @@
     [:and
      {:pg/constraint ["groups_name_check"], :pg/type "text"}
      [:string {:min 1}]
-     [:re "[^ ]"]]]],
+     [:re
+      {:error/message
+       "violates check constraint groups_name_check: CHECK (length(TRIM(BOTH FROM name)) > 0)"}
+      "[^ ]"]]]],
   :pg.public/posts
   [:and
    [:map
@@ -42,7 +45,8 @@
      [:maybe [:string {:pg/generated [:upper [:cast :title :text]], :pg/type "text"}]]]
     [:views [:pg/integer {:default 0, :pg/default 0, :pg/type "integer"}]]]
    [:pg/check
-    {:error/message "likes_within_views", :pg/constraint "likes_within_views"}
+    {:error/message "violates check constraint likes_within_views: CHECK (likes <= views)",
+     :pg/constraint "likes_within_views"}
     [:<= :likes :views]]],
   :pg.public/user_status [:enum "active" "closed"],
   :pg.public/users
@@ -63,9 +67,22 @@
       {:default "active", :pg/default "active", :pg/type "user_status"}
       :pg.public/user_status]]]
    [:multi
-    {:dispatch :status, :error/message "closed_at_matches_status"}
-    ["active" [:map [:closed_at [:nil {:error/message "closed_at_matches_status"}]]]]
-    ["closed" [:map [:closed_at [:time/instant {:error/message "closed_at_matches_status"}]]]]
+    {:dispatch :status,
+     :error/message
+     "violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)",
+     :pg/constraint "closed_at_matches_status"}
+    ["active"
+     [:map
+      [:closed_at
+       [:nil
+        {:error/message
+         "violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"}]]]]
+    ["closed"
+     [:map
+      [:closed_at
+       [:time/instant
+        {:error/message
+         "violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"}]]]]
     [:malli.core/default [:map [:status :nil]]]]]},
  :unrendered [],
  :skipped []}

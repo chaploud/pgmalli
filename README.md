@@ -55,7 +55,7 @@ The CHECKs are enforced. A closed user needs a `closed_at`:
                {:group_id 1 :email "ann@example.com" :status "closed" :closed_at nil}
                {:registry registry})
     (me/humanize))
-;; => {:closed_at ["closed_at_matches_status"]}
+;; => {:closed_at ["violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"]}
 ```
 
 A CHECK across columns too:
@@ -65,7 +65,7 @@ A CHECK across columns too:
                {:author_id 1 :title "Hello" :likes 5 :views 3}
                {:registry registry})
     (me/humanize))
-;; => ["likes_within_views"]
+;; => ["violates check constraint likes_within_views: CHECK (likes <= views)"]
 ```
 
 Generate rows that satisfy every constraint:

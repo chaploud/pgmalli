@@ -13,7 +13,7 @@
                  :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause (str "CHECK (" c ")")}]) clauses))}}})
 
 (defn- check-facts [& clauses]
-  (->> (p/facts (apply schema-with-checks clauses)) (filter :constraint) (map #(cond-> (dissoc % :schema :table :constraint) (not= :table-check (:fact %)) (dissoc :expr))) vec))
+  (->> (p/facts (apply schema-with-checks clauses)) (filter :constraint) (map #(cond-> (dissoc % :schema :table :constraint :sql) (not= :table-check (:fact %)) (dissoc :expr))) vec))
 
 (deftest facts-from-types-and-columns
   (is (= [{:fact :enum-type :schema "public" :type-name "mood" :values ["happy" "sad"]}
@@ -93,7 +93,7 @@
   (let [fs (p/facts {:name "public" :types {}
                      :tables {"t" {:columns [{:name "c" :position 1 :data_type "integer" :is_nullable true}]
                                    :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (c >= 0)" :is_valid false}}}}})]
-    (is (= {:fact :table-check :valid? false :columns ["c"] :expr [:>= :c 0]}
+    (is (= {:fact :table-check :valid? false :columns ["c"] :expr [:>= :c 0] :sql "CHECK (c >= 0)"}
            (dissoc (last fs) :schema :table :constraint)))))
 
 (deftest keys-and-references
@@ -115,7 +115,7 @@
                                       :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)"}]}}
                      :tables {"t" {:columns [{:name "mail" :position 1 :data_type "email" :type_schema "public" :is_nullable true}] :constraints {}}}})]
     (is (= {:fact :domain :schema "public" :type-name "email" :base "text" :not-null? false
-            :facts [{:fact :regex :re "@" :case-insensitive? false :constraint "email_check" :schema "public" :type-name "email"
+            :facts [{:fact :regex :re "@" :case-insensitive? false :constraint "email_check" :sql "CHECK (VALUE ~ '@'::text)" :schema "public" :type-name "email"
                      :expr [:regex :VALUE [:cast "@" :text]]}]}
            (first fs)))
     (is (= [{:fact :column} {:fact :domain-ref :base "text"}] (map #(select-keys % [:fact :base]) (rest fs))))))

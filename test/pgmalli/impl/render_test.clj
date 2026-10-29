@@ -50,7 +50,7 @@
   (let [{:keys [registry unrendered]} (r/rendered facts)
         users (:pg.public/users registry)]
     (is (= [:enum "happy" "sad"] (:pg.public/mood registry)))
-    (is (= [:and :string [:re "@"]] (:pg.public/email registry)) "domain = what a non-NULL value must be: base type + its CHECK")
+    (is (= [:and :string [:re {:error/message "violates check constraint email_check: CHECK (VALUE ~ '@'::text)"} "@"]] (:pg.public/email registry)) "domain = what a non-NULL value must be: base type + its CHECK")
     (is (= :and (first users)) "columns, then the table constraints")
     (is (= [:map {:pg/table "public.users" :pg/primary-key ["id"] :pg/unique [{:columns ["nick"]}] :pg/foreign-keys [{:columns ["group_id"] :table "public.groups" :to ["id"]}]}
             [:age [:maybe [:pg/integer {:min 0 :max 150 :pg/type "integer" :pg/constraint ["age_check"]}]]]
@@ -68,16 +68,16 @@
             [:score [:pg/integer {:pg/type "integer"}]]
             [:seq [:pg/integer {:pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
             [:since [:time/local-date {:pg/type "date" :pg/default "2020-01-01"}]]
-            [:title [:and {:pg/type "text" :pg/constraint ["title_check"]} [:string {:min 1}] [:re "[^ ]"]]]
+            [:title [:and {:pg/type "text" :pg/constraint ["title_check"]} [:string {:min 1}] [:re {:error/message "violates check constraint title_check: CHECK (length(TRIM(BOTH FROM title)) > 0)"} "[^ ]"]]]
             [:total [:pg/integer {:pg/type "integer"}]]]
            (second users)))
-    (is (= [:multi {:dispatch :mood :error/message "closed_check"}
-            ["sad" [:map [:closed_at [:time/instant {:error/message "closed_check"}]]]]
-            ["happy" [:map [:closed_at [:nil {:error/message "closed_check"}]]]]
+    (is (= [:multi {:dispatch :mood :pg/constraint "closed_check" :error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}
+            ["sad" [:map [:closed_at [:time/instant {:error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
+            ["happy" [:map [:closed_at [:nil {:error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
             [:malli.core/default [:map [:mood :nil]]]]
            (nth users 2)) "a branch check becomes :multi")
     (is (empty? unrendered))
-    (is (= [:pg/check {:pg/constraint "score_check" :error/message "score_check"} [:<= :score :total]] (nth users 3))
+    (is (= [:pg/check {:pg/constraint "score_check" :error/message "violates check constraint score_check: CHECK (score <= total)"} [:<= :score :total]] (nth users 3))
         "a column comparison is a :pg/check over the expression data")
     (testing "validation and generation through malli"
       (let [reg (registry-with registry)
@@ -114,7 +114,7 @@
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))
         reg (registry-with registry)]
     (is (= [:and [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]] [:b [:pg/integer {:pg/type "integer"}]]]
-            [:pg/check {:pg/constraint "k" :error/message "k" :pg/not-valid true} [:<= :a :b]]]
+            [:pg/check {:pg/constraint "k" :error/message "violates check constraint k: CHECK (a <= b)" :pg/not-valid true} [:<= :a :b]]]
            (:pg.public/t registry))
         "the database enforces it for new rows, so the schema does; rows from before it may not validate")
     (is (not (m/validate :pg.public/t {:a 2 :b 1} {:registry reg})))
@@ -129,17 +129,17 @@
         {:keys [registry unrendered]} (r/rendered (p/facts (table "CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"
                                                                   "CHECK (kind = 'a'::text AND since = '2020-01-01'::date OR kind = 'b'::text AND since IS NULL)"
                                                                   "CHECK (since >= '2019-01-01'::date)")))]
-    (is (= [:multi {:dispatch :kind :error/message "k0"}
-            ["a" [:map [:tenant [:maybe [:enum {:error/message "k0"} #uuid "1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"]]]]]
-            ["b" [:map [:tenant [:nil {:error/message "k0"}]]]]
+    (is (= [:multi {:dispatch :kind :pg/constraint "k0" :error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}
+            ["a" [:map [:tenant [:maybe [:enum {:error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"} #uuid "1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f"]]]]]
+            ["b" [:map [:tenant [:nil {:error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}]]]]
             [:malli.core/default [:map [:kind :nil]]]]
            (nth (:pg.public/t registry) 2))
         "a uuid value set is an enum of uuids")
-    (is (= [:pg/check {:pg/constraint "k1" :error/message "k1"}
+    (is (= [:pg/check {:pg/constraint "k1" :error/message "violates check constraint k1: CHECK (kind = 'a'::text AND since = '2020-01-01'::date OR kind = 'b'::text AND since IS NULL)"}
             [:or [:and [:= :kind [:cast "a" :text]] [:= :since [:cast "2020-01-01" :date]]] [:and [:= :kind [:cast "b" :text]] [:is :since nil]]]]
            (nth (:pg.public/t registry) 3))
         "a branch whose fact has no rendering is evaluated whole")
-    (is (= [:pg/check {:pg/constraint "k2" :error/message "k2"} [:>= :since [:cast "2019-01-01" :date]]]
+    (is (= [:pg/check {:pg/constraint "k2" :error/message "violates check constraint k2: CHECK (since >= '2019-01-01'::date)"} [:>= :since [:cast "2019-01-01" :date]]]
            (nth (:pg.public/t registry) 4))
         "so is a column pattern that has none")
     (is (= [:maybe [:time/local-date {:pg/type "date"}]] (get-in registry [:pg.public/t 1 3 1]))
@@ -166,10 +166,10 @@
         "and exclude")
     (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:not [:enum "x" "y"]]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e <> ALL (ARRAY['x'::text, 'y'::text])") :e)))
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re "^ab[\\s\\S]*$"]]
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0"]} :string [:re {:error/message "violates check constraint k0: CHECK (e ~~ 'ab%'::text)"} "^ab[\\s\\S]*$"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "e ~~ 'ab%'::text") :e))
         "LIKE is a regex")
-    (is (= [:and {:pg/type "text" :pg/constraint ["k0" "k1"]} [:string {:min 2}] [:re "[^ ]"]]
+    (is (= [:and {:pg/type "text" :pg/constraint ["k0" "k1"]} [:string {:min 2}] [:re {:error/message "violates check constraint k0: CHECK (length(btrim(e)) > 0)"} "[^ ]"]]
            (column (reg [{:name "e" :position 1 :data_type "text" :is_nullable false}] "length(btrim(e)) > 0" "length(e) >= 2") :e))
         "a bound after an [:and ...] lands on the type, where malli reads it")
     (is (= [:enum {:pg/type "boolean" :pg/constraint ["k0"]} true]
@@ -178,7 +178,7 @@
            (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "cardinality(tags) BETWEEN 1 AND 3") :tags)))
     (is (= [:vector {:max 3 :pg/type "text[]" :pg/constraint ["k0"]} :string]
            (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) <= 3") :tags)))
-    (is (= [:pg/check {:pg/constraint "k0" :error/message "k0"} [:= [:array_length :tags 1] 3]]
+    (is (= [:pg/check {:pg/constraint "k0" :error/message "violates check constraint k0: CHECK (array_length(tags, 1) = 3)"} [:= [:array_length :tags 1] 3]]
            (nth (:pg.public/t (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) = 3")) 2))
         "array_length of an empty array is NULL, so an exact length is evaluated whole")))
 
@@ -195,7 +195,7 @@
                                                       {:name "code" :position 3 :data_type "opaque" :type_schema "public" :is_nullable true}]
                                             :constraints {}}}}))
         reg (registry-with registry)]
-    (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "even_int_check" :error/message "even_int_check"} [:= [:mod :VALUE 2] 0]]]
+    (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "even_int_check" :error/message "violates check constraint even_int_check: CHECK ((VALUE % 2) = 0)"} [:= [:mod :VALUE 2] 0]]]
            (:pg.public/even_int registry))
         "a domain CHECK outside the patterns is evaluated over the value")
     (is (m/validate :pg.public/even_int 4 {:registry reg}))
@@ -207,13 +207,13 @@
     (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                             :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
                                                               :tables {}}))]
-      (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "pos_check" :error/message "pos_check" :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
+      (is (= [:and :pg/integer [:pg/check-value {:pg/constraint "pos_check" :error/message "violates check constraint pos_check: CHECK (VALUE > 0) NOT VALID" :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
         "a NOT VALID domain CHECK is enforced (the database enforces it for every new value), marked")
       (is (empty? unrendered)))
     (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
                                                                                           :constraints [{:name "d_check" :definition "CHECK (VALUE >= '2020-01-01'::date)"}]}}
                                                               :tables {}}))]
-      (is (= [:and :time/local-date [:pg/check-value {:pg/constraint "d_check" :error/message "d_check"} [:>= :VALUE [:cast "2020-01-01" :date]]]]
+      (is (= [:and :time/local-date [:pg/check-value {:pg/constraint "d_check" :error/message "violates check constraint d_check: CHECK (VALUE >= '2020-01-01'::date)"} [:>= :VALUE [:cast "2020-01-01" :date]]]]
              (:pg.public/d registry))
           "a domain CHECK that loses its fact is evaluated whole too")
       (is (empty? unrendered)))
@@ -272,7 +272,7 @@
         row (:pg.public/t registry)]
     (is (= [:string {:min 4 :pg/type "text" :pg/constraint ["k0"]}] (get-in row [1 4 1]))
         "a CHECK the evaluator cannot take whole keeps its renderable part")
-    (is (= [:pg/check {:pg/constraint "k2" :error/message "k2"} [:or [:= :mood [:cast "sad" :mood]] [:> :score [:length :nm]]]] (nth row 2))
+    (is (= [:pg/check {:pg/constraint "k2" :error/message "violates check constraint k2: CHECK (mood = 'sad'::mood OR score > length(nm))"} [:or [:= :mood [:cast "sad" :mood]] [:> :score [:length :nm]]]] (nth row 2))
         "an enum literal is a value the evaluator knows")
     (is (= [[:regex "nm" "k0"] [:branch-check nil "k1"]] (map (juxt :fact :column :constraint) unrendered))
         "the lost regex is reported; the branch that lost it is reported whole, not enforced partially")
@@ -286,9 +286,9 @@
                                                                                     {:name "tz" :position 4 :data_type "time with time zone" :is_nullable true}]
                                                                           :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}}}}}))
         reg (registry-with registry)]
-    (is (= [:multi {:dispatch :kind :error/message "k"}
-            [nil [:or [:map [:note [:nil {:error/message "k"}]]] [:map [:note [:string {:error/message "k"}]]]]]
-            ["a" [:map [:note [:string {:error/message "k"}]]]]
+    (is (= [:multi {:dispatch :kind :pg/constraint "k" :error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}
+            [nil [:or [:map [:note [:nil {:error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}]]] [:map [:note [:string {:error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}]]]]]
+            ["a" [:map [:note [:string {:error/message "violates check constraint k: CHECK (kind IS NULL AND note IS NULL OR kind = 'a'::text AND note IS NOT NULL)"}]]]]
             [:malli.core/default [:map [:kind :nil]]]]
            (nth (:pg.public/t registry) 2))
         "a NULL dispatches on nil to every branch (kind = 'a' is NULL there, not false); a value with no branch fails the CHECK")
@@ -328,7 +328,7 @@
     (is (= [:malli.core/default [:map [:status :nil]]] (last (nth (:pg.public/t registry) 2)))
         "a NOT NULL dispatch column can only take the values that have a branch")
     (is (not (m/validate :pg.public/t {:status "other" :result nil} {:registry reg})))
-    (is (= [:map [:result [:some {:error/message "k"}]]] (get-in registry [:pg.public/t 2 3 1])) "IS NOT NULL on a jsonb column is :some, not :any")
+    (is (= [:map [:result [:some {:error/message "violates check constraint k: CHECK (status = 'open'::text AND result IS NULL OR status = 'done'::text AND result IS NOT NULL)"}]]] (get-in registry [:pg.public/t 2 3 1])) "IS NOT NULL on a jsonb column is :some, not :any")
     (is (not (m/validate :pg.public/t {:status "done" :result nil} {:registry reg})))
     (is (m/validate :pg.public/t {:status "done" :result {"a" 1}} {:registry reg}))
     (is (empty? unrendered))))
@@ -410,9 +410,9 @@
                                                                                     {:name "p" :position 3 :data_type "positive" :type_schema "public" :is_nullable true :generated_expr "(a - 10)"}]
                                                                           :constraints {"b_small" {:name "b_small" :type "CHECK" :check_clause "CHECK (b < 50)"}}}}}))
         reg (registry-with registry)]
-    (is (= [:pg/check {:pg/constraint "b_small" :error/message "b_small"} [:< [:* :a 2] 50]] (nth (:pg.public/t registry) 2))
+    (is (= [:pg/check {:pg/constraint "b_small" :error/message "violates check constraint b_small: CHECK (b < 50)"} [:< [:* :a 2] 50]] (nth (:pg.public/t registry) 2))
         "b is a * 2 to the database, so the CHECK is on a")
-    (is (= [:pg/check {:pg/constraint "p positive_check" :error/message "p positive_check"} [:> [:- :a 10] 0]] (nth (:pg.public/t registry) 3))
+    (is (= [:pg/check {:pg/constraint "p positive_check" :error/message "violates check constraint p positive_check: CHECK (VALUE > 0)"} [:> [:- :a 10] 0]] (nth (:pg.public/t registry) 3))
         "the domain of a generated column checks the expression's value")
     (is (m/validate :pg.public/t {:a 20 :b nil :p nil} {:registry reg}))
     (is (not (m/validate :pg.public/t {:a 30 :b nil :p nil} {:registry reg})) "30 * 2 is not below 50")
@@ -426,7 +426,7 @@
                                                                :constraints {"p" {:name "p" :type "CHECK"
                                                                                   :check_clause "CHECK (((id >= 0) AND (id < 10)) OR ((id >= 30) AND (id < 40) AND (id >= 20) AND (id < 30)))"}}}}}))
         reg (registry-with registry)]
-    (is (= [:or {:error/message "p"} [:map [:id [:int {:min 0 :max 9 :error/message "p"}]]]] (nth (:pg.public/t registry) 2)))
+    (is (= [:or {:pg/constraint "p" :error/message "violates check constraint p: CHECK (((id >= 0) AND (id < 10)) OR ((id >= 30) AND (id < 40) AND (id >= 20) AND (id < 30)))"} [:map [:id [:int {:min 0 :max 9 :error/message "violates check constraint p: CHECK (((id >= 0) AND (id < 10)) OR ((id >= 30) AND (id < 40) AND (id >= 20) AND (id < 30)))"}]]]] (nth (:pg.public/t registry) 2)))
     (is (m/validate :pg.public/t {:id 5} {:registry reg}))
     (is (not (m/validate :pg.public/t {:id 30} {:registry reg})))))
 

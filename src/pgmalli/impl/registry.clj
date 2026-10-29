@@ -246,7 +246,8 @@
     (loop [re (str (last part))]
       (cond
         ;; malli drops the anchors before it calls test.chuck
-        (try (string-from-regex (re-pattern (str/replace re #"^\^?(.*?)(\$?)$" "$1"))) true (catch Exception _ false)) [:re re]
+        (try (string-from-regex (re-pattern (str/replace re #"^\^?(.*?)(\$?)$" "$1"))) true (catch Exception _ false))
+        (if (= re (str (last part))) part [:re re])
         (str/starts-with? re "(?i)") (recur (subs re 4))))))
 
 (defn- generate-from-part

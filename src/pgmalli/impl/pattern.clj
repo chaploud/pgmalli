@@ -317,7 +317,7 @@
                      :let [{:keys [expr error]} (try-clause definition)
                            ;; NOT VALID: existing values may violate it, so it is reported, not applied
                            ms (when (not= false is_valid) (some-> expr normalize match-columns))
-                           check (when expr (merge base {:constraint cname :expr (x/canonical expr)}))]]
+                           check (when expr (merge base {:constraint cname :sql definition :expr (x/canonical expr)}))]]
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
                        expr {:check (cond-> (assoc check :fact :domain-check) (false? is_valid) (assoc :valid? false))}
                        :else {:check (merge base {:fact :unparsed :constraint cname :input definition :error error})}))
@@ -344,7 +344,7 @@
   "The facts of a CHECK. One on a char(n) column (in bpchar) matches no pattern: the patterns
    read text, and char(n) compares and measures without its trailing spaces."
   [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar]
-  (let [base (assoc base :constraint cname)
+  (let [base (assoc base :constraint cname :sql check_clause)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
         parsed (try-clause check_clause)]
     (cond

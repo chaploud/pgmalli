@@ -51,7 +51,7 @@
             (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
             (is (= [{:columns ["age"] :index true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
                 "unique indexes over plain columns count, key columns only, even one named as a constraint is; expression and partial ones do not")
-            (is (some #(= "closed" (:error/message (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
+            (is (some #(= "closed" (:pg/constraint (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
             (let [col (fn [k] (pgmalli/non-null (pgmalli/column reg :pg.public/prices k)))]
               (is (= [[:pg/numeric {:precision 3 :scale 1}] [:pg/numeric {:precision 3 :scale 5}] [:pg/numeric {:precision 2 :scale -3}]]
                      (map #(last (col %)) [:p1 :p2 :p3]))

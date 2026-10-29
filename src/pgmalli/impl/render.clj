@@ -49,6 +49,12 @@
 
 (defn- prune [m] (into {} (remove (comp nil? val)) m))
 
+(defn- check-message
+  "What a row failing a CHECK reads: its name and its text as PostgreSQL prints it, as
+   PostgreSQL's own error names the constraint."
+  [{:keys [constraint sql]}]
+  (if sql (str "violates check constraint " constraint ": " sql) constraint))
+
 (defn- with-props
   "Properties on a column schema. On [:and type ...] the bounds malli reads (:min, :max) go on
    the type; provenance stays on the :and, where the insert derivation reads it."
@@ -125,7 +131,7 @@
       ;; a numeric equals one of another scale (2.0 = 2), which an :enum of BigDecimals refuses
       :in-set (cond (and decimal-base? (every? number? (:values f)))
                     (kept (conj (if (and (vector? schema) (= :and (first schema))) schema [:and schema])
-                                [:pg/check-value {:pg/constraint (:constraint f) :error/message (:constraint f)} [:in :VALUE (vec (:values f))]]))
+                                [:pg/check-value {:pg/constraint (:constraint f) :error/message (check-message f)} [:in :VALUE (vec (:values f))]]))
                     (nil? members) as-is
                     ;; a second IN on the same column intersects
                     (= :enum base) (let [vs (filter (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
@@ -149,7 +155,7 @@
                          max (conj [(if max-exclusive? :< :<=) max])))
                  :else as-is))
       :non-blank (if string-base?
-                   (kept (if (:trim? f) [:and (with-props schema {:min 1}) [:re "[^ ]"]] (with-props schema {:min 1})))
+                   (kept (if (:trim? f) [:and (with-props schema {:min 1}) [:re {:error/message (check-message f)} "[^ ]"]] (with-props schema {:min 1})))
                    as-is)
       :max-length (cond string-base? (kept (with-props schema {:max (:max f)}))
                         ;; an array of varchar(n): the bound is the elements'
@@ -170,10 +176,10 @@
                      as-is)
                    as-is)
       :regex (if-let [re (when regex-base? (ev/java-regex (:re f)))]
-               (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") re)]])
+               (kept [:and schema [:re {:error/message (check-message f)} (str (when (:case-insensitive? f) "(?i)") re)]])
                as-is)
       :like (if regex-base?
-              (kept [:and schema [:re (str (when (:case-insensitive? f) "(?i)") (ev/like-regex (:pattern f)))]])
+              (kept [:and schema [:re {:error/message (check-message f)} (str (when (:case-insensitive? f) "(?i)") (ev/like-regex (:pattern f)))]])
               as-is)
       :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered :ref-base ref-base}
                                             (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f))
@@ -268,15 +274,16 @@
   [fragment]
   (boolean (some #(let [[_ _ s] (shape/entry-parts %)] (and (not (shape/maybe? s)) (impossible? s))) (shape/entries fragment))))
 
-(defn- pg-check [{:keys [constraint expr]}]
-  [:pg/check {:pg/constraint constraint :error/message constraint} expr])
+(defn- pg-check [{:keys [constraint expr] :as f}]
+  [:pg/check {:pg/constraint constraint :error/message (check-message f)} expr])
 
 (defn- table-constraint
   "{:schema :unrendered :skipped} for a table-level check fact; :schema nil when it cannot be
    rendered. A branch that lost a fact is never enforced partially: the CHECK is evaluated
    whole, or reported whole."
   [schema-name columns by-column {:keys [fact constraint] :as f} overrides types]
-  (let [frag #(fragment schema-name columns by-column (map (partial merge (select-keys f [:schema :table :constraint :expr])) %) constraint overrides)
+  (let [message (check-message f)
+        frag #(fragment schema-name columns by-column (map (partial merge (select-keys f [:schema :table :constraint :sql :expr])) %) message overrides)
         whole (fn [r] (cond (empty? (:unrendered r)) r
                             (ev/supported? (:expr f) types) {:schema (pg-check f) :skipped (:skipped r)}
                             :else {:schema nil :unrendered [f] :skipped (:skipped r)}))]
@@ -285,7 +292,7 @@
                           ;; a branch on the column being NULL dispatches on nil
                           bs (for [b branches, v (if (:null b) [nil] (:values b))] (assoc (frag (:facts b)) :value v))
                           d (when default (frag default))]
-                      (whole {:schema (into [:multi {:dispatch (shape/ident-key dispatch) :error/message constraint}]
+                      (whole {:schema (into [:multi {:dispatch (shape/ident-key dispatch) :pg/constraint constraint :error/message message}]
                                             ;; two alternatives pinning the same value: either may hold; a NULL
                                             ;; leaves every alternative NULL or false, so one of them is not false;
                                             ;; another value without a branch of its own fails
@@ -301,7 +308,7 @@
       :or-check (let [all (map frag (:alternatives f))
                       alts (remove (comp unreachable? :schema) all)
                       partitions? (str/ends-with? constraint " (partitions)")]
-                  (assoc (whole {:schema (if (seq alts) (into [:or {:error/message constraint}] (map :schema alts)) [:not {:error/message constraint} :any])
+                  (assoc (whole {:schema (if (seq alts) (into [:or {:pg/constraint constraint :error/message message}] (map :schema alts)) [:not {:pg/constraint constraint :error/message message} :any])
                                  :unrendered (mapcat :unrendered alts)
                                  :skipped (mapcat :skipped alts)})
                          :diagnostics (for [[i a] (map-indexed vector all) :when (unreachable? (:schema a))]
@@ -372,7 +379,7 @@
   [facts lost extra]
   (concat (remove #(and (:expr %) (lost (:constraint %))) facts)
           (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) facts)]]
-            (merge extra {:fact :table-check :constraint c :expr (:expr f) :columns (pattern/referenced-columns (:expr f))}))))
+            (merge extra {:fact :table-check :constraint c :sql (:sql f) :expr (:expr f) :columns (pattern/referenced-columns (:expr f))}))))
 
 ;;; tables and domains
 
@@ -438,14 +445,14 @@
         lost (lost-checks (:unrendered first-pass) types)
         facts (if (empty? lost) facts (remove #(lost (:constraint %)) facts))
         checks (concat checks (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) (:unrendered first-pass))]]
-                                (assoc (select-keys f [:schema :type-name :constraint :expr]) :fact :domain-check)))
+                                (assoc (select-keys f [:schema :type-name :constraint :sql :expr]) :fact :domain-check)))
         {:keys [schema unrendered skipped]} (if (empty? lost) first-pass (fold-facts schema-name (base-type base) facts overrides))
         results (for [c checks :let [ov (override-for overrides c)]]
                   (cond (and (map? ov) (:skip ov)) {:skipped [c]}
                         ov {:schema ov}
                         ;; NOT VALID: enforced for every new value all the same, so enforced, marked
                         (and (= :domain-check (:fact c)) (ev/supported? (:expr c) types))
-                        {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (:constraint c)} (false? (:valid? c)) (assoc :pg/not-valid true)) (:expr c)]}
+                        {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (check-message c)} (false? (:valid? c)) (assoc :pg/not-valid true)) (:expr c)]}
                         :else {:unrendered [c]}))
         extras (keep :schema results)
         s (cond (empty? extras) schema
