@@ -28,3 +28,7 @@
             :unrendered {"sample" [{:kind :check :table "sample.users"}]}
             :diagnostics {"sample" [{:table "sample.users" :kind :row-trigger}]}}
            (generate/check config {:db? false})))))
+
+(deftest diff-takes-generated-data-maps
+  (doseq [x [42 "x" [nil] nil]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"generated data map" (generate/diff x {:registry {}})) (pr-str x))))

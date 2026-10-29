@@ -10,7 +10,8 @@
    or, with a PostgreSQL JDBC driver on the classpath and no psql needed,
       :db {:jdbc-url \"jdbc:postgresql://host/db\" :user :password} or {:datasource ds}"
   (:require [pgmalli.impl.diff :as diff]
-            [pgmalli.impl.files :as files]))
+            [pgmalli.impl.files :as files]
+            [pgmalli.impl.jdbc :as jdbc]))
 
 (defn generate!
   "Writes the generated file for every schema in the config. Returns {schema path}."
@@ -18,9 +19,12 @@
   (files/generate! config))
 
 (defn diff
-  "[difference ...] between two generated data maps of a schema, as stale reports them (:file the
-   first, :db the second): a migration's effect on the schemas, read from the files alone."
+  "[difference ...] between two generated data maps of a schema, as check's :stale reports them
+   (:file the first, :db the second): a migration's effect on the schemas, read from the files
+   alone."
   [before after]
+  (doseq [x [before after]]
+    (jdbc/checked! [:map [:registry :map]] x :pgmalli.error/invalid-options "a generated data map (pgmalli.core/generated)"))
   (diff/diff before after))
 
 (defn check
