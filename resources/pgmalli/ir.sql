@@ -108,7 +108,7 @@ cons AS (
     SELECT string_agg('(' || COALESCE(pg_catalog.pg_get_partition_constraintdef(t.inhrelid), 'true')
                           || COALESCE((SELECT string_agg(' AND (' || pg_catalog.pg_get_expr(k.conbin, k.conrelid) || ')', '')
                                        FROM pg_catalog.pg_constraint k WHERE k.conrelid = t.inhrelid AND k.contype = 'c' AND k.conislocal), '')
-                          || ')', ' OR ') AS clause
+                          || ')', ' OR ' ORDER BY l.relname) AS clause
     FROM tree t JOIN pg_catalog.pg_class l ON l.oid = t.inhrelid
     WHERE l.relkind IN ('r', 'f')
   ) leaves ON true
@@ -142,7 +142,7 @@ types AS (
                            'base_type', pg_catalog.format_type(t.typbasetype, t.typtypmod),
                            'not_null', t.typnotnull,
                            'default', t.typdefault,
-                           'constraints', (SELECT COALESCE(json_agg(json_build_object('name', k.conname, 'definition', pg_get_constraintdef(k.oid, true), 'is_valid', k.convalidated)), '[]'::json)
+                           'constraints', (SELECT COALESCE(json_agg(json_build_object('name', k.conname, 'definition', pg_get_constraintdef(k.oid, true), 'is_valid', k.convalidated) ORDER BY k.conname), '[]'::json)
                                            FROM pg_catalog.pg_constraint k WHERE k.contypid = t.oid AND k.contype = 'c'))
          END AS typ
   FROM pg_catalog.pg_type t

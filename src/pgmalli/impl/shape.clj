@@ -10,6 +10,10 @@
 (defn- schema-form? [x]
   (or (vector? x) (keyword? x) (string? x) (symbol? x) (fn? x) (map? x) (m/schema? x) (m/into-schema? x)))
 
+(def ^:private checked-registry
+  "The last registry map schemas-of checked: callers pass the same one over and over."
+  (atom nil))
+
 (defn schemas-of
   "The name -> schema map of a registry: a map as it is, a malli Registry (a composite one, say)
    through its schemas. Anything else is an error: a generated data map, a map whose values are
@@ -19,12 +23,13 @@
         (error/fail! :pgmalli.error/not-a-registry
                      (str "given the generated data of schema " (pr-str (:schema registry)) ", not a registry; pass (pgmalli.core/registry " (pr-str (:schema registry)) ")")
                      {:given (:schema registry)})
+        (identical? registry @checked-registry) registry
         (map? registry)
         (if-let [[k v] (first (remove (comp schema-form? val) registry))]
           (error/fail! :pgmalli.error/not-a-registry
                        (str "not a registry: " (pr-str k) " maps to " (pr-str v) ", not a schema; pass (pgmalli.core/registry \"<schema>\")")
                        {:given k})
-          registry)
+          (reset! checked-registry registry))
         :else
         (if-let [r (mr/registry registry)]
           (mr/-schemas r)

@@ -50,7 +50,12 @@
                     {:given (:table t) :table (:table t) :references (:table r)}))
      (mapv (fn [t] (update t :refs #(vec (filter (comp known :table) %)))) ts))))
 
-(defn key-of [row columns] (mapv #(get row %) columns))
+(defn- comparable
+  "x with byte arrays as vectors: a bytea value compares and hashes by its bytes, not by identity."
+  [x]
+  (if (bytes? x) (vec x) x))
+
+(defn key-of [row columns] (mapv #(comparable (get row %)) columns))
 
 (defn- counting-key
   "The key value of a row for a key set, or nil when its NULLs mean it cannot conflict."
@@ -110,7 +115,7 @@
   (if (some #{v} candidates)
     (cons v (remove #{v} candidates))
     (let [n (count candidates)]
-      (if (zero? n) candidates (let [i (mod (hash v) n)] (concat (drop i candidates) (take i candidates)))))))
+      (if (zero? n) candidates (let [i (mod (hash (comparable v)) n)] (concat (drop i candidates) (take i candidates)))))))
 
 (defn- solve-refs
   "[row ds] with the row's references pointing at rows of ds and the row valid?, or nil.
@@ -196,7 +201,8 @@
         scale (requiring-resolve 'clojure.test.check.generators/scale)
         row-gen ((:row-gen mem) name)
         chunk 25]
-    (->> (range 0 n chunk)
+    ;; not a range, which is chunked: a table that fills from a few rows generates no more
+    (->> (take-while #(< % n) (iterate #(+ % chunk) 0))
          (mapcat (fn [start] (generate (vector-of (scale #(max % 30) row-gen) (min chunk (- n start))) 30 (+ seed start))))
          (map-indexed (fn [i row] (fill-branches registry (:gen-of mem) name row (+ seed (* 1000 i))))))))
 
@@ -293,7 +299,7 @@
                             rs (get ds target)
                             settle (fn [[r ds]] (some-> (if self (first (solve-refs r self ds (set (mapcat :columns others)) target valid? nil)) r) (vector ds)))
                             fits? (fn [[r ds]] (when (= (inc (count rs)) (count (distinct-by-keys (conj rs r) key-sets))) [r ds]))]
-                        (->> (candidates registry mem name 20 (hash [target (count rs) pins]))
+                        (->> (candidates registry mem name 20 (hash [target (count rs) (update-vals pins comparable)]))
                              (map #(merge % pins))
                              (keep #(solve-refs % others ds (set (keys pins)) target valid? (grow (dec depth))))
                              (keep settle)

@@ -31,6 +31,10 @@
   [dataset]
   (not-empty (:pgmalli/short (meta dataset))))
 
+(def ^:private dataset-shape [:map-of :string [:sequential :map]])
+
+(defn- dataset! [dataset] (jdbc/checked! dataset-shape dataset :pgmalli.error/invalid-dataset "dataset {\"schema.table\" [row ...]}"))
+
 (defn inserts
   "HoneySQL INSERT maps for a dataset, one per table, in an order the database accepts:
    parents before the tables referencing them, and within a table rows before the rows
@@ -42,6 +46,7 @@
   ([registry dataset] (inserts registry dataset {}))
   ([registry dataset opts]
    (jdbc/checked! [:map {:closed true} [:on-conflict {:optional true} [:enum :nothing]]] opts)
+   (dataset! dataset)
    (insert/inserts registry dataset (or opts {}))))
 
 ;;; datasets as EDN: the values EDN has no literal for go under pgmalli's tags
@@ -68,10 +73,11 @@
    generated once (with a seed) is kept in the repository and read back with read-dataset.
    The tables that came out short (short-tables) are written too, under :pgmalli/short."
   [path dataset]
+  (dataset! dataset)
   (io/make-parents path)
   (spit path
         (str "{" (str/join "\n " (concat (for [[table rows] (sort-by key dataset)]
-                                            (str (pr-str table) "\n [" (str/join "\n  " (map #(pr-str (into (sorted-map) (map (fn [[k v]] [k (literal v)])) %)) rows)) "]"))
+                                            (str (pr-str table) "\n [" (str/join "\n  " (map #(pr-str (into (sorted-map-by (fn [a b] (compare (str a) (str b)))) (map (fn [[k v]] [k (literal v)])) %)) rows)) "]"))
                                           (when-let [s (short-tables dataset)] [(str ":pgmalli/short " (pr-str s))])))
              "}\n")))
 

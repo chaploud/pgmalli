@@ -4,6 +4,7 @@
             [clojure.test.check.generators :as tcg]
             [malli.core :as m]
             [pgmalli.data :as data]
+            pgmalli.impl.dataset
             [pgmalli.sample :refer [opts registry]]))
 
 (deftest a-dataset-kept-as-edn-comes-back-as-it-was
@@ -43,3 +44,17 @@
     (is (every? #(= 2025 (.get ^java.time.temporal.Temporal % java.time.temporal.ChronoField/YEAR))
                 (map #(if (instance? java.time.Instant %) (.atZone ^java.time.Instant % java.time.ZoneOffset/UTC) %) times))
         "times come from a fixed range, not from the clock")))
+
+(deftest a-dataset-not-shaped-as-one-is-an-error-not-a-hang
+  (doseq [ds [{"sample.users" [nil]} {"sample.users" {:id 1}} [1] 42]]
+    (is (= :pgmalli.error/invalid-dataset (:pgmalli/error (ex-data (is (thrown? clojure.lang.ExceptionInfo (data/inserts registry ds))))))
+        (pr-str ds))
+    (is (thrown? clojure.lang.ExceptionInfo (data/write-dataset (str (java.io.File/createTempFile "pgmalli-bad" ".edn")) ds)))))
+
+(deftest a-row-with-string-and-keyword-columns-writes
+  (let [path (str (java.io.File/createTempFile "pgmalli-keys" ".edn"))]
+    (data/write-dataset path {"public.t" [{:id 1 "a.b" 2}]})
+    (is (= {"public.t" [{:id 1 "a.b" 2}]} (data/read-dataset path)))))
+
+(deftest byte-array-keys-compare-by-their-bytes
+  (is (= (pgmalli.impl.dataset/key-of {:k (byte-array [1])} [:k]) (pgmalli.impl.dataset/key-of {:k (byte-array [1])} [:k]))))

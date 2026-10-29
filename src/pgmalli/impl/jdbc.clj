@@ -50,9 +50,14 @@
      opts
      (let [errors (-> (m/explain schema opts) me/with-spell-checking me/humanize)]
        (error/fail! kind (str label ": " (pr-str errors))
-                    {:given (cond-> opts (map? opts) (dissoc :db)) :errors errors :known (vec (map first (m/children (m/schema schema))))})))))
+                    (cond-> {:given (cond-> opts (map? opts) (dissoc :db)) :errors errors}
+                      (= :map (m/type schema)) (assoc :known (vec (map first (m/children (m/schema schema)))))))))))
 
-(defn options! [opts] (checked! options-schema opts))
+;; compiled once: malli keeps a schema's validator, and these are checked on every call
+(def ^:private options (delay (m/schema options-schema)))
+(def ^:private read-options* (delay (m/schema read-options-schema)))
+
+(defn options! [opts] (checked! @options opts))
 
 ;;; what the driver returns and takes
 
@@ -224,7 +229,7 @@
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
    pgmalli.core/as-read."
   [registry name opts]
-  (checked! read-options-schema opts)
+  (checked! @read-options* opts)
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         table (or (:pg/table props) (:pg/view props))
