@@ -329,7 +329,7 @@
 (deftest text-of-non-strings-is-postgresqls-or-unknown
   (is (passes? "CHECK (concat('a'::text, b) = 'at'::text)" {:b true}) "concat prints t")
   (is (passes? "CHECK (((b)::text || 'x'::text) = 'truex'::text)" {:b true}) "a cast prints true")
-  (is (passes? "CHECK (('a'::text || b) = 'at'::text)" {:b true}))
+  (is (passes? "CHECK (('a'::text || b) = 'atrue'::text)" {:b true}) "|| casts to text, which prints true")
   (is (passes? "CHECK ((ts)::text = '2020-01-01 00:00:00'::text)" {:ts (java.time.LocalDateTime/parse "2020-01-01T00:00")}))
   (is (passes? "CHECK ((ts)::text = '2020-01-01 00:00:00.5'::text)" {:ts (java.time.LocalDateTime/parse "2020-01-01T00:00:00.5")}))
   (is (not (passes? "CHECK ((ts)::text = 'x'::text)" {:ts (java.time.LocalDateTime/parse "2020-01-01T00:00")})))
@@ -370,3 +370,65 @@
 (deftest a-time-literal-parses-and-compares
   (is (passes? "CHECK (t >= '09:00:00'::time without time zone)" {:t (java.time.LocalTime/parse "10:00")}))
   (is (not (passes? "CHECK (t >= '09:00:00'::time without time zone)" {:t (java.time.LocalTime/parse "08:00")}))))
+
+(deftest syntax-java-reads-differently-is-unsupported
+  (doseq [re ["[[:<:]]x[[:>:]]" "^[[.-.]]$" "^[[=a=]]$" "^[a&&b]$" "^\\x41b$" "^[\\x41]$" "(?i)A" "a(?x) b" "^\\v$"
+              "^a{,2}$" "***=a." "***:(?i)a" "\\ca" "\\u0041" "^(a)\\1$" "^\\0$" "\\y" "^[a[b]$"]]
+    (is (nil? (ev/java-regex re)) re))
+  (doseq [re ["^\\(?\\d{3}\\)?$" "^(?:ab)+$" "a(?=b)" "(?<!x)y" "^[]a]$" "^[^]a]$" "^a{1,2}$"]]
+    (is (some? (ev/java-regex re)) re))
+  (is (passes? "CHECK (s ~ '^[:alpha:]$'::text)" {:s ":"}) "[:alpha:] outside brackets is a bracket of : a l p h"))
+
+(deftest concatenation-casts-to-text-and-concat-prints-the-output
+  (is (passes? "CHECK ((b || ''::text) = 'true'::text)" {:b true}))
+  (is (passes? "CHECK (concat(b, ''::text) = 't'::text)" {:b true})))
+
+(deftest jsonb-text-is-jsonb-as-postgresql-prints-it
+  (is (passes? "CHECK (((v -> 'a'::text))::text = '\"x\"'::text)" {:v {"a" "x"}}))
+  (is (passes? "CHECK (((v -> 'a'::text))::text = 'null'::text)" {:v {"a" nil}}))
+  (is (passes? "CHECK ((v)::text = '{\"a\": \"\\u0001\\n\", \"bb\": [1, null]}'::text)" {:v {"bb" [1 nil] "a" "\u0001\n"}}))
+  (is (passes? "CHECK ((v)::text = '{\"é\": 1, \"abc\": 2}'::text)" {:v {"abc" 2 "é" 1}}) "keys by length in bytes")
+  (is (passes? "CHECK (((v -> 'a'::text) || 'y'::text) = '\"x\"y'::text)" {:v {"a" "x"}}) "jsonb || text is text"))
+
+(deftest a-json-null-inside-a-container-is-null
+  (is (passes? "CHECK ((v || 'null'::jsonb) = '[1, null]'::jsonb)" {:v 1}))
+  (is (passes? "CHECK (((v -> 'a'::text) || (v -> 'b'::text)) = '[null, 2]'::jsonb)" {:v {"a" nil "b" 2}}))
+  (is (passes? "CHECK (((v -> 'a'::text) || (v -> 'b'::text)) = '[\"x\", \"y\"]'::jsonb)" {:v {"a" "x" "b" "y"}}))
+  (is (passes? "CHECK ((v -> 'a'::text) <@ '[null]'::jsonb)" {:v {"a" nil}})))
+
+(deftest date-plus-time-is-a-timestamp
+  (let [d (java.time.LocalDate/parse "2020-01-01")]
+    (is (passes? "CHECK ((v + '10:00:00'::time without time zone) > v)" {:v d}))
+    (is (passes? "CHECK ((v + '10:00:00'::time without time zone) = '2020-01-01 10:00:00'::timestamp without time zone)" {:v d}))
+    (is (passes? "CHECK ((v - '10:00:00'::time without time zone) = '2019-12-31 14:00:00'::timestamp without time zone)" {:v d}))))
+
+(deftest timestamptz-casts-to-time-without-time-zone
+  (is (passes? "CHECK (((v)::time without time zone >= '00:00:00'::time without time zone))" {:v (java.time.Instant/now)})))
+
+(deftest numeric-power-is-exact-or-unknowable
+  (is (passes? "CHECK (((v ^ (2)::numeric) > (0)::numeric))" {:v 1e200M}))
+  (is (not (passes? "CHECK (((v ^ (2)::numeric) > (0)::numeric))" {:v 0M})))
+  (is (passes? "CHECK (((v ^ (2)::numeric) = 1.44))" {:v 1.2M}) "a double would give 1.44 and a bit")
+  (is (passes? "CHECK (((v ^ 0.5) <= 1.4142135623730950))" {:v 2M}) "PostgreSQL rounds a fractional power"))
+
+(deftest small-casts-and-comparisons
+  (is (passes? "CHECK ((v = 'NaN'::double precision))" {:v Double/NaN}))
+  (is (passes? "CHECK ((v >= (0)::double precision))" {:v Double/NaN}) "NaN sorts above every number")
+  (is (passes? "CHECK ((v >= (0)::double precision))" {:v Float/NaN}))
+  (is (passes? "CHECK ((v)::boolean)" {:v 5}))
+  (is (not (passes? "CHECK ((v)::boolean)" {:v 0})))
+  (is (ev/passes? (x/check-clause "CHECK ((v <= ARRAY['happy'::ord]))") {:v ["sad"]} {:v :unordered}) "an enum array orders by its labels"))
+
+(deftest a-numeric-literal-beyond-bigint-is-read
+  (is (not (passes? "CHECK ((v > ('100000000000000000000000000000000000000'::numeric)::double precision))" {:v 1.0}))))
+
+(deftest text-orders-by-a-collation-the-evaluator-does-not-have
+  (is (passes? "CHECK ((v >= 'a'::text))" {:v "B"}) "en_US and ICU put B after a")
+  (is (passes? "CHECK ((v BETWEEN 'a'::text AND 'c'::text))" {:v "B"}))
+  (is (passes? "CHECK ((GREATEST(v, 'a'::text) = v))" {:v "B"}))
+  (is (not (passes? "CHECK ((v >= '10'::text))" {:v "09"})) "digits order alike in every collation")
+  (is (not (passes? "CHECK ((v = 'a'::text))" {:v "B"}))))
+
+(deftest arrays-order-element-by-element-and-uuids-by-unsigned-bytes
+  (is (passes? "CHECK ((v < ARRAY[2]))" {:v [1 2 3]}))
+  (is (passes? "CHECK ((v > '00000000-0000-0000-0000-000000000000'::uuid))" {:v #uuid "ffffffff-0000-0000-0000-000000000000"})))

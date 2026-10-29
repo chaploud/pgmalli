@@ -63,6 +63,11 @@
          (number? v) (num v)
          :else v)))
 
+(def ^:private json-null
+  "A JSON null as -> returns it: not SQL NULL, which a missing key gives. Inside a container a
+   JSON null is nil."
+  ::json-null)
+
 (defn- nan? [v] (and (float? v) (Double/isNaN (double v))))
 
 (defn- compare*
@@ -96,13 +101,25 @@
           (and (number? a) (number? b)) (zero? (compare* a b))
           :else (= a b))))
 
+(defn- order
+  "compare* where PostgreSQL's order is the evaluator's; otherwise unknowable: text orders by
+   its collation (digits alone sort alike in every one), an array or jsonb by rules that tell
+   them apart, values of different kinds only inside jsonb."
+  [a b]
+  (let [digits? #(re-matches #"[0-9]*" %)]
+    (cond (or (coll? a) (coll? b) (= json-null a) (= json-null b)) (unknowable :order)
+          (and (string? a) (string? b) (not (and (digits? a) (digits? b)))) (unknowable :collation)
+          ;; PostgreSQL orders a uuid by its bytes unsigned, UUID.compareTo by signed longs
+          (and (instance? UUID a) (instance? UUID b)) (compare (str a) (str b))
+          :else (try (compare* a b) (catch ClassCastException _ (unknowable :order))))))
+
 (defn- cmp [op a b]
   (when (and (some? a) (some? b))
     (case op
       := (same? a b)
       :<> (not (same? a b))
       (let [[a b] (comparable-pair a b)
-            c (compare* a b)]
+            c (order a b)]
         (case op :< (neg? c) :> (pos? c) :<= (not (pos? c)) :>= (not (neg? c)))))))
 
 (defn- in3
@@ -128,10 +145,13 @@
 
 (defn- plus [a b]
   ;; addition commutes: the date, time or number goes first, the duration or day count second
-  (let [[a b] (if (or (instance? Duration a) (and (integer? a) (instance? LocalDate b))) [b a] [a b])]
+  (let [[a b] (if (or (instance? Duration a) (and (or (integer? a) (instance? LocalTime a) (instance? OffsetTime a)) (instance? LocalDate b))) [b a] [a b])]
     (cond (and (number? a) (number? b)) (float-result (+ a b) [a b] nil)
           ;; date + integer is a date, date + interval a timestamp
           (and (instance? LocalDate a) (integer? b)) (.plusDays ^LocalDate a b)
+          ;; date + time is a timestamp, date + timetz a timestamptz
+          (and (instance? LocalDate a) (instance? LocalTime b)) (.atTime ^LocalDate a ^LocalTime b)
+          (and (instance? LocalDate a) (instance? OffsetTime b)) (.toInstant (.atDate ^OffsetTime b a))
           (instance? LocalDate a) (.plus (.atStartOfDay ^LocalDate a) ^Duration b)
           (instance? Instant a) (.plus ^Instant a ^Duration b)
           (instance? LocalDateTime a) (.plus ^LocalDateTime a ^Duration b)
@@ -145,6 +165,7 @@
   ([a b]
   (cond (and (number? a) (number? b)) (float-result (- a b) [a b] nil)
         (instance? Duration b) (plus a (.negated ^Duration b))
+        (and (instance? LocalDate a) (instance? LocalTime b)) (.minusNanos (.atStartOfDay ^LocalDate a) (.toNanoOfDay ^LocalTime b))
         (and (instance? LocalDate a) (integer? b)) (.minusDays ^LocalDate a b)
         (and (instance? LocalDate a) (instance? LocalDate b)) (- (.toEpochDay ^LocalDate a) (.toEpochDay ^LocalDate b))
         (and (instance? Instant a) (instance? Instant b)) (Duration/between b a)
@@ -202,9 +223,18 @@
                                      (float-result (/ (double a) (double b)) [a b] (fn [_] (not (zero? a)))))
         :else (numeric-divide (bigdec a) (bigdec b))))
 
-(defn- power [x y]
-  (let [r (float-result (Math/pow (double x) (double y)) [x y] (fn [_] (not (zero? x))))]
-    (if (and (integer? x) (integer? y) (not (neg? y))) (bigdec r) r)))
+(defn- power
+  "^: numeric when an operand is a numeric and neither a double, exact for an exponent of 0 to
+   1000 and unknowable otherwise (PostgreSQL rounds a numeric power to its own scale)."
+  [x y]
+  (if (and (or (decimal? x) (decimal? y)) (not-any? float? [x y]))
+    (let [x (bigdec x)
+          n (try (.intValueExact (bigdec y)) (catch ArithmeticException _ nil))]
+      (if (and n (<= 0 n 1000) (< (* n (max 1 (- (.precision x) (.scale x)))) 100000))
+        (.pow x (int n))
+        (unknowable :power)))
+    (let [r (float-result (Math/pow (double x) (double y)) [x y] (fn [_] (not (zero? x))))]
+    (if (and (integer? x) (integer? y) (not (neg? y))) (bigdec r) r))))
 
 (defn- set-scale
   "A numeric at digits places; a negative digits rounds left of the point, leaving scale 0."
@@ -268,10 +298,6 @@
 
 (declare json-text)
 
-(def ^:private json-null
-  "A JSON null inside a jsonb value, as -> returns it: not SQL NULL, which a missing key gives."
-  ::json-null)
-
 (def ^:private pg-time
   (-> (DateTimeFormatterBuilder.) (.appendPattern "HH:mm:ss") (.appendFraction ChronoField/MICRO_OF_SECOND 0 6 true) .toFormatter))
 
@@ -312,15 +338,30 @@
                                     (unknowable :text)))
           :else (unknowable :text))))
 
+(declare json-text*)
+
 (defn- concat*
-  "||: text, a SQL array and an element, or jsonb, where two objects merge and anything else
-   concatenates as arrays (a scalar or an object as an array of itself)."
-  [a b]
-  (cond (and (string? a) (string? b)) (str a b)
-        (and (map? a) (map? b)) (merge a b)
-        (or (coll? a) (coll? b)) (into (if (vector? a) a [a]) (if (vector? b) b [b]))
-        (or (string? a) (string? b)) (str (text-out a false) (text-out b false))
-        :else [a b]))
+  "||: jsonb, where two objects merge and anything else concatenates as arrays (a scalar or an
+   object as an array of itself); text, a jsonb printed as one, other values cast to text (true,
+   not t); or a SQL array and an element. ja and jb tell an operand is jsonb by its expression
+   (-> and the like give strings and numbers too); an object is jsonb, and so is anything but a
+   string beside a jsonb (text || jsonb takes text alone)."
+  ([a b] (concat* a b false false))
+  ([a b ja jb]
+   (let [ja (or ja (map? a) (= json-null a))
+         jb (or jb (map? b) (= json-null b))
+         ja (or ja (and jb (not (string? a))))
+         jb (or jb (and ja (not (string? b))))
+         elem #(if (= json-null %) nil %)]
+     (cond (and ja jb) (if (and (map? a) (map? b))
+                         (merge a b)
+                         (into (if (vector? a) a [(elem a)]) (if (vector? b) b [(elem b)])))
+           ja (str (json-text* a) (text-out b true))
+           jb (str (text-out a true) (json-text* b))
+           (and (string? a) (string? b)) (str a b)
+           (or (coll? a) (coll? b)) (into (if (vector? a) a [a]) (if (vector? b) b [b]))
+           (or (string? a) (string? b)) (str (text-out a true) (text-out b true))
+           :else [a b]))))
 
 ;;; casts
 
@@ -443,9 +484,9 @@
     (float-types t) (cond-> (double (if (number? v) v (parse-double (str/trim v)))) (real-types t) float4)
     (bpchar-types t) (str/replace (cast-to v :text) #" +$" "")
     (text-types t) (text-out v true)
-    (= :boolean t) (if (boolean? v) v (parse-boolean* v))
+    (= :boolean t) (cond (boolean? v) v (integer? v) (not (zero? v)) :else (parse-boolean* v))
     ;; timestamptz to the types without a zone: in the session zone, the JVM's (pgjdbc sets it)
-    (and (instance? Instant v) (#{:date :timestamp :timestamp-without-time-zone :time} t))
+    (and (instance? Instant v) (#{:date :timestamp :timestamp-without-time-zone :time :time-without-time-zone} t))
     (cast-to (LocalDateTime/ofInstant v (ZoneId/systemDefault)) t)
     (= :date t) (cond (instance? LocalDate v) v
                       (instance? LocalDateTime v) (.toLocalDate ^LocalDateTime v)
@@ -496,31 +537,54 @@
         "(?!)"))
     atom))
 
-(def ^:private regex-token
-  "An escape or a bracket expression of a Java regex: what the rewrites below leave whole."
+(def ^:private escape-or-bracket
+  "An escape or a bracket expression of a Java regex: what generation-regex's rewrites leave whole."
   "\\\\.|\\[\\^?\\]?(?:\\\\.|[^\\]\\\\])*\\]")
+
+(def ^:private regex-token
+  "An escape, a bracket expression (with its [:class:]es), a (? group opener, {, or a character."
+  #"\\.|\[\^?\]?(?:\[:\w+:\]|\\.|[^\]\\])*\]|\(\?<?.?|\{,|[\s\S]")
+
+(defn- java-reads-differently?
+  "Whether a token of a PostgreSQL pattern means something else to Java, or nothing:
+   - the escapes \\m \\M \\y \\Y (word boundaries), \\Z, \\A, \\v (a vertical tab), \\x (every hex
+     digit that follows), \\u \\U \\c, and \\0 to \\9 (octal or back-references), also inside brackets;
+   - a [ inside brackets ([[:<:]], [[.-.]], [[=a=]], which Java nests) and && (an intersection);
+   - (? other than a group or a lookaround: embedded options;
+   - {,n}, which Java reads as text."
+  [t]
+  (or (some #(re-matches #"\\[mMyYZAvxuUc0-9]" %) (re-seq #"\\." t))
+      (and (str/starts-with? t "[") (< 1 (count t))
+           (some? (re-find #"\[|&&" (str/replace (subs t 1) #"\\.|\[:\w+:\]" ""))))
+      (and (str/starts-with? t "(?") (not (#{"(?:" "(?=" "(?!" "(?<=" "(?<!"} t)))
+      (= "{," t)))
 
 (def ^:private regex-forms
   "[loose strict] Java regexes for a PostgreSQL pattern, or nil when it uses syntax Java reads
-   differently. A class (\\w, [[:alpha:]] ...) takes its POSIX members in ASCII; outside ASCII
-   the members depend on the server's C library and locale, so loose takes every non-ASCII
-   character and strict none: a string strict matches PostgreSQL's matches, and one loose does
-   not match PostgreSQL's does not. . is [\\s\\S], as PostgreSQL's matches a newline too; $ is
-   \\z, as Java's $ also matches before a final newline; \\b is a backspace and \\B a backslash.
-   Memoized: the keys are the regexes of a schema, a finite set."
+   differently (java-reads-differently?; a *** director Java rejects). A class (\\w, [[:alpha:]] ...) takes
+   its POSIX members in ASCII; outside ASCII the members depend on the server's C library and
+   locale, so loose takes every non-ASCII character and strict none: a string strict matches
+   PostgreSQL's matches, and one loose does not match PostgreSQL's does not. . is [\\s\\S], as
+   PostgreSQL's matches a newline too; $ is \\z, as Java's $ also matches before a final newline;
+   \\b is a backspace and \\B a backslash. Memoized: the keys are the regexes of a schema, a
+   finite set."
   (memoize
    (fn [re]
-     (let [form (fn [extra]
-                  (str/replace (posix-classes re) (re-pattern (str regex-token "|[.$]"))
-                               (fn [t]
-                                 (cond (= "." t) "[\\s\\S]"
-                                       (= "$" t) "\\z"
-                                       (= "\\b" t) "\\x08"
-                                       (= "\\B" t) "\\\\"
-                                       (re-find #"^\\[wWdDsS]$|^\[.*(?:\\[wWdDsS]|\\p\{)" t) (ascii-set t extra)
-                                       :else t))))
+     (let [tokens (re-seq regex-token re)
+           form (fn [extra]
+                  (apply str (for [t tokens]
+                               (cond (= "." t) "[\\s\\S]"
+                                     (= "$" t) "\\z"
+                                     (= "\\b" t) "\\x08"
+                                     (= "\\B" t) "\\\\"
+                                     (re-matches #"\\[wWdDsS]" t) (ascii-set t extra)
+                                     (and (str/starts-with? t "[") (< 1 (count t)))
+                                     (let [t (str "[" (posix-classes (subs t 1)))]
+                                       (if (re-find #"\\[wWdDsS]|\\p\{" t) (ascii-set t extra) t))
+                                     :else t))))
            forms [(form non-ascii) (form "")]]
-       (when (and (not (re-find #"\\[mMyYZA]" re)) (every? #(try (re-pattern %) (catch Exception _ nil)) forms))
+       (when (and (not-any? java-reads-differently? tokens)
+                  (every? #(try (re-pattern %) (catch Exception _ nil)) forms))
          forms)))))
 
 (defn java-regex
@@ -547,12 +611,12 @@
                 (str/replace #"(?<!\\)\\z" "")
                 strict-regex
                 (str/replace "[\\s\\S]" "[\\x20-\\x7E]"))
-      ci? (str/replace (re-pattern (str regex-token "|\\p{L}"))
+      ci? (str/replace (re-pattern (str escape-or-bracket "|\\p{L}"))
                        #(if (and (= 1 (count %) (count (str/lower-case %)) (count (str/upper-case %))) (not= (str/lower-case %) (str/upper-case %)))
                           (str "[" (str/lower-case %) (str/upper-case %) "]")
                           %))
       ;; repeats bounded: strings short enough for the other parts (a length, a domain) to keep
-      true (str/replace (re-pattern (str regex-token "|\\*|\\+|\\{(\\d+),\\}"))
+      true (str/replace (re-pattern (str escape-or-bracket "|\\*|\\+|\\{(\\d+),\\}"))
                         (fn [[m n]] (case m "*" "{0,4}" "+" "{1,4}" (if n (str "{" n "," (+ 4 (parse-long n)) "}") m)))))))
 
 (defn- escape-regex
@@ -592,19 +656,27 @@
 
 ;;; jsonb
 
+(defn- json-string
+  "A JSON string as PostgreSQL's escape_json writes it."
+  [^String s]
+  (str "\"" (str/replace s #"[\"\\\x00-\x1F]"
+                          #(case % "\"" "\\\"" "\\" "\\\\" "\b" "\\b" "\f" "\\f" "\n" "\\n" "\r" "\\r" "\t" "\\t"
+                                 (format "\\u%04x" (int (first %)))))
+       "\""))
+
 (defn- json-text*
-  "A value inside a container, as PostgreSQL prints jsonb."
+  "A jsonb value as PostgreSQL prints it: a string quoted, a JSON null null."
   [v]
-  (cond (nil? v) "null" (string? v) (pr-str v) :else (json-text v)))
+  (cond (or (nil? v) (= json-null v)) "null" (string? v) (json-string v) :else (json-text v)))
 
 (defn- json-text
-  "->> and #>>: scalars as text, containers as PostgreSQL prints jsonb (keys by length, then bytes)."
+  "->> and #>>: scalars as text, containers as PostgreSQL prints jsonb (keys by length in bytes, then bytes)."
   [v]
   (cond (or (nil? v) (= json-null v)) nil
         (string? v) v
         (boolean? v) (str v)
         (number? v) (.toPlainString (bigdec v))
-        (map? v) (str "{" (str/join ", " (for [[k x] (sort-by (fn [[k _]] [(count k) k]) v)] (str (pr-str k) ": " (json-text* x)))) "}")
+        (map? v) (str "{" (str/join ", " (for [[k x] (sort-by (fn [[^String k _]] (let [b (.getBytes k "UTF-8")] (into [(alength b)] (map #(bit-and % 0xff)) b))) v)] (str (json-string k) ": " (json-text* x)))) "}")
         (sequential? v) (str "[" (str/join ", " (map json-text* v)) "]")))
 
 (defn- json-get [v k]
@@ -627,9 +699,10 @@
 (defn- json-contains?
   "a @> b, for jsonb and arrays alike; only a top-level array contains a scalar."
   [a b]
+  (let [elem #(if (= json-null %) nil %) a (elem a) b (elem b)]
   (if (and (sequential? a) (not (coll? b)))
     (boolean (some #(same? % b) a))
-    (json-contains-in a b)))
+    (json-contains-in a b))))
 
 (defn- json-has-key? [v k]
   (cond (map? v) (contains? v k)
@@ -714,6 +787,8 @@
           :raw ((raw-values (first args)))
           ::bpchar (let [[col n padded?] args] (some-> (ev col row) (bpchar-value n padded?)))
           ::int (let [[t x] args] (some->> (ev x row) (in-range t)))
+          ::jsonb-text (some-> (a) json-text*)
+          ::concat (let [[x y jx jy] args vx (ev x row) vy (ev y row)] (when (and (some? vx) (some? vy)) (concat* vx vy jx jy)))
           (:now :transaction_timestamp :statement_timestamp :clock_timestamp) (Instant/now)
           :and (and3 (all))
           :or (or3 (all))
@@ -736,7 +811,7 @@
           :coalesce (first (filter some? (all)))
           :concat (apply str (map #(text-out % false) (remove nil? (all))))
           ::unordered (let [[x cols] args]
-                        (if (some #(let [v (ev % row)] (or (string? v) (keyword? v))) cols) (unknowable :order) (ev x row)))
+                        (if (some #(let [v (ev % row)] (or (string? v) (keyword? v) (coll? v))) cols) (unknowable :order) (ev x row)))
           ;; a hash partition's bound: the row's key hashed as the database hashes it
           :satisfies_hash_partition (let [[_ modulus remainder & vs] (all)] (pghash/satisfies-hash-partition? modulus remainder vs))
           :case (let [[clauses else] (if (= :else (last (butlast args)))
@@ -816,6 +891,17 @@
                   :cast (let [t (cast-type (nth e 2))] (when (rank t) t))
                   nil))))
 
+(defn- jsonb-expr?
+  "Whether e is a jsonb by its form: ->, #>, a cast to jsonb, || or - of jsonb."
+  [e]
+  (and (vector? e)
+       (case (first e)
+         (:-> :json-path) true
+         :cast (boolean (json-types (cast-type (nth e 2))))
+         :|| (every? jsonb-expr? (rest e))
+         :- (jsonb-expr? (second e))
+         false)))
+
 (def ^:private padded-ops #{:like :ilike :not-like :not-ilike :regex :iregex :not-regex :not-iregex :octet_length})
 
 (defn- typed
@@ -830,7 +916,10 @@
       :else
       (let [[op & args] e
             e (case op
-                :cast (assoc e 1 (rw (second e)))
+                :cast (if (and (text-types (cast-type (nth e 2))) (jsonb-expr? (second e)))
+                        [::jsonb-text (rw (second e))]
+                        (assoc e 1 (rw (second e))))
+                :|| [::concat (rw (first args)) (rw (second args)) (jsonb-expr? (first args)) (jsonb-expr? (second args))]
                 (:in :not-in) [op (rw (second e)) (mapv rw (nth e 2))]
                 :array [op (mapv rw (second e))]
                 :raw e
@@ -854,6 +943,11 @@
   ([e types]
    (let [e (typed (x/canonical e) types)]
      (fn [row] (not (false? (try (ev e row) (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
+
+(defn unknowable?
+  "Whether the row's verdict depends on what the evaluator does not know, so checker passes it."
+  [e row types]
+  (try (ev (typed (x/canonical e) types) row) false (catch Exception ex (boolean (::unknowable (ex-data ex))))))
 
 (defn passes?
   ([e row] ((checker e) row))

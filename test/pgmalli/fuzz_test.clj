@@ -246,6 +246,8 @@
                 [i e] (map-indexed vector exprs)]
           (is (let [pg (get-in verdicts [j i]) ours (ev/passes? e row column-types)]
                 (or (= pg ours)
+                    ;; a verdict that depends on what pgmalli cannot know passes the row
+                    (ev/unknowable? e row column-types)
                     ;; outside ASCII a class is the server's: pgmalli passes the row, unless
                     ;; another arm fails it with an error PostgreSQL's evaluation order skips
                     (and (re-find #"\\[wWdDsS]|\[:" (pr-str e)) (some #(and (string? %) (re-find #"[^\x00-\x7F]" %)) (vals row)))))

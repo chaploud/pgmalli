@@ -353,7 +353,7 @@
 
                        (and (string? x) (numeric-types t)
                             (re-matches #"-?\d+(\.\d+)?([eE][+-]?\d+)?" x))
-                       (if (re-find #"[.eE]" x) (bigdec x) (parse-long x))
+                       (if (re-find #"[.eE]" x) (bigdec x) (or (parse-long x) (bigdec x)))
 
                        :else f))
 
