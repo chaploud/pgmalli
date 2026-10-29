@@ -53,6 +53,9 @@
     (is (= {:g/id [:maybe [:string {:max 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?g/id} :where [:= :id 1]} opts))
         "a qualified one keeps its namespace, as sql/format's :params does")
+    (is (= (h/arg-types registry body opts)
+           (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :id [:param :id]] [:in :mood ?moods]] :limit ?n} opts))
+        "[:param :id] and ?id are the same parameters")
     (is (= [:cat [:int {:pg/identity :always :pg/type "bigint"}] :int]
            (second (h/query-schema registry [:id :n] body opts))))))
 
@@ -82,6 +85,36 @@
   (is (= [] (h/check registry '{:delete-from table :where [:= :id 1]} opts)))
   (is (= [] (h/check registry '{:insert-into table :values [{:x 1}]} opts)))
   (is (= [] (h/check registry '{:insert-into [table [:x]] :values [[1]]} opts))))
+
+(deftest code-in-a-query-is-not-read-as-columns
+  (is (= [] (h/check registry '{:with [(recent-cte) [:x {:select [:id] :from [:users]}]] :select [:id] :from [:recent]} opts))
+      "a :with entry built by code may define any table")
+  (is (= [] (h/check registry '{:select [:id] :from [:users] :order-by (case sort :nick [[:nick :asc]] [[:id :desc]])} opts)))
+  (is (= [] (h/check registry '{:select [:id] :from [:users] :group-by (if x [:nick] [:id])} opts)))
+  (is (= [] (h/check registry '{:insert-into [[:users [:group_id (case k :a :mood :score)]] {:select [[:?g] [:?v]]}]} opts))
+      "a column built by code may be any one")
+  (is (= [] (h/check registry '{:update :users :set {(col-of k) 1} :where [:= :id 1]} opts))))
+
+(deftest a-table-function-without-an-alias-is-named-after-it
+  (is (= [] (h/check registry {:select [:*] :from [[[:public.claim_token :?user-id :?token]]]} opts)))
+  (is (= [] (h/check registry {:select [:claim_token.x] :from [[[:claim_token 1]]]} opts))))
+
+(deftest a-set-operations-order-by-names-its-first-members-output
+  (let [body {:union-all [{:select [[:id :uid] [0 :bucket]] :from [:users]} {:select [:id 1] :from [:groups]}]}]
+    (is (= [] (h/check registry (assoc body :order-by [:bucket [:uid :desc]]) opts)))
+    (is (= [{:kind :unknown-column :column :nick}] (h/check registry (assoc body :order-by [:nick]) opts))
+        "the tables' columns are not in scope there")
+    (is (= [] (h/check registry '{:union [(base) {:select [:id] :from [:users]}] :order-by [:x]} opts)))))
+
+(deftest check-never-throws-on-code
+  (doseq [body '[{:insert-into [[:users [(f) "s" 1 nil]] {:select [(g)]}]}
+                 {:insert-into [:users [(f)]] :values [[1]]}
+                 {:select [(f) "s" 1] :from [(t) "u"] :where [:= (c) "x"] :order-by [(o)] :group-by [(g)]}
+                 {:update (t) :set {"a" 1 (k) 2} :returning [(r)]}
+                 {:select [:id] :from [:users] :join [(j) [:= (a) :id]] :with [(w)] :limit (n)}]]
+    (is (vector? (h/check registry body opts)) (pr-str body))
+    (is (map? (h/arg-types registry body opts)) (pr-str body))
+    (is (vector? (h/query-schema registry '[] body opts)) (pr-str body))))
 
 (deftest read-names-the-types-an-extension-reads-otherwise
   (is (= [:map [:born [:maybe :time/local-date]] [:closed_at [:maybe ['inst? {:pg/type "timestamptz"}]]]]

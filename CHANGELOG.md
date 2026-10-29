@@ -7,9 +7,9 @@ All notable changes to this project are documented here. The format follows
 
 ### Added
 
-- `pgmalli.honeysql` reads HoneySQL's named parameters (`:?id`): `arg-types` types them under
-  the key `sql/format`'s `:params` takes (`:id`), as it types symbols, and `query-schema` takes
-  that key among its args.
+- `pgmalli.honeysql` reads HoneySQL's named parameters (`:?id`, `?id`, `[:param :id]`):
+  `arg-types` types them under the key `sql/format`'s `:params` takes (`:id`), as it types
+  symbols, and `query-schema` takes that key among its args.
 - `:read {pg-type schema}` in `as-read` and `pgmalli.honeysql`: a type a `ReadableColumn`
   extension reads otherwise, by its `:pg/type` (`{"date" :time/local-date}`), over `:time`.
 - `generate!`, `stale` and `check` read the catalog over JDBC when `:db` has `:jdbc-url` (with
@@ -29,6 +29,13 @@ All notable changes to this project are documented here. The format follows
 - A symbol where a table goes (`:from`, the joins, `:update`, `:delete-from`, `:insert-into`)
   is a table chosen at run time: opaque, as a symbol elsewhere is an argument.
 - `row-schema` of `{:select [:*]}` was nil.
+- Code in a query is not read as columns: a `:with` entry built by code leaves unknown tables
+  unjudged as a `:with` built by code does, a list where `:order-by`, `:group-by`, `:columns`
+  or a `:set` key goes is not read, and `check`, `arg-types` and `query-schema` do not throw on
+  it.
+- A table function with no alias (`{:from [[[:f args...]]]}`) is opaque, named after the
+  function; it was read as a table.
+- The `:order-by` of a set operation (`:union` ...) names its first member's output columns.
 
 ## [0.2.45] - 2026-09-04
 

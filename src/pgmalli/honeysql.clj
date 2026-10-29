@@ -150,7 +150,8 @@
         (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (name (if (keyword? b) b a)) (written a) listed]
         (keyword? a) [nil (name a) nil listed]
         (keyword? b) [nil (name b) nil listed]
-        (vector? a) (table-ref a schema)))))
+        ;; [[:f args...]]: a table function, named after the function
+        (and (nil? b) (vector? a) (keyword? (first a))) [nil (name (first a)) nil]))))
 
 (defn- insert-target [stmt] (:table (insert-parts stmt)))
 
@@ -268,11 +269,14 @@
     :current_catalog :current_schema :user :true :false :null :default :*})
 
 (defn- param-key
-  "The :params key of a HoneySQL named parameter (:?id is :id, :?a/b is :a/b); nil for anything else."
+  "The :params key of a HoneySQL named parameter, as sql/format looks it up: :?id and ?id are
+   :id (:?a/b is :a/b), [:param k] is k. nil for anything else."
   [x]
-  (when (keyword? x)
-    (let [c (subs (str x) 1)]
-      (when (str/starts-with? c "?") (keyword (subs c 1))))))
+  (if (and (vector? x) (= 2 (count x)) (= :param (first x)))
+    (second x)
+    (when (or (keyword? x) (symbol? x))
+      (let [c (if (keyword? x) (subs (str x) 1) (str x))]
+        (when (str/starts-with? c "?") (keyword (subs c 1)))))))
 
 (defn- column-keyword? [x] (and (keyword? x) (not (sql-values x)) (not (param-key x))))
 
@@ -318,16 +322,17 @@
   (let [values (:values stmt)
         columns (:columns (insert-parts stmt))
         do-update (:do-update-set stmt)]
-    (concat (when (map? (:set stmt)) (:set stmt))
-            ;; ON CONFLICT DO UPDATE SET: a map of assignments, the columns taken from EXCLUDED, or
-            ;; {:fields [...] :where ...} (the columns taken from EXCLUDED, under a condition)
-            (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update) :when (keyword? c)] [c nil])
-                  (map? do-update) do-update
-                  (vector? do-update) (for [c do-update :when (keyword? c)] [c nil]))
-            (when (vector? values)
-              (concat (mapcat identity (filter map? values))
-                      ;; positional rows under the listed columns
-                      (when columns (mapcat #(map vector columns %) (filter vector? values))))))))
+    (filter (comp column-keyword? first)
+     (concat (when (map? (:set stmt)) (:set stmt))
+             ;; ON CONFLICT DO UPDATE SET: a map of assignments, the columns taken from EXCLUDED, or
+             ;; {:fields [...] :where ...} (the columns taken from EXCLUDED, under a condition)
+             (cond (and (map? do-update) (contains? do-update :fields)) (for [c (:fields do-update) :when (keyword? c)] [c nil])
+                   (map? do-update) do-update
+                   (vector? do-update) (for [c do-update :when (keyword? c)] [c nil]))
+             (when (vector? values)
+               (concat (mapcat identity (filter map? values))
+                       ;; positional rows under the listed columns
+                       (when columns (mapcat #(map vector columns %) (filter vector? values)))))))))
 
 (defn- target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
@@ -344,6 +349,11 @@
 
 (defn- star? [col] (= "*" (second (split-column col))))
 
+(defn- vectorish
+  "x when it is a vector: a list there is code, and what it builds is not in the data."
+  [x]
+  (when (vector? x) x))
+
 (defn- output-name
   "The name of the output column a bare :col of :order-by or :group-by may mean (a select
    alias, or a selected column's name), nil when there is none."
@@ -354,23 +364,34 @@
               (when (= (name col) (if alias (name alias) (some-> c split-column second))) col)))
           (selected-items stmt))))
 
+(defn- output-statement
+  "The statement whose select names a statement's output columns: itself, or the first member
+   of a set operation (UNION ...); nil when that member is built by code."
+  [stmt]
+  (if-let [members (some stmt [:union :union-all :intersect :except])]
+    (when (and (vector? members) (map? (first members))) (output-statement (first members)))
+    stmt))
+
 (defn- ordering-columns
   "The input columns :order-by and :group-by name as they are (:col, or [:col :asc]);
    expressions there are not read. As PostgreSQL reads them, a bare name in :order-by is an
-   output column first, one in :group-by an input column first."
+   output column first (of a set operation, its first member's), one in :group-by an input
+   column first."
   [registry sc stmt]
-  (concat (for [c (:group-by stmt)
-                :when (and (column-keyword? c) (not (and (output-name stmt c) (empty? (column-hits registry sc c)))))]
-            c)
-          (for [o (:order-by stmt) :let [c (if (vector? o) (first o) o)]
-                :when (and (column-keyword? c) (not (output-name stmt c)))]
-            c)))
+  (let [out (output-statement stmt)]
+    (concat (for [c (vectorish (:group-by stmt))
+                  :when (and (column-keyword? c) (not (and (output-name stmt c) (empty? (column-hits registry sc c)))))]
+              c)
+            (when out
+              (for [o (vectorish (:order-by stmt)) :let [c (if (vector? o) (first o) o)]
+                    :when (and (column-keyword? c) (not (output-name out c)))]
+                c)))))
 
 (defn- column-problems [registry sc stmt schema]
   (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
                                       (for [c (ordering-columns registry sc stmt)] [c sc])
                                       (for [[_ c] (comparisons stmt)] [c sc])
-                                      (for [c (:columns (insert-parts stmt))] [c (target-scope sc stmt schema)])
+                                      (for [c (:columns (insert-parts stmt)) :when (column-keyword? c)] [c (target-scope sc stmt schema)])
                                       (for [[c] (assignments stmt)] [c (target-scope sc stmt schema)])))
         :when (and (not (star? col)) (nil? (resolve-column registry scope col)))
         :let [hits (column-hits registry scope col)]]
@@ -386,6 +407,8 @@
            rows (when (vector? values) values)
            ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
            given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
+          ;; a column built by code may be any of them
+          given (when (every? keyword? given) given)
            given-names (set (map name given))
            required (set (for [[k p] (some-> (get (::schemas registry) (shape/derived-name (shape/table-key table) "insert")) shape/column-entries)
                                :when (not (:optional p))]
@@ -430,12 +453,13 @@
                  (enum-problems registry scopes stmt schema)))))
 
 (defn check
-  "The problems of every statement of a query. A query whose :with is built elsewhere (not
-   data) cannot have its unknown tables judged, so those are left out for it."
+  "The problems of every statement of a query. A query whose :with, or one of its entries, is
+   built elsewhere (not data) cannot have its unknown tables judged, so those are left out for
+   it. Code in the query is never read as columns: what it builds is not in the data."
   ([registry body] (check registry body {}))
   ([registry body opts]
    (let [registry (reading registry)
-         opaque? (some (fn [stmt] (some #(let [w (get stmt %)] (and (some? w) (not (vector? w)))) [:with :with-recursive])) (statements body))
+         opaque? (some (fn [stmt] (some #(let [w (get stmt %)] (and (some? w) (or (not (vector? w)) (not-every? vector? w)))) [:with :with-recursive])) (statements body))
          found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body opts))]
      (vec (if opaque? (remove #(= :unknown-table (:kind %)) found) found)))))
 
@@ -459,8 +483,8 @@
     :any))
 
 (defn arg-types
-  "{arg schema} for the arguments of a query: its symbols, and its HoneySQL named parameters
-   under their :params key (:?id is :id). An argument compared with a column has the column's
+  "{arg schema} for the arguments of a query: its HoneySQL named parameters (:?id, ?id,
+   [:param :id]) under the key sql/format's :params takes (:id), and its other symbols. An argument compared with a column has the column's
    type (:in a :sequential of it), one assigned to it the column's type with NULL, one in
    :limit / :offset :int. The first typed use wins; a use that gives no type (:any) never
    hides one that does."
@@ -475,7 +499,7 @@
                                   (for [[col v] (assignments stmt)] [v (column-type registry (target-scope sc stmt schema) col true opts)]))]
                  pair)]
      (reduce (fn [acc [x t]]
-               (let [k (if (symbol? x) x (param-key x))]
+               (let [k (or (param-key x) (when (symbol? x) x))]
                  (if (and k (contains? #{nil :any} (acc k))) (assoc acc k t) acc)))
              {} typed))))
 
