@@ -47,7 +47,7 @@
     (is (= [] (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m :mood] [[:unnest :?s]]]}]} opts))
         "selected, as INSERT ... SELECT passes values")
     (is (= {:id [:int {:pg/identity :always :pg/type "bigint"}]
-            :moods [:sequential [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]
+            :moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
             :n :int}
            (h/arg-types registry body opts)))
     (is (= {:g/id [:maybe [:string {:max 40 :pg/type "character varying"}]]}
@@ -138,6 +138,19 @@
         "typed where the members agree, nullable where one is")
     (is (nil? (h/row-schema registry {:union [{:select [:id] :from [:users]} '(other)]} #{} opts)))))
 
+(deftest an-in-argument-is-what-sql-format-expands
+  (let [t (:ids (h/arg-types registry {:select [:id] :from [:users] :where [:in :id :?ids]} opts))]
+    (doseq [v [[1 2] '(1) #{1 2} (map inc [0 1])]] (is (m/validate t v) (pr-str v)))
+    (doseq [v [[] #{} 1 nil (long-array [1])]] (is (not (m/validate t v)) (pr-str v)) "IN (), or not expanded")))
+
+(deftest write-names-what-an-extension-sends-for-a-type
+  (let [o (assoc opts :write {"character varying" [:or :string :keyword]})]
+    (is (= {:n [:or :string :keyword] :ns [:or [:sequential {:min 1} [:or :string :keyword]] [:set {:min 1} [:or :string :keyword]]]
+            :v [:maybe [:or :string :keyword]]}
+           (h/arg-types registry {:update :users :set {:nick :?v} :where [:and [:= :nick :?n] [:in :nick :?ns]]} o)))
+    (is (= {:id [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} o))
+        "the other types as before")))
+
 (deftest read-names-the-types-an-extension-reads-otherwise
   (is (= [:map [:born [:maybe :time/local-date]] [:closed_at [:maybe ['inst? {:pg/type "timestamptz"}]]]]
          (h/row-schema registry {:select [:born :closed_at] :from [:users]} #{} (assoc opts :read {"date" :time/local-date})))))
@@ -145,7 +158,7 @@
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
     (is (= {'id [:int {:pg/identity :always :pg/type "bigint"}]
-            'moods [:sequential [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]
+            'moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
             'min [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]
             'n :int}
            (h/arg-types registry body opts)))

@@ -12,6 +12,8 @@ All notable changes to this project are documented here. The format follows
   symbols, and `query-schema` takes that key among its args.
 - `:read {pg-type schema}` in `as-read` and `pgmalli.honeysql`: a type a `ReadableColumn`
   extension reads otherwise, by its `:pg/type` (`{"date" :time/local-date}`), over `:time`.
+- `:write {pg-type schema}` in `pgmalli.honeysql`: what a `SettableParameter` extension sends
+  for a type (`{"text" [:or :string :keyword]}`), over the column's read type, for arguments.
 - `generate!`, `stale` and `check` read the catalog over JDBC when `:db` has `:jdbc-url` (with
   `:user` and `:password`) or `:datasource`, with the PostgreSQL driver on the classpath and no
   psql. The query runs in a transaction rolled back after, so a pooled connection keeps its
@@ -45,6 +47,9 @@ All notable changes to this project are documented here. The format follows
   driver.
 - `row-schema` of a set operation is its first member's names, typed where the members agree
   and nullable where one is; it was nil.
+- An `:in` argument is a non-empty vector, list or set (lazy seqs included) of the column's
+  type, what `sql/format` expands into `IN (?, ...)`; it was a `:sequential`, refusing a set and
+  taking `[]`, which formats as `IN ()`.
 - An SQL word under an alias (`[:current_timestamp :ts]`) is not a column.
 - The README and `install!` say how `:malli/schema` reads a schema (data through malli's default
   registry, an object as it is), so a schema object over the registry instruments with nothing

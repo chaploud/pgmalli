@@ -230,11 +230,13 @@ subquery's columns are resolved in the subquery first, then in the statements ar
 
 ;; HoneySQL's named parameters are typed under the key sql/format's :params takes
 (h/arg-types registry {:select [:id] :from [:users] :where [:in :mood :?moods] :limit :?n})
-;; => {:moods [:sequential [:enum {...} "happy" "sad"]], :n :int}
+;; => {:moods [:or [:sequential {:min 1} [:enum {...} "happy" "sad"]] [:set {:min 1} ...]], :n :int}
 ```
 
 Options: `:schema` for unqualified table names (default `"public"`); `:qualified?`, `:kebab?`,
-`:nil-columns`, `:time` and `:read` as in `as-read`; `:result :one` for a function returning
+`:nil-columns`, `:time` and `:read` as in `as-read`; `:write {pg-type schema}` for what a
+`SettableParameter` extension of your own sends (`{"text" [:or :string :keyword]}`), next.jdbc
+sending no keyword without one; `:result :one` for a function returning
 one row or nil (`[:maybe row]`). Without `:time` and `:read` the schema is data malli's default
 registry reads: date and timestamp columns are `inst?` (what the driver returns). `:time
 :instant` or `:local`, or a `:read` naming them, gives the `malli.experimental.time` types

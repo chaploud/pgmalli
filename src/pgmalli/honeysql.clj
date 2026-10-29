@@ -516,26 +516,33 @@
 
 (defn- column-type
   "The type of a column for a value compared with it (NULL never matches, so no [:maybe]) or,
-   with nullable?, assigned to it."
-  [registry sc col nullable? opts]
+   with nullable?, assigned to it: under :write when it names the column's type."
+  [registry sc col nullable? {:keys [write] :as opts}]
   (if-let [s (:schema (resolve-column registry sc col))]
-    (let [inner (read-shape registry (shape/non-null s) opts)]
+    (let [inner (or (shape/read-as write (shape/non-null s)) (read-shape registry (shape/non-null s) opts))]
       (if (and nullable? (= :maybe (first s))) [:maybe inner] inner))
     :any))
 
 (defn arg-types
   "{arg schema} for the arguments of a query: its HoneySQL named parameters (:?id, ?id,
-   [:param :id]) under the key sql/format's :params takes (:id), and its other symbols. An argument compared with a column has the column's
-   type (:in a :sequential of it), one assigned to it the column's type with NULL, one in
-   :limit / :offset :int. The first typed use wins; a use that gives no type (:any) never
-   hides one that does."
+   [:param :id]) under the key sql/format's :params takes (:id), and its other symbols. An
+   argument compared with a column has the column's type (NULL never matches, so none; :in a
+   non-empty vector, list or set of it, as sql/format expands them), one assigned to it the
+   column's type with NULL, one in :limit / :offset :int. :write {pg-type schema} names what a
+   SettableParameter extension of your own sends for a type ({\"text\" [:or :string
+   :keyword]}); otherwise an argument is what the column reads as (:time, :read). The first
+   typed use wins; a use that gives no type (:any) never hides one that does."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema "public"} :as opts}]
    (let [registry (reading registry)
          typed (for [[stmt sc] (statement-chains registry body opts)
                      pair (concat (for [[op col value] (comparisons stmt)
                                         :let [t (column-type registry sc col false opts)]]
-                                    [value (if (and (= :in op) (not= :any t)) [:sequential t] t)])
+                                    [value (if (and (= :in op) (not= :any t))
+                                            ;; what sql/format expands into IN (?, ...): a collection, never
+                                            ;; empty (IN () is not SQL)
+                                            [:or [:sequential {:min 1} t] [:set {:min 1} t]]
+                                            t)])
                                   (for [[_ v] (select-keys stmt [:limit :offset])] [v :int])
                                   (for [[col v] (assignments stmt)] [v (column-type registry (target-scope sc stmt schema) col true opts)]))]
                  pair)]
