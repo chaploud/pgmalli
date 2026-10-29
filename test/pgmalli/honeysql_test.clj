@@ -131,7 +131,7 @@
   (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]] [:top-id [:maybe :any]]]
          (h/row-schema registry {:select [:id [[:max :id] :top_id]] :from [:users]} (assoc opts :qualified? true :kebab? true)))
       "an expression has no table: its key is unqualified, kebab-cased as the builder does")
-  (is (nil? (h/row-schema registry {:select [[[:cast :nick :text]]] :from [:users]} (assoc opts :qualified? true)))
+  (is (= [:map {:pgmalli/untold [:nick]}] (h/row-schema registry {:select [[[:cast :nick :text]]] :from [:users]} (assoc opts :qualified? true)))
       "a cast to the column's own type is dropped and the key keeps the table: not told without the types"))
 
 (deftest a-set-operations-row-is-named-by-its-first-member
@@ -254,7 +254,7 @@
           "a column under an alias keeps its table in the key, as the driver does")
       (is (m/validate row {:users/id 1 :users/g 2} malli-opts) "as malli's default registry reads it"))
     (is (= (h/row-schema registry {:select [:users/*] :from [:users]} opts) (h/row-schema registry {:select [:*] :from [:users]} opts)))
-    (is (nil? (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} (assoc opts :qualified? true)))
+    (is (= [:map {:pgmalli/untold [:id]}] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} (assoc opts :qualified? true)))
         "the driver keys a column through a subquery by its table at the bottom, which an opaque one hides")
     (is (= [:map [:id [:maybe :any]]] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} opts)))
     (is (= [:map [:users/group-id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]] (h/row-schema registry '{:select [:group_id] :from [:users]} (assoc opts :qualified? true :kebab? true))))
@@ -839,6 +839,14 @@
   (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:select [:u.nick] :from [[:users "u"]]} opts)))
   (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:with [["c" {:select [:id] :from [:users]}]] :select [:id] :from [:c]} opts)))
   (is (= [{:kind :unknown-table :table "sample.c"}] (h/check registry {:with [["C" {:select [:id] :from [:users]}]] :select [:*] :from [:c]} opts))))
+
+(deftest a-quoted-sql-word-is-a-column
+  (is (= [] (h/check registry {:select [:user :nick] :from [:users]} opts)))
+  (is (= [{:kind :unknown-column :column :user}] (h/check registry {:select [:user :nick] :from [:users]} (assoc opts :format {:quoted true}))))
+  (is (nil? (h/row-schema registry {:select [:user :nick] :from [:users]} (assoc opts :format {:quoted true})))))
+
+(deftest a-string-select-alias-is-the-key
+  (is (= [:users/nn] (map first (drop 1 (h/row-schema registry {:select [[:nick "nn"]] :from [:users]} (assoc opts :qualified? true)))))))
 
 (deftest the-question-mark-operators-are-no-arguments
   (is (= [:id] (keys (h/arg-types registry {:select [:id] :from [:users] :where [:and [:? :nick "a"] [:?| :nick :nick] [:?& :nick :nick] [:= :id :?id]]} opts)))))

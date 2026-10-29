@@ -480,16 +480,21 @@
           (vector? after-first) (rest after-first))))
 
 (defn- select-parts
-  "[column alias] of a select item: a column, a column under an alias, or an aliased
-   expression, which has no column."
-  [item]
-  (cond
-    (keyword? item) (when (or (= :* item) (column-keyword? item)) [item nil])
-    (not (vector? item)) nil
-    (and (keyword? (first item)) (not (column-keyword? (first item))) (not= :* (first item))) (when (keyword? (second item)) [nil (second item)])
-    (and (keyword? (first item)) (keyword? (second item))) [(first item) (second item)]
-    (keyword? (first item)) [(first item) nil]
-    (keyword? (second item)) [nil (second item)]))
+  "[column alias] of a select item: a column, a column under an alias (a keyword, or a string
+   HoneySQL quotes), or an aliased expression, which has no column. Under sql/format's :quoted
+   a keyword HoneySQL otherwise writes as an SQL word (:user) is a column."
+  ([item] (select-parts item {}))
+  ([item opts]
+   (let [column? (if (get-in opts [:format :quoted])
+                   #(and (keyword? %) (not (param-key %)) (not (shorthand-fn %)))
+                   column-keyword?)]
+     (cond
+       (keyword? item) (when (or (= :* item) (column? item)) [item nil])
+       (not (vector? item)) nil
+       (and (keyword? (first item)) (not (column? (first item))) (not= :* (first item))) (when (alias? (second item)) [nil (second item)])
+       (and (keyword? (first item)) (alias? (second item))) [(first item) (second item)]
+       (keyword? (first item)) [(first item) nil]
+       (alias? (second item)) [nil (second item)]))))
 
 (def ^:private in-ops #{:in :not-in})
 (def ^:private like-ops #{:like :ilike :not-like :not-ilike})
@@ -618,16 +623,16 @@
 
 (defn- alias-label
   "The label PostgreSQL gives an alias: folded as any unquoted name (:user-id labels user_id),
-   as it is under sql/format's :quoted."
+   as it is under sql/format's :quoted or as a string, which HoneySQL quotes."
   [alias opts]
-  (if (get-in opts [:format :quoted]) (name alias) (folded (name alias))))
+  (if (or (string? alias) (get-in opts [:format :quoted])) (name alias) (folded (name alias))))
 
 (defn- item-name
   "The name of the output column a select item makes: its alias, its column's name, or the name
    PostgreSQL gives the expression; nil when that cannot be told."
   ([item] (item-name item {}))
   ([item opts]
-   (let [[col alias] (select-parts item)]
+   (let [[col alias] (select-parts item opts)]
      (cond alias (alias-label alias opts)
            col (second (split-column col))
            :else (expression-name (item-expression item))))))
@@ -708,11 +713,11 @@
                           n))]
     (some->> (error/suggestions c names 3) (mapv keyword))))
 
-(defn- column-problems [registry sc stmt schema]
+(defn- column-problems [registry sc stmt {:keys [schema] :or {schema default-schema} :as opts}]
   (let [target (target-scope sc stmt schema)
         ;; a target code names is not in the data: its columns are not judged
         assigned (when (seq target) (concat (filter column-keyword? (:columns (insert-parts stmt))) (map first (assignments stmt))))]
-    (for [[col scope] (distinct (concat (for [c (keep (comp first select-parts) (selected-items stmt))] [c sc])
+    (for [[col scope] (distinct (concat (for [c (keep #(first (select-parts % opts)) (selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c] (comparisons stmt)] [c sc])
                                         ;; a keyword assigned in SET is a column the statement sees
@@ -852,7 +857,7 @@
         scopes (chain scope)]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?]
                    {:kind :unknown-table :table table})
-                 (column-problems registry scopes stmt schema)
+                 (column-problems registry scopes stmt opts)
                  (insert-problems registry stmt schema)
                  (write-problems registry scopes stmt opts)
                  (enum-problems registry scopes stmt opts)))))
@@ -1076,11 +1081,54 @@
          in-data (data-args body)]
      (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
 
+(defn- using-merges
+  "{column merge} of a statement's JOIN ... USING, the last join merging a column winning:
+   {:join k :left alias :right alias :tables [alias ...]}, :left the earlier table holding the
+   column (nil when several do: a merge of merges), :tables every table it merges."
+  [registry stmt sc schema]
+  (let [alias #(second (table-ref % schema))
+        joins (for [k join-keys :let [j (get stmt k)] :when (vector? j), [t c] (partition 2 j)] [k (alias t) c])]
+    (:merges
+     (reduce (fn [{:keys [before] :as acc} [k right c]]
+               (-> (if (and (vector? c) (= :using (first c)))
+                     (reduce (fn [acc col]
+                               (let [col (folded (name col))
+                                     holders (filter #(when-let [e (get sc %)] (has-column? registry e col)) before)]
+                                 (assoc-in acc [:merges col] {:join k :right right :left (when (= 1 (count holders)) (first holders))
+                                                              :tables (conj (vec holders) right)})))
+                             acc (filter keyword? (rest c)))
+                     acc)
+                   (update :before conj right)))
+             {:before (vec (take-last 1 (map alias (from-items stmt [:from :using])))) :merges {}}
+             joins))))
+
+(defn- merged-column
+  "[sides schema nullable?] of a column JOIN ... USING merges: the aliases of the tables
+   next.jdbc may key it by (nil: unqualified), its schema (nil when the two differ) and whether
+   it may be NULL. PostgreSQL keeps the column of the table it takes the value from (INNER and
+   LEFT JOIN the left one, RIGHT JOIN the right, FULL JOIN neither: a COALESCE), unless a cast
+   to the merged type hides it."
+  [registry sc column {:keys [join left right tables]}]
+  (let [col-schema #(when-let [{:keys [table opaque?]} (get sc %)]
+                      (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (folded column))))))
+        ;; the type without what does not change it (a default, constraints)
+        type-of #(let [s (shape/non-null %)] (if (and (vector? s) (map? (second s))) (assoc s 1 (select-keys (second s) [:pg/type :pg/max-length :min :max])) s))
+        side (case join (:join :inner-join :left-join) left :right-join right nil)
+        ls (some-> left col-schema)
+        rs (col-schema right)]
+    (cond (#{:full-join :outer-join} join) [[nil] nil true]
+          ;; ponytail: a timestamp's or time's precision is not in the registry, so (3) and (6) read as one type
+          (and side ls rs (= (type-of ls) (type-of rs)))
+          (let [s (if (= side left) ls rs)] [[side] s (or (maybe? s) (:nullable? (get sc side)))])
+          ;; one side cast to the merged type: which one, the registry does not say
+          :else [(distinct (concat (if (#{:join :inner-join} join) tables (remove nil? [side])) [nil])) nil true])))
+
 (defn- select-row
   "The row a SELECT returns. Under :qualified?, a column through an opaque table, or a cast
-   column, leaves the row untold: the driver keys it by the table it comes from at the bottom
-   (a subquery's, a CTE's), or keeps it when PostgreSQL drops a cast to the column's own type."
-  [registry stmt chain {:keys [qualified?] :or {qualified? true} :as opts}]
+   column, has a key this cannot tell: the driver keys it by the table it comes from at the
+   bottom (a subquery's, a CTE's), or keeps it when PostgreSQL drops a cast to the column's own
+   type. The row leaves those out, an open map, and names them under :pgmalli/untold."
+  [registry stmt chain {:keys [qualified? schema] :or {qualified? true schema default-schema} :as opts}]
   (let [registry (reading registry)
         sc (first chain)
         ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw or code
@@ -1091,31 +1139,53 @@
                              (some #(or (seq? %) (and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))))
                                    (vectorish g)))))
         ;; table nil: an expression comes from no table, and the driver keys it unqualified
-        entry (fn [table column schema nullable?]
-                (jdbc/row-entry (jdbc/row-key table column opts)
+        entry (fn [table column schema nullable? props]
+                (jdbc/row-entry (jdbc/row-key table column opts) props
                                 (if schema (driver-type registry jdbc/read-type schema opts) :any)
                                 (or nullable? regrouped? (nil? schema) (maybe? schema)) opts))
+        untold (fn [n] [[::untold n]])
+        merges (using-merges registry stmt sc schema)
+        merged (fn [label m]
+                 (if (and qualified? (some #(:opaque? (get sc %)) (:tables m)))
+                   (untold label)
+                   (let [[sides s nullable?] (merged-column registry sc label m)
+                         by-key (into {} (for [a sides :let [t (some-> a sc :table)]] [(jdbc/row-key t label opts) t]))
+                         ;; keys the driver may give it: each optional
+                         props (when (next by-key) {:optional true})]
+                     (for [[_ t] by-key] (entry t label s nullable? props)))))
         star (fn [col]
                (let [[a] (split-column col)
                      tables (if a (some-> (get sc a) vector) (vals sc))]
                  (when (and (seq tables) (every? #(and % (not (:opaque? %))) tables))
-                   (for [{:keys [table nullable?]} tables, [c s] (column-entries registry table)]
-                     (entry table c s nullable?)))))
+                   (if a
+                     (for [{:keys [table nullable?]} tables, [c s] (column-entries registry table)] (entry table c s nullable? nil))
+                     ;; SELECT * lists a column USING merges once
+                     (concat (mapcat (fn [[c m]] (merged c m)) merges)
+                             (for [[alias {:keys [table nullable?]}] sc, [c s] (column-entries registry table)
+                                   :when (not (some #{alias} (:tables (get merges c))))]
+                               (entry table c s nullable? nil)))))))
         items (for [item (selected-items stmt)
-                    :let [[col alias] (select-parts item)]]
+                    :let [[col alias] (select-parts item opts)]]
                 (cond
-                  (nil? col) (when-not (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
-                               (when-let [n (item-name item opts)] [(entry nil n nil true)]))
+                  (nil? col) (when-let [n (item-name item opts)]
+                               (if (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
+                                 (untold n)
+                                 [(entry nil n nil true nil)]))
                   (star? col) (star col)
                   :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
-                          (when-not (and qualified? opaque?)
-                            ;; a column under an alias is still keyed by its table: the driver reads the table from the field
-                            [(entry table (if alias (alias-label alias opts) column) schema nullable?)]))))]
+                          (let [label (if alias (alias-label alias opts) column)
+                                m (when-not (first (split-column col)) (get merges (folded column)))]
+                            (cond m (merged label m)
+                                  (and qualified? opaque?) (untold label)
+                                  ;; a column under an alias is still keyed by its table: the driver reads the table from the field
+                                  :else [(entry table label schema nullable? nil)])))))]
     (when (and (seq items) (every? some? items) (not-any? :unknown? (vals sc)))
       ;; a name selected twice is one key, the driver keeping the last column's value
       (let [entries (apply concat items)
+            untold (vec (distinct (keep #(when (= ::untold (first %)) (keyword (second %))) entries)))
+            entries (remove #(= ::untold (first %)) entries)
             last-of (into {} (map (juxt first identity)) entries)]
-        (into [:map] (map last-of) (distinct (map first entries)))))))
+        (into (cond-> [:map] (seq untold) (conj {:pgmalli/untold untold})) (map last-of) (distinct (map first entries)))))))
 
 (declare row-schema*)
 
@@ -1142,7 +1212,10 @@
    column cannot be resolved (check says which).
 
    Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
-   operation's row is its first member's names. Options: docs/queries.md#options."
+   operation's row is its first member's names. Under qualified keys, a column next.jdbc keys
+   by a table the data does not show (one through a subquery or a CTE, a cast column) is left
+   out of the map, which is open, and named under the :pgmalli/untold property. Options:
+   docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
    (jdbc/options! opts)

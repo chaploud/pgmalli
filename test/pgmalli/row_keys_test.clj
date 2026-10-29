@@ -25,26 +25,43 @@
    {:select [[[:cast :nick :text]]] :from [:users]}
    {:select [:u.id :g.name :g/*] :from [[:users :u]] :left-join [[:groups :g] [:= :g.id -1]]}
    {:select [:u.nick :g.id] :from [[:users :u]] :right-join [[:groups :g] [:= :g.id -1]]}
-   {:select [:id [[:count :*] :n]] :from [[{:select [:id] :from [:users]} :sub]] :group-by [:id]}])
+   {:select [:id [[:count :*] :n]] :from [[{:select [:id] :from [:users]} :sub]] :group-by [:id]}
+   {:with [[:c {:select [:id] :from [:groups]}]] :select [:id] :from [:c]}
+   {:select [:u.id :x.n] :from [[:users :u]] :join [[[:lateral {:select [[:u.nick :n]]}] :x] true]}
+   {:select [[:nick "nn"]] :from [:users]}
+   ;; USING merges a column, keyed by the table PostgreSQL takes it from
+   {:select [:*] :from [[:users :u]] :join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :left-join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :right-join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :full-join [[:posts :p] [:using :id]]}
+   {:select [:*] :from [[:users :u]] :join [[:likes :l] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :right-join [[:likes :l] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :left-join [[:likes :l] [:using :id]]}])
 
 (deftest row-schema-keys-are-the-drivers
   (when *db*
     (exec-sql! "CREATE TABLE groups (id int PRIMARY KEY, name text NOT NULL);
                 CREATE TABLE users (id int PRIMARY KEY, group_id int NOT NULL REFERENCES groups, nick text);
-                INSERT INTO groups VALUES (1, 'g'); INSERT INTO users VALUES (1, 1, 'a');")
+                CREATE TABLE posts (id bigint PRIMARY KEY, title text);
+                CREATE TABLE likes (id int PRIMARY KEY, n int);
+                INSERT INTO groups VALUES (1, 'g'); INSERT INTO users VALUES (1, 1, 'a'); INSERT INTO posts VALUES (1, 't'), (2, 'u');
+                INSERT INTO likes VALUES (1, 1), (2, 2);")
     (let [{:keys [host port db user password]} *db*
           ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [q queries, builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
-              :let [row (first (jdbc/execute! ds (sql/format q) {:builder-fn @(requiring-resolve builder)}))
-                    schema (h/row-schema registry q (pgmalli/read-options builder))]]
-        (if schema
-          (do (is (clojure.set/subset? (set (keys row)) (set (map first (rest schema)))) (pr-str builder q))
-              (is (clojure.set/subset? (set (for [[k p] (rest schema) :when (not (and (map? p) (:optional p)))] k)) (set (keys row)))
-                  (pr-str builder q))
-              (is (m/validate schema row) (pr-str builder q row)))
-          (is (:qualified? (pgmalli/read-options builder))
-              (str "only a qualified row is untold (a cast column, one through a subquery): " (pr-str q))))))))
+              row (jdbc/execute! ds (sql/format q) {:builder-fn @(requiring-resolve builder)})
+              :let [schema (h/row-schema registry q (pgmalli/read-options builder))
+                    entries (m/children (m/schema schema))
+                    untold (:pgmalli/untold (m/properties (m/schema schema)))]]
+        (is (= (count untold) (count (remove (set (map first entries)) (keys row))))
+            (str "a key the row lacks is one :pgmalli/untold names " (pr-str builder q row)))
+        (is (or (empty? untold) (:qualified? (pgmalli/read-options builder)))
+            (str "only a qualified key is untold (a cast column, one through a subquery): " (pr-str q)))
+        (is (clojure.set/subset? (set (for [[k p] entries :when (not (:optional p))] k)) (set (keys row)))
+            (pr-str builder q))
+        (is (m/validate schema row) (pr-str builder q row))))))
 
 (deftest pg-array-is-what-the-driver-takes
   (when *db*
