@@ -347,12 +347,15 @@
             {:kind :unknown-type :table "wh.stock" :column "sku" :type "catalog.sku" :type-schema "catalog"}]
            (:unrendered (files/from-database {:db *db*} "wh"))))
     (let [config {:db *db* :overrides {:sku [:ref :pg.catalog/sku] :kind [:ref :pg.catalog/kind]}}
-          reg (pgmalli/registry (files/from-database config "catalog") (files/from-database config "wh"))
-          ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 1)]
+          reg (pgmalli/registry (files/from-database config "catalog") (files/from-database config "wh"))]
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "abc" :k nil} {:registry reg})))
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "c"} {:registry reg})))
-      (is (= 3 (count (get ds "wh.stock"))) (pr-str (data/short-tables ds)))
-      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))
+      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg {"wh.stock" [{:id 1 :sku "ABC" :k "a"}]}))))
+      ;; babashka has no test.chuck: ^[A-Z]{3}$ defeats strings drawn and filtered
+      (when @registry/regex-generation?
+        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 1)]
+          (is (= 3 (count (get ds "wh.stock"))) (pr-str (data/short-tables ds)))
+          (exec-sql! (str "DELETE FROM wh.stock;" (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))))))))))
 
 (deftest like-with-an-escape-takes-and-generates-what-postgresql-takes
   (when *db*
@@ -366,6 +369,8 @@
               :let [row (assoc base k v)]]
         (is (= ok (m/validate :pg.le/t row {:registry reg})) (pr-str row))
         (is (= ok (try (exec-sql! (str (row-sql row) "; DELETE FROM le.t;")) true (catch clojure.lang.ExceptionInfo _ false))) (pr-str row)))
-      (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
-        (is (= 5 (count (get ds "le.t"))) (pr-str (data/short-tables ds)))
-        (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))))))))
+      ;; babashka has no test.chuck: strings of a LIKE pattern are drawn and filtered there
+      (when @registry/regex-generation?
+        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
+          (is (= 5 (count (get ds "le.t"))) (pr-str (data/short-tables ds)))
+          (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))))
