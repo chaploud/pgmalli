@@ -53,6 +53,7 @@ The table's map carries:
 | `:pg/primary-key` | `["id"]` |
 | `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index |
 | `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |
+| `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; `:where true` for a partial one |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
 
 An identifier that is not a plain name (`Order Items`) is a string key. Names keep the
@@ -161,11 +162,15 @@ Values are the registry's types: `java.time`, `UUID`, jsonb as maps and vectors.
 ## What is read
 
 Tables (regular and partitioned), views, materialized views, columns, CHECK, PRIMARY KEY,
-UNIQUE and FOREIGN KEY constraints, unique indexes over plain columns, enum and domain types.
+UNIQUE, FOREIGN KEY and EXCLUDE constraints, unique indexes over plain columns, row-level
+triggers, enum and domain types.
 
-Not read: other indexes, EXCLUDE constraints, triggers, policies and privileges. A row a
-trigger or an EXCLUDE would reject validates all the same; a row-level INSERT trigger is
-listed in `:diagnostics`.
+An EXCLUDE is a table property, not a check: a row it would reject validates all the same.
+Datasets keep its `=` columns distinct, so their rows never conflict; one with no `=` column,
+an expression or a WHERE is listed in `:diagnostics` as one datasets may break. A row a
+trigger would reject validates too; a row-level INSERT trigger is listed in `:diagnostics`.
+
+Not read: other indexes, policies and privileges.
 
 A generated column is left to the database. A range built from two columns
 (`tsrange(valid_from, valid_until)`) gives them a CHECK: lower bound not above the upper.

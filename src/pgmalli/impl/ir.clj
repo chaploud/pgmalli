@@ -11,7 +11,7 @@
       :tables {\"users\" {:name \"users\" :kind \"TABLE\"
                         :columns [{:name :position :data_type :type_schema :is_nullable
                                    :default_value :generated_expr :identity :max_length :precision :scale}]
-                        :constraints {\"users_age_check\" {:name :type :columns :check_clause :is_valid :nulls_not_distinct :references}}
+                        :constraints {\"users_age_check\" {:name :type :columns :check_clause :is_valid :nulls_not_distinct :references :exclude}}
                         :triggers [{:name :before :insert :update :delete}]}}
       :types {\"mood\" {:kind \"ENUM\" :enum_values [...]}
               \"email\" {:kind \"DOMAIN\" :base_type :not_null :default :constraints [{:name :definition}]}}}

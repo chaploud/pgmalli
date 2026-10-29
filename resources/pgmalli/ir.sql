@@ -35,7 +35,7 @@ cons AS (
   SELECT k.conrelid AS relid,
          json_build_object(
            'name', k.conname,
-           'type', CASE k.contype WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PRIMARY KEY' WHEN 'u' THEN 'UNIQUE' WHEN 'f' THEN 'FOREIGN KEY' END,
+           'type', CASE k.contype WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PRIMARY KEY' WHEN 'u' THEN 'UNIQUE' WHEN 'f' THEN 'FOREIGN KEY' WHEN 'x' THEN 'EXCLUDE' END,
            'columns', (SELECT json_agg(a.attname ORDER BY ord)
                        FROM unnest(k.conkey) WITH ORDINALITY AS c(attnum, ord)
                        JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = c.attnum),
@@ -43,6 +43,15 @@ cons AS (
            'is_valid', k.convalidated,
            -- NOT ENFORCED (PostgreSQL 18): conenforced is absent before, hence read through jsonb
            'is_enforced', COALESCE((to_jsonb(k) ->> 'conenforced')::boolean, true),
+           -- EXCLUDE: the index method, each element's column (null for an expression) and operator,
+           -- and whether a WHERE limits it to some rows
+           'exclude', CASE WHEN k.contype = 'x' THEN json_build_object(
+                        'method', (SELECT am.amname FROM pg_catalog.pg_class ic JOIN pg_catalog.pg_am am ON am.oid = ic.relam WHERE ic.oid = k.conindid),
+                        'partial', (SELECT i.indpred IS NOT NULL FROM pg_catalog.pg_index i WHERE i.indexrelid = k.conindid),
+                        'elements', (SELECT json_agg(json_build_object('column', a.attname, 'op', o.oprname) ORDER BY e.ord)
+                                     FROM unnest(k.conkey, k.conexclop) WITH ORDINALITY AS e(attnum, opoid, ord)
+                                     LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = e.attnum AND e.attnum > 0
+                                     JOIN pg_catalog.pg_operator o ON o.oid = e.opoid)) END,
            'nulls_not_distinct', CASE WHEN k.contype = 'u' THEN (SELECT i.indnullsnotdistinct FROM pg_catalog.pg_index i WHERE i.indexrelid = k.conindid) END,
            'references', CASE WHEN k.contype = 'f' THEN json_build_object(
                            'match', CASE k.confmatchtype WHEN 'f' THEN 'FULL' WHEN 'p' THEN 'PARTIAL' ELSE 'SIMPLE' END,
@@ -54,7 +63,7 @@ cons AS (
          ) AS con
   FROM pg_catalog.pg_constraint k
   JOIN pg_catalog.pg_namespace n ON n.oid = k.connamespace
-  WHERE n.nspname = :'schema' AND k.contype IN ('c', 'p', 'u', 'f') AND k.conparentid = 0
+  WHERE n.nspname = :'schema' AND k.contype IN ('c', 'p', 'u', 'f', 'x') AND k.conparentid = 0
   UNION ALL
   -- a unique index over plain columns, without a predicate, constrains rows as a UNIQUE constraint does;
   -- its key columns only (INCLUDE columns are not part of the key)

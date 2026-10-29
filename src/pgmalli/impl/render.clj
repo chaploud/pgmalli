@@ -350,6 +350,9 @@
                                                      :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
                                                      :to (get-in f [:to :columns])}
                                               (= :full (:match f)) (assoc :match :full)))))
+         :pg/exclude (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:exclude} :fact) tfacts))]
+                                       (cond-> {:constraint (:constraint f) :using (:method f) :elements (:elements f)}
+                                         (:partial? f) (assoc :where true)))))
          ;; a BEFORE row trigger runs before NOT NULL and CHECK are: it may fill what a write leaves out
          :pg/before-triggers (not-empty (into {} (for [event [:insert :update]
                                                        :let [names (vec (for [f tfacts :when (and (= :trigger (:fact f)) (:before f) (event f))] (:name f)))]
@@ -411,6 +414,14 @@
             (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))]
               {:kind :row-trigger :confidence :proven :severity :info :trigger (:name f)
                :message (str "trigger " (:name f) " runs for every inserted row: its code may reject or change rows the schema accepts")})
+            (for [f tfacts :when (= :exclude (:fact f))
+                  :let [eq (keep #(when (and (:column %) (= "=" (:op %))) (:column %)) (:elements f))
+                        kept? (and (seq eq) (not (:partial? f)) (every? :column (:elements f)))]]
+              {:kind :exclude :confidence :proven :severity :info :constraint (:constraint f)
+               :message (str "EXCLUDE " (:constraint f) " is not checked by the schemas"
+                             (if kept?
+                               (str "; datasets keep its = columns " (pr-str (vec eq)) " distinct, so their rows never conflict")
+                               "; datasets may generate rows it refuses"))})
             (for [f tfacts :when (= :not-enforced (:fact f))]
               {:kind :not-enforced :confidence :proven :severity :info :constraint (:constraint f)
                :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})

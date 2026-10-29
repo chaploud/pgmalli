@@ -120,6 +120,9 @@ All notable changes to this project are documented here. The format follows
   in any comparison, code-built joins making tables nullable.
 - `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
   `{:select [:*]}`, and makes outer-joined columns nullable.
+- EXCLUDE constraints are read: a table's `:pg/exclude`, and a `:diagnostics` entry saying
+  the schemas do not check it. Datasets keep its `=` columns distinct, so generated rows never
+  conflict (`dataset-schema` still takes what the database takes).
 - `:uncast-enum-string` is an enum type's alone: a text column a CHECK narrows to a list takes a
   varchar parameter, and was reported. A function's alias in `:from` is not held to the
   columns it lists (`t.name` reads as `name(t)`).

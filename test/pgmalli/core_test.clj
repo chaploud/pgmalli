@@ -223,3 +223,20 @@
                       "DO $$ BEGIN IF (SELECT c FROM tq.t) <> 'bb' THEN RAISE EXCEPTION 'char(3) cut'; END IF;"
                       " IF (SELECT count(*) FROM tq.e) <> 2 THEN RAISE EXCEPTION 'rows of defaults missing'; END IF; END $$;"))
       (is true "every INSERT ran: quoted types, arrays of them, empty arrays, char(n) whole, rows of defaults"))))
+
+(deftest an-exclude-constraint-is-on-the-table-and-datasets-keep-its-equal-columns-apart
+  (when *db*
+    (exec-sql! "CREATE EXTENSION IF NOT EXISTS btree_gist; CREATE SCHEMA ex;
+                CREATE TABLE ex.slots (id int PRIMARY KEY, room int NOT NULL CHECK (room BETWEEN 1 AND 3), seat int NOT NULL,
+                  EXCLUDE USING gist (room WITH =, seat WITH <>));")
+    (let [g (files/from-database {:db *db*} "ex")
+          registry (pgmalli/registry g)
+          props (m/properties (pgmalli/columns registry :pg.ex/slots))
+          ds (clojure.test.check.generators/generate (data/dataset-generator registry {:rows 3}) 30 1)]
+      (is (= [{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} {:column "seat" :op "<>"}]}]
+             (:pg/exclude props)))
+      (is (= [:exclude] (map :kind (:diagnostics g))) "the schemas do not check it, and say so")
+      (is (= 3 (count (distinct (map :room (get ds "ex.slots"))))) "no two rows share a room, so none conflict")
+      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts registry ds))))
+      (is (m/validate (data/dataset-schema registry) {"ex.slots" [{:id 1 :room 1 :seat 1} {:id 2 :room 1 :seat 1}]} {:registry registry})
+          "a dataset the database takes (equal seats in one room) is valid: the rule is for generating"))))

@@ -9,13 +9,15 @@
 
 (defn tables
   "[{:name :table :key-sets :refs} ...] for every row schema but those in except. A key set is
-   {:columns :nulls-distinct? :label}; a reference {:columns :table :to :full? :label},
+   {:columns :nulls-distinct? :label}, :generated-only? for one generation keeps and validation
+   does not (an EXCLUDE's = columns: distinct, its rows never conflict, though the database
+   takes equal ones whose other elements do not clash); a reference {:columns :table :to :full? :label},
    references to tables outside the dataset left out."
   ([registry] (tables registry nil))
   ([registry except]
    (let [ts (for [[k s] (sort-by (comp str key) (shape/schemas-of registry))
                   :when (and (shape/row-schema? s) (not (contains? (set except) (:pg/table (second (shape/row-map s))))))
-                 :let [{:keys [pg/table pg/primary-key pg/unique pg/foreign-keys]} (second (shape/row-map s))]]
+                 :let [{:keys [pg/table pg/primary-key pg/unique pg/foreign-keys pg/exclude]} (second (shape/row-map s))]]
              {:name k
               :table table
               :key-sets (concat (when primary-key
@@ -23,7 +25,12 @@
                                     :label (str table " primary key " (pr-str primary-key))}])
                                 (for [{:keys [columns nulls-distinct]} unique]
                                   {:columns (mapv shape/ident-key columns) :nulls-distinct? (not (false? nulls-distinct))
-                                   :label (str table " unique " (pr-str columns))}))
+                                   :label (str table " unique " (pr-str columns))})
+                                (for [{:keys [constraint elements where]} exclude
+                                      :let [eq (keep #(when (= "=" (:op %)) (:column %)) elements)]
+                                      :when (and (seq eq) (not where) (every? :column elements))]
+                                  {:columns (mapv shape/ident-key eq) :nulls-distinct? true :generated-only? true
+                                   :label (str table " exclude " constraint " " (pr-str (vec eq)))}))
               :refs (for [{:keys [columns to match] target :table} foreign-keys]
                       {:columns (mapv shape/ident-key columns) :table target :to (mapv shape/ident-key to) :full? (= :full match)
                        :label (str table " " (pr-str columns) " references " target " " (pr-str to))})})
@@ -74,7 +81,7 @@
   [registry]
   (let [ts (tables registry)]
     (into [:and (into [:map] (for [t ts] [(:table t) {:optional true} [:vector (:name t)]]))]
-          (concat (for [t ts, k (:key-sets t)]
+          (concat (for [t ts, k (:key-sets t) :when (not (:generated-only? k))]
                     [:fn {:error/message (:label k)} (fn [ds] (not (duplicate-keys? (get ds (:table t)) k)))])
                   (for [t ts, r (:refs t)]
                     [:fn {:error/message (:label r)} (fn [ds] (not-any? #(dangling? % r ds) (get ds (:table t))))])))))

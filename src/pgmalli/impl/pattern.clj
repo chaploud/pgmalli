@@ -28,6 +28,7 @@
      :null         col IS NULL
      :when-present col IS NULL OR <column pattern>       {:fact-when-present}
      :primary-key  table primary key                      {:columns}
+     :exclude      EXCLUDE constraint                     {:method :partial? :elements [{:column :op}]}
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
                                                            :index? (from a unique index, not a constraint)}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns}}
@@ -299,8 +300,10 @@
       (and max_length (#{"bit varying" "varbit"} elem-type)) (conj (merge base {:fact :length :fn :length :max max_length}))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced index]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_enforced index exclude]}]
   (case type
+    "EXCLUDE" [(merge base {:fact :exclude :constraint cname :method (:method exclude) :partial? (boolean (:partial exclude))
+                            :elements (mapv #(select-keys % [:column :op]) (:elements exclude))})]
     "PRIMARY KEY" [(merge base {:fact :primary-key :constraint cname :columns columns})]
     "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index)})]
     ;; NOT ENFORCED: the database never checks it, so it is not a reference, only noted
