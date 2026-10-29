@@ -7,8 +7,8 @@
 
    Scope: tables come from :from, :using, :cross-join, the joins (:join-by is not read),
    :insert-into, :update and :delete-from, under their aliases. CTEs (:with), subqueries,
-   table functions, a symbol where a table goes and a pg_catalog table the registry lacks are
-   opaque tables: their columns exist but have no type. Every table has the system columns
+   table functions, a symbol where a table goes and a pg_catalog or information_schema table
+   the registry lacks are opaque tables: their columns exist but have no type. Every table has the system columns
    (ctid, xmin, ...). A column is :col (unique in the scope), :alias/col or :alias.col; a
    column a subquery cannot resolve is looked for in the enclosing statements, as PostgreSQL
    does. An unqualified table is in :schema (default \"public\"). What code in the query
@@ -125,7 +125,9 @@
 (defn- cte-name [entry]
   (when (vector? entry)
     (let [n (if (vector? (first entry)) (ffirst entry) (first entry))]
-      (when (keyword? n) (folded (name n))))))
+      (cond (keyword? n) (folded (name n))
+            ;; HoneySQL quotes a string name: it is as written
+            (string? n) n))))
 
 (defn- cte-pair? [x] (and (vector? x) (<= 2 (count x) 3) (statement? (second x))))
 
@@ -202,6 +204,8 @@
   [k]
   (when-not (or (namespace k) (str/includes? (name k) ".")) (folded (name k))))
 
+(defn- alias? [x] (or (keyword? x) (string? x)))
+
 (defn- table-ref
   "[table alias written columns] of a :from / join / target item: the table's qualified name,
    its alias, the name as written (nil when qualified by a schema), and the columns an alias
@@ -216,17 +220,20 @@
     (map? x) [nil (str "(subquery " (hash x) ")") nil]
     (vector? x)
     (let [[a b] x
-          ;; [:alias {:columns [...]}]; a column definition list ([:raw "a int"]) names no column read here
-          [b listed] (if (and (vector? b) (keyword? (first b)) (map? (second b)))
+          ;; [:alias {:columns [...]}]; a column definition list ([:alias [:raw "(a int)"]]) names
+          ;; no column read here
+          [b listed] (if (and (vector? b) (alias? (first b)) (or (map? (second b)) (vector? (second b))))
                        [(first b) (let [cs (:columns (second b))] (when (and (sequential? cs) (every? #(or (keyword? %) (string? %)) cs)) (mapv name cs)))]
-                       [b nil])]
+                       [b nil])
+          ;; HoneySQL quotes a string alias: it is as written
+          alias-name #(if (string? %) % (folded (name %)))]
       (cond
         ;; :t / [:t :alias] / INSERT INTO t (columns...)
-        (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (folded (if (keyword? b) (name b) (last (str/split (name a) #"\.")))) (written a) listed]
+        (and (keyword? a) (or (nil? b) (alias? b) (vector? b))) [(qualified a schema) (if (alias? b) (alias-name b) (folded (last (str/split (name a) #"\.")))) (written a) listed]
         (keyword? a) [nil (folded (name a)) nil listed]
         ;; [[:unnest ...] [:t {:columns [:x]}]]: t.f reads as f(t), the function on a scalar result,
         ;; so a function's alias is not held to the columns it lists
-        (keyword? b) [nil (folded (name b)) nil (when-not (vector? a) listed)]
+        (alias? b) [nil (alias-name b) nil (when-not (vector? a) listed)]
         ;; [[:f args...]]: a table function, named after the function
         (and (nil? b) (vector? a) (keyword? (first a))) [nil (folded (last (str/split (name (first a)) #"\."))) nil]
         ;; [subquery]: one with no alias
@@ -248,7 +255,7 @@
           :else catalog)
     table))
 
-(defn- catalog? [table] (str/starts-with? table "pg_catalog."))
+(defn- catalog? [table] (boolean (re-find #"^(pg_catalog|information_schema)\." table)))
 
 (defn- outer-aliases
   "The aliases an outer join may leave NULL: a LEFT JOIN's table, every table before a RIGHT
@@ -301,8 +308,11 @@
       (let [target (assoc (get sc alias) :excluded? true)] (assoc sc "excluded" target))
       sc)))
 
-(defn- lateral? [item]
-  (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (= :lateral (ffirst item))))))
+(defn- lateral?
+  "Whether a FROM or join item sees the items before it: LATERAL, or a function call, which is
+   implicitly LATERAL."
+  [item]
+  (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (keyword? (ffirst item))))))
 
 (defn- statement-chains
   "[[statement scopes path] ...] for the statements of a query, scopes the statement's own scope
@@ -440,7 +450,8 @@
   [x]
   (if (and (vector? x) (= 2 (count x)) (= :param (first x)))
     (second x)
-    (when (or (keyword? x) (symbol? x))
+    ;; the jsonb and hstore operators ?, ?| and ?&
+    (when (and (or (keyword? x) (symbol? x)) (not (#{:? :?| :?&} x)))
       (let [c (if (keyword? x) (subs (str x) 1) (str x))]
         (when (str/starts-with? c "?") (keyword (subs c 1)))))))
 
@@ -652,19 +663,29 @@
     (when (and (vector? members) (map? (first members))) (output-statement (first members)))
     stmt))
 
+(defn- untold-outputs?
+  "Whether stmt's select may make output names not read here: a :raw item, or, when stars?
+   (the first member of a set operation, whose output names are all ORDER BY sees), a star."
+  [stmt stars?]
+  (boolean (some #(let [e (item-expression %)]
+                    (or (and (vector? e) (= :raw (first e)))
+                        (and stars? (some-> (first (select-parts %)) star?))))
+                 (selected-items stmt))))
+
 (defn- ordering-columns
   "The input columns :order-by and :group-by name as they are (:col, or [:col :asc]);
    expressions there are not read. As PostgreSQL reads them, a bare name in :order-by is an
    output column first (of a set operation, its first member's), one in :group-by an input
    column first."
   [registry sc stmt]
-  (let [out (output-statement stmt)]
+  (let [out (output-statement stmt)
+        output? (fn [s c stars?] (or (output-column? s c) (and (nil? (first (split-column c))) (untold-outputs? s stars?))))]
     (concat (for [c (vectorish (:group-by stmt))
-                  :when (and (column-keyword? c) (not (and (output-column? stmt c) (empty? (column-hits registry sc c)))))]
+                  :when (and (column-keyword? c) (not (and (output? stmt c false) (empty? (column-hits registry sc c)))))]
               c)
             (when out
               (for [o (vectorish (:order-by stmt)) :let [c (if (vector? o) (first o) o)]
-                    :when (and (column-keyword? c) (not (output-column? out c)))]
+                    :when (and (column-keyword? c) (not (output? out c (not= out stmt))))]
                 c)))))
 
 (defn- whole-row?
@@ -926,8 +947,8 @@
          found (for [[stmt scopes] (statement-chains registry body opts)
                      :let [own (first scopes)
                            targets (set (keep #(some-> % (table-ref schema) second) [(insert-target stmt) (:update stmt) (:delete-from stmt)]))]
-                     [alias {:keys [table cte?]}] (when (map? own) own)
-                     :when (and table (not cte?) (not= "excluded" (str/lower-case (str alias))))]
+                     [alias {:keys [table cte? excluded?]}] (when (map? own) own)
+                     :when (and table (not cte?) (not excluded?))]
                  [(if (targets alias) :writes :reads) table])]
      (merge {:reads #{} :writes #{}}
             (update-vals (group-by first found) #(set (map second %)))))))

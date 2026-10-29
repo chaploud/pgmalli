@@ -300,4 +300,23 @@
  [:enum-join-on {:select [:u.id] :from [[:users :u]] :join [[:active_users :a] [:and [:= :a.id :u.id] [:= :a.mood "angry"]]]}]
  [:enum-not-in {:select [:id] :from [:users] :where [:not-in :mood ["happy" "nah"]]}]
  [:enum-like {:select [:id] :from [:users] :where [:like [:cast :mood :text] "h%"]}]
+ ;; function FROM items: a column definition list keeps the alias, and the arguments see the earlier items (implicitly LATERAL)
+ [:fn-coldef {:select [:r.a] :from [[[:jsonb_to_recordset [:cast "[{\"a\":1}]" :jsonb]] [:r [:raw "(a int)"]]]]}]
+ [:fn-coldef-bare {:select [:a] :from [[[:jsonb_to_recordset [:cast "[{\"a\":1}]" :jsonb]] [:r [:raw "(a int)"]]]]}]
+ [:fn-coldef-join {:select [:u.id :r.a] :from [[:users :u]] :join [[[:jsonb_to_record [:cast "{\"a\":1}" :jsonb]] [:r [:raw "(a int)"]]] true]}]
+ [:fn-arg-sub {:select [:u.id :g] :from [[:users :u] [[:generate_series 1 {:select [[[:max :id]]] :from [:posts] :where [:= :posts.user_id :u.id]}] :g]]}]
+ [:fn-arg-sub-join {:select [:u.id :g] :from [[:users :u]] :join [[[:generate_series 1 {:select [[[:max :id]]] :from [:posts] :where [:= :posts.user_id :u.id]}] :g] true]}]
+ [:fn-arg-sub-cross {:select [:u.id :g] :from [[:users :u]] :cross-join [[[:generate_series 1 {:select [[[:max :id]]] :from [:posts] :where [:= :posts.user_id :u.id]}] :g]]}]
+ [:fn-unnest-array-sub {:select [:u.id :t] :from [[:users :u] [[:unnest [:array {:select [:title] :from [:posts] :where [:= :posts.user_id :u.id]}]] :t]]}]
+ ;; output names a star or :raw makes
+ [:union-star-order {:union [{:select [:*] :from [:users]} {:select [:*] :from [:users]}] :order-by [:nick]}]
+ [:union-qstar-order {:union [{:select [:u.*] :from [[:users :u]]} {:select [:*] :from [:users]}] :order-by [:nick]}]
+ [:raw-alias-order {:select [[[:raw "id AS x"]]] :from [:users] :order-by [:x]}]
+ [:raw-alias-group {:select [[[:raw "nick AS x"]]] :from [:users] :group-by [:x]}]
+ ;; string names, which HoneySQL quotes
+ [:string-alias {:select [:u.nick] :from [[:users "u"]]}]
+ [:string-alias-sub {:select [:s.id] :from [[{:select [:id] :from [:users]} "s"]]}]
+ [:string-cte {:with [["c" {:select [:id] :from [:users]}]] :select [:c.id] :from [:c]}]
+ [:string-cte-bad {:with [["c" {:select [:id] :from [:users]}]] :select [:nope] :from [:c]}]
+ [:info-schema {:select [:table_name] :from [:information_schema.tables] :where [:= :table_name "users"]}]
 ]

@@ -830,4 +830,18 @@
          (h/tables registry {:update :users :set {:nick "a"} :from [[:groups :g]] :where [:= :g.id :users.group_id]} opts)))
   (is (= {:reads #{"sample.users"} :writes #{}}
          (h/tables registry {:with [[:groups {:select [:id] :from [:users]}]] :select [:*] :from [:groups]} opts)) "a CTE is no table")
-  (is (= {:reads #{} :writes #{"sample.users"}} (h/tables registry {:insert-into :users :values [{:id 1}] :on-conflict [:id] :do-update-set [:nick]} opts))))
+  (is (= {:reads #{} :writes #{"sample.users"}} (h/tables registry {:insert-into :users :values [{:id 1}] :on-conflict [:id] :do-update-set [:nick]} opts)))
+  (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:select [:excluded.id] :from [[:users :excluded]]} opts))
+      "excluded is a table's alias outside ON CONFLICT"))
+
+(deftest string-names-are-as-honeysql-quotes-them
+  (is (= [] (h/check registry {:select [:u.nick] :from [[:users "u"]]} opts)))
+  (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:select [:u.nick] :from [[:users "u"]]} opts)))
+  (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:with [["c" {:select [:id] :from [:users]}]] :select [:id] :from [:c]} opts)))
+  (is (= [{:kind :unknown-table :table "sample.c"}] (h/check registry {:with [["C" {:select [:id] :from [:users]}]] :select [:*] :from [:c]} opts))))
+
+(deftest the-question-mark-operators-are-no-arguments
+  (is (= [:id] (keys (h/arg-types registry {:select [:id] :from [:users] :where [:and [:? :nick "a"] [:?| :nick :nick] [:?& :nick :nick] [:= :id :?id]]} opts)))))
+
+(deftest information-schema-is-opaque-as-pg-catalog
+  (is (= [] (h/check registry {:select [:table_name] :from [:information_schema.tables]} opts))))
