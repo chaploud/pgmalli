@@ -42,11 +42,17 @@
   [v]
   (if (instance? java.time.Duration v) (str v) v))
 
+(defn- hstore-text
+  "A map as hstore text: {\"a\" \"1\" \"b\" nil} is \"a\"=>\"1\", \"b\"=>NULL."
+  [m]
+  (let [q #(str "\"" (str/replace (str %) #"[\\\"]" "\\\\$0") "\"")]
+    (str/join ", " (for [[k v] m] (str (q k) "=>" (if (nil? v) "NULL" (q v)))))))
+
 (defn- insert-value
   "A dataset value in the form an INSERT needs: a value of an enum or domain cast to it (an
    array of a domain over an array as an array), a string of a type strings are not cast to
    implicitly (inet, bit ...) cast to it, an interval as text cast to it, json written and
-   cast, an array with its element type; anything else as it is."
+   cast, an hstore map as its text, an array with its element type; anything else as it is."
   [schema v]
   (let [s (shape/non-null schema)
         t (:pg/type (shape/column-props s))
@@ -57,6 +63,8 @@
                                                [:raw (str "CAST('{}' AS " (ref-type s) ")")])
           (ref-type s) [:cast v [:raw (ref-type s)]]
           (types/json? t) [:cast (json/write v) (keyword t)]
+          ;; pgjdbc reads an hstore as a Map
+          (and (instance? java.util.Map v) (= "hstore" (:name (types/entry type-name)))) [:cast (hstore-text v) :hstore]
           (and (vector? s) (= :vector (first s)))
           (if-let [elem (ref-type (shape/non-null (last s)))]
             (if (seq v)

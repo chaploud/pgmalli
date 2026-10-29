@@ -313,3 +313,12 @@
              (honey.sql/format stmt)))
       (is (= [{:plain 4}] (:values (first (data/inserts reg {"qc.Warehouse" [{:plain 4}]}))))
           "rows stay maps of keywords while no column needs quoting"))))
+
+(deftest an-hstore-map-as-pgjdbc-reads-it-inserts
+  (when *db*
+    (let [[reg] (registry-of "hs" "CREATE EXTENSION IF NOT EXISTS hstore SCHEMA public; CREATE SCHEMA hs; CREATE TABLE hs.t (id int PRIMARY KEY, h public.hstore);")
+          m (doto (java.util.HashMap.) (.put "color" "red") (.put "a \"b\\" "=>,") (.put "size" nil))]
+      (exec-sql! (str (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg {"hs.t" [{:id 1 :h m} {:id 2 :h {}}]})))
+                      "; DO $$ BEGIN IF (SELECT h FROM hs.t WHERE id = 1) <> hstore(ARRAY['color', 'a \"b\\', 'size'], ARRAY['red', '=>,', NULL])"
+                      " OR (SELECT h FROM hs.t WHERE id = 2) <> ''::hstore THEN RAISE EXCEPTION 'wrong hstore'; END IF; END $$;"))
+      (is true "the map went in as the same hstore"))))
