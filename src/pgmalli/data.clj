@@ -6,8 +6,7 @@
             [clojure.string :as str]
             [pgmalli.impl.dataset :as ds]
             [pgmalli.impl.insert :as insert]
-            [pgmalli.impl.jdbc :as jdbc]
-            [pgmalli.impl.shape :as shape])
+            [pgmalli.impl.jdbc :as jdbc])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetTime)))
 
 (defn dataset-schema
@@ -22,11 +21,7 @@
    Tables that came out short are listed in the dataset's metadata, see short-tables."
   ([registry] (dataset-generator registry {}))
   ([registry opts]
-   (jdbc/checked! [:map {:closed true} [:rows {:optional true} pos-int?] [:except {:optional true} [:or [:set :string] [:sequential :string]]]] opts)
-   (let [known (set (for [[_ s] (shape/schemas-of registry) :when (shape/row-schema? s)] (:pg/table (second (shape/row-map s)))))]
-     (when-let [stray (seq (remove known (:except opts)))]
-       (throw (ex-info (str ":except names tables the registry does not: " (vec stray) "; it holds " (vec (sort known)))
-                       {:tables (vec stray) :known (vec (sort known))}))))
+   (jdbc/checked! [:map {:closed true} [:rows {:optional true} pos-int?] [:except {:optional true} [:maybe [:or [:set :string] [:sequential :string]]]]] opts)
    (ds/dataset-generator registry (or opts {}))))
 
 (defn short-tables

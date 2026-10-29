@@ -99,5 +99,5 @@
    :zone, default the JVM's; JSON text in json and jsonb columns is parsed."
   ([] (jdbc/transformer))
   ([opts]
-   (jdbc/checked! [:map {:closed true} [:zone {:optional true} [:fn #(instance? java.time.ZoneId %)]]] opts)
+   (jdbc/checked! [:map {:closed true} [:zone {:optional true} [:fn {:error/message "should be a java.time.ZoneId"} #(instance? java.time.ZoneId %)]]] opts)
    (jdbc/transformer opts)))

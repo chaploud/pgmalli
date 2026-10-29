@@ -28,7 +28,11 @@
                       {:columns (mapv shape/ident-key columns) :table target :to (mapv shape/ident-key to) :full? (= :full match)
                        :label (str table " " (pr-str columns) " references " target " " (pr-str to))})})
          known (set (map :table ts))
-         excepted (set except)]
+         excepted (set except)
+         all (into known (for [[_ s] (shape/schemas-of registry) :when (shape/row-schema? s)] (:pg/table (second (shape/row-map s)))))]
+     (when-let [stray (seq (remove all excepted))]
+       (throw (ex-info (str ":except names tables the registry does not: " (vec stray) "; it holds " (vec (sort all)))
+                       {:tables (vec stray) :known (vec (sort all))})))
      (doseq [t ts, r (:refs t) :when (excepted (:table r))]
        (throw (ex-info (str (:table t) " references " (:table r) ", which :except leaves out") {:table (:table t) :references (:table r)})))
      (mapv (fn [t] (update t :refs #(vec (filter (comp known :table) %)))) ts))))

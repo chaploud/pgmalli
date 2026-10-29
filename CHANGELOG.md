@@ -84,7 +84,9 @@ All notable changes to this project are documented here. The format follows
   (selected too, as INSERT ... SELECT passes values); a column an opaque table may hold beside
   one known table as ambiguous; HoneySQL's `:%max.id`; an SQL word under an alias; a column of
   a table code brings in (`:left-join (when x [...])`) as unknown. Code in a query is not read
-  as columns, and nothing throws on it.
+  as columns, and nothing throws on it. Where code builds some of a query's CTEs (`:with
+  ctes`, or one entry of it), an unqualified table may be one of them; one qualified by a
+  schema is still judged (all of the query's unknown tables went unjudged).
 - `row-schema` names an expression with no alias as PostgreSQL does (a function's name, `case`,
   `array`, a cast column's or function's name, `?column?` for a value or an operator) and reads
   set operations (the first member's names, typed where the members agree, nullable where one

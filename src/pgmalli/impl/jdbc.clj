@@ -161,7 +161,7 @@
   (let [s (shape/schema-of registry name)
         props (when (vector? s) (let [m (shape/row-map s)] (when (map? (second m)) (second m))))]
     (when-not (and (or (:pg/table props) (:pg/view props)) (not (:closed props)))
-      (throw (ex-info (str name " is no table's or view's row schema, which as-read reads (an insert schema is what is sent, not read)")
+      (throw (ex-info (str name " is no table's or view's row schema, which as-read reads (an insert or update schema is what is sent, not read)")
                       {:name name})))
     (shape/row-map s)))
 

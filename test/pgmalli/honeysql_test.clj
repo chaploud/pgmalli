@@ -560,3 +560,9 @@
 (deftest a-row-of-a-table-the-registry-lacks-is-untold
   (is (nil? (h/row-schema registry {:select [:id] :from [:users]})) ":schema left out: no sample here")
   (is (= [{:kind :unknown-table :table "public.users"}] (h/check registry {:select [:id] :from [:users]}))))
+
+(deftest a-cte-code-builds-may-be-any-unqualified-table
+  (is (= [:map [:id [:maybe :any]]] (h/row-schema registry '{:with ctes :select [:id] :from :recent} opts)))
+  (is (= [] (h/check registry '{:with ctes :select [:id] :from :recent} opts)))
+  (is (= [{:kind :unknown-table :table "other.nope"}] (h/check registry '{:with ctes :select [:id] :from :other.nope} opts))
+      "a table qualified by a schema is no CTE"))

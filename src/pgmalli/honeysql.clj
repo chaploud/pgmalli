@@ -154,6 +154,19 @@
   [body]
   (set (cte-names* body true)))
 
+(declare code-ctes?)
+
+(defn- code-ctes
+  "#{::code-ctes} when code (not data) gives a statement of the query some of its CTEs: any
+   unqualified name may then be one of them, so none is an unknown table."
+  [body]
+  (when (some code-ctes? (statements body)) #{::code-ctes}))
+
+(defn- query-ctes
+  "The CTE names a statement of the query may see, at any depth, code's included."
+  [body]
+  (into (cte-names body) (code-ctes body)))
+
 (defn- free-cte-names
   "Names of the CTEs built up in code (pairs outside any :with), which every statement sees."
   [body]
@@ -245,7 +258,7 @@
         nullable (outer-aliases stmt schema)
         sc (into {}
                  (for [[table alias written listed] (keep #(table-ref % schema) refs)
-                       :let [cte? (boolean (and written (ctes written)))
+                       :let [cte? (boolean (and written (or (ctes written) (ctes ::code-ctes))))
                              table (when table (catalog-table registry table written))]]
                    [alias (cond-> {:table table :cte? cte?
                                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))
@@ -270,7 +283,7 @@
   [registry body opts]
   (letfn [(walk [x outer ctes in-vector? under?]
             (cond (statement? x) (let [open? (and (empty? outer) in-vector? (not under?))
-                                       ctes (into (if open? (cte-names body) ctes) (keep cte-name) (cte-entries x))
+                                       ctes (into (if open? (query-ctes body) ctes) (keep cte-name) (cte-entries x))
                                        outer (if open? (list :open) outer)
                                        ;; a column of a table code brings in is the enclosing data's, untyped
                                        chain (cons (scope registry x ctes opts) (cond->> outer (code-sources? x) (cons :open)))]
@@ -280,7 +293,7 @@
                                           (walk (:insert-into x) outer ctes false true)
                                           (mapcat #(walk % chain ctes false true) (vals (dissoc x :insert-into))))))
                   (branch? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x)) under?) (seq x))))]
-    (walk body () (free-cte-names body) false false)))
+    (walk body () (into (free-cte-names body) (code-ctes body)) false false)))
 
 (defn- split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table, :b does not."
@@ -613,8 +626,7 @@
   [registry stmt scope {:keys [schema] :or {schema default-schema}}]
   (let [registry (reading registry)
         scopes (chain scope)]
-    (vec (concat (for [[_ {:keys [table cte?]}] (first scopes)
-                       :when (and table (not cte?) (not (catalog? table)) (nil? (table-columns registry table)))]
+    (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?]
                    {:kind :unknown-table :table table})
                  (column-problems registry scopes stmt schema)
                  (insert-problems registry stmt schema)
@@ -664,17 +676,16 @@
 (defn check
   "The problems of every statement of a query, and the clauses it uses that are read nowhere
    here (:unread-clause: a HoneySQL clause pgmalli does not know, or one of your own), so a
-   query is never judged on part of it in silence. A query whose :with, or one of its entries,
-   is built elsewhere (not data) cannot have its unknown tables judged, so those are left out
-   for it. Code in the query is never read as columns: what it builds is not in the data."
+   query is never judged on part of it in silence. In a query whose :with, or one of its
+   entries, is built elsewhere (not data), an unqualified table may be a CTE, and is no unknown
+   one. Code in the query is never read as columns: what it builds is not in the data."
   ([registry body] (check registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
    (query! body)
    (let [registry (reading registry)
-         opaque? (some code-ctes? (statements body))
          found (mapcat (fn [[stmt scopes]] (problems registry stmt scopes opts)) (statement-chains registry body opts))]
-     (vec (concat (if opaque? (remove #(= :unknown-table (:kind %)) found) found) (unread-clauses body))))))
+     (vec (concat found (unread-clauses body))))))
 
 ;;; types
 
@@ -841,7 +852,7 @@
   ([registry body opts]
    (jdbc/options! opts)
    (query! body)
-   (when (map? body) (row-schema* registry body (cte-names body) opts))))
+   (when (map? body) (row-schema* registry body (query-ctes body) opts))))
 
 (defn query-schema
   "[:=> [:cat arg-types...] [:sequential row]], the malli function schema of a function taking
