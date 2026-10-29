@@ -49,6 +49,8 @@ All notable changes to this project are documented here. The format follows
 - Supported versions in the README, the oldest of them run in CI.
 - `bb oracle`: `check` against PostgreSQL itself on a corpus of queries and mutants of them;
   CI holds its false positives at none.
+- `bb upstream` and a weekly workflow: the suite against the newest HoneySQL, next.jdbc, pgjdbc,
+  malli and PostgreSQL, each failure naming the upstream change and the pgmalli list to update.
 
 ### Fixed
 

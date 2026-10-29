@@ -47,6 +47,19 @@ false positives at none in `bb test:jvm`.
 After changing how `pgmalli.honeysql` resolves scopes or names, run `bb oracle` with a few
 seeds. A query it got wrong goes into the corpus.
 
+## Following upstream
+
+`bb upstream` runs the JVM suite against the newest stable HoneySQL, next.jdbc, pgjdbc and
+malli and `postgres:alpine` (`PGMALLI_PG_IMAGE` selects another), and prints what to update,
+grouped by upstream. The upstream workflow runs it weekly, outside PR CI. Every failure under
+the database fixture names the PostgreSQL, pgjdbc, next.jdbc, HoneySQL and malli versions that
+ran. The tests that catch a change upstream, each naming the list to update:
+
+| test | catches |
+|---|---|
+| `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
+| `pgmalli.upstream-test` | a `pg_catalog` type pgmalli neither renders nor treats as opaque; a map builder next.jdbc adds or drops |
+
 ## Other tasks
 
 - `bb harvest` rebuilds the expression corpus (`PGMALLI_PGSCHEMA_DIR` adds a checkout of

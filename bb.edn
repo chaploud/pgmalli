@@ -7,9 +7,12 @@
  :tasks {lint {:doc "clj-kondo over src and test"
                :task (shell "clj-kondo --lint src test dev")}
          test:matrix {:doc "bb test against the PostgreSQL versions CI covers"
-                      :task (doseq [v ["16" "17" "18"]]
+                      :requires ([clj-yaml.core :as yaml])
+                      :task (doseq [v (get-in (yaml/parse-string (slurp ".github/workflows/ci.yml")) [:jobs :test :strategy :matrix :pg])]
                               (println "==" v)
                               (shell {:extra-env {"PGMALLI_PG_IMAGE" (str "postgres:" v "-alpine")}} "bb test"))}
+         upstream {:doc "The JVM suite against the newest HoneySQL, next.jdbc, pgjdbc, malli and postgres:alpine, with what to update"
+                   :task (load-file "dev/upstream.clj")}
          harvest {:doc "Rebuild test/corpus/harvested.edn (needs docker)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/harvest.clj")}

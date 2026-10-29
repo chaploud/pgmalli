@@ -2,7 +2,8 @@
   "One throwaway PostgreSQL container per test run, one fresh database per namespace.
    Data lives on tmpfs with durability off, as usual for CI."
   (:require [babashka.process :as p]
-            [clojure.string :as str])
+            [clojure.string :as str]
+            [clojure.test :as t])
   (:import (java.net ServerSocket)))
 
 (def ^:dynamic *db* nil)
@@ -49,12 +50,27 @@
                                  {:in sql})]
     (when-not (zero? exit) (throw (ex-info (str "SQL failed: " (str/trim err)) {:sql sql})))))
 
+(defn version
+  "The version of a jar on the classpath, by its artifact name (\"honeysql\"); nil when absent."
+  [artifact]
+  (second (re-find (re-pattern (str "/" artifact "-([^/:]+)\\.jar")) (System/getProperty "java.class.path"))))
+
+(defn- server-version [container]
+  (let [{:keys [out]} (p/sh ["docker" "exec" container "psql" "-X" "-tA" "-U" "postgres" "-c" "SHOW server_version"])]
+    (str/trim out)))
+
+(def ^:private upstream
+  (delay (str "upstream: PostgreSQL " (server-version (:name @container))
+              (apply str (for [[label artifact] [["pgjdbc" "postgresql"] ["next.jdbc" "next.jdbc"] ["HoneySQL" "honeysql"] ["malli" "malli"]]]
+                           (str ", " label " " (or (version artifact) "absent")))))))
+
 (def ^:private said-skipped
   (delay (println "PGMALLI_SKIP_DB is set: the tests that need a database are skipped")))
 
 (defn with-postgres
-  "clojure.test :once fixture. Binds *db* to an empty database for the namespace.
-   Set PGMALLI_SKIP_DB to run without docker; *db* is then nil."
+  "clojure.test :once fixture. Binds *db* to an empty database for the namespace, and names the
+   upstream versions that ran in every failure under it. Set PGMALLI_SKIP_DB to run without
+   docker; *db* is then nil."
   [f]
   (if (System/getenv "PGMALLI_SKIP_DB")
     (do @said-skipped (f))
@@ -63,7 +79,7 @@
       (exec-in! name "postgres" (str "CREATE DATABASE " dbname))
       (binding [*db* {:host "localhost" :port port :db dbname :user "postgres" :password "pw"}
                 *container* name]
-        (f)))))
+        (t/testing @upstream (f))))))
 
 (defn exec-sql!
   "Runs SQL against the namespace's database through the container's psql."
