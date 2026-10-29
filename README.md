@@ -415,8 +415,9 @@ PostgreSQL's deparser prints them.
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The suite includes property-based round trips through
-PostgreSQL: expressions are stored as CHECK constraints and read back, and `:pg/check`
-verdicts are compared with PostgreSQL's own on generated rows.
+PostgreSQL: expressions are stored as CHECK constraints and read back, `:pg/check` verdicts
+are compared with PostgreSQL's own on generated rows, and `pgmalli.honeysql/check` with
+PostgreSQL's own on hundreds of queries (`bb oracle` for thousands).
 
 ## License
 

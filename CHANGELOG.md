@@ -110,6 +110,9 @@ All notable changes to this project are documented here. The format follows
   where it sits, the same statement in two places in its own scope each. `:t.*` must name a
   table of the scope; code anywhere in a query (an `:insert-into` target, a CTE name) leaves
   its part unjudged, and clauses inside code are read.
+- `bb oracle` runs `check` beside PostgreSQL itself on a corpus of queries and seeded mutants
+  of them (`test/resources/pgmalli/oracle/`), and `pgmalli.oracle-test` holds its false
+  positives at none in CI.
 - Checked against PostgreSQL itself (several thousand queries, PREPAREd): `check` reported, for
   queries it accepts, a column `JOIN ... USING` merges as ambiguous, a column of a
   schema-qualified table (`:public.users`, `:public.users.id`), an identifier in another case or

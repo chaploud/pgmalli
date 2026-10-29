@@ -1,0 +1,12 @@
+CREATE TYPE mood AS ENUM ('happy', 'sad');
+CREATE TABLE groups (id serial PRIMARY KEY, name text NOT NULL, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE users (id serial PRIMARY KEY, group_id int NOT NULL REFERENCES groups(id), nick text, name text, mood mood, score int NOT NULL);
+CREATE TABLE posts (id bigserial PRIMARY KEY, user_id int NOT NULL REFERENCES users(id), title text NOT NULL, body text, created_at timestamptz NOT NULL DEFAULT now());
+CREATE TABLE tags (id serial PRIMARY KEY, name text NOT NULL UNIQUE);
+CREATE TABLE post_tags (post_id bigint NOT NULL REFERENCES posts(id), tag_id int NOT NULL REFERENCES tags(id), PRIMARY KEY (post_id, tag_id));
+CREATE VIEW active_users AS SELECT id, nick, group_id, mood FROM users WHERE score > 0;
+INSERT INTO groups (name) VALUES ('g1'), ('g2');
+INSERT INTO users (group_id, nick, name, mood, score) VALUES (1, 'a', 'A', 'happy', 1), (2, 'b', 'B', 'sad', 0);
+INSERT INTO posts (user_id, title) VALUES (1, 't1'), (2, 't2');
+INSERT INTO tags (name) VALUES ('x'), ('y');
+INSERT INTO post_tags VALUES (1, 1), (2, 2);

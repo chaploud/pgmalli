@@ -14,6 +14,8 @@
                       ;; strings from regexes, which pgmalli uses when it is on the classpath
                       com.gfredericks/test.chuck {:mvn/version "0.2.15"}}
          :main-opts ["-m" "cognitect.test-runner"]}
+  ;; with :test, as bb oracle runs it: pgmalli.oracle's -main instead of the test runner
+  :oracle {:main-opts ["-m" "pgmalli.oracle"]}
   :build {:deps {io.github.clojure/tools.build {:git/tag "v0.10.14" :git/sha "1176afd"}}
           :ns-default build}
   :deploy {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.5"}}
