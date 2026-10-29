@@ -145,6 +145,13 @@ All notable changes to this project are documented here. The format follows
 - EXCLUDE constraints are read: a table's `:pg/exclude`, and a `:diagnostics` entry saying
   the schemas do not check it. Datasets keep its `=` columns distinct, so generated rows never
   conflict (`dataset-schema` still takes what the database takes).
+- An argument compared with a column is typed by the column's kind, an enum's labels kept: a
+  CHECK, a length or a range is no longer applied, as PostgreSQL compares a value beyond them
+  and matches no row. `{:compare :lenient}` adds nil alone. IS [NOT] DISTINCT FROM takes nil.
+- An argument reaching an enum type's column as a String is an `:uncast-enum-string`, unless
+  `:write` says what is sent. `row-schema` keys a column by its name (`:group-id` reads as
+  `group_id`) and an alias as written under `:format {:quoted true}`; ROLLUP, CUBE and
+  GROUPING SETS make the grouped columns nullable; `:join-by` leaves its tables open.
 - `:uncast-enum-string` is an enum type's alone: a text column a CHECK narrows to a list takes a
   varchar parameter, and was reported. A function's alias in `:from` is not held to the
   columns it lists (`t.name` reads as `name(t)`).

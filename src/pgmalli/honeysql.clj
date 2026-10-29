@@ -91,10 +91,11 @@
 (declare insert-parts)
 
 (defn- code-sources?
-  "Whether code (a list) brings in some of a statement's tables, whose columns the data then
-   does not show."
+  "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
+   tables, whose columns the data then does not show."
   [stmt]
-  (boolean (or (some seq? (concat (keep stmt (concat from-keys join-keys [:update :delete-from :insert-into]))
+  (boolean (or (contains? stmt :join-by)
+               (some seq? (concat (keep stmt (concat from-keys join-keys [:update :delete-from :insert-into]))
                                   (from-items stmt from-keys)
                                   (map second (join-items stmt))))
                ;; an :insert-into target insert-parts finds no table in
@@ -417,9 +418,12 @@
         column (second (split-column col))
         [opaque & _] (filter #(nth % 2) hits)]
     (cond (= 1 (count hits))
-          (let [[alias table opaque? nullable?] (first hits)]
+          (let [[alias table opaque? nullable?] (first hits)
+                cs (when-not opaque? (table-columns registry table))
+                ;; the column's own name, as next.jdbc keys the row: :group-id is group_id
+                column (if (or (nil? cs) (contains? cs column)) column (folded column))]
             {:table (or table alias) :column column
-             :schema (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (folded column)))))
+             :schema (get cs column)
              :nullable? (boolean nullable?) :opaque? (boolean opaque?)})
           (and opaque (>= 1 (count (remove #(nth % 2) hits))))
           (let [[alias table] opaque] {:table (or table alias) :column column :schema nil :nullable? true :opaque? true}))))
@@ -602,15 +606,21 @@
   [item]
   (if (and (vector? item) (= 1 (count item))) (first item) item))
 
+(defn- alias-label
+  "The label PostgreSQL gives an alias: folded as any unquoted name (:user-id labels user_id),
+   as it is under sql/format's :quoted."
+  [alias opts]
+  (if (get-in opts [:format :quoted]) (name alias) (folded (name alias))))
+
 (defn- item-name
   "The name of the output column a select item makes: its alias, its column's name, or the name
    PostgreSQL gives the expression; nil when that cannot be told."
-  [item]
-  (let [[col alias] (select-parts item)]
-    ;; unquoted, PostgreSQL folds an alias as it folds any name: :user-id labels user_id
-    (cond alias (folded (name alias))
-          col (second (split-column col))
-          :else (expression-name (item-expression item)))))
+  ([item] (item-name item {}))
+  ([item opts]
+   (let [[col alias] (select-parts item)]
+     (cond alias (alias-label alias opts)
+           col (second (split-column col))
+           :else (expression-name (item-expression item))))))
 
 ;;; problems
 
@@ -767,27 +777,37 @@
   "Enum literals outside the enum, compared with or assigned to its column; and, under pgjdbc's
    default stringtype (varchar), a string HoneySQL sends as a parameter (not inlined, not cast)
    to an enum column, which PostgreSQL refuses (no enum = varchar)."
-  [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema}}]
-  (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc])
-                                  (let [target (target-scope sc stmt schema)]
-                                    (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
+  [registry sc stmt {:keys [schema stringtype format write] :or {schema default-schema}}]
+  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc])
+                     (let [target (target-scope sc stmt schema)]
+                       (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
+        varchar? (and (not= :unspecified stringtype) (not (:inline format)))
+        enum-type (fn [s] (let [inner (shape/non-null s)]
+                            (when (and (vector? inner) (= :ref (first inner))) (shape/type-name (shape/column-props s)))))]
+   (concat
+    ;; an argument sent to an enum type's column: a String unless :write says what an extension sends
+    (for [[col value scope] uses
+          :let [k (param-key value)] :when k
+          :let [t (some-> (:schema (resolve-column registry scope col)) enum-type)]
+          :when (and t varchar? (not (:enum write)) (not (get write t)))]
+      {:kind :uncast-enum-string :column col :arg k :type t})
+    (for [[col value scope] uses
         :let [{s :schema} (resolve-column registry scope col)
               values (cond (string? value) [value]
                            (and (vector? value) (= :cast (first value)) (string? (second value))) [(second value)]
                            (and (vector? value) (every? string? value)) value)
               allowed (when s (enum-values registry s))
               ;; an enum type, not a text column a CHECK narrows to a list: varchar = varchar needs no cast
-              enum-type? (let [inner (shape/non-null s)] (and (vector? inner) (= :ref (first inner))))
-              uncast? (and enum-type? (not= :unspecified stringtype) (not (:inline format))
+              uncast? (and (enum-type s) varchar?
                            (or (string? value) (and (vector? value) (every? string? value))))]
         :when (and allowed (seq values))
         v values
         :let [invalid? (not (some #{v} allowed))]
         p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
            ;; a value outside the enum fails however it is sent
-           (when (and uncast? (not invalid?)) {:kind :uncast-enum-string :column col :value v :type (shape/type-name (shape/column-props s))})]
+           (when (and uncast? (not invalid?)) {:kind :uncast-enum-string :column col :value v :type (enum-type s)})]
         :when p]
-    p))
+    p))))
 
 (defn- problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
@@ -941,18 +961,19 @@
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 
 (defn- compared-type
-  "The type of an argument compared with a column of type t by op: :in's a non-empty vector,
-   list or set of t, as sql/format expands it (IN () is not SQL); an array's what :write's
-   :array names; a LIKE pattern's t without its bounds, a pattern being no value of the
-   column. {:compare :lenient} takes any value of the column's kind, nil too but in :in (nil
-   formats as IN ?): one the column cannot hold matches no row, as NULL does."
+  "The type of an argument compared with a column of type t by op: the column's kind (an enum's
+   labels kept, its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond
+   them, matching no row), without NULL; :in's a non-empty vector, list or set of it, as
+   sql/format expands it (IN () is not SQL); an array's what :write's :array names.
+   {:compare :lenient} takes nil too but in :in (nil formats as IN ?)."
   [op t array? {:keys [compare] :as opts}]
   (let [lenient? (= :lenient compare)
-        t (cond-> t (or lenient? (like-ops op)) loose)]
+        t (loose t)]
     (cond-> (cond array? (jdbc/array-type t opts)
                   (and (in-ops op) (not (untyped? t))) [:or [:sequential {:min 1} t] [:set {:min 1} t]]
                   :else t)
-      (and lenient? (not (in-ops op))) nullable)))
+      ;; IS [NOT] DISTINCT FROM compares NULL as a value
+      (or (and lenient? (not (in-ops op))) (#{:is-distinct-from :is-not-distinct-from} op)) nullable)))
 
 (defn- data-args
   "The arguments the data of a query shows, outside code (a list): code may leave its own out
@@ -967,7 +988,7 @@
    (arg-types registry {:select [:id] :from [:users] :where [:= :email :?email]})
    ;; => {:email [:string {:max 120, :pg/type \"character varying\"}]}
 
-   An argument compared with a column has the column's type without NULL; one in :in a
+   An argument compared with a column has the column's kind without NULL; one in :in a
    non-empty collection of it; one assigned to a column the column's type; one in :limit
    :int; any other :any. The first typed use wins. Options: see query-schema.
    See docs/queries.md."
@@ -1006,11 +1027,13 @@
   [registry stmt chain {:keys [qualified?] :as opts}]
   (let [registry (reading registry)
         sc (first chain)
+        ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL
+        regrouped? (some #(and (vector? %) (#{:rollup :cube :grouping-sets} (first %))) (vectorish (:group-by stmt)))
         ;; table nil: an expression comes from no table, and the driver keys it unqualified
         entry (fn [table column schema nullable?]
                 (jdbc/row-entry (jdbc/row-key table column opts)
                                 (if schema (driver-type registry jdbc/read-type schema opts) :any)
-                                (or nullable? (nil? schema) (maybe? schema)) opts))
+                                (or nullable? regrouped? (nil? schema) (maybe? schema)) opts))
         star (fn [col]
                (let [[a] (split-column col)
                      tables (if a (some-> (get sc a) vector) (vals sc))]
@@ -1021,12 +1044,12 @@
                     :let [[col alias] (select-parts item)]]
                 (cond
                   (nil? col) (when-not (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
-                               (when-let [n (item-name item)] [(entry nil n nil true)]))
+                               (when-let [n (item-name item opts)] [(entry nil n nil true)]))
                   (star? col) (star col)
                   :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
                           (when-not (and qualified? opaque?)
                             ;; a column under an alias is still keyed by its table: the driver reads the table from the field
-                            [(entry table (if alias (folded (name alias)) column) schema nullable?)]))))]
+                            [(entry table (if alias (alias-label alias opts) column) schema nullable?)]))))]
     (when (and (seq items) (every? some? items) (not-any? :unknown? (vals sc)))
       ;; a name selected twice is one key, the driver keeping the last column's value
       (let [entries (apply concat items)
@@ -1079,7 +1102,7 @@
      the options of pgmalli.core/as-read, for the row
      :write {pg-type schema}  what a SettableParameter extension takes; also
                               {:array [:pg/array :sequential :set]}, {:enum [:string :keyword]}
-     :compare :lenient        compared arguments take any value of the column's kind, and nil
+     :compare :lenient        compared arguments take nil too
      :stringtype :unspecified the connection's stringtype (pgjdbc's default :varchar)
      :format {...}            the options you pass to sql/format (:values-default-columns)
      :result :one             the return is [:maybe row]
@@ -1121,11 +1144,13 @@
    :enum-literal (fn [{:keys [column value allowed]}]
                    (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))
                         " (compared with a text column a CHECK narrows, it matches no row; assigned, the CHECK refuses it)"))
-   :uncast-enum-string (fn [{:keys [column value type]}]
-                         (str (pr-str value) " reaches enum column " (column-name column) " as varchar, which PostgreSQL refuses"
-                              " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
-                              " write [:cast " (pr-str value) " :" type "], or pass {:stringtype :unspecified}"
-                              " when the connection sets stringtype=unspecified"))
+   :uncast-enum-string (fn [{:keys [column value arg type]}]
+                         (let [what (if arg (str "argument " arg) (pr-str value))]
+                           (str what " reaches enum column " (column-name column) " as varchar, which PostgreSQL refuses"
+                                " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
+                                " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " :" type "], or pass {:stringtype :unspecified}"
+                                " when the connection sets stringtype=unspecified"
+                                (when arg ", or {:write {:enum [...]}} for what an extension of yours sends"))))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"

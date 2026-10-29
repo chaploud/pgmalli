@@ -92,12 +92,12 @@ keyed as in `sql/format`'s `:params`:
                        :from [:users]
                        :where [:and [:= :group_id :?group] [:in :status :?statuses]]
                        :limit :?n})
-;; => {:group [:int {:pg/type "integer", :min -2147483648, :max 2147483647}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n :int}
+;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n :int}
 ```
 
 | where the argument is | its type |
 |---|---|
-| compared with a column | the column's type, without NULL |
+| compared with a column | the column's kind (an enum's labels kept), without NULL; its CHECKs and lengths are left out, as PostgreSQL compares a value beyond them and matches no row |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | assigned to a column (`:set`, `:values`) | the column's type, NULL allowed when the column allows it |
 | a `LIKE` pattern | the column's kind (`:string`) |
@@ -107,11 +107,11 @@ keyed as in `sql/format`'s `:params`:
 
 ```clojure
 (h/arg-types registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
-;; => {:id [:int #:pg{:identity :always, :type "bigint"}], :nick [:maybe [:string {:max 40, :pg/type "character varying"}]]}
+;; => {:id [:int #:pg{:type "bigint"}], :nick [:maybe [:string {:max 40, :pg/type "character varying"}]]}
 ```
 
-A comparison with NULL matches no row, so `:?id` above does not take nil. To take any value
-of the column's kind, nil included, pass `{:compare :lenient}`:
+A comparison with NULL matches no row, so `:?id` above does not take nil. To take nil, pass
+`{:compare :lenient}`:
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:compare :lenient})
@@ -154,7 +154,7 @@ Every function of `pgmalli.honeysql` takes the same options map:
 | `:write {:enum [:string :keyword]}` | what an extension sends for a list of labels (an enum type's, a CHECK's): the labels kept, as strings, keywords or both |
 | `:write {:array :vector}` | arrays passed as vectors, not `java.sql.Array` |
 | `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped |
-| `:compare :lenient` | arguments compared with a column take any value of its kind and nil |
+| `:compare :lenient` | arguments compared with a column take nil too |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns` is read |
 | `:result :one` | `h/query-schema` only: the return is one row or nil |
 
@@ -167,7 +167,7 @@ query lacks (`:db`) are `:any`:
 (h/query-schema registry [:db :ids]
                 {:select [:id] :from [:users] :where [:in :id :?ids]}
                 {:result :one})
-;; => [:=> [:cat :any [:or [:sequential {:min 1} [:int #:pg{:identity :always, :type "bigint"}]] [:set {:min 1} [:int #:pg{:identity :always, :type "bigint"}]]]] [:maybe [:map [:id [:int #:pg{:identity :always, :type "bigint"}]]]]]
+;; => [:=> [:cat :any [:or [:sequential {:min 1} [:int #:pg{:type "bigint"}]] [:set {:min 1} [:int #:pg{:type "bigint"}]]]] [:maybe [:map [:id [:int #:pg{:identity :always, :type "bigint"}]]]]]
 ```
 
 The schema may use types malli's default registry lacks (`:time/instant`). Give it the
@@ -197,7 +197,7 @@ property makes the vector one longer, so read its parts with `m/children`:
 ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]
 
 (m/form (first (m/children broken)))
-;; => [:cat [:int #:pg{:identity :always, :type "bigint"}]]
+;; => [:cat [:int #:pg{:type "bigint"}]]
 ```
 
 An argument of the query that the argument vector (`[:db :idd]`) lacks is `:missing-arg`,
@@ -217,6 +217,8 @@ most often a typo:
 - A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
   'closed'))`) with a value outside it is an `:enum-literal`, though PostgreSQL runs it: it
   matches no row, which is a typo far more often than intended.
+- An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column is a
+  `:not-null-violation` even when it would touch no row, as PostgreSQL then runs it.
 - Values written in the query beyond NULL and enum literals: an empty `[:in :id []]` is not
   reported (an argument in `:in` is typed non-empty).
 - An ON clause naming a table joined after it, which PostgreSQL rejects.

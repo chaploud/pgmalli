@@ -368,7 +368,7 @@ HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
 
 (h/query-schema registry [:id] find-user-q)
-;; => [:=> [:cat [:int #:pg{:identity :always, :type "bigint"}]] [:sequential [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/type "character varying"}]]]]]
+;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:sequential [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/type "character varying"}]]]]]
 ```
 
 Put it on the function as a schema object over the registry. `malli.instrument` and

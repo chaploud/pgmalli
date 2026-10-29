@@ -49,7 +49,7 @@
     (is (= [] (h/check registry body opts)))
     (is (= [] (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m :mood] [[:unnest :?s]]]}]} opts))
         "selected, as INSERT ... SELECT passes values")
-    (is (= {:id [:int {:pg/identity :always :pg/type "bigint"}]
+    (is (= {:id [:int {:pg/type "bigint"}]
             :moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
             :n :int}
            (h/arg-types registry body opts)))
@@ -60,7 +60,7 @@
            (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :id [:param :id]] [:in :mood ?moods]] :limit ?n} opts))
         "[:param :id] and ?id are the same parameters")
     (let [s (h/query-schema registry [:id :n] body opts)]
-      (is (= [:cat [:int {:pg/identity :always :pg/type "bigint"}] :int] (nth s 2)))
+      (is (= [:cat [:int {:pg/type "bigint"}] :int] (nth s 2)))
       (is (= {:pgmalli/problems [{:kind :missing-arg :arg :moods}]} (second s)) "the one left out of args"))))
 
 (deftest every-table-has-the-system-columns
@@ -152,7 +152,7 @@
     (is (= {:n [:or :string :keyword] :ns [:or [:sequential {:min 1} [:or :string :keyword]] [:set {:min 1} [:or :string :keyword]]]
             :v [:maybe [:or :string :keyword]]}
            (h/arg-types registry {:update :users :set {:nick :?v} :where [:and [:= :nick :?n] [:in :nick :?ns]]} o)))
-    (is (= {:id [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} o))
+    (is (= {:id [:int {:pg/type "bigint"}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} o))
         "the other types as before")))
 
 (deftest an-outer-join-may-leave-a-tables-columns-null
@@ -170,9 +170,9 @@
         "a table's * too, absent under :nil-columns :absent")))
 
 (deftest an-argument-only-code-uses-may-be-nil
-  (is (= {:g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] :from [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]}
+  (is (= {:g [:int {:pg/type "integer"}] :from [:maybe [:int {:pg/type "bigint"}]]}
          (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when from [:>= :id :?from])]} opts)))
-  (is (= {:g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]}
+  (is (= {:g [:int {:pg/type "integer"}]}
          (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when x [:= :group_id :?g])]} opts))
       "one use in the data is enough"))
 
@@ -223,13 +223,13 @@
 (deftest an-any-or-all-argument-is-an-array
   (let [body {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:<> :group_id [:all :?gs]]]}]
     (is (= {:ids :any :gs :any} (h/arg-types registry body opts)) "the driver takes typed Java arrays, which data cannot name")
-    (is (= {:ids [:or [:sequential [:int {:pg/identity :always :pg/type "bigint"}]] [:set [:int {:pg/identity :always :pg/type "bigint"}]]]}
+    (is (= {:ids [:or [:sequential [:int {:pg/type "bigint"}]] [:set [:int {:pg/type "bigint"}]]]}
            (select-keys (h/arg-types registry body (assoc opts :write {:array [:sequential :set]})) [:ids]))
         "the collections an extension sends instead; empty is an empty array, which SQL takes")
     (let [t (:ids (h/arg-types registry body (assoc opts :write {:array [:pg/array :sequential]})))]
       (doseq [v [(long-array [1 2]) (into-array Long [1]) (long-array []) [1] '()]] (is (m/validate t v {:registry registry}) (pr-str v)))
       (doseq [v [(object-array [1]) (into-array String ["a"]) #{1} nil]] (is (not (m/validate t v {:registry registry})) (pr-str v)))
-      (is (= [:or [:pg/array [:int {:pg/identity :always :pg/type "bigint"}]] [:sequential [:int {:pg/identity :always :pg/type "bigint"}]]] t)
+      (is (= [:or [:pg/array [:int {:pg/type "bigint"}]] [:sequential [:int {:pg/type "bigint"}]]] t)
           ":pg/array is what the driver takes (Object[] it refuses)"))
     (is (= {:ids [:vector [:or :int :string]]}
            (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :write {:array [:vector] "bigint" [:or :int :string]}))))))
@@ -240,9 +240,9 @@
 
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
-    (is (= {'id [:int {:pg/identity :always :pg/type "bigint"}]
+    (is (= {'id [:int {:pg/type "bigint"}]
             'moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
-            'min [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]
+            'min [:int {:pg/type "integer"}]
             'n :int}
            (h/arg-types registry body opts)))
     (let [row (h/row-schema registry body (assoc opts :qualified? true :nil-columns :absent :time :instant))]
@@ -258,12 +258,12 @@
         "the driver keys a column through a subquery by its table at the bottom, which an opaque one hides")
     (is (= [:map [:id [:maybe :any]]] (h/row-schema registry '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} opts)))
     (is (= [:map [:users/group-id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]] (h/row-schema registry '{:select [:group_id] :from [:users]} (assoc opts :qualified? true :kebab? true))))
-    (is (= {'x [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]} opts))
+    (is (= {'x [:int {:pg/type "bigint"}]} (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]} opts))
         "an untyped use never hides a typed one")
     (let [row (h/row-schema registry body (assoc opts :nil-columns :absent))]
       (is (= [:closed_at {:optional true} ['inst? {:pg/type "timestamptz"}]] (nth row 3)) "by default time columns are inst?, which the default registry has")
       (is (m/validate row {:id 1 :g 2 :closed_at (java.util.Date.)}) "and no registry is needed"))
-    (is (= [:=> [:cat [:int {:pg/identity :always :pg/type "bigint"}] :any] [:sequential [:map [:n [:maybe :any]]]]]
+    (is (= [:=> [:cat [:int {:pg/type "bigint"}] :any] [:sequential [:map [:n [:maybe :any]]]]]
            (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
         "an expression under an alias is :any; a symbol used nowhere is :any")
     (is (= [:sequential [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
@@ -288,7 +288,7 @@
   (is (= [] (h/check registry '{:insert-into tbl :values rows} opts)) "a target passed in says nothing")
   (let [with-interval (assoc registry :pg.sample/spans [:map {:pg/table "sample.spans"} [:id :int] [:span [:time/duration {:pg/type "interval"}]]])]
     (is (= [:map [:span [:any {:pg/type "interval"}]]] (h/row-schema with-interval {:select [:span] :from [:spans]} opts)) "an interval is a driver object"))
-  (is (= {'ids [:int {:pg/identity :always :pg/type "bigint"}]}
+  (is (= {'ids [:int {:pg/type "bigint"}]}
          (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:in :nope ids] [:= :id ids]]} opts))
       "an :in on an unknown column gives no type either"))
 
@@ -376,7 +376,7 @@
   (testing "the types the same shapes give"
     (is (= {'m [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]}
            (h/arg-types registry '{:insert-into :users :columns [:group_id :mood :score] :values [[1 m 2]]} opts)))
-    (is (= {'gid [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]}
+    (is (= {'gid [:int {:pg/type "integer"}]}
            (h/arg-types registry '{:select [:id] :from [:users] :where [:= gid :group_id]} opts))
         "a symbol on the left takes the column's type")))
 
@@ -397,7 +397,7 @@
       "a CTE body bound in a let sees its sibling CTEs"))
 
 (deftest one-row-results
-  (is (= [:=> [:cat [:int {:pg/identity :always :pg/type "bigint"}]] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40}]]]]]]
+  (is (= [:=> [:cat [:int {:pg/type "bigint"}]] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40}]]]]]]
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
@@ -521,8 +521,9 @@
 (deftest every-comparison-honeysql-writes-types-its-arguments
   (let [types (h/arg-types registry {:select [:id] :from [:users]
                                      :where [:and [:not-in :id :?ids] [:between :score :?lo :?hi] [:not-like :nick :?p] [:is-distinct-from :group_id :?g]]} opts)]
-    (is (= [:sequential {:min 1} [:int {:pg/identity :always :pg/type "bigint"}]] (second (:ids types))) ":not-in as :in")
-    (is (= (:lo types) (:hi types) (:g types) [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]))
+    (is (= [:sequential {:min 1} [:int {:pg/type "bigint"}]] (second (:ids types))) ":not-in as :in")
+    (is (= (:lo types) (:hi types) [:int {:pg/type "integer"}]))
+    (is (= [:maybe (:lo types)] (:g types)) "IS DISTINCT FROM compares NULL as a value")
     (is (= [:string {:pg/type "character varying"}] (:p types)))))
 
 (deftest a-select-of-every-set-operation-and-the-dot
@@ -699,7 +700,8 @@
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:cast "sad" :mood]]} {})) "a cast is what it takes")
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:stringtype :unspecified})) "or stringtype=unspecified")
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:format {:inline true}})) "or the value inlined")
-    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {})) "an argument may be an object the driver sends typed")))
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {:write {:enum [:string]}}))
+        "an argument is reported unless :write says what is sent")))
 
 (deftest an-argument-cast-to-an-enum-is-of-the-enum
   (is (= {:m [:enum "happy" "sad"]}
@@ -781,3 +783,26 @@
     (is (= {:role [:or :string :keyword]}
            (update-vals (h/arg-types reg {:select [:id] :from [:attempts] :where [:= :role :?role]} o) m/form))
         "a column without labels takes the type's")))
+
+(deftest review-round-1-honeysql
+  (testing "a row is keyed by the column's name, not the spelling written"
+    (is (= [:group_id] (map first (drop 1 (h/row-schema registry {:select [:group-id] :from [:users]} opts)))))
+    (is (= [:group_id] (map first (drop 1 (h/row-schema registry {:select [:GROUP_ID] :from [:users]} opts))))))
+  (testing "quoted output keeps an alias as written"
+    (is (= [:E :e-mail] (map first (drop 1 (h/row-schema registry {:select [[:nick :E] [:nick :e-mail]] :from [:users]}
+                                                          (assoc opts :format {:quoted true})))))))
+  (testing "IS [NOT] DISTINCT FROM takes NULL"
+    (is (= [:maybe [:string {:pg/type "character varying"}]]
+           (m/form (:n (h/arg-types registry {:select [:id] :from [:users] :where [:is-distinct-from :nick :?n]} opts))))))
+  (testing "an argument reaching an enum type's column as a String"
+    (is (= [{:kind :uncast-enum-string :column :mood :arg :m :type "mood"}]
+           (h/check registry {:select [:id] :from [:users] :where [:= :mood :?m]} (assoc opts :stringtype :varchar))))
+    (is (= [] (h/check registry {:select [:id] :from [:users] :where [:= :mood :?m]} (assoc opts :stringtype :varchar :write {:enum [:keyword]})))
+        "unless :write says what an extension sends")
+    (is (= [] (h/check registry {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} (assoc opts :stringtype :varchar)))))
+  (testing ":join-by leaves its tables open"
+    (is (= [{:kind :unread-clause :clause :join-by}]
+           (h/check registry {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:left [[:groups :g] [:= :g.id :u.group_id]]]} opts))))
+  (testing "ROLLUP's total row is NULL in its grouped columns"
+    (is (= [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
+           (second (second (h/row-schema registry {:select [:group_id [[:count :*] :n]] :from [:users] :group-by [[:rollup :group_id]]} opts)))))))
