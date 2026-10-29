@@ -61,6 +61,11 @@ All notable changes to this project are documented here. The format follows
   in any comparison, code-built joins making tables nullable.
 - `row-schema` names unaliased expressions as PostgreSQL does, reads set operations and
   `{:select [:*]}`, and makes outer-joined columns nullable.
+- kebab and camel names as PostgreSQL folds them: an INSERT's `:group-id` key is `group_id`
+  (it was a `:missing-required-column`), an alias in `:order-by` / `:group-by` matches its
+  folded name, and `row-schema` keys an aliased column as next.jdbc does (`:user_id` for
+  `:user-id`). A bare keyword clause value (`{:select :id}`, `:order-by :x`, `:returning :x`)
+  is read as HoneySQL reads it.
 - `check` reads names as HoneySQL writes them: `:system_user`, `:'x` (written as `x`), a
   namespaced column in `:set` and `:values` (the namespace dropped), a `:values` key a column
   list leaves out (not written); each was reported. A keyword assigned in `:set` is checked as

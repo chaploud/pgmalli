@@ -446,13 +446,19 @@
 
 (defn- column-keyword? [x] (and (keyword? x) (not (sql-values x)) (not (param-key x)) (not (shorthand-fn x))))
 
+(defn- vectorish
+  "x when it is a vector, [x] for a bare keyword (HoneySQL takes :order-by :id for [:id]): a
+   list there is code, and what it builds is not in the data."
+  [x]
+  (cond (vector? x) x (keyword? x) [x]))
+
 (defn- selected-items
   "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
    or :returning."
   [stmt]
   (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))
         after-first (or (:select-distinct-on stmt) (:select-top stmt) (:select-distinct-top stmt))]
-    (cond (vector? s) s
+    (cond (or (vector? s) (keyword? s)) (vectorish s)
           (vector? after-first) (rest after-first))))
 
 (defn- select-parts
@@ -597,7 +603,8 @@
    PostgreSQL gives the expression; nil when that cannot be told."
   [item]
   (let [[col alias] (select-parts item)]
-    (cond alias (name alias)
+    ;; unquoted, PostgreSQL folds an alias as it folds any name: :user-id labels user_id
+    (cond alias (folded (name alias))
           col (second (split-column col))
           :else (expression-name (item-expression item)))))
 
@@ -610,16 +617,11 @@
 
 (defn- star? [col] (= "*" (second (split-column col))))
 
-(defn- vectorish
-  "x when it is a vector: a list there is code, and what it builds is not in the data."
-  [x]
-  (when (vector? x) x))
-
 (defn- output-column?
   "Whether a bare :col of :order-by or :group-by may mean an output column of stmt."
   [stmt col]
   (boolean (and (not (first (split-column col)))
-                (some #(= (name col) (item-name %)) (selected-items stmt)))))
+                (some #(= (folded (name col)) (item-name %)) (selected-items stmt)))))
 
 (defn- output-statement
   "The statement whose select names a statement's output columns: itself, or the first member
@@ -688,7 +690,8 @@
             given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
             ;; a column built by code may be any of them
             given (when (every? keyword? given) given)
-            given-names (set (map name given))
+            ;; HoneySQL writes :group-id as group_id
+            given-names (into #{} (mapcat (fn [k] [(name k) (folded (name k))])) given)
             required (set (for [[k p] (some-> (get (::schemas registry) (shape/derived-name (shape/table-key table) "insert")) shape/column-entries)
                                 :when (not (:optional p))]
                             (name k)))]
@@ -984,7 +987,7 @@
                   :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
                           (when-not (and qualified? opaque?)
                             ;; a column under an alias is still keyed by its table: the driver reads the table from the field
-                            [(entry table (if alias (name alias) column) schema nullable?)]))))]
+                            [(entry table (if alias (folded (name alias)) column) schema nullable?)]))))]
     (when (and (seq items) (every? some? items) (not-any? :unknown? (vals sc)))
       ;; a name selected twice is one key, the driver keeping the last column's value
       (let [entries (apply concat items)

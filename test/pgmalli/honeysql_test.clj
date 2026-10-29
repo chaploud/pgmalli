@@ -704,3 +704,20 @@
 (deftest an-argument-cast-to-an-enum-is-of-the-enum
   (is (= {:m [:enum "happy" "sad"]}
          (update-vals (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} opts) m/form))))
+
+(deftest kebab-and-camel-names-as-postgresql-folds-them
+  (let [check #(h/check registry % opts)]
+    (is (= [] (check {:insert-into :users :values [{:group-id 1 :score 1}]})) "HoneySQL writes :group-id as group_id")
+    (is (= [] (check {:insert-into :users :columns [:group-id :score] :values [[1 1]]})))
+    (is (= [] (check {:select [[:nick :the-nick]] :from [:users] :order-by [:the_nick]})) "an alias is folded too")
+    (is (= [] (check {:select [[:nick :userNick]] :from [:users] :order-by [:usernick]})))
+    (is (= [] (check {:select [[:mood :user-mood] [[:count :*] :n]] :from [:users] :group-by [:user_mood]})))
+    (is (= [:user_id :usernick] (map first (drop 1 (h/row-schema registry {:select [[:id :user-id] [:nick :userNick]] :from [:users]} opts))))
+        "next.jdbc keys the row by the folded label")))
+
+(deftest a-bare-keyword-clause-value-is-read
+  (let [check #(h/check registry % opts)]
+    (is (= [{:kind :unknown-column :column :nosuch}] (check {:select :nosuch :from :users})))
+    (is (= [{:kind :unknown-column :column :nosuch}] (check {:select [:id] :from :users :order-by :nosuch})))
+    (is (= [{:kind :unknown-column :column :nosuch}] (check {:update :users :set {:nick "a"} :returning :nosuch})))
+    (is (= [:id] (map first (drop 1 (h/row-schema registry {:select :id :from :users} opts)))))))
