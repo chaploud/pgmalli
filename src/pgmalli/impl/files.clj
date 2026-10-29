@@ -2,13 +2,17 @@
   "Config -> generated EDN files, one per schema. The config is documented on pgmalli.generate.
 
    File contents, in this order:
-     {:schema \"public\" :database-version \"PostgreSQL 17.6\" :diagnostics [...]
-      :registry {name schema} :unrendered [fact ...] :skipped [fact ...]}
+     {:schema \"public\" :database-version \"PostgreSQL 17\" :diagnostics [...]
+      :registry {name schema} :unrendered [entry ...] :skipped [entry ...]}
+
+   An :unrendered or :skipped entry is {:kind :table or :domain :column :constraint :sql :type},
+   the keys that apply.
 
    Output is deterministic (sorted maps, pprint). Overrides that are not EDN (functions)
    are rejected at generation time."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.pprint :as pp]
             [clojure.walk :as walk]
             [pgmalli.impl.error :as error]
@@ -35,19 +39,32 @@
 (defn- sort-maps [x]
   (walk/postwalk #(if (map? %) (into (sorted-map-by (fn [a b] (compare (str a) (str b)))) %) %) x))
 
+(defn- left-out
+  "An :unrendered or :skipped entry as the file keeps it: what was left out and where."
+  [{:keys [schema table type-name column constraint sql input type fact]}]
+  (cond-> {:kind fact}
+    table (assoc :table (str schema "." table))
+    (and type-name (not table)) (assoc :domain (str schema "." type-name))
+    column (assoc :column column)
+    constraint (assoc :constraint constraint)
+    (or sql input) (assoc :sql (or sql input))
+    type (assoc :type type)))
+
 (defn assemble
   "The file's data from the rendering of a schema's facts, in reading order: what it is, then
    what deserves a look, then the schemas, then what was left out."
   [schema database-version facts overrides]
   (let [r (sort-maps (render/rendered facts (or overrides {})))]
     (array-map :schema schema :database-version database-version
-               :diagnostics (:diagnostics r) :registry (:registry r) :unrendered (:unrendered r) :skipped (:skipped r))))
+               :diagnostics (:diagnostics r) :registry (:registry r)
+               :unrendered (mapv left-out (:unrendered r)) :skipped (mapv left-out (:skipped r)))))
 
 (defn from-database
   "Generated data for one schema, read from the database."
   [{:keys [db overrides]} schema]
   (let [ir (ir/from-db (assoc db :schema schema))]
-    (assemble schema (:database_version ir) (pattern/facts ir) overrides)))
+    ;; the major version alone: a minor upgrade changes no schema
+    (assemble schema (str/replace (:database_version ir) #"^(PostgreSQL \d+)\.\d+$" "$1") (pattern/facts ir) overrides)))
 
 (defn path-for
   "Where a schema's file goes: <out-dir>/<schema>.edn; the config as given or with its

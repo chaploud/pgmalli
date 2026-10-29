@@ -5,6 +5,8 @@
             [malli.core :as m]
             malli.experimental.time
             [pgmalli.core :as pgmalli]
+            [pgmalli.impl.portable :as portable]
+            [pgmalli.impl.shape :as shape]
             [pgmalli.sample :refer [opts registry user]]))
 
 (deftest other-shapes-of-the-same-schema
@@ -33,13 +35,13 @@
                                             :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
       (is (= [:map {:pg/table "public.t"} [:c [:string {:pg/type "code"}]]] (pgmalli/portable reg :pg.public/t)))))
   (testing "column and non-null"
-    (is (= [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]] (pgmalli/column registry :pg.sample/users :nick)))
-    (is (= [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] (pgmalli/non-null (pgmalli/column registry :pg.sample/users "nick"))))
-    (is (nil? (pgmalli/column registry :pg.sample/users :nope)))))
+    (is (= [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]] (portable/column registry :pg.sample/users :nick)))
+    (is (= [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] (shape/non-null (portable/column registry :pg.sample/users "nick"))))
+    (is (nil? (portable/column registry :pg.sample/users :nope)))))
 
 (deftest unknown-names-are-an-error
   (doseq [[what f] {:portable #(pgmalli/portable registry :pg.sample/nope)
-                    :column #(pgmalli/column registry :pg.sample/nope :id)
+                    :column #(portable/column registry :pg.sample/nope :id)
                     :columns #(pgmalli/columns registry :pg.sample/nope)
                     :as-read #(pgmalli/as-read registry :pg.sample/nope)}]
     (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no schema named" (f)) (str what))]

@@ -24,8 +24,7 @@
                     :unrendered [{:kind :check :table "sample.users"}]
                     :diagnostics [{:table "sample.users" :kind :row-trigger}])]
     (spit (doto (files/path-for config "sample") (io/make-parents)) (files/edn-string data))
-    (is (= {:stale nil
-            :missing nil
+    (is (= {:missing nil
             :unrendered {"sample" [{:kind :check :table "sample.users"}]}
             :diagnostics {"sample" [{:table "sample.users" :kind :row-trigger}]}}
            (generate/check config {:db? false})))))

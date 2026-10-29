@@ -84,7 +84,7 @@
       (is (= 0 code))
       (is (= "" err))
       (is (= ["public: unrendered (1), left out of the schemas:"
-              "  public.tags tags_slug_check: CHECK [:is_slug :slug]"
+              "  public.tags tags_slug_check: CHECK (is_slug(slug))"
               "    to keep it, add to pgmalli.edn :overrides {\"tags_slug_check\" <malli schema>}, or {\"tags_slug_check\" {:skip \"<why>\"}} to silence it"
               "public: diagnostics (1):"
               "  info public.tags: weight_positive is NOT VALID: rows from before it may violate it, new rows may not"

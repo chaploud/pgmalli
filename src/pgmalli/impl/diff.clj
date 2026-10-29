@@ -2,6 +2,7 @@
   "Generated files against the database and against each other: what differs, entry by entry."
   (:require [clojure.java.io :as io]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.shape :as shape]))
 
 (defn- row-parts
@@ -60,17 +61,13 @@
                 [schema ds])]
     (when (seq diffs) (into {} diffs))))
 
-(defn stale
-  "The differences pgmalli.generate/stale documents."
-  [config]
-  (stale* config (files config)))
-
 (defn check
   "What pgmalli.generate/check reports."
   ([config] (check config {}))
-  ([config {:keys [db?] :or {db? true}}]
+  ([config {:keys [db?] :or {db? true} :as opts}]
+   (jdbc/checked! [:map {:closed true} [:db? {:optional true} :boolean]] opts)
    (let [files (files config)]
-     {:stale (when db? (stale* config files))
-      :missing (not-empty (vec (remove files (:schemas (files/config config)))))
-      :unrendered (into {} (for [[s f] files :when (seq (:unrendered f))] [s (:unrendered f)]))
-      :diagnostics (into {} (for [[s f] files :when (seq (:diagnostics f))] [s (:diagnostics f)]))})))
+     (cond-> {:missing (not-empty (vec (remove files (:schemas (files/config config)))))
+              :unrendered (not-empty (into {} (for [[s f] files :when (seq (:unrendered f))] [s (:unrendered f)])))
+              :diagnostics (not-empty (into {} (for [[s f] files :when (seq (:diagnostics f))] [s (:diagnostics f)])))}
+       db? (assoc :stale (stale* config files))))))

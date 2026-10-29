@@ -9,7 +9,9 @@
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.portable :as portable]
             [pgmalli.impl.registry :as registry]
+            [pgmalli.impl.shape :as shape]
             [pgmalli.test-db :refer [*db* exec-sql! sql-literal with-postgres]])
   (:import (java.io File)))
 
@@ -37,7 +39,7 @@
                   CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
                   CREATE TRIGGER users_touch BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION touch();")
       (testing "a missing file is stale"
-        (is (every? (comp nil? :file) (get (generate/stale config) "public"))))
+        (is (every? (comp nil? :file) (get (:stale (generate/check config)) "public"))))
       (testing "generate, read back, validate"
         (is (= {"public" out} (generate/generate! config)))
         (let [data (files/read-edn out)]
@@ -53,7 +55,7 @@
             (is (= [{:columns ["age"] :index true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
                 "unique indexes over plain columns count, key columns only, even one named as a constraint is; expression and partial ones do not")
             (is (some #(= "closed" (:pg/constraint (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
-            (let [col (fn [k] (pgmalli/non-null (pgmalli/column reg :pg.public/prices k)))]
+            (let [col (fn [k] (shape/non-null (portable/column reg :pg.public/prices k)))]
               (is (= [[:pg/numeric {:precision 3 :scale 1}] [:pg/numeric {:precision 3 :scale 5}] [:pg/numeric {:precision 2 :scale -3}]]
                      (map #(last (col %)) [:p1 :p2 :p3]))
                   "the scale is read as PostgreSQL stores it, signed")
@@ -72,10 +74,10 @@
               (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"}] (map #(select-keys % [:kind :table]) (:diagnostics data)))
                   "the file says what deserves a look")))))
       (testing "stale and unrendered"
-        (is (nil? (generate/stale config)))
+        (is (nil? (:stale (generate/check config))))
         (is (empty? (:unrendered (files/read-edn out))))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
-        (let [diffs (get (generate/stale config) "public")]
+        (let [diffs (get (:stale (generate/check config)) "public")]
           (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
@@ -163,9 +165,10 @@
       (generate/generate! config)
       (let [{:keys [stale unrendered diagnostics]} (generate/check config)]
         (is (nil? stale))
-        (is (= {} unrendered))
+        (is (nil? unrendered))
         (is (= [:no-partition] (map :kind (get diagnostics "chk")))))
-      (is (nil? (:stale (generate/check config {:db? false}))) "without the database, only the files")
+      (is (not (contains? (generate/check config {:db? false}) :stale)) "without the database, only the files")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (generate/check config {:db false})) "a misspelt option is an error")
       (let [data (files/read-edn (files/path-for config "chk"))]
         (is (= [:schema :database-version :diagnostics :registry :unrendered :skipped] (keys data)) "read from the top: what it is, what deserves a look, the schemas")))))
 

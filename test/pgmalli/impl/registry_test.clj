@@ -8,6 +8,7 @@
             [pgmalli.impl.files :as files]
             [pgmalli.impl.json :as json]
             [pgmalli.impl.pattern :as p]
+            [pgmalli.impl.portable :as portable]
             [pgmalli.impl.registry :as reg]
             [malli.registry]
             malli.experimental.time
@@ -28,11 +29,7 @@
       "errors name the constraint")
   (is (= ["violates check constraint score_check: CHECK (score >= 0 AND score <= total)"]
          (me/humanize (m/explain :pg.sample/users (assoc user :score 3) opts))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope")))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "t"} [:a :int]]}}))
-      "files from before the schema-qualified :pg/table are refused, not half-read")
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"older pgmalli" (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/unique [["a"]]} [:a :int]]}}))
-      "so are files with the older key shapes"))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope"))))
 
 (deftest a-map-of-no-schemas-is-not-a-registry
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a registry: :a maps to 1, not a schema; pass \(pgmalli.core/registry"
@@ -114,20 +111,12 @@
     (is (m/validate (data/dataset-schema (pgmalli/registry "other")) {"other.notes" [{:id 1 :user_id 9}]} {:registry (pgmalli/registry "other")})
         "a reference to a table outside the registry is not checked")))
 
-(deftest install-makes-the-names-readable-everywhere
-  (let [before (pgmalli/install! "sample")]
-    (is (m/validate :pg.sample/groups {:id 1 :name "g"}) "no registry passed: malli's default one has it now")
-    (is (not (m/validate :pg.sample/groups {:id "x" :name "g"})))
-    (is (map? before) "what the default registry held, to put back")
-    (malli.registry/set-default-registry! before)
-    (is (thrown? Exception (m/validate :pg.sample/groups {:id 1 :name "g"})) "put back: the names are gone again")))
-
 (deftest any-malli-registry-will-do
   (let [composite (malli.registry/composite-registry registry {:app/flag :boolean})]
     (is (m/validate :pg.sample/groups {:id 1 :name "g"} {:registry composite}))
     (is (= [] (h/check composite {:select [:id] :from [:groups]} {:schema "sample"})))
     (is (= 2 (count (keys (tcg/generate (data/dataset-generator composite {:rows 2}) 20 1)))) "datasets from a composite registry")
-    (is (= (pgmalli/column registry :pg.sample/users :nick) (pgmalli/column composite :pg.sample/users :nick)))
+    (is (= (portable/column registry :pg.sample/users :nick) (portable/column composite :pg.sample/users :nick)))
     (is (= (pgmalli/portable registry :pg.sample/users) (pgmalli/portable composite :pg.sample/users)) "portable inlines references through a composite registry")
     (is (= (h/query-schema registry '[id] {:select [:id] :from [:groups]} {:schema "sample"})
            (h/query-schema composite '[id] {:select [:id] :from [:groups]} {:schema "sample"})))))

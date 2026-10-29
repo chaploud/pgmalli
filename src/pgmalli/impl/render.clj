@@ -318,7 +318,7 @@
                                  :unrendered (mapcat :unrendered alts)
                                  :skipped (mapcat :skipped alts)})
                          :diagnostics (for [[i a] (map-indexed vector all) :when (unreachable? (:schema a))]
-                                        {:kind (if partitions? :unreachable-partition :unreachable-alternative) :confidence :proven :severity :warning
+                                        {:kind (if partitions? :unreachable-partition :unreachable-alternative) :severity :warning
                                          :constraint constraint :alternative i
                                          :message (if partitions?
                                                     "a partition can take no row: its bounds and its parent's do not overlap"
@@ -390,40 +390,40 @@
 ;;; tables and domains
 
 (defn- table-diagnostics
-  "The states a table stores that no row can satisfy, or that deserve a look: [{:kind :confidence
+  "The states a table stores that no row can satisfy, or that deserve a look: [{:kind
    :severity :message ...} ...] over its rendered columns, its table constraints and its facts."
   [rendered checks tfacts]
   (let [keys-of (fn [fact] (map :columns (filter (comp #{fact} :fact) tfacts)))]
     (concat
             (:diagnostics checks)
             (for [[col r] rendered :when (impossible? (:schema r))]
-              {:kind :contradiction :confidence :proven :severity :error :column col
+              {:kind :contradiction :severity :error :column col
                :message (str "no value fits column " col ": its CHECKs contradict each other")})
             (for [s (:schemas checks) :when (and (vector? s) (= :pg/check (first s)) (false? (last s)))
                   :let [c (:pg/constraint (second s)) partitions? (str/ends-with? (str c) " (partitions)")]]
-              {:kind (if partitions? :no-partition :check-false) :confidence :proven :severity :warning :constraint c
+              {:kind (if partitions? :no-partition :check-false) :severity :warning :constraint c
                :message (if partitions? "a partitioned table with no partition takes no row" (str c " is CHECK (false): the table takes no row"))})
             (for [f tfacts :when (false? (:valid? f))]
-              {:kind :not-valid :confidence :proven :severity :info :constraint (:constraint f)
+              {:kind :not-valid :severity :info :constraint (:constraint f)
                :message (str (:constraint f) " is NOT VALID: rows from before it may violate it, new rows may not")})
             (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))]
-              {:kind :row-trigger :confidence :proven :severity :info :trigger (:name f)
+              {:kind :row-trigger :severity :info :trigger (:name f)
                :message (str "trigger " (:name f) " runs for every inserted row: its code may reject or change rows the schema accepts")})
             (for [f tfacts :when (= :exclude (:fact f))
                   :let [eq (keep #(when (and (:column %) (= "=" (:op %))) (:column %)) (:elements f))
                         kept? (and (seq eq) (not (:partial? f)) (every? :column (:elements f)))]]
-              {:kind :exclude :confidence :proven :severity :info :constraint (:constraint f)
+              {:kind :exclude :severity :info :constraint (:constraint f)
                :message (str "EXCLUDE " (:constraint f) " is not checked by the schemas"
                              (if kept?
                                (str "; datasets keep its = columns " (pr-str (vec eq)) " distinct, so their rows never conflict")
                                "; datasets may generate rows it refuses"))})
             (for [f tfacts :when (= :not-enforced (:fact f))]
-              {:kind :not-enforced :confidence :proven :severity :info :constraint (:constraint f)
+              {:kind :not-enforced :severity :info :constraint (:constraint f)
                :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})
             (for [f (filter (comp #{:unique} :fact) tfacts)
                   :when (or (some #{(:columns f)} (keys-of :primary-key))
                             (< 1 (count (filter #{(:columns f)} (keys-of :unique)))))]
-              {:kind :redundant-unique :confidence :proven :severity :info :constraint (:constraint f)
+              {:kind :redundant-unique :severity :info :constraint (:constraint f)
                :message (str (:constraint f) " repeats a key on the same columns " (pr-str (:columns f)))}))))
 
 (defn- render-table [schema-name table tfacts overrides types]
@@ -480,8 +480,8 @@
 (defn rendered
   "facts -> {:registry :unrendered :skipped :diagnostics}, :registry being the file's :registry
    map (names to schemas) rather than a malli registry; a diagnostic is a state the database
-   stores but no row can satisfy (or that deserves a look): {:table :kind :confidence :severity
-   :message ...}, :confidence :proven when shown from the catalog alone."
+   stores but no row can satisfy (or that deserves a look): {:table :kind :severity
+   :message ...}."
   ([facts] (rendered facts {}))
   ([facts overrides]
    (let [schema-name (:schema (first facts))

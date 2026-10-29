@@ -53,17 +53,17 @@
          (count (:unrendered data)) " unrendered, " (count (:diagnostics data)) " diagnostics")))
 
 (defn- override-key
-  "What :overrides takes for an unrendered fact: its constraint's name, or its type as a keyword."
+  "What :overrides takes for an unrendered entry: its constraint's name, or its type as a keyword."
   [{:keys [constraint type]}]
   (if constraint constraint (keyword (str/replace (str/replace (str type) #"^[^.]+\." "") #"\(.*\)$" ""))))
 
 (defn- print-unrendered [schema facts]
   (when (seq facts)
     (println (str schema ": unrendered (" (count facts) "), left out of the schemas:"))
-    (doseq [{:keys [table type-name constraint column expr type fact] :as f} facts
+    (doseq [{:keys [table domain constraint column sql type kind] :as f} facts
             :let [k (override-key f)]]
-      (println (str "  " (str/join "." (remove nil? [schema (or table type-name)])) " " (or constraint column) ": "
-                    (cond expr (str "CHECK " (pr-str expr)) type (str "type " type) :else (name fact))))
+      (println (str "  " (or table domain) " " (or constraint column) ": "
+                    (cond sql sql type (str "type " type) :else (name kind))))
       (println (str "    to keep it, add to pgmalli.edn :overrides {" (pr-str k) " <malli schema>}"
                     (when (string? k) (str ", or {" (pr-str k) " {:skip \"<why>\"}} to silence it")))))))
 

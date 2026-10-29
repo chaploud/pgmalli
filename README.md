@@ -541,7 +541,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/unknown-schema` | a registry name the registry lacks, with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
 | `:pgmalli.error/not-query-data` | a query that is no HoneySQL data |
-| `:pgmalli.error/not-generated` | a generated file missing from the classpath, or older than pgmalli |
+| `:pgmalli.error/not-generated` | a generated file missing from the classpath |
 | `:pgmalli.error/invalid-dataset` | a dataset naming tables or columns the registry lacks |
 | `:pgmalli.error/reference-cycle` | tables referencing each other in a cycle |
 | `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |

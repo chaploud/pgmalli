@@ -92,7 +92,7 @@ keyed as in `sql/format`'s `:params`:
                        :from [:users]
                        :where [:and [:= :group_id :?group] [:in :status :?statuses]]
                        :limit :?n})
-;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n :int}
+;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:int {:min 0}]}
 ```
 
 | where the argument is | its type |

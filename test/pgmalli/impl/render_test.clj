@@ -496,7 +496,7 @@
     (is (= #{[:no-partition "public.e"] [:contradiction "public.t"] [:unreachable-partition "public.t"] [:not-valid "public.t"] [:redundant-unique "public.t"]}
            (set (map (juxt :kind :table) diagnostics))))
     (is (= 5 (count diagnostics)))
-    (is (every? #(and (keyword? (:severity %)) (= :proven (:confidence %)) (string? (:message %))) diagnostics))))
+    (is (every? #(and (keyword? (:severity %)) (string? (:message %))) diagnostics))))
 
 (deftest a-not-enforced-constraint-is-noted-not-applied
   (let [{:keys [registry unrendered diagnostics]} (r/rendered (p/facts {:name "public" :types {}
