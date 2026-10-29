@@ -63,6 +63,10 @@ ran. The tests that catch a change upstream, each naming the list to update:
 | `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
 | `pgmalli.upstream-test` | a `pg_catalog` type pgmalli neither renders nor treats as opaque; a map builder next.jdbc adds or drops |
 
+A failing weekly run comments on the open issue labelled `upstream` (or opens it) with the
+list; the next passing run closes it. GitHub disables a scheduled workflow after 60 days
+without activity in the repository: `gh workflow enable upstream.yml` turns it back on.
+
 ## Other tasks
 
 - `bb harvest` rebuilds the expression corpus (`PGMALLI_PGSCHEMA_DIR` adds a checkout of

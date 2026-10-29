@@ -5,8 +5,13 @@ on:
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
+permissions:
+  contents: read
+  issues: write
 jobs:
   upstream:
+    # forks inherit the schedule; the report belongs to this repository's issues
+    if: github.repository == 'chaploud/pgmalli'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -22,4 +27,30 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: pull postgres image
         run: docker pull postgres:alpine
-      - run: bb upstream
+      - name: bb upstream
+        id: run
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          bb upstream | tee upstream-report.md
+      # one open issue labelled upstream: a failure comments on it (or opens it), a pass closes it
+      - name: report on the upstream issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OUTCOME: ${{ steps.run.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh label create upstream --color D93F0B --description "bb upstream: the suite against the newest upstreams" 2>/dev/null || true
+          issue=$(gh issue list --label upstream --state open --json number --jq '.[0].number // empty')
+          if [ "$OUTCOME" = failure ]; then
+            { echo "bb upstream fails: $RUN_URL"
+              echo
+              echo "Each line names the upstream change and what to update; run \`bb upstream\` to see it locally."
+              echo
+              tail -c 60000 upstream-report.md; } > body.md
+            if [ -n "$issue" ]; then gh issue comment "$issue" --body-file body.md
+            else gh issue create --title "Upstream: the suite fails on the newest versions" --label upstream --body-file body.md; fi
+            exit 1
+          elif [ -n "$issue" ]; then
+            gh issue close "$issue" --comment "bb upstream passes again: $RUN_URL"
+          fi

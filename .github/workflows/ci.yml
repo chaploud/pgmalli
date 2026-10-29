@@ -35,7 +35,7 @@ jobs:
       - name: install psql
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: pull postgres image
-        run: docker pull $PGMALLI_PG_IMAGE
+        run: docker pull "$PGMALLI_PG_IMAGE"
       - run: bb lint
       - run: bb test
       - run: bb test:jvm
@@ -56,7 +56,7 @@ jobs:
         with:
           cli: latest
       - name: pull postgres image
-        run: docker pull $PGMALLI_PG_IMAGE
+        run: docker pull "$PGMALLI_PG_IMAGE"
       # fuzz-test builds its CHECKs with HoneySQL, which 2.4.1066 writes IS DISTINCT FROM in wrong
       - run: >-
           clojure -Sdeps '{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version "2.4.1066"}
