@@ -27,8 +27,9 @@
    [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json]] :any]
                             [:map [:array {:optional true} [:enum :vector :sequential]]
                              [:json {:optional true} [:enum :parsed]]]]]
-   [:write {:optional true} [:and [:map-of [:or :string [:enum :array]] :any]
-                             [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]]]]
+   [:write {:optional true} [:and [:map-of [:or :string [:enum :array :enum]] :any]
+                             [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]
+                              [:enum {:optional true} [:vector {:min 1} [:enum :string :keyword]]]]]]
    [:compare {:optional true} [:enum :strict :lenient]]
    [:result {:optional true} [:enum :one]]
    [:format {:optional true} :map]
@@ -96,6 +97,17 @@
   (if-let [kinds (:array write)]
     (let [alts (map #(vector % t) kinds)] (if (next alts) (into [:or] alts) (first alts)))
     :any))
+
+(defn enum-arg
+  "An argument's type t when it is a list of labels ([:enum ...], an enum type's or a CHECK's)
+   under :write's :enum, what a SettableParameter extension sends: the labels as strings,
+   keywords or both ({:enum [:string :keyword]}); t otherwise."
+  [t {:keys [write]}]
+  (if-let [kinds (and (vector? t) (= :enum (first t)) (:enum write))]
+    (let [[props labels] (if (map? (second t)) [(second t) (drop 2 t)] [nil (rest t)])]
+      (into (cond-> [:enum] props (conj props))
+            (distinct (for [k kinds, v labels] (if (= :keyword k) (keyword v) v)))))
+    t))
 
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: :write names what a

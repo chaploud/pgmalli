@@ -34,6 +34,9 @@ All notable changes to this project are documented here. The format follows
 - `:read`, `:write` and `{:compare :lenient}` for next.jdbc extensions and builders
   ([docs/reading-rows.md](docs/reading-rows.md), [docs/queries.md](docs/queries.md)).
 - `:pg/array`: what the driver takes as an array parameter.
+- `:write {:enum [:string :keyword]}`: an argument whose column takes a list of labels (an enum
+  type, a CHECK's list) takes them as strings, keywords or both, as a `SettableParameter`
+  extension sends them; the labels stay the check.
 - `:db` with `:jdbc-url` or `:datasource` reads the catalog over JDBC, without psql.
 - `query-schema` carries the query's problems and a `:missing-arg` as `:pgmalli/problems`.
 - `check` reports a clause it does not read (`:unread-clause`), from the HoneySQL loaded.

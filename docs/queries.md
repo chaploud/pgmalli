@@ -151,6 +151,7 @@ Every function of `pgmalli.honeysql` takes the same options map:
 | `:schema "app"` | the schema of unqualified tables |
 | the options of `as-read` | how next.jdbc builds rows and the driver reads values |
 | `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
+| `:write {:enum [:string :keyword]}` | what an extension sends for a list of labels (an enum type's, a CHECK's): the labels kept, as strings, keywords or both |
 | `:write {:array :vector}` | arrays passed as vectors, not `java.sql.Array` |
 | `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped |
 | `:compare :lenient` | arguments compared with a column take any value of its kind and nil |

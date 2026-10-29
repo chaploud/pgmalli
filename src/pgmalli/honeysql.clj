@@ -900,7 +900,8 @@
   "A column schema as jdbc's read-type or write-type (f) gives it, without NULL, as malli's
    default registry reads it."
   [registry f s opts]
-  (portable/portable-data (::schemas registry) (f (shape/non-null s) opts)))
+  (cond-> (portable/portable-data (::schemas registry) (f (shape/non-null s) opts))
+    (= f jdbc/write-type) (jdbc/enum-arg opts)))
 
 (def ^:private maybe? shape/maybe?)
 
@@ -1082,7 +1083,7 @@
      :schema \"app\"           the schema of unqualified tables (\"public\")
      the options of pgmalli.core/as-read, for the row
      :write {pg-type schema}  what a SettableParameter extension takes; also
-                              {:array [:pg/array :sequential :set]}
+                              {:array [:pg/array :sequential :set]}, {:enum [:string :keyword]}
      :compare :lenient        compared arguments take any value of the column's kind, and nil
      :stringtype :unspecified the connection's stringtype (pgjdbc's default :varchar)
      :format {...}            the options you pass to sql/format (:values-default-columns)

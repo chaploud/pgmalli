@@ -757,3 +757,14 @@
 (deftest a-function-alias-is-not-held-to-the-columns-it-lists
   (is (= [] (h/check registry {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]} opts))
       "PostgreSQL reads t.name as name(t)"))
+
+(deftest write-enum-names-what-an-extension-sends-for-an-enum
+  (let [types #(update-vals (h/arg-types registry % (assoc opts :write {:enum [:string :keyword]})) m/form)]
+    (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad" :happy :sad]
+           (:m (types {:select [:id] :from [:users] :where [:= :mood :?m]})))
+        "the enum's labels kept, as strings and as keywords")
+    (is (= [:enum "happy" "sad" :happy :sad] (:m (types {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]})))
+        "an argument cast to an enum too")
+    (is (= {:m [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"]}
+           (update-vals (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood :?m]} opts) m/form))
+        "without it, the labels as strings")))
