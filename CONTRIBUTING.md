@@ -85,8 +85,17 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
 
 A release is a pushed `vX.Y.Z` tag; the tag is the version. Choose it by semantic
 versioning: patch for fixes, minor for additions and, before 1.0, any change to the
-contract; what is breaking is the README's [Stability](README.md#stability) list. Add the
-version's section to CHANGELOG.md in the same commit: `## X.Y.Z (date)`, one short bullet per
-change a user meets, a breaking one saying what to do. A fix to something not yet released
-gets no entry. `clojure -T:build jar` builds a snapshot of the last tag. Renovate updates the
-dependencies.
+contract; what is breaking is the README's [Stability](README.md#stability) list.
+
+1. On main, in one commit: add the version's section to CHANGELOG.md, `## X.Y.Z (date)`,
+   one short bullet per change a user meets, a breaking one saying what to do (fixes made
+   a fix to something not yet released gets no entry), and set the installation coordinate in README.md to
+   the new version.
+2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
+3. The release workflow checks that the tag is on main, runs `bb test:jvm`, builds the jar
+   and deploys it to Clojars; a second job then creates the GitHub release with the jar and
+   generated notes. If only that second job fails, re-run it alone: Clojars rejects
+   publishing a version twice.
+
+Never move or delete a published tag; a broken release is fixed by the next version.
+`clojure -T:build jar` builds a snapshot of the last tag. Renovate updates the dependencies.

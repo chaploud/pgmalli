@@ -1,5 +1,8 @@
 name: ci
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request: {}
 permissions:
   contents: read
 concurrency:
@@ -12,19 +15,24 @@ jobs:
       fail-fast: false
       matrix:
         pg: ["16", "17", "18"]
+        # lint, the docs and the jar do not depend on the server: run them once, on the newest
+        include:
+          - pg: "18"
+            once: true
     env:
       PGMALLI_PG_IMAGE: postgres:${{ matrix.pg }}-alpine
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0   # the jar version comes from the latest release tag
+          persist-credentials: false
       - uses: actions/cache@v6
         with:
           path: |
             ~/.m2/repository
             ~/.gitlibs
-            ~/.deps.clj
           key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: deps-${{ runner.os }}-
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
@@ -34,15 +42,19 @@ jobs:
           cli: latest
           bb: latest
           clj-kondo: latest
+      # ir reads the test database with the host's psql
       - name: install psql
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: pull postgres image
         run: docker pull "$PGMALLI_PG_IMAGE"
       - run: bb lint
+        if: matrix.once
       - run: bb test
       - run: bb test:jvm
       - run: bb test:docs
+        if: matrix.once
       - run: clojure -T:build jar
+        if: matrix.once
   floor:
     # the oldest versions README supports; here, not in deps.edn, where Renovate would raise them
     runs-on: ubuntu-latest
@@ -50,6 +62,8 @@ jobs:
       PGMALLI_PG_IMAGE: postgres:16-alpine
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-java@v6
         with:
           distribution: temurin
