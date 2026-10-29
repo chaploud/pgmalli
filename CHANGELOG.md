@@ -51,6 +51,14 @@ All notable changes to this project are documented here. The format follows
   type, what `sql/format` expands into `IN (?, ...)`; it was a `:sequential`, refusing a set and
   taking `[]`, which formats as `IN ()`.
 - An SQL word under an alias (`[:current_timestamp :ts]`) is not a column.
+- A column an outer join may leave NULL is nullable in `row-schema` (absent under
+  `:nil-columns :absent`): a `:left-join`'s tables, every table before a `:right-join`'s, both
+  sides of a `:full-join` or `:outer-join`, in the order `sql/format` writes the joins. It was
+  required, and a row the driver returned failed it.
+- An argument the data shows only inside code (`(when from [:>= :id :?from])`) takes nil too.
+- An argument compared through `[:any x]` or `[:all x]` (`= ANY(?)`) is an array of the column's
+  type: `:any` by default, the driver taking typed Java arrays, or the collections `:write`'s
+  `:array` names (`{:array [:sequential :set]}`).
 - The README and `install!` say how `:malli/schema` reads a schema (data through malli's default
   registry, an object as it is), so a schema object over the registry instruments with nothing
   installed; how `registry` composes and which registry of a composite one wins.

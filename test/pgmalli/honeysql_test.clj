@@ -151,6 +151,36 @@
     (is (= {:id [:int {:pg/identity :always :pg/type "bigint"}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} o))
         "the other types as before")))
 
+(deftest an-outer-join-may-leave-a-tables-columns-null
+  (let [id [:int {:pg/identity :always :pg/type "bigint"}]
+        gid [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]
+        row #(h/row-schema registry (merge {:select [:u.id :g.id] :from [[:users :u]]} %) #{} (assoc opts :qualified? true))]
+    (is (= [:map [:users/id id] [:groups/id [:maybe gid]]] (row {:left-join [[:groups :g] [:= :g.id :u.group_id]]})))
+    (is (= [:map [:users/id [:maybe id]] [:groups/id gid]] (row {:right-join [[:groups :g] [:= :g.id :u.group_id]]})))
+    (is (= [:map [:users/id [:maybe id]] [:groups/id [:maybe gid]]] (row {:full-join [[:groups :g] [:= :g.id :u.group_id]]})))
+    (is (= [:map [:users/id id] [:groups/id gid]] (row {:join [[:groups :g] [:= :g.id :u.group_id]]})))
+    (is (= [:map [:users/id id] [:groups/id [:maybe gid]]]
+           (row {:left-join [[:users :x] [:= :x.id :u.id] [:groups :g] [:= :g.id :u.group_id]]}))
+        "every pair of a :left-join")
+    (is (= {:optional true} (second (nth (h/row-schema registry {:select [:g/*] :from [:users] :left-join [[:groups :g] [:= :g.id :users.group_id]]} #{} (assoc opts :nil-columns :absent)) 1)))
+        "a table's * too, absent under :nil-columns :absent")))
+
+(deftest an-argument-only-code-uses-may-be-nil
+  (is (= {:g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] :from [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]}
+         (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when from [:>= :id :?from])]} opts)))
+  (is (= {:g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]}
+         (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when x [:= :group_id :?g])]} opts))
+      "one use in the data is enough"))
+
+(deftest an-any-or-all-argument-is-an-array
+  (let [body {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:<> :group_id [:all :?gs]]]}]
+    (is (= {:ids :any :gs :any} (h/arg-types registry body opts)) "the driver takes typed Java arrays, which data cannot name")
+    (is (= {:ids [:or [:sequential [:int {:pg/identity :always :pg/type "bigint"}]] [:set [:int {:pg/identity :always :pg/type "bigint"}]]]}
+           (select-keys (h/arg-types registry body (assoc opts :write {:array [:sequential :set]})) [:ids]))
+        "the collections an extension sends instead; empty is an empty array, which SQL takes")
+    (is (= {:ids [:vector [:or :int :string]]}
+           (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :write {:array [:vector] "bigint" [:or :int :string]}))))))
+
 (deftest read-names-the-types-an-extension-reads-otherwise
   (is (= [:map [:born [:maybe :time/local-date]] [:closed_at [:maybe ['inst? {:pg/type "timestamptz"}]]]]
          (h/row-schema registry {:select [:born :closed_at] :from [:users]} #{} (assoc opts :read {"date" :time/local-date})))))
