@@ -305,26 +305,54 @@
   "[[:digit:]] and friends as the \\p{Digit} classes Java understands."
   [re]
   (str/replace re #"\[:(alpha|digit|alnum|upper|lower|space|punct|xdigit|cntrl|print|graph|blank):\]"
-               (fn [[_ c]] (str "\\p{" (str/capitalize c) "}"))))
+               (fn [[_ c]] (str "\\p{" (if (= "xdigit" c) "XDigit" (str/capitalize c)) "}"))))
 
-(defn- outside-brackets
-  "re with each . and $ outside escapes and bracket expressions replaced by (f c)."
-  [re f]
-  (str/replace re #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|[.$]" #(if (#{"." "$"} %) (f %) %)))
+(def ^:private non-ascii "\\x{80}-\\x{10FFFF}")
 
-(def java-regex
-  "The Java regex for a PostgreSQL pattern, or nil when it uses syntax Java reads differently.
-   (?U) where it has classes: the database's classes and \\w take every letter of UTF-8, Java's
-   only ASCII ones. . is [\\s\\S], as PostgreSQL's matches a newline too, without a flag a
-   string generator would not read; $ is \\z, as Java's $ also matches before a final newline.
-   Memoized: the keys are the regexes of a schema, a finite set, and this runs once per row
-   otherwise."
+(defn- ascii-set
+  "A bracket expression of the ASCII characters the Java regex atom matches, and extra."
+  [atom extra]
+  (if-let [p (try (re-pattern atom) (catch Exception _ nil))]
+    (let [cs (filter #(re-matches p (str (char %))) (range 1 128))]
+      (if (or (seq cs) (seq extra))
+        (str "[" (apply str (map #(format "\\x%02X" %) cs)) extra "]")
+        "(?!)"))
+    atom))
+
+(def ^:private regex-forms
+  "[loose strict] Java regexes for a PostgreSQL pattern, or nil when it uses syntax Java reads
+   differently. A class (\\w, [[:alpha:]] ...) takes its POSIX members in ASCII; outside ASCII
+   the members depend on the server's C library and locale, so loose takes every non-ASCII
+   character and strict none: a string strict matches PostgreSQL's matches, and one loose does
+   not match PostgreSQL's does not. . is [\\s\\S], as PostgreSQL's matches a newline too; $ is
+   \\z, as Java's $ also matches before a final newline; \\b is a backspace and \\B a backslash.
+   Memoized: the keys are the regexes of a schema, a finite set."
   (memoize
    (fn [re]
-     (let [classes (posix-classes re)
-           j (str (when (re-find #"\\[wWdDsSbBp]" classes) "(?U)") (outside-brackets classes {"." "[\\s\\S]" "$" "\\z"}))]
-       (when (and (not (re-find #"\\[mMyYZA]" re)) (try (re-pattern j) (catch Exception _ nil)))
-         j)))))
+     (let [form (fn [extra]
+                  (str/replace (posix-classes re) #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|[.$]"
+                               (fn [t]
+                                 (cond (= "." t) "[\\s\\S]"
+                                       (= "$" t) "\\z"
+                                       (= "\\b" t) "\\x08"
+                                       (= "\\B" t) "\\\\"
+                                       (re-find #"^\\[wWdDsS]$|^\[.*(?:\\[wWdDsS]|\\p\{)" t) (ascii-set t extra)
+                                       :else t))))
+           forms [(form non-ascii) (form "")]]
+       (when (and (not (re-find #"\\[mMyYZA]" re)) (every? #(try (re-pattern %) (catch Exception _ nil)) forms))
+         forms)))))
+
+(defn java-regex
+  "The Java regex a value PostgreSQL's pattern may match matches (see regex-forms); nil when
+   the pattern has syntax Java reads differently."
+  [re]
+  (first (regex-forms re)))
+
+(defn strict-regex
+  "The Java regex java-regex gives, its classes without the non-ASCII characters: a string it
+   matches PostgreSQL's pattern matches on any server."
+  [re]
+  (-> re (str/replace (str "[" non-ascii "]") "(?!)") (str/replace non-ascii "")))
 
 (defn- escape-regex
   "Literal text as a regex: each metacharacter backslashed (not \\Q...\\E, which a string
@@ -352,6 +380,14 @@
 (def ^:private compiled (memoize re-pattern))
 
 (defn- matches? [s re] (some? (re-find (compiled re) s)))
+
+(defn- regex-match
+  "Whether s matches the pattern; nil (NULL, so a CHECK passes) when that depends on the
+   server's classes outside ASCII."
+  [s re f]
+  (let [[loose strict] (regex-forms re)]
+    (cond (matches? s (f strict)) true
+          (or (= loose strict) (not (matches? s (f loose)))) false)))
 
 ;;; jsonb
 
@@ -423,10 +459,10 @@
    :ilike (fn [s p] (matches? s (case-insensitive (like-regex p))))
    :not-like (fn [s p] (not (matches? s (like-regex p))))
    :not-ilike (fn [s p] (not (matches? s (case-insensitive (like-regex p)))))
-   :regex (fn [s re] (matches? s (java-regex re)))
-   :iregex (fn [s re] (matches? s (case-insensitive (java-regex re))))
-   :not-regex (fn [s re] (not (matches? s (java-regex re))))
-   :not-iregex (fn [s re] (not (matches? s (case-insensitive (java-regex re)))))
+   :regex (fn [s re] (regex-match s re identity))
+   :iregex (fn [s re] (regex-match s re case-insensitive))
+   :not-regex (fn [s re] (some-> (regex-match s re identity) not))
+   :not-iregex (fn [s re] (some-> (regex-match s re case-insensitive) not))
    :subscript (fn [v i] (when (<= 1 i (count v)) (nth v (dec i))))
    :array_length (fn [v dim] (when (and (= 1 dim) (seq v)) (count v)))
    :cardinality count

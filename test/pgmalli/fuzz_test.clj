@@ -232,7 +232,32 @@
       (testing (str "seed " seed ", " (count exprs) " expressions x " (count rows) " rows")
         (doseq [[j row] (map-indexed vector rows)
                 [i e] (map-indexed vector exprs)]
-          (is (= (get-in verdicts [j i]) (ev/passes? e row column-types))
+          (is (let [pg (get-in verdicts [j i]) ours (ev/passes? e row column-types)]
+                (or (= pg ours)
+                    ;; outside ASCII a class is the server's: pgmalli passes the row, unless
+                    ;; another arm fails it with an error PostgreSQL's evaluation order skips
+                    (and (re-find #"\\[wWdDsS]|\[:" (pr-str e)) (some #(and (string? %) (re-find #"[^\x00-\x7F]" %)) (vals row)))))
               (str "CHECK " (to-sql e) "\n  data  " (pr-str e) "\n  row   " (pr-str row)
                    "\n  PostgreSQL " (get-in verdicts [j i]) ", pgmalli " (not (get-in verdicts [j i]))
                    "\n  " (ts/rerun #'evaluated-checks-agree-with-postgres seed))))))))
+
+(deftest classes-agree-with-postgres-in-ascii-and-never-reject-what-it-takes-outside
+  (when *db*
+    (let [patterns (vec (concat (for [c ["alpha" "digit" "alnum" "upper" "lower" "space" "punct" "xdigit" "cntrl" "print" "graph" "blank"]]
+                                  (str "^[[:" c ":]]$"))
+                                ["^[^[:alpha:]]$" "^[[:alpha:]_-]$" "^\\w$" "^\\W$" "^\\d$" "^\\D$" "^\\s$" "^\\S$" "^[\\w.]$" "^[^\\s]$" "^\\b$"]))
+          cps (concat (range 1 128) [0xA0 0xAA 0xB2 0xD7 0xDF 0xE9 0xAD 0x1C5 0x301 0x663 0x1680 0x2007 0x2028 0x202F 0x203F 0x20AC 0x3000 0x3042 0x1F600])
+          sql (str "SELECT p.i, c, chr(c) ~ p.pat FROM unnest(ARRAY[" (str/join ", " (map test-db/sql-literal patterns)) "]) WITH ORDINALITY p(pat, i), "
+                   "unnest(ARRAY[" (str/join ", " cps) "]) c;")
+          {:keys [exit out err]} (p/sh ["docker" "exec" "-i" *container* "psql" "-X" "-q" "-A" "-t" "-F" "\t" "-U" "postgres" "-d" (:db *db*)] {:in sql})]
+      (is (zero? exit) err)
+      (doseq [line (str/split-lines (str/trim out))
+              :let [[i c v] (str/split line #"\t")
+                    pattern (patterns (dec (parse-long i)))
+                    s (Character/toString (int (parse-long c)))
+                    clause (x/check-clause (str "CHECK (s ~ " (test-db/sql-literal pattern) "::text)"))
+                    pg? (= "t" v)
+                    accepted? (ev/passes? clause {:s s})]]
+        (if (< (parse-long c) 128)
+          (is (= pg? accepted? (some? (re-find (re-pattern (ev/java-regex pattern)) s))) (str pattern " on " (pr-str s)))
+          (when pg? (is (and accepted? (re-find (re-pattern (ev/java-regex pattern)) s)) (str pattern " on U+" (format "%04X" (parse-long c))))))))))

@@ -148,7 +148,8 @@
             cases (for [c (cons "v" (keys checks)), s strings] [c s (m/validate :pg.cs/t (assoc (zipmap (map keyword (cons "v" (keys checks))) (repeat nil)) (keyword c) s) {:registry reg})])]
         (is (= :map (first (:pg.cs/t reg))) "the CHECKs are column schemas, not evaluated")
         (exec-sql! (str "DO $$ BEGIN "
-                        (apply str (for [[c s ok] cases]
+                        ;; outside ASCII a class is the server's: the schema takes what it may take
+                        (apply str (for [[c s ok] cases :when (not (and ok (#{"z" "o"} c) (re-find #"[^\x00-\x7F]" s)))]
                                      (str "IF cs.takes('" c "', " (sql-literal s) ") <> " ok
                                           " THEN RAISE EXCEPTION 'schema says " ok " for % in " c "', " (sql-literal s) "; END IF;")))
                         " END $$;"))

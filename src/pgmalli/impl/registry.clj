@@ -200,23 +200,21 @@
 
 (def ^:private generation-regex
   "A regex test.chuck generates from, whose strings match the regex given: without the flags,
-   \\z and \\p{Alpha} test.chuck refuses, a case-insensitive one's letters as [aA], repeats at
-   most 4 more than their least; nil when
-   there is none, and the strings are drawn and filtered. Memoized: a registry build asks it
-   of every [:re]."
+   \\z test.chuck refuses, classes as their ASCII members alone (which every server's classes
+   have) and any character as a printable ASCII one, a case-insensitive one's letters as [aA], repeats at most 4 more than their least;
+   nil when there is none, and the strings are drawn and filtered. Memoized: a registry build
+   asks it of every [:re]."
   (memoize
    (fn [re]
      (let [string-from-regex (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex)
            ci? (re-find #"^\(\?iu?\)" re)
            g (cond-> (-> re
-                         (str/replace #"^(?:\(\?iu?\))?(?:\(\?U\))?" "")
+                         (str/replace #"^\(\?iu?\)" "")
                          (str/replace #"(?<!\\)\\z" "")
-                         ;; inside a bracket expression, where PostgreSQL's classes are: their ASCII members
-                         (str/replace #"\\p\{(Alpha|Digit|Alnum|Upper|Lower|Xdigit|Space|Blank)\}"
-                                      (fn [[_ c]] ({"Alpha" "a-zA-Z" "Digit" "0-9" "Alnum" "a-zA-Z0-9" "Upper" "A-Z" "Lower" "a-z"
-                                                   "Xdigit" "0-9a-fA-F" "Space" " \\t\\n" "Blank" " \\t"} c))))
+                         ev/strict-regex
+                         (str/replace "[\\s\\S]" "[\\x20-\\x7E]"))
                ci? (str/replace #"\\.|\[\^?\]?(?:\\.|[^\]\\])*\]|\p{L}"
-                                #(if (and (= 1 (count %)) (not= (str/lower-case %) (str/upper-case %)))
+                                #(if (and (= 1 (count %) (count (str/lower-case %)) (count (str/upper-case %))) (not= (str/lower-case %) (str/upper-case %)))
                                    (str "[" (str/lower-case %) (str/upper-case %) "]")
                                    %))
                ;; repeats bounded: strings short enough for the other parts (a length, a domain) to keep

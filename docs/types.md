@@ -176,7 +176,7 @@ Generate a version's rows from its own schema, so the generator need not guess t
 | `length(col) <= n` | `[:string {:max n}]` |
 | `cardinality(col) BETWEEN a AND b`, `array_length(col, 1) <= n` | `[:vector {:min a :max b} <T>]` |
 | `jsonb_typeof(col) = 'object'` (`'array'`) | `:map` (`[:sequential :any]`) |
-| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?iu)`; `.` as `[\s\S]`, as it matches a newline; `$` as `\z`, as Java's also matches before a final newline; `(?U)` when it has classes, so they take every Unicode letter, as in a UTF-8 database) |
+| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?iu)`; `.` as `[\s\S]`, as it matches a newline; `$` as `\z`, as Java's also matches before a final newline; a class such as `\w` or `[[:alpha:]]` as its ASCII members plus every non-ASCII character, see below) |
 | `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^a[\s\S]*\z"]]` (with `(?iu)`) |
 | `col IS NULL OR <a pattern>` | the pattern, or NULL |
 | `col IS NOT NULL` | no `[:maybe ...]` |
@@ -187,6 +187,11 @@ Generate a version's rows from its own schema, so the generator need not guess t
 | a domain CHECK no pattern covers | `[:pg/check-value expr]`, `VALUE` as `:VALUE` |
 | `NOT ENFORCED` (PostgreSQL 18) | nothing; listed in `:diagnostics` |
 | `NOT VALID` | `[:pg/check {:pg/not-valid true} ...]` |
+
+Outside ASCII, a class's members depend on the server's C library and locale: `[[:punct:]]`
+takes `€` on glibc but not under the C locale. So a class takes every non-ASCII character
+when a value is checked, and none when one is generated; a `[:pg/check]` whose result depends on
+it is NULL, and passes.
 
 A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a nullable column takes
 `[:maybe ...]`, and a NULL dispatch value takes any branch.

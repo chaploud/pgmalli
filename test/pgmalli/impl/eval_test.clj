@@ -152,7 +152,7 @@
   (is (not (passes? "CHECK (code ~ '^[[:digit:]]+$'::text)" {:code "d"})) "POSIX classes are translated")
   (is (not (passes? "CHECK (code ~ '^[[:alnum:]]+$'::text)" {:code ":::"})))
   (is (passes? "CHECK (code ~* '^ab$'::text)" {:code "AB"}))
-  (is (= "(?U)^[\\p{Alpha}]+\\z" (ev/java-regex "^[[:alpha:]]+$")))
+  (is (passes? "CHECK (code ~ '^[[:xdigit:]]+$'::text)" {:code "0aF"}))
   (is (nil? (ev/java-regex "\\mword\\M")) "PostgreSQL-only escapes are not translated")
   (is (not (ev/supported? (x/check-clause "CHECK (code ~ '\\mword\\M'::text)")))))
 
@@ -165,6 +165,24 @@
   (is (re-find (re-pattern (ev/java-regex "^[[:alpha:]]+$")) "é") "the rendered regex too")
   (is (re-find (re-pattern (ev/case-insensitive (ev/like-regex "é%"))) "Éa"))
   (is (not (passes? "CHECK (c ~ '^[[:alpha:]]+$'::text)" {:c "1"}))))
+
+(deftest a-class-outside-ascii-is-left-to-the-server-and-never-rejects-what-it-may-take
+  (doseq [[check s] [["CHECK (s ~ '^[[:punct:]]+$'::text)" "$<=>€×"]
+                     ["CHECK (s !~ '\\s'::text)" "a\u00A0b"]
+                     ["CHECK (s !~ '[[:blank:]]'::text)" "a\u2003b"]
+                     ["CHECK (s ~ '^\\d+$'::text)" "١٢"]
+                     ["CHECK ((s ~ '^\\w+$') OR n > 0)" "é"]
+                     ["CHECK (NOT (s ~ '^\\w+$') OR n > 0)" "é"]]]
+    (is (passes? check {:s s :n 0}) check))
+  (is (not (passes? "CHECK (s ~ '^[[:alpha:]]+$'::text)" {:s "café!"})) "an ASCII character outside the class still fails")
+  (is (not (passes? "CHECK (NOT (s ~ '^\\w+$') OR n > 0)" {:s "ab" :n 0})))
+  (is (re-find (re-pattern (ev/java-regex "^[[:punct:]]+$")) "$€"))
+  (is (not (re-find (re-pattern (ev/strict-regex (ev/java-regex "^[[:punct:]]+$"))) "€")) "generation keeps to ASCII members"))
+
+(deftest backslash-b-is-a-backspace-and-backslash-capital-b-a-backslash
+  (is (passes? "CHECK (s ~ 'a\\bb'::text)" {:s "a\bb"}))
+  (is (not (passes? "CHECK (s ~ 'a\\bb'::text)" {:s "ab"})))
+  (is (passes? "CHECK (s ~ '^a\\Bb$'::text)" {:s "a\\b"})))
 
 (deftest dollar-matches-only-at-the-end-and-dot-matches-a-newline
   (is (not (passes? "CHECK (s ~ '^abc$'::text)" {:s "abc\n"})))
