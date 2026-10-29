@@ -120,7 +120,7 @@
                      [:tuple [:= :=] [:tuple [:= :cast] [:= :d] [:= :integer]] [:int {:min -1 :max 10}]]
                      [:tuple [:= :=] [:tuple [:= :cast] [:tuple [:= :cast] [:= :d] [:= :double-precision]] [:= :integer]] [:int {:min -1 :max 10}]]
                      [:tuple [:= :case] [:tuple [:= :=] [:= :e] [:= "happy"]] [:tuple [:= :>] ::int-col [:= 0]] [:= :else] [:tuple [:= :is] ::int-col :nil]]
-                     [:tuple ::cmp [:tuple [:enum :* :/] [:tuple [:= :cast] ::interval-lit [:= :interval]] [:enum 2 3 0.5M 1.5M]] [:tuple [:= :cast] ::interval-lit [:= :interval]]]
+                     [:tuple ::cmp [:tuple [:= :+] [:= :ts] [:tuple [:enum :* :/] [:tuple [:= :cast] ::interval-lit [:= :interval]] [:enum 2 3 0.5M 1.5M]]] [:tuple [:= :+] [:= :ts] [:tuple [:= :cast] ::interval-lit [:= :interval]]]]
                      [:tuple [:= :=] [:tuple [:= :trunc] [:= :d] [:int {:min -1 :max 2}]] [:enum 0 2 2.2M 2.25M 9.9M]]
                      [:tuple [:= :=] [:tuple [:= :/] [:= :d] [:enum 3 7]] [:enum 0.33333333333333333333M -0.33333333333333333333M 0.83333333333333333333M 0.75M]]
                      [:tuple [:= :=] [:tuple [:= :->>] [:= :j] ::jkey] [:enum "1" "1.50" "1.5"]]
