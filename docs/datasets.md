@@ -39,7 +39,7 @@ default):
 (def sample (gen/generate (data/dataset-generator registry {:rows 2}) 30 42))
 
 (keys sample)
-;; => ("public.groups" "public.users" "public.posts")
+;; => ("public.groups" "public.users" "public.events" "public.posts")
 
 (m/validate (data/dataset-schema registry) sample {:registry registry})
 ;; => true
@@ -48,12 +48,12 @@ default):
 `:except` leaves tables out. A table referencing one left out is an error:
 
 ```clojure
-(keys (gen/generate (data/dataset-generator registry {:rows 2 :except #{"public.posts"}}) 30 42))
+(keys (gen/generate (data/dataset-generator registry {:rows 2 :except #{"public.posts" "public.events"}}) 30 42))
 ;; => ("public.groups" "public.users")
 
 (try (data/dataset-generator registry {:except #{"public.users"}})
      (catch clojure.lang.ExceptionInfo e (ex-message e)))
-;; => "public.posts references public.users, which :except leaves out"
+;; => "public.events references public.users, which :except leaves out"
 ```
 
 A foreign key is filled from a row of the table it references. A cycle of NOT NULL

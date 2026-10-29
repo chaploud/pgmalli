@@ -21,14 +21,14 @@ generate test data and check HoneySQL queries, without a database at hand.
 
 ## Quickstart
 
-The examples use [docs/example/schema.sql](docs/example/schema.sql): `groups`, `users` and
-`posts`, with an enum, identity and generated columns, and CHECKs. Add pgmalli to your
+The examples use [docs/example/schema.sql](docs/example/schema.sql): `groups`, `users`,
+`posts` and `events`, with an enum, identity and generated columns, a jsonb column, and CHECKs. Add pgmalli to your
 dependencies ([Installation](#installation)) and keep `resources` on the classpath:
 
 ```shell
 $ psql -f docs/example/schema.sql
 $ clojure -M -m pgmalli.main generate
-wrote resources/pgmalli/public.edn (public: 3 tables, 0 views, 1 enums, 0 domains; 0 unrendered, 0 diagnostics)
+wrote resources/pgmalli/public.edn (public: 4 tables, 0 views, 1 enums, 0 domains; 0 unrendered, 0 diagnostics)
 done: files written: 1; commit them, and run `clojure -M -m pgmalli.main check` in CI
 ```
 
@@ -238,7 +238,7 @@ A dataset is several tables at once, foreign keys pointing at generated rows:
 (def sample (gen/generate (data/dataset-generator registry {:rows 3}) 30 42))
 
 (map count (vals sample))
-;; => (3 3 3)
+;; => (3 3 3 3)
 
 (m/validate (data/dataset-schema registry) sample {:registry registry})
 ;; => true
@@ -254,7 +254,7 @@ HoneySQL INSERTs in an order the database accepts:
 ;; => true
 
 (map :insert-into (data/inserts registry sample))
-;; => (:public.groups [{:overriding-value :system} :public.users] [{:overriding-value :system} :public.posts])
+;; => (:public.groups [{:overriding-value :system} :public.users] [{:overriding-value :system} :public.events] [{:overriding-value :system} :public.posts])
 ```
 
 <!-- :test-doc-blocks/skip -->

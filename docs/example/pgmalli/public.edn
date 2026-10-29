@@ -3,7 +3,17 @@
  :database-version "PostgreSQL 17.11",
  :diagnostics [],
  :registry
- {:pg.public/groups
+ {:pg.public/events
+  [:map
+   {:pg/foreign-keys [{:columns ["user_id"], :table "public.users", :to ["id"]}],
+    :pg/primary-key ["id"],
+    :pg/table "public.events"}
+   [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
+   [:payload [:map {:pg/constraint ["events_payload_check"], :pg/type "jsonb"}]]
+   [:schema_version
+    [:enum {:pg/constraint ["events_schema_version_check"], :pg/type "integer"} 1 2]]
+   [:user_id [:int {:pg/type "bigint"}]]],
+  :pg.public/groups
   [:map
    {:pg/primary-key ["id"], :pg/table "public.groups", :pg/unique [{:columns ["name"]}]}
    [:id [:pg/integer {:pg/identity :default, :pg/type "integer"}]]

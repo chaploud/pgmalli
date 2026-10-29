@@ -768,3 +768,16 @@
     (is (= {:m [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"]}
            (update-vals (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood :?m]} opts) m/form))
         "without it, the labels as strings")))
+
+(deftest write-enum-wins-over-the-type-for-a-column-with-labels
+  (let [reg (pgmalli/registry {:registry {:pg.public/attempts [:map {:pg/table "public.attempts"}
+                                                               [:id [:int {:pg/type "bigint"}]]
+                                                               [:role [:string {:pg/type "character varying"}]]
+                                                               [:status [:enum {:pg/constraint ["attempts_status_check"] :pg/type "character varying"} "active" "submitted"]]]}})
+        o {:write {"character varying" [:or :string :keyword] :enum [:string :keyword]}}]
+    (is (= {:status [:enum {:pg/constraint ["attempts_status_check"] :pg/type "character varying"} "active" "submitted" :active :submitted]}
+           (update-vals (h/arg-types reg {:select [:id] :from [:attempts] :where [:= :status :?status]} o) m/form))
+        "a column with labels keeps them: :enum says how its values are sent")
+    (is (= {:role [:or :string :keyword]}
+           (update-vals (h/arg-types reg {:select [:id] :from [:attempts] :where [:= :role :?role]} o) m/form))
+        "a column without labels takes the type's")))

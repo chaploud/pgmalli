@@ -900,8 +900,15 @@
   "A column schema as jdbc's read-type or write-type (f) gives it, without NULL, as malli's
    default registry reads it."
   [registry f s opts]
-  (cond-> (portable/portable-data (::schemas registry) (f (shape/non-null s) opts))
-    (= f jdbc/write-type) (jdbc/enum-arg opts)))
+  (let [typed #(portable/portable-data (::schemas registry) (f (shape/non-null s) %))
+        ;; a column with labels (an enum type's, a CHECK's) keeps them under :write's :enum, the
+        ;; more particular of the two, even where :write names its type
+        labels (when (and (= f jdbc/write-type) (get-in opts [:write :enum]))
+                 (let [t (typed (update opts :write select-keys [:array :enum]))]
+                   (when (and (vector? t) (= :enum (first t))) t)))]
+    (cond labels (jdbc/enum-arg labels opts)
+          (= f jdbc/write-type) (jdbc/enum-arg (typed opts) opts)
+          :else (typed opts))))
 
 (def ^:private maybe? shape/maybe?)
 

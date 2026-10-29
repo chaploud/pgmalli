@@ -28,3 +28,10 @@ CREATE TABLE posts (
   views       integer NOT NULL DEFAULT 0,
   CONSTRAINT likes_within_views CHECK (likes <= views)
 );
+
+CREATE TABLE events (
+  id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  user_id        bigint NOT NULL REFERENCES users,
+  schema_version integer NOT NULL CHECK (schema_version IN (1, 2)),
+  payload        jsonb NOT NULL CHECK (jsonb_typeof(payload) = 'object')
+);

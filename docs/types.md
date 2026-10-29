@@ -114,6 +114,56 @@ run `pgmalli.upstream-test`: it creates every extension the PostgreSQL image shi
 type that is in neither list, and generates, inserts and reads back a NOT NULL column of every
 entry.
 
+## jsonb columns
+
+PostgreSQL holds a jsonb column's shape in CHECKs at most (`jsonb_typeof(payload) =
+'object'` becomes `:map`); its keys and their types are the application's. Write them as
+malli and join them to the generated schema, with no copy of either:
+
+```clojure
+(require '[pgmalli.core :as pgmalli]
+         '[malli.core :as m]
+         '[malli.util :as mu]
+         '[malli.error :as me]
+         '[malli.generator :as mg])
+
+(def registry (pgmalli/registry "public"))
+
+(def evidence-v1 [:map [:course :string] [:score :int]])
+(def evidence-v2 [:map [:course :string] [:score :int] [:graded_by :string]])
+```
+
+A payload whose shape another column names (a version) is a `:multi` on that column beside
+the row schema:
+
+```clojure
+(def event
+  (m/schema [:and :pg.public/events
+             [:multi {:dispatch :schema_version}
+              [1 [:map [:payload evidence-v1]]]
+              [2 [:map [:payload evidence-v2]]]]]
+            {:registry registry}))
+
+(m/validate event {:id 1 :user_id 1 :schema_version 1 :payload {:course "sql" :score 3}})
+;; => true
+
+(me/humanize (m/explain event {:id 1 :user_id 1 :schema_version 2 :payload {:course "sql" :score 3}}))
+;; => {:payload {:graded_by ["missing required key"]}}
+```
+
+Generate a version's rows from its own schema, so the generator need not guess the shape:
+
+```clojure
+(def new-event-v2
+  (-> (pgmalli/columns registry :pg.public.events/insert)
+      (mu/assoc :schema_version [:= 2])
+      (mu/assoc :payload evidence-v2)))
+
+(m/validate event (assoc (mg/generate new-event-v2 {:registry registry :seed 1}) :id 1)
+            {:registry registry})
+;; => true
+```
+
 ## CHECK constraints
 
 | CHECK | malli |
