@@ -616,3 +616,24 @@
 (deftest a-star-names-a-table-of-the-scope
   (is (= [{:kind :unknown-column :column :x.*}] (h/check registry {:select [:x.*] :from :users} opts)))
   (is (= [] (h/check registry {:select [:id] :from [[{:select [:id] :from :users}]]} opts)) "[subquery] has no alias"))
+
+(deftest what-postgresql-accepts-checks-clean
+  (doseq [q [{:select [:id] :from [:users] :join [:groups [:using :id]]}
+             {:select [:users.id] :from [:sample.users]}
+             {:select [:sample.users.id] :from [:users]}
+             {:select [:ID :Nick] :from [:USERS] :where [:= :Users.ID 1]}
+             {:select [:group-id] :from [:users]}
+             {:select [:u] :from [[:users :u]]}
+             {:select [:users] :from [:users]}]]
+    (is (= [] (h/check registry q opts)) (pr-str q))))
+
+(deftest a-scope-hides-what-postgresql-hides
+  (is (= [{:kind :unknown-column :column :nosuch}]
+         (h/check registry {:select [:u.id] :from [[:users :u] [[:lateral {:select [:nosuch] :from [:groups]}] :p]]} opts))
+      "a LATERAL subquery does not see itself")
+  (is (= [{:kind :unknown-column :column :u.nick}]
+         (h/check registry {:select [:id] :from [[:users :u]] :where [:exists {:select [1] :from [[:groups :u]] :where [:= :u.nick "x"]}]} opts))
+      "an inner alias hides the outer one of its name")
+  (is (= [{:kind :unknown-column :column :nosuch}]
+         (h/check registry {:with [[:users {:select [[1 :x]]}]] :update :users :set {:nosuch "x"} :where [:= :id 1]} opts))
+      "the table an UPDATE names, which a CTE does not hide"))

@@ -110,6 +110,13 @@ All notable changes to this project are documented here. The format follows
   where it sits, the same statement in two places in its own scope each. `:t.*` must name a
   table of the scope; code anywhere in a query (an `:insert-into` target, a CTE name) leaves
   its part unjudged, and clauses inside code are read.
+- Checked against PostgreSQL itself (several thousand queries, PREPAREd): `check` reported, for
+  queries it accepts, a column `JOIN ... USING` merges as ambiguous, a column of a
+  schema-qualified table (`:public.users`, `:public.users.id`), an identifier in another case or
+  with `-` (HoneySQL writes `:USERS` and `:group-id` unquoted, PostgreSQL folds them), and a
+  whole-row reference (`SELECT u FROM users u`); it reports none of them. A LATERAL subquery no
+  longer sees itself, an inner alias hides an outer one of its name, and the table an UPDATE or
+  DELETE names is the table even under a CTE of its name.
 - A value HoneySQL passes as it is (`[:lift {...}]`, `[:inline {...}]`) is data, never a
   statement or a clause; a column definition list (`[:r {:columns [[:raw "a int"]]}]`) does not
   throw.

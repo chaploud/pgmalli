@@ -24,6 +24,13 @@
 
 ;;; tables and columns of the registry
 
+(defn- folded
+  "An identifier as PostgreSQL reads what HoneySQL writes of it by default, unquoted: - is _,
+   and the case folded. Only where the name as it is matches nothing (a quoted mixed-case one
+   matches as it is)."
+  [s]
+  (-> s (str/replace "-" "_") str/lower-case))
+
 (defn- column-entries
   "[[column-name schema] ...] of a table (or view) in the registry, in its order; nil when it
    is not there."
@@ -44,7 +51,7 @@
   (if (::schemas registry)
     registry
     (let [r {::schemas (shape/schemas-of registry)}]
-      (assoc r ::table-columns (memoize #(some->> (column-entries r %) (into system-columns)))))))
+      (assoc r ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (into system-columns)))))))
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
 
@@ -73,6 +80,11 @@
   "[join-key item] for the tables the joins bring in, in join-keys' order."
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] [k t]))
+
+(defn- join-items*
+  "[item condition] of every join of a statement."
+  [stmt]
+  (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
 
 (declare insert-parts)
 
@@ -111,7 +123,7 @@
 (defn- cte-name [entry]
   (when (vector? entry)
     (let [n (if (vector? (first entry)) (ffirst entry) (first entry))]
-      (when (keyword? n) (name n)))))
+      (when (keyword? n) (folded (name n))))))
 
 (defn- cte-pair? [x] (and (vector? x) (<= 2 (count x) 3) (statement? (second x))))
 
@@ -186,7 +198,7 @@
 (defn- written
   "The table name as written when it names no schema, the form a CTE may shadow."
   [k]
-  (when-not (or (namespace k) (str/includes? (name k) ".")) (name k)))
+  (when-not (or (namespace k) (str/includes? (name k) ".")) (folded (name k))))
 
 (defn- table-ref
   "[table alias written columns] of a :from / join / target item: the table's qualified name,
@@ -195,7 +207,8 @@
    naming a table chosen at run time) has no table."
   [x schema]
   (cond
-    (keyword? x) [(qualified x schema) (name x) (written x)]
+    ;; FROM public.users is referred to as users
+    (keyword? x) [(qualified x schema) (folded (last (str/split (name x) #"\."))) (written x)]
     (symbol? x) [nil (str x) nil]
     ;; a subquery with no alias (PostgreSQL 16): nothing names it, so no query reaches it by name
     (map? x) [nil (str "(subquery " (hash x) ")") nil]
@@ -207,11 +220,11 @@
                        [b nil])]
       (cond
         ;; :t / [:t :alias] / INSERT INTO t (columns...)
-        (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (name (if (keyword? b) b a)) (written a) listed]
-        (keyword? a) [nil (name a) nil listed]
-        (keyword? b) [nil (name b) nil listed]
+        (and (keyword? a) (or (nil? b) (keyword? b) (vector? b))) [(qualified a schema) (folded (if (keyword? b) (name b) (last (str/split (name a) #"\.")))) (written a) listed]
+        (keyword? a) [nil (folded (name a)) nil listed]
+        (keyword? b) [nil (folded (name b)) nil listed]
         ;; [[:f args...]]: a table function, named after the function
-        (and (nil? b) (vector? a) (keyword? (first a))) [nil (name (first a)) nil]
+        (and (nil? b) (vector? a) (keyword? (first a))) [nil (folded (last (str/split (name (first a)) #"\."))) nil]
         ;; [subquery]: one with no alias
         (and (nil? b) (map? a)) (table-ref a schema)))))
 
@@ -264,9 +277,13 @@
                      (map second (join-items stmt))
                      [(insert-target stmt) (:update stmt) (:delete-from stmt)])
         nullable (outer-aliases stmt schema)
-        sc (into {}
-                 (for [[table alias written listed] (keep #(table-ref % schema) refs)
-                       :let [cte? (boolean (and written (or (ctes written) (ctes ::code-ctes))))
+        ;; UPDATE, DELETE FROM and INSERT INTO name a table, which a CTE of the same name does not hide
+        targets (set (keep identity [(insert-target stmt) (:update stmt) (:delete-from stmt)]))
+        using (set (for [[_ j] (join-items* stmt) :when (and (vector? j) (= :using (first j))) c (rest j) :when (keyword? c)]
+                     (folded (name c))))
+        sc (into (with-meta {} {::using using})
+                 (for [r refs :let [[table alias written listed] (table-ref r schema)] :when alias
+                       :let [cte? (boolean (and written (not (targets r)) (or (ctes written) (ctes ::code-ctes))))
                              table (when table (catalog-table registry table written))]]
                    [alias (cond-> {:table table :cte? cte?
                                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))
@@ -277,7 +294,7 @@
                             (nullable alias) (assoc :nullable? true))]))]
     ;; ON CONFLICT: EXCLUDED is the row proposed for insertion, with the target's columns
     (if-let [[_ alias] (when (contains? stmt :on-conflict) (some-> (insert-target stmt) (table-ref schema)))]
-      (let [target (assoc (get sc alias) :excluded? true)] (assoc sc "EXCLUDED" target "excluded" target))
+      (let [target (assoc (get sc alias) :excluded? true)] (assoc sc "excluded" target))
       sc)))
 
 (defn- lateral? [item]
@@ -304,9 +321,11 @@
                         ;; a column of a table code brings in is the enclosing data's, untyped
                         chain (cons (scope registry x ctes opts) (cond->> outer (code-sources? x) (cons :open)))
                         part (fn [k v scopes cs] (walk v (conj path k) scopes cs false true))
+                        ;; a LATERAL item sees its statement's tables, but not itself
+                        lateral-chain (fn [t] (cons (dissoc (first chain) (second (table-ref t (:schema opts default-schema)))) (rest chain)))
                         items (fn [k v]
                                 (if (vector? v)
-                                  (apply concat (map-indexed (fn [i t] (walk t (conj path k i) (if (lateral? t) chain outer) ctes false true)) v))
+                                  (apply concat (map-indexed (fn [i t] (walk t (conj path k i) (if (lateral? t) (lateral-chain t) outer) ctes false true)) v))
                                   (part k v outer ctes)))]
                     (cons [x chain path]
                           (concat
@@ -321,7 +340,7 @@
                            (for [k join-keys :let [j (get x k)] :when (some? j)
                                  found (if (vector? j)
                                          (apply concat (map-indexed (fn [i t] (if (even? i)
-                                                                                (walk t (conj path k i) (if (lateral? t) chain outer) ctes false true)
+                                                                                (walk t (conj path k i) (if (lateral? t) (lateral-chain t) outer) ctes false true)
                                                                                 (walk t (conj path k i) chain ctes false true)))
                                                                     j))
                                          (part k j outer ctes))]
@@ -332,18 +351,22 @@
     (walk body [] () (into (free-cte-names body) (code-ctes body)) false false)))
 
 (defn- split-column
-  "[alias column] of a column keyword: :a/b and :a.b name a table, :b does not."
+  "[alias column] of a column keyword: :a/b and :a.b name a table (:schema.a.b too), :b does
+   not. The alias is folded as table-ref folds aliases."
   [col]
-  (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))]
-    (if (str/includes? s ".") (str/split s #"\." 2) [nil s])))
+  (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))
+        parts (str/split s #"\.")]
+    (if (next parts)
+      [(folded (nth parts (- (count parts) 2))) (last parts)]
+      [nil s])))
 
 (defn- has-column?
   "Whether a scope entry may hold a column: one it lists, one of its table's, or anything for
    an opaque table."
   [registry {:keys [table opaque? columns]} column]
-  (cond columns (boolean (some #{column} columns))
+  (cond columns (boolean (some #(or (= column %) (= (folded column) %)) columns))
         opaque? true
-        :else (contains? (table-columns registry table) column)))
+        :else (let [cs (table-columns registry table)] (or (contains? cs column) (contains? cs (folded column))))))
 
 (defn- own-hits
   "[[alias table opaque? nullable?] ...] of the tables of one scope a column may belong to."
@@ -364,9 +387,13 @@
    ones) that has any."
   [registry scopes col]
   (let [[sc & outer] (chain scopes)
+        [alias column] (split-column col)
         hits (own-hits registry sc col)
-        [alias] (split-column col)]
+        ;; JOIN ... USING (c) merges the c of the tables it joins into one column
+        hits (if (and (next hits) (nil? alias) (contains? (::using (meta sc)) (folded column))) (take 1 hits) hits)]
     (cond (or (seq hits) (empty? outer)) hits
+          ;; an alias names the nearest table of its name: an outer one of the same name is hidden
+          (and alias (contains? sc alias)) hits
           ;; the enclosing statement is not in the data: a column not of this scope's tables is
           ;; one of its, untyped
           (= :open (first outer)) (if (and alias (contains? sc alias)) hits [[alias nil true]])
@@ -385,7 +412,8 @@
         [opaque & _] (filter #(nth % 2) hits)]
     (cond (= 1 (count hits))
           (let [[alias table opaque? nullable?] (first hits)]
-            {:table (or table alias) :column column :schema (when-not opaque? (get (table-columns registry table) column))
+            {:table (or table alias) :column column
+             :schema (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (folded column)))))
              :nullable? (boolean nullable?) :opaque? (boolean opaque?)})
           (and opaque (>= 1 (count (remove #(nth % 2) hits))))
           (let [[alias table] opaque] {:table (or table alias) :column column :schema nil :nullable? true :opaque? true}))))
@@ -601,6 +629,12 @@
                     :when (and (column-keyword? c) (not (output-column? out c)))]
                 c)))))
 
+(defn- whole-row?
+  "Whether an unqualified :x names a table of the scope rather than a column: its whole row."
+  [scope col]
+  (let [[a column] (split-column col)]
+    (boolean (and (nil? a) (some #(and (map? %) (contains? % (folded column))) (chain scope))))))
+
 (defn- column-problems [registry sc stmt schema]
   (let [target (target-scope sc stmt schema)
         ;; a target code names is not in the data: its columns are not judged
@@ -609,10 +643,10 @@
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c] (comparisons stmt)] [c sc])
                                         (for [c assigned] [c target])))
-          :when (if (star? col)
+          :when (if (or (star? col) (whole-row? scope col))
                   ;; :t.* names a table of the scope, unless the data does not show them all
                   (let [[a] (split-column col)]
-                    (and a (not (some #{:open} (chain scope))) (not-any? #(and (map? %) (contains? % a)) (chain scope))))
+                    (and (star? col) a (not (some #{:open} (chain scope))) (not-any? #(and (map? %) (contains? % a)) (chain scope))))
                   (nil? (resolve-column registry scope col)))
           :let [hits (column-hits registry scope col)]]
       (if (< 1 (count hits))
