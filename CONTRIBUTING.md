@@ -85,8 +85,8 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
 
 A release is a pushed `vX.Y.Z` tag; the tag is the version. Choose it by semantic
 versioning: patch for fixes, minor for additions and, before 1.0, any change to the
-contract. Changes to the config keys or the generated file layout are breaking. Add the
+contract; what is breaking is the README's [Stability](README.md#stability) list. Add the
 version's section to CHANGELOG.md in the same commit: `## X.Y.Z (date)`, one short bullet per
-change a user meets, a breaking one saying what to do. Fixes made before the release are no
-entries. `clojure -T:build jar` builds a
-snapshot of the last tag. Renovate updates the dependencies.
+change a user meets, a breaking one saying what to do. A fix to something not yet released
+gets no entry. `clojure -T:build jar` builds a snapshot of the last tag. Renovate updates the
+dependencies.

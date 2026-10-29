@@ -153,9 +153,9 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 | `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
 | `:write {:enum [:string :keyword]}` | what an extension sends for a list of labels (an enum type's, a CHECK's): the labels kept, as strings, keywords or both |
 | `:write {:array [:pg/array :sequential :vector :set]}` | what an array argument (`[:any :?ids]`) may be sent as: a Java array, a vector, list or set |
-| `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped (`:varchar`, pgjdbc's default, by default) |
+| `:stringtype :unspecified` | your connection's `stringtype`: strings reach enum columns untyped (default `:varchar`, as pgjdbc's) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
-| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns` is read |
+| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns` and `:inline` are read |
 | `:result :one` | `h/query-schema` only: the return is one row or nil |
 
 ## Function schemas

@@ -885,7 +885,7 @@
   "[problem ...] of a HoneySQL query against the registry; [] when there are none.
 
    (check registry {:select [:id :mail] :from [:users]})
-   ;; => [{:kind :unknown-column, :column :mail}]
+   ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]
 
    A problem in a nested statement (a subquery, a CTE) carries :in, where the statement sits:
    (get-in q (:in p)) for data, the position in the form for code. explain says each problem
@@ -1105,7 +1105,7 @@
                               {:array [:pg/array :sequential :set]}, {:enum [:string :keyword]}
      :compare :lenient        compared arguments take nil too
      :stringtype :unspecified the connection's stringtype (pgjdbc's default :varchar)
-     :format {...}            the options you pass to sql/format (:values-default-columns)
+     :format {...}            the options you pass to sql/format (:values-default-columns, :inline)
      :result :one             the return is [:maybe row]
    Throws when args are not keywords or symbols. See docs/queries.md."
   ([registry args body] (query-schema registry args body {}))

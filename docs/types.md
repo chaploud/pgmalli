@@ -176,7 +176,7 @@ Generate a version's rows from its own schema, so the generator need not guess t
 | `length(col) <= n` | `[:string {:max n}]` |
 | `cardinality(col) BETWEEN a AND b`, `array_length(col, 1) <= n` | `[:vector {:min a :max b} <T>]` |
 | `jsonb_typeof(col) = 'object'` (`'array'`) | `:map` (`[:sequential :any]`) |
-| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?iu)`; `.` as `[\s\S]`, as it matches a newline; `$` as `\z`, as Java's also matches before a final newline; `(?U)` when it has classes, which take every letter of UTF-8) |
+| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?iu)`; `.` as `[\s\S]`, as it matches a newline; `$` as `\z`, as Java's also matches before a final newline; `(?U)` when it has classes, so they take every Unicode letter, as in a UTF-8 database) |
 | `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^a[\s\S]*\z"]]` (with `(?iu)`) |
 | `col IS NULL OR <a pattern>` | the pattern, or NULL |
 | `col IS NOT NULL` | no `[:maybe ...]` |

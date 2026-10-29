@@ -88,7 +88,8 @@ shows how CI catches a forgotten one.
 io.github.chaploud/pgmalli {:mvn/version "0.2.45"}
 ```
 
-`pgmalli.main` reads `pgmalli.edn` from the working directory:
+`pgmalli.main` reads `pgmalli.edn` from the working directory, or the file given after the
+command (`generate ci.edn`):
 
 ```clojure
 {:schemas ["public"]                  ; the default
@@ -332,7 +333,7 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels or a CHECK's list, with `:allowed` |
-| `:uncast-enum-string` | a string sent to an enum column as `varchar` |
+| `:uncast-enum-string` | a string, literal or argument, sent as `varchar` to a column of an enum type; not under `:stringtype :unspecified` or `:format {:inline true}` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 
 `h/explain` says each problem as what is wrong and what to do:

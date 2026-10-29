@@ -20,5 +20,5 @@ listed; the [README](README.md) describes what this one does.
   `row-schema`, `query-schema`, `explain`).
 * Generated files kept current in CI (`generate/check`, `pgmalli.main check`).
 
-Supported: PostgreSQL 16 and later, HoneySQL 2.4.1066, next.jdbc 1.3, pgjdbc 42.7, malli 0.20
-and Clojure 1.11 and later, and babashka for everything but JDBC.
+Supported, each and later: PostgreSQL 16, HoneySQL 2.4.1066, next.jdbc 1.3, pgjdbc 42.7,
+malli 0.20 and Clojure 1.11; babashka for everything but JDBC.
