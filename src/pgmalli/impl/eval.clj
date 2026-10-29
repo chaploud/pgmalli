@@ -331,7 +331,7 @@
 (def ^:private text-types (eval-types :text))
 (def ^:private json-types (eval-types :json))
 (def ^:private bpchar-types (types/keywords #(= "character" (:name %))))
-(def ^:private temporal-types #{:date :timestamp :timestamp-without-time-zone :timestamptz :timestamp-with-time-zone :time :interval})
+(def ^:private temporal-types #{:date :timestamp :timestamp-without-time-zone :timestamptz :timestamp-with-time-zone :time :time-without-time-zone :interval})
 (def ^:private int-ranges
   (update-vals (types/by-keyword :range) :range))
 
@@ -456,7 +456,7 @@
     (#{:timestamptz :timestamp-with-time-zone} t) (cond (instance? LocalDateTime v) (.toInstant (.atZone ^LocalDateTime v (ZoneId/systemDefault)))
                                                         (instance? LocalDate v) (.toInstant (.atStartOfDay ^LocalDate v (ZoneId/systemDefault)))
                                                         :else (parse-timestamptz v))
-    (= :time t) (cond (instance? LocalTime v) v
+    (#{:time :time-without-time-zone} t) (cond (instance? LocalTime v) v
                       (instance? LocalDateTime v) (.toLocalTime ^LocalDateTime v)
                       (instance? OffsetTime v) (.toLocalTime ^OffsetTime v)
                       :else (LocalTime/parse (str/trim v)))

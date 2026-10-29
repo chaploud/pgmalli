@@ -141,8 +141,9 @@
   "Type name after ::. Handles multi-word names, (n[,m]) modifiers and [] dimensions."
   [st]
   (let [t (next-tok! st)
-        _ (when-not (= :ident (:t t)) (throw (ex-info "expected a type name" {:got t :input (:input @st)})))
-        base (ident-name st t)
+        ;; TIME is also a keyword (AT TIME ZONE)
+        _ (when-not (or (= :ident (:t t)) (kw? t "TIME")) (throw (ex-info "expected a type name" {:got t :input (:input @st)})))
+        base (if (= :kw (:t t)) "time" (ident-name st t))
         words (loop [ws [base]]
                 (let [n (peek-tok st)
                       nv (some-> (:v n) str/lower-case)

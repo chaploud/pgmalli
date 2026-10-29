@@ -366,3 +366,7 @@
     (is (not (valid? [:double {:pg/type "real"}] 3.5e38)))
     (is (not (valid? [:double {:pg/type "real"}] 1e-46)))
     (is (valid? [:double {:pg/type "double precision"}] 3.5e38))))
+
+(deftest a-time-literal-parses-and-compares
+  (is (passes? "CHECK (t >= '09:00:00'::time without time zone)" {:t (java.time.LocalTime/parse "10:00")}))
+  (is (not (passes? "CHECK (t >= '09:00:00'::time without time zone)" {:t (java.time.LocalTime/parse "08:00")}))))
