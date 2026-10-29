@@ -14,8 +14,18 @@
             [pgmalli.impl.json :as json]
             [pgmalli.impl.pghash :as pghash]
             [pgmalli.impl.types :as types])
-  (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneId ZoneOffset)
+  (:import (java.math BigDecimal RoundingMode)
+           (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneId ZonedDateTime)
+           (java.time.format DateTimeFormatter DateTimeFormatterBuilder)
+           (java.time.temporal ChronoField)
            (java.util UUID)))
+
+(defn- unknowable
+  "Gives up on the row: its verdict depends on what the evaluator does not know (an enum's
+   order, a numeric column's scale), so checker passes it rather than reject what PostgreSQL
+   may accept."
+  [what]
+  (throw (ex-info (str "unknowable: " what) {::unknowable what})))
 
 ;;; three-valued logic and comparison
 
@@ -43,16 +53,26 @@
 
 (defn- not3 [v] (when (some? v) (not v)))
 
-(defn- json-number [n] (.stripTrailingZeros (bigdec n)))
-
 (defn- json-normal
   "A jsonb value as the evaluator reads it: string keys (applications often read them as
-   keywords), numeric numbers (jsonb equality is numeric)."
-  [v]
-  (cond (map? v) (into {} (map (fn [[k x]] [(if (keyword? k) (name k) k) (json-normal x)])) v)
-        (sequential? v) (mapv json-normal v)
-        (number? v) (json-number v)
-        :else v))
+   keywords), numbers as BigDecimals with the scale they were written with (->> prints it)."
+  ([v] (json-normal v bigdec))
+  ([v num]
+   (cond (map? v) (into {} (map (fn [[k x]] [(if (keyword? k) (name k) k) (json-normal x num)])) v)
+         (sequential? v) (mapv #(json-normal % num) v)
+         (number? v) (num v)
+         :else v)))
+
+(defn- nan? [v] (and (float? v) (Double/isNaN (double v))))
+
+(defn- compare*
+  "compare, NaN equal to itself and above every other number, as PostgreSQL orders floats
+   and numerics (Clojure's compare takes NaN as equal to anything)."
+  [a b]
+  (cond (and (nan? a) (nan? b)) 0
+        (nan? a) 1
+        (nan? b) -1
+        :else (compare a b)))
 
 (defn- comparable-pair
   "Temporal operands of different types as PostgreSQL compares them: a date is its midnight,
@@ -71,8 +91,9 @@
 
 (defn- same? [a b]
   (let [[a b] (comparable-pair a b)]
-    (cond (or (map? a) (map? b) (sequential? a) (sequential? b)) (= (json-normal a) (json-normal b))
-          (and (number? a) (number? b)) (zero? (compare a b))
+    (cond (or (map? a) (map? b) (sequential? a) (sequential? b))
+          (let [numeric #(json-normal % (fn [n] (.stripTrailingZeros (bigdec n))))] (= (numeric a) (numeric b)))
+          (and (number? a) (number? b)) (zero? (compare* a b))
           :else (= a b))))
 
 (defn- cmp [op a b]
@@ -81,7 +102,7 @@
       := (same? a b)
       :<> (not (same? a b))
       (let [[a b] (comparable-pair a b)
-            c (compare a b)]
+            c (compare* a b)]
         (case op :< (neg? c) :> (pos? c) :<= (not (pos? c)) :>= (not (neg? c)))))))
 
 (defn- in3
@@ -94,55 +115,117 @@
 
 ;;; arithmetic, temporal and string helpers
 
+(defn- float-result
+  "A double precision result as PostgreSQL gives it: an error when it overflows to infinity
+   from finite operands, or, where underflow? says so, rounds to zero from non-zero ones."
+  [r operands underflow?]
+  (when (double? r)
+    (when (and (Double/isInfinite r) (not-any? #(and (float? %) (Double/isInfinite (double %))) operands))
+      (throw (ex-info "value out of range: overflow" {})))
+    (when (and underflow? (zero? r) (underflow? operands))
+      (throw (ex-info "value out of range: underflow" {}))))
+  r)
+
 (defn- plus [a b]
   ;; addition commutes: the date, time or number goes first, the duration or day count second
   (let [[a b] (if (or (instance? Duration a) (and (integer? a) (instance? LocalDate b))) [b a] [a b])]
-    (cond (and (number? a) (number? b)) (+ a b)
+    (cond (and (number? a) (number? b)) (float-result (+ a b) [a b] nil)
           ;; date + integer is a date, date + interval a timestamp
           (and (instance? LocalDate a) (integer? b)) (.plusDays ^LocalDate a b)
           (instance? LocalDate a) (.plus (.atStartOfDay ^LocalDate a) ^Duration b)
           (instance? Instant a) (.plus ^Instant a ^Duration b)
           (instance? LocalDateTime a) (.plus ^LocalDateTime a ^Duration b)
+          ;; a time wraps around midnight
+          (instance? LocalTime a) (.plus ^LocalTime a ^Duration b)
           (instance? Duration a) (.plus ^Duration a ^Duration b)
           :else (throw (ex-info "cannot add" {:a a :b b})))))
 
 (defn- minus
   ([a] (if (instance? Duration a) (.negated ^Duration a) (- a)))
   ([a b]
-  (cond (and (number? a) (number? b)) (- a b)
+  (cond (and (number? a) (number? b)) (float-result (- a b) [a b] nil)
         (instance? Duration b) (plus a (.negated ^Duration b))
         (and (instance? LocalDate a) (integer? b)) (.minusDays ^LocalDate a b)
         (and (instance? LocalDate a) (instance? LocalDate b)) (- (.toEpochDay ^LocalDate a) (.toEpochDay ^LocalDate b))
         (and (instance? Instant a) (instance? Instant b)) (Duration/between b a)
         (and (instance? LocalDateTime a) (instance? LocalDateTime b)) (Duration/between b a)
-        ;; jsonb: delete a key, keys, or an element
+        (and (instance? LocalTime a) (instance? LocalTime b)) (Duration/between b a)
+        ;; jsonb: delete a key, keys, or an element; text[] deletes the string elements it holds
         (and (map? a) (string? b)) (dissoc a b)
         (and (map? a) (sequential? b)) (apply dissoc a b)
         (and (vector? a) (integer? b)) (let [i (if (neg? b) (+ (count a) b) b)]
                                         (if (< -1 i (count a)) (into (subvec a 0 i) (subvec a (inc i))) a))
         (and (vector? a) (string? b)) (vec (remove #(= b %) a))
+        (and (vector? a) (sequential? b)) (vec (remove #(and (string? %) (some #{%} b)) a))
         :else (throw (ex-info "cannot subtract" {:a a :b b})))))
 
+(defn- scale-interval
+  "interval * or / a number (as double precision): microseconds rounded to even, as interval_mul
+   and interval_div round them."
+  [^Duration d f op]
+  (let [f (double f)
+        us (Math/rint (op (+ (* 1e6 (.getSeconds d)) (quot (.getNano d) 1000)) f))]
+    (when (or (and (= op /) (zero? f)) (Double/isNaN us) (Double/isInfinite us) (> (abs us) 9.2e18))
+      (throw (ex-info "interval out of range" {})))
+    (Duration/ofNanos (* 1000 (long us)))))
+
+(defn- times [a b]
+  (let [[a b] (if (instance? Duration a) [b a] [a b])]
+    (if (instance? Duration b)
+      (scale-interval b a *)
+      (float-result (* a b) [a b] #(not-any? zero? %)))))
+
+(defn- nbase-head
+  "[weight first-digit] of a numeric in PostgreSQL's base 10000 digits ([0 0] for zero)."
+  [^BigDecimal x]
+  (if (zero? (.signum x))
+    [0 0]
+    (let [x (.abs x)
+          w (Math/floorDiv (- (.precision x) (.scale x) 1) 4)]
+      [w (.intValue (.setScale (.movePointLeft x (int (* 4 w))) 0 RoundingMode/DOWN))])))
+
+(defn- numeric-divide
+  "numeric / numeric at the scale select_div_scale (numeric.c) picks: at least 16 significant
+   digits and the operands' scales, rounded half away from zero."
+  [^BigDecimal a ^BigDecimal b]
+  (let [[w1 d1] (nbase-head a)
+        [w2 d2] (nbase-head b)
+        qweight (cond-> (- w1 w2) (<= d1 d2) dec)
+        rscale (-> (- 16 (* 4 qweight)) (max (.scale a) (.scale b) 0) (min 1000))]
+    (.divide a b (int rscale) RoundingMode/HALF_UP)))
+
 (defn- divide [a b]
-  (cond (and (integer? a) (integer? b)) (quot a b)
-        (or (decimal? a) (decimal? b)) (.divide (bigdec a) (bigdec b) java.math.MathContext/DECIMAL64)
-        :else (/ a b)))
+  (cond (instance? Duration a) (scale-interval a b /)
+        (and (integer? a) (integer? b)) (quot a b)
+        (or (float? a) (float? b)) (if (zero? b)
+                                     (throw (ex-info "division by zero" {}))
+                                     (float-result (/ (double a) (double b)) [a b] (fn [_] (not (zero? a)))))
+        :else (numeric-divide (bigdec a) (bigdec b))))
 
 (defn- power [x y]
-  (let [r (Math/pow (double x) (double y))]
+  (let [r (float-result (Math/pow (double x) (double y)) [x y] (fn [_] (not (zero? x))))]
     (if (and (integer? x) (integer? y) (not (neg? y))) (bigdec r) r)))
+
+(defn- set-scale
+  "A numeric at digits places; a negative digits rounds left of the point, leaving scale 0."
+  [v digits mode]
+  (let [r (.setScale (bigdec v) (int digits) ^RoundingMode mode)]
+    (if (neg? digits) (.setScale r 0) r)))
 
 (defn- round*
   "round(v[, digits]): numeric ties go away from zero, double precision ties to even."
   ([v] (round* v 0))
   ([v digits]
-   (let [mode (if (double? v) java.math.RoundingMode/HALF_EVEN java.math.RoundingMode/HALF_UP)
-         r (.setScale (bigdec v) (int digits) mode)]
-     (cond (integer? v) v (double? v) (double r) :else r))))
+   (let [r (set-scale v digits (if (double? v) RoundingMode/HALF_EVEN RoundingMode/HALF_UP))]
+     (cond (and (integer? v) (zero? digits)) v (double? v) (double r) :else r))))
 
-(defn- floor* [v] (cond (integer? v) v (double? v) (Math/floor v) :else (.setScale (bigdec v) 0 java.math.RoundingMode/FLOOR)))
-(defn- ceil* [v] (cond (integer? v) v (double? v) (Math/ceil v) :else (.setScale (bigdec v) 0 java.math.RoundingMode/CEILING)))
-(defn- trunc* [v] (cond (integer? v) v (double? v) (double (long v)) :else (.setScale (bigdec v) 0 java.math.RoundingMode/DOWN)))
+(defn- floor* [v] (cond (integer? v) v (double? v) (Math/floor v) :else (.setScale (bigdec v) 0 RoundingMode/FLOOR)))
+(defn- ceil* [v] (cond (integer? v) v (double? v) (Math/ceil v) :else (.setScale (bigdec v) 0 RoundingMode/CEILING)))
+
+(defn- trunc*
+  "trunc(v): toward zero; trunc(v, digits) exists for numeric alone, an integer read as one."
+  ([v] (cond (integer? v) v (double? v) (double (long v)) :else (.setScale (bigdec v) 0 RoundingMode/DOWN)))
+  ([v digits] (set-scale v digits RoundingMode/DOWN)))
 
 (defn- octets [v] (if (string? v) (alength (.getBytes ^String v "UTF-8")) (count v)))
 
@@ -157,9 +240,18 @@
   (let [s (str/replace v #" +$" "")]
     (if (and padded? n) (apply str s (repeat (- n (chars* s)) \space)) s)))
 
-(defn- trim-chars [chars s]
-  (let [cs (set chars)]
-    (->> s (drop-while cs) reverse (drop-while cs) reverse (apply str))))
+(defn- code-points [^String s] (vec (.toArray (.codePoints s))))
+
+(defn- trim-chars
+  "s without the characters (code points) of chars at the sides: :both, :leading or :trailing."
+  [chars s side]
+  (let [cs (set (code-points chars))
+        trim #(drop-while cs %)
+        v (cond-> (code-points s)
+            (not= :trailing side) trim
+            (not= :leading side) (-> reverse trim reverse))
+        a (int-array v)]
+    (String. a 0 (alength a))))
 
 (defn- substr
   "substring(s, from[, count]): 1-based, clipped like PostgreSQL."
@@ -174,13 +266,61 @@
 (defn- left* [s n] (let [len (chars* s)] (if (neg? n) (cp-subs s 0 (max 0 (+ len n))) (cp-subs s 0 (min len n)))))
 (defn- right* [s n] (let [len (chars* s)] (if (neg? n) (cp-subs s (min len (- n)) len) (cp-subs s (max 0 (- len n)) len))))
 
-(defn- concat* [a b]
+(declare json-text)
+
+(def ^:private json-null
+  "A JSON null inside a jsonb value, as -> returns it: not SQL NULL, which a missing key gives."
+  ::json-null)
+
+(def ^:private pg-time
+  (-> (DateTimeFormatterBuilder.) (.appendPattern "HH:mm:ss") (.appendFraction ChronoField/MICRO_OF_SECOND 0 6 true) .toFormatter))
+
+(def ^:private pg-date (DateTimeFormatter/ofPattern "uuuu-MM-dd"))
+
+(defn- pg-offset
+  "A UTC offset as PostgreSQL prints it: +09, -03:30, +00."
+  [^ZonedDateTime z]
+  (let [s (.getTotalSeconds (.getOffset z))
+        a (abs s)]
+    (str (if (neg? s) "-" "+") (format "%02d" (quot a 3600))
+         (when (pos? (rem a 3600)) (format ":%02d" (quot (rem a 3600) 60)))
+         (when (pos? (rem a 60)) (format ":%02d" (rem a 60))))))
+
+(defn- text-out
+  "v as PostgreSQL's output function prints it: booleans t and f where concat and || print
+   them, true and false where a cast does; timestamptz in the session zone (the JVM's, as
+   pgjdbc sets it). A value whose text the evaluator cannot tell is unknowable: a numeric's
+   scale is its column's, a double's and an interval's text are PostgreSQL's own, an array
+   reads as jsonb or a SQL array."
+  [v cast?]
+  (let [day? (fn [d] (<= 1 (.getYear ^LocalDate d) 9999))
+        micros? (fn [t] (zero? (rem (.getNano ^LocalTime t) 1000)))
+        zone (ZoneId/systemDefault)]
+    (cond (string? v) v
+          (boolean? v) (if cast? (str v) (if v "t" "f"))
+          (integer? v) (str v)
+          (instance? UUID v) (str v)
+          (= json-null v) "null"
+          (map? v) (json-text v)
+          (and (instance? LocalDate v) (day? v)) (.format pg-date ^LocalDate v)
+          (and (instance? LocalTime v) (micros? v)) (.format pg-time ^LocalTime v)
+          (and (instance? LocalDateTime v) (day? (.toLocalDate ^LocalDateTime v)) (micros? (.toLocalTime ^LocalDateTime v)))
+          (str (.format pg-date ^LocalDateTime v) " " (.format pg-time ^LocalDateTime v))
+          (instance? Instant v) (let [z (.atZone ^Instant v zone)]
+                                  (if (and (day? (.toLocalDate z)) (micros? (.toLocalTime z)))
+                                    (str (.format pg-date z) " " (.format pg-time z) (pg-offset z))
+                                    (unknowable :text)))
+          :else (unknowable :text))))
+
+(defn- concat*
+  "||: text, a SQL array and an element, or jsonb, where two objects merge and anything else
+   concatenates as arrays (a scalar or an object as an array of itself)."
+  [a b]
   (cond (and (string? a) (string? b)) (str a b)
-        (and (vector? a) (vector? b)) (into a b)
         (and (map? a) (map? b)) (merge a b)
-        (vector? a) (conj a b)
-        (vector? b) (into [a] b)
-        :else (str a b)))
+        (or (coll? a) (coll? b)) (into (if (vector? a) a [a]) (if (vector? b) b [b]))
+        (or (string? a) (string? b)) (str (text-out a false) (text-out b false))
+        :else [a b]))
 
 ;;; casts
 
@@ -259,9 +399,37 @@
                             :else e)))
             (re-seq #"\"(?:[^\"\\]|\\.)*\"|[^,]+" inner)))))
 
-(def ^:private json-null
-  "A JSON null inside a jsonb value, as -> returns it: not SQL NULL, which a missing key gives."
-  ::json-null)
+(def ^:private json-number-or-string
+  #"\"(?:[^\"\\]|\\.)*\"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+
+(defn- parse-json
+  "JSON text as data, a number a BigDecimal as written (1.50 keeps its scale, which ->> prints):
+   each number goes to the parser as a marked string, as neither parser keeps a scale on
+   babashka."
+  [s]
+  (let [marked (str/replace s json-number-or-string #(if (str/starts-with? % "\"") % (str "\"\u0000" % "\"")))
+        p (json/parse marked)]
+    (if (nil? p)
+      json-null
+      ;; arrays as vectors: babashka's cheshire gives lists
+      (walk/postwalk #(cond (and (string? %) (str/starts-with? % "\u0000")) (bigdec (subs % 1))
+                            (sequential? %) (vec %)
+                            :else %)
+                     p))))
+
+(defn float4?
+  "Whether a double fits a real: single precision neither overflows to infinity nor
+   underflows to zero, where PostgreSQL rejects the value."
+  [d]
+  (let [f (unchecked-float d)]
+    (not (or (and (Float/isInfinite f) (not (Double/isInfinite d))) (and (zero? f) (not (zero? d)))))))
+
+(defn- float4
+  "A real as PostgreSQL makes it from a number: single precision."
+  [d]
+  (if (float4? d) (double (unchecked-float d)) (throw (ex-info "value out of range for type real" {}))))
+
+(def ^:private real-types #{:real :float4})
 
 (defn- cast-to [v t]
   (cond
@@ -272,24 +440,29 @@
                                               (boolean? v) (if v 1 0)
                                               :else (Long/parseLong (str/trim v)))))
     (exact-types t) (bigdec (if (number? v) v (str/trim v)))
-    (float-types t) (double (if (number? v) v (parse-double (str/trim v))))
+    (float-types t) (cond-> (double (if (number? v) v (parse-double (str/trim v)))) (real-types t) float4)
     (bpchar-types t) (str/replace (cast-to v :text) #" +$" "")
-    (text-types t) (cond (string? v) v
-                         (instance? LocalDateTime v) (str/replace (str v) "T" " ")
-                         (instance? Instant v) (-> (str (.atOffset ^Instant v ZoneOffset/UTC)) (str/replace "T" " ") (str/replace #"Z$" "+00"))
-                         :else (str v))
+    (text-types t) (text-out v true)
     (= :boolean t) (if (boolean? v) v (parse-boolean* v))
+    ;; timestamptz to the types without a zone: in the session zone, the JVM's (pgjdbc sets it)
+    (and (instance? Instant v) (#{:date :timestamp :timestamp-without-time-zone :time} t))
+    (cast-to (LocalDateTime/ofInstant v (ZoneId/systemDefault)) t)
     (= :date t) (cond (instance? LocalDate v) v
                       (instance? LocalDateTime v) (.toLocalDate ^LocalDateTime v)
                       :else (LocalDate/parse (str/trim v)))
     (#{:timestamp :timestamp-without-time-zone} t) (cond (instance? LocalDateTime v) v
                                                          (instance? LocalDate v) (.atStartOfDay ^LocalDate v)
                                                          :else (LocalDateTime/parse (str/replace (str/trim v) " " "T")))
-    (#{:timestamptz :timestamp-with-time-zone} t) (if (instance? Instant v) v (parse-timestamptz v))
-    (= :time t) (if (instance? LocalTime v) v (LocalTime/parse (str/trim v)))
+    (#{:timestamptz :timestamp-with-time-zone} t) (cond (instance? LocalDateTime v) (.toInstant (.atZone ^LocalDateTime v (ZoneId/systemDefault)))
+                                                        (instance? LocalDate v) (.toInstant (.atStartOfDay ^LocalDate v (ZoneId/systemDefault)))
+                                                        :else (parse-timestamptz v))
+    (= :time t) (cond (instance? LocalTime v) v
+                      (instance? LocalDateTime v) (.toLocalTime ^LocalDateTime v)
+                      (instance? OffsetTime v) (.toLocalTime ^OffsetTime v)
+                      :else (LocalTime/parse (str/trim v)))
     (= :interval t) (if (instance? Duration v) v (parse-interval v))
     (= :uuid t) (if (instance? UUID v) v (UUID/fromString (str/trim v)))
-    (json-types t) (if (string? v) (let [p (json/parse v)] (if (nil? p) json-null p)) v)
+    (json-types t) (if (string? v) (parse-json v) v)
     (array-elem t) (if (string? v) (mapv #(cast-to % (array-elem t)) (parse-array v)) v)
     :else v))
 
@@ -395,8 +568,6 @@
 
 ;;; jsonb
 
-(declare json-text)
-
 (defn- json-text*
   "A value inside a container, as PostgreSQL prints jsonb."
   [v]
@@ -408,7 +579,7 @@
   (cond (or (nil? v) (= json-null v)) nil
         (string? v) v
         (boolean? v) (str v)
-        (number? v) (let [d (json-number v)] (if (zero? (.scale d)) (str (.toBigInteger d)) (.toPlainString d)))
+        (number? v) (.toPlainString (bigdec v))
         (map? v) (str "{" (str/join ", " (for [[k x] (sort-by (fn [[k _]] [(count k) k]) v)] (str (pr-str k) ": " (json-text* x)))) "}")
         (sequential? v) (str "[" (str/join ", " (map json-text* v)) "]")))
 
@@ -420,15 +591,21 @@
 (defn- json-path [v path]
   (reduce (fn [v k] (json-get v (if (and (sequential? v) (string? k) (re-matches #"-?\d+" k)) (parse-long k) k))) v path))
 
-(defn- json-contains?
-  "a @> b, for jsonb and arrays alike: object keys of b in a with contained values, every
-   element of array b contained in some element of array a, a top-level array may contain a scalar."
+(defn- json-contains-in
+  "a @> b below the top level: object keys of b in a with contained values, every element of
+   array b contained in some element of array a, scalars equal."
   [a b]
-  (cond (and (map? a) (map? b)) (every? (fn [[k x]] (and (contains? a k) (json-contains? (get a k) x))) b)
-        (and (sequential? a) (sequential? b)) (every? (fn [x] (some #(json-contains? % x) a)) b)
-        (and (sequential? a) (not (map? b))) (boolean (some #(same? % b) a))
+  (cond (and (map? a) (map? b)) (every? (fn [[k x]] (and (contains? a k) (json-contains-in (get a k) x))) b)
+        (and (sequential? a) (sequential? b)) (every? (fn [x] (some #(json-contains-in % x) a)) b)
         (or (map? a) (map? b) (sequential? a) (sequential? b)) false
         :else (same? a b)))
+
+(defn- json-contains?
+  "a @> b, for jsonb and arrays alike; only a top-level array contains a scalar."
+  [a b]
+  (if (and (sequential? a) (not (coll? b)))
+    (boolean (some #(same? % b) a))
+    (json-contains-in a b)))
 
 (defn- json-has-key? [v k]
   (cond (map? v) (contains? v k)
@@ -444,17 +621,17 @@
 (def ^:private strict
   "Operators that are a function of their evaluated arguments: a NULL argument makes the
    result NULL, an exception fails the row. Arities follow PostgreSQL's."
-  {:+ plus :- minus :* * :/ divide :mod rem :pow power :abs abs
+  {:+ plus :- minus :* times :/ divide :mod rem :pow power :abs abs
    :round round* :floor floor* :ceil ceil* :ceiling ceil* :trunc trunc*
    :length chars* :char_length chars* :character_length chars* :octet_length octets
    :lower str/lower-case :upper str/upper-case :reverse str/reverse
    :substr substr :substring substr :left left* :right right*
    ;; TRIM(BOTH chars FROM x) parses as [:trim chars x]; btrim(x, chars) keeps the call order;
    ;; without chars, only spaces are trimmed
-   :trim (fn ([s] (trim-chars " " s)) ([cs s] (trim-chars cs s)))
-   :btrim (fn ([s] (trim-chars " " s)) ([s cs] (trim-chars cs s)))
-   :ltrim (fn ([s] (str/replace s #"^ +" "")) ([s cs] (apply str (drop-while (set cs) s))))
-   :rtrim (fn ([s] (str/replace s #" +$" "")) ([s cs] (apply str (reverse (drop-while (set cs) (reverse s))))))
+   :trim (fn ([s] (trim-chars " " s :both)) ([cs s] (trim-chars cs s :both)))
+   :btrim (fn ([s] (trim-chars " " s :both)) ([s cs] (trim-chars cs s :both)))
+   :ltrim (fn ([s] (trim-chars " " s :leading)) ([s cs] (trim-chars cs s :leading)))
+   :rtrim (fn ([s] (trim-chars " " s :trailing)) ([s cs] (trim-chars cs s :trailing)))
    :replace (fn [s from to] (if (= "" from) s (str/replace s from to)))
    :starts_with (fn [s p] (str/starts-with? s p))
    :strpos (fn [s p] (if-let [i (str/index-of s p)] (inc (.codePointCount ^String s 0 (int i))) 0))
@@ -533,7 +710,9 @@
           :greatest (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (cmp :> %2 %1) %2 %1) vs)))
           :least (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (cmp :< %2 %1) %2 %1) vs)))
           :coalesce (first (filter some? (all)))
-          :concat (apply str (remove nil? (all)))
+          :concat (apply str (map #(text-out % false) (remove nil? (all))))
+          ::unordered (let [[x cols] args]
+                        (if (some #(let [v (ev % row)] (or (string? v) (keyword? v))) cols) (unknowable :order) (ev x row)))
           ;; a hash partition's bound: the row's key hashed as the database hashes it
           :satisfies_hash_partition (let [[_ modulus remainder & vs] (all)] (pghash/satisfies-hash-partition? modulus remainder vs))
           :case (let [[clauses else] (if (= :else (last (butlast args)))
@@ -565,13 +744,18 @@
            (or (not (string? a)) (try (cast-to a t) true (catch Exception _ false)))
            :else (and (string? a) (contains? types (name t)))))))
 
-(defn- supported-node? [[op a t] types]
-  (case op
-    :cast (castable? a t types)
-    (:regex :iregex :not-regex :not-iregex) (let [re (literal-arg t)] (and (string? re) (some? (java-regex re))))
-    (:like :ilike :not-like :not-ilike) (string? (literal-arg t))
-    :raw (contains? raw-values a)
-    (contains? supported-ops op)))
+(def ^:private ordering-ops #{:< :> :<= :>= :between :between-symmetric :greatest :least})
+
+(defn- supported-node? [[op a t :as e] types]
+  (if (ordering-ops op)
+    ;; a literal of the schema's own type (an enum) ordered: by labels the evaluator does not have
+    (not-any? #(and (vector? %) (= :cast (first %)) (contains? types (name (cast-type (nth % 2))))) (rest e))
+    (case op
+      :cast (castable? a t types)
+      (:regex :iregex :not-regex :not-iregex) (let [re (literal-arg t)] (and (string? re) (some? (java-regex re))))
+      (:like :ilike :not-like :not-ilike) (string? (literal-arg t))
+      :raw (contains? raw-values a)
+      (contains? supported-ops op))))
 
 (defn supported?
   "Whether every operator, cast and pattern in the expression is implemented; types are the
@@ -585,11 +769,13 @@
 
 (defn column-type
   "The type the evaluator reads for a column, from its schema's properties (:pg/type, and
-   :pg/max-length, a char(n)'s n): an integer or char(n) type, nil for the others."
+   :pg/max-length, a char(n)'s n): an integer or char(n) type; :unordered for a type pgmalli
+   has no entry for (an enum, whose order is its labels', or a domain); nil for the others."
   [{:keys [pg/type pg/max-length]}]
   (let [t (some-> type (str/replace " " "-") keyword)]
     (cond (int-ranges t) t
-          (bpchar-types t) [t max-length])))
+          (bpchar-types t) [t max-length]
+          (and type (nil? (types/entry (str/replace type #"\(.*\)|\[\]" "")))) :unordered)))
 
 (defn- int-type
   "The integer type of an expression whose operand types are known: smallint, integer or
@@ -630,8 +816,12 @@
                     ;; a literal compared with a char(n) is one too
                     (and (#{:= :<> :< :> :<= :>=} op) (some bpchar? (rest e))) (mapv #(if (string? %) (bpchar-value % nil false) %) e)
                     :else e)
-            t (when (#{:+ :- :* :/ :mod :abs} op) (int-type e types))]
-        (if t [::int t e] e)))))
+            t (when (#{:+ :- :* :/ :mod :abs} op) (int-type e types))
+            ;; an enum orders by its labels, which the evaluator does not have
+            unordered (when (ordering-ops op) (seq (filter #(and (keyword? %) (= :unordered (get types %))) (rest e))))]
+        (cond t [::int t e]
+              unordered [::unordered e (vec unordered)]
+              :else e)))))
 
 (defn checker
   "Row predicate of a CHECK expression: true when the result is true or NULL, as in PostgreSQL.
@@ -639,7 +829,7 @@
   ([e] (checker e {}))
   ([e types]
    (let [e (typed (x/canonical e) types)]
-     (fn [row] (not (false? (try (ev e row) (catch Exception _ false))))))))
+     (fn [row] (not (false? (try (ev e row) (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
 
 (defn passes?
   ([e row] ((checker e) row))

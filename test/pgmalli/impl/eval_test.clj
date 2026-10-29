@@ -261,3 +261,95 @@
   (is (passes? "CHECK (jsonb_typeof(j -> 'b') = 'string')" {:j {"a" nil}}) "a missing key is SQL NULL")
   (is (passes? "CHECK ((j ->> 'a') IS NULL)" {:j {"a" nil}}))
   (is (passes? "CHECK ((j -> 'a') = 'null'::jsonb)" {:j {"a" nil}})))
+
+(deftest an-enum-orders-by-its-labels-which-the-evaluator-does-not-have
+  (let [types {:m :unordered :n :unordered}
+        ok? (fn [clause row] (ev/passes? (x/check-clause clause) row types))]
+    (is (= :unordered (ev/column-type {:pg/type "mood"})))
+    (is (nil? (ev/column-type {:pg/type "numeric(10,2)"})))
+    (is (ok? "CHECK (m < n)" {:m "happy" :n "ok"}) "happy may come before ok")
+    (is (ok? "CHECK (m >= 'ok'::mood)" {:m "happy"}))
+    (is (ok? "CHECK (greatest(m, n) = m)" {:m "a" :n "b"}))
+    (is (not (ok? "CHECK (m = n)" {:m "a" :n "b"})) "equality needs no order")
+    (is (not (ok? "CHECK (m < n)" {:m 2 :n 1})) "a domain over a number orders as one"))
+  (doseq [c ["CHECK (m >= 'ok'::mood)" "CHECK (m BETWEEN 'sad'::mood AND 'ok'::mood)" "CHECK (greatest(m, 'ok'::mood) = m)"]]
+    (is (not (ev/supported? (x/check-clause c) #{"mood"})) c))
+  (is (ev/supported? (x/check-clause "CHECK (m <> 'ok'::mood)") #{"mood"})))
+
+(deftest time-arithmetic
+  (let [t #(java.time.LocalTime/parse %)]
+    (is (passes? "CHECK ((b - a) >= '00:30:00'::interval)" {:a (t "10:00") :b (t "10:40")}))
+    (is (not (passes? "CHECK ((b - a) >= '00:30:00'::interval)" {:a (t "10:00") :b (t "10:20")})))
+    (is (passes? "CHECK ((a + '23:00:00'::interval) = b)" {:a (t "10:00") :b (t "09:00")}) "a time wraps around midnight")
+    (is (passes? "CHECK ((a - '11:00:00'::interval) = b)" {:a (t "10:00") :b (t "23:00")}))))
+
+(deftest interval-times-and-divided-by-a-number
+  (is (passes? "CHECK (('1 day'::interval * 1.5) = '36:00:00'::interval)" {}))
+  (is (passes? "CHECK ((2 * '01:00:00'::interval) = '02:00:00'::interval)" {}))
+  (is (passes? "CHECK (('1 day'::interval / 4) = '06:00:00'::interval)" {}))
+  (is (not (passes? "CHECK ((i / 0) IS NULL)" {:i (java.time.Duration/ofHours 1)}))))
+
+(deftest trunc-takes-places
+  (is (passes? "CHECK (trunc(d, 1) = 1.2)" {:d 1.29M}))
+  (is (passes? "CHECK (trunc(d, '-2'::integer) = (1200)::numeric)" {:d 1234.5M})))
+
+(deftest numeric-division-keeps-the-digits-select-div-scale-gives
+  (is (passes? "CHECK ((100.0 / (7)::numeric) = 14.2857142857142857)" {}))
+  (is (passes? "CHECK ((2.0 / (3)::numeric) = 0.66666666666666666667)" {}))
+  (is (passes? "CHECK ((d / 3) = 0.33333333333333333333)" {:d 1.00M}))
+  (is (passes? "CHECK ((d / 3) = 333333333.33333333)" {:d 1000000000M}))
+  (is (not (passes? "CHECK ((f / 0) IS NULL)" {:f 1.0})) "float division by zero errors"))
+
+(deftest jsonb-numbers-print-as-written
+  (is (passes? "CHECK ((j ->> 'p'::text) = '1.50'::text)" {:j {"p" 1.50M}}))
+  (is (passes? "CHECK (('{\"p\": 1.50}'::jsonb ->> 'p'::text) = '1.50'::text)" {}))
+  (is (passes? "CHECK (('{\"p\": 1e2}'::jsonb ->> 'p'::text) = '100'::text)" {}))
+  (is (passes? "CHECK (j = '{\"p\": 1.5}'::jsonb)" {:j {"p" 1.50M}}) "equality is still numeric"))
+
+(deftest trims-take-code-points
+  (is (passes? "CHECK (btrim(s, '😀'::text) = 'a'::text)" {:s "😀a😀"}))
+  (is (passes? "CHECK (ltrim(s, '😀'::text) = 'a😀'::text)" {:s "😀a😀"}))
+  (is (passes? "CHECK (rtrim(s, '😀'::text) = '😀a'::text)" {:s "😀a😀"}))
+  (is (passes? "CHECK (btrim(s, '😀'::text) = s)" {:s "😁"}) "another character sharing the high surrogate stays"))
+
+(deftest jsonb-containment-of-a-scalar-is-top-level-only
+  (is (not (passes? "CHECK (j @> '{\"a\": 1}'::jsonb)" {:j {"a" [1 2]}})))
+  (is (not (passes? "CHECK (j @> '[1]'::jsonb)" {:j [[1]]})))
+  (is (passes? "CHECK (j @> '1'::jsonb)" {:j [1 2]})))
+
+(deftest jsonb-minus-text-array-and-concatenation
+  (is (passes? "CHECK ((j - '{a,b}'::text[]) = '{}'::jsonb)" {:j {"a" 1 "b" 2}}))
+  (is (passes? "CHECK ((j - '{a}'::text[]) = '[1, \"b\"]'::jsonb)" {:j ["a" 1 "b"]}))
+  (is (passes? "CHECK ((j || '1'::jsonb) = '[{\"a\": 1}, 1]'::jsonb)" {:j {"a" 1}}))
+  (is (passes? "CHECK ((j || '[2]'::jsonb) = '[1, 2]'::jsonb)" {:j 1}))
+  (is (passes? "CHECK ((j || '{\"b\": 2}'::jsonb) = '{\"a\": 1, \"b\": 2}'::jsonb)" {:j {"a" 1}})))
+
+(deftest text-of-non-strings-is-postgresqls-or-unknown
+  (is (passes? "CHECK (concat('a'::text, b) = 'at'::text)" {:b true}) "concat prints t")
+  (is (passes? "CHECK (((b)::text || 'x'::text) = 'truex'::text)" {:b true}) "a cast prints true")
+  (is (passes? "CHECK (('a'::text || b) = 'at'::text)" {:b true}))
+  (is (passes? "CHECK ((ts)::text = '2020-01-01 00:00:00'::text)" {:ts (java.time.LocalDateTime/parse "2020-01-01T00:00")}))
+  (is (passes? "CHECK ((ts)::text = '2020-01-01 00:00:00.5'::text)" {:ts (java.time.LocalDateTime/parse "2020-01-01T00:00:00.5")}))
+  (is (not (passes? "CHECK ((ts)::text = 'x'::text)" {:ts (java.time.LocalDateTime/parse "2020-01-01T00:00")})))
+  (is (passes? "CHECK ((f)::text = 'x'::text)" {:f 1.0}) "a double's text is unknown: the row passes")
+  (is (passes? "CHECK ((d)::text = 'x'::text)" {:d 1.5M}) "a numeric's scale is its column's"))
+
+(deftest float-overflow-nan-and-real
+  (is (not (passes? "CHECK (((1e308)::double precision * (10)::double precision) > (0)::double precision)" {})) "overflow errors")
+  (is (not (passes? "CHECK ((f * f) >= (0)::double precision)" {:f 1e-200})) "underflow errors")
+  (is (passes? "CHECK (f > (1)::double precision)" {:f ##NaN}) "NaN sorts above every number")
+  (is (passes? "CHECK (f = 'NaN'::double precision)" {:f ##NaN}))
+  (is (not (passes? "CHECK (f = (1)::double precision)" {:f ##NaN})))
+  (is (passes? "CHECK (greatest(f, (1)::double precision) = f)" {:f ##NaN}))
+  (is (not (passes? "CHECK ((0.1)::real = (0.1)::double precision)" {})) "real is single precision")
+  (is (not (passes? "CHECK ((d)::real > (0)::double precision)" {:d 3.5e38M})) "real overflows")
+  (is (not (passes? "CHECK ((d)::real = (0)::double precision)" {:d 1e-46M})) "real underflows"))
+
+(deftest timestamptz-casts-in-the-session-zone
+  (let [now (java.time.Instant/now)
+        today (java.time.LocalDate/now)]
+    (is (passes? "CHECK (received_on <= ((now())::date + 1))" {:received_on today}))
+    (is (not (passes? "CHECK (received_on <= ((now())::date + 1))" {:received_on (.plusDays today 2)})))
+    (is (passes? "CHECK ((ts)::date = d)" {:ts now :d (.toLocalDate (.atZone now (java.time.ZoneId/systemDefault)))}))
+    (is (passes? "CHECK ((ts)::timestamp without time zone = l)" {:ts now :l (java.time.LocalDateTime/ofInstant now (java.time.ZoneId/systemDefault))}))))
+

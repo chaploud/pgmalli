@@ -39,7 +39,7 @@
              ::cmp [:enum :< :> :<= :>= := :<>]
              ::jkey [:enum "a" "b" "c"]
              ;; literals in the text PostgreSQL prints, so the round trip compares equal
-             ::jlit [:enum "{}" "{\"a\": 1}" "{\"a\": \"x\"}" "[1, 2]" "{\"a\": {\"b\": 1}}" "[]"]
+             ::jlit [:enum "{}" "{\"a\": 1}" "{\"a\": \"x\"}" "[1, 2]" "{\"a\": {\"b\": 1}}" "[]" "[1]" "{\"a\": [1]}"]
              ::date-lit [:enum "2020-01-01" "2020-06-15" "2021-01-01"]
              ::ts-lit [:enum "2020-01-01 00:00:00+00" "2020-06-15 12:30:00+00"]
              ::interval-lit [:enum "1 day" "01:30:00" "2 days" "00:00:30"]
@@ -119,7 +119,19 @@
                      [:tuple [:= :<] [:tuple [:= :-] ::int-col] ::int-lit]
                      [:tuple [:= :=] [:tuple [:= :cast] [:= :d] [:= :integer]] [:int {:min -1 :max 10}]]
                      [:tuple [:= :=] [:tuple [:= :cast] [:tuple [:= :cast] [:= :d] [:= :double-precision]] [:= :integer]] [:int {:min -1 :max 10}]]
-                     [:tuple [:= :case] [:tuple [:= :=] [:= :e] [:= "happy"]] [:tuple [:= :>] ::int-col [:= 0]] [:= :else] [:tuple [:= :is] ::int-col :nil]]]
+                     [:tuple [:= :case] [:tuple [:= :=] [:= :e] [:= "happy"]] [:tuple [:= :>] ::int-col [:= 0]] [:= :else] [:tuple [:= :is] ::int-col :nil]]
+                     [:tuple ::cmp [:tuple [:enum :* :/] [:tuple [:= :cast] ::interval-lit [:= :interval]] [:enum 2 3 0.5M 1.5M]] [:tuple [:= :cast] ::interval-lit [:= :interval]]]
+                     [:tuple [:= :=] [:tuple [:= :trunc] [:= :d] [:int {:min -1 :max 2}]] [:enum 0 2 2.2M 2.25M 9.9M]]
+                     [:tuple [:= :=] [:tuple [:= :/] [:= :d] [:enum 3 7]] [:enum 0.33333333333333333333M -0.33333333333333333333M 0.83333333333333333333M 0.75M]]
+                     [:tuple [:= :=] [:tuple [:= :->>] [:= :j] ::jkey] [:enum "1" "1.50" "1.5"]]
+                     [:tuple [:= :=] [:tuple [:enum :btrim :ltrim :rtrim] ::str-col [:enum "😀" "a"]] [:enum "" "a" "😀a"]]
+                     [:tuple [:= :=] [:tuple [:= :-] [:= :j] [:tuple [:= :cast] [:enum "{a,b}" "{a}"] [:= :text-array]]] [:tuple [:= :cast] ::jlit [:= :jsonb]]]
+                     [:tuple [:= :=] [:tuple [:= :jsonb_typeof] [:tuple [:= :||] [:= :j] [:tuple [:= :cast] ::jlit [:= :jsonb]]]] [:enum "array" "object"]]
+                     [:tuple [:= :=] [:tuple [:= :concat] ::str-col [:= :b]] [:enum "at" "af" "atrue"]]
+                     [:tuple [:= :=] [:tuple [:= :cast] [:enum :b :dt] [:= :text]] [:enum "true" "t" "2020-01-01"]]
+                     [:tuple [:= :>] [:tuple [:= :pow] [:tuple [:= :cast] ::int-col [:= :double-precision]] [:enum 2 160]] [:= 0]]
+                     [:tuple [:= :=] [:tuple [:= :cast] [:enum 0.1M 0.5M] [:= :real]] [:tuple [:= :cast] [:enum 0.1M 0.5M] [:= :double-precision]]]
+                     [:tuple ::cmp [:tuple [:= :cast] [:= "NaN"] [:= :double-precision]] [:tuple [:= :cast] ::int-col [:= :double-precision]]]]
              ::expr [:or
                      ::atom
                      [:tuple [:= :not] [:ref ::expr]]
@@ -175,12 +187,12 @@
 
 (def ^:private row-schema
   [:map [:n [:maybe [:int {:min -6 :max 101}]]] [:m [:maybe [:int {:min -6 :max 101}]]]
-   [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB" "a\n" "😀😀" "tr" "of" "o" " YE " "é" "É" "Éa"]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
+   [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB" "a\n" "😀😀" "😀a😁" "tr" "of" "o" " YE " "é" "É" "Éa"]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
    [:e [:maybe [:enum "happy" "sad"]]] [:b [:maybe :boolean]]
    ;; only values numeric(10,2) can hold, as BigDecimals, as rows read from the database would be
    [:d [:maybe [:enum -1.0M 0.0M 0.01M 0.5M 2.25M 2.5M 9.99M]]]
    ;; containers only: jsonb - on a scalar makes the whole SELECT fail
-   [:j [:maybe [:enum {} {"a" 1} {"a" "x" "b" [1 2]} {"a" {"b" 1}} {"a" nil "c" true} [1 "a"] [] [{"a" 1}]]]]
+   [:j [:maybe [:enum {} {"a" 1} {"a" "x" "b" [1 2]} {"a" {"b" 1}} {"a" nil "c" true} [1 "a"] [] [{"a" 1}] {"a" 1.50M} {"a" [1 2]} [[1]]]]]
    [:arr [:maybe [:enum [] ["a"] ["a" "b"] ["b" "a" "a"] ["it's"]]]]
    [:dt [:maybe [:enum (java.time.LocalDate/parse "2019-12-31") (java.time.LocalDate/parse "2020-01-01") (java.time.LocalDate/parse "2020-01-02") (java.time.LocalDate/parse "2020-06-15")]]]
    [:ts [:maybe [:enum (java.time.Instant/parse "2019-12-31T23:30:00Z") (java.time.Instant/parse "2020-01-01T00:00:00Z") (java.time.Instant/parse "2020-01-02T01:30:00Z") (java.time.Instant/parse "2020-06-15T12:30:00Z")]]]
