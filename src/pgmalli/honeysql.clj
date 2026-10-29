@@ -21,7 +21,8 @@
             [pgmalli.impl.error :as error]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 ;;; tables and columns of the registry
 
@@ -804,44 +805,64 @@
              :when p]
          p)))))
 
-(defn- enum-problems
-  "Enum literals outside the enum, compared with or assigned to its column; and, under pgjdbc's
-   default stringtype (varchar), a string HoneySQL sends as a parameter (not inlined, not cast)
-   to an enum column, which PostgreSQL refuses (no enum = varchar)."
-  [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema}}]
-  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc])
+(defn- enum-type
+  "The type of an enum type's column, or of a domain over one."
+  [registry s]
+  (let [inner (shape/non-null s)]
+    (when (and (vector? inner) (= :ref (first inner)) (enum-values registry inner))
+      (shape/type-name (shape/column-props s)))))
+
+(defn- uncast-type
+  "The type a string is to be cast to for a column that takes no varchar: an enum type (or a
+   domain over one), json, or a type of types' :cast (bit takes varbit, which keeps its
+   length); nil for a column that takes one."
+  [registry s]
+  (let [t (shape/type-name (shape/column-props s))
+        c (some-> (:cast (types/entry t)) name)]
+    (or (enum-type registry s)
+        (when (types/json? t) t)
+        ;; :bit-varying is no type HoneySQL writes; its alias is
+        (when c (if (str/includes? c " ") (first (:aliases (types/entry c))) c)))))
+
+(declare driver-type)
+
+(defn- string-problems
+  "Enum literals outside the enum (or a CHECK's list), compared with or assigned to its column; and, under pgjdbc's default stringtype (varchar), a string HoneySQL
+   sends as a parameter (not inlined, not cast) to a column PostgreSQL takes no varchar for
+   (enum = varchar does not exist, nor inet = varchar): a literal, or an argument to an enum
+   column or to one arg-types types as a string."
+  [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema} :as opts}]
+  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc false])
                      (let [target (target-scope sc stmt schema)]
-                       (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
+                       (when (seq target) (for [[col value] (assignments stmt)] [col value target true]))))
         varchar? (and (not= :unspecified stringtype) (not (:inline format)))
-        ;; an enum type, or a domain over one: PostgreSQL has no = varchar for either
-        enum-type (fn [s] (let [inner (shape/non-null s)]
-                            (when (and (vector? inner) (= :ref (first inner)) (enum-values registry inner))
-                              (shape/type-name (shape/column-props s)))))]
-   (concat
-    ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
-    ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
-    (for [[col value scope] uses
-          :let [k (param-key value)] :when k
-          :let [t (some-> (:schema (resolve-column registry scope col)) enum-type)]
-          :when (and t varchar?)]
-      {:kind :uncast-enum-string :column col :arg k :type t})
-    (for [[col value scope] uses
-        :let [{s :schema} (resolve-column registry scope col)
-              values (cond (string? value) [value]
-                           (and (vector? value) (= :cast (first value)) (string? (second value))) [(second value)]
-                           (and (vector? value) (every? string? value)) value)
-              allowed (when s (enum-values registry s))
-              ;; an enum type, not a text column a CHECK narrows to a list: varchar = varchar needs no cast
-              uncast? (and (enum-type s) varchar?
-                           (or (string? value) (and (vector? value) (every? string? value))))]
-        :when (and allowed (seq values))
-        v values
-        :let [invalid? (not (some #{v} allowed))]
-        p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
-           ;; a value outside the enum fails however it is sent
-           (when (and uncast? (not invalid?)) {:kind :uncast-enum-string :column col :value v :type (enum-type s)})]
-        :when p]
-    p))))
+        head #(if (vector? %) (first %) %)]
+    (concat
+     ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
+     ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
+     (for [[col value scope assigned?] uses
+           :let [k (param-key value)] :when (and k varchar?)
+           :let [s (:schema (resolve-column registry scope col))
+                 t (some->> s (uncast-type registry))]
+           ;; one assigned to a nullable column may be nil, which PostgreSQL takes
+           :when (and t (not (and assigned? (shape/maybe? s)))
+                      (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
+       {:kind :uncast-string :column col :arg k :type t})
+     (for [[col value scope] uses
+           :let [{s :schema} (resolve-column registry scope col)
+                 strings? (or (string? value) (and (vector? value) (every? string? value)))
+                 values (cond strings? (if (string? value) [value] value)
+                              (and (vector? value) (#{:cast :inline} (first value)) (string? (second value))) [(second value)])
+                 allowed (when s (enum-values registry s))
+                 uncast (when (and s varchar? strings?) (uncast-type registry s))]
+           :when (seq values)
+           v values
+           :let [invalid? (and allowed (not (some #{v} allowed)))]
+           p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
+              ;; a value outside the enum fails however it is sent
+              (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
+           :when p]
+       p))))
 
 (defn- problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
@@ -860,7 +881,7 @@
                  (column-problems registry scopes stmt opts)
                  (insert-problems registry stmt schema)
                  (write-problems registry scopes stmt opts)
-                 (enum-problems registry scopes stmt opts)))))
+                 (string-problems registry scopes stmt opts)))))
 
 (def ^:private read-clauses
   "The clauses check, arg-types and row-schema read."
@@ -874,7 +895,7 @@
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
-   what it does goes unjudged: in a statement, and, when HoneySQL is loaded, in a map of
+   what it does goes unjudged: in the query map and every statement, and, when HoneySQL is loaded, in a map of
    HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). The rows of
    :values, :set and :do-update-set are maps of columns, not of clauses, though a subquery in
    them is read."
@@ -887,7 +908,8 @@
         maps (tree-seq branch? seq body)]
     (distinct (concat
                (for [m maps
-                     :when (and (map? m) (seq m) (not (rows m)) (or (statement? m) (and clauses (every? clauses (keys m)))))
+                     ;; the query itself is clauses, however unknown ({:selct [:id]})
+                     :when (and (map? m) (seq m) (not (rows m)) (or (identical? m body) (statement? m) (and clauses (every? clauses (keys m)))))
                      k (keys m)
                      :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))]
                  {:kind :unread-clause :clause k})
@@ -1277,21 +1299,20 @@
    :missing-required-column (fn [{:keys [table column]}]
                               (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"))
    :values-arity (fn [{:keys [row columns values]}]
-                   (str ":values row " row " has " values " values for " columns " :columns"))
+                   (str ":values row " row " has " values " values for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column value allowed]}]
                    (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
-   :uncast-enum-string (fn [{:keys [column value arg type]}]
-                         (let [what (if arg (str "argument " arg) (pr-str value))]
-                           (str what " reaches enum column " (column-name column) " as varchar, which PostgreSQL refuses"
-                                " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
-                                " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " :" type "], or pass {:stringtype :unspecified}"
-                                " when the connection sets stringtype=unspecified"
-                                )))
+   :uncast-string (fn [{:keys [column value arg type]}]
+                    (let [what (if arg (str "argument " arg) (pr-str value))]
+                      (str what " reaches column " (column-name column) " as varchar, which its type " type " does not take"
+                           " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
+                           " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " :" type "], or pass {:stringtype :unspecified}"
+                           " when the connection sets stringtype=unspecified")))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write :default"))
-   :unread-clause (fn [{:keys [clause]}] (str "clause " clause " is not read by pgmalli, so what it does is not checked"))
+   :unread-clause (fn [{:keys [clause]}] (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand"))
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))})
 
 (defn explain

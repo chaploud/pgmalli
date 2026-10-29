@@ -31,7 +31,7 @@
 (def schema-sql (slurp (io/resource "pgmalli/oracle/schema.sql")))
 (def corpus (edn/read-string (slurp (io/resource "pgmalli/oracle/corpus.edn"))))
 
-(def ^:private tables ["users" "groups" "posts" "tags" "post_tags" "active_users"])
+(def ^:private tables ["users" "groups" "posts" "tags" "post_tags" "active_users" "hosts"])
 (def ^:private alias-ish #{"u" "g" "p" "s" "c" "x" "v" "t" "a" "b" "n" "h" "ins" "excluded" "EXCLUDED" "zz" "nosuch"})
 (def ^:private row-keys #{:set :do-update-set :values})
 
@@ -106,7 +106,7 @@
     "428C9" :read-only-column
     (cond (and (= "22P02" state) (str/includes? message "enum")) :enum-literal
           ;; a parameter pgjdbc sent as varchar where the column's type takes none
-          (and (#{"42883" "42804"} state) (str/includes? message "character varying")) :uncast-enum-string
+          (and (#{"42883" "42804"} state) (str/includes? message "character varying")) :uncast-string
           :else :other)))
 
 (defn- verdict

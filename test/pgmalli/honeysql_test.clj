@@ -692,7 +692,7 @@
 
 (deftest a-string-reaches-an-enum-column-as-varchar
   (let [check #(h/check registry %1 (merge opts {:stringtype :varchar} %2))
-        uncast (fn [v] {:kind :uncast-enum-string :column :mood :value v :type "mood"})]
+        uncast (fn [v] {:kind :uncast-string :column :mood :value v :type "mood"})]
     (is (= [(uncast "sad")] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {}))
         "pgjdbc sends a String as varchar, which no enum takes without a cast")
     (is (= [(uncast "sad")] (check {:update :users :set {:mood "sad"} :where [:= :id 1]} {})))
@@ -734,7 +734,7 @@
 
 (deftest each-problem-reads-as-what-to-do
   (is (= ["unknown column nik; did you mean nick?"
-          "\"sad\" reaches enum column mood as varchar, which PostgreSQL refuses (HoneySQL sends a string as a parameter, and pgjdbc types it varchar); write [:cast \"sad\" :mood], or pass {:stringtype :unspecified} when the connection sets stringtype=unspecified"]
+          "\"sad\" reaches column mood as varchar, which its type mood does not take (HoneySQL sends a string as a parameter, and pgjdbc types it varchar); write [:cast \"sad\" :mood], or pass {:stringtype :unspecified} when the connection sets stringtype=unspecified"]
          (h/explain (h/check registry {:select [:nik] :from [:users] :where [:= :mood "sad"]} (assoc opts :stringtype :varchar)))))
   (is (every? string? (h/explain [{:kind :something-new}])) "a kind with no sentence still prints"))
 
@@ -795,9 +795,9 @@
     (is (= [:maybe [:string {:pg/type "character varying"}]]
            (m/form (:n (h/arg-types registry {:select [:id] :from [:users] :where [:is-distinct-from :nick :?n]} opts))))))
   (testing "an argument reaching an enum type's column as a String"
-    (is (= [{:kind :uncast-enum-string :column :mood :arg :m :type "mood"}]
+    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
            (h/check registry {:select [:id] :from [:users] :where [:= :mood :?m]} (assoc opts :stringtype :varchar))))
-    (is (= [{:kind :uncast-enum-string :column :mood :arg :m :type "mood"}]
+    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
            (h/check registry {:select [:id] :from [:users] :where [:= :mood :?m]} (assoc opts :stringtype :varchar :write {:enum [:keyword]})))
         "an extension sending a keyword as a String sends varchar all the same")
     (is (= [] (h/check registry {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} (assoc opts :stringtype :varchar)))))
@@ -839,6 +839,38 @@
   (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:select [:u.nick] :from [[:users "u"]]} opts)))
   (is (= {:reads #{"sample.users"} :writes #{}} (h/tables registry {:with [["c" {:select [:id] :from [:users]}]] :select [:id] :from [:c]} opts)))
   (is (= [{:kind :unknown-table :table "sample.c"}] (h/check registry {:with [["C" {:select [:id] :from [:users]}]] :select [:*] :from [:c]} opts))))
+
+(deftest a-string-reaches-a-type-that-takes-no-varchar
+  (let [reg (pgmalli/registry {:registry {:pg.public/hosts [:map {:pg/table "public.hosts"}
+                                                            [:id [:int {:pg/type "integer"}]]
+                                                            [:ip [:any {:pg/type "inet"}]]
+                                                            [:flags [:string {:min 4 :max 4 :pg/type "bit"}]]
+                                                            [:mask [:maybe [:string {:pg/type "bit"}]]]
+                                                            [:doc [:any {:pg/type "jsonb"}]]
+                                                            [:note [:string {:pg/type "text"}]]]}})
+        check #(h/check reg %1 (merge {:schema "public"} %2))]
+    (is (= [{:kind :uncast-string :column :ip :value "10.0.0.1" :type "inet"}] (check {:select [:id] :from [:hosts] :where [:= :ip "10.0.0.1"]} {})))
+    (is (= [{:kind :uncast-string :column :flags :value "1010" :type "varbit"}] (check {:update :hosts :set {:flags "1010"}} {}))
+        "bit takes varbit, which keeps the length")
+    (is (= [{:kind :uncast-string :column :doc :value "{}" :type "jsonb"}] (check {:update :hosts :set {:doc "{}"}} {})))
+    (is (= [{:kind :uncast-string :column :flags :arg :f :type "varbit"}] (check {:select [:id] :from [:hosts] :where [:= :flags :?f]} {})))
+    (is (= [] (check {:select [:id] :from [:hosts] :where [:= :ip :?ip]} {})) "an argument arg-types leaves :any may be an object of the type")
+    (is (= [] (check {:update :hosts :set {:mask :?m} :where [:= :id 1]} {}))
+        "an argument assigned to a nullable column may be nil, which PostgreSQL takes")
+    (is (= [] (check {:select [:id] :from [:hosts] :where [:and [:= :ip [:cast "10.0.0.1" :inet]] [:= :note "a"]]} {})))
+    (is (= [] (check {:select [:id] :from [:hosts] :where [:= :ip "10.0.0.1"]} {:format {:inline true}})))))
+
+(deftest an-inlined-enum-literal-is-one-too
+  (is (= [{:kind :enum-literal :column :mood :value "zz" :allowed ["happy" "sad"]}]
+         (h/check registry {:select [:id] :from [:users] :where [:= :mood [:inline "zz"]]} opts))))
+
+(deftest an-unknown-clause-of-the-query-is-unread
+  (is (= [{:kind :unread-clause :clause :selct}] (h/check registry {:selct [:id]} opts))))
+
+(deftest explain-says-what-to-do-for-arity-and-unread-clauses
+  (is (= [":values row 0 has 2 values for 3 :columns; give each row as many values as :columns"
+          "clause :frob is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand"]
+         (h/explain [{:kind :values-arity :table "sample.users" :row 0 :columns 3 :values 2} {:kind :unread-clause :clause :frob}]))))
 
 (deftest a-quoted-sql-word-is-a-column
   (is (= [] (h/check registry {:select [:user :nick] :from [:users]} opts)))

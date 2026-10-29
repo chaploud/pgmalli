@@ -277,3 +277,15 @@ These match or touch no row, which is almost always a mistake:
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.
 - An argument schema with a regex (`[:re ...]`) does not generate with `mg/generate`; it
   validates only.
+- Partitions and sequences: the registry lists neither, so a query reading one by name
+  (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`. Write the name as a
+  symbol (`'events_2026`), a table chosen at run time, to leave it unjudged.
+- The columns of a CTE or a subquery: they exist, untyped.
+- A string sent as `varchar` to a column of a type `:uncast-string` does not cover (an
+  integer, a date, a uuid), which PostgreSQL refuses too; and an argument whose type
+  `h/arg-types` leaves `:any` (an `inet` column's), which may be an object of the type.
+- Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
+  PostgreSQL folds it to lower case, and check takes it as written.
+- Under qualified keys, the key of a column next.jdbc qualifies by a table the data does not
+  show (one read through a subquery or a CTE, a cast column): `h/row-schema` leaves it out of
+  the map, which is open, and names it under the `:pgmalli/untold` property.
