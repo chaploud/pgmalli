@@ -5,6 +5,10 @@ on:
   schedule:
     - cron: "0 3 * * 1"
   workflow_dispatch:
+    inputs:
+      pg-image:
+        description: "the PostgreSQL image to run on (a beta tag, say)"
+        default: postgres:alpine
 permissions:
   contents: read
   issues: write
@@ -13,6 +17,8 @@ jobs:
     # forks inherit the schedule; the report belongs to this repository's issues
     if: github.repository == 'chaploud/pgmalli'
     runs-on: ubuntu-latest
+    env:
+      PGMALLI_PG_IMAGE: ${{ inputs.pg-image || 'postgres:alpine' }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-java@v6
@@ -26,7 +32,7 @@ jobs:
       - name: install psql
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: pull postgres image
-        run: docker pull postgres:alpine
+        run: docker pull "$PGMALLI_PG_IMAGE"
       - name: bb upstream
         id: run
         continue-on-error: true
