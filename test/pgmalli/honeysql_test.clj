@@ -172,6 +172,17 @@
          (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when x [:= :group_id :?g])]} opts))
       "one use in the data is enough"))
 
+(deftest compare-nil-lets-a-compared-argument-be-nil
+  (let [body {:select [:id] :from [:users] :where [:and [:= :id :?id] [:in :group_id :?gs] [:> :score :?min]] :limit :?n}
+        types (h/arg-types registry body (assoc opts :compare-nil true))]
+    (is (= [:maybe [:int {:pg/identity :always :pg/type "bigint"}]] (:id types)))
+    (is (= [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]] (:min types)))
+    (is (= (:gs (h/arg-types registry body opts)) (:gs types)) "not :in's: nil formats as IN ?")
+    (is (= :int (:n types)))
+    (is (= {:v [:maybe [:string {:max 40 :pg/type "character varying"}]]}
+           (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare-nil true)))
+        "an assigned one as before")))
+
 (deftest an-any-or-all-argument-is-an-array
   (let [body {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:<> :group_id [:all :?gs]]]}]
     (is (= {:ids :any :gs :any} (h/arg-types registry body opts)) "the driver takes typed Java arrays, which data cannot name")

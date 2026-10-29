@@ -14,6 +14,10 @@ All notable changes to this project are documented here. The format follows
   extension reads otherwise, by its `:pg/type` (`{"date" :time/local-date}`), over `:time`.
 - `:write {pg-type schema}` in `pgmalli.honeysql`: what a `SettableParameter` extension sends
   for a type (`{"text" [:or :string :keyword]}`), over the column's read type, for arguments.
+- `{:compare-nil true}` in `pgmalli.honeysql`: a compared argument (`=`, `<>`, `<`, `ANY` ...;
+  not `:in`'s, nil formatting as `IN ?`, which is not SQL) may be nil, for code passing nil to
+  match no row: `sql/format` sends it to `= ?`, which no row equals. Assigned arguments are as
+  before.
 - `generate!`, `stale` and `check` read the catalog over JDBC when `:db` has `:jdbc-url` (with
   `:user` and `:password`) or `:datasource`, with the PostgreSQL driver on the classpath and no
   psql. The query runs in a transaction rolled back after, so a pooled connection keeps its

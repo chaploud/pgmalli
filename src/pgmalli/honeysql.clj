@@ -542,6 +542,8 @@
 
 (defn- maybe [s] (if (and (vector? s) (= :maybe (first s))) s [:maybe s]))
 
+(defn- maybe-typed [t] (if (= :any t) t (maybe t)))
+
 (defn- arg-key [x] (or (param-key x) (when (symbol? x) x)))
 
 (defn- array-arg
@@ -578,7 +580,9 @@
    with [:any x] or [:all x] (= ANY(?)) is an array of the column's type: :any, the driver
    taking typed Java arrays, unless :write's :array names the collections an extension sends
    instead ({:array [:sequential :set]}). An argument used only inside code (a list: (when x
-   [...])) also takes nil, the code possibly leaving it out. The first typed use wins; a use
+   [...])) also takes nil, the code possibly leaving it out. {:compare-nil true} lets a compared
+   argument (not :in's: nil formats as IN ?, which is not SQL) be nil, for code passing nil to
+   match no row (sql/format sends it to = ?, which no row equals). The first typed use wins; a use
    that gives no type (:any) never hides one that does."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema "public"} :as opts}]
@@ -586,13 +590,16 @@
          typed (for [[stmt sc] (statement-chains registry body opts)
                      pair (concat (for [[op col value] (comparisons stmt)
                                         :let [t (column-type registry sc col false opts)]]
-                                    (if-let [x (array-arg value)]
-                                      [x (array-type t opts)]
-                                      [value (if (and (= :in op) (not= :any t))
-                                               ;; what sql/format expands into IN (?, ...): a collection, never
-                                               ;; empty (IN () is not SQL)
-                                               [:or [:sequential {:min 1} t] [:set {:min 1} t]]
-                                               t)]))
+                                    (let [;; nil formats as IN ?, which is not SQL
+                                          nil-ok? (and (:compare-nil opts) (not= :in op))]
+                                      (if-let [x (array-arg value)]
+                                        [x (cond-> (array-type t opts) nil-ok? maybe-typed)]
+                                        [value (cond (and (= :in op) (not= :any t))
+                                                     ;; what sql/format expands into IN (?, ...): a collection, never
+                                                     ;; empty (IN () is not SQL)
+                                                     [:or [:sequential {:min 1} t] [:set {:min 1} t]]
+                                                     nil-ok? (maybe-typed t)
+                                                     :else t)])))
                                   (for [[_ v] (select-keys stmt [:limit :offset])] [v :int])
                                   (for [[col v] (assignments stmt)] [v (column-type registry (target-scope sc stmt schema) col true opts)]))]
                  pair)
