@@ -280,7 +280,8 @@ locals; where a table goes, a symbol is a table chosen at run time.
 `check`, `query-schema`, `row-schema` and `arg-types` are the namespace's functions. What
 `check` finds in a query, and a query argument `query-schema`'s args lack (`:missing-arg`),
 are the function schema's `:pgmalli/problems` property rather than an error: the schema is
-made as its namespace loads, which a typo should not stop. A clause pgmalli reads nowhere (one
+made as its namespace loads, which a typo should not stop. With the property the vector is one
+longer (`[:=> {...} [:cat ...] out]`): read it with `m/schema` and `m/children`, not by position. A clause pgmalli reads nowhere (one
 new to HoneySQL, `:join-by`, one you registered) is an `:unread-clause` problem, so no part of
 a query goes unjudged in silence. An ambiguous column comes with the tables it could belong
 to, under `:candidates`. Every query of a project checked in one test:

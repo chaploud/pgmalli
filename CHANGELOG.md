@@ -24,7 +24,8 @@ All notable changes to this project are documented here. The format follows
   psql. The query runs in a transaction rolled back after, so a pooled connection keeps its
   search_path.
 - `query-schema` carries the problems `check` finds in its query, and a query argument its
-  args lack (`:missing-arg`), as the `:pgmalli/problems` property of the function schema.
+  args lack (`:missing-arg`), as the `:pgmalli/problems` property of the function schema; with
+  it the vector is one longer (`[:=> {...} [:cat ...] out]`), so read it with `m/children`.
 - `check` reports a clause it reads nowhere (`:unread-clause`: one new to HoneySQL, one
   registered with `register-clause!`, `:join-by`, `{:table :t}`), so a query is never judged on
   part of it in silence; it reads the clauses and operators of the HoneySQL loaded.

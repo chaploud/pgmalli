@@ -850,7 +850,8 @@
    problems check finds, and an argument of the query args lack (:missing-arg, a typo in args
    most likely), are the schema's :pgmalli/problems property, not an error: a schema in
    :malli/schema metadata is made as its namespace loads, which a typo, or a registry not yet
-   generated again, should not stop."
+   generated again, should not stop. The property makes the vector one longer: read its parts
+   with m/children, not by position."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)
