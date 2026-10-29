@@ -236,15 +236,17 @@
         from (take-last 1 (map alias (from-items stmt [:from :using])))]
     (:nullable
      (reduce (fn [{:keys [before] :as acc} [k t]]
-               (let [a (alias t)]
+               (let [a (when t (alias t))]
                  (-> (case k
                        :left-join (update acc :nullable conj a)
                        :right-join (update acc :nullable into before)
-                       (:outer-join :full-join) (update acc :nullable into (conj before a))
+                       (:outer-join :full-join) (update acc :nullable into (cond-> before a (conj a)))
                        acc)
                      (update :before conj a))))
              {:before (vec from) :nullable #{}}
-             (join-items stmt)))))
+             ;; a RIGHT or FULL JOIN code builds nulls the tables before it all the same
+             (concat (join-items stmt)
+                     (for [k [:right-join :full-join :outer-join] :when (seq? (get stmt k))] [k nil]))))))
 
 (defn- scope
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool :nullable? bool}} of one statement;
@@ -289,9 +291,10 @@
                                        chain (cons (scope registry x ctes opts) (cond->> outer (code-sources? x) (cons :open)))]
                                    (cons [x chain]
                                          (concat
-                                          ;; INSERT ... SELECT: the SELECT does not see the table inserted into
-                                          (walk (:insert-into x) outer ctes false true)
-                                          (mapcat #(walk % chain ctes false true) (vals (dissoc x :insert-into))))))
+                                          ;; INSERT ... SELECT does not see the table inserted into, nor a CTE body
+                                          ;; the tables of the statement its :with belongs to
+                                          (mapcat #(walk % outer ctes false true) (keep x (cons :insert-into with-keys)))
+                                          (mapcat #(walk % chain ctes false true) (vals (apply dissoc x :insert-into with-keys))))))
                   (branch? x) (mapcat #(walk % outer ctes (or in-vector? (vector? x)) under?) (seq x))))]
     (walk body () (into (free-cte-names body) (code-ctes body)) false false)))
 
@@ -602,7 +605,7 @@
              {:kind :missing-required-column :table table :column c})))))))
 
 (defn- enum-problems [registry sc stmt schema]
-  (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (#{:= :<> :not= :!= :in :not-in} op)] [col value sc])
+  (for [[col value scope] (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc])
                                   (let [target (target-scope sc stmt schema)]
                                     (when (seq target) (for [[col value] (assignments stmt)] [col value target]))))
         :let [{s :schema} (resolve-column registry scope col)
@@ -645,15 +648,18 @@
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
    what it does goes unjudged: in a statement, and, when HoneySQL is loaded, in a map of
-   HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). Rows of
-   :values and :set are not clauses."
+   HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). The rows of
+   :values, :set and :do-update-set are maps of columns, not of clauses, though a subquery in
+   them is read."
   [body]
   (let [clauses (some-> (honeysql 'honey.sql/clause-order) (#(set (%))))
-        maps (tree-seq #(and (branch? %) (not (seq? %)))
-                       #(if (map? %) (vals (dissoc % :values :set :do-update-set)) (seq %))
-                       body)]
+        rows (set (for [st (statements body)
+                        r (concat (when (vector? (:values st)) (:values st)) [(:set st) (:do-update-set st)])
+                        :when (map? r)]
+                    r))
+        maps (tree-seq #(and (branch? %) (not (seq? %))) seq body)]
     (distinct (for [m maps
-                    :when (and (map? m) (seq m) (or (statement? m) (and clauses (every? clauses (keys m)))))
+                    :when (and (map? m) (seq m) (not (rows m)) (or (statement? m) (and clauses (every? clauses (keys m)))))
                     k (keys m)
                     :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))]
                 {:kind :unread-clause :clause k}))))
@@ -791,9 +797,9 @@
   "The row a SELECT returns. Under :qualified?, a column through an opaque table, or a cast
    column, leaves the row untold: the driver keys it by the table it comes from at the bottom
    (a subquery's, a CTE's), or keeps it when PostgreSQL drops a cast to the column's own type."
-  [registry stmt ctes {:keys [qualified?] :as opts}]
+  [registry stmt chain {:keys [qualified?] :as opts}]
   (let [registry (reading registry)
-        sc (scope registry stmt ctes opts)
+        sc (first chain)
         ;; table nil: an expression comes from no table, and the driver keys it unqualified
         entry (fn [table column schema nullable?]
                 (jdbc/row-entry (jdbc/row-key table column opts)
@@ -811,7 +817,7 @@
                   (nil? col) (when-not (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
                                (when-let [n (item-name item)] [(entry nil n nil true)]))
                   (star? col) (star col)
-                  :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry sc col)]
+                  :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
                           (when-not (and qualified? opaque?)
                             ;; a column under an alias is still keyed by its table: the driver reads the table from the field
                             [(entry table (if alias (name alias) column) schema nullable?)]))))]
@@ -823,9 +829,9 @@
 
 (declare row-schema*)
 
-(defn- set-operation-row [registry members ctes opts]
+(defn- set-operation-row [registry members chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (for [m members] (row-schema* registry m (into ctes (cte-names m)) (dissoc opts :qualified? :nil-columns)))]
+    (let [rows (for [m members] (row-schema* registry m chains (dissoc opts :qualified? :nil-columns)))]
       (when (and (every? some? rows) (apply = (map count rows)))
         (into [:map]
               (for [entries (apply map vector (map rest rows))
@@ -834,11 +840,12 @@
                 (jdbc/row-entry (ffirst entries) (if (= 1 (count inners)) (first inners) :any) (some maybe? schemas) opts)))))))
 
 (defn- row-schema*
-  "row-schema of a statement inside a query whose CTE names are ctes."
-  [registry stmt ctes opts]
+  "row-schema of a statement of a query, chains its statements' scope chains (statement-chains),
+   which alone say which tables and CTEs a statement sees."
+  [registry stmt chains opts]
   (if-let [members (some stmt set-operation-keys)]
-    (set-operation-row registry members ctes opts)
-    (select-row registry stmt ctes opts)))
+    (set-operation-row registry members chains opts)
+    (select-row registry stmt (get chains stmt) opts)))
 
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc builds it from what the driver
@@ -852,7 +859,7 @@
   ([registry body opts]
    (jdbc/options! opts)
    (query! body)
-   (when (map? body) (row-schema* registry body (query-ctes body) opts))))
+   (when (map? body) (row-schema* registry body (into {} (statement-chains (reading registry) body opts)) opts))))
 
 (defn query-schema
   "[:=> [:cat arg-types...] [:sequential row]], the malli function schema of a function taking

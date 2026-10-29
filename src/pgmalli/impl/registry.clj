@@ -26,8 +26,8 @@
 (defn- insert-entry [e]
   (let [[k p s] (shape/entry-parts e)
         props (shape/column-props s)
-        nullable? (and (vector? s) (= :maybe (first s)))]
-    (when-not (or (:pg/generated props) (= :always (:pg/identity props)))
+        nullable? (shape/maybe? s)]
+    (when-not (shape/written-by-database? props)
       [k (cond-> p (or (:pg/identity props) (contains? props :pg/default) nullable?) (assoc :optional true)) s])))
 
 (defn- omitted-values
@@ -85,7 +85,7 @@
   (let [[_ props & entries] (shape/row-map row)]
     (into [:map (assoc (select-keys props [:pg/table]) :closed true)]
           (for [e entries :let [[k p s] (shape/entry-parts e) cp (shape/column-props s)]
-                :when (not (or (:pg/generated cp) (= :always (:pg/identity cp))))]
+                :when (not (shape/written-by-database? cp))]
             [k (assoc p :optional true) s]))))
 
 (defn- with-derived [registry]
@@ -129,7 +129,7 @@
                 ;; database refuses
                 ;; an array of a type pgmalli cannot write a value of: empty, which every array type takes
                 :vector (when (= :any (last s)) {:gen/elements [[]]})
-                (:any :some) (cond (#{"json" "jsonb"} (:pg/type p)) {:gen/schema json-value}
+                (:any :some) (cond (shape/json-types (:pg/type p)) {:gen/schema json-value}
                                    (shape/opaque-literals (shape/type-name p)) {:gen/elements (shape/opaque-literals (shape/type-name p))}
                                    (:pg/type p) {:gen/elements [nil]})
                 nil)]
@@ -151,7 +151,7 @@
         m (into [:map props]
                 (map (fn [e] (let [[k p s] (shape/entry-parts e)
                                    key? (or (key-cols k) (:pg/identity (shape/column-props s)))
-                                   s (if (and (vector? s) (= :maybe (first s))) [:maybe (gen-hints (last s) key?)] (gen-hints s key?))]
+                                   s (if (shape/maybe? s) [:maybe (gen-hints (last s) key?)] (gen-hints s key?))]
                                (if (empty? p) [k s] [k p s])))
                      entries))]
     (if (= :and (first row)) (into [:and m] (drop 2 row)) m)))
@@ -190,8 +190,7 @@
 (defn columns
   "The [:map ...] of a row or insert schema, without the table-level constraints."
   [registry name]
-  (let [d (shape/schema-of registry name)
-        props (when (vector? d) (let [m (shape/row-map d)] (when (map? (second m)) (second m))))]
+  (let [props (shape/row-props (shape/schema-of registry name))]
     (when-not (or (:pg/table props) (:pg/view props))
       (throw (ex-info (str name " is no row or insert schema") {:name name}))))
   (let [s (m/deref (m/schema name {:registry registry}))]

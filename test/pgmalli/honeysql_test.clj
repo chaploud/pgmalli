@@ -566,3 +566,23 @@
   (is (= [] (h/check registry '{:with ctes :select [:id] :from :recent} opts)))
   (is (= [{:kind :unknown-table :table "other.nope"}] (h/check registry '{:with ctes :select [:id] :from :other.nope} opts))
       "a table qualified by a schema is no CTE"))
+
+(deftest a-ctes-visibility-is-one-judgment
+  (let [body {:select [:id :mood] :from [:users] :where [:exists {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]}]
+    (is (= [] (h/check registry body opts)))
+    (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (last (last (h/row-schema registry body opts))))
+        "the outer users is the table, as check reads it: the inner :with is not visible outside"))
+  (is (= [{:kind :unknown-column :column :nick}] (h/check registry {:with [[:c {:select [:nick] :from [:groups]}]] :select [:id] :from [:users]} opts))
+      "a CTE body does not see the tables of the statement its :with belongs to"))
+
+(deftest every-comparison-reads-its-value-as-the-columns
+  (doseq [w [[:< :mood "bogus"] [:between :mood "happy" "bogus"] [:is-distinct-from :mood "bogus"]]]
+    (is (= [:enum-literal] (map :kind (h/check registry {:select [:id] :from [:users] :where w} opts))) (pr-str w))))
+
+(deftest a-subquery-in-a-row-is-read
+  (let [sub {:select [:id] :from [:groups] :join-by [:left [:users [:= 1 1]]]}]
+    (is (some #{{:kind :unread-clause :clause :join-by}} (h/check registry {:update :users :set {:group_id sub}} opts)))))
+
+(deftest a-right-join-code-builds-nulls-the-tables-before-it
+  (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]]
+         (h/row-schema registry '{:select [:users.id] :from [:users] :right-join (when x [[:groups :g] [:= 1 1]])} opts))))

@@ -61,7 +61,7 @@
   (let [driver-object [:any {:pg/type (pg-type schema)}]]
     (or (shape/read-as read schema)
         (cond (array-column? schema) (if-let [kind (:array read)] [kind (read-type (last schema) opts)] driver-object)
-              (and (#{"json" "jsonb"} (pg-type schema)) (not= :parsed (:json read))) driver-object
+              (and (shape/json-types (pg-type schema)) (not= :parsed (:json read))) driver-object
               (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
               :else (shape/read-time time schema)))))
 
@@ -121,7 +121,7 @@
       mt/string-transformer
       {:name :pgmalli
        :decoders {:any {:compile (fn [schema _]
-                                  (when (#{"json" "jsonb"} (:pg/type (m/properties schema)))
+                                  (when (shape/json-types (:pg/type (m/properties schema)))
                                     (fn [x] (if (string? x) (json/parse x) x))))}
                   ;; the bounded numbers, from text as :int and :double are
                   :pg/integer (fn [x] (if (string? x) (or (parse-long x) x) x))
@@ -159,7 +159,7 @@
   "The row map of a generated schema as data (columns gives the malli schema)."
   [registry name]
   (let [s (shape/schema-of registry name)
-        props (when (vector? s) (let [m (shape/row-map s)] (when (map? (second m)) (second m))))]
+        props (shape/row-props s)]
     (when-not (and (or (:pg/table props) (:pg/view props)) (not (:closed props)))
       (throw (ex-info (str name " is no table's or view's row schema, which as-read reads (an insert or update schema is what is sent, not read)")
                       {:name name})))

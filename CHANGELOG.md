@@ -96,6 +96,13 @@ All notable changes to this project are documented here. The format follows
 - `pgmalli.honeysql` reads `:except-all`, `:not-in`, `:between`, `:not-like` and the other
   comparisons HoneySQL writes, `[:. a b]`, `:with-ordinality`, and an operator registered with
   `register-op!` (`?column?`, not a function's name).
+- `row-schema` reads a query's scopes as `check` does, through one judgment of which tables
+  and CTEs a statement sees: an inner `:with` hides no outer table from it, and a table code
+  brings in is untyped there too. A CTE body does not see the tables of the statement its
+  `:with` belongs to. An enum literal is judged in every comparison but LIKE (`<`, `BETWEEN`,
+  `IS DISTINCT FROM` ...), as arguments are typed. A subquery in a row of `:values` or `:set` is
+  read for unread clauses. A RIGHT or FULL JOIN code builds makes the tables before it
+  nullable.
 - A value HoneySQL passes as it is (`[:lift {...}]`, `[:inline {...}]`) is data, never a
   statement or a clause; a column definition list (`[:r {:columns [[:raw "a int"]]}]`) does not
   throw.

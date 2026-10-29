@@ -25,7 +25,7 @@
         kind (when (vector? base) (first base))]
     (cond (nil? v) nil
           (= :enum kind) [:cast v (keyword (sql-type s))]
-          (#{"json" "jsonb"} t) [:cast (json/write v) (keyword t)]
+          (shape/json-types t) [:cast (json/write v) (keyword t)]
           (= :vector kind) (let [elem (shape/non-null (last base))
                                  elem-type (cond (and (vector? elem) (= :ref (first elem))) (sql-type elem)
                                                  (and t (str/ends-with? t "[]")) (subs t 0 (- (count t) 2)))]

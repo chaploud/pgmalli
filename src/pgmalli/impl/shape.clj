@@ -41,6 +41,22 @@
   [[k p s]]
   (if (map? p) [k p s] [k {} p]))
 
+(def json-types
+  "The :pg/type of the columns a JSON document is the value of."
+  #{"json" "jsonb"})
+
+(defn written-by-database?
+  "Whether the database alone writes a column (a generated one, an identity ALWAYS one): no
+   INSERT or UPDATE carries it."
+  [column-props]
+  (boolean (or (:pg/generated column-props) (= :always (:pg/identity column-props)))))
+
+(defn row-props
+  "The properties of a row (or insert, update) schema's map: :pg/table or :pg/view, keys..."
+  [s]
+  (let [m (when (vector? s) (row-map s))]
+    (when (and (vector? m) (map? (second m))) (second m))))
+
 (defn maybe?
   "Whether a column schema takes NULL: [:maybe ...]."
   [s]
@@ -60,9 +76,8 @@
 (defn row-schema?
   "Row schemas carry :pg/table; their inserts do too, but closed."
   [s]
-  (let [m (when (vector? s) (row-map s))
-        props (when (vector? m) (second m))]
-    (and (map? props) (string? (:pg/table props)) (not (:closed props)))))
+  (let [props (row-props s)]
+    (and (string? (:pg/table props)) (not (:closed props)))))
 
 (defn derived-name
   "The name of a schema derived from a row's: :pg.<schema>/<table> -> :pg.<schema>.<table>/<suffix>
