@@ -54,7 +54,12 @@
        [:nil
         {:error/message
          "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
-    [:malli.core/default [:map [:mood :nil]]]]
+    [:malli.core/default
+     [:map
+      [:mood
+       [:nil
+        {:error/message
+         "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]]
    [:pg/check
     {:error/message "violates check constraint referrer_check: CHECK (referrer_id <> id)",
      :pg/constraint "referrer_check"}

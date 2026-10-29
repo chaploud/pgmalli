@@ -379,7 +379,7 @@
   (when *db*
     (let [cases [["f" "float8" "f::integer = 2" 2.5] ["n" "numeric" "n::integer = 3" 2.5M] ["t" "text" "t::varchar(3) = 'abc'" "abcd"]
                  ["l" "text" "length(l::varchar(2)) = 2" "abc"] ["c" "text" "c::char(3) IN ('abc')" "abc  "] ["b" "boolean" "b::text = 'true'" true]
-                 ["r" "real" "r::text = '0.1'" (float 0.1)] ["g" "numeric" "g::bigint IN (1, 2)" 1.4M] ["w" "float8" "w >= 0" ##NaN]]
+                 ["r" "real" "r::text = '0.1'" 0.1] ["g" "numeric" "g::bigint IN (1, 2)" 1.4M] ["w" "float8" "w >= 0" ##NaN]]
           [reg data] (registry-of "vc" (str "CREATE SCHEMA vc; CREATE TABLE vc.t (id int PRIMARY KEY"
                                             (apply str (for [[c t chk] cases] (str ", " c " " t " CHECK (" chk ")"))) ");"))
           unrendered (set (keep :constraint (:unrendered data)))

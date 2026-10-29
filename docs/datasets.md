@@ -99,7 +99,7 @@ the file with `clojure.edn` yourself, give `edn/read-string` the tags as `{:read
 
 ```clojure
 (first (sql/format (second (data/inserts registry sample))))
-;; => "INSERT INTO public.users (closed_at, created_at, email, group_id, id, nick, status) OVERRIDING SYSTEM VALUE VALUES (?, ?, ?, ?, ?, ?, CAST(? AS \"public\".\"user_status\")), (?, ?, ?, ?, ?, ?, CAST(? AS \"public\".\"user_status\"))"
+;; => "INSERT INTO public.users (closed_at, created_at, email, group_id, id, nick, status) OVERRIDING SYSTEM VALUE VALUES (CAST(? AS timestamp with time zone), CAST(? AS timestamp with time zone), ?, ?, ?, ?, CAST(? AS \"public\".\"user_status\")), (CAST(? AS timestamp with time zone), CAST(? AS timestamp with time zone), ?, ?, ?, ?, CAST(? AS \"public\".\"user_status\"))"
 ```
 
 Enum and domain values are cast to their type, quoted as it is spelt; a string of a type the
@@ -107,12 +107,13 @@ driver's text parameter cannot be written to (`inet`, `bit`, `money` ...) is cas
 is written and cast, and arrays given their element type. An identity ALWAYS column gets
 `OVERRIDING SYSTEM VALUE`. A column a row lacks is `DEFAULT`.
 
-Time values are passed as they are. Require `next.jdbc.date-time` so the driver takes
-`java.time`:
+Dates and times are ISO 8601 text cast to the column's type, so the SQL runs as parameters
+and with `{:inline true}` alike; an `Instant` or `java.util.Date` in a `date` or `timestamp`
+column is that time in the JVM's zone, as pgjdbc sends it:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-(require '[next.jdbc :as jdbc] 'next.jdbc.date-time)
+(require '[next.jdbc :as jdbc])
 
 (jdbc/with-transaction [tx db]
   (doseq [q (data/inserts registry sample)]
