@@ -1028,8 +1028,13 @@
   [registry stmt chain {:keys [qualified?] :as opts}]
   (let [registry (reading registry)
         sc (first chain)
-        ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL
-        regrouped? (some #(and (vector? %) (#{:rollup :cube :grouping-sets} (first %))) (vectorish (:group-by stmt)))
+        ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw or code
+        ;; there may be one, and a join :join-by builds (read nowhere here) may be outer
+        regrouped? (or (contains? stmt :join-by)
+                       (let [g (:group-by stmt)]
+                         (or (seq? g)
+                             (some #(or (seq? %) (and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))))
+                                   (vectorish g)))))
         ;; table nil: an expression comes from no table, and the driver keys it unqualified
         entry (fn [table column schema nullable?]
                 (jdbc/row-entry (jdbc/row-key table column opts)

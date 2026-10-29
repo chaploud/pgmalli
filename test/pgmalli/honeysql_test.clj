@@ -807,3 +807,8 @@
   (testing "ROLLUP's total row is NULL in its grouped columns"
     (is (= [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
            (second (second (h/row-schema registry {:select [:group_id [[:count :*] :n]] :from [:users] :group-by [[:rollup :group_id]]} opts)))))))
+
+(deftest a-row-is-nullable-where-a-join-or-grouping-pgmalli-does-not-read-may-null-it
+  (let [nullable? (fn [q] (every? #(= :maybe (first (last %))) (drop 1 (h/row-schema registry q opts))))]
+    (is (nullable? {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:right [[:groups :g] [:= :g.id 9]]]}))
+    (is (nullable? {:select [:group_id] :from [:users] :group-by [[:raw "CUBE(group_id)"]]}))))
