@@ -3,6 +3,27 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
+## 0.3.1 (2026-10-30)
+
+* Reading a schema runs none of the functions or operators it defines, so its owner cannot
+  run code as whoever generates (CVE-2018-1058). Over JDBC, a schema name stays one
+  identifier.
+* Validation does not stall on a huge numeric (`1E+100000000`) or on a long value under a
+  LIKE CHECK, and a long value a regex runs out of stack on does not throw: its CHECK
+  passes, a `[:re ...]` schema fails it. A value nested deeper than the stack is unknowable
+  to a CHECK.
+* Generate again if a schema has a LIKE CHECK with text between two `%`s (`'%-%'`), a
+  `col IS NULL OR <pattern>` CHECK, or types or functions named like built-ins (`text`,
+  `lower`): their files change, and `pgmalli.main check` reports them stale. The LIKE regex
+  matches what it matched; the others were read wrong (a built-in's name taken for the
+  schema's own) or said their CHECK's name alone.
+* A schema name with `/`, `\` or `..`, or two names differing only in case, is a config
+  error instead of writing outside `:out-dir` or sharing one file.
+* An invalid config leaves out the values of the keys it does not take, so a misspelt `:db`
+  does not show its password.
+* `inserts` quotes a column name containing `$`; `read-dataset` throws
+  `:pgmalli.error/invalid-dataset` for a file that does not read as a dataset.
+
 ## 0.3.0 (2026-10-30)
 
 The first release meant for use. The releases before it were development and are not
