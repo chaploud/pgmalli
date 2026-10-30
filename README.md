@@ -91,7 +91,7 @@ shows how CI catches a forgotten one.
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-io.github.chaploud/pgmalli {:mvn/version "0.3.1"}
+io.github.chaploud/pgmalli {:mvn/version "0.3.2"}
 ```
 
 `pgmalli.main` reads `pgmalli.edn` from the working directory, or the file given after the
@@ -342,7 +342,7 @@ The problems it reports:
 | `:not-null-violation` | NULL written into a NOT NULL column |
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
-| `:enum-literal` | a literal outside an enum type's labels or a CHECK's list, with `:allowed` |
+| `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list where written or under `=`, `IN` and `IS NOT DISTINCT FROM`, with `:allowed` |
 | `:uncast-string` | a string sent as `varchar` where the column's type takes none (an enum, a number, a date ...); not under `:stringtype :unspecified` or `:format {:inline true}` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |

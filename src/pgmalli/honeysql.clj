@@ -454,6 +454,13 @@
   #{:current_timestamp :current_date :current_time :localtime :localtimestamp :current_user :session_user :current_role
     :system_user :current_catalog :current_schema :user :true :false :null :default :*})
 
+(defn- sql-value
+  "The SQL word HoneySQL writes for keyword x, lower-cased (:null for :NULL), or nil for a
+   column: it writes the name as spelt, and PostgreSQL reads NULL and Null as it reads null."
+  [x]
+  (when (and (keyword? x) (nil? (namespace x)))
+    (sql-values (keyword (str/lower-case (name x))))))
+
 (defn- param-key
   "The :params key of a HoneySQL named parameter, as sql/format looks it up: :?id and ?id are
    :id (:?a/b is :a/b), [:param k] is k. nil for anything else."
@@ -472,7 +479,7 @@
     (let [c (subs (str x) 1)]
       (when (str/starts-with? c "%") (first (str/split (subs c 1) #"\."))))))
 
-(defn- column-keyword? [x] (and (keyword? x) (not (sql-values x)) (not (param-key x)) (not (shorthand-fn x))))
+(defn- column-keyword? [x] (and (keyword? x) (not (sql-value x)) (not (param-key x)) (not (shorthand-fn x))))
 
 (defn- vectorish
   "x when it is a vector, [x] for a bare keyword (HoneySQL takes :order-by :id for [:id]): a
@@ -510,21 +517,49 @@
 (def ^:private like-ops #{:like :ilike :not-like :not-ilike})
 (def ^:private comparison-ops
   (into #{:= :<> :not= :!= :< :> :<= :>= :is-distinct-from :is-not-distinct-from} (concat in-ops like-ops)))
+;; a value outside a CHECK's list makes these match no row; the others compare the column's base
+;; type, which takes any value
+(def ^:private equality-ops #{:= :in :is-not-distinct-from})
+(def ^:private negated-op
+  {:= :<> :<> := :not= := :!= := :in :not-in :not-in :in
+   :is-not-distinct-from :is-distinct-from :is-distinct-from :is-not-distinct-from})
+
+(defn- conditions [stmt]
+  (cond-> (select-keys stmt (into [:where :having :on-conflict] join-keys))
+    ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
+    (map? (:do-update-set stmt)) (assoc :do-update-where (:where (:do-update-set stmt)))))
+
+(defn- condition-nodes [stmt] (own-nodes (conditions stmt)))
+
+(defn- polar-nodes
+  "[node negated?] for the nodes of part, as own-nodes walks them: negated? under an odd number
+   of :not, through :and and :or alone ([:not [:= :state \"x\"]] is state <> 'x'; a CASE or a
+   function's argument under NOT is not negated)."
+  [part]
+  (letfn [(walk [x neg?]
+            (lazy-seq
+             (cons [x neg?]
+                   (when (and (branch? x) (not (statement? x)))
+                     (let [neg? (case (when (vector? x) (first x))
+                                  :not (not neg?)
+                                  (:and :or) neg?
+                                  false)]
+                       (mapcat #(walk % neg?) (seq x)))))))]
+    (walk part false)))
 
 (defn- comparisons
   "[op column other] for each column side of the comparisons in a statement's conditions: a
-   column on either side, the other side whatever it is (a value, a symbol, a column)."
+   column on either side, the other side whatever it is (a value, a symbol, a column). Under an
+   odd number of :not, op is its negation (= is <>)."
   [stmt]
-  (for [x (own-nodes (cond-> (select-keys stmt (into [:where :having :on-conflict] join-keys))
-                       ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
-                       (map? (:do-update-set stmt)) (assoc :do-update-where (:where (:do-update-set stmt)))))
+  (for [[x negated?] (polar-nodes (conditions stmt))
         :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
                                    (and (= 4 (count x)) (#{:between :not-between} (first x)))))
         :let [[op a b c] x]
         [col other] (if (= 4 (count x))
                       (when (column-keyword? a) [[a b] [a c]])
                       (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a])))]
-    [op col other]))
+    [(if negated? (negated-op op op) op) col other]))
 
 (defn- target-column
   "A column as HoneySQL writes it where a statement assigns it: without its namespace."
@@ -612,9 +647,9 @@
    register-op!). nil when this cannot tell (a cast value or operation is named after its type,
    a subquery after its column, :raw anything)."
   [x]
-  (cond (or (number? x) (string? x) (boolean? x) (nil? x) (param-key x) (#{:null :true :false} x)) "?column?"
+  (cond (or (number? x) (string? x) (boolean? x) (nil? x) (param-key x) (#{:null :true :false} (sql-value x))) "?column?"
         (shorthand-fn x) (function-name (shorthand-fn x))
-        (keyword? x) (when (sql-values x) (name x))
+        (keyword? x) (some-> (sql-value x) name)
         (not (and (vector? x) (keyword? (first x)))) nil
         :else (let [[h a] x]
                 (cond (= :. h) (some-> (last x) (#(when (keyword? %) (function-name (name %)))))
@@ -661,6 +696,25 @@
         ;; a domain's CHECKs narrow its base as [:and base ...]
         :and (enum-values registry (first (shape/entries s)))
         nil))))
+
+(defn- check-list?
+  "Whether a column's labels are a CHECK's list ([:enum {:pg/constraints ...} ...]), not an
+   enum type's."
+  [s]
+  (let [inner (shape/non-null s)]
+    (and (vector? inner) (= :enum (first inner)) (some? (:pg/constraints (second inner))))))
+
+(defn- compared-schema
+  "The schema a value op compares with a column of schema s must fit: under equality-ops, or
+   for an enum type's labels, the column's; for a CHECK's list otherwise, the base type."
+  [s op]
+  (if (and (not (equality-ops op)) (check-list? s))
+    (let [t (:pg/type (second (shape/non-null s)))
+          base (:schema (types/entry t))]
+      (cond (keyword? base) [base {:pg/type t}]
+            (some? base) base
+            :else :any))
+    s))
 
 (defn- star? [col] (= "*" (second (split-column col))))
 
@@ -730,6 +784,10 @@
     (for [[col scope] (distinct (concat (for [c (keep #(first (select-parts % opts)) (selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c] (comparisons stmt)] [c sc])
+                                        (for [x (condition-nodes stmt)
+                                              :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
+                                                         (column-keyword? (second x)))]
+                                          [(second x) sc])
                                         ;; a keyword assigned in SET is a column the statement sees
                                         (for [m [(:set stmt) (:do-update-set stmt)] :when (and (map? m) (not (contains? m :fields)))
                                               [_ v] m :when (column-keyword? v)]
@@ -775,6 +833,18 @@
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column (keyword c)})))))))
 
+(defn- null-value?
+  "Whether HoneySQL writes v as NULL: nil, [:inline nil], [:lift nil], or :null (any case) where
+   the format leaves it unquoted. A :dialect other than :nrql quotes it unless :quoted false, and
+   :quoted-always may match it."
+  [v {:keys [quoted quoted-always dialect] :as format}]
+  (let [quoted? (if (contains? format :quoted)
+                  quoted
+                  (and (contains? format :dialect) (not= :nrql dialect)))]
+    (or (nil? v) (#{[:inline nil] [:lift nil]} v)
+        (and (= :null (sql-value v)) (not quoted?)
+             (not (some-> quoted-always (re-find (name v))))))))
+
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
    a column only the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
@@ -809,7 +879,7 @@
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
-                           (and (or (nil? v) (= [:inline nil] v)) (not (shape/maybe? s)) (not (filled-by-trigger? registry table how)))
+                           (and (null-value? v format) (not (shape/maybe? s)) (not (filled-by-trigger? registry table how)))
                            {:kind :not-null-violation :table table :column col :clause clause})]
              :when p]
          p)))))
@@ -841,20 +911,21 @@
 (declare driver-type)
 
 (defn- string-problems
-  "Enum literals outside the enum (or a CHECK's list), compared with or assigned to its column; and, under pgjdbc's default stringtype (varchar), a string HoneySQL
+  "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
+   assigned or under equality-ops; and, under pgjdbc's default stringtype (varchar), a string HoneySQL
    sends as a parameter (not inlined, not cast) to a column PostgreSQL takes no varchar for
    (enum = varchar does not exist, nor inet = varchar): a literal, or an argument to an enum
    column or to one arg-types types as a string."
   [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema} :as opts}]
-  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc false])
+  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] {:col col :value value :scope sc :op op})
                      (let [target (target-scope sc stmt schema)]
-                       (when (seq target) (for [[col value] (assignments stmt)] [col value target true]))))
+                       (when (seq target) (for [[col value] (assignments stmt)] {:col col :value value :scope target :assigned? true}))))
         varchar? (and (not= :unspecified stringtype) (not (:inline format)))
         head #(if (vector? %) (first %) %)]
     (concat
      ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
      ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
-     (for [[col value scope assigned?] uses
+     (for [{:keys [col value scope assigned?]} uses
            :let [k (param-key value)] :when (and k varchar?)
            :let [s (:schema (resolve-column registry scope col))
                  t (some->> s (uncast-type registry))]
@@ -862,12 +933,12 @@
            :when (and t (not (and assigned? (shape/maybe? s)))
                       (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
-     (for [[col value scope assigned?] uses
+     (for [{:keys [col value scope assigned? op]} uses
            :let [{s :schema} (resolve-column registry scope col)
                  strings? (or (string? value) (and (vector? value) (every? string? value)))
                  values (cond strings? (if (string? value) [value] value)
                               (and (vector? value) (#{:cast :inline} (first value)) (string? (second value))) [(second value)])
-                 allowed (when s (enum-values registry s))
+                 allowed (when s (enum-values registry (cond-> s (not assigned?) (compared-schema op))))
                  ;; text casts to a reg* type (regclass ...) implicitly, so an assignment takes it
                  uncast (when (and s varchar? strings? (not (and assigned? (some->> s shape/column-props shape/type-name (re-matches #"reg\w+")))))
                           (uncast-type registry s))]
@@ -1041,6 +1112,16 @@
       (if (and assigned? (maybe? s)) [:maybe inner] inner))
     :any))
 
+(defn- compared-column-type
+  "The type of an argument op compares with a column, as compared-schema narrows it. A CHECK's
+   list taken as its base type still takes the keywords :write's :enum lets an extension send."
+  [registry sc col op opts]
+  (if-let [s (:schema (resolve-column registry sc col))]
+    (let [c (compared-schema s op)
+          t (driver-type registry jdbc/write-type c opts)]
+      (if (and (not= c s) (some #{:keyword} (get-in opts [:write :enum]))) [:or t :keyword] t))
+    :any))
+
 (defn- loose
   "A column type without the bounds a comparison need not keep (CHECKs, lengths, ranges): its
    kind and :pg/type. A type with other children (an enum, an :or) stays: PostgreSQL refuses a
@@ -1098,7 +1179,7 @@
          typed (mapcat (fn [[stmt sc]]
                          (concat (for [[op col value] (comparisons stmt)
                                        :let [x (array-arg value)]]
-                                   [(or x value) (compared-type op (column-type registry sc col false opts) x opts)])
+                                   [(or x value) (compared-type op (compared-column-type registry sc col op opts) x opts)])
                                  (for [[_ v] (select-keys stmt [:limit :offset])] [v [:int {:min 0}]])
                                  ;; [:cast :?x :mood]: an argument cast to an enum is a value of it
                                  (for [x (tree-seq branch? seq stmt)

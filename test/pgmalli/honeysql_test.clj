@@ -668,11 +668,68 @@
           "OVERRIDING USER VALUE ignores the value given")
       (is (= [] (check {:update :users :set {:nick_upper :default :id [:default]} :where [:= :id 1]})) "DEFAULT is allowed"))))
 
+(deftest null-spellings-are-checked-in-every-write
+  (doseq [v [nil :null [:inline nil] [:lift nil]]
+          [clause column q]
+          [[:set :score {:update :users :set {:score v} :where [:= :id 1]}]
+           [:values :group_id {:insert-into :users :values [{:group_id v :score 1}]}]
+           [:values :group_id {:insert-into :users :columns [:group_id :score] :values [[v 1]]}]
+           [:do-update-set :score {:insert-into :users :values [{:group_id 1 :score 1}]
+                                  :on-conflict [:id] :do-update-set {:score v}}]]]
+    (is (= [{:kind :not-null-violation :table "sample.users" :column column :clause clause}]
+           (h/check registry q opts))
+        (pr-str q)))
+  (doseq [v [nil :null [:inline nil] [:lift nil]]]
+    (is (= [] (h/check registry {:update :users :set {:nick v} :where [:= :id 1]} opts)) (pr-str v))))
+
+(deftest a-quoted-null-is-a-column
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                       [:id [:int {:pg/type "integer"}]]
+                                                       [:null [:int {:pg/type "integer"}]]]}})
+        q {:update :t :set {:id :null}}]
+    (doseq [format [{:quoted true} {:quoted-always #"^null$"}
+                    {:dialect :ansi}
+                    {:dialect :ansi :quoted true}
+                    {:dialect :ansi :quoted-always #"^id$"}
+                    {:dialect :ansi :quoted false :quoted-always #"^null$"}
+                    {:dialect :ansi :quoted nil :quoted-always #"^null$"}
+                    {:dialect :nrql :quoted true}]]
+      (is (= [] (h/check reg q {:format format})) (pr-str format)))
+    (doseq [format [{} {:quoted-always #"^id$"}
+                    {:dialect :ansi :quoted false}
+                    {:dialect :ansi :quoted nil}
+                    {:dialect :ansi :quoted false :quoted-always #"^id$"}
+                    {:dialect :nrql}]]
+      (is (= [{:kind :not-null-violation :table "public.t" :column :id :clause :set}]
+             (h/check reg q {:format format})) (pr-str format)))))
+
+(deftest null-tests-read-their-column-in-every-condition
+  (doseq [op [:is :is-not]
+          q [{:select [:id] :from [:users] :where [op :nosuch nil]}
+             {:select [:id] :from [:users] :group-by [:id] :having [op :nosuch nil]}
+             {:select [:users.id] :from [:users] :join [:groups [op :nosuch nil]]}
+             {:insert-into :groups :values [{:id 1 :name "g"}]
+              :on-conflict [:id] :do-update-set {:fields [:name] :where [op :nosuch nil]}}]]
+    (is (= [{:kind :unknown-column :column :nosuch}] (h/check registry q opts)) (pr-str q)))
+  (doseq [op [:is :is-not]]
+    (is (= [{:kind :unknown-column :column :u.nosuch :in [:where 1]}]
+           (h/check registry {:select [:id] :from [[:users :u]]
+                              :where [:exists {:select [1] :from [:groups] :where [op :u.nosuch nil]}]} opts)))
+    (is (= [] (h/check registry {:select [:id] :from [[:users :u]]
+                                 :where [:exists {:select [1] :from [:groups] :where [op :u.nick nil]}]} opts)))))
+
+(deftest is-true-false-unknown-are-not-columns
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                       [:flag [:maybe [:boolean {:pg/type "boolean"}]]]]}})]
+    (doseq [op [:is :is-not], v [nil true false :null :true :false :unknown]]
+      (is (= [] (h/check reg {:select [:flag] :from [:t] :where [op :flag v]})) (pr-str [op v])))))
+
 (deftest a-before-trigger-may-fill-what-a-write-leaves-null
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
                                                         [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]]]}})]
     (is (= [] (h/check reg {:insert-into :t :values [{:id 1}]})) "no :missing-required-column")
-    (is (= [] (h/check reg {:insert-into :t :values [{:id 1 :g nil}]})) "no :not-null-violation")
+    (doseq [v [nil :null [:inline nil] [:lift nil]]]
+      (is (= [] (h/check reg {:insert-into :t :values [{:id 1 :g v}]})) (pr-str v)))
     (is (= [{:kind :not-null-violation :table "public.t" :column :g :clause :set}] (h/check reg {:update :t :set {:g nil}}))
         "an UPDATE has no BEFORE UPDATE trigger here")))
 
@@ -921,3 +978,67 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/rc [:map {:pg/table "public.rc"} [:id :int] [:r [:any {:pg/type "regclass"}]]]}})]
     (is (= [] (h/check reg {:update :rc :set {:r "w"}})))
     (is (= [:uncast-string] (map :kind (h/check reg {:select [:id] :from [:rc] :where [:= :r "w"]}))))))
+
+(def ^:private check-list-registry
+  ;; state is a text column a CHECK narrows to a list; mood an enum type
+  (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
+                                :pg.public/t [:map {:pg/table "public.t"}
+                                              [:id [:int {:pg/type "integer"}]]
+                                              [:state [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]]
+                                              [:n [:enum {:pg/type "integer" :pg/constraints ["t_n_check"]} 1 2]]
+                                              [:m [:ref {:pg/type "mood"} :pg.public/mood]]]}}))
+
+(deftest a-check-list-narrows-writes-and-equality-not-other-comparisons
+  (let [q #(h/check check-list-registry {:select [:id] :from [:t] :where %} {:stringtype :unspecified})]
+    (doseq [w [[:= :state "archived"] [:in :state ["archived"]] [:is-not-distinct-from :state "archived"]
+               [:= "archived" :state] [:not [:<> :state "archived"]] [:not [:not [:= :state "archived"]]]]]
+      (is (= [:enum-literal] (map :kind (q w))) (pr-str w)))
+    (doseq [w [[:<> :state "archived"] [:not= :state "archived"] [:not-in :state ["archived"]]
+               [:< :state "z"] [:between :state "a" "z"] [:is-distinct-from :state "archived"]
+               [:<> "archived" :state] [:not [:= :state "archived"]] [:not [:in :state ["archived"]]]
+               [:not [:and [:= :id 1] [:= :state "archived"]]]]]
+      (is (= [] (q w)) (str (pr-str w) ": PostgreSQL compares a text, and the query matches rows")))
+    (is (= [:enum-literal] (map :kind (h/check check-list-registry {:update :t :set {:state "archived"}})))
+        "a write the CHECK refuses")
+    (doseq [w [[:<> :m "zz"] [:< :m "zz"] [:not-in :m ["zz"]]]]
+      (is (= [:enum-literal] (map :kind (q w))) (str (pr-str w) ": an enum type refuses the value however compared")))))
+
+(deftest an-argument-compared-with-a-check-list-takes-its-base-type-except-under-equality
+  (let [args #(h/arg-types check-list-registry {:select [:id] :from [:t] :where %})]
+    (is (= {:x [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]} (args [:= :state :?x])))
+    (is (= {:x [:string {:pg/type "text"}]} (args [:<> :state :?x])))
+    (is (= {:x [:string {:pg/type "text"}]} (args [:< :state :?x])))
+    (is (= {:x [:or [:sequential {:min 1} [:string {:pg/type "text"}]] [:set {:min 1} [:string {:pg/type "text"}]]]}
+           (args [:not-in :state :?x])))
+    (is (= {:x [:enum {:pg/type "mood"} "ok" "sad"]} (args [:<> :m :?x])) "an enum type keeps its labels")
+    (is (= {:x [:or [:sequential {:min 1} [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]]
+                [:set {:min 1} [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]]]}
+           (args [:in :state :?x])))
+    (is (= {:lo [:string {:pg/type "text"}] :hi [:string {:pg/type "text"}]} (args [:between :state :?lo :?hi])))
+    (is (= {:x [:maybe [:string {:pg/type "text"}]]} (args [:is-distinct-from :state :?x])))
+    (is (= {:x [:string {:pg/type "text"}]} (args [:not [:= :state :?x]])) "NOT = is <>")
+    (is (= {:x [:int {:pg/type "integer"}]} (args [:<> :n :?x])) "an integer column's list, its base type")
+    (is (= {:x [:enum {:pg/type "integer" :pg/constraints ["t_n_check"]} 1 2]} (args [:= :n :?x])))
+    (is (= {:x [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"] :y [:string {:pg/type "text"}]}
+           (h/arg-types check-list-registry {:update :t :set {:state :?x} :where [:<> :state :?y]}))
+        "the write keeps the list, the comparison in the same statement does not")
+    (is (= {:x [:or [:string {:pg/type "text"}] :keyword]}
+           (h/arg-types check-list-registry {:select [:id] :from [:t] :where [:<> :state :?x]} {:write {:enum [:keyword]}}))
+        "an extension that sends labels as keywords sends any keyword compared with the base type")))
+
+(deftest null-in-any-case-is-sql-null
+  (is (= [{:kind :not-null-violation :table "sample.users" :column :score :clause :set}]
+         (h/check registry {:update :users :set {:score :NULL} :where [:= :id 1]} opts)))
+  (is (= [] (h/check registry {:select [:id] :from [:users] :where [:is :nick :NULL]} opts)) "not a column named NULL"))
+
+(deftest not-negates-through-and-or-only-and-each-occurrence-on-its-own
+  (let [q #(map :kind (h/check check-list-registry {:select [:id] :from [:t] :where %} {:stringtype :unspecified}))
+        c [:= :state "archived"]]
+    (is (= [:enum-literal] (q [:not [:case [:= :state "archived"] true :else false]])) "a CASE's condition is not negated")
+    (is (= [:enum-literal] (q [:not [:= :id [:case [:= :state "archived"] 1 :else 2]]])))
+    (is (= [:enum-literal] (q [:or c [:not c]])) "the same vector, once plain and once negated")
+    (is (= [] (q [:not [:or [:= :state "archived"] [:= :id 1]]])))))
+
+(deftest an-sql-word-in-any-case-names-its-column-as-postgresql-does
+  (is (= [:map [:current_date [:maybe :any]]] (h/row-schema registry {:select [:CURRENT_DATE] :from [:users]} opts)))
+  (is (= [:map [:?column? [:maybe :any]]] (h/row-schema registry {:select [:NULL] :from [:users]} opts))))

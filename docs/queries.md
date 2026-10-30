@@ -71,7 +71,9 @@ An INSERT or UPDATE is checked against what PostgreSQL refuses to write:
 ;; => [{:kind :read-only-column, :table "public.posts", :column :title_upper}]
 ```
 
-HoneySQL writes NULL for a key one map of `:values` lacks and another has. `users.status`
+NULL is any of `nil`, `:null` (in any case), `[:inline nil]` and `[:lift nil]`; a `:null` the
+format quotes (`:quoted`, or a `:dialect`) is a column named `null`. HoneySQL also writes NULL
+for a key one map of `:values` lacks and another has. `users.status`
 has a default, but the first row below gets NULL:
 
 ```clojure
@@ -112,7 +114,7 @@ keyed as in `sql/format`'s `:params`:
 
 | where the argument is | its type |
 |---|---|
-| compared with a column | the column's kind (an enum's labels kept), without NULL |
+| compared with a column | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast to an enum type (`[:cast :?s :user_status]`) | the enum's labels |
 | assigned to a column (`:set`, `:values`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out |
@@ -261,8 +263,9 @@ naming its `:var`; `{:ns 'app.queries}` (or a list of namespaces) limits it to s
 
 These match or touch no row, which is almost always a mistake:
 
-- A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
-  'closed'))`) with a value outside it: an `:enum-literal`.
+- An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list (`CHECK (state
+  IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`, `NOT IN` and `<`
+  match rows and are not reported; nor is `NOT (state = ...)`.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 

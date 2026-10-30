@@ -3,6 +3,20 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
+## 0.3.2 (2026-10-30)
+
+* `h/check` reports NULL written into a NOT NULL column however HoneySQL spells it: `nil`,
+  `:null` (in any case), `[:inline nil]` or `[:lift nil]`. A `:null` the format quotes is a
+  column. Thanks to @M-simplifier.
+* An unknown column on the left of `IS` / `IS NOT` is reported.
+* A column a CHECK narrows to a list (`CHECK (state IN ('open', 'closed'))`) is narrowed only
+  where a value outside the list fails or matches no row: a write, `=`, `IN` and
+  `IS NOT DISTINCT FROM`. `<>`, `NOT IN`, `<` and the like are no longer reported as
+  `:enum-literal`, and `arg-types` gives their arguments the column's base type. An enum
+  type keeps its labels in every comparison.
+* A comparison under `NOT` is read as its negation: `[:not [:= :state "x"]]` is `<>`.
+* An SQL word in another case (`:CURRENT_DATE`, `:TRUE`) is not taken for a column.
+
 ## 0.3.1 (2026-10-30)
 
 * Reading a schema runs none of the functions or operators it defines, so its owner cannot

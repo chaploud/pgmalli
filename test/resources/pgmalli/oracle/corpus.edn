@@ -150,6 +150,8 @@
  ;; ON CONFLICT
  ;; writes PostgreSQL refuses: NULL into NOT NULL, a column only the database writes
  [:update-null {:update :posts :set {:title nil} :where [:= :id 1]}]
+ [:update-null-keyword {:update :posts :set {:title :null} :where [:= :id 1]}]
+ [:update-null-lift {:update :posts :set {:title [:lift nil]} :where [:= :id 1]}]
  [:update-nullable {:update :posts :set {:body nil} :where [:= :id 1]}]
  [:update-identity {:update :audits :set {:id 5}}]
  [:update-generated {:update :audits :set {:note_upper "x"}}]
@@ -186,6 +188,11 @@
  [:check-in-compare {:select [:id] :from [:tickets] :where [:and [:= :state "open"] [:in :kind ["bug" "task"]]]}]
  [:check-in-set {:update :tickets :set {:state "closed" :kind "task"} :where [:= :id 1]}]
  [:check-in-insert {:insert-into :tickets :values [{:state "closed" :kind "bug"}]}]
+ ;; a CHECK's list does not narrow <>, NOT IN or <: PostgreSQL compares the base type
+ [:check-in-not-equal {:select [:id] :from [:tickets] :where [:<> :state "archived"]}]
+ [:check-in-not-in {:select [:id] :from [:tickets] :where [:not-in :kind ["epic"]]}]
+ [:check-in-less {:select [:id] :from [:tickets] :where [:< :state "z"]}]
+ [:check-in-distinct {:select [:id] :from [:tickets] :where [:is-distinct-from :kind "epic"]}]
  [:upsert-excluded {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name [:|| :EXCLUDED.name "!"]}}]
  [:upsert-target-ref {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :tags.name}}]
  [:upsert-excluded-bad {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :EXCLUDED.nosuch}}]
@@ -226,6 +233,10 @@
  [:any-array {:select [:id] :from [:users] :where [:= :id [:any [:array [1 2]]]]}]
  [:cast-col {:select [[[:cast :score :text] :s]] :from [:users]}]
  [:is-null {:select [:id] :from [:users] :where [:is :nick nil]}]
+ [:is-null-bad-column {:select [:id] :from [:users] :where [:is :nosuch nil]}]
+ [:is-not-null-bad-column {:select [:id] :from [:users] :where [:is-not :nosuch nil]}]
+ [:is-unknown {:select [:id] :from [:users] :where [:is [:= :score 1] :unknown]}]
+ [:is-not-unknown {:select [:id] :from [:users] :where [:is-not [:= :score 1] :unknown]}]
  ;; second batch: queries PostgreSQL accepts that a scope rule could misjudge
  [:using-plain {:select [:id] :from [:users] :join [:posts [:using :id]]}]
  [:using-qualified {:select [:users.id :posts.id] :from [:users] :join [:posts [:using :id]]}]

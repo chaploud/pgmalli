@@ -89,6 +89,15 @@
       "three spellings of a named parameter, keyed without ?")
   (is (= ["SELECT a AS b, COUNT(*), MAX(id) FROM t"] (sql/format {:select [[:a :b] [[:count :*]] :%max.id] :from [:t]}))
       "[:a :b] is a AS b; :%f.args calls f")
+  (is (= ["\"null\""] (sql/format :null {:dialect :ansi})) "a dialect quotes :null")
+  (is (= ["null"] (sql/format :null {:dialect :ansi :quoted false})) "unless :quoted false")
+  (is (= ["null"] (sql/format :null {:dialect :ansi :quoted nil})))
+  ;; :nrql and :quoted-always are newer than the oldest HoneySQL README supports
+  (when (try (sql/format :x {:dialect :nrql}) (catch Exception _ nil))
+    (is (= ["null"] (sql/format :null {:dialect :nrql})) ":nrql does not quote"))
+  (when (= ["\"x\""] (sql/format :x {:quoted-always #"^x$"}))
+    (is (= ["\"null\""] (sql/format :null {:quoted-always #"^null$"}))))
+  (is (= ["NULL"] (sql/format :NULL)) "a keyword is written as spelt")
   (is (= ["INSERT INTO t AS u (a) VALUES (?)" 1] (sql/format {:insert-into [[:t :u] [:a]] :values [[1]]}))))
 
 (deftest sql-format-writes-values-maps-as-write-problems-reads-them
