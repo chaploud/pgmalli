@@ -189,7 +189,7 @@
               (kept [:and schema [:re {:error/message (check-message f)} (cond-> (ev/like-regex (:pattern f)) (:case-insensitive? f) ev/case-insensitive)]])
               as-is)
       :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered :ref-base ref-base}
-                                            (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f))
+                                            (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f) :sql (:sql f))
                                             schema-name)]
                       (if (= (:unrendered inner) unrendered) (kept (:schema inner)) as-is))
       :not-null (kept (rejecting-nil schema))

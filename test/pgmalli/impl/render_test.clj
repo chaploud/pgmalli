@@ -592,3 +592,10 @@
     (is (ok? :pg.public/u {:u nil :b 1}) "a NULL dispatch passes when an alternative is not false")
     (is (not (ok? :pg.public/u {:u nil :b 0})) "and fails when every alternative is false")
     (is (not (ok? :pg.public/u {:u 3 :b 1})))))
+
+(deftest a-pattern-under-is-null-or-says-its-check-as-the-others-do
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "c" :position 1 :data_type "text" :is_nullable true}]
+                                                               :constraints {"c_check" {:name "c_check" :type "CHECK"
+                                                                                        :check_clause "CHECK (c IS NULL OR c ~ '^z'::text)"}}}}}))]
+    (is (re-find #"violates check constraint c_check: CHECK \(c IS NULL OR c ~ '\^z'::text\)" (pr-str (:pg.public/t registry))))))
