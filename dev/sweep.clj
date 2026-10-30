@@ -48,6 +48,14 @@
               "SELECT nspname FROM pg_namespace WHERE nspname NOT LIKE 'pg\\_%' AND nspname <> 'information_schema' ORDER BY 1"])
        :out str/split-lines (remove str/blank?)))
 
+(defn- target
+  "The table an INSERT goes into, as SQL: a keyword's name, or the quoted text of [:raw ...]
+   (identity tables come as [{:overriding-value :system} t], quoted names as [[:raw ...]])."
+  [q]
+  (let [t (:insert-into q)
+        t (if (and (vector? t) (not= :raw (first t))) (last t) t)]
+    (if (vector? t) (second t) (name t))))
+
 (defn- inserts-round-trip
   "Findings from loading a generated dataset back into the database: one per statement the
    database refused, in one transaction (a refused statement is rolled back to its savepoint,
@@ -56,7 +64,7 @@
   (let [dataset (into {} (for [[t rows] dataset] [t (mapv #(into {} (for [[k v] %] [k (literal v)])) rows)]))
         [stmts err] (try-step :inserts #(vec (data/inserts registry dataset)))
         formatted (when-not err (mapv (fn [q] (let [[t e] (try-step :format #(first (sql/format q {:inline true})))]
-                                                (or t (assoc e :table (let [t (:insert-into q)] (if (vector? t) (last t) t)))))) stmts))
+                                                (or t (assoc e :table (target q))))) stmts))
         [texts err2] [(filter string? formatted) (seq (remove string? formatted))]
         stmts (when-not err (filterv #(string? (nth formatted (.indexOf ^java.util.List stmts %))) stmts))]
     (cond err [err]
@@ -64,7 +72,7 @@
           :else
           ;; the script's own rows would take keys the dataset uses: the tables are emptied first (rolled back too)
           (let [script (str "\\set ON_ERROR_ROLLBACK on\nBEGIN;\n"
-                            "\\warn STMT truncate\nTRUNCATE " (str/join ", " (map (fn [q] (let [t (:insert-into q)] (name (if (vector? t) (last t) t)))) stmts)) " CASCADE;\n"
+                            "\\warn STMT truncate\nTRUNCATE " (str/join ", " (map target stmts)) " CASCADE;\n"
                             (str/join "\n" (map-indexed (fn [i t] (str "\\warn STMT " i "\n" t ";")) texts))
                             "\nROLLBACK;\n")
                 {:keys [err]} (p/sh ["docker" "exec" "-i" db/*container* "psql" "-X" "-q" "-U" "postgres" "-d" dbname] {:in script})
@@ -77,7 +85,7 @@
                   :let [i (parse-long (str/trim n))]
                   :when i
                   :let [q (nth stmts i)]]
-              {:kind :rejected :table (let [t (:insert-into q)] (if (vector? t) (last t) t))
+              {:kind :rejected :table (target q)
                :message (str/join "\n" (remove #(str/starts-with? % "STMT") lines))
                :statement (let [t (nth texts i)] (subs t 0 (min 800 (count t))))})))))
 
