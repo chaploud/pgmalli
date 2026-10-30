@@ -250,7 +250,9 @@ PostgreSQL does:
 - A column missing from the map is NULL, or its literal default in an insert schema.
 - A CHECK whose result depends on what pgmalli cannot know passes: an enum compared by its
   order, the text of a numeric, float or interval (`::text`, `||`), a regex class outside
-  ASCII.
+  ASCII, a regex Java runs out of stack on for a long value (a repeated alternation such as
+  `^([a-z0-9]|-)+$`). A `[:re ...]` schema in the registry fails such a value instead, since an
+  application's own `:re` may have no CHECK behind it.
 
 The operators covered are comparison, logic, `IN`, `BETWEEN`, `IS DISTINCT FROM`, arithmetic,
 `LIKE`, regexes, `CASE`, and the common string, numeric, array and jsonb functions. A CHECK

@@ -452,3 +452,34 @@
   (is (passes? "CHECK ((x)::numeric(2,0) = 3::numeric)" {:x 2.4999999999999996}) "15 significant digits: 2.50000000000000")
   (is (ev/passes? (x/check-clause "CHECK (x = (0.105)::real)") {:x 0.105} {:x :real}))
   (is (m/validate [:double {:pg/type "real"}] (float 0.5) {:registry (merge (m/default-schemas) pgtypes/schemas)}) "a Float, as pgjdbc reads a real"))
+
+(defn- ms [f] (let [t (System/nanoTime)] (f) (quot (- (System/nanoTime) t) 1000000)))
+
+(def ^:private types-registry {:registry (merge (m/default-schemas) pgtypes/schemas)})
+
+(deftest a-numeric-with-a-huge-exponent-is-judged-without-spelling-out-its-digits
+  (let [n [:pg/numeric {:precision 10 :scale 2}]]
+    (is (> 1000 (ms #(is (false? (m/validate n 1E+100000000M types-registry))))))
+    (is (> 1000 (ms #(is (true? (m/validate n 1E-100000000M types-registry))))) "rounds to 0.00")
+    (is (true? (m/validate n 99999999.994M types-registry)))
+    (is (false? (m/validate n 99999999.995M types-registry)) "rounds up past the precision"))
+  (is (> 1000 (ms #(is (not (passes? "CHECK (((n)::numeric(10,2)) > (0)::numeric)" {:n 1E+100000000M}))))))
+  (is (> 1000 (ms #(is (not (passes? "CHECK (((n)::integer) > 0)" {:n 1E+100000000M}))))))
+  (is (passes? "CHECK (((n)::integer) = 0)" {:n 1E-100000000M})))
+
+(deftest a-long-value-on-a-repeated-alternation-passes-instead-of-overflowing-the-stack
+  (let [slug (apply str (repeat 100000 "a"))]
+    (is (false? (m/validate [:re "^([a-z0-9]|-)+$"] slug types-registry))
+        "fails, as an application's own :re in the registry has no CHECK behind it")
+    (is (passes? "CHECK ((slug ~ '^([a-z0-9]|-)+$'::text))" {:slug slug}))
+    (is (passes? "CHECK ((slug !~ '^([a-z0-9]|-)+$'::text))" {:slug slug}) "unknowable, not false, under NOT")))
+
+(deftest a-like-on-a-long-value-takes-linear-time
+  (let [s (apply str (repeat 100000 "@a"))]
+    (is (> 1000 (ms #(is (not (passes? "CHECK ((email ~~ '%_@_%._%'::text))" {:email s}))))))
+    (is (> 1000 (ms #(is (false? (m/validate [:re (ev/like-regex "%a%a%a%b")] s types-registry))))))
+    (is (passes? "CHECK ((email ~~ '%_@_%._%'::text))" {:email "a@b.c"}))))
+
+(deftest a-long-quoted-string-in-a-cast-parses
+  (let [long-s (apply str (repeat 100000 "a"))]
+    (is (passes? "CHECK ((((body)::jsonb ->> 'id'::text) IS NOT NULL))" {:body (str "{\"id\": \"" long-s "\"}")}))))

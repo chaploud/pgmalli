@@ -376,6 +376,17 @@
 (def ^:private int-ranges
   (update-vals (types/by-keyword :range) :range))
 
+;; A BigDecimal read from a request can be 1e100000000: setScale would spell out its digits
+(defn integer-digits
+  "Digits before the point, read off precision and scale; 0 or less when |d| < 1."
+  [^BigDecimal d]
+  (- (.precision d) (.scale d)))
+
+(defn rounded
+  "d at scale places, half up; a d too small to reach them is zero, without the division."
+  ^BigDecimal [^BigDecimal d scale]
+  (if (< (integer-digits d) (- scale)) (BigDecimal/valueOf 0 (int scale)) (.setScale d (int scale) java.math.RoundingMode/HALF_UP)))
+
 (defn- in-range [t v]
   (let [[lo hi] (int-ranges t)]
     (if (or (nil? lo) (<= lo v hi)) v (throw (ex-info "integer out of range" {:type t :value v})))))
@@ -438,10 +449,10 @@
                       (cond (and (str/starts-with? e "\"") (str/ends-with? e "\"")) (str/replace (subs e 1 (dec (count e))) #"\\(.)" "$1")
                             (= "NULL" e) nil
                             :else e)))
-            (re-seq #"\"(?:[^\"\\]|\\.)*\"|[^,]+" inner)))))
+            (re-seq #"\"[^\"\\]*(?:\\.[^\"\\]*)*\"|[^,]+" inner)))))
 
 (def ^:private json-number-or-string
-  #"\"(?:[^\"\\]|\\.)*\"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
+  #"\"[^\"\\]*(?:\\.[^\"\\]*)*\"|-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?")
 
 (defn- parse-json
   "JSON text as data, a number a BigDecimal as written (1.50 keeps its scale, which ->> prints):
@@ -478,7 +489,8 @@
     (nil? v) nil
     ;; float to integer rounds ties to even, numeric to integer away from zero
     (integer-types t) (long (in-range t (cond (integer? v) v
-                                              (number? v) (bigint (.setScale (bigdec v) 0 (if (double? v) java.math.RoundingMode/HALF_EVEN java.math.RoundingMode/HALF_UP)))
+                                              (double? v) (bigint (.setScale (bigdec v) 0 java.math.RoundingMode/HALF_EVEN))
+                                              (number? v) (let [d (bigdec v)] (if (< 20 (integer-digits d)) (throw (ex-info "integer out of range" {:type t})) (bigint (rounded d 0))))
                                               (boolean? v) (if v 1 0)
                                               :else (Long/parseLong (str/trim v)))))
     ;; a float goes to numeric with 15 significant digits (a real 6), as float8_numeric and
@@ -613,6 +625,8 @@
     (cond-> (-> re
                 (str/replace #"^\(\?iu?\)" "")
                 (str/replace #"(?<!\\)\\z" "")
+                ;; like-regex's atomic groups, which test.chuck does not read: the same strings
+                (str/replace "(?>[\\s\\S]*?" "(?:[\\s\\S]*")
                 strict-regex
                 (str/replace "[\\s\\S]" "[\\x20-\\x7E]"))
       ci? (str/replace (re-pattern (str escape-or-bracket "|\\p{L}"))
@@ -630,16 +644,23 @@
   (str/replace s #"[\\^$.|?*+()\[\]{}]" "\\\\$0"))
 
 (def like-regex
-  "The anchored Java regex of a LIKE pattern (backslash escapes % and _), memoized as java-regex is."
+  "The anchored Java regex of a LIKE pattern (backslash escapes % and _), memoized as java-regex is.
+   The text between two %s is fixed-length, so its first occurrence is the one to take: an atomic
+   group commits to it, which keeps matching linear where [\\s\\S]* between them backtracks
+   polynomially ('%a%a%a%b' on a long value)."
   (memoize
    (fn [pattern]
-     (str "^"
-          (str/replace pattern #"\\(.)|%|_|[^%_\\]+"
-                       (fn [[m esc]] (cond esc (escape-regex esc)
-                                           (= m "%") "[\\s\\S]*"
-                                           (= m "_") "[\\s\\S]"
-                                           :else (escape-regex m))))
-          "\\z"))))
+     (let [segments (str/split (str/replace pattern #"\\(.)|%|_|[^%_\\]+"
+                                            (fn [[m esc]] (cond esc (escape-regex esc)
+                                                                (= m "%") "\u0000"
+                                                                (= m "_") "[\\s\\S]"
+                                                                :else (escape-regex m))))
+                               #"\u0000" -1)]
+       (if (= 1 (count segments))
+         (str "^" (first segments) "\\z")
+         (str "^" (first segments)
+              (apply str (for [s (butlast (rest segments)) :when (seq s)] (str "(?>[\\s\\S]*?" s ")")))
+              "[\\s\\S]*" (last segments) "\\z"))))))
 
 (defn case-insensitive
   "A Java regex matching regardless of case, of every letter as in the database (~*, ILIKE)."
@@ -648,7 +669,10 @@
 
 (def ^:private compiled (memoize re-pattern))
 
-(defn- matches? [s re] (some? (re-find (compiled re) s)))
+;; in a CHECK, unknowable rather than true, so that NOT LIKE and !~ pass too
+(defn- matches? [s re]
+  (try (some? (re-find (compiled re) s))
+       (catch StackOverflowError _ (throw (ex-info "the regex runs out of stack on this value" {::unknowable true})))))
 
 (defn- regex-match
   "Whether s matches the pattern; nil (NULL, so a CHECK passes) when that depends on the
@@ -793,8 +817,9 @@
                         ;; numeric(p,s) rounds to s places, and fails past p digits
                         (and (vector? t) (exact-types (cast-type t)) (integer? (second t)) (decimal? v))
                         (let [[_ p sc] t
-                              r (.setScale ^BigDecimal v (int (or sc 0)) java.math.RoundingMode/HALF_UP)]
-                          (if (< (- (.precision r) (.scale r)) (inc (- p (or sc 0)))) r (throw (ex-info "numeric field overflow" {}))))
+                              sc (or sc 0)
+                              r (when (<= (integer-digits v) (inc (- p sc))) (rounded v sc))]
+                          (if (and r (< (integer-digits r) (inc (- p sc)))) r (throw (ex-info "numeric field overflow" {}))))
                         :else v))
           :array (mapv #(ev % row) (first args))
           :raw ((raw-values (first args)))

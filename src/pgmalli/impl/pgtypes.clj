@@ -111,7 +111,10 @@
                      bound (dec (long (.longValueExact (.movePointRight 1M digits))))
                      ;; generated within :gen/min and :gen/max (BigDecimals) when given, at the scale
                      scaled (fn [d] (.longValueExact (.setScale (.movePointRight (bigdec d) (int scale)) 0 java.math.RoundingMode/HALF_UP)))]
-                 {:pred (fn [v] (and (decimal? v) (< (.abs (.setScale ^BigDecimal v (int scale) java.math.RoundingMode/HALF_UP)) limit)))
+                 {:pred (fn [v] (and (decimal? v)
+                                     ;; rounding adds a digit at most
+                                     (<= (ev/integer-digits v) (inc (- precision scale)))
+                                     (< (.abs (ev/rounded v scale)) limit)))
                   :type-properties {:error/message (str "should fit numeric(" precision ", " scale ")")
                                     :gen/gen (gen/fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale))
                                                    (gen/large-integer* {:min (clojure.core/max (- bound) (if gen-min (scaled gen-min) (- bound)))
@@ -129,7 +132,20 @@
                (let [pass? (ev/checker expr types)]
                  {:pred (fn [v] (pass? {:VALUE v})) :min 1 :max 1}))}))
 
+(def re-schema
+  "[:re re] as malli's, except a value java.util.regex runs out of stack on fails instead of
+   throwing StackOverflowError (a regex such as ^([a-z0-9]|-)+$ recurses once per character, and
+   malli catches Exception alone). It fails rather than passes since the registry holds the
+   application's own :re schemas too, which no database CHECK may stand behind."
+  (m/-simple-schema
+   {:type :re
+    :compile (fn [_ [re] _]
+               (let [p (re-pattern re)]
+                 {:pred (fn [x] (and (instance? CharSequence x)
+                                     (try (some? (re-find p x)) (catch StackOverflowError _ false))))
+                  :min 1 :max 1}))}))
+
 (def schemas
   "The schema types pgmalli registers, by name."
-  {:string string-schema :double double-schema :pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
+  {:re re-schema :string string-schema :double double-schema :pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
    :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema})
