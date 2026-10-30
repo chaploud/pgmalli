@@ -112,12 +112,13 @@
           :else :other)))
 
 (defn- verdict
-  "PostgreSQL's verdict on [sql & params]: :ok, or the kind of problem check would report for
-   it, or :other."
+  "PostgreSQL's verdict on [sql & params]: :ok with the :rows it matched (selected or
+   written), or the kind of problem check would report for it, or :other."
   [^java.sql.Connection conn [sql & params :as sqlvec]]
   (try
     (jdbc/execute! conn (into [(str "EXPLAIN " sql)] params))
-    (try (jdbc/execute! conn sqlvec) {:pg :ok}
+    (try (let [r (jdbc/execute! conn sqlvec)]
+           {:pg :ok :rows (or (:next.jdbc/update-count (first r)) (count r))})
          (catch PSQLException e
            (case (.getSQLState e)
              "23502" {:pg :not-null-violation :state "23502" :message (.getMessage e)}
@@ -136,15 +137,18 @@
         (#{:missing-required-column :not-null-violation} k) :not-null-violation
         :else k))
 
-(defn- outcome [pg problems]
+(defn- outcome [{:keys [pg rows]} problems]
   (let [pg (name-class pg)
         ks (set (map (comp name-class :kind) problems))]
     (cond (and (= :ok pg) (empty? ks)) :agree-ok
-          ;; a literal outside a CHECK's list matches no row, and NULL set into a NOT NULL
-          ;; column by ON CONFLICT DO UPDATE fails once a row conflicts, which check reports by
-          ;; design (docs/queries.md "Reported though PostgreSQL runs them")
+          ;; a literal outside a CHECK's list matches no row (so only where PostgreSQL matched
+          ;; none), and NULL set into a NOT NULL column by ON CONFLICT DO UPDATE fails once a row
+          ;; conflicts, which check reports by design (docs/queries.md "Reported though PostgreSQL
+          ;; runs them")
           (and (= :ok pg) (seq problems)
-               (every? #(or (= :enum-literal (:kind %)) (= [:not-null-violation :do-update-set] ((juxt :kind :clause) %))) problems))
+               (every? #(or (and (= :enum-literal (:kind %)) (= 0 rows))
+                            (= [:not-null-violation :do-update-set] ((juxt :kind :clause) %)))
+                       problems))
           :reported-by-design
           (= :ok pg) :false-positive
           (= :other pg) (if (empty? ks) :other-silent :other-flagged)
@@ -186,7 +190,7 @@
                    :when sqlvec
                    :let [v (verdict conn sqlvec)
                          problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query {:format fmt})))]]
-               (merge c v {:format mode :sql (first sqlvec) :params (vec (rest sqlvec)) :problems problems :outcome (outcome (:pg v) problems)})))))))
+               (merge c v {:format mode :sql (first sqlvec) :params (vec (rest sqlvec)) :problems problems :outcome (outcome v problems)})))))))
 
 (defn -main
   "bb oracle [seed] [mutants-per-query]: the run on a throwaway PostgreSQL (docker, as the tests
