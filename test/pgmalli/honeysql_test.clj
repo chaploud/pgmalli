@@ -668,11 +668,57 @@
           "OVERRIDING USER VALUE ignores the value given")
       (is (= [] (check {:update :users :set {:nick_upper :default :id [:default]} :where [:= :id 1]})) "DEFAULT is allowed"))))
 
+(deftest null-spellings-are-checked-in-every-write
+  (doseq [v [nil :null [:inline nil] [:lift nil]]
+          [clause column q]
+          [[:set :score {:update :users :set {:score v} :where [:= :id 1]}]
+           [:values :group_id {:insert-into :users :values [{:group_id v :score 1}]}]
+           [:values :group_id {:insert-into :users :columns [:group_id :score] :values [[v 1]]}]
+           [:do-update-set :score {:insert-into :users :values [{:group_id 1 :score 1}]
+                                  :on-conflict [:id] :do-update-set {:score v}}]]]
+    (is (= [{:kind :not-null-violation :table "sample.users" :column column :clause clause}]
+           (h/check registry q opts))
+        (pr-str q)))
+  (doseq [v [nil :null [:inline nil] [:lift nil]]]
+    (is (= [] (h/check registry {:update :users :set {:nick v} :where [:= :id 1]} opts)) (pr-str v))))
+
+(deftest a-quoted-null-is-a-column
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                       [:id [:int {:pg/type "integer"}]]
+                                                       [:null [:int {:pg/type "integer"}]]]}})
+        q {:update :t :set {:id :null}}]
+    (doseq [format [{:quoted true} {:quoted-always #"^null$"}]]
+      (is (= [] (h/check reg q {:format format})) (pr-str format)))
+    (is (= [{:kind :not-null-violation :table "public.t" :column :id :clause :set}]
+           (h/check reg q {:format {:quoted-always #"^id$"}})))))
+
+(deftest null-tests-read-their-column-in-every-condition
+  (doseq [op [:is :is-not]
+          q [{:select [:id] :from [:users] :where [op :nosuch nil]}
+             {:select [:id] :from [:users] :group-by [:id] :having [op :nosuch nil]}
+             {:select [:users.id] :from [:users] :join [:groups [op :nosuch nil]]}
+             {:insert-into :groups :values [{:id 1 :name "g"}]
+              :on-conflict [:id] :do-update-set {:fields [:name] :where [op :nosuch nil]}}]]
+    (is (= [{:kind :unknown-column :column :nosuch}] (h/check registry q opts)) (pr-str q)))
+  (doseq [op [:is :is-not]]
+    (is (= [{:kind :unknown-column :column :u.nosuch :in [:where 1]}]
+           (h/check registry {:select [:id] :from [[:users :u]]
+                              :where [:exists {:select [1] :from [:groups] :where [op :u.nosuch nil]}]} opts)))
+    (is (= [] (h/check registry {:select [:id] :from [[:users :u]]
+                                 :where [:exists {:select [1] :from [:groups] :where [op :u.nick nil]}]} opts)))))
+
+(deftest is-tests-keep-their-sql-literals
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                       [:flag [:maybe [:boolean {:pg/type "boolean"}]]]]}})]
+    (doseq [op [:is :is-not], v [nil true false :null :true :false :unknown]]
+      (is (= [] (h/check reg {:select [:flag] :from [:t] :where [op :flag v]})) (pr-str [op v])))))
+
 (deftest a-before-trigger-may-fill-what-a-write-leaves-null
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
                                                         [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]]]}})]
     (is (= [] (h/check reg {:insert-into :t :values [{:id 1}]})) "no :missing-required-column")
-    (is (= [] (h/check reg {:insert-into :t :values [{:id 1 :g nil}]})) "no :not-null-violation")
+    (doseq [v [nil :null [:inline nil] [:lift nil]]]
+      (is (= [] (h/check reg {:insert-into :t :values [{:id 1 :g v}]})) (pr-str v)))
     (is (= [{:kind :not-null-violation :table "public.t" :column :g :clause :set}] (h/check reg {:update :t :set {:g nil}}))
         "an UPDATE has no BEFORE UPDATE trigger here")))
 

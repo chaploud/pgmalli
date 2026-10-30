@@ -511,13 +511,16 @@
 (def ^:private comparison-ops
   (into #{:= :<> :not= :!= :< :> :<= :>= :is-distinct-from :is-not-distinct-from} (concat in-ops like-ops)))
 
+(defn- condition-nodes [stmt]
+  (own-nodes (cond-> (select-keys stmt (into [:where :having :on-conflict] join-keys))
+               ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
+               (map? (:do-update-set stmt)) (assoc :do-update-where (:where (:do-update-set stmt))))))
+
 (defn- comparisons
   "[op column other] for each column side of the comparisons in a statement's conditions: a
    column on either side, the other side whatever it is (a value, a symbol, a column)."
   [stmt]
-  (for [x (own-nodes (cond-> (select-keys stmt (into [:where :having :on-conflict] join-keys))
-                       ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
-                       (map? (:do-update-set stmt)) (assoc :do-update-where (:where (:do-update-set stmt)))))
+  (for [x (condition-nodes stmt)
         :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
                                    (and (= 4 (count x)) (#{:between :not-between} (first x)))))
         :let [[op a b c] x]
@@ -730,6 +733,10 @@
     (for [[col scope] (distinct (concat (for [c (keep #(first (select-parts % opts)) (selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c] (comparisons stmt)] [c sc])
+                                        (for [x (condition-nodes stmt)
+                                              :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
+                                                         (column-keyword? (second x)))]
+                                          [(second x) sc])
                                         ;; a keyword assigned in SET is a column the statement sees
                                         (for [m [(:set stmt) (:do-update-set stmt)] :when (and (map? m) (not (contains? m :fields)))
                                               [_ v] m :when (column-keyword? v)]
@@ -775,6 +782,12 @@
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column (keyword c)})))))))
 
+(defn- null-value? [v {:keys [quoted quoted-always]}]
+  (or (nil? v) (#{[:inline nil] [:lift nil]} v)
+      (and (= :null v) (not quoted)
+           (not (and (instance? java.util.regex.Pattern quoted-always)
+                     (re-find quoted-always "null"))))))
+
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
    a column only the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
@@ -809,7 +822,7 @@
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
-                           (and (or (nil? v) (= [:inline nil] v)) (not (shape/maybe? s)) (not (filled-by-trigger? registry table how)))
+                           (and (null-value? v format) (not (shape/maybe? s)) (not (filled-by-trigger? registry table how)))
                            {:kind :not-null-violation :table table :column col :clause clause})]
              :when p]
          p)))))
