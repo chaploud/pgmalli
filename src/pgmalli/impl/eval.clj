@@ -378,9 +378,10 @@
 
 ;; A BigDecimal read from a request can be 1e100000000: setScale would spell out its digits
 (defn integer-digits
-  "Digits before the point, read off precision and scale; 0 or less when |d| < 1."
+  "Digits before the point, read off precision and scale; 0 or less when |d| < 1, and fewer than
+   any bound for a zero (0E+30's precision and scale say 31)."
   [^BigDecimal d]
-  (- (.precision d) (.scale d)))
+  (if (zero? (.signum d)) Integer/MIN_VALUE (- (.precision d) (.scale d))))
 
 (defn rounded
   "d at scale places, half up; a d too small to reach them is zero, without the division."
@@ -615,6 +616,12 @@
   [re]
   (-> re (str/replace (str "[" non-ascii "]") "(?!)") (str/replace non-ascii "")))
 
+(defn backtracking-regex
+  "like-regex's output without its atomic groups, which test.chuck and joined-regex do not read:
+   the same strings, as [\\s\\S]* between the parts."
+  [re]
+  (str/replace re #"\(\?>\[\\s\\S\]\*\?((?:\\.|[^\\()])*)\)" (fn [[_ part]] (str "[\\s\\S]*" part))))
+
 (defn generation-regex
   "The regex a string generator reads, from java-regex's (case-insensitive or not): its strings
    match the regex given. Without the flags and \\z, which test.chuck refuses; classes as their
@@ -625,8 +632,7 @@
     (cond-> (-> re
                 (str/replace #"^\(\?iu?\)" "")
                 (str/replace #"(?<!\\)\\z" "")
-                ;; like-regex's atomic groups, which test.chuck does not read: the same strings
-                (str/replace "(?>[\\s\\S]*?" "(?:[\\s\\S]*")
+                backtracking-regex
                 strict-regex
                 (str/replace "[\\s\\S]" "[\\x20-\\x7E]"))
       ci? (str/replace (re-pattern (str escape-or-bracket "|\\p{L}"))
@@ -987,12 +993,17 @@
          stored (if reals
                   (fn [row] (reduce (fn [r k] (let [v (get r k)] (if (and (number? v) (float4? v)) (assoc r k (Float/valueOf (unchecked-float v))) r))) row reals))
                   identity)]
-     (fn [row] (not (false? (try (ev e (stored row)) (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
+     (fn [row] (not (false? (try (ev e (stored row))
+                                ;; a value nested deeper than the stack goes: unknowable, as a regex's
+                                (catch StackOverflowError _ true)
+                                (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
 
 (defn unknowable?
   "Whether the row's verdict depends on what the evaluator does not know, so checker passes it."
   [e row types]
-  (try (ev (typed (x/canonical e) types) row) false (catch Exception ex (boolean (::unknowable (ex-data ex))))))
+  (try (ev (typed (x/canonical e) types) row) false
+       (catch StackOverflowError _ true)
+       (catch Exception ex (boolean (::unknowable (ex-data ex))))))
 
 (defn passes?
   ([e row] ((checker e) row))

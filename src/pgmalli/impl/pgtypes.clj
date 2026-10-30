@@ -139,6 +139,7 @@
    application's own :re schemas too, which no database CHECK may stand behind."
   (m/-simple-schema
    {:type :re
+    :to-ast m/-to-value-ast
     :compile (fn [_ [re] _]
                (let [p (re-pattern re)]
                  {:pred (fn [x] (and (instance? CharSequence x)

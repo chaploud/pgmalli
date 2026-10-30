@@ -462,7 +462,11 @@
     (is (> 1000 (ms #(is (false? (m/validate n 1E+100000000M types-registry))))))
     (is (> 1000 (ms #(is (true? (m/validate n 1E-100000000M types-registry))))) "rounds to 0.00")
     (is (true? (m/validate n 99999999.994M types-registry)))
-    (is (false? (m/validate n 99999999.995M types-registry)) "rounds up past the precision"))
+    (is (false? (m/validate n 99999999.995M types-registry)) "rounds up past the precision")
+    (is (true? (m/validate n 0E+30M types-registry)) "a zero with an exponent is zero")
+    (is (true? (m/validate [:pg/numeric {:precision 3 :scale -1}] 0E+5M types-registry))))
+  (is (passes? "CHECK (((n)::integer) = 0)" {:n 0E+25M}))
+  (is (passes? "CHECK (((n)::numeric(8,3)) = (0)::numeric)" {:n 0E+30M}))
   (is (> 1000 (ms #(is (not (passes? "CHECK (((n)::numeric(10,2)) > (0)::numeric)" {:n 1E+100000000M}))))))
   (is (> 1000 (ms #(is (not (passes? "CHECK (((n)::integer) > 0)" {:n 1E+100000000M}))))))
   (is (passes? "CHECK (((n)::integer) = 0)" {:n 1E-100000000M})))
@@ -483,3 +487,7 @@
 (deftest a-long-quoted-string-in-a-cast-parses
   (let [long-s (apply str (repeat 100000 "a"))]
     (is (passes? "CHECK ((((body)::jsonb ->> 'id'::text) IS NOT NULL))" {:body (str "{\"id\": \"" long-s "\"}")}))))
+
+(deftest a-value-nested-deeper-than-the-stack-is-unknowable
+  (let [deep (reduce (fn [v _] [v]) 1 (range 100000))]
+    (is (passes? "CHECK (((payload ->> 'k'::text) = 'v'::text))" {:payload {"k" "v" "x" deep}}))))

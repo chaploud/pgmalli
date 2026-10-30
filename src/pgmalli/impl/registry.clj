@@ -342,7 +342,7 @@
                                               ps))
           regex (when @regex-generation?
                   ;; several: strings of all of them at once, which one alone seldom makes
-                  (or (some->> (joined-regex (distinct (map (comp str last) (nested-res parts)))) generation-regex (vector :re))
+                  (or (some->> (joined-regex (distinct (map (comp ev/backtracking-regex str last) (nested-res parts)))) generation-regex (vector :re))
                       (some #(when-let [re (generation-regex (str (last %)))]
                                (if (= re (str (last %))) % [:re re]))
                             res)))

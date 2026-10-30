@@ -1,6 +1,7 @@
 (ns pgmalli.impl.registry-test
   "Generated files as malli registries, on the checked-in test/resources/pgmalli/{sample,other}.edn."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [clojure.test.check.generators :as tcg]
             [malli.core :as m]
             [malli.error :as me]
@@ -237,3 +238,15 @@
           rows (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})]
       (is (every? #(re-matches #"[aA]\p{IsAlphabetic}{0,4}" %) (map :o rows)))
       (is (every? #(re-matches #"[a-z]{3}" %) (map :c rows)) "char(3) pads: only three letters match"))))
+
+(deftest a-text-column-with-two-likes-generates-strings-of-both
+  (when @reg/regex-generation?
+    (let [reg (registry-of {} [{:name "s" :position 1 :data_type "text" :is_nullable false}]
+                           [["s_check" "s ~~ 'a%b%'::text"] ["s_check1" "s ~~ '%c%d'::text"]])
+          rows (mg/sample :pg.public.t/insert {:registry reg :size 20 :seed 1})]
+      (is (every? #(and (str/starts-with? % "a") (str/ends-with? % "d")) (map :s rows))))))
+
+(deftest an-re-in-the-registry-round-trips-through-malli-ast
+  (let [reg (pgmalli/registry {:registry {}})
+        s (m/schema [:map [:a [:re {:error/message "m"} "x+"]]] {:registry reg})]
+    (is (= (m/form s) (m/form (m/from-ast (m/ast s) {:registry reg}))))))
