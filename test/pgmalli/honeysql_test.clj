@@ -1030,3 +1030,15 @@
   (is (= [{:kind :not-null-violation :table "sample.users" :column :score :clause :set}]
          (h/check registry {:update :users :set {:score :NULL} :where [:= :id 1]} opts)))
   (is (= [] (h/check registry {:select [:id] :from [:users] :where [:is :nick :NULL]} opts)) "not a column named NULL"))
+
+(deftest not-negates-through-and-or-only-and-each-occurrence-on-its-own
+  (let [q #(map :kind (h/check check-list-registry {:select [:id] :from [:t] :where %} {:stringtype :unspecified}))
+        c [:= :state "archived"]]
+    (is (= [:enum-literal] (q [:not [:case [:= :state "archived"] true :else false]])) "a CASE's condition is not negated")
+    (is (= [:enum-literal] (q [:not [:= :id [:case [:= :state "archived"] 1 :else 2]]])))
+    (is (= [:enum-literal] (q [:or c [:not c]])) "the same vector, once plain and once negated")
+    (is (= [] (q [:not [:or [:= :state "archived"] [:= :id 1]]])))))
+
+(deftest an-sql-word-in-any-case-names-its-column-as-postgresql-does
+  (is (= [:map [:current_date [:maybe :any]]] (h/row-schema registry {:select [:CURRENT_DATE] :from [:users]} opts)))
+  (is (= [:map [:?column? [:maybe :any]]] (h/row-schema registry {:select [:NULL] :from [:users]} opts))))

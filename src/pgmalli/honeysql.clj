@@ -454,11 +454,12 @@
   #{:current_timestamp :current_date :current_time :localtime :localtimestamp :current_user :session_user :current_role
     :system_user :current_catalog :current_schema :user :true :false :null :default :*})
 
-(defn- sql-value?
-  "Whether HoneySQL writes keyword x as an SQL word: it writes the name as spelt, and
-   PostgreSQL reads :NULL and :Null as it reads :null."
+(defn- sql-value
+  "The SQL word HoneySQL writes for keyword x, lower-cased (:null for :NULL), or nil for a
+   column: it writes the name as spelt, and PostgreSQL reads NULL and Null as it reads null."
   [x]
-  (and (keyword? x) (nil? (namespace x)) (sql-values (keyword (str/lower-case (name x))))))
+  (when (and (keyword? x) (nil? (namespace x)))
+    (sql-values (keyword (str/lower-case (name x))))))
 
 (defn- param-key
   "The :params key of a HoneySQL named parameter, as sql/format looks it up: :?id and ?id are
@@ -478,7 +479,7 @@
     (let [c (subs (str x) 1)]
       (when (str/starts-with? c "%") (first (str/split (subs c 1) #"\."))))))
 
-(defn- column-keyword? [x] (and (keyword? x) (not (sql-value? x)) (not (param-key x)) (not (shorthand-fn x))))
+(defn- column-keyword? [x] (and (keyword? x) (not (sql-value x)) (not (param-key x)) (not (shorthand-fn x))))
 
 (defn- vectorish
   "x when it is a vector, [x] for a bare keyword (HoneySQL takes :order-by :id for [:id]): a
@@ -530,34 +531,35 @@
 
 (defn- condition-nodes [stmt] (own-nodes (conditions stmt)))
 
-(defn- negated-nodes
-  "The nodes of part under an odd number of :not (by identity), whose comparisons mean their
-   negation: [:not [:= :state \"x\"]] is state <> 'x'."
+(defn- polar-nodes
+  "[node negated?] for the nodes of part, as own-nodes walks them: negated? under an odd number
+   of :not, through :and and :or alone ([:not [:= :state \"x\"]] is state <> 'x'; a CASE or a
+   function's argument under NOT is not negated)."
   [part]
-  (let [found (java.util.Collections/newSetFromMap (java.util.IdentityHashMap.))]
-    (letfn [(walk [x neg?]
-              (when (and (branch? x) (not (statement? x)))
-                (when neg? (.add found x))
-                (let [neg? (if (and (vector? x) (= :not (first x))) (not neg?) neg?)]
-                  (doseq [c (seq x)] (walk c neg?)))))]
-      (walk part false))
-    found))
+  (letfn [(walk [x neg?]
+            (lazy-seq
+             (cons [x neg?]
+                   (when (and (branch? x) (not (statement? x)))
+                     (let [neg? (case (when (vector? x) (first x))
+                                  :not (not neg?)
+                                  (:and :or) neg?
+                                  false)]
+                       (mapcat #(walk % neg?) (seq x)))))))]
+    (walk part false)))
 
 (defn- comparisons
   "[op column other] for each column side of the comparisons in a statement's conditions: a
    column on either side, the other side whatever it is (a value, a symbol, a column). Under an
    odd number of :not, op is its negation (= is <>)."
   [stmt]
-  (let [part (conditions stmt)
-        negated (negated-nodes part)]
-    (for [x (own-nodes part)
-          :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
-                                     (and (= 4 (count x)) (#{:between :not-between} (first x)))))
-          :let [[op a b c] x]
-          [col other] (if (= 4 (count x))
-                        (when (column-keyword? a) [[a b] [a c]])
-                        (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a])))]
-      [(if (.contains ^java.util.Set negated x) (negated-op op op) op) col other])))
+  (for [[x negated?] (polar-nodes (conditions stmt))
+        :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
+                                   (and (= 4 (count x)) (#{:between :not-between} (first x)))))
+        :let [[op a b c] x]
+        [col other] (if (= 4 (count x))
+                      (when (column-keyword? a) [[a b] [a c]])
+                      (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a])))]
+    [(if negated? (negated-op op op) op) col other]))
 
 (defn- target-column
   "A column as HoneySQL writes it where a statement assigns it: without its namespace."
@@ -645,9 +647,9 @@
    register-op!). nil when this cannot tell (a cast value or operation is named after its type,
    a subquery after its column, :raw anything)."
   [x]
-  (cond (or (number? x) (string? x) (boolean? x) (nil? x) (param-key x) (#{:null :true :false} x)) "?column?"
+  (cond (or (number? x) (string? x) (boolean? x) (nil? x) (param-key x) (#{:null :true :false} (sql-value x))) "?column?"
         (shorthand-fn x) (function-name (shorthand-fn x))
-        (keyword? x) (when (sql-value? x) (name x))
+        (keyword? x) (some-> (sql-value x) name)
         (not (and (vector? x) (keyword? (first x)))) nil
         :else (let [[h a] x]
                 (cond (= :. h) (some-> (last x) (#(when (keyword? %) (function-name (name %)))))
@@ -840,7 +842,7 @@
                   quoted
                   (and (contains? format :dialect) (not= :nrql dialect)))]
     (or (nil? v) (#{[:inline nil] [:lift nil]} v)
-        (and (sql-value? v) (= "null" (str/lower-case (name v))) (not quoted?)
+        (and (= :null (sql-value v)) (not quoted?)
              (not (some-> quoted-always (re-find (name v))))))))
 
 (defn- write-problems
