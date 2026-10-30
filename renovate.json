@@ -1,42 +1,53 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":semanticCommitsDisabled", "helpers:pinGitHubActionDigests"],
-  "schedule": ["before 9am on monday"],
-  "description": "ignorePaths is narrowed because the default excludes test/, where the postgres image is pinned",
-  "ignorePaths": ["**/node_modules/**"],
-  "labels": ["dependencies"],
+  "extends": [
+    "config:recommended",
+    ":semanticCommitsDisabled",
+    "helpers:pinGitHubActionDigests"
+  ],
+  "schedule": [
+    "before 9am on monday"
+  ],
+  "labels": [
+    "dependencies"
+  ],
   "packageRules": [
     {
       "description": "A release that was hijacked is usually pulled within days: wait before proposing it. A rule, not a top-level minimumReleaseAge, which would also hold pin and digest updates that carry no release date",
-      "matchUpdateTypes": ["major", "minor", "patch"],
+      "matchUpdateTypes": [
+        "major",
+        "minor",
+        "patch"
+      ],
       "minimumReleaseAge": "5 days"
     },
     {
       "description": "Test, docs and build dependencies in one PR",
-      "matchFileNames": ["deps.edn", "bb.edn"],
+      "matchFileNames": [
+        "deps.edn",
+        "bb.edn"
+      ],
       "groupName": "dev deps"
     },
     {
       "description": "What a user's project pulls in, in a PR of its own (overrides the rule above)",
-      "matchFileNames": ["deps.edn"],
-      "matchDepNames": ["org.clojure/data.json", "metosin/malli", "camel-snake-kebab/camel-snake-kebab", "org.clojure/test.check"],
+      "matchFileNames": [
+        "deps.edn"
+      ],
+      "matchDepNames": [
+        "org.clojure/data.json",
+        "metosin/malli",
+        "camel-snake-kebab/camel-snake-kebab",
+        "org.clojure/test.check"
+      ],
       "groupName": "runtime deps"
     },
     {
       "description": "GitHub Actions in one PR",
-      "matchManagers": ["github-actions"],
+      "matchManagers": [
+        "github-actions"
+      ],
       "groupName": "github actions"
-    }
-  ],
-  "customManagers": [
-    {
-      "description": "postgres image used by the tests",
-      "customType": "regex",
-      "managerFilePatterns": ["/^test/pgmalli/test_db\\.clj$/"],
-      "matchStrings": ["\"postgres:(?<currentValue>\\d+)-alpine\""],
-      "depNameTemplate": "postgres",
-      "datasourceTemplate": "docker",
-      "versioningTemplate": "regex:^(?<major>\\d+)$"
     }
   ]
 }
