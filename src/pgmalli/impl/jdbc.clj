@@ -43,7 +43,8 @@
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
    with the one meant, otherwise. kind and label say whose they are (options by default).
-   A config's :db, which may hold a password, is left out of the error."
+   A config's :db, which may hold a password, is left out of the error, and so are the values of
+   keys schema does not take (a misspelt :db is one)."
   ([schema opts] (checked! schema opts :pgmalli.error/invalid-options "pgmalli options"))
   ([schema opts kind label]
    (if (m/validate schema (or opts {}))
@@ -57,7 +58,10 @@
                               (cond (str/includes? (pr-str errors) "should be spelled") ""
                                     suggest (error/did-you-mean suggest)
                                     (and (seq stray) (seq known)) (str "; it takes " (str/join ", " known))))
-                    (cond-> {:given (cond-> opts (map? opts) (dissoc :db)) :errors errors}
+                    (cond-> {:given (cond-> opts
+                                      (and (map? opts) known) (select-keys known)
+                                      (map? opts) (dissoc :db))
+                             :errors errors}
                       known (assoc :known (vec known))))))))
 
 ;; compiled once: malli keeps a schema's validator, and these are checked on every call

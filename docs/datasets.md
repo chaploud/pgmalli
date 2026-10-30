@@ -109,7 +109,10 @@ is written and cast, and arrays given their element type. An identity ALWAYS col
 
 Dates and times are ISO 8601 text cast to the column's type, so the SQL runs as parameters
 and with `{:inline true}` alike; an `Instant` or `java.util.Date` in a `date` or `timestamp`
-column is that time in the JVM's zone, as pgjdbc sends it:
+column is that time in the JVM's zone, as pgjdbc sends it. Run a dataset someone else wrote
+with parameters: HoneySQL's inline strings double their quotes alone, which is safe only while
+the server has `standard_conforming_strings` on (the default), where a backslash is not an
+escape:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure

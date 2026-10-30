@@ -93,3 +93,10 @@
                           (data/inserts weird {"public.Weird T" [{:Id 1 "a b" "x" :zz 1}]})))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean \"a b\"\?"
                           (data/inserts weird {"public.Weird T" [{:Id 1 "a c" "x"}]})))))
+
+(deftest a-column-with-a-dollar-sign-is-quoted-in-the-column-list
+  ;; "Big" needs quotes, so the INSERT names its columns
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id :int] ["a$b" :int] ["Big" :int]]}})
+        [sql & params] (honey.sql/format (first (data/inserts reg {"public.t" [{:id 1 "a$b" 2 "Big" 3}]})))]
+    (is (re-find #"\"a\$b\"" sql) sql)
+    (is (= 3 (count params)) sql)))

@@ -22,7 +22,7 @@
           {:keys [exit]} (p/sh ["docker" "run" "-d" "--rm" "--name" name
                                 "-e" "POSTGRES_PASSWORD=pw" "-e" "POSTGRES_DB=t"
                                 "--tmpfs" "/var/lib/postgresql:rw,size=256m"
-                                "-p" (str port ":5432") image
+                                "-p" (str "127.0.0.1:" port ":5432") image
                                 "-c" "fsync=off" "-c" "synchronous_commit=off" "-c" "full_page_writes=off"])]
       (cond (zero? exit) {:name name :port port}
             (< attempt 3) (recur (inc attempt))

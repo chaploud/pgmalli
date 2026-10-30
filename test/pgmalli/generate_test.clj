@@ -32,3 +32,15 @@
 (deftest diff-takes-generated-data-maps
   (doseq [x [42 "x" [nil] nil]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"generated data map" (generate/diff x {:registry {}})) (pr-str x))))
+
+(deftest a-schema-name-that-is-not-one-file-name-in-out-dir-is-an-error
+  (doseq [schemas [["../esc"] ["a/b"] ["a\\b"] [".."] ["public" "Public"]]]
+    (is (= :pgmalli.error/invalid-config
+           (:pgmalli/error (ex-data (is (thrown? clojure.lang.ExceptionInfo (files/config {:schemas schemas}))))))
+        (pr-str schemas)))
+  (is (= ["public" "app"] (:schemas (files/config {:schemas ["public" "app"]})))))
+
+(deftest a-misspelt-db-keeps-its-password-out-of-the-error
+  (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:dbb {:password "s3cret"}})))]
+    (is (not (re-find #"s3cret" (pr-str (ex-data e)))))
+    (is (not (re-find #"s3cret" (str e))))))

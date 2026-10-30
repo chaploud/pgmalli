@@ -23,9 +23,22 @@
 
 (def default-config {:schemas ["public"] :out-dir "resources/pgmalli" :overrides {} :db {}})
 
+(defn- file-name?
+  "A schema name that is one file's name in :out-dir: no separator, NUL, . or .."
+  [s]
+  (not (or (#{"" "." ".."} s) (re-find #"[/\\\x00]" s))))
+
+;; a case-insensitive file system (macOS, Windows) keeps one of "public" and "Public"
+(defn- distinct-files? [ss]
+  (apply distinct? (map str/lower-case ss)))
+
 (def config-schema
   [:map {:closed true}
-   [:schemas {:optional true} [:sequential {:min 1 :error/message "should be a vector of schema names, such as [\"public\"]"} :string]]
+   [:schemas {:optional true}
+    [:and
+     [:sequential {:min 1 :error/message "should be a vector of schema names, such as [\"public\"]"}
+      [:and :string [:fn {:error/message "should be a schema name that is a file name: no /, \\, NUL, . or .."} file-name?]]]
+     [:fn {:error/message "should not hold two names that differ only in case: their files would be one on a case-insensitive file system"} distinct-files?]]]
    [:out-dir {:optional true} :string]
    [:overrides {:optional true} [:map-of [:or :string :keyword] :any]]
    [:db {:optional true} [:map-of :keyword :any]]])

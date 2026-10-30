@@ -18,7 +18,7 @@
   "Whether a name reaches PostgreSQL as it is spelt unquoted: HoneySQL quotes nothing unless
    told to, and splits a name at its dots."
   [s]
-  (and (re-matches #"[a-z_][a-z0-9_$]*" s) (not (reserved s))))
+  (and (re-matches #"[a-z_][a-z0-9_]*" s) (not (reserved s))))
 
 (defn- ref-type
   "The SQL of the type the schema a [:ref ...] names, schema and name each quoted whatever
