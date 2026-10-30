@@ -57,9 +57,11 @@
 (defn- jdbc-sql
   "ir.sql with its psql variables written in: :\"schema\" an identifier, :'schema' a literal."
   [schema]
-  (-> (query-sql)
-      (str/replace ":\"schema\"" (str "\"" (str/replace schema "\"" "\"\"") "\""))
-      (str/replace ":'schema'" (str "'" (str/replace schema "'" "''") "'"))))
+  ;; one pass: a second would rewrite the first's output when the name holds :'schema'
+  (str/replace (query-sql) #":\"schema\"|:'schema'"
+               #(if (= % ":\"schema\"")
+                  (str "\"" (str/replace schema "\"" "\"\"") "\"")
+                  (str "'" (str/replace schema "'" "''") "'"))))
 
 (defn- target
   "host:port/db psql reaches, from the db map or psql's environment."
