@@ -188,6 +188,11 @@
  [:check-in-compare {:select [:id] :from [:tickets] :where [:and [:= :state "open"] [:in :kind ["bug" "task"]]]}]
  [:check-in-set {:update :tickets :set {:state "closed" :kind "task"} :where [:= :id 1]}]
  [:check-in-insert {:insert-into :tickets :values [{:state "closed" :kind "bug"}]}]
+ ;; a CHECK's list does not narrow <>, NOT IN or <: PostgreSQL compares the base type
+ [:check-in-not-equal {:select [:id] :from [:tickets] :where [:<> :state "archived"]}]
+ [:check-in-not-in {:select [:id] :from [:tickets] :where [:not-in :kind ["epic"]]}]
+ [:check-in-less {:select [:id] :from [:tickets] :where [:< :state "z"]}]
+ [:check-in-distinct {:select [:id] :from [:tickets] :where [:is-distinct-from :kind "epic"]}]
  [:upsert-excluded {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name [:|| :EXCLUDED.name "!"]}}]
  [:upsert-target-ref {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :tags.name}}]
  [:upsert-excluded-bad {:insert-into :tags :values [{:name "x"}] :on-conflict [:name] :do-update-set {:name :EXCLUDED.nosuch}}]

@@ -665,6 +665,25 @@
         :and (enum-values registry (first (shape/entries s)))
         nil))))
 
+(def ^:private equality-ops
+  "The comparisons a value outside a CHECK's list makes match no row."
+  #{:= :in :is-not-distinct-from})
+
+(defn- check-labels?
+  "Whether a column's labels are a CHECK's list on it ([:enum {:pg/constraints ...} ...] in the
+   column), not an enum type's: PostgreSQL compares such a column as its base type, so <>,
+   NOT IN or < takes any value of it."
+  [s]
+  (let [inner (shape/non-null s)]
+    (and (vector? inner) (= :enum (first inner)) (map? (second inner)) (contains? (second inner) :pg/constraints))))
+
+(defn- without-labels
+  "A CHECK's labelled column as its base type: [:string {:pg/type \"text\"}]."
+  [s]
+  (let [t (:pg/type (second (shape/non-null s)))
+        base (:schema (types/entry t))]
+    (cond (keyword? base) [base {:pg/type t}] base base :else :any)))
+
 (defn- star? [col] (= "*" (second (split-column col))))
 
 (defn- output-column?
@@ -857,14 +876,15 @@
 (declare driver-type)
 
 (defn- string-problems
-  "Enum literals outside the enum (or a CHECK's list), compared with or assigned to its column; and, under pgjdbc's default stringtype (varchar), a string HoneySQL
+  "Enum literals outside the enum, compared with or assigned to its column, or outside a CHECK's
+   list, assigned or under = and IN; and, under pgjdbc's default stringtype (varchar), a string HoneySQL
    sends as a parameter (not inlined, not cast) to a column PostgreSQL takes no varchar for
    (enum = varchar does not exist, nor inet = varchar): a literal, or an argument to an enum
    column or to one arg-types types as a string."
   [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema} :as opts}]
-  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc false])
+  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] [col value sc false op])
                      (let [target (target-scope sc stmt schema)]
-                       (when (seq target) (for [[col value] (assignments stmt)] [col value target true]))))
+                       (when (seq target) (for [[col value] (assignments stmt)] [col value target true nil]))))
         varchar? (and (not= :unspecified stringtype) (not (:inline format)))
         head #(if (vector? %) (first %) %)]
     (concat
@@ -878,7 +898,7 @@
            :when (and t (not (and assigned? (shape/maybe? s)))
                       (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
-     (for [[col value scope assigned?] uses
+     (for [[col value scope assigned? op] uses
            :let [{s :schema} (resolve-column registry scope col)
                  strings? (or (string? value) (and (vector? value) (every? string? value)))
                  values (cond strings? (if (string? value) [value] value)
@@ -889,7 +909,10 @@
                           (uncast-type registry s))]
            :when (seq values)
            v values
-           :let [invalid? (and allowed (not (some #{v} allowed)))]
+           ;; a CHECK's list holds for a write, and makes = and IN match no row; <>, NOT IN and <
+           ;; compare the base type, which PostgreSQL takes any value of
+           :let [invalid? (and allowed (not (some #{v} allowed))
+                               (or assigned? (equality-ops op) (not (check-labels? s))))]
            p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
               ;; a value outside the enum fails however it is sent
               (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
@@ -1057,6 +1080,15 @@
       (if (and assigned? (maybe? s)) [:maybe inner] inner))
     :any))
 
+(defn- compared-column-type
+  "The type of an argument op compares with a column: a CHECK's list kept only under = and IN,
+   which a value outside it makes match no row; under <>, NOT IN or <, the column's base type."
+  [registry sc col op opts]
+  (let [s (:schema (resolve-column registry sc col))]
+    (if (and s (not (equality-ops op)) (check-labels? s))
+      (driver-type registry jdbc/write-type (without-labels s) opts)
+      (column-type registry sc col false opts))))
+
 (defn- loose
   "A column type without the bounds a comparison need not keep (CHECKs, lengths, ranges): its
    kind and :pg/type. A type with other children (an enum, an :or) stays: PostgreSQL refuses a
@@ -1114,7 +1146,7 @@
          typed (mapcat (fn [[stmt sc]]
                          (concat (for [[op col value] (comparisons stmt)
                                        :let [x (array-arg value)]]
-                                   [(or x value) (compared-type op (column-type registry sc col false opts) x opts)])
+                                   [(or x value) (compared-type op (compared-column-type registry sc col op opts) x opts)])
                                  (for [[_ v] (select-keys stmt [:limit :offset])] [v [:int {:min 0}]])
                                  ;; [:cast :?x :mood]: an argument cast to an enum is a value of it
                                  (for [x (tree-seq branch? seq stmt)

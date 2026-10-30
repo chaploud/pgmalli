@@ -978,3 +978,32 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/rc [:map {:pg/table "public.rc"} [:id :int] [:r [:any {:pg/type "regclass"}]]]}})]
     (is (= [] (h/check reg {:update :rc :set {:r "w"}})))
     (is (= [:uncast-string] (map :kind (h/check reg {:select [:id] :from [:rc] :where [:= :r "w"]}))))))
+
+(def ^:private check-list-registry
+  ;; state is a text column a CHECK narrows to a list; mood an enum type
+  (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
+                                :pg.public/t [:map {:pg/table "public.t"}
+                                              [:id [:int {:pg/type "integer"}]]
+                                              [:state [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]]
+                                              [:m [:ref {:pg/type "mood"} :pg.public/mood]]]}}))
+
+(deftest a-check-list-narrows-writes-and-equality-not-other-comparisons
+  (let [q #(h/check check-list-registry {:select [:id] :from [:t] :where %} {:stringtype :unspecified})]
+    (doseq [w [[:= :state "archived"] [:in :state ["archived"]] [:is-not-distinct-from :state "archived"]]]
+      (is (= [:enum-literal] (map :kind (q w))) (pr-str w) ))
+    (doseq [w [[:<> :state "archived"] [:not= :state "archived"] [:not-in :state ["archived"]]
+               [:< :state "z"] [:between :state "a" "z"] [:is-distinct-from :state "archived"]]]
+      (is (= [] (q w)) (str (pr-str w) ": PostgreSQL compares a text, and the query matches rows")))
+    (is (= [:enum-literal] (map :kind (h/check check-list-registry {:update :t :set {:state "archived"}})))
+        "a write the CHECK refuses")
+    (doseq [w [[:<> :m "zz"] [:< :m "zz"] [:not-in :m ["zz"]]]]
+      (is (= [:enum-literal] (map :kind (q w))) (str (pr-str w) ": an enum type refuses the value however compared")))))
+
+(deftest an-argument-compared-with-a-check-list-takes-its-base-type-but-under-equality
+  (let [args #(h/arg-types check-list-registry {:select [:id] :from [:t] :where %})]
+    (is (= {:x [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]} (args [:= :state :?x])))
+    (is (= {:x [:string {:pg/type "text"}]} (args [:<> :state :?x])))
+    (is (= {:x [:string {:pg/type "text"}]} (args [:< :state :?x])))
+    (is (= {:x [:or [:sequential {:min 1} [:string {:pg/type "text"}]] [:set {:min 1} [:string {:pg/type "text"}]]]}
+           (args [:not-in :state :?x])))
+    (is (= {:x [:enum {:pg/type "mood"} "ok" "sad"]} (args [:<> :m :?x])) "an enum type keeps its labels")))

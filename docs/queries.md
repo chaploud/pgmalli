@@ -112,7 +112,7 @@ keyed as in `sql/format`'s `:params`:
 
 | where the argument is | its type |
 |---|---|
-| compared with a column | the column's kind (an enum's labels kept), without NULL |
+| compared with a column | the column's kind without NULL: an enum type's labels kept; a CHECK's list kept under `=` and `IN` only, other comparisons taking the column's base type |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast to an enum type (`[:cast :?s :user_status]`) | the enum's labels |
 | assigned to a column (`:set`, `:values`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out |
@@ -261,8 +261,10 @@ naming its `:var`; `{:ns 'app.queries}` (or a list of namespaces) limits it to s
 
 These match or touch no row, which is almost always a mistake:
 
-- A comparison of a text column a CHECK narrows to a list (`CHECK (state IN ('open',
-  'closed'))`) with a value outside it: an `:enum-literal`.
+- An `=` or `IN` of a column a CHECK narrows to a list (`CHECK (state IN ('open',
+  'closed'))`) with a value outside it: an `:enum-literal`. Other comparisons (`<>`, `NOT IN`,
+  `<`) take any value of the base type and are not reported; an enum type refuses a value
+  outside its labels in any comparison.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 
