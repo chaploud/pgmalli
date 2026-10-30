@@ -5,6 +5,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str]
             [pgmalli.impl.dataset :as ds]
+            [pgmalli.impl.error :as error]
             [pgmalli.impl.insert :as insert]
             [pgmalli.impl.jdbc :as jdbc])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetTime)))
@@ -86,5 +87,13 @@
    by identity, so a dataset holding bytea values is not = to itself read back; its rows load
    the same."
   [path]
-  (let [m (edn/read-string {:readers readers} (slurp path))]
-    (with-meta (dissoc m :pgmalli/short) {:pgmalli/short (:pgmalli/short m)})))
+  (let [text (slurp path)
+        ;; a file someone else wrote: what does not read as one is the same error, whatever broke
+        m (try (edn/read-string {:readers readers} text)
+               (catch Exception e (error/fail! :pgmalli.error/invalid-dataset (str path " does not read as a dataset: " (ex-message e)) {:given path} e))
+               (catch StackOverflowError _ (error/fail! :pgmalli.error/invalid-dataset (str path " nests too deep to read") {:given path})))]
+    (when-not (map? m)
+      (error/fail! :pgmalli.error/invalid-dataset (str path " does not read as a dataset: not a map") {:given path}))
+    (let [d (dissoc m :pgmalli/short)]
+      (dataset! d)
+      (with-meta d {:pgmalli/short (:pgmalli/short m)}))))

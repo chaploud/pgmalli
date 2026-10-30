@@ -66,3 +66,12 @@
 (deftest an-instant-beyond-local-date-time-goes-to-postgresql-as-it-is
   (let [reg (pgmalli.core/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:tz [:time/instant {:pg/type "timestamp with time zone"}]]]}})]
     (is (= 1 (count (data/inserts reg {"public.t" [{:tz java.time.Instant/MAX}]}))))))
+
+(deftest a-file-that-does-not-read-as-a-dataset-is-an-invalid-dataset
+  (doseq [text ["{\"public.t\" [{:b #pgmalli/bytes \"abc\"}]}" "{\"public.t\" [{:b #pgmalli/bytes \"zz\"}]}"
+                "{\"public.t\" [{:d #pgmalli/date 5}]}" "[1 2]" "{\"public.t\" [{:x #nope/tag 1}]}" "{\"public.t\" 3}"]]
+    (let [path (str (java.io.File/createTempFile "pgmalli-bad" ".edn"))]
+      (spit path text)
+      (is (= :pgmalli.error/invalid-dataset
+             (:pgmalli/error (ex-data (is (thrown? clojure.lang.ExceptionInfo (data/read-dataset path))))))
+          text))))
