@@ -17,6 +17,8 @@
   ;; bb test:docs: README.md and docs/*.md as tests; with :test and :docs to run them, the example
   ;; registry (docs/example/pgmalli) on the classpath
   :test-doc-blocks {:replace-deps {com.github.lread/test-doc-blocks {:mvn/version "1.2.22"}}
+                    ;; GHSA-p6pp-m3f8-5c89 (fixed in 2.18.11)
+                    :override-deps {com.fasterxml.jackson.core/jackson-core {:mvn/version "2.22.4"}}
                     :exec-fn lread.test-doc-blocks/gen-tests
                     :exec-args {:docs ["README.md" "docs/reading-rows.md" "docs/queries.md" "docs/datasets.md" "docs/types.md"]}}
   :docs {:extra-paths ["docs/example" "target/test-doc-blocks/test"]}
@@ -24,7 +26,19 @@
   :oracle {:main-opts ["-m" "pgmalli.oracle"]}
   :build {:deps {io.github.clojure/tools.build {:git/tag "v0.10.14" :git/sha "1176afd"}}
           :ns-default build}
-  :deploy {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.5"}}
+  ;; The token is in this job's environment. deps-deploy imports its S3 wagon when it loads, which
+  ;; pulls an old AWS SDK, jackson and logback with known advisories: newer versions here, and no
+  ;; logback (slf4j 2 does not bind it; slf4j-nop takes the logs).
+  :deploy {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.5"
+                                             :exclusions [ch.qos.logback/logback-classic]}}
+           :override-deps {com.amazonaws/aws-java-sdk-s3 {:mvn/version "1.12.797"}
+                           com.amazonaws/aws-java-sdk-sts {:mvn/version "1.12.797"}
+                           com.amazonaws/aws-java-sdk-kms {:mvn/version "1.12.797"}
+                           com.amazonaws/aws-java-sdk-core {:mvn/version "1.12.797"}
+                           com.amazonaws/jmespath-java {:mvn/version "1.12.797"}
+                           com.fasterxml.jackson.core/jackson-core {:mvn/version "2.22.4"}
+                           com.fasterxml.jackson.core/jackson-databind {:mvn/version "2.22.4"}
+                           com.fasterxml.jackson.dataformat/jackson-dataformat-cbor {:mvn/version "2.22.4"}}
            :exec-fn deps-deploy.deps-deploy/deploy
            :exec-args {:installer :remote :artifact "target/pgmalli.jar"
                        :pom-file "target/classes/META-INF/maven/io.github.chaploud/pgmalli/pom.xml"}}}}

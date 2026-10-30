@@ -22,22 +22,22 @@ jobs:
     env:
       PGMALLI_PG_IMAGE: postgres:${{ matrix.pg }}-alpine
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0   # the jar version comes from the latest release tag
           persist-credentials: false
-      - uses: actions/cache@v6
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
           path: |
             ~/.m2/repository
             ~/.gitlibs
           key: deps-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
           restore-keys: deps-${{ runner.os }}-
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           distribution: temurin
           java-version: "25"
-      - uses: DeLaGuardo/setup-clojure@13.6.1
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
         with:
           cli: latest
           bb: latest
@@ -55,20 +55,28 @@ jobs:
         if: matrix.once
       - run: clojure -T:build jar
         if: matrix.once
+  workflows:
+    name: audit the workflows
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      - run: pipx run zizmor==1.31.1 .github/workflows
   floor:
     # the oldest versions README supports; here, not in deps.edn, where Renovate would raise them
     runs-on: ubuntu-latest
     env:
       PGMALLI_PG_IMAGE: postgres:16-alpine
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
-      - uses: actions/setup-java@v6
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           distribution: temurin
           java-version: "25"
-      - uses: DeLaGuardo/setup-clojure@13.6.1
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
         with:
           cli: latest
       - name: pull postgres image

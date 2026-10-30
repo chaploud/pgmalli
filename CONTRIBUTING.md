@@ -100,10 +100,15 @@ contract; what is breaking is the README's [Stability](README.md#stability) list
    something not yet released gets no entry), and set the installation coordinate in
    README.md to the new version.
 2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. The release workflow checks that the tag is on main, runs `bb test:jvm`, builds the jar
-   and deploys it to Clojars; a second job then creates the GitHub release with the jar and
-   generated notes. If only that second job fails, re-run it alone: Clojars rejects
+3. The release workflow checks that the tag is on main, runs `bb test:jvm` and builds the
+   jar; a second job deploys it to Clojars, and a third creates the GitHub release with the
+   jar and generated notes. If only the last job fails, re-run it alone: Clojars rejects
    publishing a version twice.
+
+The Clojars deploy token is the secret `CLOJARS_PASSWORD` of the environment `clojars`,
+which only `v*` tags can deploy from; only the deploy job sees it. It is chaploud's token,
+scoped to `io.github.chaploud/pgmalli`. To replace it, create one with the same scope on
+Clojars, run `gh secret set CLOJARS_PASSWORD --env clojars`, and disable the old token.
 
 Never move or delete a published tag; a broken release is fixed by the next version.
 `clojure -T:build jar` builds a snapshot of the last tag. Renovate updates the dependencies.

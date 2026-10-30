@@ -7,6 +7,11 @@
   "labels": ["dependencies"],
   "packageRules": [
     {
+      "description": "A release that was hijacked is usually pulled within days: wait before proposing it. A rule, not a top-level minimumReleaseAge, which would also hold pin and digest updates that carry no release date",
+      "matchUpdateTypes": ["major", "minor", "patch"],
+      "minimumReleaseAge": "5 days"
+    },
+    {
       "description": "Test, docs and build dependencies in one PR",
       "matchFileNames": ["deps.edn", "bb.edn"],
       "groupName": "dev deps"
