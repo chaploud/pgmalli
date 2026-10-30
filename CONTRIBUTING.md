@@ -7,7 +7,7 @@ Issues and pull requests are welcome.
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the
 image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb oracle`, `bb docs:example`,
-`bb harvest` and `bb sweep` need it; `bb lint`, `bb test:docs` and `bb fixture` do not.
+`bb harvest`, `bb sweep` and `bb upstream` need it; `bb lint`, `bb test:docs` and `bb fixture` do not.
 
 ## Tests
 
@@ -31,12 +31,11 @@ it, `bb docs:example` generates `docs/example/pgmalli/` again; a test fails unti
 block that cannot run (a shell command, a database call) gets `<!-- :test-doc-blocks/skip -->`
 before it.
 
-When a change touches what a type or CHECK becomes, update [docs/types.md](docs/types.md)
-and add a CHANGELOG entry.
+When a change touches what a type or CHECK becomes, update [docs/types.md](docs/types.md).
 
 ## Randomized tests
 
-`fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a seed, 42 in CI.
+`fuzz-test`, `catalog-fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a seed, 42 in CI.
 `PGMALLI_FUZZ_SEED=<n> bb test:jvm` runs other seeds. A failure prints its seed, the case
 (shrunk where test.check shrinks it), where it failed and the command that runs it again, with
 `PGMALLI_FUZZ_SEED`, `PGMALLI_FUZZ_CASE` or `PGMALLI_FUZZ_SCHEMAS` set.
@@ -95,10 +94,15 @@ A release is a pushed `vX.Y.Z` tag; the tag is the version. Choose it by semanti
 versioning: patch for fixes, minor for additions and, before 1.0, any change to the
 contract; what is breaking is the README's [Stability](README.md#stability) list.
 
-1. On main, in one commit: add the version's section to CHANGELOG.md, `## X.Y.Z (date)`,
-   one short bullet per change a user meets, a breaking one saying what to do (a fix to
-   something not yet released gets no entry), and set the installation coordinate in
-   README.md to the new version.
+A fix can change what `generate` writes for some schemas, so that `check` finds their files
+stale until they are regenerated. Its CHANGELOG entry says which schemas. Choose the version by
+what upgrading then costs the users at the time, not by precedent: a patch while regenerating
+is a step nobody minds, a minor once it is work people plan for.
+
+1. On main, in one commit: add the version's section to CHANGELOG.md (`## X.Y.Z (date)`) and
+   set the coordinate in README.md's Installation to the new version. The section has one
+   short bullet per change a user meets; a breaking one says what to do. A fix to something
+   not yet released gets no entry.
 2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The release workflow checks that the tag is on main, runs `bb test:jvm` and builds the
    jar; a second job deploys it to Clojars, and a third creates the GitHub release with the

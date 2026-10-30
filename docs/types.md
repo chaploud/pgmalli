@@ -10,7 +10,7 @@ For a schema `public`:
 
 | name | holds |
 |---|---|
-| `:pg.public/<table>` | a row: `[:map ...]`, inside `[:and ...]` when the table has CHECKs |
+| `:pg.public/<table>` | a row: `[:map ...]`, inside `[:and ...]` when a CHECK stays at table level |
 | `:pg.public.<table>/insert` | what an INSERT may carry |
 | `:pg.public.<table>/update` | what an UPDATE may set |
 | `:pg.public/<view>` | a row of a view or materialized view |
@@ -35,7 +35,9 @@ A **domain** is its base type with its CHECKs applied. The column decides whethe
 allowed. A domain's NOT NULL and DEFAULT apply to every column of the domain.
 
 pgmalli's own schema types are in the registry too: `:pg/check`, `:pg/check-value`,
-`:pg/bytes`, `:pg/smallint`, `:pg/integer`, `:pg/numeric` and `:pg/array`.
+`:pg/bytes`, `:pg/smallint`, `:pg/integer`, `:pg/numeric` and `:pg/array`. Three of malli's
+are replaced: `:string` counts characters, `:double` with `:pg/type "real"` keeps to a real's
+range, and `:re` fails a value its regex runs out of stack on, where malli's throws.
 
 ## Properties
 
@@ -74,6 +76,7 @@ spelling.
 | a domain over an enum or domain | `[:ref ...]` to it, with its own CHECKs |
 | `smallint`, `integer` | `:pg/smallint`, `:pg/integer` (bounded to the type's range) |
 | `bigint` | `:int` |
+| `numeric` | `decimal?` |
 | `numeric(p, s)` | `[:and decimal? [:pg/numeric {:precision p :scale s}]]` |
 | `real`, `double precision` | `:double` |
 | `text`, `varchar(n)`, `char(n)`, `name`, `"char"` | `:string`, `[:string {:max n :pg/max-length n}]` |
@@ -88,14 +91,12 @@ spelling.
 | `bit(n)`, `bit varying(n)` | `[:string {:min n :max n}]`, `[:string {:max n}]` |
 | `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, geometric, range, multirange, `reg*` and other types | `[:any {:pg/type "..."}]` |
 | `citext` | `:string`; its `~` and `LIKE` CHECKs ignore case, an `=` or `IN` CHECK is `:unrendered` |
-| `hstore`, `ltree`, `lquery`, `ltxtquery`, `cube`, `seg`, `query_int`, `isbn`, `isbn13`, `ean13`, `ismn`, `ismn13`, `issn`, `issn13`, `upc` | `[:any {:pg/type "..."}]` |
-| a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
+| a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]` (`[:some ...]` when NOT NULL), listed in `:unrendered` |
 
-An enum or domain of another schema (`wh.stock.sku` of type `catalog.sku`) is such a type too:
-each schema's file stands alone and refers to no other, so the column is `[:any]` (`[:some]`
-when NOT NULL) and its `:unrendered` entry names the schema, `:type-schema "catalog"`. With
-both schemas generated and loaded together (`(pgmalli/registry "catalog" "wh")`), a type
-override refers to it: `{:overrides {:sku [:ref :pg.catalog/sku]}}`.
+An enum or domain of another schema (`wh.stock.sku` of type `catalog.sku`) is `[:any]`
+(`[:some]` when NOT NULL): each schema's file stands alone. Its `:unrendered` entry names the
+schema (`:type-schema "catalog"`). With both loaded (`(pgmalli/registry "catalog" "wh")`),
+override it: `{:overrides {:sku [:ref :pg.catalog/sku]}}`.
 
 `:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
 do; malli's own `:string`, in `portable` output, counts UTF-16 units. `:pg/max-length n` is the
@@ -190,13 +191,13 @@ Generate a version's rows from its own schema, so the generator need not guess t
 |---|---|
 | `col IN (...)`, `col = 'x'` | `[:enum ...]`; `[:and [:ref ...] [:enum ...]]` on an enum or domain; `[:pg/check-value [:in :VALUE [...]]]` on a `numeric`, which equals `2.0` to `2` |
 | `col NOT IN (...)`, `col <> 'x'` | `[:and <type> [:not [:enum ...]]]` |
-| `col >= a AND col <= b`, `BETWEEN`, one-sided bounds | `{:min a :max b}`; an exclusive bound as `[:> a]` |
+| `col >= a AND col <= b`, `BETWEEN`, one-sided bounds | `{:min a :max b}`; an exclusive bound as `[:> a]` on a `numeric`, the next integer on an integer type (`{:min 2}` for `> 1`), `[:pg/check expr]` on a float type |
 | `length(trim(col)) > 0` | `[:and [:string {:min 1}] [:re "[^ ]"]]` |
 | `col <> ''` | `[:string {:min 1}]` |
 | `length(col) <= n` | `[:string {:max n}]` |
 | `cardinality(col) BETWEEN a AND b`, `array_length(col, 1) <= n` | `[:vector {:min a :max b} <T>]` |
 | `jsonb_typeof(col) = 'object'` (`'array'`) | `:map` (`[:sequential :any]`) |
-| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?iu)`; `.` as `[\s\S]`, as it matches a newline; `$` as `\z`, as Java's also matches before a final newline; a class such as `\w` or `[[:alpha:]]` as its ASCII members plus every non-ASCII character, see below) |
+| `col ~ 're'` (`~*`) | `[:and :string [:re "re"]]` (with `(?iu)`) |
 | `col LIKE 'a%'` (`ILIKE`) | `[:and :string [:re "^a[\s\S]*\z"]]` (with `(?iu)`) |
 | `col IS NULL OR <a pattern>` | the pattern, or NULL |
 | `col IS NOT NULL` | no `[:maybe ...]` |
@@ -208,6 +209,10 @@ Generate a version's rows from its own schema, so the generator need not guess t
 | `NOT ENFORCED` (PostgreSQL 18) | nothing; listed in `:diagnostics` |
 | `NOT VALID` | `[:pg/check {:pg/not-valid true} ...]` |
 
+A regex is translated to Java's where the two differ. `.` becomes `[\s\S]`, as PostgreSQL's
+matches a newline. `$` becomes `\z`, as Java's also matches before a final newline. A class
+such as `\w` or `[[:alpha:]]` becomes its ASCII members plus every non-ASCII character.
+
 Outside ASCII, a class's members depend on the server's C library and locale: `[[:punct:]]`
 takes `€` on glibc but not under the C locale. So a class takes every non-ASCII character
 when a value is checked, and none when one is generated
@@ -216,18 +221,19 @@ when a value is checked, and none when one is generated
 A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a nullable column takes
 `[:maybe ...]`, and a NULL dispatch value takes any branch.
 
-Several CHECKs on one column only tighten it. A CHECK on a `char(n)` column, or on a domain over
-`char(n)`, is a `[:pg/check expr]` (`[:pg/check-value expr]`): `char(n)` compares and measures
-without its trailing spaces. Its column patterns still say how values generate: one of an
-`IN`'s values, or strings of its regex or `LIKE`. A partitioned table's row schema carries a CHECK
-named `<table> (partitions)`: the OR of its partitions' bounds.
+Several CHECKs on one column only tighten it.
+
+A CHECK on a `char(n)` column, or on a domain over `char(n)`, is a `[:pg/check expr]`
+(`[:pg/check-value expr]`): `char(n)` compares and measures without its trailing spaces. Its
+column patterns still say how values generate: one of an `IN`'s values, or strings of its
+regex or `LIKE`.
 
 > NOTE: a `NOT VALID` CHECK is enforced, as the database enforces it for every new row. A row
 > from before it may fail; skip the CHECK with an override if such rows must pass.
 
-Strings are generated from a regex on the JVM when `com.gfredericks/test.chuck` is on the
-classpath (without the flags and `\z` test.chuck refuses, and with the ASCII members of a
-class). Without it, and on babashka, strings are drawn and filtered.
+Generating from a regex needs test.chuck ([README](../README.md#installation)). It generates
+without the flags and `\z`, which test.chuck refuses, and with only the ASCII members of a
+class.
 
 ## How `:pg/check` evaluates
 
@@ -248,11 +254,15 @@ PostgreSQL does:
 - An expression the database would fail on (division by zero, a cast that does not parse)
   fails the row.
 - A column missing from the map is NULL, or its literal default in an insert schema.
-- A CHECK whose result depends on what pgmalli cannot know passes: an enum compared by its
-  order, the text of a numeric, float or interval (`::text`, `||`), a regex class outside
-  ASCII, a regex Java runs out of stack on for a long value (a repeated alternation such as
-  `^([a-z0-9]|-)+$`). A `[:re ...]` schema in the registry fails such a value instead, since an
-  application's own `:re` may have no CHECK behind it.
+- A CHECK whose result depends on what pgmalli cannot know passes: two enum columns compared
+  by their order, the text of a numeric, float or interval (`::text`, `||`), a regex class
+  outside ASCII. An enum column compared with a literal (`mood > 'sad'`) is `:unrendered`.
+
+A regex Java runs out of stack on for a long value (a repeated alternation such as
+`^([a-z0-9]|-)+$`) passes inside `[:pg/check ...]`. Rendered as `[:re ...]`, as a column's `~`
+and `LIKE` CHECKs and the branches of `[:multi ...]` and `[:or ...]` are, it fails: the
+registry's `:re` fails such a value, since an application's own `:re` may have no CHECK
+behind it.
 
 The operators covered are comparison, logic, `IN`, `BETWEEN`, `IS DISTINCT FROM`, arithmetic,
 `LIKE`, regexes, `CASE`, and the common string, numeric, array and jsonb functions. A CHECK
@@ -262,7 +272,7 @@ outside them (a function of your own, a cast to a range type, `AT TIME ZONE`) is
 Values are the registry's types: `java.time`, `UUID`, jsonb as maps and vectors.
 
 > NOTE: a CHECK comparing `timestamp` with `timestamptz` or `now()` converts in the JVM's time
-> zone. Give [`transformer`](reading-rows.md#decoding-instead) the zone your JDBC driver
+> zone. Give [`transformer`](reading-rows.md#decoding-instead) the zone pgjdbc
 > used (`{:zone ...}`).
 
 ## What is read
@@ -270,6 +280,9 @@ Values are the registry's types: `java.time`, `UUID`, jsonb as maps and vectors.
 Tables (regular and partitioned), views, materialized views, columns, CHECK, PRIMARY KEY,
 UNIQUE, FOREIGN KEY and EXCLUDE constraints, unique indexes over plain columns, row-level
 triggers, enum and domain types.
+
+A partitioned table's row schema carries a CHECK named `<table> (partitions)`: the OR of its
+partitions' bounds.
 
 An EXCLUDE is a table property, not a check: a row it would reject validates all the same,
 and each EXCLUDE is listed in `:diagnostics`. Datasets keep its `=` columns distinct, so their
@@ -280,22 +293,22 @@ would reject validates too; a row-level INSERT trigger is listed in `:diagnostic
 
 Not read: other indexes, policies and privileges.
 
-A generated column is left to the database. A range built from two columns
-(`tsrange(valid_from, valid_until)`) gives them a CHECK: lower bound not above the upper.
+A generated column is left to the database. A generated column that is a range of two columns
+(`GENERATED ALWAYS AS (tsrange(valid_from, valid_until))`) gives those columns a CHECK: lower
+bound not above the upper.
 
 ## Registries
 
 `pgmalli.core/registry` returns a map: malli's default schemas, `malli.util`'s,
 `malli.experimental.time`'s, pgmalli's `:pg/*` types, and the generated and derived names.
-pgmalli's names are all under `:pg`, so it hides none of malli's. A name defined in two of
-the schemas passed keeps the later schema's.
+Its `:string`, `:double` and `:re` replace malli's ([above](#names-in-the-registry)).
+A name defined in two of the schemas passed keeps the later schema's.
 
 Every pgmalli function taking a registry takes any malli registry holding the generated
 names, a `malli.registry/composite-registry` included. In a composite registry the first
 registry holding a name wins.
 
-`pgmalli.core/columns` gives the `[:map ...]` of a row or insert schema without its table
-CHECKs, which is what `malli.util` takes.
+For `pgmalli.core/columns`, see the [README](../README.md#validating-rows-and-writes).
 
 ## The generated file
 
@@ -328,5 +341,6 @@ A diagnostic is `{:table :kind :severity :message}`, with `:constraint`, `:colum
 
 An `:unrendered` or `:skipped` entry is `{:kind :table :column :constraint :sql :type
 :type-schema}`, the keys that apply; a domain's has `:domain` in place of `:table`. `:kind` is
-`:check` (a constraint pgmalli reads but cannot express), `:unparsed` (one it cannot read) or
+`:check` (a constraint pgmalli reads but cannot express), `:unparsed` (one it cannot read, or
+cannot turn into data with PostgreSQL's meaning, as a `citext` comparison) or
 `:type` (a column type it has no schema for).

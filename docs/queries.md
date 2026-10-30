@@ -55,9 +55,9 @@ A clause pgmalli does not read is reported rather than passed over:
 ;; => [{:kind :unread-clause, :clause :frobnicate}]
 ```
 
-The columns of a CTE, a subquery, a table function or a `pg_catalog` table the registry lacks
-exist but have no type, nor has an expression (`[:count :*]`): comparisons with them are not
-checked. Every table has the system columns (`ctid`, `xmin`, ...).
+The columns of a CTE, a subquery, a table function, or a `pg_catalog` table the registry
+lacks exist but have no type. An expression (`[:count :*]`) has none either. Comparisons with
+them are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
 
@@ -112,13 +112,17 @@ keyed as in `sql/format`'s `:params`:
 
 | where the argument is | its type |
 |---|---|
-| compared with a column | the column's kind (an enum's labels kept), without NULL; its CHECKs and lengths are left out, as PostgreSQL compares a value beyond them and matches no row |
+| compared with a column | the column's kind (an enum's labels kept), without NULL |
 | in `:in` | a non-empty vector, list or set of the column's type |
+| cast to an enum type (`[:cast :?s :user_status]`) | the enum's labels |
 | assigned to a column (`:set`, `:values`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | `[:int {:min 0}]` |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
+
+A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
+matches no row.
 
 ```clojure
 (h/arg-types registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
@@ -144,7 +148,8 @@ key is required, as `sql/format` refuses a missing one:
 ## The row a query returns
 
 `h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
-join may leave NULL is nullable; an expression is nullable `:any`:
+join may leave NULL is nullable; an expression is nullable `:any`. A set operation (`:union`
+...) takes its first member's column names, as unqualified keys:
 
 ```clojure
 (h/row-schema registry {:select [:u.email :p.title]
@@ -169,7 +174,7 @@ when a whole row is selected (`{:select [:u] :from [[:users :u]]}`).
 ## The tables a query uses
 
 `h/tables` gives the tables and views a query reads and writes, in every subquery and CTE,
-aliases and CTE names resolved: which queries a change to a table reaches.
+with aliases and CTE names resolved. Use it to find the queries a change to a table affects.
 
 ```clojure
 (h/tables registry {:update :users :set {:nick "a"} :from [[:groups :g]] :where [:= :g.id :users.group_id]})
@@ -185,9 +190,9 @@ take the same options map:
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
 | the options of `as-read` | how next.jdbc builds rows and the driver reads values ([reading-rows.md](reading-rows.md#options)) |
-| `:write {pg-type schema}` | what a `SettableParameter` extension of yours takes for a type |
-| `:write {:enum [:string :keyword]}` | what an extension sends for a list of labels (an enum type's, a CHECK's): the labels kept, as strings, keywords or both |
-| `:write {:array [:pg/array :sequential :vector :set]}` | what an array argument (`[:any :?ids]`) may be sent as: a Java array, a vector, list or set |
+| `:write {pg-type schema}` | what your own `SettableParameter` extension takes for a type |
+| `:write {:enum [:string :keyword]}` | the form your own `SettableParameter` extension accepts for a value of an enum or a CHECK's list: strings, keywords or both |
+| `:write {:array [:pg/array :sequential :vector :set]}` | what an array argument (`[:any :?ids]`) may be sent as: a Java array, a vector, list or set; `:any` without it |
 | `:stringtype :unspecified` | your connection's `stringtype`: strings reach every column untyped (default `:varchar`, as pgjdbc's) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
@@ -195,18 +200,14 @@ take the same options map:
 
 ## Function schemas
 
-`h/query-schema` combines `arg-types` and `row-schema`: the arguments are the function's, in order, and keys the
-query lacks (`:db`) are `:any`:
+`h/query-schema` combines `arg-types` and `row-schema` into `[:=> [:cat arg ...] [:sequential
+row]]`, the arguments in the function's order. The return is `:any` when `h/row-schema` gives
+nil, under `{:result :one}` too. [README.md](../README.md#function-schemas-for-queries) puts
+it on a function and instruments it.
 
-```clojure
-(h/query-schema registry [:db :ids]
-                {:select [:id] :from [:users] :where [:in :id :?ids]}
-                {:result :one})
-;; => [:=> [:cat :any [:or [:sequential {:min 1} [:int #:pg{:type "bigint"}]] [:set {:min 1} [:int #:pg{:type "bigint"}]]]] [:maybe [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]]]]]
-```
-
-The schema may use types malli's default registry lacks (`:time/instant`). Give it the
-registry when you make it, so `:malli/schema` holds a schema that needs none:
+The schema may use types malli's default registry lacks (`:time/instant`). That is why
+`m/schema` takes the registry: the schema object then needs none. Read its parts with
+`m/children`:
 
 ```clojure
 (def find-users-schema
@@ -222,8 +223,8 @@ registry when you make it, so `:malli/schema` holds a schema that needs none:
 
 ### Problems in function schemas
 
-A query with problems still gives a schema, carrying them as `:pgmalli/problems`. The
-property makes the vector one longer, so read its parts with `m/children`:
+The `:pgmalli/problems` property makes the vector one longer, so read the parts with
+`m/children`, not by position:
 
 ```clojure
 (def broken
@@ -246,9 +247,8 @@ most often a typo:
 ;; => [{:kind :missing-arg, :arg :id}]
 ```
 
-Instrumentation does not read the property. `h/schema-problems` gathers it from the
-`:malli/schema` of every var, each problem naming its `:var`; `{:ns 'app.queries}` (or a list
-of namespaces) limits it to some:
+`h/schema-problems` gathers the property from the `:malli/schema` of every var, each problem
+naming its `:var`; `{:ns 'app.queries}` (or a list of namespaces) limits it to some:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
@@ -268,20 +268,21 @@ These match or touch no row, which is almost always a mistake:
 
 ## Not checked
 
-- Columns inside code (a list, `(when x [:= :id x])`): what it builds is not data.
+- What code in the query (a list) builds at run time: the vectors written inside it are
+  checked, but a column it computes (`(keyword c)`) is not.
 - The tables of `:join-by`.
 - A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
   reported as `:unread-clause`.
-- Values written in the query beyond NULL and enum literals: an empty `[:in :id []]` is not
-  reported (an argument in `:in` is typed non-empty).
+- Values written in the query beyond NULL, enum literals and strings sent as `varchar`: an
+  empty `[:in :id []]` is not reported (an argument in `:in` is typed non-empty).
 - An ON clause naming a table joined after it, which PostgreSQL rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.
-- An argument schema with a regex (`[:re ...]`) does not generate with `mg/generate`; it
-  validates only.
+- An argument schema with a regex CHECK (`[:and [:string] [:re ...]]`) does not generate with
+  `mg/generate`; it validates only. It lacks the generation hint the registry's column schema
+  carries, and test.chuck refuses the regex's `\z`.
 - Partitions and sequences: the registry lists neither, so a query reading one by name
   (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`. Write the name as a
   symbol (`'events_2026`), a table chosen at run time, to leave it unjudged.
-- The columns of a CTE or a subquery: they exist, untyped.
 - A string sent as `varchar` to a column of a domain over a type other than an enum (a
   domain over `integer`), which PostgreSQL refuses; and an argument whose type `h/arg-types`
   leaves `:any` (an `inet` column's), which may be an object of the type.

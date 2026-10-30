@@ -16,9 +16,11 @@ PostgreSQL's JDBC driver returns. The examples use [example/schema.sql](example/
 ## The default
 
 With no options, the row is what next.jdbc's default builder, `as-maps`, builds with no
-extension: keys are `:table/column`, dates and timestamps are `java.sql.Date` and `java.sql.Timestamp`
-(`inst?`), and arrays, json, intervals, `citext` and `bit varying` are the driver's own objects
-(`:any`). `real` is a `Float`, `bit(1)` a `Boolean`, and a numeric `NaN` a `Double`:
+extension: keys are `:table/column`, dates and timestamps are `java.sql.Date` and
+`java.sql.Timestamp` (`inst?`), and arrays, json, intervals, `citext` and `bit varying` are the
+driver's own objects (`:any`). `real` is a `Float`, `bit(1)` a `Boolean`, and a numeric `NaN` a
+`Double`. `time` and `timetz` are a `java.sql.Time` under every `:time`: `next.jdbc.date-time`
+converts dates and timestamps alone:
 
 ```clojure
 (m/validate (pgmalli/as-read registry :pg.public/users)
@@ -39,7 +41,7 @@ extension: keys are `:table/column`, dates and timestamps are `java.sql.Date` an
 | `:time :inst` | the default: dates and timestamps as `java.sql.Date` and `Timestamp` (`inst?`) |
 | `:time :instant` | `next.jdbc.date-time/read-as-instant` |
 | `:time :local` | `next.jdbc.date-time/read-as-local` |
-| `:read {pg-type schema}` | what a `ReadableColumn` extension of yours returns for a column type |
+| `:read {pg-type schema}` | what your own `ReadableColumn` extension returns for a column type |
 | `:read {:array :vector}` | an extension returning arrays as vectors (`:sequential` for any sequence) |
 | `:read {:json :parsed}` | an extension returning json parsed |
 
@@ -71,7 +73,7 @@ An option pgmalli does not know is an error that suggests the intended name:
 ;; => [inst? #:pg{:default [:now], :type "timestamp with time zone"}]
 ```
 
-## Extensions of yours
+## Your own extensions
 
 A `ReadableColumn` extension changes what a column type comes back as. Key it by the
 `:pg/type` and give the schema of the value returned:
@@ -87,7 +89,9 @@ A `ReadableColumn` extension changes what a column type comes back as. Key it by
 ## Decoding instead
 
 `transformer` turns JDBC values into the registry's types, for an application that works
-with `java.time`:
+with `java.time`. It converts rows with unqualified keys, as `as-unqualified-maps` builds them:
+the registry's row schemas have unqualified keys, so next.jdbc's default `#:users{...}` rows
+are left as they are:
 
 ```clojure
 (def user
@@ -104,4 +108,11 @@ with `java.time`:
 ;; => true
 ```
 
-A `timestamp` (without time zone) value converts in `:zone`, the JVM's by default: `(pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})`.
+`:zone` (the JVM's by default) is the zone some values convert in:
+`(pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})`.
+
+- In a `timestamp` (without time zone) column, a `java.sql.Timestamp`, which pgjdbc returns,
+  keeps its date and time and does not use `:zone`. A `java.util.Date` or an `Instant` converts
+  in `:zone`.
+- In a `date` column, a `java.sql.Date` keeps its date. A `java.sql.Timestamp`, a
+  `java.util.Date` or an `Instant` converts in `:zone`.

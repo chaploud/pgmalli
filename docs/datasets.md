@@ -58,8 +58,8 @@ default):
 ;; => "public.events references public.users, which :except leaves out; leave public.events out too, or keep public.users"
 ```
 
-A foreign key is filled from a row of the table it references. A cycle of NOT NULL
-foreign keys between tables cannot be generated.
+A foreign key is filled from a row of the table it references. Tables whose foreign keys form
+a cycle are an error (`:pgmalli.error/reference-cycle`); leave one of them out with `:except`.
 
 ## Short tables
 
@@ -72,7 +72,8 @@ full:
 ;; => nil
 ```
 
-A CHECK in `:unrendered` is not in the schema, so nothing generates values for it: the
+A CHECK listed in the generated file's `:unrendered` ([types](types.md#the-generated-file)) is
+not in the schema, so nothing generates values for it: the
 rows may be ones PostgreSQL refuses. Give the column a schema with `:overrides`
 ([Overrides](../README.md#overrides)) that keeps the values to what the CHECK takes.
 
@@ -90,8 +91,8 @@ Write it to a file to keep it across upgrades:
 
 The file holds one row per line, `java.time` values and bytes under pgmalli's tags
 (`#pgmalli/instant "..."`, `#pgmalli/bytes "hex"`). Byte arrays compare by identity, so a
-dataset with `bytea` values is not `=` to itself read back, though it inserts the same rows. To read
-the file with `clojure.edn` yourself, give `edn/read-string` the tags as `{:readers data/readers}`.
+dataset with `bytea` values is not `=` to itself read back, though it inserts the same rows.
+To read the file with `clojure.edn` yourself, give `edn/read-string` the tags as `{:readers data/readers}`.
 
 ## Inserting
 
@@ -109,10 +110,7 @@ is written and cast, and arrays given their element type. An identity ALWAYS col
 
 Dates and times are ISO 8601 text cast to the column's type, so the SQL runs as parameters
 and with `{:inline true}` alike; an `Instant` or `java.util.Date` in a `date` or `timestamp`
-column is that time in the JVM's zone, as pgjdbc sends it. Run a dataset someone else wrote
-with parameters: HoneySQL's inline strings double their quotes alone, which is safe only while
-the server has `standard_conforming_strings` on (the default), where a backslash is not an
-escape:
+column is that time in the JVM's zone, as pgjdbc sends it:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
@@ -134,3 +132,7 @@ For a database that already holds some rows (seeded by migrations), add
 > NOTE: identity sequences do not move with the inserted ids. Before inserting rows without
 > ids into the same tables, set them:
 > `SELECT setval(pg_get_serial_sequence('users', 'id'), max(id)) FROM users`.
+
+Run a dataset someone else wrote with parameters, not `{:inline true}`. Inlined, HoneySQL only
+doubles the quotes in a string, which is safe only while the server has
+`standard_conforming_strings` on (the default).

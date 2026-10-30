@@ -71,9 +71,10 @@
   ([registry name opts] (jdbc/as-read registry name opts)))
 
 (defn transformer
-  "malli transformer decoding JDBC and string values into the registry's types. Instants and
-   java.util.Dates that land in date or timestamp (without time zone) columns are read in
-   :zone, default the JVM's; JSON text in json and jsonb columns is parsed."
+  "malli transformer decoding JDBC and string values into the registry's types. An Instant or
+   java.util.Date in a date or timestamp (without time zone) column is read in :zone, default
+   the JVM's, except a java.sql.Timestamp in a timestamp column (its date and time are kept)
+   and a java.sql.Date in a date column; JSON text in json and jsonb columns is parsed."
   ([] (jdbc/transformer))
   ([opts]
    (jdbc/checked! [:map {:closed true} [:zone {:optional true} [:fn {:error/message "should be a java.time.ZoneId"} #(instance? java.time.ZoneId %)]]] opts)
