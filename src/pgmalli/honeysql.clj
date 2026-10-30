@@ -782,11 +782,14 @@
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column (keyword c)})))))))
 
-(defn- null-value? [v {:keys [quoted quoted-always]}]
-  (or (nil? v) (#{[:inline nil] [:lift nil]} v)
-      (and (= :null v) (not quoted)
-           (not (and (instance? java.util.regex.Pattern quoted-always)
-                     (re-find quoted-always "null"))))))
+(defn- null-value? [v {:keys [quoted quoted-always dialect] :as format}]
+  (let [quoted? (if (contains? format :quoted)
+                  quoted
+                  (and (contains? format :dialect) (not= :nrql dialect)))]
+    (or (nil? v) (#{[:inline nil] [:lift nil]} v)
+        (and (= :null v) (not quoted?)
+             (not (and (instance? java.util.regex.Pattern quoted-always)
+                       (re-find quoted-always "null")))))))
 
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into

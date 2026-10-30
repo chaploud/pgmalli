@@ -89,6 +89,8 @@
       "three spellings of a named parameter, keyed without ?")
   (is (= ["SELECT a AS b, COUNT(*), MAX(id) FROM t"] (sql/format {:select [[:a :b] [[:count :*]] :%max.id] :from [:t]}))
       "[:a :b] is a AS b; :%f.args calls f")
+  (is (= ["\"null\""] (sql/format :null {:dialect :ansi})))
+  (is (= ["null"] (sql/format :null {:dialect :ansi :quoted false})))
   (is (= ["INSERT INTO t AS u (a) VALUES (?)" 1] (sql/format {:insert-into [[:t :u] [:a]] :values [[1]]}))))
 
 (deftest sql-format-writes-values-maps-as-write-problems-reads-them

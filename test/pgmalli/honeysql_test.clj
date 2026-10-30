@@ -687,10 +687,21 @@
                                                        [:id [:int {:pg/type "integer"}]]
                                                        [:null [:int {:pg/type "integer"}]]]}})
         q {:update :t :set {:id :null}}]
-    (doseq [format [{:quoted true} {:quoted-always #"^null$"}]]
+    (doseq [format [{:quoted true} {:quoted-always #"^null$"}
+                    {:dialect :ansi}
+                    {:dialect :ansi :quoted true}
+                    {:dialect :ansi :quoted-always #"^id$"}
+                    {:dialect :ansi :quoted false :quoted-always #"^null$"}
+                    {:dialect :ansi :quoted nil :quoted-always #"^null$"}
+                    {:dialect :nrql :quoted true}]]
       (is (= [] (h/check reg q {:format format})) (pr-str format)))
-    (is (= [{:kind :not-null-violation :table "public.t" :column :id :clause :set}]
-           (h/check reg q {:format {:quoted-always #"^id$"}})))))
+    (doseq [format [{} {:quoted-always #"^id$"}
+                    {:dialect :ansi :quoted false}
+                    {:dialect :ansi :quoted nil}
+                    {:dialect :ansi :quoted false :quoted-always #"^id$"}
+                    {:dialect :nrql}]]
+      (is (= [{:kind :not-null-violation :table "public.t" :column :id :clause :set}]
+             (h/check reg q {:format format})) (pr-str format)))))
 
 (deftest null-tests-read-their-column-in-every-condition
   (doseq [op [:is :is-not]
