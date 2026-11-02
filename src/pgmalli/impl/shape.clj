@@ -103,6 +103,11 @@
   (let [s (if (maybe? s) (last s) s)]
     (if (and (vector? s) (map? (second s))) (second s) {})))
 
+(defn domain-base
+  "The base of a domain's registry schema: the first schema of [:and base checks...]."
+  [d]
+  (if (and (vector? d) (= :and (first d))) (first (entries d)) d))
+
 (defn column-entries
   "[[column props schema] ...] of a row or insert schema as data."
   [schema]

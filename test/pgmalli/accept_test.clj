@@ -3,7 +3,9 @@
    JVM only (babashka has no java.sql), so bb test does not list it."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is use-fixtures]]
+            [malli.core :as m]
             [next.jdbc :as jdbc]
+            [pgmalli.core :as pgmalli]
             [pgmalli.impl.accept :as accept]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
 
@@ -63,3 +65,11 @@
                                   ;; another error is of the value, which the type took ("1" is no regclass)
                                   (catch java.sql.SQLException e (not (#{"42883" "42804" "42846" "42725"} (.getSQLState e)))))]]
           (is (= taken? (accept/accepts? t (accept/sent-type v {}) :cast)) (str (pr-str v) " " (class v) " " t)))))))
+
+(deftest sent-values-are-what-goes-as-the-type
+  (let [registry (pgmalli/registry {:registry {}})]
+    (doseq [v [1 1M 1N (biginteger 1) 1.0 (float 1) true "1" \1 (java.util.UUID/randomUUID) (.getBytes "a")
+               (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
+               (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]
+            :let [t (accept/sent-type v {})]]
+      (is (m/validate (accept/sent-values t) v {:registry registry}) (str (class v) " goes as " t)))))

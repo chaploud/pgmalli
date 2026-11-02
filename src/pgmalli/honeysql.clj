@@ -90,7 +90,7 @@
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
 
-(declare insert-parts star? expression-type type-schema accepted-type)
+(declare insert-parts star? expression-type type-schema accepted-type head)
 
 (defn- code-sources?
   "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
@@ -912,8 +912,7 @@
   "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
    type of types' :cast (bit takes varbit, which keeps its length), or any other type types
    has; nil for a string type (text, varchar, char, name, citext) or a type types lacks (a
-   domain over a base type among them). Where pgmalli.impl.accept answers, it decides whether
-   s takes a varchar (takes-varchar?)."
+   domain over a base type among them)."
   [registry s]
   (let [p (shape/column-props s)
         e (types/entry (shape/type-name p))
@@ -940,7 +939,7 @@
             (when-let [n (enum-type registry s)] [:enum n]))]
     (cond (accept/known? t) t
           ;; a domain: its base, the first schema of [:and base checks...]
-          (and d (nil? (enum-values registry inner))) (slot-type registry (if (and (vector? d) (= :and (first d))) (first (shape/entries d)) d)))))
+          (and d (nil? (enum-values registry inner))) (slot-type registry (shape/domain-base d)))))
 
 (defn- takes-varchar?
   "Whether a column of schema s takes a varchar parameter, compared or assigned; nil where
@@ -963,8 +962,7 @@
                        (cond-> {:col side :value value :scope sc :op op} s (assoc :schema s)))
                      (let [target (target-scope sc stmt schema)]
                        (when (seq target) (for [[col value] (assignments stmt)] {:col col :value value :scope target :assigned? true}))))
-        varchar? (= "character varying" (accept/sent-type "" opts))
-        head #(if (vector? %) (first %) %)]
+        varchar? (= "character varying" (accept/sent-type "" opts))]
     (concat
      ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
      ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
@@ -1236,9 +1234,12 @@
 
 (defn- kind
   "What an alternative is a value of, through [:and kind checks...]: one alternative of each
-   kind is kept."
+   kind is kept, a function schema ([:fn f]) being a kind of its own."
   [t]
-  (if (= :and (head t)) (kind (first (remove map? (rest t)))) (head t)))
+  (case (head t)
+    :and (kind (first (remove map? (rest t))))
+    :fn t
+    (head t)))
 
 (defn- within
   "Alternative a held to the range a column's own assigned values have: their :min and :max,
@@ -1264,7 +1265,7 @@
    :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values (what
    :write lets the application send as its type), and the values of each of sent-types that
    PostgreSQL takes there (cast, or {:accept :postgresql}) or holds as its own (accept/holds?),
-   assigned held to the own values' range. Compared, the values lose the bounds a comparison
+   assigned or cast held to the own values' range. Compared, the values lose the bounds a comparison
    need not keep (loose). Own values with labels (an enum's, a CHECK's list), untyped, or of a
    type pgmalli.impl.accept does not answer for, are the type alone."
   [registry s context {:keys [accept write] :as opts}]
@@ -1283,11 +1284,14 @@
                              (concat (alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts))))
                                      (alternatives (accept/sent-values p))))
                        :when (not (untyped? a))]
-                   a)
-            kept (reduce (fn [kept a] (if (some #(= (kind a) (kind %)) kept) kept (conj kept a)))
-                         (vec (alternatives own)) alts)
-            alts (map #(cond-> % (not= :compare context) (within own)) (drop (count (alternatives own)) kept))]
-        (if (seq alts) (into [:or] (concat (alternatives own) alts)) own)))))
+                   [p a])
+            own-alts (vec (alternatives own))
+            added (reduce (fn [added [_ a :as pa]] (if (some #(= (kind a) (kind %)) (concat own-alts (map second added))) added (conj added pa)))
+                          [] alts)
+            ;; a number held to a number column's range, which PostgreSQL checks after converting it;
+            ;; a string's or a date's cannot be said of the value sent
+            alts (for [[p a] added] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within own)))]
+        (if (seq alts) (into [:or] (concat own-alts alts)) own)))))
 
 (defn- compared-type
   "The type of an argument compared with a column of type t by op: the column's kind (an enum's
@@ -1343,9 +1347,16 @@
                                        target (target-scope sc stmt schema)
                                        refusing (frequencies
                                                  (concat (when-not (= :lenient (:compare opts))
-                                                           (for [[op side other] (comparison-sides stmt)
-                                                                 :when (not (or (#{:is-distinct-from :is-not-distinct-from} op) (null-value? other (:format opts))))]
-                                                             side))
+                                                           ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
+                                                           (for [[x] (polar-nodes (conditions stmt))
+                                                                 :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
+                                                                                            (and (= 4 (count x)) (#{:between :not-between} (first x)))))
+                                                                 :let [[op & operands] x]
+                                                                 :when (not (or (#{:is-distinct-from :is-not-distinct-from} op)
+                                                                                (some #(null-value? % (:format opts)) operands)))
+                                                                 o operands
+                                                                 o (if (and (in-ops op) (vector? o) (not (keyword? (first o)))) o [o])]
+                                                             o))
                                                          (for [[col v] (assignments stmt)
                                                                :let [c (:schema (resolve-column registry target col))]
                                                                :when (and c (not (maybe? c)))]

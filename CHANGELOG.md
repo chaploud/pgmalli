@@ -7,7 +7,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 * `h/arg-types` types an argument under a cast (`[:cast :?at :timestamptz]`) with what
   PostgreSQL casts to the type: a string too, and an enum type's labels alone. A `numeric`,
-  `real` or `double precision` column's argument takes an integer too.
+  `real` or `double precision` column's argument takes an integer too, a `double precision`
+  one a `real` too.
 * `{:accept :postgresql}` types an argument with all PostgreSQL takes where it goes (a `bigint`
   compared with a `numeric`, anything assigned to a `text` column); by default (`:native`) it
   takes its column's own values, as before. `:sends` names the types an application's values

@@ -19,32 +19,23 @@
    [java.time.OffsetTime "time with time zone"] [java.time.LocalDateTime "timestamp without time zone"]
    [java.time.OffsetDateTime "timestamp with time zone"]])
 
-(def default-sends
-  "The types pgjdbc sends an application's values as, with no extension, in the order an
-   argument's alternatives are listed."
-  ["bigint" "numeric" "double precision" "real" "boolean" "character varying" "uuid" "bytea" "date"
-   "time without time zone" "time with time zone" "timestamp without time zone" "timestamp with time zone"])
+(def ^:private sends
+  "[type schema]: each type pgjdbc sends an application's values as with no extension, and a
+   malli schema of the values it sends as it (integer? for a BigInt or BigInteger, which go as
+   numeric), in the order an argument's alternatives are listed."
+  [["bigint" :int] ["numeric" [:or 'decimal? 'integer?]] ["double precision" :double] ["real" 'float?]
+   ["boolean" :boolean] ["character varying" [:or :string 'char?]] ["uuid" :uuid] ["bytea" 'bytes?]
+   ["date" :time/local-date] ["time without time zone" :time/local-time] ["time with time zone" :time/offset-time]
+   ["timestamp without time zone" :time/local-date-time] ["timestamp with time zone" :time/offset-date-time]])
 
-(def sent-values
-  "The malli schema of the values pgjdbc sends as each type of default-sends."
-  {"bigint" :int
-   "numeric" [:or 'decimal? 'integer?]
-   "double precision" :double
-   "real" 'float?
-   "boolean" :boolean
-   "character varying" [:or :string 'char?]
-   "uuid" :uuid
-   "bytea" 'bytes?
-   "date" :time/local-date
-   "time without time zone" :time/local-time
-   "time with time zone" :time/offset-time
-   "timestamp without time zone" :time/local-date-time
-   "timestamp with time zone" :time/offset-date-time})
+(def default-sends (mapv first sends))
+
+(def sent-values (into {} sends))
 
 (defn sent-type
   "The type value goes to PostgreSQL as: :unknown for one sent untyped, which PostgreSQL types
    from the context (nil; a String under stringtype=unspecified, or written into the SQL under
-   sql/format's :inline); nil for a class pgjdbc takes no value of."
+   sql/format's :inline); nil for a class class-types does not list."
   [value {:keys [stringtype format]}]
   (cond (nil? value) :unknown
         (string? value) (if (or (= :unspecified stringtype) (:inline format)) :unknown "character varying")
@@ -68,6 +59,8 @@
 
 (def ^:private numbers #{"smallint" "integer" "bigint" "real" "double precision" "numeric"})
 (def ^:private strings #{"character varying" "text" "character" "name" "citext"})
+
+(defn number-type? [t] (contains? numbers t))
 
 (def ^:private families
   "Types whose comparison operators take each other: implicit casts and cross-type operators."
@@ -112,8 +105,8 @@
       :else
       (boolean
        (or (some #(and (% t) (% sent)) families)
-           ;; a reg* type is an oid, which the integers compare with, and integer and bigint
-           ;; take by assignment and cast too
+           ;; a reg* type is an oid: it takes any integer; integer and bigint take it by
+           ;; assignment and cast too, smallint compared only
            (let [[_ other] (cond (oid? t) [t sent] (oid? sent) [sent t])]
              (or (#{"integer" "bigint"} other) (and (= "smallint" other) (or (oid? t) (= :compare context)))))
            (contains? (compared t) sent)

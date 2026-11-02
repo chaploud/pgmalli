@@ -117,15 +117,15 @@ keyed as in `sql/format`'s `:params`:
 | compared with a column, in a condition or in a select or ORDER BY expression | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type |
 | compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
-| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of the types `:sends` names: a string too, and an enum type's labels alone; `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (NULL matching no row) or assigned to a NOT NULL column |
+| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of the types `:sends` names: a string too, and an enum type's labels alone; `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as `:write`'s `:array` says |
 | a `LIKE` pattern | the column's kind (`:string`) |
-| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal or double of at least 0 too, which PostgreSQL rounds |
+| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal, double or float of at least 0 too, which PostgreSQL rounds |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
 A column's type takes its own values, a `numeric`, `real` or `double precision` one an integer
-too: the same number. PostgreSQL takes more, a `bigint` compared with a `numeric`, any value
+too, a `double precision` one a `real` too, of the types `:sends` names: the same number. PostgreSQL takes more, a `bigint` compared with a `numeric`, any value
 assigned to a `text` column, which hides a mix-up a type would catch. `{:accept :postgresql}`
 types an argument with all of it, of the types `:sends` names, the alternatives held to the
 column's range:
@@ -263,7 +263,7 @@ take the same options map:
 | `:write {:array [:pg/array :sequential :vector :set]}` | what an array argument (`[:any :?ids]`) may be sent as: a Java array, a vector, list or set; `:any` without it |
 | `:stringtype :unspecified` | your connection's `stringtype`: strings reach every column untyped (default `:varchar`, as pgjdbc's) |
 | `:accept :postgresql` | an argument takes all PostgreSQL takes where it goes, not its column's own values alone (`:native`, the default) |
-| `:sends ["bigint" ...]` | the types your application's values reach PostgreSQL as (names or aliases of [types.md](types.md)), for a cast's argument and under `:accept :postgresql`, the types `:write` names added: by default pgjdbc's for its Java types, `bigint`, `numeric`, `double precision`, `real`, `boolean`, `character varying`, `uuid`, `bytea`, `date`, `time`, `timetz`, `timestamp`, `timestamptz` |
+| `:sends ["bigint" ...]` | the types your application's values reach PostgreSQL as (names or aliases of [types.md](types.md)), for a cast's argument, a number column's narrower numbers and under `:accept :postgresql`, the types `:write` names added: by default pgjdbc's for its Java types, `bigint`, `numeric`, `double precision`, `real`, `boolean`, `character varying`, `uuid`, `bytea`, `date`, `time`, `timetz`, `timestamp`, `timestamptz` |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
 | `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |

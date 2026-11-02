@@ -8,6 +8,7 @@
             [malli.core :as m]
             [malli.error :as me]
             [malli.transform :as mt]
+            [pgmalli.impl.accept :as accept]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.json :as json]
             [pgmalli.impl.shape :as shape]
@@ -154,10 +155,8 @@
   (or (shape/read-as write schema)
       (when (array-column? schema) (array-type (write-type (last schema) opts) opts))
       (let [t (driver-type schema (dissoc opts :read) write-type)
-            ;; pgjdbc also takes these java.time types as they are
-            native ({:time/local-date :time/local-date :time/local-date-time :time/local-date-time
-                     :time/instant :time/offset-date-time :time/local-time :time/local-time
-                     :time/offset-time :time/offset-time} (if (vector? schema) (first schema) schema))]
+            ;; pgjdbc also takes its java.time type as it is
+            native (some-> (pg-type schema) types/entry :name accept/sent-values)]
         (if (and native (= :inst time) (= 'inst? (if (vector? t) (first t) t)))
           [:or t native]
           t))))
@@ -249,7 +248,7 @@
    holds it stays a reference."
   [schemas s opts f]
   (if-let [d (when (and (vector? s) (= :ref (first s))) (get schemas (last s)))]
-    (let [base (through-domain schemas (if (and (vector? d) (= :and (first d))) (first (shape/entries d)) d) opts f)]
+    (let [base (through-domain schemas (shape/domain-base d) opts f)]
       (if (= base (f base opts)) s (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))
 

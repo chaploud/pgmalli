@@ -557,6 +557,16 @@
     (is (not (m/validate t 1000000000000M)) "beyond an integer's range, PostgreSQL refuses it")
     (is (not (m/validate t 1.0E12)))))
 
+(deftest only-a-number-is-held-to-a-number-columns-range
+  (is (m/validate (:x (h/arg-types registry {:select [[[:cast :?x :integer] :n]]} {:schema "sample"})) "5" {:registry registry})
+      "a string cast to an integer is read as one, then checked")
+  (let [t (:x (h/arg-types registry {:update :users :set {:nick :?x} :where [:= :id 1]} {:schema "sample" :accept :postgresql}))]
+    (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number"))
+  (is (= [:or [:fn decimal?] [:fn int?]]
+         (:x (h/arg-types registry {:select [:id] :from [:users] :where [:= [:cast :id :numeric] :?x]}
+                          {:schema "sample" :write {"numeric" [:fn decimal?] "bigint" [:fn int?]}})))
+      "function schemas are kinds of their own"))
+
 (deftest a-misspelt-type-in-sends-is-an-error
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean \"timestamp\"" (h/arg-types registry {:select [:id] :from [:users]} {:sends ["timestampz"]})))
   (is (map? (h/arg-types registry {:select [:id] :from [:users]} {:sends ["int8" "varchar"]})) "an alias is a name"))
