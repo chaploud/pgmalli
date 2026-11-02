@@ -19,26 +19,35 @@
    [java.time.OffsetTime "time with time zone"] [java.time.LocalDateTime "timestamp without time zone"]
    [java.time.OffsetDateTime "timestamp with time zone"]])
 
-(def ^:private sends
-  "[type schema]: each type pgjdbc sends an application's values as with no extension, and a
-   malli schema of the values it sends as it (integer? for a BigInt or BigInteger, which go as
-   numeric), in the order an argument's alternatives are listed."
-  [["bigint" :int] ["numeric" [:or 'decimal? 'integer?]] ["double precision" :double] ["real" 'float?]
-   ["boolean" :boolean] ["character varying" [:or :string 'char?]] ["uuid" :uuid] ["bytea" 'bytes?]
-   ["date" :time/local-date] ["time without time zone" :time/local-time] ["time with time zone" :time/offset-time]
-   ["timestamp without time zone" :time/local-date-time] ["timestamp with time zone" :time/offset-date-time]])
+(defn pgjdbc-write
+  "[[schema type] ...]: the values an application commonly sends through pgjdbc with no
+   extension, as malli schemas, and the type it sends each as; a String untyped (:unknown) under
+   its stringtype=unspecified. pgjdbc sends more (a BigInt as numeric, a Float as real, a
+   Character as varchar: class-types), which an application adds as rows."
+  [{:keys [stringtype]}]
+  [[:int "bigint"] ['decimal? "numeric"] [:double "double precision"]
+   [:boolean "boolean"] [:string (if (= :unspecified stringtype) :unknown "character varying")]
+   [:uuid "uuid"] ['bytes? "bytea"] [:time/local-date "date"] [:time/local-time "time without time zone"]
+   [:time/offset-time "time with time zone"] [:time/local-date-time "timestamp without time zone"]
+   [:time/offset-date-time "timestamp with time zone"]])
 
-(def default-sends (mapv first sends))
+(def default-write (pgjdbc-write {}))
 
-(def sent-values (into {} sends))
+(defn- strings?
+  "Whether a schema of :write takes strings: :string or string?, alone or in an :or."
+  [s]
+  (if (and (vector? s) (= :or (first s)))
+    (boolean (some strings? (remove map? (rest s))))
+    (contains? #{:string 'string?} (if (vector? s) (first s) s))))
 
 (defn sent-type
   "The type value goes to PostgreSQL as: :unknown for one sent untyped, which PostgreSQL types
-   from the context (nil; a String under stringtype=unspecified, or written into the SQL under
+   from the context (nil; a String :write sends untyped, or one written into the SQL under
    sql/format's :inline); nil for a class class-types does not list."
-  [value {:keys [stringtype format]}]
+  [value {:keys [write format]}]
   (cond (nil? value) :unknown
-        (string? value) (if (or (= :unspecified stringtype) (:inline format)) :unknown "character varying")
+        (string? value) (let [ts (set (for [[s t] (or write default-write) :when (strings? s)] t))]
+                          (if (or (:inline format) (contains? ts :unknown)) :unknown "character varying"))
         :else (some (fn [[c t]] (when (instance? c value) t)) class-types)))
 
 ;;; what PostgreSQL takes
@@ -127,8 +136,9 @@
    "real" #{"smallint" "integer" "bigint"}})
 
 (defn holds?
-  "Whether a value sent as type sent is one of type t's own: its type, or a number of a
-   narrower kind (an integer for a numeric, a real for a double precision), which PostgreSQL
-   takes as the same number."
+  "Whether a value sent as type sent is one of type t's own: its type, a number of a narrower
+   kind (an integer for a numeric, a real for a double precision), which PostgreSQL takes as the
+   same number, or one sent untyped where t's values are text (a string type, an enum), which
+   PostgreSQL reads as the value itself."
   [t sent]
-  (or (= t sent) (contains? (widened t) sent)))
+  (or (= t sent) (contains? (widened t) sent) (and (= :unknown sent) (or (vector? t) (contains? strings t)))))

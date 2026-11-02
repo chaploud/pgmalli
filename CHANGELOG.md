@@ -7,13 +7,17 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 * `h/arg-types` types an argument under a cast (`[:cast :?at :timestamptz]`) with what
   PostgreSQL casts to the type: a string too, and an enum type's labels alone. A `numeric`,
-  `real` or `double precision` column's argument takes an integer too, a `double precision`
-  one a `real` too.
+  `real` or `double precision` column's argument takes an integer too.
 * `{:accept :postgresql}` types an argument with all PostgreSQL takes where it goes (a `bigint`
   compared with a `numeric`, anything assigned to a `text` column); by default (`:native`) it
-  takes its column's own values, as before. `:sends` names the types an application's values
-  reach PostgreSQL as, for a cast's argument and under `:accept :postgresql`; a name pgmalli
-  does not know is an error.
+  takes its column's own values, as before.
+* `:write` is all an application sends: rows of `[schema type]`, the type a name or alias, or
+  `:unknown` for a value sent untyped. `h/pgjdbc-write` gives pgjdbc's, the default, `{:stringtype
+  :unspecified}` for that connection property; a row left out is a value an argument does not
+  take. A row with `:pg/element` is a collection an array argument may be. A type pgmalli does
+  not know is an error.
+* `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
+  `:set` built at run time.
 * An argument in `:limit` or `:offset` takes nil (no limit). A comparison in a select or ORDER BY
   expression types its argument, and `h/check` reads it: its unknown columns, uncast strings and
   enum literals are problems now.
@@ -22,6 +26,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * What to do: an instrumented function whose argument was `:any` under a cast or in a select or
   ORDER BY comparison now has its type checked; a query whose select or ORDER BY compares an
   unknown column or an enum with a literal outside its labels now has problems.
+* What to do: rewrite `:write` and `:stringtype` as rows from `h/pgjdbc-write`:
+  `{:stringtype :unspecified}` is `{:write (h/pgjdbc-write {:stringtype :unspecified})}`;
+  `{:write {"text" [:or :string :keyword]}}` and `{:enum [:string :keyword]}` are a row
+  `[:keyword :unknown]` (or the type your extension sends a keyword as); `{:array [:sequential]}`
+  is `[[:sequential :pg/element] :unknown]`. A row adds to a column's own values rather than
+  replacing them, except where pgmalli knew only the driver's object (`:any`: json, arrays,
+  interval).
 
 ## 0.3.3 (2026-11-03)
 

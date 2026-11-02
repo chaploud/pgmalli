@@ -66,10 +66,10 @@
                                   (catch java.sql.SQLException e (not (#{"42883" "42804" "42846" "42725"} (.getSQLState e)))))]]
           (is (= taken? (accept/accepts? t (accept/sent-type v {}) :cast)) (str (pr-str v) " " (class v) " " t)))))))
 
-(deftest sent-values-are-what-goes-as-the-type
+(deftest pgjdbc-write-says-what-goes-as-which-type
   (let [registry (pgmalli/registry {:registry {}})]
-    (doseq [v [1 1M 1N (biginteger 1) 1.0 (float 1) true "1" \1 (java.util.UUID/randomUUID) (.getBytes "a")
+    (doseq [v [1 1M 1.0 true "1" (java.util.UUID/randomUUID) (.getBytes "a")
                (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
-               (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]
-            :let [t (accept/sent-type v {})]]
-      (is (m/validate (accept/sent-values t) v {:registry registry}) (str (class v) " goes as " t)))))
+               (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
+      (is (= [(accept/sent-type v {})] (for [[s t] accept/default-write :when (m/validate s v {:registry registry})] t))
+          (str (class v) " goes as one type")))))

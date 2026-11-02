@@ -5,6 +5,7 @@
    return. as-read and pgmalli.honeysql both read columns and key rows here."
   (:require [camel-snake-kebab.core :as csk]
             [clojure.string :as str]
+            [clojure.walk]
             [malli.core :as m]
             [malli.error :as me]
             [malli.transform :as mt]
@@ -33,15 +34,11 @@
   "The options pgmalli.honeysql takes: as-read's, and those of docs/queries.md#options."
   (into read-options-schema
         [[:schema {:optional true} :string]
-         [:write {:optional true} [:and [:map-of [:or :string [:enum :array :enum]] :any]
-                                   [:map [:array {:optional true} [:vector {:min 1} [:enum :pg/array :sequential :vector :set]]]
-                                    [:enum {:optional true} [:vector {:min 1} [:enum :string :keyword]]]]]]
+         [:write {:optional true} [:sequential [:tuple :any [:or :string [:= :unknown]]]]]
          [:compare {:optional true} [:enum :strict :lenient]]
          [:result {:optional true} [:enum :one]]
          [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]
          [:format {:optional true} :map]
-         [:stringtype {:optional true} [:enum :varchar :unspecified]]
-         [:sends {:optional true} [:vector {:min 1} :string]]
          [:accept {:optional true} [:enum :native :postgresql]]]))
 
 (defn checked!
@@ -73,17 +70,30 @@
 (def ^:private read-options* (delay (m/schema read-options-schema)))
 
 (defn options!
-  "opts when pgmalli.honeysql takes them: their keys and values, and each type :sends names
+  "opts when pgmalli.honeysql takes them: their keys and values, and each type :write names
    one types knows (a name or an alias); an error naming what it does not, with the one meant."
   [opts]
   (checked! @options opts)
-  (when-let [[t] (seq (remove types/entry (:sends opts)))]
+  (when-let [[t] (seq (remove #(or (= :unknown %) (types/entry %)) (map second (:write opts))))]
     (let [known (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)]
       (error/fail! :pgmalli.error/invalid-options
-                   (str "pgmalli options: :sends names " (pr-str t) ", which is no type pgmalli knows (docs/types.md)"
+                   (str "pgmalli options: :write sends a value as " (pr-str t) ", which is no type pgmalli knows (docs/types.md)"
                         (error/did-you-mean (some-> (error/suggest t known) pr-str)))
-                   {:given (select-keys opts [:sends])})))
+                   {:given (select-keys opts [:write])})))
   opts)
+
+(defn- element-row?
+  "A row of :write whose schema holds :pg/element: a collection of an array's elements."
+  [[s]]
+  (boolean (some #{:pg/element} (tree-seq coll? seq s))))
+
+(defn write-rows
+  "The rows of :write (accept/default-write without it), each type by its name, and whether
+   they are of a collection (element-row?)."
+  [{:keys [write]} array?]
+  (for [[s t :as row] (or write accept/default-write)
+        :when (= array? (element-row? row))]
+    [s (if (= :unknown t) t (:name (types/entry t)))]))
 
 ;;; what the driver returns and takes
 
@@ -125,41 +135,30 @@
               :else (driver-type schema opts read-type)))))
 
 (defn array-type
-  "An array argument of elements t: what :write's :array names an application sends
-   ([:pg/array :sequential :set]: a typed Java array, a vector, list or set of t); :any without
-   it, malli's default registry having nothing for what the driver takes (:pg/array is
-   pgmalli's registry's)."
-  [t {:keys [write]}]
-  (if-let [kinds (:array write)]
-    (let [alts (map #(vector % t) kinds)] (if (next alts) (into [:or] alts) (first alts)))
-    :any))
-
-(defn enum-arg
-  "An argument's type t when it is a list of labels ([:enum ...], an enum type's or a CHECK's)
-   under :write's :enum, what a SettableParameter extension sends: the labels as strings,
-   keywords or both ({:enum [:string :keyword]}); t otherwise."
-  [t {:keys [write]}]
-  (if-let [kinds (and (vector? t) (= :enum (first t)) (:enum write))]
-    (let [[props labels] (if (map? (second t)) [(second t) (drop 2 t)] [nil (rest t)])]
-      (into (cond-> [:enum] props (conj props))
-            (distinct (for [k kinds, v labels] (if (= :keyword k) (keyword v) v)))))
-    t))
+  "An array argument of elements t: the collections :write's rows with :pg/element send, t in
+   its place ([[:sequential :pg/element] :unknown]); :any without one."
+  [t opts]
+  (let [alts (for [[s] (write-rows opts true)] (clojure.walk/postwalk-replace {:pg/element t} s))]
+    (case (count alts) 0 :any 1 (first alts) (into [:or] alts))))
 
 (defn write-type
-  "A column's schema (without NULL) as an argument the driver takes: :write names what a
-   SettableParameter extension sends for a :pg/type; a date, time or timestamp a
-   java.util.Date or the java.time type of it pgjdbc sends (accept/sent-values); an array
-   column's argument is an array of its elements' (array-type); otherwise the types read-type
-   shares with it (:time extends both sides)."
-  [schema {:keys [write time] :or {time :inst} :as opts}]
-  (or (shape/read-as write schema)
-      (when (array-column? schema) (array-type (write-type (last schema) opts) opts))
-      (let [t (driver-type schema (dissoc opts :read) write-type)
-            ;; pgjdbc also takes its java.time type as it is
-            native (some-> (shape/type-name (shape/column-props schema)) types/entry :name accept/sent-values)]
-        (if (and native (= :inst time) (= 'inst? (if (vector? t) (first t) t)))
-          [:or t native]
-          t))))
+  "A column's schema (without NULL) as an argument the driver takes: an array column's
+   argument is an array of its elements' (array-type); otherwise the types read-type shares
+   with it (:time extends both sides), and what :write sends as its type, which is all of it
+   where read-type has the driver's object (:any)."
+  [schema opts]
+  (if (array-column? schema)
+    (array-type (write-type (last schema) opts) opts)
+    (let [t (driver-type schema (dissoc opts :read) write-type)
+          n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
+          alts (concat (when-not (= :any (if (vector? t) (first t) t)) [t])
+                       ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
+                       (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
+                             a (if (and (vector? s) (= :or (first s))) (remove map? (rest s)) [s])]
+                         a))
+          ;; one of each kind, the column's own first: its :pg/type and bounds
+          alts (vals (reduce (fn [m a] (update m (shape/kind a) #(or % a))) (array-map) alts))]
+      (case (count alts) 0 t 1 (first alts) (into [:or] alts)))))
 
 ;;; rows as next.jdbc builds them
 
@@ -260,9 +259,9 @@
 
 (defn column-write-type
   "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the
-   driver takes its base; :write may still name the domain's type."
-  [schemas s {:keys [write] :as opts}]
-  (or (shape/read-as write s) (write-type (through-domain schemas s opts write-type) opts)))
+   driver takes its base."
+  [schemas s opts]
+  (write-type (through-domain schemas s opts write-type) opts))
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on

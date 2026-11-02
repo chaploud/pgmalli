@@ -949,7 +949,7 @@
 
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
-   assigned or under equality-ops; and, under pgjdbc's default stringtype (varchar), a string HoneySQL
+   assigned or under equality-ops; and, where :write sends a String as varchar (pgjdbc's default), a string HoneySQL
    sends as a parameter (not inlined, not cast) to a column PostgreSQL takes no varchar for
    (enum = varchar does not exist, nor inet = varchar): a literal, or an argument to an enum
    column or to one whose own values are strings."
@@ -964,8 +964,8 @@
                        (when (seq target) (for [[col value] (assignments stmt)] {:col col :value value :scope target :assigned? true}))))
         varchar? (= "character varying" (accept/sent-type "" opts))]
     (concat
-     ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
-     ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
+     ;; an argument sent to an enum type's column: a String, which goes as varchar unless :write
+     ;; sends it untyped (stringtype=unspecified)
      (for [{:keys [col value scope assigned?] :as use} uses
            :let [k (param-key value)] :when (and k varchar?)
            :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
@@ -1142,18 +1142,14 @@
   "A column schema as jdbc's read-type or write-type (f) gives it, without NULL, as malli's
    default registry reads it."
   [registry f s opts]
-  (let [typed #(portable/portable-data (::schemas registry)
-                                       (if (= f jdbc/read-type)
-                                         (jdbc/column-read-type (::schemas registry) (shape/non-null s) %)
-                                         (jdbc/column-write-type (::schemas registry) (shape/non-null s) %)))
-        ;; a column with labels (an enum type's, a CHECK's) keeps them under :write's :enum, the
-        ;; more particular of the two, even where :write names its type
-        labels (when (and (= f jdbc/write-type) (get-in opts [:write :enum]))
-                 (let [t (typed (update opts :write select-keys [:array :enum]))]
-                   (when (and (vector? t) (= :enum (first t))) t)))]
-    (cond labels (jdbc/enum-arg labels opts)
-          (= f jdbc/write-type) (jdbc/enum-arg (typed opts) opts)
-          :else (typed opts))))
+  (let [t (portable/portable-data (::schemas registry)
+                                  (if (= f jdbc/read-type)
+                                    (jdbc/column-read-type (::schemas registry) (shape/non-null s) opts)
+                                    (jdbc/column-write-type (::schemas registry) (shape/non-null s) opts)))]
+    ;; pgmalli's own types read as malli's may meet the same alternative :write sends (:pg/bytes, bytes?)
+    (if (and (vector? t) (= :or (first t)) (not (map? (second t))))
+      (let [alts (distinct (rest t))] (if (next alts) (into [:or] alts) (first alts)))
+      t)))
 
 (def ^:private maybe? shape/maybe?)
 
@@ -1181,12 +1177,9 @@
 
 (defn- compared-schema-type
   "The type of an argument op compares with a value of column schema s, as compared-schema
-   narrows it. A CHECK's list taken as its base type still takes the keywords :write's :enum
-   lets an extension send."
+   narrows it."
   [registry s op opts]
-  (let [c (compared-schema s op)
-        t (accepted-type registry c :compare opts)]
-    (if (and (not= c s) (some #{:keyword} (get-in opts [:write :enum]))) [:or t :keyword] t)))
+  (accepted-type registry (compared-schema s op) :compare opts))
 
 (defn- compared-column-type [registry sc col op opts]
   (if-let [s (:schema (resolve-column registry sc col))] (compared-schema-type registry s op opts) :any))
@@ -1204,8 +1197,8 @@
 
 (defn- loose
   "A column type without the bounds a comparison need not keep (CHECKs, lengths, ranges): its
-   kind and :pg/type. A type with other children (an enum, an :or) stays: PostgreSQL refuses a
-   value outside an enum, even compared."
+   kind and :pg/type, each alternative's of an :or. A type with other children (an enum) stays:
+   PostgreSQL refuses a value outside an enum, even compared."
   [t]
   (if-not (vector? t)
     t
@@ -1216,6 +1209,7 @@
                            (into [(first base) {:pg/type pg}] (rest base))
                            (if (and (keyword? base) (:pg/type p)) [base {:pg/type (:pg/type p)}] base)))
             (#{:maybe :vector :sequential :set} h) [h (loose (last t))]
+            (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
             (seq children) t
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 
@@ -1232,15 +1226,6 @@
         (and (vector? t) (map? (second t))) (let [p (dissoc (second t) :pg/type)] (if (and (empty? p) (= 2 (count t))) (first t) (assoc t 1 p)))
         :else t))
 
-(defn- kind
-  "What an alternative is a value of, through [:and kind checks...]: one alternative of each
-   kind is kept, a function schema ([:fn f]) being a kind of its own."
-  [t]
-  (case (head t)
-    :and (kind (first (remove map? (rest t))))
-    :fn t
-    (head t)))
-
 (defn- within
   "Alternative a held to the range a column's own assigned values have: their :min and :max,
    and the checks of an [:and base checks...]."
@@ -1254,39 +1239,38 @@
                 :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))]
     (if (next kids) (into [:and a] (rest kids)) a)))
 
-(defn- sent-types
-  "The types an application's values reach PostgreSQL as: those :sends names (pgjdbc's by
-   default), and those :write says what it sends as."
-  [{:keys [sends write]}]
-  (distinct (concat (map #(:name (types/entry %) %) (or sends accept/default-sends)) (filter string? (keys write)))))
-
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
-   :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values (what
-   :write lets the application send as its type), and the values of each of sent-types that
-   PostgreSQL takes there (cast, or {:accept :postgresql}) or holds as its own (accept/holds?),
-   assigned or cast held to the own values' range. Compared, the values lose the bounds a comparison
-   need not keep (loose). Own values with labels (an enum's, a CHECK's list), untyped, or of a
-   type pgmalli.impl.accept does not answer for, are the type alone."
-  [registry s context {:keys [accept write] :as opts}]
+   :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
+   (jdbc/write-type), and the values of each row of :write sent as a type PostgreSQL takes there
+   (cast, or {:accept :postgresql}) or holds as its own (accept/holds?), assigned or cast held
+   to the own values' range. Compared, the values lose the bounds a comparison need not keep
+   (loose). Own values with labels (an enum's, a CHECK's list) are the labels, as keywords too
+   where a row of keywords goes; untyped own values, or of a type pgmalli.impl.accept does not
+   answer for, are the type alone."
+  [registry s context {:keys [accept] :as opts}]
   (let [own (cond-> (driver-type registry jdbc/write-type s opts) (= :compare context) loose)
         t (slot-type registry s)
         takes? (if (or (= :cast context) (= :postgresql accept))
                  #(accept/accepts? t % context)
-                 #(accept/holds? t %))]
-    (if (or (nil? t) (untyped? own) (= :enum (head own)))
-      own
-      (let [alts (for [p (sent-types opts)
-                       ;; a String may go untyped (stringtype=unspecified)
-                       :when (and (not= p t) (takes? (if (= "character varying" p) (accept/sent-type "" opts) p)))
-                       ;; :write's values for the type, else what the column of it takes (:time too) and pgjdbc sends
-                       a (or (some-> (get write p) alternatives)
-                             (concat (alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts))))
-                                     (alternatives (accept/sent-values p))))
-                       :when (not (untyped? a))]
-                   [p a])
-            own-alts (vec (alternatives own))
-            added (reduce (fn [added [_ a :as pa]] (if (some #(= (kind a) (kind %)) (concat own-alts (map second added))) added (conj added pa)))
+                 #(accept/holds? t %))
+        sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
+        ;; the values sent untyped, else what the column of the type takes (:time too) and :write sends as it
+        alts (for [p sent
+                   a (if (= :unknown p)
+                       (mapcat (fn [[schema q]] (when (= :unknown q) (alternatives schema))) (jdbc/write-rows opts false))
+                       (alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts)))))
+                   :when (not (untyped? a))]
+               [p a])]
+    (cond
+      (or (nil? t) (untyped? own)) own
+      (= :enum (head own)) (if (some #(= :keyword (shape/kind (second %))) alts)
+                             (let [[props labels] (if (map? (second own)) [(second own) (drop 2 own)] [nil (rest own)])]
+                               (into (cond-> [:enum] props (conj props)) (concat labels (map keyword labels))))
+                             own)
+      :else
+      (let [own-alts (vec (alternatives own))
+            added (reduce (fn [added [_ a :as pa]] (if (some #(= (shape/kind a) (shape/kind %)) (concat own-alts (map second added))) added (conj added pa)))
                           [] alts)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
             ;; a string's or a date's cannot be said of the value sent
@@ -1639,6 +1623,49 @@
                   (= :one result) (if (= update-count row) row [:maybe row])
                   :else [:sequential row])]))))
 
+;;; what an application writes
+
+(defn pgjdbc-write
+  "The rows of :write for pgjdbc with no extension: [[schema type] ...], the values an
+   application sends and the type each goes as; under {:stringtype :unspecified}, its connection
+   property, a String goes untyped (:unknown). The default of :write; add or remove rows to say
+   what your application's extensions send (docs/queries.md#what-your-application-sends)."
+  ([] (pgjdbc-write {}))
+  ([opts]
+   (jdbc/checked! [:map {:closed true} [:stringtype {:optional true} [:enum :varchar :unspecified]]] opts)
+   (accept/pgjdbc-write opts)))
+
+(defn- written-row
+  "The [:map ...] of the derived schema (\"insert\", \"update\") of the table row name: each column
+   typed as an argument assigned to it, keyed and optional as the derived schema has it."
+  [registry name derived what opts]
+  (jdbc/options! opts)
+  (let [r (reading registry)
+        s (shape/schema-of registry name)]
+    (when-not (shape/row-schema? s) (shape/not-a-row! registry name what))
+    (into [:map {:closed true}]
+          (for [[k props c] (shape/column-entries (get (::schemas r) (shape/derived-name name derived)))
+                :let [t (accepted-type r c :assign opts)]]
+            (into [k] (remove nil? [(when (:optional props) {:optional true}) (if (maybe? c) (nullable t) t)]))))))
+
+(defn values-schema
+  "The [:map ...] of one row an INSERT's :values may carry into the table whose row schema is
+   name: each column typed as arg-types types an argument assigned to it, keyed by its name;
+   the columns the database writes (generated, identity ALWAYS) left out, those it may fill
+   (a default, identity BY DEFAULT, NULL) optional. Options: docs/queries.md#options.
+
+   (values-schema registry :pg.public/users)"
+  ([registry name] (values-schema registry name {}))
+  ([registry name opts] (written-row registry name "insert" "values-schema" opts)))
+
+(defn set-schema
+  "The [:map ...] an UPDATE's :set may carry into the table whose row schema is name: as
+   values-schema, every column optional.
+
+   (set-schema registry :pg.public/users)"
+  ([registry name] (set-schema registry name {}))
+  ([registry name opts] (written-row registry name "update" "set-schema" opts)))
+
 ;;; problems as text
 
 (defn- column-name [c] (if (keyword? c) (subs (str c) 1) (str c)))
@@ -1664,7 +1691,7 @@
                            " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
                            " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
                            (if (str/ends-with? type "[]") (str "[:raw " (pr-str type) "]") (str ":" type))
-                           "], or pass {:stringtype :unspecified}"
+                           "], or add [:string :unknown] to :write"
                            " when the connection sets stringtype=unspecified")))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]

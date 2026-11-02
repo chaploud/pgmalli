@@ -320,7 +320,8 @@ takes. Cast it, or tell `h/check` your connection has
 (h/check registry {:select [:id] :from [:users] :where [:= :status "active"]})
 ;; => [{:kind :uncast-string, :column :status, :value "active", :type "user_status"}]
 
-(h/check registry {:select [:id] :from [:users] :where [:= :status "active"]} {:stringtype :unspecified})
+(h/check registry {:select [:id] :from [:users] :where [:= :status "active"]}
+         {:write (h/pgjdbc-write {:stringtype :unspecified})})
 ;; => []
 ```
 
@@ -343,7 +344,7 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list where written or under `=`, `IN` and `IS NOT DISTINCT FROM`, with `:allowed` |
-| `:uncast-string` | a string sent as `varchar` where the column's type takes none (an enum, a number, a date ...); not under `:stringtype :unspecified` or `:format {:inline true}` |
+| `:uncast-string` | a string sent as `varchar` where the column's type takes none (an enum, a number, a date ...); not where `:write` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
