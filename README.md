@@ -407,8 +407,7 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
 (mi/unstrument!)
 ```
 
-`:db` is not in the query, so its schema is `:any`. With `{:result :one}` the function
-returns one row or nil. A problem `h/check` finds goes into the schema's `:pgmalli/problems`
+`:db` is not in the query, so its schema is `:any`. A problem `h/check` finds goes into the schema's `:pgmalli/problems`
 property instead of an exception, so a namespace with a broken query still loads.
 `h/schema-problems` gathers them for one test
 ([docs/queries.md](docs/queries.md#problems-in-function-schemas)).

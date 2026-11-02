@@ -1045,7 +1045,7 @@
   (when (and (sequential? return-keys) (map? stmt) (not= stmt (sent stmt opts)))
     (let [[_ alias] (some-> (first (write-targets stmt)) (table-ref schema))
           {:keys [table opaque?]} (get (first (chain scopes)) alias)
-          cs (when-not opaque? (table-columns registry table))]
+          cs (when (and table (not opaque?)) (table-columns registry table))]
       (for [k return-keys :let [n (name k)]
             :when (and cs (not (contains? cs n)) (contains? cs (folded n)))]
         {:kind :unknown-column :column (keyword n) :did-you-mean [(keyword (folded n))]}))))
@@ -1359,11 +1359,9 @@
     (select-row registry stmt (get chains path) opts)))
 
 (defn row-schema
-  "The [:map ...] of one row a query returns, as next.jdbc builds it; nil when a selected
-   column cannot be resolved (check says which), or a whole row is selected ({:select [:t]}),
-   which next.jdbc reads as one PGobject. A write with no RETURNING returns
-   [:map [:next.jdbc/update-count :int]]; under :return-keys, the rows of the RETURNING pgjdbc
-   adds (nil for TRUNCATE, whose generated keys have no column).
+  "The [:map ...] of one row a query returns, as next.jdbc builds it (for a write with no
+   RETURNING, its update count); nil when that cannot be told, as
+   docs/queries.md#the-row-a-query-returns lists.
 
    Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
    operation's row is its first member's names. Under qualified keys, a column next.jdbc keys
@@ -1399,10 +1397,9 @@
 
    The problems of check, and a query argument args lack (:missing-arg), are the schema's
    :pgmalli/problems property, not an error: the vector is then one longer, so read its parts
-   with m/children. The return is what execute! returns on a datasource or connection;
-   {:result :one} makes it [:maybe row], what execute-one! returns there, but for a write's update
-   count, which is never nil. Options: docs/queries.md#options. Throws when args are not keywords
-   or symbols."
+   with m/children. The return is what execute! returns on a datasource or connection, under
+   {:result :one} what execute-one! returns. Options: docs/queries.md#options. Throws when args are
+   not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)

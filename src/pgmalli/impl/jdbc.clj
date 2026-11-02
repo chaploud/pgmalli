@@ -29,7 +29,7 @@
                              [:json {:optional true} [:enum :parsed]]]]]])
 
 (def options-schema
-  "The options pgmalli.honeysql takes: as-read's, and those of query data."
+  "The options pgmalli.honeysql takes: as-read's, and those of docs/queries.md#options."
   (into read-options-schema
         [[:schema {:optional true} :string]
          [:write {:optional true} [:and [:map-of [:or :string [:enum :array :enum]] :any]

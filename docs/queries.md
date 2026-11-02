@@ -170,12 +170,8 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 ;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/created-at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
 ```
 
-`h/row-schema` returns nil when a selected column cannot be resolved (`h/check` says which), or
-when a whole row is selected (`{:select [:u] :from [[:users :u]]}`).
-
-A write with no RETURNING returns no row: next.jdbc returns the driver's update count in a map
-of its own. Under next.jdbc's `:return-keys`, pgjdbc adds `RETURNING *` to an INSERT, UPDATE or
-DELETE, or RETURNING the columns named; a TRUNCATE then returns nothing, and `h/row-schema` nil:
+A write with no RETURNING returns the map next.jdbc builds of the driver's update count. Under
+next.jdbc's `:return-keys`, pgjdbc adds RETURNING to an INSERT, UPDATE or DELETE:
 
 ```clojure
 (h/row-schema registry {:delete-from :posts :where [:= :author_id 1]})
@@ -183,6 +179,21 @@ DELETE, or RETURNING the columns named; a TRUNCATE then returns nothing, and `h/
 
 (h/row-schema registry {:delete-from :posts :where [:= :author_id 1]} {:return-keys ["id"]})
 ;; => [:map [:posts/id [:int #:pg{:identity :always, :type "bigint"}]]]
+```
+
+`h/row-schema` returns nil when a selected column cannot be resolved (`h/check` says which),
+when a whole row is selected, when code builds the RETURNING, and for a TRUNCATE under
+`:return-keys`, which returns no row:
+
+```clojure
+(h/row-schema registry {:select [:u] :from [[:users :u]]})
+;; => nil
+
+(h/row-schema registry '{:delete-from :posts :returning cols})
+;; => nil
+
+(h/row-schema registry {:truncate :posts} {:return-keys true})
+;; => nil
 ```
 
 ## The tables a query uses
@@ -210,17 +221,26 @@ take the same options map:
 | `:stringtype :unspecified` | your connection's `stringtype`: strings reach every column untyped (default `:varchar`, as pgjdbc's) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
-| `:result :one` | `h/query-schema` only: the return is one row or nil (`execute-one!`); the update count's map is never nil |
-| `:return-keys true` or `["col" ...]` | `h/check`, `h/row-schema` and `h/query-schema` only: the `:return-keys` next.jdbc sends the write with, passed to `execute!` or set with `with-options`; an INSERT, UPDATE or DELETE then returns its rows, not its update count |
+| `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |
+| `:return-keys true` or `["col" ...]` | the `:return-keys` next.jdbc sends a write with, passed to `execute!` or set with `with-options` |
 
 ## Function schemas
 
 `h/query-schema` combines `arg-types` and `row-schema` into `[:=> [:cat arg ...] [:sequential
-row]]`, the arguments in the function's order. The return is what `execute!` returns on a datasource or
-connection (`execute-one!` under `{:result :one}`). A function returning anything else, such as
-what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns, needs its own return
-schema: on a prepared statement next.jdbc reads the generated keys, as under `:return-keys`. The return is `:any` when `h/row-schema` gives
-nil, under `{:result :one}` too. [README.md](../README.md#function-schemas-for-queries) puts
+row]]`, the arguments in the function's order. The return is what `execute!` returns on a
+datasource or connection, `:any` when `h/row-schema` gives nil. `{:result :one}` makes it what
+`execute-one!` returns:
+
+```clojure
+(h/query-schema registry [:id] {:select [:email] :from [:users] :where [:= :id :?id]} {:result :one})
+;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:maybe [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+
+(h/query-schema registry [:id] {:delete-from :users :where [:= :id :?id]} {:result :one})
+;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
+```
+
+A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement
+returns, or a value made of the rows, needs a return schema of its own. [README.md](../README.md#function-schemas-for-queries) puts
 it on a function and instruments it.
 
 The schema may use types malli's default registry lacks (`:time/instant`). That is why

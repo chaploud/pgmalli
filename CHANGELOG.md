@@ -11,8 +11,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   Under `{:result :one}` that map is not `[:maybe ...]`: `execute-one!` returns it.
 * The `:return-keys` option says the write is sent with next.jdbc's `:return-keys`: its row is
   then the table's (`true`) or the columns named, as pgjdbc adds RETURNING; `h/check` reads that
-  RETURNING too. A function whose writes next.jdbc sends with `:return-keys`, passed to
-  `execute!` or set with `with-options`, passes the same `:return-keys` to `h/query-schema`.
+  RETURNING too, and reports a name that is a column only as HoneySQL folds it (`:group-id` for
+  `group_id`): pgjdbc sends it quoted, as written.
+* What to do: a function whose writes next.jdbc sends with `:return-keys`, passed to `execute!`
+  or set with `with-options`, passes the same `:return-keys` to `h/query-schema`. An
+  instrumented function that runs a write and returns anything but what `execute!` (or
+  `execute-one!`) returns, such as the count itself, needs a return schema of its own: its
+  return was `:any`.
 
 ## 0.3.2 (2026-10-30)
 
