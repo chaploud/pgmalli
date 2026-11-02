@@ -46,6 +46,12 @@
   {"ctid" [:some {:pg/type "tid"}] "xmin" [:some {:pg/type "xid"}] "xmax" [:some {:pg/type "xid"}]
    "cmin" [:some {:pg/type "cid"}] "cmax" [:some {:pg/type "cid"}] "tableoid" [:int {:pg/type "oid"}]})
 
+(defn- options!
+  "opts checked (jdbc/options!), :write's schemas against registry unless it is one reading
+   made, which a public function has checked them against before."
+  [registry opts]
+  (jdbc/options! opts (when-not (::schemas registry) registry)))
+
 (defn- reading
   "The registry as this namespace reads it: its schemas taken once (a composite registry merges
    them on every lookup) and the columns of a table memoized, since a column is looked for in
@@ -944,21 +950,20 @@
             (str (:name e) (when (str/ends-with? (str (:pg/type p)) "[]") "[]"))
             (when-let [n (enum-type registry s)] [:enum n]))]
     (cond (accept/known? t) t
-          ;; a domain: its base, the first schema of [:and base checks...]
           (and d (nil? (enum-values registry inner))) (slot-type registry (shape/domain-base d)))))
 
-(defn- takes-varchar?
-  "Whether a column of schema s takes a varchar parameter, compared or assigned; nil where
-   pgmalli.impl.accept does not answer."
-  [registry s assigned?]
-  (when-let [t (slot-type registry s)] (accept/accepts? t "character varying" (if assigned? :assign :compare))))
+(defn- takes-string?
+  "Whether a column of schema s takes a string sent as one of types, compared or assigned; nil
+   where pgmalli.impl.accept does not answer."
+  [registry s assigned? types]
+  (when-let [t (slot-type registry s)] (boolean (some #(accept/accepts? t % (if assigned? :assign :compare)) types))))
 
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
-   assigned or under equality-ops; and, where :write sends a String as varchar (pgjdbc's default), a string HoneySQL
-   sends as a parameter (not inlined, not cast) to a column PostgreSQL takes no varchar for
-   (enum = varchar does not exist, nor inet = varchar): a literal, or an argument to an enum
-   column or to one whose own values are strings."
+   assigned or under equality-ops; and, where :write sends a String typed (varchar, pgjdbc's
+   default), a string HoneySQL sends as a parameter (not inlined, not cast) to a column
+   PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar): a
+   literal, or an argument to an enum column or to one whose own values are strings."
   [registry sc stmt {:keys [schema] :or {schema default-schema} :as opts}]
   (let [uses (concat (for [[op side value] (comparison-sides stmt)
                            :when (not (like-ops op))
@@ -968,16 +973,17 @@
                        (cond-> {:col side :value value :scope sc :op op} s (assoc :schema s)))
                      (let [target (target-scope sc stmt schema)]
                        (when (seq target) (for [[col value] (assignments stmt)] {:col col :value value :scope target :assigned? true}))))
-        varchar? (= "character varying" (accept/sent-type "" opts))]
+        sends (jdbc/string-sends opts)
+        typed? (not (or (sends :unknown) (:inline (:format opts))))]
     (concat
-     ;; an argument sent to an enum type's column: a String, which goes as varchar unless :write
+     ;; an argument sent to an enum type's column: a String, which goes typed unless :write
      ;; sends it untyped (stringtype=unspecified)
      (for [{:keys [col value scope assigned?] :as use} uses
-           :let [k (param-key value)] :when (and k varchar?)
+           :let [k (param-key value)] :when (and k typed?)
            :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
                  t (some->> s (uncast-type registry))]
            ;; one assigned to a nullable column may be nil, which PostgreSQL takes
-           :when (and t (not (takes-varchar? registry s assigned?)) (not (and assigned? (shape/maybe? s)))
+           :when (and t (not (takes-string? registry s assigned? sends)) (not (and assigned? (shape/maybe? s)))
                       (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
      (for [{:keys [col value scope assigned? op] :as use} uses
@@ -986,7 +992,7 @@
                  values (cond strings? (if (string? value) [value] value)
                               (and (vector? value) (#{:cast :inline} (first value)) (string? (second value))) [(second value)])
                  allowed (when s (enum-values registry (cond-> s (not assigned?) (compared-schema op))))
-                 uncast (when (and s varchar? strings? (not (takes-varchar? registry s assigned?)))
+                 uncast (when (and s typed? strings? (not (takes-string? registry s assigned? sends)))
                           (uncast-type registry s))]
            :when (seq values)
            v values
@@ -1108,7 +1114,7 @@
    Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (jdbc/options! opts (when-not (::schemas registry) registry))
+   (options! registry opts)
    (query! body)
    (let [registry (reading registry)
          sent-body (or (sent body opts) body)
@@ -1130,7 +1136,7 @@
    ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
   ([registry body] (tables registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
-   (jdbc/options! opts (when-not (::schemas registry) registry))
+   (options! registry opts)
    (query! body)
    (let [registry (reading registry)
          found (for [[stmt scopes] (statement-chains registry body opts)
@@ -1173,7 +1179,7 @@
   ([v heads] (when (and (vector? v) (= 2 (count v)) (heads (first v)) (arg-key (second v))) (second v))))
 
 (defn- column-type
-  "The type of an argument for a column: compared with it (NULL never matches, so no
+  "The type of an argument for a column: compared with it (a comparison with NULL is never true, so no
    [:maybe]) or, when assigned?, assigned to it."
   [registry sc col assigned? opts]
   (if-let [s (:schema (resolve-column registry sc col))]
@@ -1222,13 +1228,10 @@
 
 (defn- head [t] (if (vector? t) (first t) t))
 
-(defn- alternatives [t] (if (= :or (head t)) (rest t) [t]))
-
 (defn- unlabel
   "t without the :pg/type it names, which an alternative of another type's values would misname."
   [t]
-  (cond (and (vector? t) (map? (second t)) (= :or (first t))) (into [:or] (map unlabel (drop 2 t)))
-        (= :or (head t)) (into [:or] (map unlabel (rest t)))
+  (cond (= :or (head t)) (into [:or] (map unlabel (shape/alternatives t)))
         (and (vector? t) (map? (second t))) (let [p (dissoc (second t) :pg/type)] (if (and (empty? p) (= 2 (count t))) (first t) (assoc t 1 p)))
         :else t))
 
@@ -1241,7 +1244,7 @@
   (let [kids (when (= :and (head own)) (remove map? (rest own)))
         base (if kids (first kids) own)
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
-        rounded? (and (#{"smallint" "integer" "bigint"} t) (not (#{"smallint" "integer" "bigint"} p)))
+        rounded? (and (accept/integer-type? t) (not (accept/integer-type? p)))
         [min max] (if rounded? [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))
         a (cond (empty? bounds) a
@@ -1252,12 +1255,13 @@
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
    :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
-   (jdbc/write-type), and the values of each row of :write sent as a type PostgreSQL takes there
-   (cast, or {:accept :postgresql}) or holds as its own (accept/holds?); assigned or cast, a
-   number held to a number column's range (within). Compared, the values lose the bounds a comparison need not keep
-   (loose). Own values with labels (an enum's, a CHECK's list) are the labels, as keywords too
-   where a row of keywords goes; untyped own values, or of a type pgmalli.impl.accept does not
-   answer for, are the type alone."
+   (jdbc/write-type), and the values of each type :write sends that PostgreSQL takes there (cast,
+   or {:accept :postgresql}) or holds as its own (accept/holds?): the rows sent untyped, or a
+   column of the type's own values (:time's too) with the rows sent as it; assigned or cast, a
+   number held to a number column's range (within). Compared, the values lose the bounds a
+   comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
+   labels, a text label as a keyword too where a row of keywords goes; untyped own values, or
+   of a type pgmalli.impl.accept does not answer for, are the type alone."
   [registry s context {:keys [accept] :as opts}]
   (let [own (cond-> (driver-type registry jdbc/write-type s opts) (= :compare context) loose)
         t (slot-type registry s)
@@ -1265,28 +1269,27 @@
                  #(accept/accepts? t % context)
                  #(accept/holds? t %))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
-        ;; the values sent untyped, else what the column of the type takes (:time too) and :write sends as it
         alts (for [p sent
                    a (if (= :unknown p)
-                       (mapcat (fn [[schema q]] (when (= :unknown q) (alternatives schema))) (jdbc/write-rows opts false))
-                       (alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts)))))
+                       (mapcat (fn [[schema q]] (when (= :unknown q) (shape/alternatives schema))) (jdbc/write-rows opts false))
+                       (shape/alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts)))))
                    :when (not (untyped? a))]
                [p a])]
     (cond
+      ;; a cast takes a string and every explicit cast, of types pgmalli.impl.accept does not answer for
+      (and (nil? t) (= :cast context)) :any
       (or (nil? t) (untyped? own)) own
       (= :enum (head own)) (if (some #(= :keyword (shape/kind (second %))) alts)
                              (let [[props labels] (if (map? (second own)) [(second own) (drop 2 own)] [nil (rest own)])]
-                               (into (cond-> [:enum] props (conj props)) (concat labels (map keyword labels))))
+                               (into (cond-> [:enum] props (conj props)) (concat labels (map keyword (filter string? labels)))))
                              own)
       :else
-      (let [own-alts (vec (alternatives own))
-            ;; one of each kind, the own values first (shape/distinct-kinds), keeping the type each is sent as
-            added (reduce (fn [added [_ a :as pa]] (if (some #(= (shape/kind a) (shape/kind %)) (concat own-alts (map second added))) added (conj added pa)))
-                          [] alts)
+      (let [own-alts (shape/alternatives own)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
             ;; a string's or a date's cannot be said of the value sent
-            alts (for [[p a] added] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))]
-        (if (seq alts) (into [:or] (concat own-alts alts)) own)))))
+            alts (for [[p a] alts] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
+            all (shape/distinct-kinds (concat own-alts alts))]
+        (if (= (count all) (count own-alts)) own (into [:or] all))))))
 
 (defn- compared-type
   "The type of an argument compared with a column of type t by op: the column's kind (an enum's
@@ -1319,24 +1322,25 @@
    docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
-   (jdbc/options! opts (when-not (::schemas registry) registry))
+   (options! registry opts)
    (query! body)
    (let [registry (reading registry)
          typed (mapcat (fn [[stmt sc]]
                          (concat (for [[op side value] (comparison-sides stmt)
                                        :let [x (array-arg value)]
                                        :when (arg-key (or x value))
-                                       :let [t (cond (column-keyword? side) (compared-column-type registry sc side op opts)
-                                                     (vector? side) (if-let [s (:schema (expression-type registry sc side opts))] (compared-schema-type registry s op opts) :any)
+                                       ;; an array goes untyped and PostgreSQL reads each element as the column's type
+                                       :let [o (cond-> opts x (dissoc :accept))
+                                             t (cond (column-keyword? side) (compared-column-type registry sc side op o)
+                                                     (vector? side) (if-let [s (:schema (expression-type registry sc side o))] (compared-schema-type registry s op o) :any)
                                                      :else :any)]]
                                    [(or x value) (compared-type op t x opts)])
                                  ;; LIMIT and OFFSET take a bigint of at least 0 by assignment, NULL for none
                                  (for [[_ v] (select-keys stmt [:limit :offset])]
                                    [v (nullable (accepted-type registry [:int {:pg/type "bigint" :min 0}] :assign opts))])
-                                 ;; [:cast :?x :timestamptz]: what PostgreSQL casts to the type, NULL too unless
-                                 ;; every use of the cast refuses it: compared (NULL never matches, but under
-                                 ;; IS [NOT] DISTINCT FROM, with NULL, or {:compare :lenient}) or assigned to a
-                                 ;; NOT NULL column
+                                 ;; [:cast :?x :timestamptz]: what PostgreSQL casts to the type; nil too unless every use
+                                 ;; of the cast is compared (not under IS [NOT] DISTINCT FROM, not with NULL, not under
+                                 ;; {:compare :lenient}) or assigned to a NOT NULL column
                                  (let [casts (filter #(and (vector? %) (= :cast (first %)) (= 3 (count %)) (arg-key (second %)))
                                                      ;; this statement's own and the items INSERT ... SELECT assigns: a
                                                      ;; subquery's casts are its uses
@@ -1459,9 +1463,9 @@
     (cond
       ;; HoneySQL sends a string or number as a parameter, unless :inline writes it into the SQL
       ;; an untyped string is text
-      (string? x) (assoc (typed (if (= :unknown (accept/sent-type x opts)) "text" "character varying")) :string? true)
+      (string? x) (assoc (typed (let [t (jdbc/sent-type x opts)] (if (= :unknown t) "text" t))) :string? true)
       (boolean? x) (typed "boolean")
-      (number? x) (when-not (:inline format) (typed (accept/sent-type x opts)))
+      (number? x) (when-not (:inline format) (typed (jdbc/sent-type x opts)))
       (keyword? x) (or (typed (word-types (sql-value x)))
                        (when (shorthand-fn x) (typed (word-types fname)))
                        (when-let [{s :schema :keys [nullable? opaque?]} (when (column-keyword? x) (resolve-column registry chain x))]
@@ -1584,7 +1588,7 @@
    docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
-   (jdbc/options! opts (when-not (::schemas registry) registry))
+   (options! registry opts)
    (query! body)
    (when (map? body)
      (if-let [body (sent body opts)]
@@ -1616,7 +1620,7 @@
    not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
-   (jdbc/options! opts (when-not (::schemas registry) registry))
+   (options! registry opts)
    (query! body)
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
      (error/fail! :pgmalli.error/invalid-options
@@ -1650,8 +1654,10 @@
    typed as an argument assigned to it, optional as the derived schema has it, keyed by its
    name as HoneySQL writes it (:kebab? and :lower? as next.jdbc's builders read it back)."
   [registry name derived what opts]
-  (jdbc/options! opts (when-not (::schemas registry) registry))
+  (options! registry opts)
   (let [r (reading registry)
+        ;; a table HoneySQL names (:users), in :schema
+        name (if (and (keyword? name) (nil? (namespace name))) (shape/schema-key (:schema opts default-schema) (clojure.core/name name)) name)
         s (shape/schema-of registry name)]
     (cond (shape/row-schema? s) nil
           (shape/read-row? s) (error/fail! :pgmalli.error/unknown-schema
@@ -1666,7 +1672,7 @@
 
 (defn insert-schema
   "The [:map ...] of one row an INSERT's :values may carry into the table whose row schema is
-   name, the registry's insert schema typed as arg-types types an argument: each column as an
+   name (:pg.public/users, or :users in :schema), typed as arg-types types an argument: each column as an
    argument assigned to it, keyed by its name; the columns the database writes (generated,
    identity ALWAYS) left out, those it may fill (a default, identity BY DEFAULT, NULL)
    optional. Options: docs/queries.md#options.
@@ -1704,8 +1710,8 @@
                    (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
    :uncast-string (fn [{:keys [column value arg type]}]
                     (let [what (if arg (str "argument " arg) (pr-str value))]
-                      (str what " reaches column " (column-name column) " as varchar, which its type " type " does not take"
-                           " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
+                      (str what " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
+                           " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar unless :write sends it untyped);"
                            " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
                            (if (str/ends-with? type "[]") (str "[:raw " (pr-str type) "]") (str ":" type))
                            "], or pass {:write (h/pgjdbc-write {:stringtype :unspecified})}"

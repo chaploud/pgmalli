@@ -74,50 +74,87 @@
   [[s]]
   (boolean (some #{:pgmalli/element} (tree-seq coll? seq s))))
 
-(def ^:private migration
-  "How the :write and :stringtype of pgmalli 0.3 read as :write's rows."
-  (str "; :write is a vector of [schema type] rows, pgjdbc's (h/pgjdbc-write) by default: {:stringtype :unspecified} is"
-       " {:write (h/pgjdbc-write {:stringtype :unspecified})}, a keyword an extension sends untyped a row [:keyword :unknown],"
-       " :array's kinds rows [[kind :pgmalli/element] :unknown], {\"jsonb\" s} a row [s \"jsonb\"]"
-       " (docs/queries.md#what-your-application-sends)"))
+(defn- migration
+  "What each option of pgmalli 0.3 given (:stringtype, :write as a map) is as :write's rows."
+  [{:keys [stringtype write]}]
+  (let [m (when (map? write) write)]
+    (cond-> []
+      stringtype (conj (str ":stringtype " (pr-str stringtype) " is :write (h/pgjdbc-write {:stringtype " (pr-str stringtype) "})"))
+      (:enum m) (conj (str ":enum " (pr-str (:enum m)) " is a row [:keyword :unknown] where a keyword goes untyped; a column's strings and labels stay its own"))
+      (:array m) (conj (str ":array " (pr-str (:array m)) " is a row [[kind :pgmalli/element] :unknown] for each kind"))
+      (seq (filter string? (keys m))) (conj (str (str/join ", " (map pr-str (filter string? (keys m))))
+                                                 ": {\"T\" s} is a row [s \"T\"], left out where (h/pgjdbc-write) has it;"
+                                                 " a keyword going untyped is [:keyword :unknown]")))))
 
 (defn options!
-  "opts when pgmalli.honeysql takes them: their keys and values, each type :write names one
-   types knows (a name or an alias), a row's schema one registry (a malli registry) reads; an
-   error naming what it does not, with the one meant or, for :write and :stringtype of pgmalli
-   0.3, what they are now."
-  ([opts] (options! opts nil))
-  ([opts registry]
-   (let [write (:write opts)]
-     (when (or (contains? opts :stringtype) (map? write) (and (vector? write) (seq write) (not (vector? (first write)))))
-       (error/fail! :pgmalli.error/invalid-options
-                    (str "pgmalli options: " (pr-str (select-keys opts [:write :stringtype])) " is no longer read" migration)
-                    {:given (select-keys opts [:write :stringtype])})))
-   (checked! @options opts)
-   (doseq [[s t :as row] (:write opts)]
-     (when-not (or (= :unknown t) (and (not (element-row? row)) (types/entry t)))
-       (let [known (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)]
-         (error/fail! :pgmalli.error/invalid-options
-                      (str "pgmalli options: :write sends " (pr-str s) " as " (pr-str t)
-                           (if (element-row? row)
-                             ", but a collection row goes untyped (:unknown): PostgreSQL types the array from where it goes"
-                             (str ", which is no type pgmalli knows (docs/types.md)" (error/did-you-mean (some-> (error/suggest t known) pr-str)))))
-                      {:given row})))
-     (when registry
-       (try (m/schema (clojure.walk/postwalk-replace {:pgmalli/element :any} s) {:registry registry})
-            (catch Exception e
-              (error/fail! :pgmalli.error/invalid-options
-                           (str "pgmalli options: :write sends " (pr-str s) ", which is no malli schema the registry reads: " (ex-message e))
-                           {:given row})))))
-   opts))
+  "opts when pgmalli.honeysql takes them: their keys and values, :write a vector of [schema
+   type] rows, each type one types knows (a name or an alias) or :unknown, a collection row's
+   :unknown, each schema one registry reads (a malli registry; nil when the caller has checked
+   them); an error naming what it does not, with the one meant or, for an option of pgmalli
+   0.3, what it is now."
+  [opts registry]
+  (let [{:keys [write]} opts
+        fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
+    (when (or (contains? opts :stringtype) (map? write))
+      (fail! (str (pr-str (select-keys opts [:write :stringtype])) " is no longer read; :write is a vector of [schema type] rows,"
+                  " pgjdbc's (h/pgjdbc-write) by default: " (str/join "; " (migration opts)) " (docs/queries.md#what-your-application-sends)")
+             (select-keys opts [:write :stringtype])))
+    (when (and (contains? opts :write) (not (and (sequential? write) (not (map? write)))))
+      (fail! (str ":write is a vector of [schema type] rows, such as (h/pgjdbc-write); got " (pr-str write)) write))
+    (doseq [[i row] (map-indexed vector write)
+            :let [[s t] (when (vector? row) row)
+                  what (str ":write's row " i " " (pr-str row))]]
+      (cond (not (and (vector? row) (= 2 (count row))))
+            (fail! (str what " is no [schema type] row") row)
+            (not (or (= :unknown t) (string? t)))
+            (fail! (str what ": a type is a name of docs/types.md (\"varchar\") or :unknown for a value sent untyped") row)
+            (= :pgmalli/element s)
+            (fail! (str what ": :pgmalli/element goes in a collection, [[:sequential :pgmalli/element] :unknown]") row)
+            (and (element-row? row) (not= :unknown t))
+            (fail! (str what ": pgmalli reads a collection row as sent untyped (:unknown), its type taken from where it goes") row)
+            (not (or (= :unknown t) (types/entry t)))
+            (fail! (str what ": " (pr-str t) " is no type pgmalli knows (docs/types.md)"
+                        (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str)))
+                   row)
+            registry
+            (try (m/schema (clojure.walk/postwalk-replace {:pgmalli/element :any} s) {:registry registry})
+                 (catch Exception e
+                   (error/fail! :pgmalli.error/invalid-options
+                                (str "pgmalli options: " what ": no malli schema the registry reads ("
+                                     (pr-str (or (get-in (ex-data e) [:data :schema]) (ex-message e))) ")")
+                                {:given row} e))))))
+  (checked! @options opts)
+  opts)
 
 (defn write-rows
-  "The rows of :write (accept/write-rows), each type by its name, of a collection (element-row?)
-   or not."
+  "The rows of :write (accept/default-write without it), each type by its name, of a
+   collection (element-row?) or not."
   [opts array?]
-  (for [[s t :as row] (accept/write-rows opts)
+  (for [[s t :as row] (or (:write opts) accept/default-write)
         :when (= array? (element-row? row))]
     [s (if (= :unknown t) t (:name (types/entry t)))]))
+
+(defn string-sends
+  "The types :write sends a String as: of its rows that take strings (:string, string?);
+   pgjdbc's varchar without one."
+  [opts]
+  (or (not-empty (set (for [[s t] (write-rows opts false)
+                            :when (some #(#{:string 'string?} (shape/kind %)) (shape/alternatives s))]
+                        t)))
+      #{"character varying"}))
+
+(defn sent-type
+  "The type value goes to PostgreSQL as: nil untyped (:unknown), which PostgreSQL types from
+   the context; a String or Character as :write sends a String (string-sends), :unknown where
+   one row sends it untyped or under sql/format's :inline, which writes it into the SQL; any
+   other value as pgjdbc sends its class (accept/class-type)."
+  [value {:keys [format] :as opts}]
+  (cond (nil? value) :unknown
+        (or (string? value) (char? value)) (let [ts (string-sends opts)]
+                                             (cond (or (:inline format) (ts :unknown)) :unknown
+                                                   (= 1 (count ts)) (first ts)
+                                                   :else "character varying"))
+        :else (accept/class-type value)))
 
 ;;; what the driver returns and takes
 
@@ -178,7 +215,7 @@
           alts (concat (when-not (= :any (if (vector? t) (first t) t)) [t])
                        ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
                        (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
-                             a (if (and (vector? s) (= :or (first s))) (remove map? (rest s)) [s])]
+                             a (shape/alternatives s)]
                          a))]
       (case (count alts) 0 t 1 (first alts) (into [:or] alts)))))
 

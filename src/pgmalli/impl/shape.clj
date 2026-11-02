@@ -193,11 +193,17 @@
       :fn t
       h)))
 
+(defn alternatives
+  "The alternatives of t: an :or's children, its properties left out; t alone otherwise."
+  [t]
+  (if (and (vector? t) (= :or (first t))) (remove map? (rest t)) [t]))
+
 (defn distinct-kinds
-  "Alternatives ts, the first of each kind (an argument's own values come first, with their
-   :pg/type and bounds)."
+  "Alternatives ts, the first of each kind, in their order (an argument's own values come
+   first, with their :pg/type and bounds)."
   [ts]
-  (vals (reduce (fn [m t] (update m (kind t) #(or % t))) (array-map) ts)))
+  (first (reduce (fn [[out seen] t] (let [k (kind t)] (if (seen k) [out seen] [(conj out t) (conj seen k)])))
+                 [[] #{}] ts)))
 
 (defn non-null
   "A column schema without its [:maybe ...]: what a value must be when it is not NULL."

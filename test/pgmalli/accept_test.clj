@@ -7,6 +7,7 @@
             [next.jdbc :as jdbc]
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.accept :as accept]
+            [pgmalli.impl.jdbc :as pgjdbc]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
@@ -64,21 +65,21 @@
                                   true
                                   ;; another error is of the value, which the type took ("1" is no regclass)
                                   (catch java.sql.SQLException e (not (#{"42883" "42804" "42846" "42725"} (.getSQLState e)))))]]
-          (is (= taken? (accept/accepts? t (accept/sent-type v {}) :cast)) (str (pr-str v) " " (class v) " " t)))))))
+          (is (= taken? (accept/accepts? t (pgjdbc/sent-type v {}) :cast)) (str (pr-str v) " " (class v) " " t)))))))
 
 (deftest pgjdbc-write-says-what-goes-as-which-type
   (let [registry (pgmalli/registry {:registry {}})]
     (doseq [v [1 1M 1.0 true "1" (java.util.UUID/randomUUID) (.getBytes "a")
                (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
                (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
-      (is (= [(accept/sent-type v {})] (for [[s t] accept/default-write :when (m/validate s v {:registry registry})] t))
+      (is (= [(pgjdbc/sent-type v {})] (for [[s t] accept/default-write :when (m/validate s v {:registry registry})] t))
           (str (class v) " goes as one type")))))
 
 (deftest a-string-goes-untyped-under-stringtype-unspecified
   (when *db*
     (exec-sql! "CREATE TYPE untyped_mood AS ENUM ('ok'); CREATE TABLE untyped_probe (e untyped_mood, t text, i integer)")
     (let [{:keys [host port db user password]} *db*
-          sent (accept/sent-type "1" {:write (accept/pgjdbc-write {:stringtype :unspecified})})]
+          sent (pgjdbc/sent-type "1" {:write (accept/pgjdbc-write {:stringtype :unspecified})})]
       (is (= :unknown sent))
       (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db "?stringtype=unspecified") :user user :password password})]
         (doseq [[col t v] [["e" [:enum "untyped_mood"] "ok"] ["t" "text" "1"] ["i" "integer" "1"]]

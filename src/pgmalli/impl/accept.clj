@@ -5,15 +5,13 @@
    pgmalli.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
    a caller passes a domain as its base type. pgmalli.accept-test holds both against pgjdbc
    and PostgreSQL."
-  (:require [clojure.string :as str]
-            [pgmalli.impl.shape :as shape]
-            [pgmalli.impl.types :as types]))
+  (:require [clojure.string :as str]))
 
 ;;; what pgjdbc sends
 
 (def ^:private class-types
   "[class type] pgjdbc's setObject sends a value of class as (any other Number with setNumber);
-   a String and a Character go as :write's string rows say (sent-type)."
+   a String and a Character go by the connection's stringtype, which :write's rows say."
   [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
    [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
    [Boolean "boolean"] [java.util.UUID "uuid"]
@@ -24,8 +22,8 @@
 (defn pgjdbc-write
   "[[schema type] ...]: the values an application commonly sends through pgjdbc with no
    extension, as malli schemas, and the type it sends each as; a String untyped (:unknown) under
-   its stringtype=unspecified. pgjdbc sends more (a BigInt as numeric, a Float as real, a
-   Character as varchar: class-types), which an application adds as rows."
+   its stringtype=unspecified. pgjdbc sends more (a BigInt as numeric, a Float as real:
+   class-types; a Character as a String), which an application adds as rows."
   [{:keys [stringtype]}]
   [[:int "bigint"] ['decimal? "numeric"] [:double "double precision"]
    [:boolean "boolean"] [:string (if (= :unspecified stringtype) :unknown "character varying")]
@@ -35,27 +33,10 @@
 
 (def default-write (pgjdbc-write {}))
 
-(defn write-rows
-  "The rows of :write: pgjdbc's (default-write) without it."
-  [{:keys [write]}]
-  (or write default-write))
-
-(defn sent-type
-  "The type value goes to PostgreSQL as: a String or Character as the rows of :write that take
-   strings say, :unknown where one sends them untyped (stringtype=unspecified, an extension) or
-   under sql/format's :inline, which writes it into the SQL; nil as :unknown, which PostgreSQL
-   types from the context; any other value as pgjdbc sends its class (class-types), nil for a
-   class it does not list."
-  [value {:keys [format] :as opts}]
-  (cond (nil? value) :unknown
-        (or (string? value) (char? value))
-        (let [ts (set (for [[s t] (write-rows opts)
-                            :when (some #(#{:string 'string?} (shape/kind %)) (if (= :or (shape/kind s)) (remove map? (rest s)) [s]))]
-                        (if (= :unknown t) t (:name (types/entry t)))))]
-          (cond (or (:inline format) (ts :unknown)) :unknown
-                (= 1 (count ts)) (first ts)
-                :else "character varying"))
-        :else (some (fn [[c t]] (when (instance? c value) t)) class-types)))
+(defn class-type
+  "The type pgjdbc sends value as by its class; nil for a class class-types does not list."
+  [value]
+  (some (fn [[c t]] (when (instance? c value) t)) class-types))
 
 ;;; what PostgreSQL takes
 
@@ -77,6 +58,8 @@
 (def ^:private strings #{"character varying" "text" "character" "name" "citext"})
 
 (defn number-type? [t] (contains? numbers t))
+
+(defn integer-type? [t] (contains? #{"smallint" "integer" "bigint"} t))
 
 (def ^:private families
   "Types whose comparison operators take each other: implicit casts and cross-type operators."
@@ -144,8 +127,8 @@
 
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type, a number of a narrower
-   kind (an integer for a numeric, a real for a double precision), which PostgreSQL takes as the
-   same number, or one sent untyped where t's values are text (a string type, an enum), which
+   kind (an integer for a numeric, a real for a double precision), which PostgreSQL converts
+   implicitly, or one sent untyped where t's values are text (a string type, an enum), which
    PostgreSQL reads as the value itself."
   [t sent]
   (or (= t sent) (contains? (widened t) sent) (and (= :unknown sent) (or (vector? t) (contains? strings t)))))
