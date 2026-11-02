@@ -150,8 +150,8 @@ key is required, as `sql/format` refuses a missing one:
 ## The row a query returns
 
 `h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
-join may leave NULL is nullable; an expression is nullable `:any`. A set operation (`:union`
-...) takes its first member's column names, as unqualified keys:
+join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
+names, as unqualified keys:
 
 ```clojure
 (h/row-schema registry {:select [:u.email :p.title]
@@ -160,7 +160,18 @@ join may leave NULL is nullable; an expression is nullable `:any`. A set operati
 ;; => [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:posts/title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
 
 (h/row-schema registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]})
-;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:maybe :any]]]
+;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
+```
+
+An expression has its type and nullability for these forms: a literal, a cast, `count`, `sum`,
+`avg`, `min`, `max`, `coalesce`, a comparison, `AND` / `OR` / `NOT`, `EXISTS`, `IS`, the
+clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
+
+```clojure
+(h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
+                                 [[:exists {:select [1] :from [:posts]}] :any_posts] [[:upper :nick] :shout]]
+                        :from [:users]})
+;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [inst? #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:shout [:maybe :any]]]
 ```
 
 It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):

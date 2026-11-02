@@ -1274,6 +1274,82 @@
              {:before (vec (take-last 1 (map alias (from-items stmt [:from :using])))) :merges {}}
              joins))))
 
+(defn- type-schema
+  "A column's schema for a value of the PostgreSQL type t (a name or an alias), as the registry
+   writes one; nil for a type types lacks."
+  [t]
+  (when-let [{n :name s :schema} (some-> t types/entry)]
+    (if (vector? s) (into [(first s) (assoc (second s) :pg/type n)] (drop 2 s)) [s {:pg/type n}])))
+
+(def ^:private boolean-type {:schema (type-schema "boolean")})
+
+(def ^:private sum-types
+  "The type sum takes its argument's to, by the argument's :pg/type; avg's is numeric for an
+   integer, double precision for a real."
+  {"smallint" "bigint" "integer" "bigint" "bigint" "numeric" "numeric" "numeric"
+   "real" "real" "double precision" "double precision" "interval" "interval"})
+
+(def ^:private clock-types
+  {:now "timestamp with time zone" :current_timestamp "timestamp with time zone" :current_date "date"
+   :current_time "time with time zone" :localtimestamp "timestamp without time zone" :localtime "time without time zone"})
+
+(def ^:private predicates
+  "Operators and special syntax that make a boolean, NULL when an operand is."
+  (into #{} (map keyword)
+        ["=" "<>" "not=" "!=" "<" ">" "<=" ">=" "and" "or" "not" "in" "not-in" "like" "not-like" "ilike"
+         "not-ilike" "between" "not-between" "similar-to" "not-similar-to" "regexp" "regex" "~" "~*" "!~" "!~*"]))
+
+(declare expression-type)
+
+(defn- typed-args
+  "expression-type of each argument, nil for an argument it cannot tell."
+  [registry chain args opts]
+  (map #(expression-type registry chain % opts) args))
+
+(defn- expression-type
+  "{:schema column-schema :nullable? bool} of a select expression, from a closed set of forms:
+   a column, a literal, a cast, count, sum, avg, min, max, coalesce, a predicate, EXISTS, IS,
+   the clock's values and ->>; nil for any other, which stays :any."
+  [registry chain x opts]
+  (let [pg-type (fn [{s :schema}] (some-> s shape/non-null shape/column-props :pg/type))
+        h (when (vector? x) (first x))
+        fname (or (shorthand-fn x) (some-> h (#(when (keyword? %) (folded (name %))))))
+        args (cond (shorthand-fn x) (map keyword (rest (str/split (subs (str x) 2) #"\."))) (vector? x) (rest x))]
+    (cond
+      ;; pgjdbc sends HoneySQL's parameters typed by their class
+      (string? x) {:schema (type-schema "character varying") :literal? true}
+      (boolean? x) (assoc boolean-type :literal? true)
+      (integer? x) {:schema (type-schema "bigint") :literal? true}
+      (float? x) {:schema (type-schema "double precision") :literal? true}
+      (#{:true :false} (sql-value x)) boolean-type
+      (clock-types (sql-value x)) {:schema (type-schema (clock-types (sql-value x)))}
+      (column-keyword? x) (when-let [{s :schema :keys [nullable? opaque?]} (resolve-column registry chain x)]
+                            (when (and s (not opaque?)) {:schema (shape/non-null s) :nullable? (boolean (or nullable? (maybe? s)))}))
+      (and (shorthand-fn x) (not= "count" fname) (not= "now" fname)) nil
+      (= "count" fname) {:schema (type-schema "bigint")}
+      (= "now" fname) (when (empty? args) {:schema (type-schema "timestamp with time zone")})
+      (not (keyword? h)) nil
+      (= :cast h) (let [[_ v t] x
+                        s (when (keyword? t) (type-schema (str/replace (name t) "-" " ")))]
+                    (when s {:schema s :nullable? (:nullable? (expression-type registry chain v opts) true)}))
+      (#{:exists :not-exists :is :is-not :is-distinct-from :is-not-distinct-from} h) boolean-type
+      (predicates h) (assoc boolean-type :nullable? (not-every? #(and % (not (:nullable? %))) (typed-args registry chain args opts)))
+      (= :->> h) {:schema (type-schema "text") :nullable? true}
+      (#{"min" "max"} fname) (when-let [t (first (typed-args registry chain args opts))] {:schema (loose (:schema t)) :nullable? true})
+      (#{"sum" "avg"} fname) (when-let [in (some-> (first (typed-args registry chain args opts)) pg-type)]
+                               (when-let [out (if (= "sum" fname)
+                                                (sum-types in)
+                                                (get {"real" "double precision" "double precision" "double precision" "interval" "interval"}
+                                                     in (when (sum-types in) "numeric")))]
+                                 {:schema (type-schema out) :nullable? true}))
+      (= "coalesce" fname) (let [ts (typed-args registry chain args opts)
+                                 ;; a literal takes the type of the other arguments, as PostgreSQL resolves it
+                                 typed (remove :literal? ts)
+                                 typed (if (seq typed) typed ts)]
+                             (when (and (seq typed) (not-any? nil? typed) (apply = (map pg-type typed)))
+                               {:schema (cond-> (:schema (first typed)) (next ts) loose)
+                                :nullable? (not-any? #(and % (not (:nullable? %))) ts)})))))
+
 (defn- select-row
   "The row a SELECT returns. Under :qualified?, a column through an opaque table, or a cast
    column, has a key this cannot tell: the driver keys it by the table it comes from at the
@@ -1321,7 +1397,8 @@
                   (nil? col) (when-let [n (item-name item opts)]
                                (if (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
                                  (untold n)
-                                 [(entry nil n nil true nil)]))
+                                 (let [{s :schema :keys [nullable?]} (expression-type registry chain (if alias (first item) (item-expression item)) opts)]
+                                   [(entry nil n s (or nullable? (nil? s)) nil)])))
                   (star? col) (star col)
                   :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
                           (let [label (if alias (alias-label alias opts) column)
@@ -1363,8 +1440,9 @@
    RETURNING, its update count); nil when that cannot be told, as
    docs/queries.md#the-row-a-query-returns lists.
 
-   Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
-   operation's row is its first member's names. Under qualified keys, a column next.jdbc keys
+   Columns an outer join may leave NULL are nullable; an expression is typed for the forms
+   docs/queries.md#the-row-a-query-returns lists, nullable :any otherwise; a set operation's row
+   is its first member's names. Under qualified keys, a column next.jdbc keys
    by a table the data does not show (one through a subquery or a CTE, a cast column) is left
    out of the map, which is open, and named under the :pgmalli/untold property. Options:
    docs/queries.md#options."

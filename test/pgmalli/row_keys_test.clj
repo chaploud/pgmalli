@@ -23,6 +23,13 @@
    {:select [[[:count :*]] [[:max :id] :top_id] [[:+ :id 1]] [[:coalesce :nick "x"]] [[:cast :id :bigint] :big_id] [[:upper :nick]]]
     :from [:users] :group-by [:id :nick]}
    {:select [[[:cast :nick :text]]] :from [:users]}
+   ;; the types of the expressions row-schema knows, as the driver returns them
+   {:select [[[:sum :id] :s] [[:avg :id] :a] [[:min :nick] :mn] [[:count :nick] :c] [[:coalesce :nick "x"] :cn]
+             [[:= :id 1] :eq] [[:= :nick "a"] :eqn] [[:exists {:select [1] :from [:posts]}] :ex] [[:is :nick nil] :isn]
+             [[:and true [:= :id 1]] :both] [[:now] :t] [:current_date] [:localtimestamp] ["s" :lit] [1 :one] [1.5 :f] [true :b]
+             [[:cast :id :text] :idt] [[:cast :id :numeric] :idn] [[:cast :id :double-precision] :idd]]
+    :from [:users] :group-by [:id :nick]}
+   {:select [[[:sum :n] :s] [[:avg :n] :a] [[:max :n] :m] [[:count :*] :c]] :from [:likes] :where [:= :id -1]}
    {:select [:u.id :g.name :g/*] :from [[:users :u]] :left-join [[:groups :g] [:= :g.id -1]]}
    {:select [:u.nick :g.id] :from [[:users :u]] :right-join [[:groups :g] [:= :g.id -1]]}
    {:select [:id [[:count :*] :n]] :from [[{:select [:id] :from [:users]} :sub]] :group-by [:id]}
