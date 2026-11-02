@@ -1039,8 +1039,8 @@
         :else (assoc stmt :returning (if (true? return-keys) [:*] (mapv #(keyword (name %)) return-keys)))))
 
 (defn- return-key-problems
-  "pgjdbc quotes the names of :return-keys as written: one that is a column of the target only
-   folded (:group-id for group_id) is none."
+  "pgjdbc quotes the names of :return-keys as written (its quoteReturningIdentifiers, true by
+   default): one that is a column of the target only folded (:group-id for group_id) is none."
   [registry stmt scopes {:keys [return-keys schema] :or {schema default-schema} :as opts}]
   (when (and (sequential? return-keys) (map? stmt) (not= stmt (sent stmt opts)))
     (let [[_ alias] (some-> (first (write-targets stmt)) (table-ref schema))

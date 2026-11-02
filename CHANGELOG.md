@@ -12,7 +12,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * The `:return-keys` option says the write is sent with next.jdbc's `:return-keys`: its row is
   then the table's (`true`) or the columns named, as pgjdbc adds RETURNING; `h/check` reads that
   RETURNING too, and reports a name that is a column only as HoneySQL folds it (`:group-id` for
-  `group_id`): pgjdbc sends it quoted, as written.
+  `group_id`): pgjdbc sends it quoted, as written, by default (`quoteReturningIdentifiers`).
 * What to do: a function whose writes next.jdbc sends with `:return-keys`, passed to `execute!`
   or set with `with-options`, passes the same `:return-keys` to `h/query-schema`. An
   instrumented function that runs a write and returns anything but what `execute!` (or
