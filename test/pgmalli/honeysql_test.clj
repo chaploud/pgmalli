@@ -51,7 +51,7 @@
         "selected, as INSERT ... SELECT passes values")
     (is (= {:id [:int {:pg/type "bigint"}]
             :moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
-            :n [:int {:min 0}]}
+            :n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (h/arg-types registry body opts)))
     (is (= {:g/id [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?g/id} :where [:= :id 1]} opts))
@@ -60,7 +60,7 @@
            (h/arg-types registry '{:select [:id] :from [:users] :where [:and [:= :id [:param :id]] [:in :mood ?moods]] :limit ?n} opts))
         "[:param :id] and ?id are the same parameters")
     (let [s (h/query-schema registry [:id :n] body opts)]
-      (is (= [:cat [:int {:pg/type "bigint"}] [:int {:min 0}]] (nth s 2)))
+      (is (= [:cat [:int {:pg/type "bigint"}] [:maybe [:int {:pg/type "bigint" :min 0}]]] (nth s 2)))
       (is (= {:pgmalli/problems [{:kind :missing-arg :arg :moods}]} (second s)) "the one left out of args"))))
 
 (deftest every-table-has-the-system-columns
@@ -187,7 +187,7 @@
         "an enum stays: PostgreSQL refuses a value outside it")
     (is (= [:or [:sequential {:min 1} [:int {:pg/type "integer"}]] [:set {:min 1} [:int {:pg/type "integer"}]]] (:gs types))
         "nil not in :in's: it formats as IN ?")
-    (is (= [:int {:min 0}] (:n types)))
+    (is (= [:maybe [:int {:pg/type "bigint" :min 0}]] (:n types)))
     (is (= {:v [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (h/arg-types registry {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
         "an assigned one keeps the column's bounds")
@@ -244,7 +244,7 @@
     (is (= {'id [:int {:pg/type "bigint"}]
             'moods [:or [:sequential {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]] [:set {:min 1} [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]]
             'min [:int {:pg/type "integer"}]
-            'n [:int {:min 0}]}
+            'n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (h/arg-types registry body opts)))
     (let [row (h/row-schema registry body (assoc opts :qualified? true :nil-columns :absent :time :instant))]
       (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]]
@@ -497,7 +497,7 @@
 (deftest an-insert-select-assigns-its-items-to-the-columns-listed
   (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
     (is (= {:g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]
-            :m [:enum "happy" "sad"]
+            :m [:enum {:pg/type "mood"} "happy" "sad"]
             :s [:sequential [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
             :n [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (h/arg-types registry q (assoc opts :write {:array [:sequential]})))
@@ -514,6 +514,44 @@
   (is (= [:map [:m [:enum {:pg/type "mood"} "happy" "sad"]] [:i [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
           [:b [:boolean {:pg/type "boolean"}]] [:f [:double {:pg/type "double precision"}]]]
          (h/row-schema registry {:select [[[:cast "sad" :mood] :m] [[:cast :id :int] :i] [[:cast true :bool] :b] [[:cast :score :float] :f]] :from [:users]} opts))))
+
+(deftest an-argument-takes-its-slots-own-values-unless-told-otherwise
+  (let [native (dissoc opts :stringtype)
+        args #(h/arg-types registry {:select [:id] :from [:users] :where %} (merge native %2))
+        bigint [:int {:pg/type "bigint"}]
+        numeric ['decimal? {:pg/type "numeric"}]]
+    (is (= {:x bigint} (args [:= :id :?x] {})) "a column's own values")
+    (is (= {:x [:or numeric bigint]} (args [:= [:cast :id :numeric] :?x] {})) "a numeric takes an integer too: it holds it exactly")
+    (is (= {:x [:or bigint numeric [:double {:pg/type "double precision"}]]} (args [:= :id :?x] {:accept :postgresql}))
+        "under :accept :postgresql, what PostgreSQL compares a bigint with")
+    (is (= {:x bigint} (args [:= :id :?x] {:accept :postgresql :sends ["bigint" "character varying"]})) "of the types :sends names")
+    (is (= {:x [:or bigint [:string {:pg/type "character varying"}]]}
+           (args [:= :id :?x] {:accept :postgresql :sends ["bigint" "character varying"] :stringtype :unspecified}))
+        "an untyped string goes anywhere")
+    (is (= {:x [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]} (args [:= :mood :?x] {:accept :postgresql}))
+        "an enum takes its labels alone")))
+
+(deftest a-cast-argument-takes-what-postgresql-casts
+  (let [args #(h/arg-types registry % (dissoc opts :stringtype))
+        cast-to-bigint [:or [:int {:pg/type "bigint"}] ['decimal? {:pg/type "numeric"}] [:double {:pg/type "double precision"}] [:string {:pg/type "character varying"}]]]
+    (is (= {:x cast-to-bigint} (args {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]}))
+        "compared: NULL never matches")
+    (is (= {:x [:maybe cast-to-bigint]} (args {:select [[[:cast :?x :bigint] :n]]})) "selected: NULL is a value")
+    (let [{:keys [x n]} (args {:insert-into [[:users [:score :nick]] {:select [[[:cast :?x :bigint]] [[:cast :?n :text]]]}]})]
+      (is (= cast-to-bigint x) "assigned to a NOT NULL column: no NULL")
+      (is (= :maybe (first n)) "assigned to a nullable one: NULL"))
+    (is (= {:x [:enum {:pg/type "mood"} "happy" "sad"]} (args {:select [:id] :from [:users] :where [:= :mood [:cast :?x :mood]]})))
+    (is (= {:x [:or [:int {:pg/type "bigint"}] [:string {:pg/type "character varying"}]]}
+           (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]} {:schema "sample" :sends ["bigint" "character varying"]}))
+        ":sends narrows a cast's argument")))
+
+(deftest limit-and-offset-take-nil-for-none
+  (is (= {:n [:maybe [:int {:pg/type "bigint" :min 0}]]} (h/arg-types registry {:select [:id] :from [:users] :limit :?n} opts))))
+
+(deftest a-comparison-in-a-select-or-order-by-is-read
+  (is (= {:t [:int {:pg/type "bigint"}] :o [:int {:pg/type "integer"}]}
+         (h/arg-types registry {:select [:id [[:case [:= :id :?t] 1 :else 0] :c]] :from [:users] :order-by [[[:case [:= :score :?o] 0 :else 1]]]} opts)))
+  (is (= [{:kind :unknown-column :column :nope}] (h/check registry {:select [[[:case [:= :nope 1] 1 :else 0] :c]] :from [:users]} opts))))
 
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
@@ -875,7 +913,7 @@
         "an argument too is untyped under stringtype=unspecified")))
 
 (deftest an-argument-cast-to-an-enum-is-of-the-enum
-  (is (= {:m [:enum "happy" "sad"]}
+  (is (= {:m [:enum {:pg/type "mood"} "happy" "sad"]}
          (update-vals (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} opts) m/form))))
 
 (deftest kebab-and-camel-names-as-postgresql-folds-them
@@ -936,7 +974,7 @@
     (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad" :happy :sad]
            (:m (types {:select [:id] :from [:users] :where [:= :mood :?m]})))
         "the enum's labels kept, as strings and as keywords")
-    (is (= [:enum "happy" "sad" :happy :sad] (:m (types {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]})))
+    (is (= [:enum {:pg/type "mood"} "happy" "sad" :happy :sad] (:m (types {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]})))
         "an argument cast to an enum too")
     (is (= {:m [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"]}
            (update-vals (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood :?m]} opts) m/form))
@@ -985,7 +1023,7 @@
     (is (nullable? {:select [:group_id] :from [:users] :group-by [[:raw "CUBE(group_id)"]]}))))
 
 (deftest an-argument-no-use-types-is-any
-  (is (= {:e :any :n [:int {:min 0}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= [:lower :nick] :?e] :offset :?n} opts))))
+  (is (= {:e :any :n [:maybe [:int {:pg/type "bigint" :min 0}]]} (h/arg-types registry {:select [:id] :from [:users] :where [:= [:lower :nick] :?e] :offset :?n} opts))))
 
 (deftest params-schema-is-sql-formats-params-map
   (let [body {:update :users :set {:nick :?nick} :where [:= :id :?id]}

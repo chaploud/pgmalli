@@ -18,6 +18,7 @@
    the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
+            [pgmalli.impl.accept :as accept]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
@@ -89,7 +90,7 @@
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
 
-(declare insert-parts star? expression-type)
+(declare insert-parts star? expression-type type-schema accepted-type)
 
 (defn- code-sources?
   "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
@@ -527,10 +528,14 @@
   {:= :<> :<> := :not= := :!= := :in :not-in :not-in :in
    :is-not-distinct-from :is-distinct-from :is-distinct-from :is-not-distinct-from})
 
-(defn- conditions [stmt]
-  (cond-> (select-keys stmt (into [:where :having :on-conflict] join-keys))
+(defn- conditions
+  "The parts of a statement comparisons are read in: its conditions, and the expressions of
+   its select and ORDER BY (a CASE's)."
+  [stmt]
+  ;; a vector of them: a map holding :select reads as a statement, which a walk does not enter
+  (cond-> (vec (vals (select-keys stmt (into [:where :having :on-conflict :select :select-distinct :select-distinct-on :order-by] join-keys))))
     ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
-    (map? (:do-update-set stmt)) (assoc :do-update-where (:where (:do-update-set stmt)))))
+    (map? (:do-update-set stmt)) (conj (:where (:do-update-set stmt)))))
 
 (defn- condition-nodes [stmt] (own-nodes (conditions stmt)))
 
@@ -922,6 +927,27 @@
 
 (declare driver-type)
 
+(defn- slot-type
+  "The type of a column schema as pgmalli.impl.accept names it: [:enum name] for an enum type
+   (or a domain over one), a domain's base type, \"x[]\" for an array; nil for a type it does
+   not answer for."
+  [registry s]
+  (let [p (shape/column-props s)
+        inner (shape/non-null s)
+        d (when (and (vector? inner) (= :ref (first inner))) (get (::schemas registry) (last inner)))
+        t (if-let [e (types/entry (shape/type-name p))]
+            (str (:name e) (when (str/ends-with? (str (:pg/type p)) "[]") "[]"))
+            (when-let [n (enum-type registry s)] [:enum n]))]
+    (cond (accept/known? t) t
+          ;; a domain: its base, the first schema of [:and base checks...]
+          (and d (nil? (enum-values registry inner))) (slot-type registry (if (and (vector? d) (= :and (first d))) (first (shape/entries d)) d)))))
+
+(defn- takes-varchar?
+  "Whether a column of schema s takes a varchar parameter, compared or assigned; nil where
+   pgmalli.impl.accept does not answer."
+  [registry s assigned?]
+  (when-let [t (slot-type registry s)] (accept/accepts? t "character varying" (if assigned? :assign :compare))))
+
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
    assigned or under equality-ops; and, under pgjdbc's default stringtype (varchar), a string HoneySQL
@@ -947,7 +973,7 @@
            :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
                  t (some->> s (uncast-type registry))]
            ;; one assigned to a nullable column may be nil, which PostgreSQL takes
-           :when (and t (not (and assigned? (shape/maybe? s)))
+           :when (and t (not (takes-varchar? registry s assigned?)) (not (and assigned? (shape/maybe? s)))
                       (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
      (for [{:keys [col value scope assigned? op] :as use} uses
@@ -956,8 +982,7 @@
                  values (cond strings? (if (string? value) [value] value)
                               (and (vector? value) (#{:cast :inline} (first value)) (string? (second value))) [(second value)])
                  allowed (when s (enum-values registry (cond-> s (not assigned?) (compared-schema op))))
-                 ;; text casts to a reg* type (regclass ...) implicitly, so an assignment takes it
-                 uncast (when (and s varchar? strings? (not (and assigned? (some->> s shape/column-props shape/type-name (re-matches #"reg\w+")))))
+                 uncast (when (and s varchar? strings? (not (takes-varchar? registry s assigned?)))
                           (uncast-type registry s))]
            :when (seq values)
            v values
@@ -1152,7 +1177,7 @@
    [:maybe]) or, when assigned?, assigned to it."
   [registry sc col assigned? opts]
   (if-let [s (:schema (resolve-column registry sc col))]
-    (let [inner (driver-type registry jdbc/write-type s opts)]
+    (let [inner (accepted-type registry s (if assigned? :assign :compare) opts)]
       (if (and assigned? (maybe? s)) [:maybe inner] inner))
     :any))
 
@@ -1162,7 +1187,7 @@
    lets an extension send."
   [registry s op opts]
   (let [c (compared-schema s op)
-        t (driver-type registry jdbc/write-type c opts)]
+        t (accepted-type registry c :compare opts)]
     (if (and (not= c s) (some #{:keyword} (get-in opts [:write :enum]))) [:or t :keyword] t)))
 
 (defn- compared-column-type [registry sc col op opts]
@@ -1196,6 +1221,47 @@
             (seq children) t
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 
+
+(def ^:private default-sends
+  "The types pgjdbc sends an application's values as, with no extension: an integer as
+   bigint, a BigDecimal as numeric, a Double as double precision, a Float as real, a String as
+   character varying, and the java.time types as theirs."
+  ["bigint" "numeric" "double precision" "real" "boolean" "character varying" "uuid" "bytea" "date"
+   "time without time zone" "time with time zone" "timestamp without time zone" "timestamp with time zone"])
+
+(defn- head-of [t] (let [t (if (and (vector? t) (= :maybe (first t))) (second t) t)] (if (vector? t) (first t) t)))
+
+(defn- accepted-type
+  "The type of an argument where a value of column schema s goes, in context (:compare,
+   :assign or :cast): its own values (what :write lets the application send as its type), a
+   numeric, real or double precision one an integer too, which it holds exactly. Cast, or
+   under {:accept :postgresql}, also those the application sends as another type PostgreSQL
+   takes there (pgmalli.impl.accept), the types :sends names, pgjdbc's by default. A type
+   with labels (an enum, a CHECK's list) takes its labels alone; a type pgmalli.impl.accept
+   does not answer for its own values alone. Compared, the values lose the bounds a comparison
+   need not keep (loose)."
+  [registry s context {:keys [accept sends stringtype] :as opts}]
+  (let [own (cond-> (driver-type registry jdbc/write-type s opts) (= :compare context) loose)
+        t (slot-type registry s)
+        accepted? (or (= :cast context) (= :postgresql accept))]
+    (if (or (nil? t) (untyped? own) (#{:enum} (head-of own)))
+      own
+      (let [own-alts (if (= :or (head-of own)) (rest own) [own])
+            ;; a String under stringtype=unspecified goes untyped, which PostgreSQL types from the context
+            sent-as #(if (and (= "character varying" %) (= :unspecified stringtype)) :unknown %)
+            alts (if accepted?
+                   (for [p (or sends default-sends)
+                         :let [p (:name (types/entry p) p)]
+                         :when (and (not= p t) (accept/accepts? t (sent-as p) context))
+                         :let [a (loose (driver-type registry jdbc/write-type (type-schema p) opts))]
+                         :when (not (untyped? a))
+                         a' (if (= :or (head-of a)) (rest a) [a])]
+                     a')
+                   (when (#{"numeric" "real" "double precision"} t) [[:int {:pg/type "bigint"}]]))
+            ;; one alternative of each kind, the column's own first
+            kept (first (reduce (fn [[acc seen] a] (let [k (head-of a)] (if (seen k) [acc seen] [(conj acc a) (conj seen k)])))
+                                [[] #{}] (concat own-alts alts)))]
+        (if (next kept) (into [:or] kept) own)))))
 (defn- compared-type
   "The type of an argument compared with a column of type t by op: the column's kind (an enum's
    labels kept, its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond
@@ -1239,13 +1305,23 @@
                                                      (vector? side) (if-let [s (:schema (expression-type registry sc side opts))] (compared-schema-type registry s op opts) :any)
                                                      :else :any)]]
                                    [(or x value) (compared-type op t x opts)])
-                                 (for [[_ v] (select-keys stmt [:limit :offset])] [v [:int {:min 0}]])
-                                 ;; [:cast :?x :mood]: an argument cast to an enum is a value of it
-                                 (for [x (tree-seq branch? seq stmt)
-                                       :when (and (vector? x) (= :cast (first x)) (= 3 (count x)) (arg-key (second x)))
-                                       :let [[k s] (registry-type registry (nth x 2) opts)]
-                                       :when (and (vector? s) (= :enum (first s)))]
-                                   [(second x) (driver-type registry jdbc/write-type [:ref k] opts)])
+                                 ;; LIMIT and OFFSET take a bigint of at least 0 by assignment, NULL for none
+                                 (for [[_ v] (select-keys stmt [:limit :offset])]
+                                   [v [:maybe (accepted-type registry [:int {:pg/type "bigint" :min 0}] :assign opts)]])
+                                 ;; [:cast :?x :timestamptz]: what PostgreSQL casts to the type; NULL but where the
+                                 ;; cast is compared (NULL never matches) or assigned to a NOT NULL column
+                                 (let [compared (set (mapcat (fn [[_ side other]] [side other]) (comparison-sides stmt)))
+                                       target (target-scope sc stmt schema)
+                                       ;; a cast assigned to a column takes NULL as the column does
+                                       assigned (into {} (for [[col v] (assignments stmt)] [v (maybe? (:schema (resolve-column registry target col)))]))]
+                                   (for [x (tree-seq branch? seq stmt)
+                                         :when (and (vector? x) (= :cast (first x)) (= 3 (count x)) (arg-key (second x)))
+                                         :let [t (nth x 2)
+                                               s (or (when-let [[k] (registry-type registry t opts)] [:ref {:pg/type (name t)} k])
+                                                     (when (keyword? t) (type-schema (str/lower-case (str/replace (name t) "-" " ")))))]
+                                         :when s]
+                                     [(second x) (cond-> (accepted-type registry s :cast opts)
+                                                   (and (not (compared x)) (get assigned x true)) nullable)]))
                                  (for [[col v] (assignments stmt)
                                        :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
                                    ;; unnest(?): one value of the column for each element of an array

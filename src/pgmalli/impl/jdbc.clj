@@ -39,7 +39,9 @@
          [:result {:optional true} [:enum :one]]
          [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]
          [:format {:optional true} :map]
-         [:stringtype {:optional true} [:enum :varchar :unspecified]]]))
+         [:stringtype {:optional true} [:enum :varchar :unspecified]]
+         [:sends {:optional true} [:vector {:min 1} :string]]
+         [:accept {:optional true} [:enum :native :postgresql]]]))
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key

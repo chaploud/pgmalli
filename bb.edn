@@ -30,7 +30,7 @@
                   :task (load-file "dev/fixture.clj")}
          test {:doc "Run the test suite with babashka (every test/**/*_test.clj but the ones that need next.jdbc)"
                :requires ([clojure.test :as t] [clojure.string :as str] [babashka.fs :as fs])
-               :task (let [skip #{"pgmalli.catalog-fuzz-test" "pgmalli.driver-types-test" "pgmalli.oracle-test" "pgmalli.row-keys-test" "pgmalli.upstream-test"}
+               :task (let [skip #{"pgmalli.accept-test" "pgmalli.catalog-fuzz-test" "pgmalli.driver-types-test" "pgmalli.oracle-test" "pgmalli.row-keys-test" "pgmalli.upstream-test"}
                            nss (->> (fs/glob "test" "**/*_test.clj")
                                     (map (fn [f] (-> (str (fs/strip-ext (fs/relativize "test" f)))
                                                     (str/replace "/" ".")

@@ -134,6 +134,23 @@
         (is (not-any? #(= [:maybe :any] (last %)) (rest (h/row-schema registry q opts))) "each cast is typed")
         (is (m/validate (h/row-schema registry q opts) row {:registry registry}) (pr-str row))))))
 
+(deftest arguments-typed-as-postgresql-takes-them-run
+  (when *db*
+    (exec-sql! "CREATE TABLE prices (id bigint PRIMARY KEY, amount numeric NOT NULL, at timestamptz); INSERT INTO prices VALUES (1, 2.5, now());")
+    (let [{:keys [host port db user password]} *db*
+          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+          registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+      (doseq [[q opts values] [[{:select [:id] :from [:prices] :where [:= :id :?x]} {:accept :postgresql} [1 1M 1.0]]
+                               [{:select [:id] :from [:prices] :where [:> :amount :?x]} {} [1 2.5M]]
+                               [{:select [:id] :from [:prices] :where [:< :at [:cast :?x :timestamptz]]} {}
+                                ["2026-01-01T00:00:00Z" (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0)
+                                 (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
+                               [{:select [:id] :from [:prices] :limit :?x} {:accept :postgresql} [nil 1 1M 1.0]]]
+              :let [t (:x (h/arg-types registry q opts))]
+              v values]
+        (is (m/validate t v {:registry registry}) (str (pr-str q) " " (pr-str v)))
+        (is (vector? (jdbc/execute! ds (sql/format q {:params {:x v}}))) (str (pr-str q) " " (pr-str v)))))))
+
 (deftest pg-array-is-what-the-driver-takes
   (when *db*
     (let [{:keys [host port db user password]} *db*

@@ -109,20 +109,35 @@ keyed as in `sql/format`'s `:params`:
                        :from [:users]
                        :where [:and [:= :group_id :?group] [:in :status :?statuses]]
                        :limit :?n})
-;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:int {:min 0}]}
+;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:maybe [:int {:pg/type "bigint", :min 0}]]}
 ```
 
 | where the argument is | its type |
 |---|---|
-| compared with a column | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type |
+| compared with a column, in a condition or in a select or ORDER BY expression (a CASE's) | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type |
 | compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
-| cast to an enum type (`[:cast :?s :user_status]`) | the enum's labels |
+| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of the types `:sends` names: a string too, and an enum type's labels alone; NULL but where the cast is compared or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as `:write`'s `:array` says |
 | a `LIKE` pattern | the column's kind (`:string`) |
-| in `:limit`, `:offset` | `[:int {:min 0}]` |
+| in `:limit`, `:offset` | an integer of at least 0 (or what a bigint is assigned, see `:accept`), or nil for none |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
+
+A column's type takes its own values, a `numeric`, `real` or `double precision` one an integer
+too, which it holds exactly. PostgreSQL takes more: a `bigint` compared with a `numeric`, any
+value assigned to a `text` column. `{:accept :postgresql}` types an argument with all of it, of
+the types `:sends` names (pgjdbc sends an integer as `bigint`, a `BigDecimal` as `numeric`, a
+`String` as `character varying`):
+
+```clojure
+(h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:accept :postgresql})
+;; => {:id [:or [:int #:pg{:type "bigint"}] [decimal? #:pg{:type "numeric"}] [:double #:pg{:type "double precision"}]]}
+
+(h/arg-types registry {:select [:id] :from [:users] :where [:> :created_at [:cast :?since :timestamptz]]}
+             {:sends ["timestamp with time zone" "character varying"]})
+;; => {:since [:or [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time [:string #:pg{:type "character varying"}]]}
+```
 
 Where its uses type an argument differently, the first statement wins (an enclosing one before
 its subqueries), and within it a comparison (the first), then `:limit` / `:offset`, a cast, an
@@ -247,6 +262,8 @@ take the same options map:
 | `:write {:enum [:string :keyword]}` | the form your own `SettableParameter` extension accepts for a value of an enum or a CHECK's list: strings, keywords or both |
 | `:write {:array [:pg/array :sequential :vector :set]}` | what an array argument (`[:any :?ids]`) may be sent as: a Java array, a vector, list or set; `:any` without it |
 | `:stringtype :unspecified` | your connection's `stringtype`: strings reach every column untyped (default `:varchar`, as pgjdbc's) |
+| `:accept :postgresql` | an argument takes all PostgreSQL takes where it goes, not its column's own values alone (`:native`, the default) |
+| `:sends ["bigint" ...]` | the types your application's values reach PostgreSQL as, for a cast's argument and under `:accept :postgresql`: pgjdbc's for its Java types by default |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
 | `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |
