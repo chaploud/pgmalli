@@ -165,7 +165,7 @@ To take nil, pass `{:compare :lenient}`:
 ;; => {:id [:string #:pg{:type "text"}]}
 
 (h/arg-types registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]}
-             {:write (conj (h/pgjdbc-write) [[:sequential :pgmalli/element] :unknown])})
+             {:write (conj (h/pgjdbc-write) [[:sequential :pgmalli/element] "varchar[]"])})
 ;; => {:author [:int #:pg{:type "bigint"}], :titles [:sequential [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]}
 ```
 
@@ -183,12 +183,17 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 `h/insert-schema` and `h/update-schema` type it. Each column is typed as an argument assigned to
 it (what `:write` sends, held to the column's range) and keyed by its name without a namespace,
 as HoneySQL writes it back to the column (its `_` as `-` under `:kebab? true` where the format
-leaves names unquoted: `:address-line1` for `address_line1`). A column the database may fill is
+leaves names unquoted or under `:quoted-snake`: `:address-line1` for `address_line1`; a column
+with capitals by a string where names are unquoted, as PostgreSQL folds a keyword's to lower case). A column the database may fill is
 optional and takes HoneySQL's `:default` too; one it writes (generated, identity ALWAYS) takes
-`:default` alone. In `h/update-schema` every column is optional. HoneySQL writes an empty `:set`
+`:default` alone. In `h/update-schema` every column is optional. They type values: a HoneySQL
+expression other than `:default` (`[:cast "closed" :user_status]`, `[:now]`) is no value of
+them, and under pgjdbc's default an enum column's label as a String is one PostgreSQL refuses
+(varchar), as `h/check` says of a query. HoneySQL writes an empty `:set`
 as `SET` with nothing after it, which PostgreSQL refuses, so check that the row has a key. Validate it under the registry
 (`{:registry registry}`); the table's CHECKs across columns are not in it, so where they matter
-validate with `:pg.public.users/insert` (`/update`) too:
+validate an inserted row with `:pg.public.users/insert` too (an UPDATE's hold on the updated row,
+which the columns sent do not show):
 
 ```clojure
 (m/validate (h/insert-schema registry :users) {:email "ann@example.com" :group_id 1} {:registry registry})
@@ -254,9 +259,11 @@ A json, jsonb or interval column, where pgmalli knows only the driver's object, 
 of exactly its type (`[[:map-of :keyword :any] "jsonb"]`; under `:accept :postgresql`, also
 what PostgreSQL takes there); `:any` without one. An array argument
 takes the rows with `:pgmalli/element` in a collection (`:sequential`, `:vector`, `:set`,
-`:pg/array`), the element's type in its place; such a row's type is `:unknown`: PostgreSQL types
-an array from where it goes, and reads each element as the column's type, so `:accept` does not
-widen an element. Without one an array argument is `:any`.
+`:pg/array`), the element's type in its place; such a row's type is the array type it goes as
+(`"bigint[]"`), or `:unknown`. Compared (`[:= :id [:any :?ids]]`), PostgreSQL types an untyped
+array from the column and reads each element as the column's type, so `:accept` does not widen
+an element. `unnest` takes a typed array alone, each element assigned to the column. Without
+such a row an array argument is `:any`.
 
 Under pgjdbc's default, which sends a `String` as `varchar`, an enum argument is still typed as
 its labels as strings, though PostgreSQL takes no varchar for an enum: `h/check` reports it as
@@ -347,7 +354,7 @@ with aliases and CTE names resolved. Use it to find the queries a change to a ta
 | `:write [[schema type] ...]` | what your application sends besides a column's own values, and the type each goes as (a name or alias of [types.md](types.md), or `:unknown`): [what your application sends](#what-your-application-sends); `h/pgjdbc-write` by default |
 | `:accept :postgresql` | an argument takes all PostgreSQL takes where it goes (`:native`, the default: the column's own values and the rows of a type it takes as its own) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
-| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
+| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read |
 | `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |
 | `:return-keys true` or `["col" ...]` | the `:return-keys` next.jdbc sends a write with, passed to `execute!` or set with `with-options` |
 

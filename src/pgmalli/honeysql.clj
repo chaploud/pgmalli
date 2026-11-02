@@ -877,10 +877,9 @@
   "Whether HoneySQL writes v as NULL: nil, [:inline nil], [:lift nil], or :null (any case) where
    the format leaves it unquoted (quoted?), and :quoted-always does not match it."
   [v {:keys [quoted-always] :as format}]
-  (let [quoted? (quoted? format)]
-    (or (nil? v) (#{[:inline nil] [:lift nil]} v)
-        (and (= :null (sql-value v)) (not quoted?)
-             (not (some-> quoted-always (re-find (name v))))))))
+  (or (nil? v) (#{[:inline nil] [:lift nil]} v)
+      (and (= :null (sql-value v)) (not (quoted? format))
+           (not (some-> quoted-always (re-find (name v)))))))
 
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
@@ -1353,7 +1352,7 @@
                          (concat (for [[op side value] (comparison-sides stmt)
                                        :let [x (array-arg value)]
                                        :when (arg-key (or x value))
-                                       ;; an array goes untyped and PostgreSQL reads each element as the column's type
+                                       ;; compared, an array PostgreSQL types from the column, each element read as the column's type
                                        :let [o (cond-> opts x (dissoc :accept))
                                              t (cond (column-keyword? side) (compared-column-type registry sc side op o)
                                                      (vector? side) (if-let [s (:schema (expression-type registry sc side o))] (compared-schema-type registry s op o) :any)
@@ -1392,11 +1391,9 @@
                                      [(second x) (cond-> (accepted-type registry s :cast opts)
                                                    (< (get refusing x 0) (uses x)) nullable)]))
                                  (for [[col v] (assignments stmt)
-                                       :let [x (array-arg v #{:unnest})
-                                             ;; an array goes untyped and PostgreSQL reads each element as the column's type
-                                             t (column-type registry (target-scope sc stmt schema) col true (cond-> opts x (dissoc :accept)))]]
-                                   ;; unnest(?): one value of the column for each element of an array
-                                   (if x [x (jdbc/array-type t opts)] [v t]))))
+                                       :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
+                                   ;; unnest(?), of a typed array (unnest(unknown) is ambiguous): each element assigned to the column
+                                   (if-let [x (array-arg v #{:unnest})] [x (jdbc/array-type t opts)] [v t]))))
                        (statement-chains registry body opts))
          ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
@@ -1681,13 +1678,13 @@
   "The [:map ...] of the derived schema (\"insert\", \"update\") of the table row name: each column
    typed as an argument assigned to it, optional as the derived schema has it, keyed by its
    name as HoneySQL writes it back to the column (a string as it is, a keyword's _ as - under
-   :kebab? where the format leaves names unquoted); one
+   :kebab? where the format leaves names unquoted or under :quoted-snake); one
    the database may fill takes :default too, and one it writes :default alone."
   [registry name derived what opts]
   (options! registry opts)
   (let [r (reading registry)
-        ;; a table as HoneySQL names it (:users, :app.users, "users"), not a registry name (:pg.app/users)
-        ;; a registry name, or one mistyped (:pg.public.users), which schema-of names the one meant for
+        ;; a registry name (:pg.app/users), or one mistyped (:pg.public.users) that schema-of corrects, as it
+        ;; is; a table as HoneySQL names it (:users, :app.users, "users") qualified in :schema
         name (if (or (not (or (keyword? name) (string? name)))
                      (str/starts-with? (cond-> (str name) (keyword? name) (subs 1)) "pg."))
                name
@@ -1704,10 +1701,14 @@
                        (error/fail! :pgmalli.error/unknown-schema
                                     (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
                                     {:given dn})))
-          ;; HoneySQL writes a string key as it is; a keyword's - as _ where it leaves names unquoted
-          ;; (or :quoted-snake), and nothing else back: :b-1 is b_1, so b1 stays :b1
+          ;; HoneySQL writes a string key as it is, and a keyword's - as _ where names are unquoted (or
+          ;; :quoted-snake); nothing else changes, so b1 stays :b1
           kebab? (and (:kebab? opts) (or (not (quoted? (:format opts))) (:quoted-snake (:format opts))))
-          key #(if (string? %) % (keyword (cond-> (clojure.core/name %) kebab? (str/replace "_" "-"))))
+          ;; unquoted, PostgreSQL folds a keyword's name to lower case: a column with capitals only a string reaches
+          key #(let [n (clojure.core/name %)]
+                 (cond (string? %) %
+                       (and (not (quoted? (:format opts))) (not= n (str/lower-case n))) n
+                       :else (keyword (cond-> n kebab? (str/replace "_" "-")))))
           default (into [:enum] default-values)
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))]
@@ -1726,7 +1727,7 @@
   "The [:map ...] of one row an INSERT's :values may carry into the table whose row schema is
    name (:pg.public/users, or :users in :schema), typed as arg-types types an argument: each
    column as an argument assigned to it, keyed by its name as HoneySQL writes it back to the
-   column (its _ as - under :kebab?, unquoted); those the database may fill (a default,
+   column (its _ as - under :kebab?, unquoted or :quoted-snake); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
    (generated, identity ALWAYS) taking :default alone. Options: docs/queries.md#options.
 

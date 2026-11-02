@@ -639,8 +639,10 @@
 (deftest a-row-of-write-is-a-schema-sent-as-a-type
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no malli schema the registry reads"
                         (h/arg-types registry {:select [:id] :from [:users]} {:write [[:strng "varchar"]]})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli reads a collection row as sent untyped"
-                        (h/arg-types registry {:select [:id] :from [:users]} {:write [[[:vector :pgmalli/element] "bigint"]]}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"a collection row goes as an array type \(\"bigint\[\]\"\), or untyped"
+                        (h/arg-types registry {:select [:id] :from [:users]} {:write [[[:vector :pgmalli/element] "bigint"]]})))
+  (is (map? (h/arg-types registry {:select [:id] :from [:users]} {:write [[[:vector :pgmalli/element] "int8[]"]]}))
+      "an array type, by an alias of its element too"))
 
 (deftest a-cast-arguments-nil-follows-every-use-of-the-cast
   (let [nullable? #(= :maybe (first (:x (h/arg-types registry % (merge {:schema "sample"} %2)))))
@@ -804,8 +806,8 @@
     (is (m/validate t [1] {:registry registry}))
     (is (not (m/validate t [1.5M] {:registry registry})) "'{1.5}'::bigint[] is invalid input"))
   (let [t (:xs (h/arg-types registry {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
-                            (apply sends {:schema "sample" :accept :postgresql} (collections :sequential))))]
-    (is (not (m/validate t [1.5M] {:registry registry})) "unnest's elements too")))
+                            (sends {:schema "sample" :accept :postgresql} [[:sequential :pgmalli/element] "numeric[]"])))]
+    (is (m/validate t [1.5M] {:registry registry}) "unnest assigns each element of a typed array, which PostgreSQL rounds")))
 
 (deftest a-types-own-values-come-first-however-many-kinds-it-takes
   (is (= [:string {:pg/type "text"}] (second (second (:x (h/arg-types registry {:select [[[:cast :?x :text] :t]]} {:schema "sample"})))))))
@@ -1580,8 +1582,29 @@
 
 (deftest a-stringtype-beside-rows-changes-only-what-it-says
   (let [msg #(try (h/arg-types registry {:select [:id] :from [:users]} %) nil (catch clojure.lang.ExceptionInfo e e))]
+    (is (re-find #"\"timestamptz\" inst\? is a row \[inst\? \"timestamptz\"\]" (ex-message (msg {:write {"timestamptz" inst?}}))) "a predicate as its symbol")
+    (is (re-find #":stringtype :varchar is pgjdbc's default; leave it out\. All told, :write is \(h/pgjdbc-write\) " (ex-message (msg {:stringtype :varchar}))))
+    (is (re-find #":stringtype \"unspecified\" was never an option; pgjdbc's is :varchar or :unspecified\. All told, :write is \(h/pgjdbc-write\) "
+                 (ex-message (msg {:stringtype "unspecified"}))))
     (is (re-find #"All told, :write is \[\[:keyword :unknown\]\] " (ex-message (msg {:write [[:keyword :unknown]] :stringtype :varchar}))))
     (is (re-find #"All told, :write is \[\[:string \"text\"\]\] " (ex-message (msg {:write [[:string "text"]] :stringtype :unspecified}))))
     (is (re-find #":stringtype :unspecified sends :write's varchar string rows untyped \(:unknown\)" (ex-message (msg {:write [[:string "text"]] :stringtype :unspecified}))))
     (is (= {:stringtype :unspecified} (:given (ex-data (msg {:write [[:string "text"]] :stringtype :unspecified})))))
     (is (re-find #"All told, :write is \(h/pgjdbc-write\) " (ex-message (msg {:write {"mood" :string}}))))))
+
+(deftest a-row-schema-keys-as-each-format-writes-it-back
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line1 :string]]}})
+        keys #(map first (drop 2 (h/insert-schema reg :t (assoc % :kebab? true))))]
+    (is (= [:address-line1] (keys {:format {:quoted true :quoted-snake true}})) ":quoted-snake writes - back as _")
+    (is (= [:address_line1] (keys {:format {:dialect :ansi}})) "a dialect quotes names"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:MixedCase :int]]}})
+        keys #(map first (drop 2 (h/insert-schema reg :t %)))]
+    (is (= ["MixedCase"] (keys {})) "unquoted, only a string reaches a column with capitals")
+    (is (= [:MixedCase] (keys {:format {:quoted true}})))))
+
+(deftest each-migration-line-says-what-it-is
+  (let [msg #(try (h/arg-types registry {:select [:id] :from [:users]} %) nil (catch clojure.lang.ExceptionInfo e (ex-message e)))]
+    (is (re-find #"; a keyword is a row \[:keyword :unknown\] where a keyword goes untyped" (msg {:write {"mood" [:or :string :keyword]}})))
+    (is (re-find #":stringtype :varchar is pgjdbc's default; leave it out\. All told, :write is \[\[:keyword :unknown\]\] " (msg {:write [[:keyword :unknown]] :stringtype :varchar})))
+    (is (re-find #"All told, :write is \(h/pgjdbc-write \{:stringtype :unspecified\}\) " (msg {:write (h/pgjdbc-write) :stringtype :unspecified})))
+    (is (re-find #"All told, :write is \[\[:int \"bigint\"\]" (msg {:write (h/pgjdbc-write) :stringtype nil})))))

@@ -23,7 +23,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   is an error naming the row.
 * `h/insert-schema` and `h/update-schema` type a whole row written into a table, for `:values`
   and `:set` built at run time.
-* Assigned to an integer column or cast to an integer type, a fraction is held to the range
+* Assigned to an integer column (under `:accept :postgresql`) or cast to an integer type, a fraction is held to the range
   half a unit wider, as PostgreSQL rounds it first.
 * `h/check` reports a string sent as any type a column does not take (`{:write [[:string
   "text"]]}` to an enum), not only varchar.
@@ -41,7 +41,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   :unspecified})}`. `:write {"text" [:or :string :keyword]}` and `:write {:enum [:string
   :keyword]}` are a row `[:keyword :unknown]` (or the type your extension sends a keyword as): a
   column's strings and labels stay its own. `:write {:array [k ...]}` is a row `[[k
-  :pgmalli/element] :unknown]` for each k. `:write {"T" s}` for another type is a row `[s "T"]`,
+  :pgmalli/element] :unknown]` for each k (or the array type your extension sends it as,
+  `"bigint[]"`, which `unnest` needs). `:write {"T" s}` for another type is a row `[s "T"]`,
   left out where `(h/pgjdbc-write)` has that same row (`[:uuid "uuid"]`, `[:int "bigint"]` ...);
   for an enum type's name, a keyword is a row `[:keyword :unknown]` and a String needs none (cast
   it, or `{:stringtype :unspecified}`). A row adds to a column's own values rather than replacing
