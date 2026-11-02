@@ -1274,6 +1274,73 @@
              {:before (vec (take-last 1 (map alias (from-items stmt [:from :using])))) :merges {}}
              joins))))
 
+(defn- type-schema
+  "A column's schema for a value of the PostgreSQL type t (a name or an alias), as the registry
+   writes one; nil for a type types lacks."
+  [t]
+  (when-let [{n :name s :schema} (some-> t types/entry)]
+    (if (vector? s) (into [(first s) (assoc (second s) :pg/type n)] (drop 2 s)) [s {:pg/type n}])))
+
+(def ^:private aggregate-types
+  "The type sum and avg give for their argument's."
+  {"sum" {"smallint" "bigint" "integer" "bigint" "bigint" "numeric" "numeric" "numeric"
+          "real" "real" "double precision" "double precision" "interval" "interval"}
+   "avg" {"smallint" "numeric" "integer" "numeric" "bigint" "numeric" "numeric" "numeric"
+          "real" "double precision" "double precision" "double precision" "interval" "interval"}})
+
+(def ^:private word-types
+  "The type of an SQL word, and of a function of no argument."
+  {:true "boolean" :false "boolean" :current_timestamp "timestamp with time zone" :current_date "date"
+   :current_time "time with time zone" :localtimestamp "timestamp without time zone"
+   :localtime "time without time zone" "now" "timestamp with time zone" "count" "bigint"})
+
+(def ^:private parameter-types
+  "The type pgjdbc sends a parameter of each class as."
+  {Long "bigint" Integer "integer" Short "smallint" Double "double precision" Float "real"
+   BigDecimal "numeric" clojure.lang.BigInt "numeric" java.math.BigInteger "numeric" Boolean "boolean"})
+
+(def ^:private predicates
+  "Operators and special syntax that make a boolean, which may be NULL where an operand may be."
+  (into #{} (map keyword)
+        ["=" "<>" "not=" "!=" "<" ">" "<=" ">=" "and" "or" "not" "in" "not-in" "like" "not-like" "ilike"
+         "not-ilike" "between" "not-between" "similar-to" "not-similar-to" "regexp" "regex" "~" "~*" "!~" "!~*"]))
+
+(defn- expression-type
+  "{:schema column-schema :nullable? bool} of a select expression of a form
+   docs/queries.md#the-row-a-query-returns lists; nil for another."
+  [registry chain x {:keys [stringtype format] :as opts}]
+  (let [canonical (fn [{s :schema}] (some-> s shape/column-props :pg/type (#(:name (types/entry %) %))))
+        h (when (vector? x) (first x))
+        fname (if (keyword? h) (folded (name h)) (shorthand-fn x))
+        ts (map #(expression-type registry chain % opts) (when (vector? x) (rest x)))
+        typed #(when % {:schema (type-schema %)})]
+    (cond
+      ;; HoneySQL sends a string or number as a parameter, unless :inline writes it into the SQL
+      (string? x) (assoc (typed (if (or (= :unspecified stringtype) (:inline format)) "text" "character varying")) :string? true)
+      (boolean? x) (typed "boolean")
+      (number? x) (when-not (:inline format) (typed (parameter-types (class x))))
+      (keyword? x) (or (typed (word-types (sql-value x)))
+                       (when (shorthand-fn x) (typed (word-types fname)))
+                       (when-let [{s :schema :keys [nullable? opaque?]} (when (column-keyword? x) (resolve-column registry chain x))]
+                         (when (and s (not opaque?)) {:schema (shape/non-null s) :nullable? (boolean (or nullable? (maybe? s)))})))
+      (not (keyword? h)) nil
+      (= :cast h) (let [[_ v t] x]
+                    (when-let [s (when (keyword? t) (type-schema (str/lower-case (str/replace (name t) "-" " "))))]
+                      {:schema s :nullable? (:nullable? (expression-type registry chain v opts) true)}))
+      (#{:exists :not-exists :is :is-not :is-distinct-from :is-not-distinct-from} h) (typed "boolean")
+      ;; one operand: ~ is bitwise NOT
+      (and (predicates h) (or (= :not h) (next ts))) (assoc (typed "boolean") :nullable? (not-every? #(and % (not (:nullable? %))) ts))
+      (= :->> h) (assoc (typed "text") :nullable? true)
+      (#{"now" "count"} fname) (typed (word-types fname))
+      (#{"min" "max"} fname) (when-let [t (first ts)] {:schema (loose (:schema t)) :nullable? true})
+      (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical)]) typed (assoc :nullable? true))
+      ;; a string takes the other arguments' type, as PostgreSQL resolves a varchar or unknown one
+      (= "coalesce" fname) (let [others (remove :string? ts)
+                                 resolved (if (seq others) others ts)]
+                             (when (and (seq resolved) (not-any? nil? resolved) (apply = (map canonical resolved)))
+                               {:schema (cond-> (:schema (first resolved)) (next ts) loose)
+                                :nullable? (not-any? #(and % (not (:nullable? %))) ts)})))))
+
 (defn- select-row
   "The row a SELECT returns. Under :qualified?, a column through an opaque table, or a cast
    column, has a key this cannot tell: the driver keys it by the table it comes from at the
@@ -1321,7 +1388,8 @@
                   (nil? col) (when-let [n (item-name item opts)]
                                (if (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
                                  (untold n)
-                                 [(entry nil n nil true nil)]))
+                                 (let [{s :schema :keys [nullable?]} (expression-type registry chain (if alias (first item) (item-expression item)) opts)]
+                                   [(entry nil n s nullable? nil)])))
                   (star? col) (star col)
                   :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
                           (let [label (if alias (alias-label alias opts) column)
@@ -1363,8 +1431,9 @@
    RETURNING, its update count); nil when that cannot be told, as
    docs/queries.md#the-row-a-query-returns lists.
 
-   Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
-   operation's row is its first member's names. Under qualified keys, a column next.jdbc keys
+   Columns an outer join may leave NULL are nullable; an expression is typed for the forms
+   docs/queries.md#the-row-a-query-returns lists, nullable :any otherwise; a set operation's row
+   is its first member's names. Under qualified keys, a column next.jdbc keys
    by a table the data does not show (one through a subquery or a CTE, a cast column) is left
    out of the map, which is open, and named under the :pgmalli/untold property. Options:
    docs/queries.md#options."

@@ -121,14 +121,15 @@
     (is (vector? (h/query-schema registry '[] body opts)) (pr-str body))))
 
 (deftest an-expression-with-no-alias-has-the-name-postgresql-gives-it
-  (is (= [:map [:count [:maybe :any]] [:?column? [:maybe :any]] [:my_fn [:maybe :any]] [:nick [:maybe :any]] [:case [:maybe :any]]
-          [:exists [:maybe :any]] [:current_timestamp [:maybe :any]] [:coalesce [:maybe :any]]]
+  (is (= [:map [:count [:int {:pg/type "bigint"}]] [:?column? [:maybe :any]] [:my_fn [:maybe :any]] [:nick [:maybe [:string {:pg/type "text"}]]]
+          [:case [:maybe :any]] [:exists [:boolean {:pg/type "boolean"}]] [:current_timestamp ['inst? {:pg/type "timestamp with time zone"}]]
+          [:coalesce [:int {:pg/type "bigint"}]]]
          (h/row-schema registry {:select [[[:count :*]] [[:+ :id 1]] [[:public.my-fn 1]] [[:cast :nick :text]] [[:case [:= :id 1] 2]]
                                           [[:exists {:select [1]}]] :current_timestamp [[:coalesce :id 0]]]
                                  :from [:users]} opts))
       "?column? once: the driver keeps the last of the columns a name repeats")
   (is (nil? (h/row-schema registry {:select [[[:cast 1 :int]]] :from [:users]} opts)) "a cast value is named after its type, not read here")
-  (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]] [:top-id [:maybe :any]]]
+  (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]] [:top-id [:maybe [:int {:pg/type "bigint"}]]]]
          (h/row-schema registry {:select [:id [[:max :id] :top_id]] :from [:users]} (assoc opts :qualified? true :kebab? true)))
       "an expression has no table: its key is unqualified, kebab-cased as the builder does")
   (is (= [:map {:pgmalli/untold [:nick]}] (h/row-schema registry {:select [[[:cast :nick :text]]] :from [:users]} (assoc opts :qualified? true)))
@@ -263,9 +264,9 @@
     (let [row (h/row-schema registry body (assoc opts :nil-columns :absent))]
       (is (= [:closed_at {:optional true} ['inst? {:pg/type "timestamptz"}]] (nth row 3)) "by default time columns are inst?, which the default registry has")
       (is (m/validate row {:id 1 :g 2 :closed_at (java.util.Date.)}) "and no registry is needed"))
-    (is (= [:=> [:cat [:int {:pg/type "bigint"}] :any] [:sequential [:map [:n [:maybe :any]]]]]
+    (is (= [:=> [:cat [:int {:pg/type "bigint"}] :any] [:sequential [:map [:n [:int {:pg/type "bigint"}]]]]]
            (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
-        "an expression under an alias is :any; a symbol used nowhere is :any")
+        "a symbol used nowhere is :any")
     (is (= [:sequential [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
            (last (h/query-schema registry '[id] '{:select [:id] :from [:users] :where [:= :id id]} opts))))))
 
@@ -441,6 +442,39 @@
         "pgjdbc sends a :return-keys name quoted, as written")
     (is (= [] (h/check registry {:update :users :set {:nick "a"} :returning [:id]} (assoc opts :return-keys [:group-id])))
         "an explicit RETURNING leaves :return-keys unused")))
+
+(deftest an-expression-has-the-type-postgresql-gives-it
+  (let [row #(h/row-schema registry {:select % :from [:users]} opts)
+        bigint [:int {:pg/type "bigint"}]
+        nick [:string {:pg/type "character varying"}]]
+    (is (= [:map [:n bigint]] (row [[[:count :nick] :n]])) "count is never NULL")
+    (is (= [:map [:s [:maybe bigint]]] (row [[[:sum :group_id] :s]])) "sum of an integer is a bigint, NULL over no row")
+    (is (= [:map [:a [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]] (row [[[:avg :group_id] :a]])))
+    (is (= [:map [:n [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]] (row [[[:coalesce :nick] :n]]))
+        "coalesce of one column is that column")
+    (is (= [:map [:n nick]] (row [[[:coalesce :nick "x"] :n]]))
+        "a value that is not NULL makes it NOT NULL; a literal's length is not the column's")
+    (is (= [:map [:n [:maybe :any]]] (row [[[:coalesce :nick :id] :n]])) "columns of different types are not resolved here")
+    (is (= [:map [:b [:boolean {:pg/type "boolean"}]] [:c [:maybe [:boolean {:pg/type "boolean"}]]]]
+           (row [[[:= :id 1] :b] [[:= :nick "a"] :c]]))
+        "a comparison is NULL where an operand may be")
+    (is (= [:map [:u [:maybe :any]] [:p [:maybe :any]]] (row [[[:upper :nick] :u] [:?x :p]])) "other forms stay untyped")
+    (is (= [:map [:n [:maybe :any]]] (row [[[:coalesce :score 1.5] :n]]))
+        "a number is a typed parameter, which PostgreSQL resolves with the column's type")
+    (is (= [:map [:i [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]] [:f ['float? {:pg/type "real"}]] [:d [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
+           (row [[(int 1) :i] [(float 1.5) :f] [1.5M :d]]))
+        "pgjdbc types a parameter by its class")
+    (is (= [:map [:i [:maybe :any]] [:s [:string {:pg/type "text"}]]]
+           (h/row-schema registry {:select [[1 :i] ["s" :s]] :from [:users]} (assoc opts :format {:inline true})))
+        "an inlined number is typed by its text, which is not read here; an inlined string is text")
+    (is (= [:map [:s [:string {:pg/type "text"}]]] (h/row-schema registry {:select [["s" :s]] :from [:users]} (assoc opts :stringtype :unspecified))))
+    (is (= [:map [:b [:maybe :any]]] (row [[[(keyword "~") :id] :b]])) "~ alone is bitwise NOT")
+    (is (= [:map [:k [:maybe [:string {:pg/type "text"}]]]] (row [[[:->> :nick "k"] :k]])) "->> is text")
+    (is (= [:map [:s [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]] (row [[[:sum :id] :s]]))
+        "sum of a bigint is a numeric")
+    (is (= [:map [:mood [:maybe [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]] [:n [:maybe bigint]]]
+           (h/row-schema registry {:select [:mood [[:count :*] :n]] :from [:users] :group-by [[:rollup :mood]]} opts))
+        "ROLLUP adds rows whose columns are NULL")))
 
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
@@ -1081,5 +1115,5 @@
     (is (= [] (q [:not [:or [:= :state "archived"] [:= :id 1]]])))))
 
 (deftest an-sql-word-in-any-case-names-its-column-as-postgresql-does
-  (is (= [:map [:current_date [:maybe :any]]] (h/row-schema registry {:select [:CURRENT_DATE] :from [:users]} opts)))
+  (is (= [:map [:current_date ['inst? {:pg/type "date"}]]] (h/row-schema registry {:select [:CURRENT_DATE] :from [:users]} opts)))
   (is (= [:map [:?column? [:maybe :any]]] (h/row-schema registry {:select [:NULL] :from [:users]} opts))))

@@ -56,8 +56,8 @@ A clause pgmalli does not read is reported rather than passed over:
 ```
 
 The columns of a CTE, a subquery, a table function, or a `pg_catalog` table the registry
-lacks exist but have no type. An expression (`[:count :*]`) has none either. Comparisons with
-them are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
+lacks exist but have no type. Comparisons with them, or with an expression (`[:count :*]`),
+are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
 
@@ -150,8 +150,8 @@ key is required, as `sql/format` refuses a missing one:
 ## The row a query returns
 
 `h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
-join may leave NULL is nullable; an expression is nullable `:any`. A set operation (`:union`
-...) takes its first member's column names, as unqualified keys:
+join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
+names, as unqualified keys:
 
 ```clojure
 (h/row-schema registry {:select [:u.email :p.title]
@@ -160,7 +160,20 @@ join may leave NULL is nullable; an expression is nullable `:any`. A set operati
 ;; => [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:posts/title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
 
 (h/row-schema registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]})
-;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:maybe :any]]]
+;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
+```
+
+An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
+by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
+`:timestamptz`), `count`, `sum`, `avg`, `min`, `max`, `coalesce` of
+one type, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
+`IS`), the clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
+
+```clojure
+(h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
+                                 [[:exists {:select [1] :from [:posts]}] :any_posts] [[:upper :nick] :shout]]
+                        :from [:users]})
+;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [inst? #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:shout [:maybe :any]]]
 ```
 
 It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):
