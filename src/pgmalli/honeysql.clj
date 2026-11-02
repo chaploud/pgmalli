@@ -48,8 +48,8 @@
    "cmin" [:some {:pg/type "cid"}] "cmax" [:some {:pg/type "cid"}] "tableoid" [:int {:pg/type "oid"}]})
 
 (defn- options!
-  "opts checked (jdbc/options!), :write's schemas against registry unless it is one reading
-   made, which a public function has checked them against before."
+  "opts checked (jdbc/options!), :write's schemas against registry unless registry is already
+   reading's, whose caller checked them."
   [registry opts]
   (jdbc/options! opts (when-not (::schemas registry) registry)))
 
@@ -97,6 +97,10 @@
   "[item condition] of every join of a statement."
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
+
+(def ^:private default-values
+  "How HoneySQL writes DEFAULT, the value a column's default fills."
+  #{:default [:default]})
 
 (declare insert-parts star? expression-type type-schema accepted-type driver-type)
 
@@ -905,7 +909,7 @@
              :when (column-keyword? col)
              :let [{:keys [table] s :schema} (resolve-column registry target col)
                    cp (some-> s shape/column-props)
-                   p (cond (or (nil? s) (#{:default [:default]} v)) nil
+                   p (cond (or (nil? s) (default-values v)) nil
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
@@ -936,7 +940,6 @@
           (cond (str/ends-with? (:pg/type p) "[]") (str (written (:name e)) "[]")
                 (:cast e) (written (name (:cast e)))
                 (not= :string (:schema e)) (written (:name e)))))))
-
 
 (defn- slot-type
   "The type of a column schema as pgmalli.impl.accept names it: [:enum name] for an enum type
@@ -1225,7 +1228,6 @@
             (seq children) t
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 
-
 (defn- unlabel
   "t without the :pg/type it names, which an alternative of another type's values would misname."
   [t]
@@ -1240,7 +1242,8 @@
    a unit wider, and not to the checks."
   [a p t own]
   (let [base (shape/domain-base own)
-        checks (when (= :and (shape/head own)) (rest (shape/entries own)))
+        ;; a base's own kind among them (the decimal? a numeric(p,s) domain also holds) bounds no other kind
+        checks (when (= :and (shape/head own)) (remove #(= (shape/kind %) (shape/kind base)) (rest (shape/entries own))))
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
         rounded? (and (accept/integer-type? t) (not (accept/integer-type? p)))
         [min max] (if rounded? [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
@@ -1254,8 +1257,9 @@
   "The type of an argument where a value of column schema s goes, in context (:compare,
    :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
    (jdbc/write-type), and the values of each type :write sends that PostgreSQL takes there (cast,
-   or {:accept :postgresql}) or holds as its own (accept/holds?): the rows sent untyped, or a
-   column of the type's own values (:time's too) with the rows sent as it; assigned or cast, a
+   or {:accept :postgresql}) or holds as its own (accept/holds?): for an untyped one, the rows
+   sent untyped; for a typed one, the values a column of that type takes (:time's too, and the
+   rows sent as it); assigned or cast, a
    number held to a number column's range (within). Compared, the values lose the bounds a
    comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
    labels, a text label as a keyword too where a row of keywords goes, a number label as each
@@ -1671,16 +1675,17 @@
 (defn- written-row
   "The [:map ...] of the derived schema (\"insert\", \"update\") of the table row name: each column
    typed as an argument assigned to it, optional as the derived schema has it, keyed by its
-   name as HoneySQL writes it (:kebab? and :lower? as next.jdbc's builders read it back); an
-   optional one takes :default too, and one the database writes :default alone."
+   name as HoneySQL writes it (:kebab? and :lower? as next.jdbc's builders read it back); one
+   the database may fill takes :default too, and one it writes :default alone."
   [registry name derived what opts]
   (options! registry opts)
   (let [r (reading registry)
         ;; a table as HoneySQL names it (:users, :app.users, "users"), not a registry name (:pg.app/users)
-        name (if (or (and (keyword? name) (not (some-> (namespace name) (str/starts-with? "pg."))))
-                     (and (string? name) (not (str/includes? name "/"))))
-               (shape/table-key (qualified (keyword name) (:schema opts default-schema)))
-               name)
+        name (if (or (shape/generated-name? name) (not (or (keyword? name) (string? name)))
+                     ;; a registry name mistyped (:pg.public.users), which schema-of names the one meant for
+                     (str/starts-with? (clojure.core/name name) "pg."))
+               name
+               (shape/table-key (qualified (keyword name) (:schema opts default-schema))))
         s (shape/schema-of registry name)
         dn (shape/derived-name name derived)]
     (cond (shape/row-schema? s) nil
@@ -1693,16 +1698,19 @@
                        (error/fail! :pgmalli.error/unknown-schema
                                     (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
                                     {:given dn})))
-          key #(jdbc/row-key nil (clojure.core/name %) (assoc opts :qualified? false))]
+          key #(jdbc/row-key nil (clojure.core/name %) (assoc opts :qualified? false))
+          ;; the columns the database may fill: optional in what an INSERT may carry
+          fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))]
       (into [:map {:closed true}]
             (concat
-             ;; a column the database may fill takes HoneySQL's :default (DEFAULT) too
+             ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
              (for [[k props c] written
-                   :let [t (cond-> (accepted-type r c :assign opts) (maybe? c) nullable)]]
-               (if (:optional props) [(key k) {:optional true} [:or t [:= :default]]] [(key k) t]))
+                   :let [t (cond-> (accepted-type r c :assign opts) (maybe? c) nullable)
+                         t (if (fills k) [:or t (into [:enum] default-values)] t)]]
+               (if (:optional props) [(key k) {:optional true} t] [(key k) t]))
              ;; one the database writes (generated, identity ALWAYS) takes it alone
              (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-               [(key k) {:optional true} [:= :default]]))))))
+               [(key k) {:optional true} (into [:enum] default-values)]))))))
 
 (defn insert-schema
   "The [:map ...] of one row an INSERT's :values may carry into the table whose row schema is
