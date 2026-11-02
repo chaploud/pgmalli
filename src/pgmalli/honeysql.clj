@@ -1038,6 +1038,18 @@
         (contains? stmt :truncate) stmt
         :else (assoc stmt :returning (if (true? return-keys) [:*] (mapv #(keyword (name %)) return-keys)))))
 
+(defn- return-key-problems
+  "pgjdbc quotes the names of :return-keys as written: one that is a column of the target only
+   folded (:group-id for group_id) is none."
+  [registry stmt scopes {:keys [return-keys schema] :or {schema default-schema} :as opts}]
+  (when (and (sequential? return-keys) (map? stmt) (not= stmt (sent stmt opts)))
+    (let [[_ alias] (some-> (first (write-targets stmt)) (table-ref schema))
+          {:keys [table opaque?]} (get (first (chain scopes)) alias)
+          cs (when-not opaque? (table-columns registry table))]
+      (for [k return-keys :let [n (name k)]
+            :when (and cs (not (contains? cs n)) (contains? cs (folded n)))]
+        {:kind :unknown-column :column (keyword n) :did-you-mean [(keyword (folded n))]}))))
+
 (defn check
   "[problem ...] of a HoneySQL query against the registry; [] when there are none.
 
@@ -1054,12 +1066,13 @@
    (jdbc/options! opts)
    (query! body)
    (let [registry (reading registry)
-         body (or (sent body opts) body)
+         sent-body (or (sent body opts) body)
+         chains (statement-chains registry sent-body opts)
          found (mapcat (fn [[stmt scopes path]]
                          ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
                          (cond->> (problems registry stmt scopes opts) (seq path) (map #(assoc % :in (vec path)))))
-                       (statement-chains registry body opts))]
-     (vec (concat found (unread-clauses body))))))
+                       chains)]
+     (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body))))))
 
 (defn tables
   "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,

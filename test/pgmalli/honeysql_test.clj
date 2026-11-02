@@ -435,7 +435,12 @@
     (is (nil? (h/row-schema registry '{:delete-from :users :returning ?cols} opts)) "a RETURNING code builds may return rows")
     (is (= [{:kind :unknown-column :column :nmae :did-you-mean [:name]}]
            (h/check registry {:delete-from :groups} (assoc opts :return-keys ["nmae"])))
-        "check reads the RETURNING :return-keys adds")))
+        "check reads the RETURNING :return-keys adds")
+    (is (= [{:kind :unknown-column :column :group-id :did-you-mean [:group_id]}]
+           (h/check registry {:update :users :set {:nick "a"}} (assoc opts :return-keys [:group-id])))
+        "pgjdbc sends a :return-keys name quoted, as written")
+    (is (= [] (h/check registry {:update :users :set {:nick "a"} :returning [:id]} (assoc opts :return-keys [:group-id])))
+        "an explicit RETURNING leaves :return-keys unused")))
 
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
