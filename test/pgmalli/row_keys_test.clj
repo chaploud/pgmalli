@@ -113,6 +113,27 @@
         (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
         (is (m/validate one (jdbc/execute-one! ds (sql/format q) jdbc-opts)) (pr-str :one builder return-keys q))))))
 
+(deftest arguments-typed-from-expressions-are-what-the-driver-takes
+  (when *db*
+    (exec-sql! "CREATE TYPE feel AS ENUM ('ok', 'meh'); CREATE DOMAIN positive AS int CHECK (VALUE > 0);
+                CREATE TABLE notes (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, n int NOT NULL, feel feel, body text);")
+    (let [{:keys [host port db user password]} *db*
+          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+          registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+          opts {:qualified? false :write {:array [:sequential]}}]
+      (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest :?bodies]]]}]}
+                           {:n 1 :feel "ok" :bodies ["a" "b"]}]
+                          [{:select [:id] :from [:notes] :where [:and [:= [:cast :n :text] :?t] [:< [:composite :n :id] [:composite :?n :?id]]]}
+                           {:t "1" :n 2 :id 99}]]
+              :let [types (h/arg-types registry q opts)]]
+        (is (m/validate (into [:map] types) params {:registry registry}) (pr-str q))
+        (is (some? (jdbc/execute! ds (sql/format q {:params (update-vals params #(if (vector? %) (into-array String %) %))}))) (pr-str q)))
+      (let [q {:select [[[:cast "ok" :feel] :f] [[:cast 2 :positive] :p] [[:cast :n :int] :i] [[:cast true :bool] :b]] :from [:notes]}
+            row (first (jdbc/execute! ds (sql/format q) {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
+        (is (some? row))
+        (is (not-any? #(= [:maybe :any] (last %)) (rest (h/row-schema registry q opts))) "each cast is typed")
+        (is (m/validate (h/row-schema registry q opts) row {:registry registry}) (pr-str row))))))
+
 (deftest pg-array-is-what-the-driver-takes
   (when *db*
     (let [{:keys [host port db user password]} *db*

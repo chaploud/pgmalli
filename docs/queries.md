@@ -115,9 +115,10 @@ keyed as in `sql/format`'s `:params`:
 | where the argument is | its type |
 |---|---|
 | compared with a column | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type |
+| compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast to an enum type (`[:cast :?s :user_status]`) | the enum's labels |
-| assigned to a column (`:set`, `:values`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out |
+| assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as `:write`'s `:array` says |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | `[:int {:min 0}]` |
 | used only inside code (`(when x ...)`) | its type or nil |
@@ -137,6 +138,15 @@ A comparison with NULL matches no row, so `:?id` above does not take nil. To tak
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:compare :lenient})
 ;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
+```
+
+```clojure
+(h/arg-types registry {:select [:id] :from [:users] :where [:= [:cast :id :text] :?id]})
+;; => {:id [:string #:pg{:type "text"}]}
+
+(h/arg-types registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]}
+             {:write {:array [:sequential]}})
+;; => {:author [:int #:pg{:type "bigint"}], :titles [:sequential [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]}
 ```
 
 `h/params-schema` gives the same types as the `[:map ...]` of `sql/format`'s `:params`. Every
@@ -165,7 +175,7 @@ names, as unqualified keys:
 
 An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
 by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
-`:timestamptz`), `count`, `sum`, `avg`, `min`, `max`, `coalesce` of
+`:timestamptz`, `:int`) or to an enum type or domain of the registry, `count`, `sum`, `avg`, `min`, `max`, `coalesce` of
 one type, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
 `IS`), the clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
 

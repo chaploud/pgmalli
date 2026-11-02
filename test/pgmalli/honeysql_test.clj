@@ -476,6 +476,39 @@
            (h/row-schema registry {:select [:mood [[:count :*] :n]] :from [:users] :group-by [[:rollup :mood]]} opts))
         "ROLLUP adds rows whose columns are NULL")))
 
+(deftest an-argument-compared-with-an-expression-takes-its-type
+  (let [args #(h/arg-types registry {:select [:id] :from [:users] :where %} opts)
+        text [:string {:pg/type "text"}]]
+    (is (= {:k text} (args [:= [:->> :nick "k"] :?k])))
+    (is (= {:t text} (args [:not [:= [:cast :id :text] :?t]])))
+    (is (= {:ts [:or [:sequential {:min 1} text] [:set {:min 1} text]]} (args [:in [:cast :id :text] :?ts])))
+    (is (= {:s [:int {:pg/type "integer"}] :i [:int {:pg/type "bigint"}]}
+           (args [:< [:composite :score :id] [:composite :?s :?i]]))
+        "a row compares element by element")
+    (is (= {:x :any} (args [:= [:upper :nick] :?x])) "an expression of no known type types nothing")))
+
+(deftest an-insert-select-assigns-its-items-to-the-columns-listed
+  (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
+    (is (= {:g [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]
+            :m [:enum "happy" "sad"]
+            :s [:sequential [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
+            :n [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
+           (h/arg-types registry q (assoc opts :write {:array [:sequential]})))
+        "by position: an argument takes its column's type, an unnest one an array of it")
+    (is (= [] (h/check registry q (dissoc opts :stringtype))))
+    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
+           (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m] [:?s]]}]} (dissoc opts :stringtype))))
+    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood" :unnest? true}]
+           (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :stringtype)))
+        "an array of strings is varchar[]")
+    (is (re-find #"\[:cast \[:unnest :\?m\] :mood\]"
+                 (first (h/explain (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :stringtype))))))))
+
+(deftest a-cast-to-an-alias-or-an-enum-has-its-type
+  (is (= [:map [:m [:enum {:pg/type "mood"} "happy" "sad"]] [:i [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
+          [:b [:boolean {:pg/type "boolean"}]] [:f [:double {:pg/type "double precision"}]]]
+         (h/row-schema registry {:select [[[:cast "sad" :mood] :m] [[:cast :id :int] :i] [[:cast true :bool] :b] [[:cast :score :float] :f]] :from [:users]} opts))))
+
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
                                :do-update-set {:fields [:name] :where [:<= :groups.name :EXCLUDED.name]} :returning [:id]} opts))
@@ -515,7 +548,7 @@
   (let [row #(h/row-schema registry {:select [%] :from [:users]} opts)]
     (is (nil? (row [[:cast [:+ :id 1] :int]])) "an operation cast is named after the type")
     (is (nil? (row [[:cast [:case [:= :id 1] 2] :int]])))
-    (is (= [:map [:coalesce [:maybe :any]]] (row [[:cast [:coalesce :id 0] :int]])) "a function cast keeps its name")
+    (is (= [:map [:coalesce [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]] (row [[:cast [:coalesce :id 0] :int]])) "a function cast keeps its name")
     (is (= [:map [:?column? [:maybe :any]]] (row [[:-> :nick "a"]])) "an operator not an identifier")
     (is (= [:map [:max [:maybe :any]]] (row :%max.id)) ":%f.args calls f")
     (is (nil? (row [[:raw "now()"]])) ":raw may be named anything")
