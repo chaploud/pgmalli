@@ -13,10 +13,10 @@
 
 (def ^:private targets
   "[column type, the type accept/accepts? takes for it]: a domain is its base type."
-  (concat (map (juxt identity identity) (concat scalars (filter accept/known? ["bigint[]" "character varying[]" "text[]" "integer[]"])))
+  (concat (map (juxt identity identity) (concat scalars accept/covered-arrays))
           [["feel" [:enum "feel"]] ["positive" "integer"]]))
 
-(def ^:private sents (concat scalars ["bigint[]" "character varying[]" "text[]" "integer[]" "feel" :unknown]))
+(def ^:private sents (concat scalars accept/covered-arrays ["feel" :unknown]))
 
 (defn- column [t] (str "c_" (str/replace (str/replace t "[]" "_array") #"\W" "_")))
 
@@ -44,3 +44,22 @@
                 :when (not (and (= :cast context) (some #{"bytea"} [t sent]) (some #{"smallint" "integer" "bigint"} [t sent])))]
           (is (= (taken? con sent sql) (accept/accepts? accepted-t sent-t context))
               (str (pr-str sent) " " context " " t)))))))
+
+(deftest sent-type-is-pgjdbcs
+  (when *db*
+    (let [{:keys [host port db user password]} *db*]
+      (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})]
+        (doseq [v [1 (int 1) (short 1) 1M 1N (biginteger 1) 1.0 (float 1) true "1" \1 (java.util.UUID/randomUUID) (.getBytes "a")
+                   (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
+                   (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]
+                t scalars
+                ;; PostgreSQL 18 adds explicit casts between bytea and the integers
+                :when (not (and (= "bytea" t) (integer? v)))
+                ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
+                :let [taken? (try (with-open [ps (.prepareStatement con (str "SELECT CAST(? AS " t ")"))]
+                                    (.setObject ps 1 v)
+                                    (.execute ps))
+                                  true
+                                  ;; another error is of the value, which the type took ("1" is no regclass)
+                                  (catch java.sql.SQLException e (not (#{"42883" "42804" "42846" "42725"} (.getSQLState e)))))]]
+          (is (= taken? (accept/accepts? t (accept/sent-type v {}) :cast)) (str (pr-str v) " " (class v) " " t)))))))

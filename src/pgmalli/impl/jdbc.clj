@@ -71,7 +71,18 @@
 (def ^:private options (delay (m/schema options-schema)))
 (def ^:private read-options* (delay (m/schema read-options-schema)))
 
-(defn options! [opts] (checked! @options opts))
+(defn options!
+  "opts when pgmalli.honeysql takes them: their keys and values, and each type :sends names
+   one types knows (a name or an alias); an error naming what it does not, with the one meant."
+  [opts]
+  (checked! @options opts)
+  (when-let [[t] (seq (remove types/entry (:sends opts)))]
+    (let [known (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)]
+      (error/fail! :pgmalli.error/invalid-options
+                   (str "pgmalli options: :sends names " (pr-str t) ", which is no type pgmalli knows (docs/types.md)"
+                        (error/did-you-mean (some-> (error/suggest t known) pr-str)))
+                   {:given (select-keys opts [:sends])})))
+  opts)
 
 ;;; what the driver returns and takes
 
@@ -145,7 +156,8 @@
       (let [t (driver-type schema (dissoc opts :read) write-type)
             ;; pgjdbc also takes these java.time types as they are
             native ({:time/local-date :time/local-date :time/local-date-time :time/local-date-time
-                     :time/instant :time/offset-date-time} (if (vector? schema) (first schema) schema))]
+                     :time/instant :time/offset-date-time :time/local-time :time/local-time
+                     :time/offset-time :time/offset-time} (if (vector? schema) (first schema) schema))]
         (if (and native (= :inst time) (= 'inst? (if (vector? t) (first t) t)))
           [:or t native]
           t))))

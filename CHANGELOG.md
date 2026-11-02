@@ -5,20 +5,22 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ## Unreleased
 
-* Which parameter PostgreSQL takes where (compared, assigned, cast) is one table,
-  `pgmalli.impl.accept`, which a test holds against PostgreSQL 16 to 18. `h/check` decides from it
-  whether a column takes a varchar (`:uncast-string`), with the same results as before.
 * `h/arg-types` types an argument under a cast (`[:cast :?at :timestamptz]`) with what
   PostgreSQL casts to the type: a string too, and an enum type's labels alone. A `numeric`,
   `real` or `double precision` column's argument takes an integer too.
 * `{:accept :postgresql}` types an argument with all PostgreSQL takes where it goes (a `bigint`
   compared with a `numeric`, anything assigned to a `text` column); by default (`:native`) it
   takes its column's own values, as before. `:sends` names the types an application's values
-  reach PostgreSQL as, for a cast's argument and under `:accept :postgresql`.
+  reach PostgreSQL as, for a cast's argument and under `:accept :postgresql`; a name pgmalli
+  does not know is an error.
 * An argument in `:limit` or `:offset` takes nil (no limit). A comparison in a select or ORDER BY
-  expression (a CASE's) types its argument, and `h/check` reads its columns.
-* What to do: an instrumented function whose argument was `:any` under a cast, or in a CASE, now
-  has its type checked; one passing nil for a LIMIT was refused and is not.
+  expression types its argument, and `h/check` reads it: its unknown columns, uncast strings and
+  enum literals are problems now.
+* `h/check` reports a string assigned to a reg* column other than regclass (regtype, regproc
+  ...) as `:uncast-string`: PostgreSQL takes none.
+* What to do: an instrumented function whose argument was `:any` under a cast or in a select or
+  ORDER BY comparison now has its type checked; a query whose select or ORDER BY compares an
+  unknown column or an enum with a literal outside its labels now has problems.
 
 ## 0.3.3 (2026-11-03)
 

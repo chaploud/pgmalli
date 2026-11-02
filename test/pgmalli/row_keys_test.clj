@@ -149,7 +149,9 @@
               :let [t (:x (h/arg-types registry q opts))]
               v values]
         (is (m/validate t v {:registry registry}) (str (pr-str q) " " (pr-str v)))
-        (is (vector? (jdbc/execute! ds (sql/format q {:params {:x v}}))) (str (pr-str q) " " (pr-str v)))))))
+        (is (vector? (jdbc/execute! ds (sql/format q {:params {:x v}}))) (str (pr-str q) " " (pr-str v))))
+      (is (not (m/validate (:x (h/arg-types registry {:select [:id] :from [:prices] :where [:= :id :?x]} {:accept :postgresql})) "1"))
+          "a varchar compared with a bigint is no argument PostgreSQL takes"))))
 
 (deftest pg-array-is-what-the-driver-takes
   (when *db*

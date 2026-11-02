@@ -521,11 +521,11 @@
         bigint [:int {:pg/type "bigint"}]
         numeric ['decimal? {:pg/type "numeric"}]]
     (is (= {:x bigint} (args [:= :id :?x] {})) "a column's own values")
-    (is (= {:x [:or numeric bigint]} (args [:= [:cast :id :numeric] :?x] {})) "a numeric takes an integer too: it holds it exactly")
-    (is (= {:x [:or bigint numeric [:double {:pg/type "double precision"}]]} (args [:= :id :?x] {:accept :postgresql}))
+    (is (= {:x [:or numeric :int]} (args [:= [:cast :id :numeric] :?x] {})) "a numeric takes an integer too: the same number")
+    (is (= {:x [:or bigint 'decimal? 'integer? :double 'float?]} (args [:= :id :?x] {:accept :postgresql}))
         "under :accept :postgresql, what PostgreSQL compares a bigint with")
     (is (= {:x bigint} (args [:= :id :?x] {:accept :postgresql :sends ["bigint" "character varying"]})) "of the types :sends names")
-    (is (= {:x [:or bigint [:string {:pg/type "character varying"}]]}
+    (is (= {:x [:or bigint :string 'char?]}
            (args [:= :id :?x] {:accept :postgresql :sends ["bigint" "character varying"] :stringtype :unspecified}))
         "an untyped string goes anywhere")
     (is (= {:x [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]} (args [:= :mood :?x] {:accept :postgresql}))
@@ -533,7 +533,7 @@
 
 (deftest a-cast-argument-takes-what-postgresql-casts
   (let [args #(h/arg-types registry % (dissoc opts :stringtype))
-        cast-to-bigint [:or [:int {:pg/type "bigint"}] ['decimal? {:pg/type "numeric"}] [:double {:pg/type "double precision"}] [:string {:pg/type "character varying"}]]]
+        cast-to-bigint [:or [:int {:pg/type "bigint"}] 'decimal? 'integer? :double 'float? :string 'char?]]
     (is (= {:x cast-to-bigint} (args {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]}))
         "compared: NULL never matches")
     (is (= {:x [:maybe cast-to-bigint]} (args {:select [[[:cast :?x :bigint] :n]]})) "selected: NULL is a value")
@@ -541,12 +541,43 @@
       (is (= cast-to-bigint x) "assigned to a NOT NULL column: no NULL")
       (is (= :maybe (first n)) "assigned to a nullable one: NULL"))
     (is (= {:x [:enum {:pg/type "mood"} "happy" "sad"]} (args {:select [:id] :from [:users] :where [:= :mood [:cast :?x :mood]]})))
-    (is (= {:x [:or [:int {:pg/type "bigint"}] [:string {:pg/type "character varying"}]]}
+    (is (= {:x [:or [:int {:pg/type "bigint"}] :string 'char?]}
            (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]} {:schema "sample" :sends ["bigint" "character varying"]}))
         ":sends narrows a cast's argument")))
 
 (deftest limit-and-offset-take-nil-for-none
-  (is (= {:n [:maybe [:int {:pg/type "bigint" :min 0}]]} (h/arg-types registry {:select [:id] :from [:users] :limit :?n} opts))))
+  (is (= {:n [:maybe [:int {:pg/type "bigint" :min 0}]]} (h/arg-types registry {:select [:id] :from [:users] :limit :?n} opts)))
+  (let [t (:n (h/arg-types registry {:select [:id] :from [:users] :limit :?n} (assoc opts :accept :postgresql)))]
+    (is (every? #(m/validate t %) [nil 1 1M 1.0]))
+    (is (not-any? #(m/validate t %) [-1 -1M -1.0]) "PostgreSQL refuses a negative LIMIT, whatever its type")))
+
+(deftest an-alternative-is-held-to-its-columns-range
+  (let [t (:x (h/arg-types registry {:update :users :set {:score :?x} :where [:= :id 1]} (assoc opts :accept :postgresql)))]
+    (is (m/validate t 3M))
+    (is (not (m/validate t 1000000000000M)) "beyond an integer's range, PostgreSQL refuses it")
+    (is (not (m/validate t 1.0E12)))))
+
+(deftest a-misspelt-type-in-sends-is-an-error
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean \"timestamp\"" (h/arg-types registry {:select [:id] :from [:users]} {:sends ["timestampz"]})))
+  (is (map? (h/arg-types registry {:select [:id] :from [:users]} {:sends ["int8" "varchar"]})) "an alias is a name"))
+
+(deftest a-cast-arguments-nil-follows-every-use-of-the-cast
+  (let [nullable? #(= :maybe (first (:x (h/arg-types registry % (merge {:schema "sample"} %2)))))
+        cast [:cast :?x :bigint]]
+    (is (not (nullable? {:select [:id] :from [:users] :where [:= :id cast]} {})))
+    (is (nullable? {:select [:id] :from [:users] :where [:= cast nil]} {}) "IS NULL")
+    (is (nullable? {:select [:id] :from [:users] :where [:or [:is cast nil] [:= :id cast]]} {}) "an optional filter")
+    (is (nullable? {:select [:id] :from [:users] :where [:is-distinct-from :referrer_id cast]} {}))
+    (is (nullable? {:select [:id] :from [:users] :where [:= :id cast]} {:compare :lenient}))
+    (is (nullable? {:insert-into :nowhere :values [{:a cast}]} {}) "a column the registry lacks")))
+
+(deftest write-names-what-goes-in-a-cast-too
+  (let [o {:schema "sample" :write {"text" [:or :string :keyword] "character varying" [:or :string :keyword]}}]
+    (is (m/validate (:x (h/arg-types registry {:select [[[:cast :?x :text] :t]]} o)) :skill {:registry registry}))
+    (is (= [[:fn double?] [:fn float?]]
+           (take 2 (rest (:x (h/arg-types registry {:select [:id] :from [:users] :where [:= [:cast :id :double-precision] :?x]}
+                                          {:schema "sample" :write {"double precision" [:or [:fn double?] [:fn float?]]}})))))
+        "a column's own values are kept whole, first")))
 
 (deftest a-comparison-in-a-select-or-order-by-is-read
   (is (= {:t [:int {:pg/type "bigint"}] :o [:int {:pg/type "integer"}]}
@@ -1127,9 +1158,11 @@
     (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))))
 
 (deftest a-string-assigned-to-a-regclass-column-is-taken
-  (let [reg (pgmalli/registry {:registry {:pg.public/rc [:map {:pg/table "public.rc"} [:id :int] [:r [:any {:pg/type "regclass"}]]]}})]
+  (let [reg (pgmalli/registry {:registry {:pg.public/rc [:map {:pg/table "public.rc"} [:id :int] [:r [:any {:pg/type "regclass"}]]
+                                                         [:rt [:any {:pg/type "regtype"}]]]}})]
     (is (= [] (h/check reg {:update :rc :set {:r "w"}})))
-    (is (= [:uncast-string] (map :kind (h/check reg {:select [:id] :from [:rc] :where [:= :r "w"]}))))))
+    (is (= [:uncast-string] (map :kind (h/check reg {:select [:id] :from [:rc] :where [:= :r "w"]}))))
+    (is (= [:uncast-string] (map :kind (h/check reg {:update :rc :set {:rt "integer"}}))) "regclass alone takes text by assignment")))
 
 (def ^:private check-list-registry
   ;; state is a text column a CHECK narrows to a list; mood an enum type
