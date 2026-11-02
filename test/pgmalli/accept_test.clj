@@ -43,9 +43,10 @@
                 [context sql] {:compare (str "SELECT 1 FROM probe_target WHERE " (column t) " = $1")
                                :assign (str "INSERT INTO probe_target (" (column t) ") VALUES ($1)")
                                :cast (str "SELECT CAST($1 AS " t ")")}
-                ;; PostgreSQL 18 adds explicit casts between bytea and the integers
-                :when (not (and (= :cast context) (some #{"bytea"} [accepted-t sent]) (some #{"smallint" "integer" "bigint"} [accepted-t sent])))]
-          (is (= (taken? con sent sql) (accept/accepts? accepted-t sent-t context))
+                :let [taken (taken? con sent sql)
+                      ;; PostgreSQL 18 adds explicit casts between bytea and the integers, which accepts? takes on every version
+                      pg18? (and (= :cast context) (some #{"bytea"} [accepted-t sent]) (some #{"smallint" "integer" "bigint"} [accepted-t sent]))]]
+          (is (if pg18? (or (not taken) (accept/accepts? accepted-t sent-t context)) (= taken (accept/accepts? accepted-t sent-t context)))
               (str (pr-str sent) " " context " " t)))))))
 
 (deftest sent-type-is-pgjdbcs
@@ -56,8 +57,7 @@
                    (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
                    (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]
                 t scalars
-                ;; PostgreSQL 18 adds explicit casts between bytea and the integers
-                :when (not (or (and (= "bytea" t) (integer? v)) (and (bytes? v) (#{"smallint" "integer" "bigint"} t))))
+                :let [pg18? (or (and (= "bytea" t) (integer? v)) (and (bytes? v) (#{"smallint" "integer" "bigint"} t)))]
                 ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
                 :let [taken? (try (with-open [ps (.prepareStatement con (str "SELECT CAST(? AS " t ")"))]
                                     (.setObject ps 1 v)
@@ -65,7 +65,9 @@
                                   true
                                   ;; another error is of the value, which the type took ("1" is no regclass)
                                   (catch java.sql.SQLException e (not (#{"42883" "42804" "42846" "42725"} (.getSQLState e)))))]]
-          (is (= taken? (accept/accepts? t (pgjdbc/sent-type v {}) :cast)) (str (pr-str v) " " (class v) " " t)))))))
+          ;; PostgreSQL 18 adds explicit casts between bytea and the integers, which accepts? takes on every version
+          (is (if pg18? (or (not taken?) (accept/accepts? t (pgjdbc/sent-type v {}) :cast)) (= taken? (accept/accepts? t (pgjdbc/sent-type v {}) :cast)))
+              (str (pr-str v) " " (class v) " " t)))))))
 
 (deftest pgjdbc-write-says-what-goes-as-which-type
   (let [registry (pgmalli/registry {:registry {}})]

@@ -54,12 +54,15 @@
   [t]
   (boolean (or (vector? t) (covered t) (covered-arrays t))))
 
-(def ^:private numbers #{"smallint" "integer" "bigint" "real" "double precision" "numeric"})
+(def ^:private integers #{"smallint" "integer" "bigint"})
+(def ^:private numbers (into integers ["real" "double precision" "numeric"]))
 (def ^:private strings #{"character varying" "text" "character" "name" "citext"})
 
 (defn number-type? [t] (contains? numbers t))
 
-(defn integer-type? [t] (contains? #{"smallint" "integer" "bigint"} t))
+(defn integer-type? [t] (contains? integers t))
+
+(defn string-type? [t] (contains? strings t))
 
 (def ^:private families
   "Types whose comparison operators take each other: implicit casts and cross-type operators."
@@ -82,8 +85,9 @@
 (def ^:private explicit
   "Types an explicit cast turns into a type, besides what an assignment takes and the I/O
    conversion from strings."
-  (merge (zipmap numbers (repeat #{"jsonb"}))
-         {"boolean" #{"integer" "jsonb"} "integer" #{"boolean" "jsonb"}}))
+  ;; PostgreSQL 18 casts bytea and the integers both ways; earlier versions refuse it
+  (merge-with into (zipmap numbers (repeat #{"jsonb"})) (zipmap integers (repeat #{"bytea"}))
+              {"boolean" #{"integer" "jsonb"} "integer" #{"boolean"} "bytea" integers}))
 
 (defn- oid? [t] (and (string? t) (str/starts-with? t "reg")))
 
@@ -121,14 +125,13 @@
 
 (def ^:private widened
   "The types a number type's own values include, besides its own: those it is wider than."
-  {"numeric" #{"smallint" "integer" "bigint"}
-   "double precision" #{"smallint" "integer" "bigint" "real"}
-   "real" #{"smallint" "integer" "bigint"}})
+  {"numeric" integers "double precision" (conj integers "real") "real" integers})
 
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type, a number of a narrower
    kind (an integer for a numeric, a real for a double precision), which PostgreSQL converts
-   implicitly, or one sent untyped where t's values are text (a string type, an enum), which
-   PostgreSQL reads as the value itself."
+   implicitly, a string of another string type, or one sent untyped where t's values are text
+   (a string type, an enum), which PostgreSQL reads as the value itself."
   [t sent]
-  (or (= t sent) (contains? (widened t) sent) (and (= :unknown sent) (or (vector? t) (contains? strings t)))))
+  (or (= t sent) (contains? (widened t) sent) (and (strings t) (strings sent))
+      (and (= :unknown sent) (or (vector? t) (contains? strings t)))))

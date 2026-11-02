@@ -542,7 +542,7 @@
 
 (deftest a-cast-argument-takes-what-postgresql-casts
   (let [args #(h/arg-types registry % (dissoc opts :write))
-        cast-to-bigint [:or [:int {:pg/type "bigint"}] 'decimal? :double :string]]
+        cast-to-bigint [:or [:int {:pg/type "bigint"}] 'decimal? :double :string 'bytes?]]
     (is (= {:x cast-to-bigint} (args {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]}))
         "compared: NULL never matches")
     (is (= {:x [:maybe cast-to-bigint]} (args {:select [[[:cast :?x :bigint] :n]]})) "selected: NULL is a value")
@@ -584,13 +584,18 @@
 
 (deftest an-option-of-pgmalli-0-3-says-what-it-is-now
   (doseq [[o says] [[{:stringtype :unspecified} #":stringtype :unspecified is :write \(h/pgjdbc-write \{:stringtype :unspecified\}\)"]
-                    [{:write {"text" [:or :string :keyword]}} #"\{\"T\" s\} is a row \[s \"T\"\]"]
+                    [{:write {"text" [:or :string :keyword]}} #"\"text\" \[:or :string :keyword\] is a row \[:keyword :unknown\]"]
+                    [{:write {"mood" :keyword}} #"\"mood\" :keyword names no type pgmalli knows: an enum's value goes untyped, a row \[:keyword :unknown\]"]
+                    [{:write {"date" :time/local-date}} #"\"date\" :time/local-date is in \(h/pgjdbc-write\) already"]
+                    [{:write {"jsonb" [:map-of :keyword :any]}} #"\"jsonb\" \[:map-of :keyword :any\] is a row \[\[:map-of :keyword :any\] \"jsonb\"\]"]
+                    [{:write {:enum [:keyword]}} #":enum \[:keyword\] is a row \[:keyword :unknown\]"]
                     [{:write {:array [:sequential]}} #":array \[:sequential\] is a row \[\[kind :pgmalli/element\] :unknown\]"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (h/arg-types registry {:select [:id] :from [:users]} o)) (pr-str o))))
 
 (deftest pgjdbc-write-takes-pgjdbcs-stringtype
   (is (= :unknown (second (first (filter (comp #{:string} first) (h/pgjdbc-write {:stringtype :unspecified}))))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/pgjdbc-write {:stringtype :none}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/pgjdbc-write {:stringtype :none})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes an options map" (h/pgjdbc-write :unspecified))))
 
 (deftest a-misshapen-write-names-its-row
   (doseq [[w says] [[nil #":write is a vector of \[schema type\] rows"]
@@ -598,6 +603,8 @@
                     [[:keyword :unknown] #"row 0 :keyword is no \[schema type\] row"]
                     [[[:int "bigint"] [[:string :keyword] :enum]] #"row 1 .*: a type is a name of docs/types.md"]
                     [[[:pgmalli/element :unknown]] #":pgmalli/element goes in a collection"]
+                    [[[[:maybe :pgmalli/element] :unknown]] #":pgmalli/element goes in a collection"]
+                    [[[:keyword "user_status"]] #"an enum's or a domain's value goes untyped: \[:keyword :unknown\]"]
                     [[[[:or :string [:map [:a :strng]]] "text"]] #"no malli schema the registry reads \(:strng\)"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (h/arg-types registry {:select [:id] :from [:users]} {:write w})) (pr-str w))))
 
@@ -649,6 +656,48 @@
   (is (= {:id [:int {:pg/type "bigint"}]} (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:schema "sample" :write []}))
       "a column's own values, as pgmalli reads them, whatever :write says"))
 
+(deftest a-row-pgmalli-cannot-tell-may-send-a-string-or-a-keyword
+  (doseq [rows [[[[:maybe :string] :unknown]] [[[:enum "happy" "sad"] :unknown]]]]
+    (is (= [] (h/check registry {:insert-into :users :values [{:group_id 1 :score 1 :mood "happy"}]} {:schema "sample" :write rows}))
+        (pr-str rows)))
+  (is (some #{:sad} (:x (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood :?x]} {:schema "sample" :write [[[:maybe :keyword] :unknown]]})))
+      "keyword labels where a row may send a keyword untyped"))
+
+(deftest a-domain-keeps-its-checks-whatever-write-sends
+  (let [reg (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:> 0]]
+                                          :pg.public/amount [:and ['decimal? {:pg/type "numeric"}] [:>= 0]]
+                                          :pg.public/t [:map {:pg/table "public.t"}
+                                                        [:p [:ref {:pg/type "pos"} :pg.public/pos]]
+                                                        [:a [:ref {:pg/type "amount"} :pg.public/amount]]]}})
+        {:keys [p a]} (h/arg-types reg {:update :t :set {:p :?p :a :?a}})
+        ok? #(m/validate %1 %2 {:registry reg})]
+    (is (ok? p 3))
+    (is (not (ok? p -3)))
+    (is (ok? a 3) "a Long is a numeric's own value, through the domain")
+    (is (not (ok? a -3M)))
+    (is (not (ok? (h/insert-schema reg :pg.public/t) {:p -3 :a 1M})))
+    (is (not (ok? (:x (h/arg-types reg {:select [[[:cast :?x :amount] :a]]})) -3M)))))
+
+(deftest a-number-check-lists-labels-go-as-each-number-sent
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                         [:d [:enum {:pg/type "double precision" :pg/constraints ["t_d_check"]} 1.0 2.0]]
+                                                         [:i [:enum {:pg/type "integer" :pg/constraints ["t_i_check"]} 1 2]]]}})
+        ok? #(m/validate %1 %2 {:registry reg})
+        {:keys [d]} (h/arg-types reg {:update :t :set {:d :?d}})
+        {:keys [i]} (h/arg-types reg {:update :t :set {:i :?i}} {:accept :postgresql})]
+    (is (ok? d 1) "a bigint 1 goes to a double precision as 1.0")
+    (is (not (ok? d 3)))
+    (is (every? #(ok? i %) [1 1M 1.0]) "PostgreSQL takes a numeric or a double that is a label")))
+
+(deftest a-string-of-another-string-type-is-a-string-columns-own
+  (is (= {:n [:maybe [:or [:string {:pg/type "text"}] :keyword]]}
+         (h/arg-types registry {:update :users :set {:group_name :?n} :where [:= :id 1]} {:schema "sample" :write (conj (h/pgjdbc-write) [:keyword "varchar"])}))))
+
+(deftest a-registry-without-the-derived-schema-says-so
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry has no insert schema"
+                        (h/insert-schema (merge (m/default-schemas) {:pg.public/t [:map {:pg/table "public.t"} [:id :int]]}) :pg.public/t))
+      "a hand-written row schema has none"))
+
 (deftest an-untyped-value-is-a-text-or-enum-columns-own
   (is (= {:x [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]}
          (h/arg-types registry {:select [:id] :from [:users] :where [:= :mood :?x]} (sends {:schema "sample"} [:keyword "character varying"])))
@@ -657,7 +706,7 @@
          (h/arg-types (pgmalli/registry {:registry {:pg.public/j [:map {:pg/table "public.j"} [:doc [:any {:pg/type "json"}]]]}})
                       {:select [:doc] :from [:j] :where [:= :doc :?x]} {:accept :postgresql :write unspecified}))
       "json has no =, untyped or not")
-  (doseq [rows [unspecified [[[:and :string [:fn string?]] :unknown]] [[[:or :keyword :string] :unknown]]]]
+  (doseq [rows [unspecified [[[:and :string [:fn string?]] :unknown]] [[[:or :keyword :string] :unknown]] [['string? :unknown]]]]
     (is (= [] (h/check registry {:select [:id] :from [:users] :where [:= :mood "sad"]} {:schema "sample" :write rows}))
         (str "a String sent untyped reaches an enum: " (pr-str rows))))
   (doseq [t ["varchar" "text"]]
@@ -687,6 +736,10 @@
 (deftest a-types-own-values-come-first-however-many-kinds-it-takes
   (is (= [:string {:pg/type "text"}] (second (second (:x (h/arg-types registry {:select [[[:cast :?x :text] :t]]} {:schema "sample"})))))))
 
+(deftest an-inlined-string-is-text
+  (is (= [:map [:s [:string {:pg/type "text"}]]]
+         (h/row-schema registry {:select [["s" :s]] :from [:users]} {:schema "sample" :qualified? false :format {:inline true}}))))
+
 (deftest a-fraction-going-to-an-integer-is-rounded-first
   (let [t (:x (h/arg-types registry {:select [[[:cast :?x :integer] :n]]} {:schema "sample"}))]
     (is (m/validate t 2147483647.4 {:registry registry}) "PostgreSQL rounds it to 2147483647")
@@ -713,7 +766,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes its row schema :pg.sample/users" (h/insert-schema registry :pg.sample.users/insert)))
     (is (= [:born :closed-at :group-id] (take 3 (map first (drop 2 (h/insert-schema registry :pg.sample/users {:schema "sample" :kebab? true})))))
         "keyed as HoneySQL writes a column, kebab-cased as next.jdbc reads it back")
-    (is (= v (h/insert-schema registry :users {:schema "sample"})) "a table as HoneySQL names it, in :schema")
+    (is (= v (h/insert-schema registry :users {:schema "sample"}) (h/insert-schema registry "users" {:schema "sample"})) "a table as HoneySQL names it, in :schema")
     (let [reg (pgmalli/registry {:registry {:pg.public/v [:map {:pg/view "public.v"} [:id [:maybe [:int {:pg/type "bigint"}]]]]}})]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"a view has no insert schema" (h/insert-schema reg :pg.public/v))))))
 
@@ -1107,7 +1160,7 @@
 
 (deftest each-problem-reads-as-what-to-do
   (is (= ["unknown column nik; did you mean nick?"
-          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, and pgjdbc types it varchar unless :write sends it untyped); write [:cast \"sad\" :mood], or pass {:write (h/pgjdbc-write {:stringtype :unspecified})} when the connection sets stringtype=unspecified"]
+          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, typed as :write sends it: varchar under pgjdbc's default); write [:cast \"sad\" :mood], or pass {:write (h/pgjdbc-write {:stringtype :unspecified})} when the connection sets stringtype=unspecified"]
          (h/explain (h/check registry {:select [:nik] :from [:users] :where [:= :mood "sad"]} (dissoc opts :write)))))
   (is (every? string? (h/explain [{:kind :something-new}])) "a kind with no sentence still prints"))
 

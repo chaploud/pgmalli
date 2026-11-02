@@ -97,7 +97,7 @@
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
 
-(declare insert-parts star? expression-type type-schema accepted-type head)
+(declare insert-parts star? expression-type type-schema accepted-type driver-type)
 
 (defn- code-sources?
   "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
@@ -936,7 +936,6 @@
                 (:cast e) (written (name (:cast e)))
                 (not= :string (:schema e)) (written (:name e)))))))
 
-(declare driver-type)
 
 (defn- slot-type
   "The type of a column schema as pgmalli.impl.accept names it: [:enum name] for an enum type
@@ -974,17 +973,17 @@
                      (let [target (target-scope sc stmt schema)]
                        (when (seq target) (for [[col value] (assignments stmt)] {:col col :value value :scope target :assigned? true}))))
         sends (jdbc/string-sends opts)
-        typed? (not (or (sends :unknown) (:inline (:format opts))))]
+        typed? (not= :unknown (jdbc/sent-type "" opts))]
     (concat
-     ;; an argument sent to an enum type's column: a String, which goes typed unless :write
-     ;; sends it untyped (stringtype=unspecified)
+     ;; an argument to an enum type's column, or to one whose own values are strings: a String,
+     ;; which goes typed unless :write sends it untyped (stringtype=unspecified)
      (for [{:keys [col value scope assigned?] :as use} uses
            :let [k (param-key value)] :when (and k typed?)
            :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
                  t (some->> s (uncast-type registry))]
            ;; one assigned to a nullable column may be nil, which PostgreSQL takes
            :when (and t (not (takes-string? registry s assigned? sends)) (not (and assigned? (shape/maybe? s)))
-                      (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
+                      (or (enum-type registry s) (some #(= :string (shape/kind %)) (shape/alternatives (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
      (for [{:keys [col value scope assigned? op] :as use} uses
            :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
@@ -1160,7 +1159,7 @@
                                     (jdbc/column-write-type (::schemas registry) (shape/non-null s) opts)))]
     ;; one of each kind, after pgmalli's own types read as malli's (:pg/bytes as bytes?)
     (if (and (vector? t) (= :or (first t)) (not (map? (second t))))
-      (let [alts (shape/distinct-kinds (rest t))] (if (next alts) (into [:or] alts) (first alts)))
+      (shape/either (shape/distinct-kinds (rest t)) t)
       t)))
 
 (def ^:private maybe? shape/maybe?)
@@ -1226,12 +1225,10 @@
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 
 
-(defn- head [t] (if (vector? t) (first t) t))
-
 (defn- unlabel
   "t without the :pg/type it names, which an alternative of another type's values would misname."
   [t]
-  (cond (= :or (head t)) (into [:or] (map unlabel (shape/alternatives t)))
+  (cond (= :or (shape/head t)) (into [:or] (map unlabel (shape/alternatives t)))
         (and (vector? t) (map? (second t))) (let [p (dissoc (second t) :pg/type)] (if (and (empty? p) (= 2 (count t))) (first t) (assoc t 1 p)))
         :else t))
 
@@ -1241,14 +1238,14 @@
    rounds a fraction going to an integer type first, so a fraction is held to the bounds half
    a unit wider, and not to the checks."
   [a p t own]
-  (let [kids (when (= :and (head own)) (remove map? (rest own)))
+  (let [kids (when (= :and (shape/head own)) (remove map? (rest own)))
         base (if kids (first kids) own)
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
         rounded? (and (accept/integer-type? t) (not (accept/integer-type? p)))
         [min max] (if rounded? [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))
         a (cond (empty? bounds) a
-                (#{:int :double} (head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
+                (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
                 :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))]
     (if (and (next kids) (not rounded?)) (into [:and a] (rest kids)) a)))
 
@@ -1279,10 +1276,18 @@
       ;; a cast takes a string and every explicit cast, of types pgmalli.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
       (or (nil? t) (untyped? own)) own
-      (= :enum (head own)) (if (some #(= :keyword (shape/kind (second %))) alts)
-                             (let [[props labels] (if (map? (second own)) [(second own) (drop 2 own)] [nil (rest own)])]
-                               (into (cond-> [:enum] props (conj props)) (concat labels (map keyword (filter string? labels)))))
-                             own)
+      ;; labels, as each value class taken sends them: a text label as a keyword, a number as
+      ;; the number class of each number row (1.0 as 1 where a bigint goes to a double precision)
+      (= :enum (shape/head own))
+      (let [[props labels] (if (map? (second own)) [(second own) (drop 2 own)] [nil (rest own)])
+            kinds (set (map (comp shape/kind second) alts))
+            as (fn [l] (concat (when (and (string? l) (some #(:keyword (shape/value-classes (second %))) alts)) [(keyword l)])
+                               (when (number? l)
+                                 (concat (when (and (kinds :int) (== l (Math/rint (double l)))) [(long l)])
+                                         (when (kinds 'decimal?) [(bigdec l)])
+                                         (when (kinds :double) [(double l)])))))
+            more (remove (set labels) (distinct (mapcat as labels)))]
+        (if (seq more) (into (cond-> [:enum] props (conj props)) (concat labels more)) own))
       :else
       (let [own-alts (shape/alternatives own)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
@@ -1454,7 +1459,7 @@
 (defn- expression-type
   "{:schema column-schema :nullable? bool} of a select expression of a form
    docs/queries.md#the-row-a-query-returns lists; nil for another."
-  [registry chain x {:keys [format] :as opts}]
+  [registry chain x opts]
   (let [canonical (fn [{s :schema}] (some-> s shape/column-props :pg/type (#(:name (types/entry %) %))))
         h (when (vector? x) (first x))
         fname (if (keyword? h) (folded (name h)) (shorthand-fn x))
@@ -1465,7 +1470,7 @@
       ;; an untyped string is text
       (string? x) (assoc (typed (let [t (jdbc/sent-type x opts)] (if (= :unknown t) "text" t))) :string? true)
       (boolean? x) (typed "boolean")
-      (number? x) (when-not (:inline format) (typed (jdbc/sent-type x opts)))
+      (number? x) (let [t (jdbc/sent-type x opts)] (when-not (= :unknown t) (typed t)))
       (keyword? x) (or (typed (word-types (sql-value x)))
                        (when (shorthand-fn x) (typed (word-types fname)))
                        (when-let [{s :schema :keys [nullable? opaque?]} (when (column-keyword? x) (resolve-column registry chain x))]
@@ -1646,6 +1651,8 @@
    what your application's extensions send (docs/queries.md#what-your-application-sends)."
   ([] (pgjdbc-write {}))
   ([opts]
+   (when-not (map? opts)
+     (error/fail! :pgmalli.error/invalid-options (str "pgjdbc-write takes an options map, {:stringtype :unspecified}; got " (pr-str opts)) {:given opts}))
    (jdbc/checked! [:map {:closed true} [:stringtype {:optional true} [:enum :varchar :unspecified]]] opts)
    (accept/pgjdbc-write opts)))
 
@@ -1657,15 +1664,22 @@
   (options! registry opts)
   (let [r (reading registry)
         ;; a table HoneySQL names (:users), in :schema
-        name (if (and (keyword? name) (nil? (namespace name))) (shape/schema-key (:schema opts default-schema) (clojure.core/name name)) name)
-        s (shape/schema-of registry name)]
+        name (if (or (and (keyword? name) (nil? (namespace name))) (and (string? name) (not (str/includes? name "/"))))
+               (shape/schema-key (:schema opts default-schema) (clojure.core/name name))
+               name)
+        s (shape/schema-of registry name)
+        dn (shape/derived-name name derived)]
     (cond (shape/row-schema? s) nil
           (shape/read-row? s) (error/fail! :pgmalli.error/unknown-schema
                                            (str (pr-str name) " is a view's row schema, and a view has no " derived " schema; " what " takes a table's")
                                            {:given name})
           :else (shape/not-a-row! registry name what))
     (into [:map {:closed true}]
-          (for [[k props c] (shape/column-entries (get (::schemas r) (shape/derived-name name derived)))
+          (for [[k props c] (shape/column-entries
+                             (or (get (::schemas r) dn)
+                                 (error/fail! :pgmalli.error/unknown-schema
+                                              (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
+                                              {:given dn})))
                 :let [t (accepted-type r c :assign opts)]]
             (into [(jdbc/row-key nil (clojure.core/name k) (assoc opts :qualified? false))]
                   (remove nil? [(when (:optional props) {:optional true}) (if (maybe? c) (nullable t) t)]))))))
@@ -1711,7 +1725,7 @@
    :uncast-string (fn [{:keys [column value arg type]}]
                     (let [what (if arg (str "argument " arg) (pr-str value))]
                       (str what " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
-                           " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar unless :write sends it untyped);"
+                           " (HoneySQL sends a string as a parameter, typed as :write sends it: varchar under pgjdbc's default);"
                            " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
                            (if (str/ends-with? type "[]") (str "[:raw " (pr-str type) "]") (str ":" type))
                            "], or pass {:write (h/pgjdbc-write {:stringtype :unspecified})}"

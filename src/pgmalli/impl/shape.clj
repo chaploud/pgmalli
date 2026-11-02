@@ -183,15 +183,36 @@
                    (str (pr-str name) " is no table's or view's row schema; " what " takes one such as " (pr-str (vec (take 3 rows)))))
                  (cond-> {:given name :known rows} row (assoc :suggest row)))))
 
+(defn head
+  "A schema's type: its first element, or itself."
+  [t]
+  (if (vector? t) (first t) t))
+
 (defn kind
   "The kind of value t takes: its head, through [:and t checks...]; a function schema ([:fn f])
    is a kind of its own."
   [t]
-  (let [h (if (vector? t) (first t) t)]
-    (case h
-      :and (kind (first (remove map? (rest t))))
-      :fn t
-      h)))
+  (case (head t)
+    :and (kind (domain-base t))
+    :fn t
+    (head t)))
+
+(defn value-classes
+  "Which of #{:string :keyword} a value alternative t may take: its kind's, both for a kind
+   pgmalli does not tell (a reference, [:maybe ...], [:fn ...])."
+  [t]
+  (let [k (kind t)]
+    (cond (#{:string 'string? :re} k) #{:string}
+          (#{:keyword 'keyword? 'simple-keyword? 'qualified-keyword?} k) #{:keyword}
+          (or (and (keyword? k) (= "time" (namespace k)))
+              (#{:int :double :float :boolean :uuid :symbol :nil :map :map-of :tuple :sequential :vector :set :pg/array
+                 'int? 'integer? 'decimal? 'double? 'float? 'number? 'boolean? 'uuid? 'bytes? 'inst? 'nil?} k)) #{}
+          :else #{:string :keyword})))
+
+(defn either
+  "One schema of alternatives ts: an :or of them, the one alone, empty when there are none."
+  [ts empty]
+  (case (count ts) 0 empty 1 (first ts) (into [:or] ts)))
 
 (defn alternatives
   "The alternatives of t: an :or's children, its properties left out; t alone otherwise."

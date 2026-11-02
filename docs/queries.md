@@ -120,7 +120,7 @@ keyed as in `sql/format`'s `:params`:
 | cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:write`](#what-your-application-sends) sends: a string too, and an enum type's labels alone; `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:write`](#what-your-application-sends) sends one |
 | a `LIKE` pattern | the column's kind (`:string`) |
-| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal or double that PostgreSQL rounds to at least 0 too |
+| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal or double too, held to the range half a unit wider (at least -0.5) |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
@@ -128,7 +128,8 @@ A column's type takes its own values, a `numeric`, `real` or `double precision` 
 too (a `double precision` one a `real` too), as a number of its kind. PostgreSQL takes more, a `bigint`
 compared with a `numeric`, any value assigned to a `text` column, which hides a mix-up a type
 would catch. `{:accept :postgresql}` types an argument with all of it; assigned or cast, a number
-is held to a number column's range (a fraction going to an integer type once PostgreSQL rounds it):
+is held to a number column's range (a fraction going to an integer type to the range half a unit
+wider, as PostgreSQL rounds it):
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:accept :postgresql})
@@ -146,8 +147,8 @@ by what your application sends: pgjdbc sends a `Long` as `bigint`, a `String` as
 refuses a keyword unless a `SettableParameter` extension of yours sends it. `:write` lists it,
 rows of `[schema type]`: the values, and the type (a name or alias of [types.md](types.md)) they
 reach PostgreSQL as. `h/pgjdbc-write` gives pgjdbc's rows, the default; build yours from it as
-a vector (`conj` onto a seq would put a row first): of rows of the same kind, the first one's
-schema is the one a type keeps:
+a vector (`conj` onto a seq would put a row first): where rows of the same kind (two `:string`
+rows) both reach an argument, it takes the first one's schema, after the column's own values:
 
 ```clojure
 (h/pgjdbc-write)
@@ -197,8 +198,8 @@ matches no row.
 ;; => {:id [:int #:pg{:type "bigint"}], :nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]}
 ```
 
-A comparison with NULL is never true (it matches no row), so `:?id` above does not take nil. To take nil, pass
-`{:compare :lenient}`:
+A comparison with NULL is never true (it matches no row), so `:?id` above does not take nil.
+To take nil, pass `{:compare :lenient}`:
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:compare :lenient})
@@ -225,10 +226,11 @@ key is required, as `sql/format` refuses a missing one:
 Where your code passes a whole row, a map built at run time for `:values` or `:set`,
 `h/insert-schema` and `h/update-schema` type it: each column as an argument assigned to it (what
 `:write` sends, the column's range), the columns the database writes left out, those it may fill
-optional (every one, for `:set`; HoneySQL writes an empty `:set` as no SQL, so check it has a
-key), keyed by the column's name without a namespace, as HoneySQL writes it (kebab-cased under
+optional (every one, for `:set`; HoneySQL writes an empty `:set` as `SET` with nothing after it,
+which PostgreSQL refuses, so check it has a key), keyed by the column's name without a namespace, as HoneySQL writes it (kebab-cased under
 `:kebab? true`). The table's CHECKs across columns are not in it; validate with the registry's
-insert schema (`:pg.public.users/insert`) too where they matter. Validate with the registry:
+insert schema (`:pg.public.users/insert`) too where they matter. Validate it under the registry
+(`{:registry registry}`):
 
 ```clojure
 (m/validate (h/insert-schema registry :users) {:email "ann@example.com" :group_id 1} {:registry registry})
