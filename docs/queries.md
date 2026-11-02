@@ -124,8 +124,9 @@ keyed as in `sql/format`'s `:params`:
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
-Where its uses type an argument differently, a comparison wins (the first in the query), then
-`:limit` / `:offset`, a cast, an assignment.
+Where its uses type an argument differently, the first statement wins (an enclosing one before
+its subqueries), and within it a comparison (the first), then `:limit` / `:offset`, a cast, an
+assignment.
 
 A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
 matches no row.
