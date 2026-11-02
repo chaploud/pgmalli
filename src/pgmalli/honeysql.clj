@@ -1675,7 +1675,7 @@
 (defn- written-row
   "The [:map ...] of the derived schema (\"insert\", \"update\") of the table row name: each column
    typed as an argument assigned to it, optional as the derived schema has it, keyed by its
-   name as HoneySQL writes it (:kebab? and :lower? as next.jdbc's builders read it back); one
+   name as HoneySQL writes it back to the column (its _ as - under :kebab?); one
    the database may fill takes :default too, and one it writes :default alone."
   [registry name derived what opts]
   (options! registry opts)
@@ -1698,7 +1698,8 @@
                        (error/fail! :pgmalli.error/unknown-schema
                                     (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
                                     {:given dn})))
-          key #(jdbc/row-key nil (clojure.core/name %) (assoc opts :qualified? false))
+          ;; HoneySQL writes a key's - as _ and nothing else back: :b-1 is b_1, so b1 stays :b1
+          key #(keyword (cond-> (clojure.core/name %) (:kebab? opts) (str/replace "_" "-")))
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))]
       (into [:map {:closed true}]

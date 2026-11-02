@@ -181,7 +181,8 @@ key is required, as `sql/format` refuses a missing one:
 Where your code passes a whole row, a map built at run time for `:values` or `:set`,
 `h/insert-schema` and `h/update-schema` type it. Each column is typed as an argument assigned to
 it (what `:write` sends, held to the column's range) and keyed by its name without a namespace,
-as HoneySQL writes it (kebab-cased under `:kebab? true`). A column the database may fill is
+as HoneySQL writes it back to the column (its `_` as `-` under `:kebab? true`: `:address-line1`
+for `address_line1`). A column the database may fill is
 optional and takes HoneySQL's `:default` too; one it writes (generated, identity ALWAYS) takes
 `:default` alone. In `h/update-schema` every column is optional. HoneySQL writes an empty `:set`
 as `SET` with nothing after it, which PostgreSQL refuses, so check that the row has a key. The

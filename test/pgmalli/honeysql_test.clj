@@ -835,6 +835,9 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes its row schema :pg.sample/users" (h/insert-schema registry :pg.sample.users/insert)))
     (is (= [:born :closed-at :group-id] (take 3 (map first (drop 2 (h/insert-schema registry :pg.sample/users {:schema "sample" :kebab? true})))))
         "keyed as HoneySQL writes a column, kebab-cased as next.jdbc reads it back")
+    (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line1 :string]]}})]
+      (is (= [:address-line1] (map first (drop 2 (h/insert-schema reg :t {:kebab? true}))))
+          "HoneySQL writes :address-line1 as address_line1, :address-line-1 as address_line_1"))
     (is (= v (h/insert-schema registry :users {:schema "sample"}) (h/insert-schema registry "users" {:schema "sample"})
            (h/insert-schema registry :sample.users) (h/insert-schema registry :sample/users) (h/insert-schema registry "sample.users"))
         "a table as HoneySQL names it, in :schema")
