@@ -81,7 +81,8 @@
   (boolean (some #(:string (shape/value-classes %)) (shape/alternatives sch))))
 
 (defn- array-type-name
-  "\"x[]\" for an array type of an element type types knows (by a name or an alias), by its name."
+  "\"varchar[]\" as \"character varying[]\": an array type named by an element type types knows
+   (a name or an alias), by that type's name; nil otherwise."
   [t]
   (when-let [[_ e] (and (string? t) (re-matches #"(.+)\[\]" t))]
     (some-> (types/entry e) :name (str "[]"))))
@@ -98,11 +99,13 @@
         ;; pgjdbc's values; another was never an option, and the suggestion leaves it out
         stringtype (#{:varchar :unspecified} given-stringtype)
         keyword-row " is a row [:keyword :unknown] where a keyword goes untyped"
+        stringtype-line (cond (= :varchar stringtype) ":stringtype :varchar is pgjdbc's default; leave it out"
+                              (and (nil? stringtype) (some? given-stringtype))
+                              (str ":stringtype " (pr-str given-stringtype) " was never an option; pgjdbc's is :varchar or :unspecified"))
         call (if (= :unspecified stringtype) (list 'h/pgjdbc-write {:stringtype stringtype}) '(h/pgjdbc-write))
         said (concat
-              (cond (= :varchar stringtype) [[":stringtype :varchar is pgjdbc's default; leave it out"]]
-                    stringtype [[(str ":stringtype " (pr-str stringtype) " is (h/pgjdbc-write {:stringtype " (pr-str stringtype) "})")]]
-                    (some? given-stringtype) [[(str ":stringtype " (pr-str given-stringtype) " was never an option; pgjdbc's is :varchar or :unspecified")]])
+              (cond (= :unspecified stringtype) [[":stringtype :unspecified is (h/pgjdbc-write {:stringtype :unspecified})"]]
+                    stringtype-line [[stringtype-line]])
               (when-let [kinds (:enum m)]
                 [[(str ":enum " (pr-str kinds) (if (some #{:keyword} kinds) keyword-row " needs no row")
                        "; a column's labels stay its own")
@@ -129,8 +132,7 @@
     (if (sequential? write)
       ;; :write is rows already: :stringtype is the type of its string rows
       [[(cond (= :unspecified stringtype) ":stringtype :unspecified sends :write's varchar string rows untyped (:unknown)"
-              (some? stringtype) (str ":stringtype " (pr-str stringtype) " is pgjdbc's default; leave it out")
-              (some? given-stringtype) (str ":stringtype " (pr-str given-stringtype) " was never an option; pgjdbc's is :varchar or :unspecified")
+              stringtype-line stringtype-line
               :else ":stringtype nil is no option; leave it out")]
        (let [rows (vec (for [[sch t :as row] write]
                          (if (and (= :unspecified stringtype) (vector? row) (string? t) (= "character varying" (:name (types/entry t)))
@@ -164,7 +166,7 @@
 (defn options!
   "opts when pgmalli.honeysql takes them: their keys and values, :write a sequence of [schema
    type] rows, each type one types knows (a name or an alias) or :unknown, a collection row's
-   an array type or :unknown, each schema one registry reads (a malli registry; nil when the caller has checked
+   type an array of one (\"bigint[]\") or :unknown, each schema one registry reads (a malli registry; nil when the caller has checked
    them); an error naming what it does not, with the one meant or, for an option of pgmalli
    0.3, what it is now."
   [opts registry]
@@ -199,12 +201,16 @@
                    row)
             (element-row? row) nil
             (or (str/ends-with? t "[]") (str/starts-with? t "_"))
-            (fail! (str what ": an array goes as a collection of its elements, " (pr-str [[:vector :pgmalli/element] :unknown])) row)
+            (fail! (str what ": an array goes as a collection of its elements, "
+                        (pr-str [[(if (collection? s) (shape/head s) :vector) :pgmalli/element] (or (array-type-name t) :unknown)]))
+                   row)
             (not (or (= :unknown t) (types/entry t)))
             (fail! (str what ": " (pr-str t) " is no type pgmalli knows (docs/types.md)"
                         (if-let [suggest (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types))]
                           (error/did-you-mean (pr-str suggest))
-                          (str "; an enum's or a domain's value goes untyped: " (pr-str [s :unknown]))))
+                          (if (sends-string? s)
+                            "; a String goes as varchar, which an enum takes only cast, or with every String untyped under (h/pgjdbc-write {:stringtype :unspecified})"
+                            (str "; an enum's or a domain's value an extension sends untyped is a row " (pr-str [s :unknown])))))
                    row)
             registry
             (try (m/schema (clojure.walk/postwalk-replace {:pgmalli/element :any} s) {:registry registry})
@@ -293,10 +299,20 @@
               :else (driver-type schema opts read-type)))))
 
 (defn array-type
-  "An array argument of elements t: the collections :write's rows with :pgmalli/element send,
-   t in its place ([[:sequential :pgmalli/element] :unknown]); :any without one."
-  [t opts]
-  (let [alts (for [[s] (write-rows opts true)] (clojure.walk/postwalk-replace {:pgmalli/element t} s))]
+  "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
+   column; :unnest, unnest(?) assigned): the collections :write's rows with :pgmalli/element
+   send, t in its place ([[:sequential :pgmalli/element] :unknown]), of those PostgreSQL takes
+   there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
+   element type t's takes (accept/accepts?); :any without one."
+  [t opts use]
+  (let [p (some #(when (and (vector? %) (map? (second %))) (:pg/type (second %))) (shape/alternatives t))
+        elem (some-> p types/entry :name)
+        takes? (fn [sent]
+                 (if (= :unknown sent)
+                   (not= :unnest use)
+                   (or (not (and elem (accept/known? elem)))
+                       (accept/accepts? elem (subs sent 0 (- (count sent) 2)) (if (= :compare use) :compare :assign)))))
+        alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)] (clojure.walk/postwalk-replace {:pgmalli/element t} s)))]
     (shape/either alts :any)))
 
 (defn write-type
@@ -306,7 +322,7 @@
    where read-type has the driver's object (:any)."
   [schema opts]
   (if (array-column? schema)
-    (array-type (write-type (last schema) opts) opts)
+    (array-type (write-type (last schema) opts) opts :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
           n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
           alts (concat (when-not (= :any (shape/head t)) [t])

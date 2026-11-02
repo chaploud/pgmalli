@@ -509,7 +509,7 @@
             :m [:enum {:pg/type "mood"} "happy" "sad"]
             :s [:sequential [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
             :n [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
-           (h/arg-types registry q (apply sends opts (collections :sequential))))
+           (h/arg-types registry q (sends opts [[:sequential :pgmalli/element] "integer[]"])))
         "by position: an argument takes its column's type, an unnest one an array of it")
     (is (= [] (h/check registry q (dissoc opts :write))))
     (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
@@ -628,7 +628,7 @@
                     [[[:int "bigint"] [[:string :keyword] :enum]] #"row 1 .*: a type is a name of docs/types.md"]
                     [[[:pgmalli/element :unknown]] #":pgmalli/element goes in a collection"]
                     [[[[:maybe :pgmalli/element] :unknown]] #":pgmalli/element goes in a collection"]
-                    [[[:keyword "user_status"]] #"an enum's or a domain's value goes untyped: \[:keyword :unknown\]"]
+                    [[[:keyword "user_status"]] #"an enum's or a domain's value an extension sends untyped is a row \[:keyword :unknown\]"]
                     [[[:int :int8]] #"a string: \[:int \"int8\"\]"]
                     [[["int8" :int]] #"a row is \[schema type\]: \[:int \"int8\"\]"]
                     [[[[:vector :int] "bigint[]"]] #"an array goes as a collection of its elements"]
@@ -1592,11 +1592,22 @@
     (is (= {:stringtype :unspecified} (:given (ex-data (msg {:write [[:string "text"]] :stringtype :unspecified})))))
     (is (re-find #"All told, :write is \(h/pgjdbc-write\) " (ex-message (msg {:write {"mood" :string}}))))))
 
+(deftest a-collection-row-goes-where-postgresql-takes-its-array
+  (let [unnest {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
+        any {:select [:id] :from [:users] :where [:= :score [:any :?xs]]}
+        xs #(:xs (h/arg-types registry %1 (sends {:schema "sample"} [[:sequential :pgmalli/element] %2])))]
+    (is (= :any (xs unnest :unknown)) "unnest(unknown) is ambiguous")
+    (is (= :any (xs unnest "text[]")) "a text is no integer, assigned")
+    (is (not= :any (xs unnest "bigint[]")) "a bigint is assigned to an integer")
+    (is (not= :any (xs any :unknown)) "= ANY types an untyped array from the column")
+    (is (= :any (xs any "text[]")) "integer = text has no operator")))
+
 (deftest a-row-schema-keys-as-each-format-writes-it-back
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line1 :string]]}})
         keys #(map first (drop 2 (h/insert-schema reg :t (assoc % :kebab? true))))]
     (is (= [:address-line1] (keys {:format {:quoted true :quoted-snake true}})) ":quoted-snake writes - back as _")
-    (is (= [:address_line1] (keys {:format {:dialect :ansi}})) "a dialect quotes names"))
+    (is (= [:address_line1] (keys {:format {:dialect :ansi}})) "a dialect quotes names")
+    (is (= [:address_line1] (keys {:format {:quoted-always #"^address_line1$"}})) ":quoted-always quotes a name as it is"))
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:MixedCase :int]]}})
         keys #(map first (drop 2 (h/insert-schema reg :t %)))]
     (is (= ["MixedCase"] (keys {})) "unquoted, only a string reaches a column with capitals")

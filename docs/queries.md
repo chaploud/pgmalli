@@ -184,16 +184,17 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 it (what `:write` sends, held to the column's range) and keyed by its name without a namespace,
 as HoneySQL writes it back to the column (its `_` as `-` under `:kebab? true` where the format
 leaves names unquoted or under `:quoted-snake`: `:address-line1` for `address_line1`; a column
-with capitals by a string where names are unquoted, as PostgreSQL folds a keyword's to lower case). A column the database may fill is
+with capitals by a string where names are unquoted, as PostgreSQL folds an unquoted name to lower
+case and HoneySQL quotes a string key). A column the database may fill is
 optional and takes HoneySQL's `:default` too; one it writes (generated, identity ALWAYS) takes
 `:default` alone. In `h/update-schema` every column is optional. They type values: a HoneySQL
-expression other than `:default` (`[:cast "closed" :user_status]`, `[:now]`) is no value of
-them, and under pgjdbc's default an enum column's label as a String is one PostgreSQL refuses
-(varchar), as `h/check` says of a query. HoneySQL writes an empty `:set`
+expression other than `:default` (`[:cast "closed" :user_status]`, `[:now]`) is not one. Under
+pgjdbc's default they still take an enum column's label as a String, which PostgreSQL refuses
+(it goes as varchar), as `h/check` reports of a query. HoneySQL writes an empty `:set`
 as `SET` with nothing after it, which PostgreSQL refuses, so check that the row has a key. Validate it under the registry
 (`{:registry registry}`); the table's CHECKs across columns are not in it, so where they matter
-validate an inserted row with `:pg.public.users/insert` too (an UPDATE's hold on the updated row,
-which the columns sent do not show):
+validate an inserted row with `:pg.public.users/insert` too. An UPDATE's `:set` cannot be checked
+this way: a CHECK applies to the whole updated row, and `:set` carries only some of its columns:
 
 ```clojure
 (m/validate (h/insert-schema registry :users) {:email "ann@example.com" :group_id 1} {:registry registry})
@@ -260,7 +261,7 @@ of exactly its type (`[[:map-of :keyword :any] "jsonb"]`; under `:accept :postgr
 what PostgreSQL takes there); `:any` without one. An array argument
 takes the rows with `:pgmalli/element` in a collection (`:sequential`, `:vector`, `:set`,
 `:pg/array`), the element's type in its place; such a row's type is the array type it goes as
-(`"bigint[]"`), or `:unknown`. Compared (`[:= :id [:any :?ids]]`), PostgreSQL types an untyped
+(`"bigint[]"`), or `:unknown`; an argument takes the rows PostgreSQL takes where it goes. Compared (`[:= :id [:any :?ids]]`), PostgreSQL types an untyped
 array from the column and reads each element as the column's type, so `:accept` does not widen
 an element. `unnest` takes a typed array alone, each element assigned to the column. Without
 such a row an array argument is `:any`.
