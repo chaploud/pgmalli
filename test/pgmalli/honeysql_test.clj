@@ -401,6 +401,47 @@
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
+(deftest a-write-without-returning-returns-its-update-count
+  (let [counted [:map [:next.jdbc/update-count :int]]]
+    (doseq [q [{:insert-into :groups :values [{:id 1 :name "a"}]}
+               {:insert-into :groups :values [{:id 1 :name "a"}] :on-conflict [:id] :do-nothing true}
+               {:update :users :set {:nick "a"} :where [:= :id 1]}
+               {:delete-from :users :where [:= :id 1]}
+               {:with [[:old {:select [:id] :from [:users]}]] :delete-from :users :where [:in :id {:select [:id] :from [:old]}]}
+               {:truncate :users}]]
+      (is (= counted (h/row-schema registry q opts)) (pr-str q))
+      (is (= counted (h/row-schema registry q {:schema "sample"})) "whatever the builder: next.jdbc builds this map itself")
+      (is (= [:=> [:cat] counted] (h/query-schema registry [] q (assoc opts :result :one))) "execute-one! returns it, never nil"))
+    (is (= [:map [:id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
+           (h/row-schema registry {:delete-from :groups :returning [:id]} opts)))
+    (is (= [:map [:id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]] [:name [:string {:pg/type "text"}]]]
+           (h/row-schema registry {:delete-from :groups} (assoc opts :return-keys true)))
+        "pgjdbc adds RETURNING * under :return-keys true")
+    (is (= [:map [:name [:string {:pg/type "text"}]]]
+           (h/row-schema registry {:update :groups :set {:name "b"}} (assoc opts :return-keys ["name"]))))
+    (is (= [:=> [:cat] [:maybe [:map [:name [:string {:pg/type "text"}]]]]]
+           (h/query-schema registry [] {:delete-from :groups} (assoc opts :return-keys ["name"] :result :one)))
+        "a write returning rows may return none")
+    (is (nil? (h/row-schema registry {:truncate :users} (assoc opts :return-keys true)))
+        "next.jdbc reads TRUNCATE's generated keys, which have no column")
+    (is (= (h/row-schema registry {:update :groups :set {:name "b"}} (assoc opts :return-keys ["name"]))
+           (h/row-schema registry {:update :groups :set {:name "b"}} (assoc opts :return-keys [:groups/name])))
+        "a keyword names its column, as next.jdbc takes it")
+    (is (= [:map [:id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
+           (h/row-schema registry {:delete-from :groups :returning [:id]} (assoc opts :return-keys ["name"])))
+        "pgjdbc adds no RETURNING to a statement that has one")
+    (is (= (h/row-schema registry {:select [:id] :from [:users]} opts)
+           (h/row-schema registry {:select [:id] :from [:users]} (assoc opts :return-keys true))))
+    (is (nil? (h/row-schema registry '{:delete-from :users :returning ?cols} opts)) "a RETURNING code builds may return rows")
+    (is (= [{:kind :unknown-column :column :nmae :did-you-mean [:name]}]
+           (h/check registry {:delete-from :groups} (assoc opts :return-keys ["nmae"])))
+        "check reads the RETURNING :return-keys adds")
+    (is (= [{:kind :unknown-column :column :group-id :did-you-mean [:group_id]}]
+           (h/check registry {:update :users :set {:nick "a"}} (assoc opts :return-keys [:group-id])))
+        "pgjdbc sends a :return-keys name quoted, as written")
+    (is (= [] (h/check registry {:update :users :set {:nick "a"} :returning [:id]} (assoc opts :return-keys [:group-id])))
+        "an explicit RETURNING leaves :return-keys unused")))
+
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
                                :do-update-set {:fields [:name] :where [:<= :groups.name :EXCLUDED.name]} :returning [:id]} opts))
@@ -412,7 +453,7 @@
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:name :excluded.name}} opts))))
 
 (deftest a-misspelt-option-is-an-error
-  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:write {:array [:vectr]}} {:compare :loose} {:result :first}]]
+  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:write {:array [:vectr]}} {:compare :loose} {:result :first} {:return-keys []} {:return-keys "id"}]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/arg-types registry {:select [:id] :from [:users]} (merge opts o))) (pr-str o))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/check registry {:select [:id] :from [:users]} (merge opts o))) (pr-str o))))
 

@@ -41,8 +41,10 @@
 
 (deftest a-broken-query-returns-data-or-throws-ex-info
   (let [opts {:schema "sample"}
+        keys-opts (assoc opts :return-keys ["id"])
         fs {'check #(h/check registry % opts) 'arg-types #(h/arg-types registry % opts)
-            'row-schema #(h/row-schema registry % opts) 'query-schema #(h/query-schema registry [:x] % opts)}
+            'row-schema #(h/row-schema registry % opts) 'query-schema #(h/query-schema registry [:x] % opts)
+            'check+return-keys #(h/check registry % keys-opts) 'row-schema+return-keys #(h/row-schema registry % keys-opts)}
         seed (ts/seed)
         result (tc/quick-check 1500 (prop/for-all [q broken-query] (not-any? #(crash % q) (vals fs))) :seed seed)]
     (is (:pass? result)

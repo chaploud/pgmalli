@@ -61,9 +61,10 @@
 
 (def ^:private set-operation-keys [:union :union-all :intersect :except :except-all])
 (def ^:private with-keys [:with :with-recursive])
+(def ^:private write-keys [:insert-into :update :delete-from :truncate])
 (def ^:private statement-keys
-  (into #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top
-          :insert-into :update :delete-from :truncate} set-operation-keys))
+  (into #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top}
+        (concat write-keys set-operation-keys)))
 (def ^:private default-schema "public")
 (def ^:private from-keys [:from :using :cross-join])
 (def ^:private join-keys
@@ -95,7 +96,7 @@
    tables, whose columns the data then does not show."
   [stmt]
   (boolean (or (contains? stmt :join-by)
-               (some seq? (concat (keep stmt (concat from-keys join-keys [:update :delete-from :insert-into :truncate]))
+               (some seq? (concat (keep stmt (concat from-keys join-keys write-keys))
                                   (from-items stmt from-keys)
                                   (map second (join-items stmt))))
                ;; an :insert-into target insert-parts finds no table in
@@ -1023,6 +1024,32 @@
   [stmt]
   (some #(let [w (get stmt %)] (and (some? w) (or (not (vector? w)) (some (comp nil? cte-name) w)))) with-keys))
 
+(def ^:private update-count
+  "The row next.jdbc returns for a statement that returns none: the driver's update count."
+  [:map [:next.jdbc/update-count :int]])
+
+(defn- sent
+  "stmt as pgjdbc sends it; nil when next.jdbc returns the update count instead of rows. A write
+   with no RETURNING gets RETURNING * under :return-keys true, RETURNING the columns named under a
+   vector of them, but for TRUNCATE, whose generated keys have no column."
+  [stmt {:keys [return-keys]}]
+  (cond (or (not (map? stmt)) (contains? stmt :returning) (not-any? #(contains? stmt %) write-keys)) stmt
+        (not return-keys) nil
+        (contains? stmt :truncate) stmt
+        :else (assoc stmt :returning (if (true? return-keys) [:*] (mapv #(keyword (name %)) return-keys)))))
+
+(defn- return-key-problems
+  "pgjdbc quotes the names of :return-keys as written (its quoteReturningIdentifiers, true by
+   default): one that is a column of the target only folded (:group-id for group_id) is none."
+  [registry stmt scopes {:keys [return-keys schema] :or {schema default-schema} :as opts}]
+  (when (and (sequential? return-keys) (map? stmt) (not= stmt (sent stmt opts)))
+    (let [[_ alias] (some-> (first (write-targets stmt)) (table-ref schema))
+          {:keys [table opaque?]} (get (first (chain scopes)) alias)
+          cs (when (and table (not opaque?)) (table-columns registry table))]
+      (for [k return-keys :let [n (name k)]
+            :when (and cs (not (contains? cs n)) (contains? cs (folded n)))]
+        {:kind :unknown-column :column (keyword n) :did-you-mean [(keyword (folded n))]}))))
+
 (defn check
   "[problem ...] of a HoneySQL query against the registry; [] when there are none.
 
@@ -1039,11 +1066,13 @@
    (jdbc/options! opts)
    (query! body)
    (let [registry (reading registry)
+         sent-body (or (sent body opts) body)
+         chains (statement-chains registry sent-body opts)
          found (mapcat (fn [[stmt scopes path]]
                          ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
                          (cond->> (problems registry stmt scopes opts) (seq path) (map #(assoc % :in (vec path)))))
-                       (statement-chains registry body opts))]
-     (vec (concat found (unread-clauses body))))))
+                       chains)]
+     (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body))))))
 
 (defn tables
   "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
@@ -1330,9 +1359,9 @@
     (select-row registry stmt (get chains path) opts)))
 
 (defn row-schema
-  "The [:map ...] of one row a query returns, as next.jdbc builds it; nil when a selected
-   column cannot be resolved (check says which), or a whole row is selected ({:select [:t]}),
-   which next.jdbc reads as one PGobject.
+  "The [:map ...] of one row a query returns, as next.jdbc builds it (for a write with no
+   RETURNING, its update count); nil when that cannot be told, as
+   docs/queries.md#the-row-a-query-returns lists.
 
    Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
    operation's row is its first member's names. Under qualified keys, a column next.jdbc keys
@@ -1343,7 +1372,10 @@
   ([registry body opts]
    (jdbc/options! opts)
    (query! body)
-   (when (map? body) (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts))))
+   (when (map? body)
+     (if-let [body (sent body opts)]
+       (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts)
+       update-count))))
 
 (defn params-schema
   "The [:map ...] of sql/format's :params for a query: every named argument, typed as arg-types
@@ -1365,8 +1397,9 @@
 
    The problems of check, and a query argument args lack (:missing-arg), are the schema's
    :pgmalli/problems property, not an error: the vector is then one longer, so read its parts
-   with m/children. {:result :one} makes the return [:maybe row]. Options:
-   docs/queries.md#options. Throws when args are not keywords or symbols."
+   with m/children. The return is what execute! returns on a datasource or connection, under
+   {:result :one} what execute-one! returns. Options: docs/queries.md#options. Throws when args are
+   not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)
@@ -1382,7 +1415,9 @@
          row (row-schema registry body opts)]
      (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
            [(into [:cat] (map #(get types % :any)) args)
-            (cond (nil? row) :any (= :one result) [:maybe row] :else [:sequential row])]))))
+            (cond (nil? row) :any
+                  (= :one result) (if (= update-count row) row [:maybe row])
+                  :else [:sequential row])]))))
 
 ;;; problems as text
 

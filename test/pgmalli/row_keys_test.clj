@@ -76,6 +76,33 @@
             (pr-str builder q))
         (is (m/validate schema row) (pr-str builder q row))))))
 
+(deftest a-writes-row-is-what-next-jdbc-returns
+  (when *db*
+    (exec-sql! "CREATE TABLE tags (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL);")
+    (let [{:keys [host port db user password]} *db*
+          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+          registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+      (doseq [q [{:insert-into :tags :values [{:name "a"} {:name "b"}]}
+                 {:insert-into :tags :values [{:name "a"}] :on-conflict [:id] :do-nothing true}
+                 {:update :tags :set {:name "c"} :where [:= :name "a"]}
+                 {:update :tags :set {:name "c"} :where [:= :name "nothing"]}
+                 {:with [[:old {:select [:id] :from [:tags]}]] :delete-from :tags :where [:in :id {:select [:id] :from [:old]}]}
+                 {:delete-from :tags :returning [:id]}
+                 {:truncate :tags}]
+              return-keys [nil true ["name"]]
+              builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
+              :let [jdbc-opts (cond-> {:builder-fn @(requiring-resolve builder)} return-keys (assoc :return-keys return-keys))
+                    opts (cond-> (pgmalli/read-options builder) return-keys (assoc :return-keys return-keys))
+                    [_ row] (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))
+                    [_ one] (m/children (m/schema (h/query-schema registry [] q (assoc opts :result :one)) {:registry registry}))]]
+        (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
+        (let [rows (jdbc/execute! ds (sql/format q) jdbc-opts)]
+          (is (m/validate row rows) (pr-str builder return-keys q))
+          (when (and return-keys (:insert-into q) (not (:on-conflict q)))
+            (is (seq rows) "an INSERT under :return-keys returns its rows")))
+        (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
+        (is (m/validate one (jdbc/execute-one! ds (sql/format q) jdbc-opts)) (pr-str :one builder return-keys q))))))
+
 (deftest pg-array-is-what-the-driver-takes
   (when *db*
     (let [{:keys [host port db user password]} *db*
