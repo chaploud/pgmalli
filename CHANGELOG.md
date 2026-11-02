@@ -5,10 +5,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ## Unreleased
 
-* `h/row-schema` types a select expression of a closed set of forms, with its nullability: a
-  literal, a cast, `count` (never NULL), `sum`, `avg`, `min`, `max`, `coalesce`, a comparison,
-  `AND` / `OR` / `NOT`, `EXISTS`, `IS`, the clock's values and `->>`. Any other expression is
-  nullable `:any`, as every expression was.
+* `h/row-schema` types a select expression of the forms
+  [docs/queries.md](docs/queries.md#the-row-a-query-returns) lists, with its nullability. Any
+  other is nullable `:any`, as every expression was.
 
 * `h/row-schema` gives a write with no RETURNING (INSERT, UPDATE, DELETE, TRUNCATE, under
   WITH or ON CONFLICT too) the row next.jdbc returns for it,

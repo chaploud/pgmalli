@@ -56,8 +56,8 @@ A clause pgmalli does not read is reported rather than passed over:
 ```
 
 The columns of a CTE, a subquery, a table function, or a `pg_catalog` table the registry
-lacks exist but have no type. An expression (`[:count :*]`) has none either. Comparisons with
-them are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
+lacks exist but have no type. Comparisons with them, or with an expression (`[:count :*]`),
+are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
 
@@ -163,9 +163,10 @@ names, as unqualified keys:
 ;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
 ```
 
-An expression has its type and nullability for these forms: a literal, a cast, `count`, `sum`,
-`avg`, `min`, `max`, `coalesce`, a comparison, `AND` / `OR` / `NOT`, `EXISTS`, `IS`, the
-clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
+An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
+by its class), a cast to a built-in type, `count`, `sum`, `avg`, `min`, `max`, `coalesce` of
+one type, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
+`IS`), the clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
 
 ```clojure
 (h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]

@@ -27,8 +27,11 @@
    {:select [[[:sum :id] :s] [[:avg :id] :a] [[:min :nick] :mn] [[:count :nick] :c] [[:coalesce :nick "x"] :cn]
              [[:= :id 1] :eq] [[:= :nick "a"] :eqn] [[:exists {:select [1] :from [:posts]}] :ex] [[:is :nick nil] :isn]
              [[:and true [:= :id 1]] :both] [[:now] :t] [:current_date] [:localtimestamp] ["s" :lit] [1 :one] [1.5 :f] [true :b]
-             [[:cast :id :text] :idt] [[:cast :id :numeric] :idn] [[:cast :id :double-precision] :idd]]
+             [[:cast :id :text] :idt] [[:cast :id :numeric] :idn] [[:cast :id :double-precision] :idd]
+             [(int 1) :int] [(float 1.5) :real] [1.5M :dec] [1N :bigint] [[:coalesce :id 1.5] :mixed]
+             [:current_timestamp] [:current_time] [:localtime] [[:->> [:cast "{}" :jsonb] "k"] :k]]
     :from [:users] :group-by [:id :nick]}
+   {:select [[[:sum :id] :s] [[:avg :id] :a] [[:max :title] :m]] :from [:posts]}
    {:select [[[:sum :n] :s] [[:avg :n] :a] [[:max :n] :m] [[:count :*] :c]] :from [:likes] :where [:= :id -1]}
    {:select [:u.id :g.name :g/*] :from [[:users :u]] :left-join [[:groups :g] [:= :g.id -1]]}
    {:select [:u.nick :g.id] :from [[:users :u]] :right-join [[:groups :g] [:= :g.id -1]]}

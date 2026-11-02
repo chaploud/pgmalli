@@ -266,7 +266,7 @@
       (is (m/validate row {:id 1 :g 2 :closed_at (java.util.Date.)}) "and no registry is needed"))
     (is (= [:=> [:cat [:int {:pg/type "bigint"}] :any] [:sequential [:map [:n [:int {:pg/type "bigint"}]]]]]
            (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
-        "an expression under an alias is :any; a symbol used nowhere is :any")
+        "a symbol used nowhere is :any")
     (is (= [:sequential [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
            (last (h/query-schema registry '[id] '{:select [:id] :from [:users] :where [:= :id id]} opts))))))
 
@@ -459,6 +459,18 @@
            (row [[[:= :id 1] :b] [[:= :nick "a"] :c]]))
         "a comparison is NULL where an operand may be")
     (is (= [:map [:u [:maybe :any]] [:p [:maybe :any]]] (row [[[:upper :nick] :u] [:?x :p]])) "other forms stay untyped")
+    (is (= [:map [:n [:maybe :any]]] (row [[[:coalesce :score 1.5] :n]]))
+        "a number is a typed parameter, which PostgreSQL resolves with the column's type")
+    (is (= [:map [:i [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]] [:f ['float? {:pg/type "real"}]] [:d [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
+           (row [[(int 1) :i] [(float 1.5) :f] [1.5M :d]]))
+        "pgjdbc types a parameter by its class")
+    (is (= [:map [:i [:maybe :any]] [:s [:string {:pg/type "text"}]]]
+           (h/row-schema registry {:select [[1 :i] ["s" :s]] :from [:users]} (assoc opts :format {:inline true})))
+        "an inlined number is typed by its text, which is not read here; an inlined string is text")
+    (is (= [:map [:s [:string {:pg/type "text"}]]] (h/row-schema registry {:select [["s" :s]] :from [:users]} (assoc opts :stringtype :unspecified))))
+    (is (= [:map [:b [:maybe :any]]] (row [[[(keyword "~") :id] :b]])) "~ alone is bitwise NOT")
+    (is (= [:map [:s [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]] (row [[[:sum :id] :s]]))
+        "sum of a bigint is a numeric")
     (is (= [:map [:mood [:maybe [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]] [:n [:maybe bigint]]]
            (h/row-schema registry {:select [:mood [[:count :*] :n]] :from [:users] :group-by [[:rollup :mood]]} opts))
         "ROLLUP adds rows whose columns are NULL")))

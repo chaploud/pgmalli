@@ -1281,72 +1281,63 @@
   (when-let [{n :name s :schema} (some-> t types/entry)]
     (if (vector? s) (into [(first s) (assoc (second s) :pg/type n)] (drop 2 s)) [s {:pg/type n}])))
 
-(def ^:private boolean-type {:schema (type-schema "boolean")})
+(def ^:private aggregate-types
+  "The type sum and avg give for their argument's."
+  {"sum" {"smallint" "bigint" "integer" "bigint" "bigint" "numeric" "numeric" "numeric"
+          "real" "real" "double precision" "double precision" "interval" "interval"}
+   "avg" {"smallint" "numeric" "integer" "numeric" "bigint" "numeric" "numeric" "numeric"
+          "real" "double precision" "double precision" "double precision" "interval" "interval"}})
 
-(def ^:private sum-types
-  "The type sum takes its argument's to, by the argument's :pg/type; avg's is numeric for an
-   integer, double precision for a real."
-  {"smallint" "bigint" "integer" "bigint" "bigint" "numeric" "numeric" "numeric"
-   "real" "real" "double precision" "double precision" "interval" "interval"})
+(def ^:private word-types
+  "The type of an SQL word, and of a function of no argument."
+  {:true "boolean" :false "boolean" :current_timestamp "timestamp with time zone" :current_date "date"
+   :current_time "time with time zone" :localtimestamp "timestamp without time zone"
+   :localtime "time without time zone" "now" "timestamp with time zone" "count" "bigint"})
 
-(def ^:private clock-types
-  {:now "timestamp with time zone" :current_timestamp "timestamp with time zone" :current_date "date"
-   :current_time "time with time zone" :localtimestamp "timestamp without time zone" :localtime "time without time zone"})
+(def ^:private parameter-types
+  "The type pgjdbc sends a parameter of each class as."
+  {Long "bigint" Integer "integer" Short "smallint" Double "double precision" Float "real"
+   BigDecimal "numeric" clojure.lang.BigInt "numeric" java.math.BigInteger "numeric" Boolean "boolean"})
 
 (def ^:private predicates
-  "Operators and special syntax that make a boolean, NULL when an operand is."
+  "Operators and special syntax that make a boolean, which may be NULL where an operand may be."
   (into #{} (map keyword)
         ["=" "<>" "not=" "!=" "<" ">" "<=" ">=" "and" "or" "not" "in" "not-in" "like" "not-like" "ilike"
          "not-ilike" "between" "not-between" "similar-to" "not-similar-to" "regexp" "regex" "~" "~*" "!~" "!~*"]))
 
-(declare expression-type)
-
-(defn- typed-args
-  "expression-type of each argument, nil for an argument it cannot tell."
-  [registry chain args opts]
-  (map #(expression-type registry chain % opts) args))
-
 (defn- expression-type
-  "{:schema column-schema :nullable? bool} of a select expression, from a closed set of forms:
-   a column, a literal, a cast, count, sum, avg, min, max, coalesce, a predicate, EXISTS, IS,
-   the clock's values and ->>; nil for any other, which stays :any."
-  [registry chain x opts]
-  (let [pg-type (fn [{s :schema}] (some-> s shape/non-null shape/column-props :pg/type))
+  "{:schema column-schema :nullable? bool} of a select expression of a form
+   docs/queries.md#the-row-a-query-returns lists; nil for another."
+  [registry chain x {:keys [stringtype format] :as opts}]
+  (let [canonical (fn [{s :schema}] (some-> s shape/column-props :pg/type (#(:name (types/entry %) %))))
         h (when (vector? x) (first x))
-        fname (or (shorthand-fn x) (some-> h (#(when (keyword? %) (folded (name %))))))
-        args (cond (shorthand-fn x) (map keyword (rest (str/split (subs (str x) 2) #"\."))) (vector? x) (rest x))]
+        fname (if (keyword? h) (folded (name h)) (shorthand-fn x))
+        ts (map #(expression-type registry chain % opts) (when (vector? x) (rest x)))
+        typed #(when % {:schema (type-schema %)})]
     (cond
-      ;; pgjdbc sends HoneySQL's parameters typed by their class
-      (string? x) {:schema (type-schema "character varying") :literal? true}
-      (boolean? x) (assoc boolean-type :literal? true)
-      (integer? x) {:schema (type-schema "bigint") :literal? true}
-      (float? x) {:schema (type-schema "double precision") :literal? true}
-      (#{:true :false} (sql-value x)) boolean-type
-      (clock-types (sql-value x)) {:schema (type-schema (clock-types (sql-value x)))}
-      (column-keyword? x) (when-let [{s :schema :keys [nullable? opaque?]} (resolve-column registry chain x)]
-                            (when (and s (not opaque?)) {:schema (shape/non-null s) :nullable? (boolean (or nullable? (maybe? s)))}))
-      (and (shorthand-fn x) (not= "count" fname) (not= "now" fname)) nil
-      (= "count" fname) {:schema (type-schema "bigint")}
-      (= "now" fname) (when (empty? args) {:schema (type-schema "timestamp with time zone")})
+      ;; HoneySQL sends a string or number as a parameter, unless :inline writes it into the SQL
+      (string? x) (assoc (typed (if (or (= :unspecified stringtype) (:inline format)) "text" "character varying")) :string? true)
+      (boolean? x) (typed "boolean")
+      (number? x) (when-not (:inline format) (typed (parameter-types (class x))))
+      (keyword? x) (or (typed (word-types (sql-value x)))
+                       (when (shorthand-fn x) (typed (word-types fname)))
+                       (when-let [{s :schema :keys [nullable? opaque?]} (when (column-keyword? x) (resolve-column registry chain x))]
+                         (when (and s (not opaque?)) {:schema (shape/non-null s) :nullable? (boolean (or nullable? (maybe? s)))})))
       (not (keyword? h)) nil
-      (= :cast h) (let [[_ v t] x
-                        s (when (keyword? t) (type-schema (str/replace (name t) "-" " ")))]
-                    (when s {:schema s :nullable? (:nullable? (expression-type registry chain v opts) true)}))
-      (#{:exists :not-exists :is :is-not :is-distinct-from :is-not-distinct-from} h) boolean-type
-      (predicates h) (assoc boolean-type :nullable? (not-every? #(and % (not (:nullable? %))) (typed-args registry chain args opts)))
-      (= :->> h) {:schema (type-schema "text") :nullable? true}
-      (#{"min" "max"} fname) (when-let [t (first (typed-args registry chain args opts))] {:schema (loose (:schema t)) :nullable? true})
-      (#{"sum" "avg"} fname) (when-let [in (some-> (first (typed-args registry chain args opts)) pg-type)]
-                               (when-let [out (if (= "sum" fname)
-                                                (sum-types in)
-                                                (get {"real" "double precision" "double precision" "double precision" "interval" "interval"}
-                                                     in (when (sum-types in) "numeric")))]
-                                 {:schema (type-schema out) :nullable? true}))
-      (= "coalesce" fname) (let [ts (typed-args registry chain args opts)
-                                 ;; a literal takes the type of the other arguments, as PostgreSQL resolves it
-                                 typed (remove :literal? ts)
-                                 typed (if (seq typed) typed ts)]
-                             (when (and (seq typed) (not-any? nil? typed) (apply = (map pg-type typed)))
+      (= :cast h) (let [[_ v t] x]
+                    (when-let [s (when (keyword? t) (type-schema (str/lower-case (str/replace (name t) "-" " "))))]
+                      {:schema s :nullable? (:nullable? (expression-type registry chain v opts) true)}))
+      (#{:exists :not-exists :is :is-not :is-distinct-from :is-not-distinct-from} h) (typed "boolean")
+      ;; one operand: ~ is bitwise NOT
+      (and (predicates h) (or (= :not h) (next ts))) (assoc (typed "boolean") :nullable? (not-every? #(and % (not (:nullable? %))) ts))
+      (= :->> h) (assoc (typed "text") :nullable? true)
+      (#{"now" "count"} fname) (typed (word-types fname))
+      (#{"min" "max"} fname) (when-let [t (first ts)] {:schema (loose (:schema t)) :nullable? true})
+      (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical)]) typed (assoc :nullable? true))
+      ;; a string takes the other arguments' type, as PostgreSQL resolves a varchar or unknown one
+      (= "coalesce" fname) (let [others (remove :string? ts)
+                                 typed (if (seq others) others ts)]
+                             (when (and (seq typed) (not-any? nil? typed) (apply = (map canonical typed)))
                                {:schema (cond-> (:schema (first typed)) (next ts) loose)
                                 :nullable? (not-any? #(and % (not (:nullable? %))) ts)})))))
 
@@ -1398,7 +1389,7 @@
                                (if (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
                                  (untold n)
                                  (let [{s :schema :keys [nullable?]} (expression-type registry chain (if alias (first item) (item-expression item)) opts)]
-                                   [(entry nil n s (or nullable? (nil? s)) nil)])))
+                                   [(entry nil n s nullable? nil)])))
                   (star? col) (star col)
                   :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
                           (let [label (if alias (alias-label alias opts) column)
