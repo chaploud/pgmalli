@@ -717,6 +717,25 @@
     (is (m/validate t :sad {:registry reg}))
     (is (not (m/validate t :glad {:registry reg})) "no keyword but a label")))
 
+(deftest a-numeric-domains-integer-is-held-to-its-checks-alone
+  (let [reg (pgmalli/registry {:registry {:pg.public/price [:and [:pg/numeric {:pg/type "numeric(10,2)" :precision 10 :scale 2}] [:>= 0M]]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:p [:ref {:pg/type "price"} :pg.public/price]]]}})
+        ok? #(m/validate %1 %2 {:registry reg})
+        p (:p (h/arg-types reg {:update :t :set {:p :?p}}))]
+    (is (ok? p 1) "PostgreSQL takes a bigint into a numeric domain")
+    (is (not (ok? p -1)))
+    (is (ok? (:x (h/arg-types reg {:select [[[:cast :?x :price] :p]]})) 1))))
+
+(deftest a-cast-cuts-a-string-to-its-length
+  (let [reg (pgmalli/registry {:registry {:pg.public/code3 [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code3"} :pg.public/code3]]]}})]
+    (is (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :code3] :c]]})) "abcd" {:registry reg}) "CAST('abcd' AS varchar(3)) is 'abc'")
+    (is (not (m/validate (:c (h/arg-types reg {:update :t :set {:c :?c}})) "abcd" {:registry reg})) "assigned, it is too long")))
+
+(deftest a-number-label-is-read-from-a-string-sent-untyped
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
+    (is (m/validate (:l (h/arg-types reg {:update :t :set {:l :?l}} {:accept :postgresql :write (h/pgjdbc-write {:stringtype :unspecified})})) "1" {:registry reg}))))
+
 (deftest a-registry-without-the-derived-schema-says-so
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry has no insert schema"
                         (h/insert-schema (merge (m/default-schemas) {:pg.public/t [:map {:pg/table "public.t"} [:id :int]]}) :pg.public/t))

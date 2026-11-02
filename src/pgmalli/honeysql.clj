@@ -18,6 +18,7 @@
    application sends (pgjdbc's by default). The functions take
    the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
+            [clojure.walk :as walk]
             malli.core
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.error :as error]
@@ -1247,7 +1248,10 @@
         a (cond (empty? bounds) a
                 (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
                 :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))]
-    (if (and (next kids) (not rounded?)) (into [:and a] (rest kids)) a)))
+    ;; the checks alone: a base of the column's own kind (decimal? of a numeric(p,s)) is no bound on a
+    (if (and (next kids) (not rounded?))
+      (let [checks (remove #(= (shape/kind %) (shape/kind base)) (rest kids))] (if (seq checks) (into [:and a] checks) a))
+      a)))
 
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
@@ -1261,7 +1265,13 @@
    number class sent; untyped own values, or of a type pgmalli.impl.accept does not answer for,
    are the type alone (:any under a cast)."
   [registry s context {:keys [accept] :as opts}]
-  (let [own (cond-> (driver-type registry jdbc/write-type s opts) (= :compare context) loose)
+  (let [own (cond-> (driver-type registry jdbc/write-type s opts)
+              (= :compare context) loose
+              ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a domain's checks hold after it
+              (= :cast context) (->> (walk/postwalk #(if (and (vector? %) (= :string (first %)) (map? (second %)))
+                                                       (let [p (dissoc (second %) :max :min :pg/max-length)]
+                                                         (if (empty? p) (into [:string] (drop 2 %)) (assoc % 1 p)))
+                                                       %))))
         t (slot-type registry s)
         takes? (if (or (= :cast context) (= :postgresql accept))
                  #(accept/accepts? t % context)
@@ -1284,6 +1294,8 @@
             [props labels] (if (map? (second e)) [(second e) (drop 2 e)] [nil (rest e)])
             kinds (set (map (comp shape/kind second) alts))
             as (fn [l] (concat (when (and (string? l) (some #(:keyword (shape/value-classes (second %))) alts)) [(keyword l)])
+                               ;; a number label read from a string sent untyped
+                               (when (and (number? l) (some #(:string (shape/value-classes (second %))) alts)) [(str l)])
                                (when (number? l)
                                  (concat (when (and (kinds :int) (== l (Math/rint (double l)))) [(long l)])
                                          (when (kinds 'decimal?) [(bigdec l)])
