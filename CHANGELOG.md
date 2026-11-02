@@ -10,7 +10,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `[:map [:next.jdbc/update-count :int]]`, where it gave nil; `h/query-schema` returned `:any`.
   Under `{:result :one}` that map is not `[:maybe ...]`: `execute-one!` returns it.
 * The `:return-keys` option says the write is sent with next.jdbc's `:return-keys`: its row is
-  then the table's (`true`) or the columns named, as pgjdbc adds RETURNING.
+  then the table's (`true`) or the columns named, as pgjdbc adds RETURNING; `h/check` reads that
+  RETURNING too. A function whose writes next.jdbc sends with `:return-keys`, passed to
+  `execute!` or set with `with-options`, passes the same `:return-keys` to `h/query-schema`.
 
 ## 0.3.2 (2026-10-30)
 

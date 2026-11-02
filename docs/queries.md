@@ -174,8 +174,8 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 when a whole row is selected (`{:select [:u] :from [[:users :u]]}`).
 
 A write with no RETURNING returns no row: next.jdbc returns the driver's update count in a map
-of its own. Under next.jdbc's `:return-keys`, pgjdbc adds `RETURNING *`, or RETURNING the
-columns named:
+of its own. Under next.jdbc's `:return-keys`, pgjdbc adds `RETURNING *` to an INSERT, UPDATE or
+DELETE, or RETURNING the columns named; a TRUNCATE then returns nothing, and `h/row-schema` nil:
 
 ```clojure
 (h/row-schema registry {:delete-from :posts :where [:= :author_id 1]})
@@ -211,12 +211,15 @@ take the same options map:
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
 | `:result :one` | `h/query-schema` only: the return is one row or nil (`execute-one!`); the update count's map is never nil |
-| `:return-keys true` or `["col" ...]` | the `:return-keys` you pass `execute!` or `execute-one!`: a write returns its rows, not its update count |
+| `:return-keys true` or `["col" ...]` | `h/check`, `h/row-schema` and `h/query-schema` only: the `:return-keys` next.jdbc sends the write with, passed to `execute!` or set with `with-options`; an INSERT, UPDATE or DELETE then returns its rows, not its update count |
 
 ## Function schemas
 
 `h/query-schema` combines `arg-types` and `row-schema` into `[:=> [:cat arg ...] [:sequential
-row]]`, the arguments in the function's order. The return is `:any` when `h/row-schema` gives
+row]]`, the arguments in the function's order. The return is what `execute!` returns on a datasource or
+connection (`execute-one!` under `{:result :one}`). A function returning anything else, such as
+what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns, needs its own return
+schema: on a prepared statement next.jdbc reads the generated keys, as under `:return-keys`. The return is `:any` when `h/row-schema` gives
 nil, under `{:result :one}` too. [README.md](../README.md#function-schemas-for-queries) puts
 it on a function and instruments it.
 

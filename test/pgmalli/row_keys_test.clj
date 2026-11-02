@@ -87,6 +87,7 @@
                  {:update :tags :set {:name "c"} :where [:= :name "a"]}
                  {:update :tags :set {:name "c"} :where [:= :name "nothing"]}
                  {:with [[:old {:select [:id] :from [:tags]}]] :delete-from :tags :where [:in :id {:select [:id] :from [:old]}]}
+                 {:delete-from :tags :returning [:id]}
                  {:truncate :tags}]
               return-keys [nil true ["name"]]
               builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
@@ -95,7 +96,10 @@
                     [_ row] (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))
                     [_ one] (m/children (m/schema (h/query-schema registry [] q (assoc opts :result :one)) {:registry registry}))]]
         (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
-        (is (m/validate row (jdbc/execute! ds (sql/format q) jdbc-opts)) (pr-str builder return-keys q))
+        (let [rows (jdbc/execute! ds (sql/format q) jdbc-opts)]
+          (is (m/validate row rows) (pr-str builder return-keys q))
+          (when (and return-keys (:insert-into q) (not (:on-conflict q)))
+            (is (seq rows) "an INSERT under :return-keys returns its rows")))
         (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
         (is (m/validate one (jdbc/execute-one! ds (sql/format q) jdbc-opts)) (pr-str :one builder return-keys q))))))
 

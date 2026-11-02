@@ -423,7 +423,19 @@
            (h/query-schema registry [] {:delete-from :groups} (assoc opts :return-keys ["name"] :result :one)))
         "a write returning rows may return none")
     (is (nil? (h/row-schema registry {:truncate :users} (assoc opts :return-keys true)))
-        "next.jdbc reads TRUNCATE's generated keys, which have no column")))
+        "next.jdbc reads TRUNCATE's generated keys, which have no column")
+    (is (= (h/row-schema registry {:update :groups :set {:name "b"}} (assoc opts :return-keys ["name"]))
+           (h/row-schema registry {:update :groups :set {:name "b"}} (assoc opts :return-keys [:groups/name])))
+        "a keyword names its column, as next.jdbc takes it")
+    (is (= [:map [:id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
+           (h/row-schema registry {:delete-from :groups :returning [:id]} (assoc opts :return-keys ["name"])))
+        "pgjdbc adds no RETURNING to a statement that has one")
+    (is (= (h/row-schema registry {:select [:id] :from [:users]} opts)
+           (h/row-schema registry {:select [:id] :from [:users]} (assoc opts :return-keys true))))
+    (is (nil? (h/row-schema registry '{:delete-from :users :returning ?cols} opts)) "a RETURNING code builds may return rows")
+    (is (= [{:kind :unknown-column :column :nmae :did-you-mean [:name]}]
+           (h/check registry {:delete-from :groups} (assoc opts :return-keys ["nmae"])))
+        "check reads the RETURNING :return-keys adds")))
 
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
@@ -436,7 +448,7 @@
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:name :excluded.name}} opts))))
 
 (deftest a-misspelt-option-is-an-error
-  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:write {:array [:vectr]}} {:compare :loose} {:result :first}]]
+  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:write {:array [:vectr]}} {:compare :loose} {:result :first} {:return-keys []} {:return-keys "id"}]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/arg-types registry {:select [:id] :from [:users]} (merge opts o))) (pr-str o))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (h/check registry {:select [:id] :from [:users]} (merge opts o))) (pr-str o))))
 
