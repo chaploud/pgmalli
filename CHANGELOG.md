@@ -5,6 +5,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ## Unreleased
 
+* `h/arg-types` types an argument where
+  [docs/queries.md](docs/queries.md#the-types-of-the-arguments) lists: now also compared with an
+  expression `h/row-schema` types or with a column in a row (`[:composite ...]`), and as an item
+  of `INSERT INTO t (cols) SELECT`. `h/check` reads the same comparisons and items: an uncast
+  string reaching an enum-typed expression, a row's element or such an item is
+  `:uncast-string`, an unknown column in a row `:unknown-column`.
+
 * `h/row-schema` types a select expression of the forms
   [docs/queries.md](docs/queries.md#the-row-a-query-returns) lists, with its nullability. Any
   other is nullable `:any`, as every expression was.

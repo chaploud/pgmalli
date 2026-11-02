@@ -24,13 +24,13 @@
 
 (def types
   {"smallint" {:aliases ["int2"] :schema :pg/smallint :eval :integer :range [-32768 32767]}
-   "integer" {:aliases ["int4"] :schema :pg/integer :eval :integer :range [-2147483648 2147483647]}
+   "integer" {:aliases ["int4" "int"] :schema :pg/integer :eval :integer :range [-2147483648 2147483647]}
    ;; a bigint is exactly a long
    "bigint" {:aliases ["int8"] :schema :int :eval :integer :range [Long/MIN_VALUE Long/MAX_VALUE]}
    "oid" {:schema [:int {:min 0 :max 4294967295}] :eval :integer}
    "numeric" {:aliases ["decimal"] :schema 'decimal? :eval :exact :read :or-double}
    "real" {:aliases ["float4"] :schema :double :eval :float :read 'float?}
-   "double precision" {:aliases ["float8"] :schema :double :eval :float}
+   "double precision" {:aliases ["float8" "float"] :schema :double :eval :float}
    "text" {:schema :string :eval :text}
    "character varying" {:aliases ["varchar"] :schema :string :eval :text :typmod :max-length}
    "character" {:aliases ["char" "bpchar"] :schema :string :eval :text :typmod :max-length :array-cast :bpchar}
@@ -38,7 +38,7 @@
    "\"char\"" {:schema :string}
    "bit" {:schema :string :typmod :bits :gen :bits :cast :varbit :read :bit}
    "bit varying" {:aliases ["varbit"] :schema :string :typmod :max-bits :gen :bits :cast (keyword "bit varying") :read :any}
-   "boolean" {:schema :boolean}
+   "boolean" {:aliases ["bool"] :schema :boolean}
    "uuid" {:schema :uuid}
    "bytea" {:schema 'bytes?}
    "date" {:schema :time/local-date :eval :temporal}
