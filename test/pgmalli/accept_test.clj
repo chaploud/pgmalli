@@ -43,7 +43,7 @@
                                :assign (str "INSERT INTO probe_target (" (column t) ") VALUES ($1)")
                                :cast (str "SELECT CAST($1 AS " t ")")}
                 ;; PostgreSQL 18 adds explicit casts between bytea and the integers
-                :when (not (and (= :cast context) (some #{"bytea"} [t sent]) (some #{"smallint" "integer" "bigint"} [t sent])))]
+                :when (not (and (= :cast context) (some #{"bytea"} [accepted-t sent]) (some #{"smallint" "integer" "bigint"} [accepted-t sent])))]
           (is (= (taken? con sent sql) (accept/accepts? accepted-t sent-t context))
               (str (pr-str sent) " " context " " t)))))))
 
@@ -56,7 +56,7 @@
                    (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]
                 t scalars
                 ;; PostgreSQL 18 adds explicit casts between bytea and the integers
-                :when (not (and (= "bytea" t) (integer? v)))
+                :when (not (or (and (= "bytea" t) (integer? v)) (and (bytes? v) (#{"smallint" "integer" "bigint"} t))))
                 ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
                 :let [taken? (try (with-open [ps (.prepareStatement con (str "SELECT CAST(? AS " t ")"))]
                                     (.setObject ps 1 v)
