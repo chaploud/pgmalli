@@ -1329,10 +1329,30 @@
     (set-operation-row registry (get stmt k) (conj path k) chains opts)
     (select-row registry stmt (get chains path) opts)))
 
+(def ^:private update-count
+  "The row next.jdbc returns for a statement that returns none: the driver's update count."
+  [:map [:next.jdbc/update-count :int]])
+
+(defn- update-counted?
+  "Whether next.jdbc returns the update count for stmt: a write with no RETURNING, sent without
+   :return-keys (under which next.jdbc reads the generated keys, none for TRUNCATE)."
+  [stmt {:keys [return-keys]}]
+  (boolean (and (not return-keys) (not (contains? stmt :returning))
+                (some #(contains? stmt %) [:insert-into :update :delete-from :truncate]))))
+
+(defn- returned
+  "stmt as it is sent: pgjdbc adds RETURNING * to a write sent with :return-keys true, RETURNING
+   the columns named with a vector of them."
+  [stmt {:keys [return-keys]}]
+  (if (and return-keys (not (contains? stmt :returning)) (some #(contains? stmt %) [:insert-into :update :delete-from]))
+    (assoc stmt :returning (if (true? return-keys) [:*] (mapv keyword return-keys)))
+    stmt))
+
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc builds it; nil when a selected
    column cannot be resolved (check says which), or a whole row is selected ({:select [:t]}),
-   which next.jdbc reads as one PGobject.
+   which next.jdbc reads as one PGobject. A write with no RETURNING returns
+   [:map [:next.jdbc/update-count :int]].
 
    Columns an outer join may leave NULL are nullable; an expression is nullable :any; a set
    operation's row is its first member's names. Under qualified keys, a column next.jdbc keys
@@ -1343,7 +1363,11 @@
   ([registry body opts]
    (jdbc/options! opts)
    (query! body)
-   (when (map? body) (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts))))
+   (when (map? body)
+     (if (update-counted? body opts)
+       update-count
+       (let [body (returned body opts)]
+         (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts))))))
 
 (defn params-schema
   "The [:map ...] of sql/format's :params for a query: every named argument, typed as arg-types
@@ -1382,7 +1406,10 @@
          row (row-schema registry body opts)]
      (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
            [(into [:cat] (map #(get types % :any)) args)
-            (cond (nil? row) :any (= :one result) [:maybe row] :else [:sequential row])]))))
+            (cond (nil? row) :any
+                  ;; execute-one! returns the update count's map, never nil
+                  (= :one result) (if (update-counted? body opts) row [:maybe row])
+                  :else [:sequential row])]))))
 
 ;;; problems as text
 

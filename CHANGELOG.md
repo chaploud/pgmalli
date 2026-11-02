@@ -3,6 +3,15 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
+## Unreleased
+
+* `h/row-schema` gives a write with no RETURNING (INSERT, UPDATE, DELETE, TRUNCATE, under
+  WITH or ON CONFLICT too) the row next.jdbc returns for it,
+  `[:map [:next.jdbc/update-count :int]]`, where it gave nil; `h/query-schema` returned `:any`.
+  Under `{:result :one}` that map is not `[:maybe ...]`: `execute-one!` returns it.
+* The `:return-keys` option says the write is sent with next.jdbc's `:return-keys`: its row is
+  then the table's (`true`) or the columns named, as pgjdbc adds RETURNING.
+
 ## 0.3.2 (2026-10-30)
 
 * `h/check` reports NULL written into a NOT NULL column however HoneySQL spells it: `nil`,

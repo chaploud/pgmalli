@@ -37,6 +37,7 @@
                                     [:enum {:optional true} [:vector {:min 1} [:enum :string :keyword]]]]]]
          [:compare {:optional true} [:enum :strict :lenient]]
          [:result {:optional true} [:enum :one]]
+         [:return-keys {:optional true} [:or :boolean [:vector {:min 1} :string]]]
          [:format {:optional true} :map]
          [:stringtype {:optional true} [:enum :varchar :unspecified]]]))
 

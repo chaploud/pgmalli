@@ -401,6 +401,30 @@
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
+(deftest a-write-without-returning-returns-its-update-count
+  (let [counted [:map [:next.jdbc/update-count :int]]]
+    (doseq [q [{:insert-into :groups :values [{:id 1 :name "a"}]}
+               {:insert-into :groups :values [{:id 1 :name "a"}] :on-conflict [:id] :do-nothing true}
+               {:update :users :set {:nick "a"} :where [:= :id 1]}
+               {:delete-from :users :where [:= :id 1]}
+               {:with [[:old {:select [:id] :from [:users]}]] :delete-from :users :where [:in :id {:select [:id] :from [:old]}]}
+               {:truncate :users}]]
+      (is (= counted (h/row-schema registry q opts)) (pr-str q))
+      (is (= counted (h/row-schema registry q {:schema "sample"})) "whatever the builder: next.jdbc builds this map itself")
+      (is (= [:=> [:cat] counted] (h/query-schema registry [] q (assoc opts :result :one))) "execute-one! returns it, never nil"))
+    (is (= [:map [:id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
+           (h/row-schema registry {:delete-from :groups :returning [:id]} opts)))
+    (is (= [:map [:id [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]] [:name [:string {:pg/type "text"}]]]
+           (h/row-schema registry {:delete-from :groups} (assoc opts :return-keys true)))
+        "pgjdbc adds RETURNING * under :return-keys true")
+    (is (= [:map [:name [:string {:pg/type "text"}]]]
+           (h/row-schema registry {:update :groups :set {:name "b"}} (assoc opts :return-keys ["name"]))))
+    (is (= [:=> [:cat] [:maybe [:map [:name [:string {:pg/type "text"}]]]]]
+           (h/query-schema registry [] {:delete-from :groups} (assoc opts :return-keys ["name"] :result :one)))
+        "a write returning rows may return none")
+    (is (nil? (h/row-schema registry {:truncate :users} (assoc opts :return-keys true)))
+        "next.jdbc reads TRUNCATE's generated keys, which have no column")))
+
 (deftest every-shape-of-do-update-set
   (is (= [] (h/check registry {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
                                :do-update-set {:fields [:name] :where [:<= :groups.name :EXCLUDED.name]} :returning [:id]} opts))

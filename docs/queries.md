@@ -173,6 +173,18 @@ It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.m
 `h/row-schema` returns nil when a selected column cannot be resolved (`h/check` says which), or
 when a whole row is selected (`{:select [:u] :from [[:users :u]]}`).
 
+A write with no RETURNING returns no row: next.jdbc returns the driver's update count in a map
+of its own. Under next.jdbc's `:return-keys`, pgjdbc adds `RETURNING *`, or RETURNING the
+columns named:
+
+```clojure
+(h/row-schema registry {:delete-from :posts :where [:= :author_id 1]})
+;; => [:map [:next.jdbc/update-count :int]]
+
+(h/row-schema registry {:delete-from :posts :where [:= :author_id 1]} {:return-keys ["id"]})
+;; => [:map [:posts/id [:int #:pg{:identity :always, :type "bigint"}]]]
+```
+
 ## The tables a query uses
 
 `h/tables` gives the tables and views a query reads and writes, in every subquery and CTE,
@@ -198,7 +210,8 @@ take the same options map:
 | `:stringtype :unspecified` | your connection's `stringtype`: strings reach every column untyped (default `:varchar`, as pgjdbc's) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
-| `:result :one` | `h/query-schema` only: the return is one row or nil |
+| `:result :one` | `h/query-schema` only: the return is one row or nil (`execute-one!`); the update count's map is never nil |
+| `:return-keys true` or `["col" ...]` | the `:return-keys` you pass `execute!` or `execute-one!`: a write returns its rows, not its update count |
 
 ## Function schemas
 
