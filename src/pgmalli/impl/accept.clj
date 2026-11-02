@@ -5,16 +5,18 @@
    pgmalli.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
    a caller passes a domain as its base type. pgmalli.accept-test holds both against pgjdbc
    and PostgreSQL."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 ;;; what pgjdbc sends
 
 (def ^:private class-types
-  "[class type] pgjdbc's setObject sends a value of class as (a Character with setString, any
-   other Number with setNumber)."
+  "[class type] pgjdbc's setObject sends a value of class as (any other Number with setNumber);
+   a String and a Character go as :write's string rows say (sent-type)."
   [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
    [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
-   [Boolean "boolean"] [String "character varying"] [Character "character varying"] [java.util.UUID "uuid"]
+   [Boolean "boolean"] [java.util.UUID "uuid"]
    [(Class/forName "[B") "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
    [java.time.OffsetTime "time with time zone"] [java.time.LocalDateTime "timestamp without time zone"]
    [java.time.OffsetDateTime "timestamp with time zone"]])
@@ -33,21 +35,26 @@
 
 (def default-write (pgjdbc-write {}))
 
-(defn- strings?
-  "Whether a schema of :write takes strings: :string or string?, alone or in an :or."
-  [s]
-  (if (and (vector? s) (= :or (first s)))
-    (boolean (some strings? (remove map? (rest s))))
-    (contains? #{:string 'string?} (if (vector? s) (first s) s))))
+(defn write-rows
+  "The rows of :write: pgjdbc's (default-write) without it."
+  [{:keys [write]}]
+  (or write default-write))
 
 (defn sent-type
-  "The type value goes to PostgreSQL as: :unknown for one sent untyped, which PostgreSQL types
-   from the context (nil; a String :write sends untyped, or one written into the SQL under
-   sql/format's :inline); nil for a class class-types does not list."
-  [value {:keys [write format]}]
+  "The type value goes to PostgreSQL as: a String or Character as the rows of :write that take
+   strings say, :unknown where one sends them untyped (stringtype=unspecified, an extension) or
+   under sql/format's :inline, which writes it into the SQL; nil as :unknown, which PostgreSQL
+   types from the context; any other value as pgjdbc sends its class (class-types), nil for a
+   class it does not list."
+  [value {:keys [format] :as opts}]
   (cond (nil? value) :unknown
-        (string? value) (let [ts (set (for [[s t] (or write default-write) :when (strings? s)] t))]
-                          (if (or (:inline format) (contains? ts :unknown)) :unknown "character varying"))
+        (or (string? value) (char? value))
+        (let [ts (set (for [[s t] (write-rows opts)
+                            :when (some #(#{:string 'string?} (shape/kind %)) (if (= :or (shape/kind s)) (remove map? (rest s)) [s]))]
+                        (if (= :unknown t) t (:name (types/entry t)))))]
+          (cond (or (:inline format) (ts :unknown)) :unknown
+                (= 1 (count ts)) (first ts)
+                :else "character varying"))
         :else (some (fn [[c t]] (when (instance? c value) t)) class-types)))
 
 ;;; what PostgreSQL takes
@@ -101,7 +108,7 @@
 
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context
-   (:compare, :assign or :cast). sent :unknown is one pgjdbc sends untyped, which PostgreSQL
+   (:compare, :assign or :cast). sent :unknown is a value sent untyped (a :write row's), which PostgreSQL
    types from the context: anywhere but a comparison with json, which has no operator."
   [t sent context]
   (let [json-compared? (and (= "json" t) (= :compare context))]

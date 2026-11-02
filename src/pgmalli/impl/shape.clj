@@ -184,14 +184,20 @@
                  (cond-> {:given name :known rows} row (assoc :suggest row)))))
 
 (defn kind
-  "What an alternative of an argument's type is a value of, through [:and kind checks...]: one
-   alternative of each kind is kept, a function schema ([:fn f]) being a kind of its own."
+  "The kind of value t takes: its head, through [:and t checks...]; a function schema ([:fn f])
+   is a kind of its own."
   [t]
   (let [h (if (vector? t) (first t) t)]
     (case h
       :and (kind (first (remove map? (rest t))))
       :fn t
       h)))
+
+(defn distinct-kinds
+  "Alternatives ts, the first of each kind (an argument's own values come first, with their
+   :pg/type and bounds)."
+  [ts]
+  (vals (reduce (fn [m t] (update m (kind t) #(or % t))) (array-map) ts)))
 
 (defn non-null
   "A column schema without its [:maybe ...]: what a value must be when it is not NULL."

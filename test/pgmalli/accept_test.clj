@@ -73,3 +73,16 @@
                (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
       (is (= [(accept/sent-type v {})] (for [[s t] accept/default-write :when (m/validate s v {:registry registry})] t))
           (str (class v) " goes as one type")))))
+
+(deftest a-string-goes-untyped-under-stringtype-unspecified
+  (when *db*
+    (exec-sql! "CREATE TYPE untyped_mood AS ENUM ('ok'); CREATE TABLE untyped_probe (e untyped_mood, t text, i integer)")
+    (let [{:keys [host port db user password]} *db*
+          sent (accept/sent-type "1" {:write (accept/pgjdbc-write {:stringtype :unspecified})})]
+      (is (= :unknown sent))
+      (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db "?stringtype=unspecified") :user user :password password})]
+        (doseq [[col t v] [["e" [:enum "untyped_mood"] "ok"] ["t" "text" "1"] ["i" "integer" "1"]]
+                [context sql] {:compare (str "SELECT 1 FROM untyped_probe WHERE " col " = ?")
+                               :assign (str "INSERT INTO untyped_probe (" col ") VALUES (?)")}]
+          (is (accept/accepts? t sent context))
+          (is (with-open [ps (.prepareStatement con sql)] (.setObject ps 1 v) (.execute ps) true) (str col " " context)))))))

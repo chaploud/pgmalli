@@ -120,15 +120,15 @@ keyed as in `sql/format`'s `:params`:
 | cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:write`](#what-your-application-sends) sends: a string too, and an enum type's labels alone; `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:write`](#what-your-application-sends) sends one |
 | a `LIKE` pattern | the column's kind (`:string`) |
-| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal, double or float of at least 0 too, which PostgreSQL rounds |
+| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal or double that PostgreSQL rounds to at least 0 too |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
 A column's type takes its own values, a `numeric`, `real` or `double precision` one an integer
 too, a `double precision` one a `real` too: the same number. PostgreSQL takes more, a `bigint`
 compared with a `numeric`, any value assigned to a `text` column, which hides a mix-up a type
-would catch. `{:accept :postgresql}` types an argument with all of it, the alternatives held to
-the column's range:
+would catch. `{:accept :postgresql}` types an argument with all of it; assigned or cast, a number
+is held to a number column's range (a fraction going to an integer type once PostgreSQL rounds it):
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:accept :postgresql})
@@ -140,33 +140,48 @@ the column's range:
 
 ### What your application sends
 
-Which values reach a column is decided by what your application sends: pgjdbc sends a `Long`
-as `bigint`, a `String` as `varchar`, and refuses a keyword unless a `SettableParameter`
-extension of yours sends it. `:write` lists it, rows of `[schema type]`: the values, and the
-type they reach PostgreSQL as, `:unknown` for one sent untyped, which PostgreSQL types from
-where it goes. `h/pgjdbc-write` gives pgjdbc's rows, the default; build yours from it:
+An argument takes its column's own values as pgmalli reads them: the `:time` type of a date or
+timestamp, an enum's labels, a `varchar(n)`'s strings. What else reaches the column is decided
+by what your application sends: pgjdbc sends a `Long` as `bigint`, a `String` as `varchar`, and
+refuses a keyword unless a `SettableParameter` extension of yours sends it. `:write` lists it,
+rows of `[schema type]`: the values, and the type (a name or alias of [types.md](types.md)) they
+reach PostgreSQL as. `h/pgjdbc-write` gives pgjdbc's rows, the default; build yours from it, as
+a vector, since the first row of a kind comes first in a type:
 
 ```clojure
 (h/pgjdbc-write)
 ;; => [[:int "bigint"] [decimal? "numeric"] [:double "double precision"] [:boolean "boolean"] [:string "character varying"] [:uuid "uuid"] [bytes? "bytea"] [:time/local-date "date"] [:time/local-time "time without time zone"] [:time/offset-time "time with time zone"] [:time/local-date-time "timestamp without time zone"] [:time/offset-date-time "timestamp with time zone"]]
 
 (def app-write
-  (-> (h/pgjdbc-write {:stringtype :unspecified})          ; the connection's stringtype
-      (->> (remove (comp #{"timestamp without time zone"} second)))
-      (conj [:keyword :unknown]                              ; your extension: (setObject (name k) Types/OTHER)
-            [[:sequential :pg/element] :unknown])))         ; and a vector as an array
+  (-> (into [] (remove (comp #{"timestamp without time zone"} second))   ; never a LocalDateTime
+            (h/pgjdbc-write {:stringtype :unspecified}))                 ; the connection's stringtype
+      (conj [:keyword :unknown]                       ; your extension: (setObject (name k) Types/OTHER)
+            [[:sequential :pgmalli/element] :unknown])))   ; and a vector as an array
 
 (h/arg-types registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}
              {:write app-write})
 ;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:sequential [:int #:pg{:type "bigint"}]]}
 ```
 
-A value sent untyped is a string or an enum column's own (PostgreSQL reads it as the value
-itself), as keywords an enum's labels; another column takes it under `:accept :postgresql` or a
-cast. A row with `:pg/element` is a collection an array argument may be, the array's element in
-its place; without one an array argument is `:any`. A row a value of the column's own type is
-sent as is all a json, array or interval column's argument takes, where pgmalli knows only the
-driver's object.
+A row adds to what a column takes, where PostgreSQL takes its type there: a row of the column's
+own type always, a narrower number for a number column, others under `:accept :postgresql` or
+in a cast. A row left out takes nothing away from a column's own values, but a java.time value
+pgjdbc sends as the column's type is one: without the `timestamp without time zone` row, a
+`LocalDateTime` reaches no argument.
+
+`:unknown` is a value sent with no type (a String under `stringtype=unspecified`, an extension's
+`Types/OTHER`), which PostgreSQL reads as text in the type of where it goes: a text or varchar
+column takes it as a string, an enum or a CHECK's list as its labels (a keyword as a label's
+name); another column only under `:accept :postgresql` or in a cast.
+
+A json, jsonb, array or interval column, where pgmalli knows only the driver's object, takes
+the rows of exactly its type (`[[:map-of :keyword :any] "jsonb"]`); `:any` without one. A row
+with `:pgmalli/element`, of type `:unknown` (PostgreSQL types the array from where it goes), is
+a collection an array argument may be, the element's type in its place; without one an array
+argument is `:any`.
+
+An enum column takes its labels as strings under pgjdbc's default, which sends a `String` as
+`varchar` and an enum refuses: `h/check` reports it as `:uncast-string`.
 
 Where its uses type an argument differently, the first statement wins (an enclosing one before
 its subqueries), and within it a comparison (the first), then `:limit` / `:offset`, a cast, an
@@ -193,7 +208,7 @@ A comparison with NULL matches no row, so `:?id` above does not take nil. To tak
 ;; => {:id [:string #:pg{:type "text"}]}
 
 (h/arg-types registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]}
-             {:write (conj (h/pgjdbc-write) [[:sequential :pg/element] :unknown])})
+             {:write (conj (h/pgjdbc-write) [[:sequential :pgmalli/element] :unknown])})
 ;; => {:author [:int #:pg{:type "bigint"}], :titles [:sequential [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]}
 ```
 
@@ -206,11 +221,13 @@ key is required, as `sql/format` refuses a missing one:
 ```
 
 Where your code passes a whole row, a map built at run time for `:values` or `:set`,
-`h/values-schema` and `h/set-schema` type it: each column as an argument assigned to it, the
-columns the database writes left out, those it may fill optional (every one, for `:set`):
+`h/insert-schema` and `h/update-schema` type it as the registry's insert and update schemas
+do: each column as an argument assigned to it, the columns the database writes left out, those
+it may fill optional (every one, for `:set`), keyed by the column's name (kebab-cased under
+`:kebab? true`, which HoneySQL writes back in snake case):
 
 ```clojure
-(h/values-schema registry :pg.public/users)
+(h/insert-schema registry :pg.public/users)
 ;; => [:map {:closed true} [:closed_at {:optional true} [:maybe [:or [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time]]] [:created_at {:optional true} [:or [inst? #:pg{:default [:now], :type "timestamp with time zone"}] :time/offset-date-time]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:group_id [:int {:pg/type "integer", :min -2147483648, :max 2147483647}]] [:nick {:optional true} [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]] [:status {:optional true} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]]
 ```
 
@@ -289,14 +306,14 @@ with aliases and CTE names resolved. Use it to find the queries a change to a ta
 
 ## Options
 
-`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema`, `h/query-schema`, `h/values-schema`,
-`h/set-schema` and `h/tables` take the same options map:
+`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema`, `h/query-schema`, `h/insert-schema`,
+`h/update-schema` and `h/tables` take the same options map:
 
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
 | the options of `as-read` | how next.jdbc builds rows and the driver reads values ([reading-rows.md](reading-rows.md#options)) |
-| `:write [[schema type] ...]` | all your application sends, and the type each goes as (a name or alias of [types.md](types.md), or `:unknown`): [what your application sends](#what-your-application-sends); `h/pgjdbc-write` by default |
+| `:write [[schema type] ...]` | what your application sends besides a column's own values, and the type each goes as (a name or alias of [types.md](types.md), or `:unknown`): [what your application sends](#what-your-application-sends); `h/pgjdbc-write` by default |
 | `:accept :postgresql` | an argument takes all PostgreSQL takes where it goes, not its column's own values alone (`:native`, the default) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |

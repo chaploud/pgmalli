@@ -120,7 +120,7 @@
     (let [{:keys [host port db user password]} *db*
           ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))
-          opts {:qualified? false :write (conj (h/pgjdbc-write) [[:sequential :pg/element] :unknown])}]
+          opts {:qualified? false :write (conj (h/pgjdbc-write) [[:sequential :pgmalli/element] :unknown])}]
       (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest :?bodies]]]}]}
                            {:n 1 :feel "ok" :bodies ["a" "b"]}]
                           [{:select [:id] :from [:notes] :where [:and [:= [:cast :n :text] :?t] [:< [:composite :n :id] [:composite :?n :?id]]]}
@@ -171,7 +171,7 @@
           ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))
           ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
-          args (h/arg-types registry ins {:write (conj (h/pgjdbc-write) [[:pg/array :pg/element] :unknown])})
+          args (h/arg-types registry ins {:write (conj (h/pgjdbc-write) [[:pg/array :pgmalli/element] :unknown])})
           v (into-array String ["a" "b"])]
       (is (m/validate (:paths args) v {:registry registry}) "a String[] for a text[] column")
       (is (not (m/validate (:paths args) ["a"] {:registry registry})) "a vector the driver refuses")

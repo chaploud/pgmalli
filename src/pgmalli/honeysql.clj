@@ -3,7 +3,7 @@
    exist, the columns a query selects, returns, inserts, sets or compares must exist, an
    INSERT must carry the required columns, an enum literal must be one of the enum's values;
    and from the same data, the types of the query's parameters and of the rows it returns,
-   as malli schemas.
+   and of a row written into a table, as malli schemas.
 
    Scope: tables come from :from, :using, :cross-join, the joins (:join-by is not read),
    :insert-into, :update, :delete-from and :truncate, under their aliases. CTEs (:with), subqueries,
@@ -14,7 +14,8 @@
    does. An unqualified table is in :schema (default \"public\"). What code in the query
    builds (a list) is not in the data and is not judged.
 
-   Types are what next.jdbc and PostgreSQL's JDBC driver return and take. The functions take
+   Types are what next.jdbc and PostgreSQL's JDBC driver return, and what :write says the
+   application sends (pgjdbc's by default). The functions take
    the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
@@ -555,6 +556,12 @@
                        (mapcat #(walk % neg?) (seq x)))))))]
     (walk part false)))
 
+(defn- comparison?
+  "A comparison node: [op a b] of comparison-ops, or [:between a b c]."
+  [x]
+  (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
+                       (and (= 4 (count x)) (#{:between :not-between} (first x))))))
+
 (defn- comparison-sides
   "[op side other] for each side of the comparisons in a statement's conditions (BETWEEN's
    first, against each bound), element by element where a row meets a row of its length
@@ -562,8 +569,7 @@
    value, other whatever it is. Under an odd number of :not, op is its negation (= is <>)."
   [stmt]
   (for [[x negated?] (polar-nodes (conditions stmt))
-        :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
-                                   (and (= 4 (count x)) (#{:between :not-between} (first x)))))
+        :when (comparison? x)
         :let [[op a b c] x
               row? #(and (vector? %) (= :composite (first %)))]
         [side other] (cond (= 4 (count x)) [[a b] [a c]]
@@ -1102,7 +1108,7 @@
    Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! opts (when-not (::schemas registry) registry))
    (query! body)
    (let [registry (reading registry)
          sent-body (or (sent body opts) body)
@@ -1124,7 +1130,7 @@
    ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
   ([registry body] (tables registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
-   (jdbc/options! opts)
+   (jdbc/options! opts (when-not (::schemas registry) registry))
    (query! body)
    (let [registry (reading registry)
          found (for [[stmt scopes] (statement-chains registry body opts)
@@ -1146,9 +1152,9 @@
                                   (if (= f jdbc/read-type)
                                     (jdbc/column-read-type (::schemas registry) (shape/non-null s) opts)
                                     (jdbc/column-write-type (::schemas registry) (shape/non-null s) opts)))]
-    ;; pgmalli's own types read as malli's may meet the same alternative :write sends (:pg/bytes, bytes?)
+    ;; one of each kind, after pgmalli's own types read as malli's (:pg/bytes as bytes?)
     (if (and (vector? t) (= :or (first t)) (not (map? (second t))))
-      (let [alts (distinct (rest t))] (if (next alts) (into [:or] alts) (first alts)))
+      (let [alts (shape/distinct-kinds (rest t))] (if (next alts) (into [:or] alts) (first alts)))
       t)))
 
 (def ^:private maybe? shape/maybe?)
@@ -1227,24 +1233,28 @@
         :else t))
 
 (defn- within
-  "Alternative a held to the range a column's own assigned values have: their :min and :max,
-   and the checks of an [:and base checks...]."
-  [a own]
+  "Alternative a, a number sent as type p, held to the range a column of type t's own assigned
+   values have: their :min and :max, and the checks of an [:and base checks...]. PostgreSQL
+   rounds a fraction going to an integer type first, so a fraction is held to the bounds half
+   a unit wider, and not to the checks."
+  [a p t own]
   (let [kids (when (= :and (head own)) (remove map? (rest own)))
         base (if kids (first kids) own)
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
+        rounded? (and (#{"smallint" "integer" "bigint"} t) (not (#{"smallint" "integer" "bigint"} p)))
+        [min max] (if rounded? [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))
         a (cond (empty? bounds) a
                 (#{:int :double} (head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
                 :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))]
-    (if (next kids) (into [:and a] (rest kids)) a)))
+    (if (and (next kids) (not rounded?)) (into [:and a] (rest kids)) a)))
 
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
    :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
    (jdbc/write-type), and the values of each row of :write sent as a type PostgreSQL takes there
-   (cast, or {:accept :postgresql}) or holds as its own (accept/holds?), assigned or cast held
-   to the own values' range. Compared, the values lose the bounds a comparison need not keep
+   (cast, or {:accept :postgresql}) or holds as its own (accept/holds?); assigned or cast, a
+   number held to a number column's range (within). Compared, the values lose the bounds a comparison need not keep
    (loose). Own values with labels (an enum's, a CHECK's list) are the labels, as keywords too
    where a row of keywords goes; untyped own values, or of a type pgmalli.impl.accept does not
    answer for, are the type alone."
@@ -1270,18 +1280,19 @@
                              own)
       :else
       (let [own-alts (vec (alternatives own))
+            ;; one of each kind, the own values first (shape/distinct-kinds), keeping the type each is sent as
             added (reduce (fn [added [_ a :as pa]] (if (some #(= (shape/kind a) (shape/kind %)) (concat own-alts (map second added))) added (conj added pa)))
                           [] alts)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
             ;; a string's or a date's cannot be said of the value sent
-            alts (for [[p a] added] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within own)))]
+            alts (for [[p a] added] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))]
         (if (seq alts) (into [:or] (concat own-alts alts)) own)))))
 
 (defn- compared-type
   "The type of an argument compared with a column of type t by op: the column's kind (an enum's
    labels kept, its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond
    them, matching no row), without NULL; :in's a non-empty vector, list or set of it, as
-   sql/format expands it (IN () is not SQL); an array's what :write's :array names.
+   sql/format expands it (IN () is not SQL); an array's the collections :write's rows with :pgmalli/element send (jdbc/array-type).
    {:compare :lenient} takes nil too but in :in (nil formats as IN ?)."
   [op t array? {:keys [compare] :as opts}]
   (let [lenient? (= :lenient compare)]
@@ -1308,7 +1319,7 @@
    docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
-   (jdbc/options! opts)
+   (jdbc/options! opts (when-not (::schemas registry) registry))
    (query! body)
    (let [registry (reading registry)
          typed (mapcat (fn [[stmt sc]]
@@ -1335,8 +1346,7 @@
                                                  (concat (when-not (= :lenient (:compare opts))
                                                            ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
                                                            (for [[x] (polar-nodes (conditions stmt))
-                                                                 :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
-                                                                                            (and (= 4 (count x)) (#{:between :not-between} (first x)))))
+                                                                 :when (comparison? x)
                                                                  :let [[op & operands] x]
                                                                  :when (not (or (#{:is-distinct-from :is-not-distinct-from} op)
                                                                                 (some #(null-value? % (:format opts)) operands)))
@@ -1574,7 +1584,7 @@
    docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! opts (when-not (::schemas registry) registry))
    (query! body)
    (when (map? body)
      (if-let [body (sent body opts)]
@@ -1606,7 +1616,7 @@
    not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
-   (jdbc/options! opts)
+   (jdbc/options! opts (when-not (::schemas registry) registry))
    (query! body)
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
      (error/fail! :pgmalli.error/invalid-options
@@ -1637,34 +1647,41 @@
 
 (defn- written-row
   "The [:map ...] of the derived schema (\"insert\", \"update\") of the table row name: each column
-   typed as an argument assigned to it, keyed and optional as the derived schema has it."
+   typed as an argument assigned to it, optional as the derived schema has it, keyed by its
+   name as HoneySQL writes it (:kebab? and :lower? as next.jdbc's builders read it back)."
   [registry name derived what opts]
-  (jdbc/options! opts)
+  (jdbc/options! opts (when-not (::schemas registry) registry))
   (let [r (reading registry)
         s (shape/schema-of registry name)]
-    (when-not (shape/row-schema? s) (shape/not-a-row! registry name what))
+    (cond (shape/row-schema? s) nil
+          (shape/read-row? s) (error/fail! :pgmalli.error/unknown-schema
+                                           (str (pr-str name) " is a view's row schema, and a view has no " derived " schema; " what " takes a table's")
+                                           {:given name})
+          :else (shape/not-a-row! registry name what))
     (into [:map {:closed true}]
           (for [[k props c] (shape/column-entries (get (::schemas r) (shape/derived-name name derived)))
                 :let [t (accepted-type r c :assign opts)]]
-            (into [k] (remove nil? [(when (:optional props) {:optional true}) (if (maybe? c) (nullable t) t)]))))))
+            (into [(jdbc/row-key nil (clojure.core/name k) (assoc opts :qualified? false))]
+                  (remove nil? [(when (:optional props) {:optional true}) (if (maybe? c) (nullable t) t)]))))))
 
-(defn values-schema
+(defn insert-schema
   "The [:map ...] of one row an INSERT's :values may carry into the table whose row schema is
-   name: each column typed as arg-types types an argument assigned to it, keyed by its name;
-   the columns the database writes (generated, identity ALWAYS) left out, those it may fill
-   (a default, identity BY DEFAULT, NULL) optional. Options: docs/queries.md#options.
+   name, the registry's insert schema typed as arg-types types an argument: each column as an
+   argument assigned to it, keyed by its name; the columns the database writes (generated,
+   identity ALWAYS) left out, those it may fill (a default, identity BY DEFAULT, NULL)
+   optional. Options: docs/queries.md#options.
 
-   (values-schema registry :pg.public/users)"
-  ([registry name] (values-schema registry name {}))
-  ([registry name opts] (written-row registry name "insert" "values-schema" opts)))
+   (insert-schema registry :pg.public/users)"
+  ([registry name] (insert-schema registry name {}))
+  ([registry name opts] (written-row registry name "insert" "insert-schema" opts)))
 
-(defn set-schema
+(defn update-schema
   "The [:map ...] an UPDATE's :set may carry into the table whose row schema is name: as
-   values-schema, every column optional.
+   insert-schema, every column optional.
 
-   (set-schema registry :pg.public/users)"
-  ([registry name] (set-schema registry name {}))
-  ([registry name opts] (written-row registry name "update" "set-schema" opts)))
+   (update-schema registry :pg.public/users)"
+  ([registry name] (update-schema registry name {}))
+  ([registry name opts] (written-row registry name "update" "update-schema" opts)))
 
 ;;; problems as text
 
@@ -1691,7 +1708,7 @@
                            " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
                            " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
                            (if (str/ends-with? type "[]") (str "[:raw " (pr-str type) "]") (str ":" type))
-                           "], or add [:string :unknown] to :write"
+                           "], or pass {:write (h/pgjdbc-write {:stringtype :unspecified})}"
                            " when the connection sets stringtype=unspecified")))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]

@@ -69,29 +69,53 @@
 (def ^:private options (delay (m/schema options-schema)))
 (def ^:private read-options* (delay (m/schema read-options-schema)))
 
-(defn options!
-  "opts when pgmalli.honeysql takes them: their keys and values, and each type :write names
-   one types knows (a name or an alias); an error naming what it does not, with the one meant."
-  [opts]
-  (checked! @options opts)
-  (when-let [[t] (seq (remove #(or (= :unknown %) (types/entry %)) (map second (:write opts))))]
-    (let [known (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)]
-      (error/fail! :pgmalli.error/invalid-options
-                   (str "pgmalli options: :write sends a value as " (pr-str t) ", which is no type pgmalli knows (docs/types.md)"
-                        (error/did-you-mean (some-> (error/suggest t known) pr-str)))
-                   {:given (select-keys opts [:write])})))
-  opts)
-
 (defn- element-row?
-  "A row of :write whose schema holds :pg/element: a collection of an array's elements."
+  "A row of :write whose schema holds :pgmalli/element: a collection of an array's elements."
   [[s]]
-  (boolean (some #{:pg/element} (tree-seq coll? seq s))))
+  (boolean (some #{:pgmalli/element} (tree-seq coll? seq s))))
+
+(def ^:private migration
+  "How the :write and :stringtype of pgmalli 0.3 read as :write's rows."
+  (str "; :write is a vector of [schema type] rows, pgjdbc's (h/pgjdbc-write) by default: {:stringtype :unspecified} is"
+       " {:write (h/pgjdbc-write {:stringtype :unspecified})}, a keyword an extension sends untyped a row [:keyword :unknown],"
+       " :array's kinds rows [[kind :pgmalli/element] :unknown], {\"jsonb\" s} a row [s \"jsonb\"]"
+       " (docs/queries.md#what-your-application-sends)"))
+
+(defn options!
+  "opts when pgmalli.honeysql takes them: their keys and values, each type :write names one
+   types knows (a name or an alias), a row's schema one registry (a malli registry) reads; an
+   error naming what it does not, with the one meant or, for :write and :stringtype of pgmalli
+   0.3, what they are now."
+  ([opts] (options! opts nil))
+  ([opts registry]
+   (let [write (:write opts)]
+     (when (or (contains? opts :stringtype) (map? write) (and (vector? write) (seq write) (not (vector? (first write)))))
+       (error/fail! :pgmalli.error/invalid-options
+                    (str "pgmalli options: " (pr-str (select-keys opts [:write :stringtype])) " is no longer read" migration)
+                    {:given (select-keys opts [:write :stringtype])})))
+   (checked! @options opts)
+   (doseq [[s t :as row] (:write opts)]
+     (when-not (or (= :unknown t) (and (not (element-row? row)) (types/entry t)))
+       (let [known (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)]
+         (error/fail! :pgmalli.error/invalid-options
+                      (str "pgmalli options: :write sends " (pr-str s) " as " (pr-str t)
+                           (if (element-row? row)
+                             ", but a collection row goes untyped (:unknown): PostgreSQL types the array from where it goes"
+                             (str ", which is no type pgmalli knows (docs/types.md)" (error/did-you-mean (some-> (error/suggest t known) pr-str)))))
+                      {:given row})))
+     (when registry
+       (try (m/schema (clojure.walk/postwalk-replace {:pgmalli/element :any} s) {:registry registry})
+            (catch Exception e
+              (error/fail! :pgmalli.error/invalid-options
+                           (str "pgmalli options: :write sends " (pr-str s) ", which is no malli schema the registry reads: " (ex-message e))
+                           {:given row})))))
+   opts))
 
 (defn write-rows
-  "The rows of :write (accept/default-write without it), each type by its name, and whether
-   they are of a collection (element-row?)."
-  [{:keys [write]} array?]
-  (for [[s t :as row] (or write accept/default-write)
+  "The rows of :write (accept/write-rows), each type by its name, of a collection (element-row?)
+   or not."
+  [opts array?]
+  (for [[s t :as row] (accept/write-rows opts)
         :when (= array? (element-row? row))]
     [s (if (= :unknown t) t (:name (types/entry t)))]))
 
@@ -135,10 +159,10 @@
               :else (driver-type schema opts read-type)))))
 
 (defn array-type
-  "An array argument of elements t: the collections :write's rows with :pg/element send, t in
-   its place ([[:sequential :pg/element] :unknown]); :any without one."
+  "An array argument of elements t: the collections :write's rows with :pgmalli/element send,
+   t in its place ([[:sequential :pgmalli/element] :unknown]); :any without one."
   [t opts]
-  (let [alts (for [[s] (write-rows opts true)] (clojure.walk/postwalk-replace {:pg/element t} s))]
+  (let [alts (for [[s] (write-rows opts true)] (clojure.walk/postwalk-replace {:pgmalli/element t} s))]
     (case (count alts) 0 :any 1 (first alts) (into [:or] alts))))
 
 (defn write-type
@@ -155,9 +179,7 @@
                        ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
                        (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
                              a (if (and (vector? s) (= :or (first s))) (remove map? (rest s)) [s])]
-                         a))
-          ;; one of each kind, the column's own first: its :pg/type and bounds
-          alts (vals (reduce (fn [m a] (update m (shape/kind a) #(or % a))) (array-map) alts))]
+                         a))]
       (case (count alts) 0 t 1 (first alts) (into [:or] alts)))))
 
 ;;; rows as next.jdbc builds them
