@@ -164,7 +164,8 @@ names, as unqualified keys:
 ```
 
 An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
-by its class), a cast to a built-in type, `count`, `sum`, `avg`, `min`, `max`, `coalesce` of
+by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
+`:timestamptz`), `count`, `sum`, `avg`, `min`, `max`, `coalesce` of
 one type, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
 `IS`), the clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
 

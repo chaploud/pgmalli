@@ -1336,9 +1336,9 @@
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical)]) typed (assoc :nullable? true))
       ;; a string takes the other arguments' type, as PostgreSQL resolves a varchar or unknown one
       (= "coalesce" fname) (let [others (remove :string? ts)
-                                 typed (if (seq others) others ts)]
-                             (when (and (seq typed) (not-any? nil? typed) (apply = (map canonical typed)))
-                               {:schema (cond-> (:schema (first typed)) (next ts) loose)
+                                 resolved (if (seq others) others ts)]
+                             (when (and (seq resolved) (not-any? nil? resolved) (apply = (map canonical resolved)))
+                               {:schema (cond-> (:schema (first resolved)) (next ts) loose)
                                 :nullable? (not-any? #(and % (not (:nullable? %))) ts)})))))
 
 (defn- select-row
