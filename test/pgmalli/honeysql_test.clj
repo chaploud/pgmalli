@@ -1562,3 +1562,26 @@
                                           :pg.public/t [:map {:pg/table "public.t"} [:g [:ref {:pg/type "good"} :pg.public/good]]]}})
         t (:g (h/arg-types reg {:update :t :set {:g :?g}} {:write (conj (h/pgjdbc-write) [:keyword :unknown])}))]
     (is (not (m/validate t "ok" {:registry reg})))))
+
+(deftest each-rule-of-a-row-written-holds
+  (is (m/validate (h/insert-schema registry :pg.sample/users {:schema "sample" :kebab? true})
+                  {:group-id 1 :score 0 :nick-upper :default} {:registry registry})
+      "a column the database writes keyed as the others")
+  (let [reg (pgmalli/registry {:registry {:pg.public/short [:string {:pg/type "character varying(10)" :max 5 :pg/max-length 10}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "short"} :pg.public/short]]]}})]
+    (is (not (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :short] :c]]})) "abcdef" {:registry reg})) "a cast keeps a CHECK's :max"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:string {:pg/type "inet"}]]]}})]
+    (is (= [] (h/check reg {:update :t :set {:i :?x}} {:write [[[:fn string?] "inet"]]})) "a row that may send a string as inet"))
+  (is (= [:map [:a [:string {:pg/type "text"}]]] (h/row-schema registry {:select [["x" :a]]} {:schema "sample" :qualified? false :write [['string? "text"]]})))
+  (is (= {:x [:or [:int {:pg/type "integer"}] :symbol]}
+         (h/arg-types registry {:select [:id] :from [:users] :where [:= :group_id :?x]} {:schema "sample" :write (conj (h/pgjdbc-write) [:symbol "smallint"])}))
+      "an integer column takes a smallint")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no schema named" (h/insert-schema registry 'users {:schema "sample"}))))
+
+(deftest a-stringtype-beside-rows-changes-only-what-it-says
+  (let [msg #(try (h/arg-types registry {:select [:id] :from [:users]} %) nil (catch clojure.lang.ExceptionInfo e e))]
+    (is (re-find #"All told, :write is \[\[:keyword :unknown\]\] " (ex-message (msg {:write [[:keyword :unknown]] :stringtype :varchar}))))
+    (is (re-find #"All told, :write is \[\[:string \"text\"\]\] " (ex-message (msg {:write [[:string "text"]] :stringtype :unspecified}))))
+    (is (re-find #":stringtype :unspecified sends :write's varchar string rows untyped \(:unknown\)" (ex-message (msg {:write [[:string "text"]] :stringtype :unspecified}))))
+    (is (= {:stringtype :unspecified} (:given (ex-data (msg {:write [[:string "text"]] :stringtype :unspecified})))))
+    (is (re-find #"All told, :write is \(h/pgjdbc-write\) " (ex-message (msg {:write {"mood" :string}}))))))
