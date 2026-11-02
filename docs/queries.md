@@ -56,8 +56,8 @@ A clause pgmalli does not read is reported rather than passed over:
 ```
 
 The columns of a CTE, a subquery, a table function, or a `pg_catalog` table the registry
-lacks exist but have no type. Comparisons with them, or with an expression (`[:count :*]`),
-are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
+lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema`
+leaves untyped, are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
 
@@ -124,6 +124,9 @@ keyed as in `sql/format`'s `:params`:
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
+Where its uses type an argument differently, a comparison wins (the first in the query), then
+`:limit` / `:offset`, a cast, an assignment.
+
 A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
 matches no row.
 
@@ -175,15 +178,16 @@ names, as unqualified keys:
 
 An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
 by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
-`:timestamptz`, `:int`) or to an enum type or domain of the registry, `count`, `sum`, `avg`, `min`, `max`, `coalesce` of
-one type, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
+`:timestamptz`) or to an enum type or domain of the registry, `count`, `sum`, `avg`, `min`,
+`max`, `coalesce` of one type, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
 `IS`), the clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
 
 ```clojure
 (h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
-                                 [[:exists {:select [1] :from [:posts]}] :any_posts] [[:upper :nick] :shout]]
+                                 [[:exists {:select [1] :from [:posts]}] :any_posts] [[:cast "active" :user_status] :s]
+                                 [[:upper :nick] :shout]]
                         :from [:users]})
-;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [inst? #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:shout [:maybe :any]]]
+;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [inst? #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe :any]]]
 ```
 
 It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):

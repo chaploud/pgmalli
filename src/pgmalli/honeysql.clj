@@ -89,7 +89,7 @@
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
 
-(declare insert-parts)
+(declare insert-parts star? expression-type)
 
 (defn- code-sources?
   "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
@@ -473,12 +473,7 @@
       (let [c (if (keyword? x) (subs (str x) 1) (str x))]
         (when (str/starts-with? c "?") (keyword (subs c 1)))))))
 
-(defn- unnest-arg
-  "x of [:unnest x], an argument (:?xs, a symbol) sent as one array; nil for anything else."
-  [v]
-  (when (and (vector? v) (= 2 (count v)) (= :unnest (first v))
-             (let [x (second v)] (or (param-key x) (symbol? x))))
-    (second v)))
+(defn- arg-key [x] (or (param-key x) (when (symbol? x) x)))
 
 (defn- shorthand-fn
   "The function a HoneySQL :%f.args keyword calls (:%max.id is MAX(id)); nil for any other."
@@ -555,19 +550,23 @@
                        (mapcat #(walk % neg?) (seq x)))))))]
     (walk part false)))
 
-(defn- comparisons
-  "[op column other] for each column side of the comparisons in a statement's conditions: a
-   column on either side, the other side whatever it is (a value, a symbol, a column). Under an
-   odd number of :not, op is its negation (= is <>)."
+(defn- comparison-sides
+  "[op side other] for each side of the comparisons in a statement's conditions (BETWEEN's
+   first, against each bound), element by element where a row meets a row of its length
+   ([:< [:composite :a :b] [:composite :?a :?b]]): a side is a column, an expression or a
+   value, other whatever it is. Under an odd number of :not, op is its negation (= is <>)."
   [stmt]
   (for [[x negated?] (polar-nodes (conditions stmt))
         :when (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
                                    (and (= 4 (count x)) (#{:between :not-between} (first x)))))
-        :let [[op a b c] x]
-        [col other] (if (= 4 (count x))
-                      (when (column-keyword? a) [[a b] [a c]])
-                      (cond-> [] (column-keyword? a) (conj [a b]) (column-keyword? b) (conj [b a])))]
-    [(if negated? (negated-op op op) op) col other]))
+        :let [[op a b c] x
+              row? #(and (vector? %) (= :composite (first %)))]
+        [side other] (cond (= 4 (count x)) [[a b] [a c]]
+                           (and (row? a) (row? b) (= (count a) (count b))) (mapcat (fn [l r] [[l r] [r l]]) (rest a) (rest b))
+                           :else [[a b] [b a]])]
+    [(if negated? (negated-op op op) op) side other]))
+
+(defn- comparisons [stmt] (filter (comp column-keyword? second) (comparison-sides stmt)))
 
 (defn- target-column
   "A column as HoneySQL writes it where a statement assigns it: without its namespace."
@@ -601,9 +600,10 @@
                       (concat (mapcat identity (value-rows stmt columns))
                               ;; positional rows under the listed columns
                               (when columns (mapcat #(map vector columns %) (filter vector? values)))))
-                    ;; an item [x] or [x alias] is x
-                    (when (and columns (map? select))
-                      (map vector columns (map #(if (vector? %) (first %) %) (selected-items select)))))))))
+                    ;; an item [x] or [x alias] is x; a star or :raw makes columns the data does not count
+                    (let [items (map #(if (vector? %) (first %) %) (selected-items select))]
+                      (when (and columns (map? select) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
+                        (map vector columns items))))))))
 
 (defn- target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
@@ -929,7 +929,12 @@
    (enum = varchar does not exist, nor inet = varchar): a literal, or an argument to an enum
    column or to one arg-types types as a string."
   [registry sc stmt {:keys [schema stringtype format] :or {schema default-schema} :as opts}]
-  (let [uses (concat (for [[op col value] (comparisons stmt) :when (not (like-ops op))] {:col col :value value :scope sc :op op})
+  (let [uses (concat (for [[op side value] (comparison-sides stmt)
+                           :when (not (like-ops op))
+                           ;; an expression's type, where row-schema tells it
+                           :let [s (when (and (vector? side) (not (column-keyword? side))) (:schema (expression-type registry sc side opts)))]
+                           :when (or s (column-keyword? side))]
+                       (cond-> {:col side :value value :scope sc :op op} s (assoc :schema s)))
                      (let [target (target-scope sc stmt schema)]
                        (when (seq target) (for [[col value] (assignments stmt)] {:col col :value value :scope target :assigned? true}))))
         varchar? (and (not= :unspecified stringtype) (not (:inline format)))
@@ -937,18 +942,16 @@
     (concat
      ;; an argument sent to an enum type's column: what :write lets it be, an extension sends as
      ;; setObject would, a String among them, which only stringtype=unspecified leaves untyped
-     (for [{:keys [col value scope assigned?]} uses
-           :let [unnest? (some? (unnest-arg value))
-                 k (param-key (or (unnest-arg value) value))] :when (and k varchar?)
-           :let [s (:schema (resolve-column registry scope col))
+     (for [{:keys [col value scope assigned?] :as use} uses
+           :let [k (param-key value)] :when (and k varchar?)
+           :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
                  t (some->> s (uncast-type registry))]
-           ;; one assigned to a nullable column may be nil, which PostgreSQL takes; an array of
-           ;; strings is varchar[] however many of them are nil
-           :when (and t (not (and assigned? (not unnest?) (shape/maybe? s)))
+           ;; one assigned to a nullable column may be nil, which PostgreSQL takes
+           :when (and t (not (and assigned? (shape/maybe? s)))
                       (or (enum-type registry s) (= :string (head (driver-type registry jdbc/write-type s opts)))))]
-       (cond-> {:kind :uncast-string :column col :arg k :type t} unnest? (assoc :unnest? true)))
-     (for [{:keys [col value scope assigned? op]} uses
-           :let [{s :schema} (resolve-column registry scope col)
+       {:kind :uncast-string :column col :arg k :type t})
+     (for [{:keys [col value scope assigned? op] :as use} uses
+           :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
                  strings? (or (string? value) (and (vector? value) (every? string? value)))
                  values (cond strings? (if (string? value) [value] value)
                               (and (vector? value) (#{:cast :inline} (first value)) (string? (second value))) [(second value)])
@@ -1138,12 +1141,11 @@
 
 (defn- nullable [t] (if (or (untyped? t) (maybe? t)) t [:maybe t]))
 
-(defn- arg-key [x] (or (param-key x) (when (symbol? x) x)))
-
 (defn- array-arg
-  "[:any x] or [:all x] (= ANY(?), <> ALL(?)): the argument x, sent as one array."
-  [v]
-  (when (and (vector? v) (= 2 (count v)) (#{:any :all} (first v)) (arg-key (second v))) (second v)))
+  "The argument x of [h x] with h one of heads, sent as one array: [:any x] and [:all x] by
+   default (= ANY(?), <> ALL(?))."
+  ([v] (array-arg v #{:any :all}))
+  ([v heads] (when (and (vector? v) (= 2 (count v)) (heads (first v)) (arg-key (second v))) (second v))))
 
 (defn- column-type
   "The type of an argument for a column: compared with it (NULL never matches, so no
@@ -1176,24 +1178,6 @@
           k (shape/schema-key sch n)
           s (get (::schemas registry) k)]
       (when (and s (empty? (shape/column-entries s))) [k s]))))
-
-(declare expression-type)
-
-(defn- expression-comparisons
-  "[op side argument] of each comparison in a statement's conditions of an argument with an
-   expression, and with each element of a row ([:< [:composite :a :b] [:composite :?a :?b]]):
-   the comparisons of an argument with a column are comparisons'. Under an odd number of :not,
-   op is its negation."
-  [stmt]
-  (for [[x negated?] (polar-nodes (conditions stmt))
-        :when (and (vector? x) (= 3 (count x)) (comparison-ops (first x)))
-        :let [[op a b] x
-              row? #(and (vector? %) (= :composite (first %)))]
-        [side v] (if (and (row? a) (row? b) (= (count a) (count b)))
-                   (mapcat (fn [l r] [[l r] [r l]]) (rest a) (rest b))
-                   [[a b] [b a]])
-        :when (and (arg-key (or (array-arg v) v)) (or (vector? side) (and (row? a) (column-keyword? side))))]
-    [(if negated? (negated-op op op) op) side v]))
 
 (defn- loose
   "A column type without the bounds a comparison need not keep (CHECKs, lengths, ranges): its
@@ -1240,22 +1224,20 @@
    (arg-types registry {:select [:id] :from [:users] :where [:= :email :?email]})
    ;; => {:email [:string {:pg/type \"character varying\"}]}
 
-   docs/queries.md#the-types-of-the-arguments says where an argument is typed and how; anywhere
-   else it is :any. The first typed use wins. Options: docs/queries.md#options."
+   docs/queries.md#the-types-of-the-arguments says where an argument is typed and how. Options:
+   docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body {:keys [schema] :or {schema default-schema} :as opts}]
    (jdbc/options! opts)
    (query! body)
    (let [registry (reading registry)
          typed (mapcat (fn [[stmt sc]]
-                         (concat (for [[op col value] (comparisons stmt)
-                                       :let [x (array-arg value)]]
-                                   [(or x value) (compared-type op (compared-column-type registry sc col op opts) x opts)])
-                                 (for [[op side value] (expression-comparisons stmt)
-                                       :let [x (array-arg value)
-                                             t (if (column-keyword? side)
-                                                 (compared-column-type registry sc side op opts)
-                                                 (if-let [s (:schema (expression-type registry sc side opts))] (compared-schema-type registry s op opts) :any))]]
+                         (concat (for [[op side value] (comparison-sides stmt)
+                                       :let [x (array-arg value)]
+                                       :when (arg-key (or x value))
+                                       :let [t (cond (column-keyword? side) (compared-column-type registry sc side op opts)
+                                                     (vector? side) (if-let [s (:schema (expression-type registry sc side opts))] (compared-schema-type registry s op opts) :any)
+                                                     :else :any)]]
                                    [(or x value) (compared-type op t x opts)])
                                  (for [[_ v] (select-keys stmt [:limit :offset])] [v [:int {:min 0}]])
                                  ;; [:cast :?x :mood]: an argument cast to an enum is a value of it
@@ -1267,7 +1249,7 @@
                                  (for [[col v] (assignments stmt)
                                        :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
                                    ;; unnest(?): one value of the column for each element of an array
-                                   (if-let [x (unnest-arg v)] [x (jdbc/array-type t opts)] [v t]))))
+                                   (if-let [x (array-arg v #{:unnest})] [x (jdbc/array-type t opts)] [v t]))))
                        (statement-chains registry body opts))
          ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
@@ -1557,11 +1539,11 @@
                    (str ":values row " row " has " values " values for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column value allowed]}]
                    (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
-   :uncast-string (fn [{:keys [column value arg type unnest?]}]
+   :uncast-string (fn [{:keys [column value arg type]}]
                     (let [what (if arg (str "argument " arg) (pr-str value))]
                       (str what " reaches column " (column-name column) " as varchar, which its type " type " does not take"
                            " (HoneySQL sends a string as a parameter, and pgjdbc types it varchar);"
-                           " write [:cast " (cond unnest? (str "[:unnest :?" (name arg) "]") arg (str ":?" (name arg)) :else (pr-str value)) " "
+                           " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
                            (if (str/ends-with? type "[]") (str "[:raw " (pr-str type) "]") (str ":" type))
                            "], or pass {:stringtype :unspecified}"
                            " when the connection sets stringtype=unspecified")))

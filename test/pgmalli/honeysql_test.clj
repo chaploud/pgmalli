@@ -485,7 +485,14 @@
     (is (= {:s [:int {:pg/type "integer"}] :i [:int {:pg/type "bigint"}]}
            (args [:< [:composite :score :id] [:composite :?s :?i]]))
         "a row compares element by element")
-    (is (= {:x :any} (args [:= [:upper :nick] :?x])) "an expression of no known type types nothing")))
+    (is (= {:a text :b text} (args [:between [:cast :id :text] :?a :?b])))
+    (is (= {:x :any} (args [:= [:upper :nick] :?x])) "an expression of no known type types nothing")
+    (let [check #(h/check registry {:select [:id] :from [:users] :where %} (dissoc opts :stringtype))]
+      (is (= [{:kind :uncast-string :column [:cast :nick :mood] :arg :m :type "mood"}] (check [:= [:cast :nick :mood] :?m]))
+          "a string compared with an enum-typed expression reaches it as varchar")
+      (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}] (check [:= [:composite :mood :id] [:composite :?m :?i]]))
+          "a row is checked element by element")
+      (is (= [{:kind :unknown-column :column :nope}] (check [:< [:composite :nope :id] [:composite 1 2]]))))))
 
 (deftest an-insert-select-assigns-its-items-to-the-columns-listed
   (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
@@ -498,11 +505,10 @@
     (is (= [] (h/check registry q (dissoc opts :stringtype))))
     (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
            (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m] [:?s]]}]} (dissoc opts :stringtype))))
-    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood" :unnest? true}]
-           (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :stringtype)))
-        "an array of strings is varchar[]")
-    (is (re-find #"\[:cast \[:unnest :\?m\] :mood\]"
-                 (first (h/explain (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :stringtype))))))))
+    (is (= [] (h/check registry {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :stringtype)))
+        "an array is not judged: a java.sql.Array of the enum type is taken, a String[] is not")
+    (is (= {:s :any} (h/arg-types registry {:insert-into [[:users [:group_id :nick :score]] {:select [:g.* :?s] :from [[:groups :g]]}]} opts))
+        "a star stands for columns the data does not count")))
 
 (deftest a-cast-to-an-alias-or-an-enum-has-its-type
   (is (= [:map [:m [:enum {:pg/type "mood"} "happy" "sad"]] [:i [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]
