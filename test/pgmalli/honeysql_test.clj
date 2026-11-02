@@ -585,7 +585,8 @@
 (deftest an-option-of-pgmalli-0-3-says-what-it-is-now
   (doseq [[o says] [[{:stringtype :unspecified} #":stringtype :unspecified is \(h/pgjdbc-write \{:stringtype :unspecified\}\)"]
                     [{:write {"text" [:or :string :keyword]}} #"\"text\" \[:or :string :keyword\] is a row \[:keyword :unknown\]"]
-                    [{:write {"mood" :keyword}} #"\"mood\" :keyword names no type pgmalli knows: an enum's value goes untyped, a row \[:keyword :unknown\]"]
+                    [{:write {"mood" :keyword}} #"\"mood\" :keyword names no type pgmalli knows: an enum's value an extension sends untyped is a row \[:keyword :unknown\]"]
+                    [{:write {"mood" :string}} #"\"mood\" :string names no type pgmalli knows: a String goes as varchar"]
                     [{:write {"date" :time/local-date}} #"\"date\" :time/local-date is in \(h/pgjdbc-write\) already"]
                     [{:write {"date" :string}} #"\"date\" :string is a row \[:string \"date\"\]"]
                     [{:write {"jsonb" [:map-of :keyword :any]}} #"\"jsonb\" \[:map-of :keyword :any\] is a row \[\[:map-of :keyword :any\] \"jsonb\"\]"]
@@ -596,6 +597,11 @@
                         #"All told, :write is \(into \(h/pgjdbc-write \{:stringtype :unspecified\}\) \[\[:keyword :unknown\] \[\[:sequential :pgmalli/element\] :unknown\]\]\)"
                         (h/arg-types registry {:select [:id] :from [:users]}
                                      {:stringtype :unspecified :write {"text" [:or :string :keyword] :enum [:string :keyword] :array [:sequential]}})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"All told, :write is \[\[:keyword \"varchar\"\] \[:string :unknown\]\]"
+                        (h/arg-types registry {:select [:id] :from [:users]} {:write [[:keyword "varchar"] [:string "varchar"]] :stringtype :unspecified}))
+      "rows already given stay, their strings untyped")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #":stringtype nil is no option; leave it out"
+                        (h/arg-types registry {:select [:id] :from [:users]} {:write [[:string "text"]] :stringtype nil})))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #":foo is no option of pgmalli 0.3's :write"
                         (h/arg-types registry {:select [:id] :from [:users]} {:write {:foo :int}}))))
 
@@ -607,7 +613,7 @@
 (deftest a-misshapen-write-names-its-row
   (doseq [[w says] [[nil #":write is a vector of \[schema type\] rows"]
                     [#{[:int "bigint"]} #":write is a vector of \[schema type\] rows"]
-                    [[:keyword :unknown] #"row 0 :keyword is no \[schema type\] row"]
+                    [[:keyword :unknown] #"row 0 :keyword is no \[schema type\] row; :write is a vector of rows: \[\[:keyword :unknown\]\]"]
                     [[[:int "bigint"] [[:string :keyword] :enum]] #"row 1 .*: a type is a name of docs/types.md"]
                     [[[:pgmalli/element :unknown]] #":pgmalli/element goes in a collection"]
                     [[[[:maybe :pgmalli/element] :unknown]] #":pgmalli/element goes in a collection"]
@@ -730,11 +736,22 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/code3 [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}]
                                           :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code3"} :pg.public/code3]]]}})]
     (is (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :code3] :c]]})) "abcd" {:registry reg}) "CAST('abcd' AS varchar(3)) is 'abc'")
-    (is (not (m/validate (:c (h/arg-types reg {:update :t :set {:c :?c}})) "abcd" {:registry reg})) "assigned, it is too long")))
+    (is (not (m/validate (:c (h/arg-types reg {:update :t :set {:c :?c}})) "abcd" {:registry reg})) "assigned, it is too long"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/short [:string {:pg/type "character varying(10)" :max 10 :pg/max-length 10 :min 2}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "short"} :pg.public/short]]]}})]
+    (is (not (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :short] :c]]})) "a" {:registry reg})) "a cast keeps a CHECK's length")))
 
 (deftest a-number-label-is-read-from-a-string-sent-untyped
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
     (is (m/validate (:l (h/arg-types reg {:update :t :set {:l :?l}} {:accept :postgresql :write (h/pgjdbc-write {:stringtype :unspecified})})) "1" {:registry reg}))))
+
+(deftest an-integer-sent-as-integer-is-a-bigint-columns-own
+  (is (= {:x [:or [:int {:pg/type "bigint"}] :symbol]}
+         (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?x]} {:schema "sample" :write (conj (h/pgjdbc-write) [:symbol "integer"])}))))
+
+(deftest a-row-pgmalli-cannot-tell-does-not-type-a-string-literal
+  (is (= [:map [:a [:string {:pg/type "character varying"}]]]
+         (h/row-schema registry {:select [["x" :a]]} {:schema "sample" :qualified? false :write [[[:fn double?] "double precision"]]}))))
 
 (deftest a-registry-without-the-derived-schema-says-so
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry has no insert schema"
@@ -800,8 +817,11 @@
   (let [v (h/insert-schema registry :pg.sample/users {:schema "sample"})
         s (h/update-schema registry :pg.sample/users (sends {:schema "sample"} [:keyword :unknown]))
         ok? #(m/validate %1 %2 {:registry registry})]
-    (is (= [:born :closed_at :group_id :group_name :mood :nick :referrer_id :score :seq :total :updated_at] (map first (drop 2 v)))
-        "the columns the database writes left out")
+    (is (= [:born :closed_at :group_id :group_name :mood :nick :referrer_id :score :seq :total :updated_at :id :nick_upper] (map first (drop 2 v)))
+        "the columns the database writes last")
+    (is (ok? v {:group_id 1 :score 0 :id :default :nick_upper :default :total :default}) "HoneySQL's :default where the database fills or writes a column")
+    (is (not-any? #(ok? v %) [{:group_id 1 :score 0 :id 1} {:group_id :default :score 0}]) "a value where the database writes a column, :default where it fills none")
+    (is (ok? s {:total :default}))
     (is (ok? v {:group_id 1 :score 0}) "those it fills optional")
     (is (not-any? #(ok? v %) [{:score 0} {:group_id 1 :score 0 :id 1} {:group_id 1 :score 0 :mood "glad"} {:group_id 1 :score 0 :nick nil :born "x"}]))
     (is (every? #(ok? s %) [{} {:nick nil} {:mood :sad} {:nick :abc}]) "every column optional, as :write sends it")

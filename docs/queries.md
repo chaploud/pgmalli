@@ -124,12 +124,13 @@ keyed as in `sql/format`'s `:params`:
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
-A column's type takes its own values, a `numeric`, `real` or `double precision` one an integer
-too, and a `double precision` one a `real` where a row sends one, which PostgreSQL converts without loss. PostgreSQL takes more, a `bigint`
+A column's type takes its own values, and the numbers of a type PostgreSQL converts to it
+implicitly where a row sends one (an integer to a `numeric`, `real` or `double precision`
+column, a `real` to a `double precision` one). PostgreSQL takes more, a `bigint`
 compared with a `numeric`, any value assigned to a `text` column, which hides a mix-up a type
-would catch. `{:accept :postgresql}` types an argument with all of it; assigned or cast, a number
+would catch. `{:accept :postgresql}` types an argument with all of it. Assigned or cast, a number
 is held to a number column's range (a fraction going to an integer type to the range half a unit
-wider, as PostgreSQL rounds it):
+wider, as PostgreSQL rounds it; a value at exactly half a unit past may round out of range):
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:accept :postgresql})
@@ -180,8 +181,9 @@ key is required, as `sql/format` refuses a missing one:
 
 Where your code passes a whole row, a map built at run time for `:values` or `:set`,
 `h/insert-schema` and `h/update-schema` type it: each column as an argument assigned to it (what
-`:write` sends, the column's range), the columns the database writes left out, those it may fill
-optional (every one, for `:set`; HoneySQL writes an empty `:set` as `SET` with nothing after it,
+`:write` sends, the column's range), those the database may fill optional and taking
+HoneySQL's `:default` too, those it writes (generated, identity ALWAYS) taking `:default` alone
+(every column optional, for `:set`; HoneySQL writes an empty `:set` as `SET` with nothing after it,
 which PostgreSQL refuses, so check it has a key), keyed by the column's name without a
 namespace, as HoneySQL writes it (kebab-cased under
 `:kebab? true`). The table's CHECKs across columns are not in it; validate with the registry's
@@ -193,12 +195,16 @@ insert schema (`:pg.public.users/insert`, `/update` for `h/update-schema`) too w
 ;; => true
 
 (h/insert-schema registry :pg.public/users)
-;; => [:map {:closed true} [:closed_at {:optional true} [:maybe [:or [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time]]] [:created_at {:optional true} [:or [inst? #:pg{:default [:now], :type "timestamp with time zone"}] :time/offset-date-time]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:group_id [:int {:pg/type "integer", :min -2147483648, :max 2147483647}]] [:nick {:optional true} [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]] [:status {:optional true} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]]
+;; => [:map {:closed true} [:closed_at {:optional true} [:or [:maybe [:or [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time]] [:= :default]]] [:created_at {:optional true} [:or [:or [inst? #:pg{:default [:now], :type "timestamp with time zone"}] :time/offset-date-time] [:= :default]]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:group_id [:int {:pg/type "integer", :min -2147483648, :max 2147483647}]] [:nick {:optional true} [:or [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]] [:= :default]]] [:status {:optional true} [:or [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"] [:= :default]]] [:id {:optional true} [:= :default]]]
 ```
 
 A function that takes such a row and runs the query takes it in its function schema, in the
-row's place: `[:=> [:cat :any (h/insert-schema registry :users)] ...]`, the return from
-`h/query-schema`.
+row's place, the return from `h/query-schema` of the query without the row:
+
+```clojure
+[:=> [:cat :any (h/insert-schema registry :users)]
+     (last (h/query-schema registry [:db] {:insert-into :users :returning [:id]} {:result :one}))]
+```
 
 ### What your application sends
 
@@ -210,8 +216,9 @@ rows of `[schema type]`: the values, and the type (a name or alias of [types.md]
 reach PostgreSQL as. `h/pgjdbc-write` gives pgjdbc's rows, the default; build yours from it as
 a vector (`conj` onto a seq puts a row first). Row order matters: where two rows of the same
 kind (two `:string` rows) reach an argument, it takes the first one's schema, after the column's
-own values. A string literal goes as the first `:string` row's type, untyped if any `:string`
-row is `:unknown`:
+own values. A string literal goes as the type of the first `:string` row, untyped if any row
+that may take a string (a `:string` row, or one whose kind pgmalli cannot tell: `[:maybe ...]`,
+an `:enum`, a `[:fn ...]`) is `:unknown`:
 
 ```clojure
 (h/pgjdbc-write)
@@ -228,16 +235,17 @@ row is `:unknown`:
 ;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:sequential [:int #:pg{:type "bigint"}]]}
 ```
 
-A row adds to what a column takes where its type is the column's or converts to it without loss
-(a narrower number for a number column, another string type for a string column, an untyped
-value for a text or enum column), and wherever PostgreSQL takes it under `:accept :postgresql`
+A row adds to what a column takes where its type is the column's or PostgreSQL converts it to
+the column's implicitly (a narrower integer, an integer to a `numeric`, `real` or `double
+precision`, a `real` to a `double precision`, another string type to a string column, an
+untyped value to a text or enum column), and wherever PostgreSQL takes it under `:accept :postgresql`
 or in a cast. A row left out takes nothing away from a column's own values; the java.time
 values other than the `:time` option's come from the rows: without the `timestamp without time
 zone` row, a `LocalDateTime` reaches no argument.
 
 `:unknown` is a value sent with no type (a String under `stringtype=unspecified`, an extension's
 `Types/OTHER`), which PostgreSQL reads as text in the type of where it goes: a text or varchar
-column takes it as a string, an enum or a CHECK's list as its labels (a keyword as a text
+column takes it as a string, an enum or a text column's CHECK list as its labels (a keyword as a
 label's name); another column only under `:accept :postgresql` or in a cast.
 
 A json, jsonb or interval column, where pgmalli knows only the driver's object, takes the rows
@@ -334,7 +342,7 @@ with aliases and CTE names resolved. Use it to find the queries a change to a ta
 | `:schema "app"` | the schema of unqualified tables |
 | the options of `as-read` | how next.jdbc builds rows and the driver reads values ([reading-rows.md](reading-rows.md#options)) |
 | `:write [[schema type] ...]` | what your application sends besides a column's own values, and the type each goes as (a name or alias of [types.md](types.md), or `:unknown`): [what your application sends](#what-your-application-sends); `h/pgjdbc-write` by default |
-| `:accept :postgresql` | an argument takes all PostgreSQL takes where it goes, not its column's own values alone (`:native`, the default) |
+| `:accept :postgresql` | an argument takes all PostgreSQL takes where it goes (`:native`, the default: the column's own values and the rows PostgreSQL converts to them implicitly) |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline` and `:quoted` are read |
 | `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |
@@ -428,7 +436,7 @@ These match or touch no row, which is almost always a mistake:
 - The tables of `:join-by`.
 - A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
   reported as `:unread-clause`.
-- Values written in the query beyond NULL, enum literals and strings sent as `varchar`: an
+- Values written in the query beyond NULL, enum literals and strings sent typed (`varchar` under pgjdbc's default): an
   empty `[:in :id []]` is not reported (an argument in `:in` is typed non-empty).
 - An ON clause naming a table joined after it, which PostgreSQL rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.

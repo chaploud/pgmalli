@@ -108,6 +108,11 @@
   [d]
   (if (and (vector? d) (= :and (first d))) (first (entries d)) d))
 
+(defn update-base
+  "d with f applied to its base: the first schema of [:and base checks...], else d itself."
+  [d f]
+  (if (and (vector? d) (= :and (first d))) (update d (if (map? (second d)) 2 1) f) (f d)))
+
 (defn column-entries
   "[[column props schema] ...] of a row or insert schema as data."
   [schema]
@@ -204,7 +209,7 @@
   (let [k (kind t)]
     (cond (#{:string 'string? :re} k) #{:string}
           (#{:keyword 'keyword? 'simple-keyword? 'qualified-keyword?} k) #{:keyword}
-          ;; malli.experimental.time's types, and pgmalli's own (pgtypes/schemas): numbers, bytes, arrays
+          ;; malli.experimental.time's types, and pgmalli's own (pgtypes/schemas): none takes a string
           (or (and (keyword? k) (#{"time" "pg"} (namespace k)))
               (#{:int :double :float :boolean :uuid :symbol :nil :map :map-of :tuple :sequential :vector :set
                  'int? 'integer? 'decimal? 'double? 'float? 'number? 'boolean? 'uuid? 'bytes? 'inst? 'nil?} k)) #{}

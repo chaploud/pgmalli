@@ -6,16 +6,18 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 ## Unreleased
 
 * `h/arg-types` types an argument under a cast (`[:cast :?at :timestamptz]`) with what
-  PostgreSQL casts to the type: a string too, and an enum type's labels alone. A `numeric`,
-  `real` or `double precision` column's argument takes an integer too.
+  PostgreSQL casts to the type: a string too, and an enum type's labels alone.
+* An argument takes the numbers of a type PostgreSQL converts to its column's implicitly: an
+  integer to a `numeric`, `real` or `double precision` column, a narrower integer to an
+  integer column.
 * `{:accept :postgresql}` types an argument with all PostgreSQL takes where it goes (a `bigint`
   compared with a `numeric`, anything assigned to a `text` column); by default (`:native`) it
   takes its column's own values, as before.
 * `:write` is what an application sends: rows of `[schema type]`, the type a name or alias, or
   `:unknown` for a value sent untyped. `h/pgjdbc-write` gives pgjdbc's rows, the default;
   `(h/pgjdbc-write {:stringtype :unspecified})` gives them under that connection property. A
-  row adds to a column's own values where its type converts to the column's without loss (a
-  narrower number, another string type, an untyped value to a text or enum column), and wherever PostgreSQL takes it under
+  row adds to a column's own values where PostgreSQL converts its type to the column's
+  implicitly (a narrower number, another string type, an untyped value to a text or enum column), and wherever PostgreSQL takes it under
   `:accept :postgresql` or in a cast. A row of `:pgmalli/element` in a collection is what an
   array argument may be. A type pgmalli does not know, or a schema the registry does not read,
   is an error naming the row.

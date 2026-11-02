@@ -124,13 +124,14 @@
                     (contains? (explicit t) sent))))))))
 
 (def ^:private widened
-  "The types a number type's own values include, besides its own: those it is wider than."
-  {"numeric" integers "double precision" (conj integers "real") "real" integers})
+  "The number types PostgreSQL converts to a number type implicitly, besides its own."
+  {"bigint" #{"smallint" "integer"} "integer" #{"smallint"}
+   "numeric" integers "double precision" (conj integers "real") "real" integers})
 
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type, a number of a narrower
-   kind (an integer for a numeric, a real for a double precision), which PostgreSQL converts
-   implicitly, a string of another string type, or one sent untyped where t's values are text
+   kind (an integer for a numeric or a bigint, a real for a double precision), which PostgreSQL
+   converts implicitly, a string of another string type, or one sent untyped where t's values are text
    (a string type, an enum), which PostgreSQL reads as the value itself."
   [t sent]
   (or (= t sent) (contains? (widened t) sent) (and (strings t) (strings sent))

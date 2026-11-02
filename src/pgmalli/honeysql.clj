@@ -1239,8 +1239,8 @@
    rounds a fraction going to an integer type first, so a fraction is held to the bounds half
    a unit wider, and not to the checks."
   [a p t own]
-  (let [kids (when (= :and (shape/head own)) (remove map? (rest own)))
-        base (if kids (first kids) own)
+  (let [base (shape/domain-base own)
+        checks (when (= :and (shape/head own)) (rest (shape/entries own)))
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
         rounded? (and (accept/integer-type? t) (not (accept/integer-type? p)))
         [min max] (if rounded? [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
@@ -1248,10 +1248,7 @@
         a (cond (empty? bounds) a
                 (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
                 :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))]
-    ;; the checks alone: a base of the column's own kind (decimal? of a numeric(p,s)) is no bound on a
-    (if (and (next kids) (not rounded?))
-      (let [checks (remove #(= (shape/kind %) (shape/kind base)) (rest kids))] (if (seq checks) (into [:and a] checks) a))
-      a)))
+    (if (and (seq checks) (not rounded?)) (into [:and a] checks) a)))
 
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
@@ -1261,17 +1258,17 @@
    column of the type's own values (:time's too) with the rows sent as it; assigned or cast, a
    number held to a number column's range (within). Compared, the values lose the bounds a
    comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
-   labels, a text label as a keyword too where a row of keywords goes and a number label as each
-   number class sent; untyped own values, or of a type pgmalli.impl.accept does not answer for,
+   labels, a text label as a keyword too where a row of keywords goes, a number label as each
+   number class sent and as a string where one goes untyped or cast; untyped own values, or of a type pgmalli.impl.accept does not answer for,
    are the type alone (:any under a cast)."
   [registry s context {:keys [accept] :as opts}]
   (let [own (cond-> (driver-type registry jdbc/write-type s opts)
               (= :compare context) loose
-              ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a domain's checks hold after it
-              (= :cast context) (->> (walk/postwalk #(if (and (vector? %) (= :string (first %)) (map? (second %)))
-                                                       (let [p (dissoc (second %) :max :min :pg/max-length)]
-                                                         (if (empty? p) (into [:string] (drop 2 %)) (assoc % 1 p)))
-                                                       %))))
+              ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a CHECK's bounds hold after it
+              (= :cast context) (->> (walk/postwalk #(if (and (vector? %) (= :string (first %)) (:pg/max-length (second %)))
+                                                       (update % 1 (fn [p] (cond-> (dissoc p :pg/max-length) (= (:max p) (:pg/max-length p)) (dissoc :max))))
+                                                       %))
+                                     shape/without-gen))
         t (slot-type registry s)
         takes? (if (or (= :cast context) (= :postgresql accept))
                  #(accept/accepts? t % context)
@@ -1290,11 +1287,11 @@
       ;; labels, as each value class taken sends them: a text label as a keyword, a number as
       ;; the number class of each number row (1.0 as 1 where a bigint goes to a double precision)
       (= :enum (shape/kind own))
-      (let [e (if (= :enum (shape/head own)) own (shape/domain-base own))
+      (let [e (shape/domain-base own)
             [props labels] (if (map? (second e)) [(second e) (drop 2 e)] [nil (rest e)])
             kinds (set (map (comp shape/kind second) alts))
             as (fn [l] (concat (when (and (string? l) (some #(:keyword (shape/value-classes (second %))) alts)) [(keyword l)])
-                               ;; a number label read from a string sent untyped
+                               ;; a number label as a string, which PostgreSQL reads as the number where a string goes (untyped, or cast)
                                (when (and (number? l) (some #(:string (shape/value-classes (second %))) alts)) [(str l)])
                                (when (number? l)
                                  (concat (when (and (kinds :int) (== l (Math/rint (double l)))) [(long l)])
@@ -1302,7 +1299,7 @@
                                          (when (kinds :double) [(double l)])))))
             more (remove (set labels) (distinct (mapcat as labels)))]
         ;; a domain's checks stay around its labels
-        (if (seq more) (let [e' (into (cond-> [:enum] props (conj props)) (concat labels more))] (if (= e own) e' (mapv #(if (= % e) e' %) own))) own))
+        (if (seq more) (shape/update-base own (constantly (into (cond-> [:enum] props (conj props)) (concat labels more)))) own))
       :else
       (let [own-alts (shape/alternatives own)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
@@ -1674,7 +1671,8 @@
 (defn- written-row
   "The [:map ...] of the derived schema (\"insert\", \"update\") of the table row name: each column
    typed as an argument assigned to it, optional as the derived schema has it, keyed by its
-   name as HoneySQL writes it (:kebab? and :lower? as next.jdbc's builders read it back)."
+   name as HoneySQL writes it (:kebab? and :lower? as next.jdbc's builders read it back); an
+   optional one takes :default too, and one the database writes :default alone."
   [registry name derived what opts]
   (options! registry opts)
   (let [r (reading registry)
@@ -1690,22 +1688,28 @@
                                            (str (pr-str name) " is a view's row schema, and a view has no " derived " schema; " what " takes a table's")
                                            {:given name})
           :else (shape/not-a-row! registry name what))
-    (into [:map {:closed true}]
-          (for [[k props c] (shape/column-entries
-                             (or (get (::schemas r) dn)
-                                 (error/fail! :pgmalli.error/unknown-schema
-                                              (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
-                                              {:given dn})))
-                :let [t (accepted-type r c :assign opts)]]
-            (into [(jdbc/row-key nil (clojure.core/name k) (assoc opts :qualified? false))]
-                  (remove nil? [(when (:optional props) {:optional true}) (if (maybe? c) (nullable t) t)]))))))
+    (let [written (shape/column-entries
+                   (or (get (::schemas r) dn)
+                       (error/fail! :pgmalli.error/unknown-schema
+                                    (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
+                                    {:given dn})))
+          key #(jdbc/row-key nil (clojure.core/name %) (assoc opts :qualified? false))]
+      (into [:map {:closed true}]
+            (concat
+             ;; a column the database may fill takes HoneySQL's :default (DEFAULT) too
+             (for [[k props c] written
+                   :let [t (cond-> (accepted-type r c :assign opts) (maybe? c) nullable)]]
+               (if (:optional props) [(key k) {:optional true} [:or t [:= :default]]] [(key k) t]))
+             ;; one the database writes (generated, identity ALWAYS) takes it alone
+             (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
+               [(key k) {:optional true} [:= :default]]))))))
 
 (defn insert-schema
   "The [:map ...] of one row an INSERT's :values may carry into the table whose row schema is
    name (:pg.public/users, or :users in :schema), typed as arg-types types an argument: each column as an
-   argument assigned to it, keyed by its name; the columns the database writes (generated,
-   identity ALWAYS) left out, those it may fill (a default, identity BY DEFAULT, NULL)
-   optional. Options: docs/queries.md#options.
+   argument assigned to it, keyed by its name; those the database may fill (a default,
+   identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
+   (generated, identity ALWAYS) taking :default alone. Options: docs/queries.md#options.
 
    (insert-schema registry :pg.public/users)"
   ([registry name] (insert-schema registry name {}))
