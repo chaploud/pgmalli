@@ -3,7 +3,7 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
-## Unreleased
+## 0.3.3 (2026-11-03)
 
 * `h/arg-types` types an argument where
   [docs/queries.md](docs/queries.md#the-types-of-the-arguments) lists: now also compared with an
@@ -11,11 +11,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   of `INSERT INTO t (cols) SELECT`. `h/check` reads the same comparisons and items: an uncast
   string reaching an enum-typed expression, a row's element or such an item is
   `:uncast-string`, an unknown column in a row `:unknown-column`.
-
 * `h/row-schema` types a select expression of the forms
   [docs/queries.md](docs/queries.md#the-row-a-query-returns) lists, with its nullability. Any
   other is nullable `:any`, as every expression was.
-
 * `h/row-schema` gives a write with no RETURNING (INSERT, UPDATE, DELETE, TRUNCATE, under
   WITH or ON CONFLICT too) the row next.jdbc returns for it,
   `[:map [:next.jdbc/update-count :int]]`, where it gave nil; `h/query-schema` returned `:any`.
