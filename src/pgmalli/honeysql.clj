@@ -1343,7 +1343,9 @@
                                  ;; IS [NOT] DISTINCT FROM, with NULL, or {:compare :lenient}) or assigned to a
                                  ;; NOT NULL column
                                  (let [casts (filter #(and (vector? %) (= :cast (first %)) (= 3 (count %)) (arg-key (second %)))
-                                                     (tree-seq branch? seq stmt))
+                                                     ;; this statement's own and the items INSERT ... SELECT assigns: a
+                                                     ;; subquery's casts are its uses
+                                                     (mapcat own-nodes (cons (selected-items (:select (insert-parts stmt))) (vals stmt))))
                                        target (target-scope sc stmt schema)
                                        refusing (frequencies
                                                  (concat (when-not (= :lenient (:compare opts))

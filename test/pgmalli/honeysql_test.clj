@@ -579,7 +579,14 @@
     (is (nullable? {:select [:id] :from [:users] :where [:or [:is cast nil] [:= :id cast]]} {}) "an optional filter")
     (is (nullable? {:select [:id] :from [:users] :where [:is-distinct-from :referrer_id cast]} {}))
     (is (nullable? {:select [:id] :from [:users] :where [:= :id cast]} {:compare :lenient}))
-    (is (nullable? {:insert-into :nowhere :values [{:a cast}]} {}) "a column the registry lacks")))
+    (is (nullable? {:insert-into :nowhere :values [{:a cast}]} {}) "a column the registry lacks")
+    (is (not (nullable? {:select [:id] :from [:users] :where [:in :id {:select [:id] :from [:users] :where [:= :id cast]}]} {}))
+        "a subquery's comparison is the cast's use there alone")))
+
+(deftest a-domain-over-a-timestamp-with-a-precision-takes-its-java-time-type
+  (let [reg (pgmalli/registry {:registry {:pg.public/at3 [:time/instant {:pg/type "timestamp(3) with time zone"}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:at [:ref {:pg/type "at3"} :pg.public/at3]]]}})]
+    (is (m/validate (:x (h/arg-types reg {:update :t :set {:at :?x}})) (java.time.OffsetDateTime/now) {:registry reg}))))
 
 (deftest write-names-what-goes-in-a-cast-too
   (let [o {:schema "sample" :write {"text" [:or :string :keyword] "character varying" [:or :string :keyword]}}]

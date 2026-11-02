@@ -147,16 +147,16 @@
 
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: :write names what a
-   SettableParameter extension sends for a :pg/type; a date or timestamp a java.util.Date or
-   the java.time type pgjdbc takes (LocalDate, LocalDateTime, OffsetDateTime); an array column's argument is an array of
-   its elements' (array-type); otherwise the types read-type shares with it (:time extends
-   both sides)."
+   SettableParameter extension sends for a :pg/type; a date, time or timestamp a
+   java.util.Date or the java.time type of it pgjdbc sends (accept/sent-values); an array
+   column's argument is an array of its elements' (array-type); otherwise the types read-type
+   shares with it (:time extends both sides)."
   [schema {:keys [write time] :or {time :inst} :as opts}]
   (or (shape/read-as write schema)
       (when (array-column? schema) (array-type (write-type (last schema) opts) opts))
       (let [t (driver-type schema (dissoc opts :read) write-type)
             ;; pgjdbc also takes its java.time type as it is
-            native (some-> (pg-type schema) types/entry :name accept/sent-values)]
+            native (some-> (shape/type-name (shape/column-props schema)) types/entry :name accept/sent-values)]
         (if (and native (= :inst time) (= 'inst? (if (vector? t) (first t) t)))
           [:or t native]
           t))))
