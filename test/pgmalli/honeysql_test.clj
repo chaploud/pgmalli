@@ -469,6 +469,7 @@
         "an inlined number is typed by its text, which is not read here; an inlined string is text")
     (is (= [:map [:s [:string {:pg/type "text"}]]] (h/row-schema registry {:select [["s" :s]] :from [:users]} (assoc opts :stringtype :unspecified))))
     (is (= [:map [:b [:maybe :any]]] (row [[[(keyword "~") :id] :b]])) "~ alone is bitwise NOT")
+    (is (= [:map [:k [:maybe [:string {:pg/type "text"}]]]] (row [[[:->> :nick "k"] :k]])) "->> is text")
     (is (= [:map [:s [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]] (row [[[:sum :id] :s]]))
         "sum of a bigint is a numeric")
     (is (= [:map [:mood [:maybe [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"]]] [:n [:maybe bigint]]]
