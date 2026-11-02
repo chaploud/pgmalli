@@ -1257,8 +1257,9 @@
    column of the type's own values (:time's too) with the rows sent as it; assigned or cast, a
    number held to a number column's range (within). Compared, the values lose the bounds a
    comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
-   labels, a text label as a keyword too where a row of keywords goes; untyped own values, or
-   of a type pgmalli.impl.accept does not answer for, are the type alone."
+   labels, a text label as a keyword too where a row of keywords goes and a number label as each
+   number class sent; untyped own values, or of a type pgmalli.impl.accept does not answer for,
+   are the type alone (:any under a cast)."
   [registry s context {:keys [accept] :as opts}]
   (let [own (cond-> (driver-type registry jdbc/write-type s opts) (= :compare context) loose)
         t (slot-type registry s)
@@ -1278,8 +1279,9 @@
       (or (nil? t) (untyped? own)) own
       ;; labels, as each value class taken sends them: a text label as a keyword, a number as
       ;; the number class of each number row (1.0 as 1 where a bigint goes to a double precision)
-      (= :enum (shape/head own))
-      (let [[props labels] (if (map? (second own)) [(second own) (drop 2 own)] [nil (rest own)])
+      (= :enum (shape/kind own))
+      (let [e (if (= :enum (shape/head own)) own (shape/domain-base own))
+            [props labels] (if (map? (second e)) [(second e) (drop 2 e)] [nil (rest e)])
             kinds (set (map (comp shape/kind second) alts))
             as (fn [l] (concat (when (and (string? l) (some #(:keyword (shape/value-classes (second %))) alts)) [(keyword l)])
                                (when (number? l)
@@ -1287,7 +1289,8 @@
                                          (when (kinds 'decimal?) [(bigdec l)])
                                          (when (kinds :double) [(double l)])))))
             more (remove (set labels) (distinct (mapcat as labels)))]
-        (if (seq more) (into (cond-> [:enum] props (conj props)) (concat labels more)) own))
+        ;; a domain's checks stay around its labels
+        (if (seq more) (let [e' (into (cond-> [:enum] props (conj props)) (concat labels more))] (if (= e own) e' (mapv #(if (= % e) e' %) own))) own))
       :else
       (let [own-alts (shape/alternatives own)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
@@ -1297,9 +1300,9 @@
         (if (= (count all) (count own-alts)) own (into [:or] all))))))
 
 (defn- compared-type
-  "The type of an argument compared with a column of type t by op: the column's kind (an enum's
-   labels kept, its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond
-   them, matching no row), without NULL; :in's a non-empty vector, list or set of it, as
+  "The type of an argument compared with a column by op, t as accepted-type gives it compared
+   (its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond them, matching
+   no row), without NULL; :in's a non-empty vector, list or set of it, as
    sql/format expands it (IN () is not SQL); an array's the collections :write's rows with :pgmalli/element send (jdbc/array-type).
    {:compare :lenient} takes nil too but in :in (nil formats as IN ?)."
   [op t array? {:keys [compare] :as opts}]
@@ -1663,9 +1666,10 @@
   [registry name derived what opts]
   (options! registry opts)
   (let [r (reading registry)
-        ;; a table HoneySQL names (:users), in :schema
-        name (if (or (and (keyword? name) (nil? (namespace name))) (and (string? name) (not (str/includes? name "/"))))
-               (shape/schema-key (:schema opts default-schema) (clojure.core/name name))
+        ;; a table as HoneySQL names it (:users, :app.users, "users"), not a registry name (:pg.app/users)
+        name (if (or (and (keyword? name) (not (some-> (namespace name) (str/starts-with? "pg."))))
+                     (and (string? name) (not (str/includes? name "/"))))
+               (shape/table-key (qualified (keyword name) (:schema opts default-schema)))
                name)
         s (shape/schema-of registry name)
         dn (shape/derived-name name derived)]

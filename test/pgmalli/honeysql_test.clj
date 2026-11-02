@@ -583,14 +583,21 @@
       "an alias is a name"))
 
 (deftest an-option-of-pgmalli-0-3-says-what-it-is-now
-  (doseq [[o says] [[{:stringtype :unspecified} #":stringtype :unspecified is :write \(h/pgjdbc-write \{:stringtype :unspecified\}\)"]
+  (doseq [[o says] [[{:stringtype :unspecified} #":stringtype :unspecified is \(h/pgjdbc-write \{:stringtype :unspecified\}\)"]
                     [{:write {"text" [:or :string :keyword]}} #"\"text\" \[:or :string :keyword\] is a row \[:keyword :unknown\]"]
                     [{:write {"mood" :keyword}} #"\"mood\" :keyword names no type pgmalli knows: an enum's value goes untyped, a row \[:keyword :unknown\]"]
                     [{:write {"date" :time/local-date}} #"\"date\" :time/local-date is in \(h/pgjdbc-write\) already"]
+                    [{:write {"date" :string}} #"\"date\" :string is a row \[:string \"date\"\]"]
                     [{:write {"jsonb" [:map-of :keyword :any]}} #"\"jsonb\" \[:map-of :keyword :any\] is a row \[\[:map-of :keyword :any\] \"jsonb\"\]"]
                     [{:write {:enum [:keyword]}} #":enum \[:keyword\] is a row \[:keyword :unknown\]"]
-                    [{:write {:array [:sequential]}} #":array \[:sequential\] is a row \[\[kind :pgmalli/element\] :unknown\]"]]]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo says (h/arg-types registry {:select [:id] :from [:users]} o)) (pr-str o))))
+                    [{:write {:array [:sequential]}} #":array's :sequential is a row \[\[:sequential :pgmalli/element\] :unknown\]"]]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo says (h/arg-types registry {:select [:id] :from [:users]} o)) (pr-str o)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"All told, :write is \(into \(h/pgjdbc-write \{:stringtype :unspecified\}\) \[\[:keyword :unknown\] \[\[:sequential :pgmalli/element\] :unknown\]\]\)"
+                        (h/arg-types registry {:select [:id] :from [:users]}
+                                     {:stringtype :unspecified :write {"text" [:or :string :keyword] :enum [:string :keyword] :array [:sequential]}})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #":foo is no option of pgmalli 0.3's :write"
+                        (h/arg-types registry {:select [:id] :from [:users]} {:write {:foo :int}}))))
 
 (deftest pgjdbc-write-takes-pgjdbcs-stringtype
   (is (= :unknown (second (first (filter (comp #{:string} first) (h/pgjdbc-write {:stringtype :unspecified}))))))
@@ -605,6 +612,10 @@
                     [[[:pgmalli/element :unknown]] #":pgmalli/element goes in a collection"]
                     [[[[:maybe :pgmalli/element] :unknown]] #":pgmalli/element goes in a collection"]
                     [[[:keyword "user_status"]] #"an enum's or a domain's value goes untyped: \[:keyword :unknown\]"]
+                    [[[:int :int8]] #"a string: \[:int \"int8\"\]"]
+                    [[["int8" :int]] #"a row is \[schema type\]: \[:int \"int8\"\]"]
+                    [[[[:vector :int] "bigint[]"]] #"an array goes as a collection of its elements"]
+                    [[[[:vector :string] :unknown]] #"a collection sent untyped is an array, its elements :pgmalli/element: \[\[:vector :pgmalli/element\] :unknown\]"]
                     [[[[:or :string [:map [:a :strng]]] "text"]] #"no malli schema the registry reads \(:strng\)"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (h/arg-types registry {:select [:id] :from [:users]} {:write w})) (pr-str w))))
 
@@ -693,6 +704,19 @@
   (is (= {:n [:maybe [:or [:string {:pg/type "text"}] :keyword]]}
          (h/arg-types registry {:update :users :set {:group_name :?n} :where [:= :id 1]} {:schema "sample" :write (conj (h/pgjdbc-write) [:keyword "varchar"])}))))
 
+(deftest pgmallis-own-types-are-no-strings
+  (is (= [:uncast-string] (map :kind (h/check registry {:select [:id] :from [:users] :where [:= :mood "sad"]}
+                                              {:schema "sample" :write [[:pg/integer "integer"] [:string "varchar"]]})))
+      "a String still goes as varchar"))
+
+(deftest an-enum-domain-takes-its-labels-alone
+  (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
+                                          :pg.public/good [:and [:ref {:pg/type "mood"} :pg.public/mood] [:not= "ok"]]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:g [:ref {:pg/type "good"} :pg.public/good]]]}})
+        t (:g (h/arg-types reg {:update :t :set {:g :?g}} {:write (conj (h/pgjdbc-write) [:keyword :unknown])}))]
+    (is (m/validate t :sad {:registry reg}))
+    (is (not (m/validate t :glad {:registry reg})) "no keyword but a label")))
+
 (deftest a-registry-without-the-derived-schema-says-so
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry has no insert schema"
                         (h/insert-schema (merge (m/default-schemas) {:pg.public/t [:map {:pg/table "public.t"} [:id :int]]}) :pg.public/t))
@@ -766,7 +790,9 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes its row schema :pg.sample/users" (h/insert-schema registry :pg.sample.users/insert)))
     (is (= [:born :closed-at :group-id] (take 3 (map first (drop 2 (h/insert-schema registry :pg.sample/users {:schema "sample" :kebab? true})))))
         "keyed as HoneySQL writes a column, kebab-cased as next.jdbc reads it back")
-    (is (= v (h/insert-schema registry :users {:schema "sample"}) (h/insert-schema registry "users" {:schema "sample"})) "a table as HoneySQL names it, in :schema")
+    (is (= v (h/insert-schema registry :users {:schema "sample"}) (h/insert-schema registry "users" {:schema "sample"})
+           (h/insert-schema registry :sample.users) (h/insert-schema registry :sample/users) (h/insert-schema registry "sample.users"))
+        "a table as HoneySQL names it, in :schema")
     (let [reg (pgmalli/registry {:registry {:pg.public/v [:map {:pg/view "public.v"} [:id [:maybe [:int {:pg/type "bigint"}]]]]}})]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"a view has no insert schema" (h/insert-schema reg :pg.public/v))))))
 

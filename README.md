@@ -178,7 +178,7 @@ sent do not show.
 
 These schemas hold the database's types. For a row your code builds and HoneySQL sends,
 `h/insert-schema` and `h/update-schema` type each column as an argument, with what your
-application sends ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)).
+application sends ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 
 A `numeric` column takes a BigDecimal (`10M`); a long such as `10` fails. Enum values are
 strings:

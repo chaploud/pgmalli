@@ -117,15 +117,15 @@ keyed as in `sql/format`'s `:params`:
 | compared with a column, in a condition or in a select or ORDER BY expression | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type |
 | compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
-| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:write`](#what-your-application-sends) sends: a string too, and an enum type's labels alone; `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
+| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:write`](#what-your-application-sends) sends: a string too, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:write`](#what-your-application-sends) sends one |
 | a `LIKE` pattern | the column's kind (`:string`) |
-| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal or double too, held to the range half a unit wider (at least -0.5) |
+| in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal or double too, held to the range half a unit wider (at least -0.5, which PostgreSQL may round below 0) |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
 A column's type takes its own values, a `numeric`, `real` or `double precision` one an integer
-too (a `double precision` one a `real` too), as a number of its kind. PostgreSQL takes more, a `bigint`
+too, and a `double precision` one a `real` where a row sends one, which PostgreSQL converts without loss. PostgreSQL takes more, a `bigint`
 compared with a `numeric`, any value assigned to a `text` column, which hides a mix-up a type
 would catch. `{:accept :postgresql}` types an argument with all of it; assigned or cast, a number
 is held to a number column's range (a fraction going to an integer type to the range half a unit
@@ -138,53 +138,6 @@ wider, as PostgreSQL rounds it):
 (h/arg-types registry {:select [:id] :from [:users] :where [:> :created_at [:cast :?since :timestamptz]]})
 ;; => {:since [:or [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time :string :time/local-date :time/local-date-time]}
 ```
-
-### What your application sends
-
-An argument takes its column's own values as pgmalli reads them: the `:time` type of a date or
-timestamp, an enum's labels, a `varchar(n)`'s strings. What else reaches the column is decided
-by what your application sends: pgjdbc sends a `Long` as `bigint`, a `String` as `varchar`, and
-refuses a keyword unless a `SettableParameter` extension of yours sends it. `:write` lists it,
-rows of `[schema type]`: the values, and the type (a name or alias of [types.md](types.md)) they
-reach PostgreSQL as. `h/pgjdbc-write` gives pgjdbc's rows, the default; build yours from it as
-a vector (`conj` onto a seq would put a row first): where rows of the same kind (two `:string`
-rows) both reach an argument, it takes the first one's schema, after the column's own values:
-
-```clojure
-(h/pgjdbc-write)
-;; => [[:int "bigint"] [decimal? "numeric"] [:double "double precision"] [:boolean "boolean"] [:string "character varying"] [:uuid "uuid"] [bytes? "bytea"] [:time/local-date "date"] [:time/local-time "time without time zone"] [:time/offset-time "time with time zone"] [:time/local-date-time "timestamp without time zone"] [:time/offset-date-time "timestamp with time zone"]]
-
-(def app-write
-  (-> (into [] (remove (comp #{"timestamp without time zone"} second))   ; never a LocalDateTime
-            (h/pgjdbc-write {:stringtype :unspecified}))                 ; the connection's stringtype
-      (conj [:keyword :unknown]                       ; your extension: (setObject (name k) Types/OTHER)
-            [[:sequential :pgmalli/element] :unknown])))   ; and a vector as an array
-
-(h/arg-types registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}
-             {:write app-write})
-;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:sequential [:int #:pg{:type "bigint"}]]}
-```
-
-A row adds to what a column takes where the column holds its type as its own (its own type, a
-narrower number for a number column, an untyped value for a text or enum column), and wherever
-PostgreSQL takes it under `:accept :postgresql` or in a cast. A row left out takes nothing away
-from a column's own values; the java.time values come from the rows, not the column: without
-the `timestamp without time zone` row, a `LocalDateTime` reaches no argument.
-
-`:unknown` is a value sent with no type (a String under `stringtype=unspecified`, an extension's
-`Types/OTHER`), which PostgreSQL reads as text in the type of where it goes: a text or varchar
-column takes it as a string, an enum or a CHECK's list as its labels (a keyword as a text
-label's name); another column only under `:accept :postgresql` or in a cast.
-
-A json, jsonb or interval column, where pgmalli knows only the driver's object, takes the rows
-of exactly its type (`[[:map-of :keyword :any] "jsonb"]`); `:any` without one. An array argument
-takes the rows with `:pgmalli/element` in a collection (`:sequential`, `:vector`, `:set`,
-`:pg/array`), the element's type in its place; pgmalli reads such a row as sent untyped
-(`:unknown`), its type taken from where it goes. Without one an array argument is `:any`.
-
-Under pgjdbc's default, which sends a `String` as `varchar`, an enum argument is still typed as
-its labels as strings, though PostgreSQL takes no varchar for an enum: `h/check` reports it as
-`:uncast-string`.
 
 Where its uses type an argument differently, the first statement wins (an enclosing one before
 its subqueries), and within it a comparison (the first), then `:limit` / `:offset`, a cast, an
@@ -223,13 +176,16 @@ key is required, as `sql/format` refuses a missing one:
 ;; => [:map [:id [:int #:pg{:type "bigint"}]] [:nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]]
 ```
 
+### A row written into a table
+
 Where your code passes a whole row, a map built at run time for `:values` or `:set`,
 `h/insert-schema` and `h/update-schema` type it: each column as an argument assigned to it (what
 `:write` sends, the column's range), the columns the database writes left out, those it may fill
 optional (every one, for `:set`; HoneySQL writes an empty `:set` as `SET` with nothing after it,
-which PostgreSQL refuses, so check it has a key), keyed by the column's name without a namespace, as HoneySQL writes it (kebab-cased under
+which PostgreSQL refuses, so check it has a key), keyed by the column's name without a
+namespace, as HoneySQL writes it (kebab-cased under
 `:kebab? true`). The table's CHECKs across columns are not in it; validate with the registry's
-insert schema (`:pg.public.users/insert`) too where they matter. Validate it under the registry
+insert schema (`:pg.public.users/insert`, `/update` for `h/update-schema`) too where they matter. Validate it under the registry
 (`{:registry registry}`):
 
 ```clojure
@@ -239,6 +195,61 @@ insert schema (`:pg.public.users/insert`) too where they matter. Validate it und
 (h/insert-schema registry :pg.public/users)
 ;; => [:map {:closed true} [:closed_at {:optional true} [:maybe [:or [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time]]] [:created_at {:optional true} [:or [inst? #:pg{:default [:now], :type "timestamp with time zone"}] :time/offset-date-time]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:group_id [:int {:pg/type "integer", :min -2147483648, :max 2147483647}]] [:nick {:optional true} [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]] [:status {:optional true} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]]
 ```
+
+A function that takes such a row and runs the query takes it in its function schema, in the
+row's place: `[:=> [:cat :any (h/insert-schema registry :users)] ...]`, the return from
+`h/query-schema`.
+
+### What your application sends
+
+An argument takes its column's own values as pgmalli reads them: the `:time` type of a date or
+timestamp, an enum's labels, a `varchar(n)`'s strings. What else reaches the column is decided
+by what your application sends: pgjdbc sends a `Long` as `bigint`, a `String` as `varchar`, and
+refuses a keyword unless a `SettableParameter` extension of yours sends it. `:write` lists it,
+rows of `[schema type]`: the values, and the type (a name or alias of [types.md](types.md)) they
+reach PostgreSQL as. `h/pgjdbc-write` gives pgjdbc's rows, the default; build yours from it as
+a vector (`conj` onto a seq puts a row first). Row order matters: where two rows of the same
+kind (two `:string` rows) reach an argument, it takes the first one's schema, after the column's
+own values. A string literal goes as the first `:string` row's type, untyped if any `:string`
+row is `:unknown`:
+
+```clojure
+(h/pgjdbc-write)
+;; => [[:int "bigint"] [decimal? "numeric"] [:double "double precision"] [:boolean "boolean"] [:string "character varying"] [:uuid "uuid"] [bytes? "bytea"] [:time/local-date "date"] [:time/local-time "time without time zone"] [:time/offset-time "time with time zone"] [:time/local-date-time "timestamp without time zone"] [:time/offset-date-time "timestamp with time zone"]]
+
+(def app-write
+  (-> (into [] (remove (comp #{"timestamp without time zone"} second))   ; never a LocalDateTime
+            (h/pgjdbc-write {:stringtype :unspecified}))                 ; the connection's stringtype
+      (conj [:keyword :unknown]                       ; your extension: (setObject (name k) Types/OTHER)
+            [[:sequential :pgmalli/element] :unknown])))   ; and a vector as an array
+
+(h/arg-types registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}
+             {:write app-write})
+;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:sequential [:int #:pg{:type "bigint"}]]}
+```
+
+A row adds to what a column takes where its type is the column's or converts to it without loss
+(a narrower number for a number column, another string type for a string column, an untyped
+value for a text or enum column), and wherever PostgreSQL takes it under `:accept :postgresql`
+or in a cast. A row left out takes nothing away from a column's own values; the java.time
+values other than the `:time` option's come from the rows: without the `timestamp without time
+zone` row, a `LocalDateTime` reaches no argument.
+
+`:unknown` is a value sent with no type (a String under `stringtype=unspecified`, an extension's
+`Types/OTHER`), which PostgreSQL reads as text in the type of where it goes: a text or varchar
+column takes it as a string, an enum or a CHECK's list as its labels (a keyword as a text
+label's name); another column only under `:accept :postgresql` or in a cast.
+
+A json, jsonb or interval column, where pgmalli knows only the driver's object, takes the rows
+of exactly its type (`[[:map-of :keyword :any] "jsonb"]`); `:any` without one. An array argument
+takes the rows with `:pgmalli/element` in a collection (`:sequential`, `:vector`, `:set`,
+`:pg/array`), the element's type in its place; such a row's type is `:unknown`: PostgreSQL types
+an array from where it goes, and reads each element as the column's type, so `:accept` does not
+widen an element. Without one an array argument is `:any`.
+
+Under pgjdbc's default, which sends a `String` as `varchar`, an enum argument is still typed as
+its labels as strings, though PostgreSQL takes no varchar for an enum: `h/check` reports it as
+`:uncast-string`.
 
 ## The row a query returns
 

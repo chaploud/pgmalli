@@ -204,8 +204,9 @@
   (let [k (kind t)]
     (cond (#{:string 'string? :re} k) #{:string}
           (#{:keyword 'keyword? 'simple-keyword? 'qualified-keyword?} k) #{:keyword}
-          (or (and (keyword? k) (= "time" (namespace k)))
-              (#{:int :double :float :boolean :uuid :symbol :nil :map :map-of :tuple :sequential :vector :set :pg/array
+          ;; malli.experimental.time's types, and pgmalli's own (pgtypes/schemas): numbers, bytes, arrays
+          (or (and (keyword? k) (#{"time" "pg"} (namespace k)))
+              (#{:int :double :float :boolean :uuid :symbol :nil :map :map-of :tuple :sequential :vector :set
                  'int? 'integer? 'decimal? 'double? 'float? 'number? 'boolean? 'uuid? 'bytes? 'inst? 'nil?} k)) #{}
           :else #{:string :keyword})))
 

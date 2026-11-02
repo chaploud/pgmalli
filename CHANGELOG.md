@@ -14,8 +14,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `:write` is what an application sends: rows of `[schema type]`, the type a name or alias, or
   `:unknown` for a value sent untyped. `h/pgjdbc-write` gives pgjdbc's rows, the default;
   `(h/pgjdbc-write {:stringtype :unspecified})` gives them under that connection property. A
-  row adds to a column's own values where the column holds its type as its own (a narrower
-  number, an untyped value to a text or enum column), and wherever PostgreSQL takes it under
+  row adds to a column's own values where its type converts to the column's without loss (a
+  narrower number, another string type, an untyped value to a text or enum column), and wherever PostgreSQL takes it under
   `:accept :postgresql` or in a cast. A row of `:pgmalli/element` in a collection is what an
   array argument may be. A type pgmalli does not know, or a schema the registry does not read,
   is an error naming the row.
@@ -40,8 +40,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `:write {:enum [:string :keyword]}` are a row `[:keyword :unknown]` (or the type your
   extension sends a keyword as): a column's strings and labels stay its own. `:write {:array
   [k ...]}` is a row `[[k :pgmalli/element] :unknown]` for each k. `:write {"T" s}` for another
-  type is a row `[s "T"]`, left out where `(h/pgjdbc-write)` has it (`date`, `uuid`, the
-  numbers). A row adds to a column's own values rather than replacing them, except where pgmalli
+  type is a row `[s "T"]`, left out where `(h/pgjdbc-write)` has that same row (`[:uuid "uuid"]`,
+  `[:int "bigint"]` ...). A row adds to a column's own values rather than replacing them, except where pgmalli
   knew only the driver's object (`:any`: json, jsonb, interval; an array takes the
   `:pgmalli/element` rows).
 
