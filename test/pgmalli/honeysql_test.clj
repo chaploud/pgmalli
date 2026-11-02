@@ -603,6 +603,12 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"All told, :write is \[\[:keyword :unknown\] \[:string :unknown\]\]"
                         (h/arg-types registry {:select [:id] :from [:users]} {:write [[:keyword :unknown]] :stringtype :unspecified}))
       "a String goes untyped where no row said how")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"All told, :write is \(into \(h/pgjdbc-write \{:stringtype :unspecified\}\) \[\[:keyword :unknown\]\]\)"
+                        (h/arg-types registry {:select [:id] :from [:users]} {:write (conj (h/pgjdbc-write) [:keyword :unknown]) :stringtype :unspecified}))
+      "rows built on pgjdbc's as the call")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is no \[schema type\] row"
+                        (h/arg-types registry {:select [:id] :from [:users]} {:write [:string "varchar"] :stringtype :unspecified}))
+      "a row's shape before :stringtype")
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #":stringtype nil is no option; leave it out"
                         (h/arg-types registry {:select [:id] :from [:users]} {:write [[:string "text"]] :stringtype nil})))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #":foo is no option of pgmalli 0.3's :write"
@@ -796,7 +802,10 @@
   (let [t (:xs (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:any :?xs]]}
                             (apply sends {:schema "sample" :accept :postgresql} (collections :sequential))))]
     (is (m/validate t [1] {:registry registry}))
-    (is (not (m/validate t [1.5M] {:registry registry})) "'{1.5}'::bigint[] is invalid input")))
+    (is (not (m/validate t [1.5M] {:registry registry})) "'{1.5}'::bigint[] is invalid input"))
+  (let [t (:xs (h/arg-types registry {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
+                            (apply sends {:schema "sample" :accept :postgresql} (collections :sequential))))]
+    (is (not (m/validate t [1.5M] {:registry registry})) "unnest's elements too")))
 
 (deftest a-types-own-values-come-first-however-many-kinds-it-takes
   (is (= [:string {:pg/type "text"}] (second (second (:x (h/arg-types registry {:select [[[:cast :?x :text] :t]]} {:schema "sample"})))))))
@@ -837,7 +846,12 @@
         "keyed as HoneySQL writes a column, kebab-cased as next.jdbc reads it back")
     (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line1 :string]]}})]
       (is (= [:address-line1] (map first (drop 2 (h/insert-schema reg :t {:kebab? true}))))
-          "HoneySQL writes :address-line1 as address_line1, :address-line-1 as address_line_1"))
+          "HoneySQL writes :address-line1 as address_line1, :address-line-1 as address_line_1")
+      (is (= [:address_line1] (map first (drop 2 (h/insert-schema reg :t {:kebab? true :format {:quoted true}}))))
+          "quoted, HoneySQL writes a key as it is"))
+    (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} ["a-b" :string]]}})]
+      (is (= ["a-b"] (map first (drop 2 (h/insert-schema reg :t {:kebab? true}))))
+          "a column keyed by a string, which HoneySQL quotes as it is"))
     (is (= v (h/insert-schema registry :users {:schema "sample"}) (h/insert-schema registry "users" {:schema "sample"})
            (h/insert-schema registry :sample.users) (h/insert-schema registry :sample/users) (h/insert-schema registry "sample.users"))
         "a table as HoneySQL names it, in :schema")
@@ -1531,6 +1545,7 @@
 (deftest each-migration-line-gives-its-row
   (doseq [[w says] [[{"mood" :keyword} #"All told, :write is \(into \(h/pgjdbc-write\) \[\[:keyword :unknown\]\]\)"]
                     [{"text" [:or :string :keyword]} #"All told, :write is \(into \(h/pgjdbc-write\) \[\[:keyword :unknown\]\]\)"]
+                    [{"mood" [:or :string :keyword]} #"All told, :write is \(into \(h/pgjdbc-write\) \[\[:keyword :unknown\]\]\)"]
                     [{:enum [:string]} #":enum \[:string\] needs no row; a column's labels stay its own. All told, :write is \(h/pgjdbc-write\) "]
                     [{:stringtype :unspecified} #"All told, :write is \(h/pgjdbc-write \{:stringtype :unspecified\}\) "]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (h/arg-types registry {:select [:id] :from [:users]} {:schema "sample" :write w})) (pr-str w)))

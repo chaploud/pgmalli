@@ -117,15 +117,16 @@ keyed as in `sql/format`'s `:params`:
 | compared with a column, in a condition or in a select or ORDER BY expression | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type |
 | compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
-| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:write`](#what-your-application-sends) sends: a string too, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
+| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:write`](#what-your-application-sends) sends: a string too, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:write`](#what-your-application-sends) sends one |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none; under `:accept :postgresql` a decimal or double too, held to the range half a unit wider (at least -0.5, which PostgreSQL may round below 0) |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
-A column's type takes its own values, and the narrower numbers a row sends (an integer to a
-`numeric`, `real` or `double precision` column, a `real` to a `double precision` one). PostgreSQL takes more, a `bigint`
+A column's type takes its own values, and the narrower numbers a row sends (a narrower integer,
+an integer to a `numeric`, `real` or `double precision` column, a `real` to a `double precision`
+one). PostgreSQL takes more, a `bigint`
 compared with a `numeric`, any value assigned to a `text` column, which hides a mix-up a type
 would catch. `{:accept :postgresql}` types an argument with all of it. Assigned or cast, a number
 is held to a number column's range (a fraction going to an integer type to the range half a unit
@@ -181,14 +182,13 @@ key is required, as `sql/format` refuses a missing one:
 Where your code passes a whole row, a map built at run time for `:values` or `:set`,
 `h/insert-schema` and `h/update-schema` type it. Each column is typed as an argument assigned to
 it (what `:write` sends, held to the column's range) and keyed by its name without a namespace,
-as HoneySQL writes it back to the column (its `_` as `-` under `:kebab? true`: `:address-line1`
-for `address_line1`). A column the database may fill is
+as HoneySQL writes it back to the column (its `_` as `-` under `:kebab? true` where the format
+leaves names unquoted: `:address-line1` for `address_line1`). A column the database may fill is
 optional and takes HoneySQL's `:default` too; one it writes (generated, identity ALWAYS) takes
 `:default` alone. In `h/update-schema` every column is optional. HoneySQL writes an empty `:set`
-as `SET` with nothing after it, which PostgreSQL refuses, so check that the row has a key. The
-table's CHECKs across columns are not in it; where they matter, validate with the registry's
-`:pg.public.users/insert` (`/update`) too. Validate it under the registry (`{:registry
-registry}`):
+as `SET` with nothing after it, which PostgreSQL refuses, so check that the row has a key. Validate it under the registry
+(`{:registry registry}`); the table's CHECKs across columns are not in it, so where they matter
+validate with `:pg.public.users/insert` (`/update`) too:
 
 ```clojure
 (m/validate (h/insert-schema registry :users) {:email "ann@example.com" :group_id 1} {:registry registry})
@@ -203,8 +203,9 @@ row's schema in the row argument's place, and as the return, what `h/query-schem
 query without the row:
 
 ```clojure
-[:=> [:cat :any (h/insert-schema registry :users)]
-     (last (h/query-schema registry [:db] {:insert-into :users :returning [:id]} {:result :one}))]
+(m/schema [:=> [:cat :any (h/insert-schema registry :users)]
+               (last (h/query-schema registry [:db] {:insert-into :users :returning [:id]} {:result :one}))]
+          {:registry registry})
 ```
 
 ### What your application sends

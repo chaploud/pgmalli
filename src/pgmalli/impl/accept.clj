@@ -126,13 +126,15 @@
 (def ^:private widened
   "The number types a number type takes as its own besides its own: the integers to a wider
    number type, real to double precision. PostgreSQL also converts numeric to real and double
-   precision implicitly, which loses digits; pgmalli leaves that out."
+   precision implicitly; pgmalli leaves that out, a decimal sent to a float column being the
+   mix-up a type would catch."
   {"bigint" #{"smallint" "integer"} "integer" #{"smallint"}
    "numeric" integers "double precision" (conj integers "real") "real" integers})
 
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type, a number of a narrower
-   kind (an integer for a numeric or a bigint, a real for a double precision), a string of another string type, or one sent untyped where t's values are text
+   kind (a narrower integer, an integer for a numeric, real or double precision, a real for a
+   double precision), a string of another string type, or one sent untyped where t's values are text
    (a string type, an enum), which PostgreSQL reads as the value itself."
   [t sent]
   (or (= t sent) (contains? (widened t) sent) (and (strings t) (strings sent))
