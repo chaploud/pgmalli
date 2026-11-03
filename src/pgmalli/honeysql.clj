@@ -768,23 +768,24 @@
 
 (defn- positions
   "The expression positions of statement stmt, one read for check and arg-types: {:x node
-   :clause k :chain scopes :negated? bool} for every node of every clause sql/format writes, in
+   :clause k :chain scopes :negated? bool :top? bool} for every node of every clause sql/format writes, in
    its order, as a walk of each clause's value meets them, not descending into the statements nested in it, scopes the chain clause-parts says the node is read in,
    negated? under an odd number of :not through :and and :or alone ([:not [:= :a 1]] is a <> 1;
-   CASE or a function's argument under NOT is not negated). A value written to a column is
+   CASE or a function's argument under NOT is not negated), top? for the clause's value itself
+   (one of :values, :set, an item of FROM or a join). A value written to a column is
    besides {:x value :assign column :event e :target scope :may-drop? bool}: e the write
    (:insert, :update), scope the target table's, may-drop? where the row may not reach the
    column. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
    its items go to those columns by position."
   [stmt chain outer feed {:keys [schema]}]
   (let [nodes (fn [k x c]
-                (letfn [(walk [x neg?]
+                (letfn [(walk [x neg? top?]
                           (lazy-seq
-                           (cons {:x x :clause k :chain c :negated? neg?}
+                           (cons {:x x :clause k :chain c :negated? neg? :top? top?}
                                  (when (and (branch? x) (not (statement? x)))
                                    (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
-                                     (mapcat #(walk % neg?) (seq x)))))))]
-                  (walk x false)))
+                                     (mapcat #(walk % neg? false) (seq x)))))))]
+                  (walk x false true)))
         target (target-scope chain stmt schema)
         written (group-by #(nth % 3) (writes stmt))
         assigned (fn [clause c]
@@ -1742,9 +1743,8 @@
 (defn- limit-args
   "LIMIT and OFFSET take a bigint of at least 0 by assignment, NULL for none."
   [registry ps opts]
-  (for [{:keys [x clause]} (expression-nodes ps)
-        :when (#{:limit :offset} clause)
-        :when (arg-key x)]
+  (for [{:keys [x clause top?]} (expression-nodes ps)
+        :when (and top? (#{:limit :offset} clause) (arg-key x))]
     [x (nullable (accepted-type registry [:int {:pg/type "bigint" :min 0}] :assign opts))]))
 
 (defn- cast-arrays

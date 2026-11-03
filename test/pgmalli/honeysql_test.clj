@@ -2137,3 +2137,8 @@
                                                         [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]]]}})]
     (is (= :maybe (first (:g (h/arg-types reg {:insert-into :t :values [{:id 1 :g [:cast :?g :integer]}]}))))
         "nor a cast's argument: the trigger may fill the NULL it makes")))
+
+(deftest limit-types-its-own-argument-not-one-inside-an-expression
+  (is (not= (:o (args {:select [:id] :from [:users] :offset :?o}))
+            (:a (args {:select [:id] :from [:users] :offset [:+ :?a 1]})))
+      "a + 1 is at least 0, a need not be"))
