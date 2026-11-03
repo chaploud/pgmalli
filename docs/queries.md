@@ -458,8 +458,8 @@ with aliases and CTE names resolved. Use it to find the queries a change to a ta
 
 ## Options
 
-`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema`, `h/query-schema`, `h/values-schema`,
-`h/set-schema` and `h/tables` take the same options map. pgmalli reads what you pass to
+`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema`, `h/analyze`, `h/query-schema`,
+`h/values-schema`, `h/set-schema` and `h/tables` take the same options map. pgmalli reads what you pass to
 next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dialect!`,
 `set-options!`) are not read, so pass them in `:format`.
 
@@ -504,6 +504,15 @@ row, `{:result :one}` drops the `[:maybe]`:
 
 (last (h/query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]}))
 ;; => [:sequential {:max 1} [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]
+```
+
+`h/analyze` gives what `h/query-schema` is built of, for code that builds a schema of its own:
+the arguments as `h/arg-types` types them, the row as `h/row-schema` (nil where it cannot be
+told), how many rows where the data tells (nil otherwise), and the problems of `h/check`:
+
+```clojure
+(h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
+;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems []}
 ```
 
 A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns,

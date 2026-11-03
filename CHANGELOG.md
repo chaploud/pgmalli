@@ -67,6 +67,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Added
 
+* `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems}`: the
+  arguments' types, the row, how many rows where the data tells, and the problems of `h/check`
+  ([docs/queries.md](docs/queries.md#function-schemas)). `h/query-schema` is built of it.
 * `{:read {:enum :keyword}}`: an extension reading every enum type's value as a keyword
   ([docs/reading-rows.md](docs/reading-rows.md#your-own-extensions)).
 * `:send` says what your application sends, as pgjdbc's `setObject` decides it by a value's

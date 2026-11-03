@@ -2624,12 +2624,32 @@
               unbounded-limit? (assoc :min 0))]
       (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
 
+(defn analyze
+  "{:args :row :rows :problems} of a query, what one reading of it tells: :args as arg-types
+   gives them, :row as row-schema (nil when it cannot be told), :rows {:min n :max m} of the rows
+   a statement returns where the data tells (docs/queries.md#function-schemas), nil otherwise,
+   :problems as check finds them. query-schema builds a function schema of it. Options:
+   docs/queries.md#options.
+
+   (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
+   ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:users/email ...]], :rows {:min 0, :max 1}, :problems []}"
+  ([registry body] (analyze registry body {}))
+  ([registry body opts]
+   (jdbc/options! opts)
+   (let [body (query! body)
+         registry (reading registry)
+         opts (with-defaults registry opts)]
+     {:args (arg-types registry body opts)
+      :row (row-schema registry body opts)
+      :rows (row-count registry body opts)
+      :problems (check registry body opts)})))
+
 (defn query-schema
   "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
-   and running body: the args' types from arg-types (:any for a key the query lacks), the
-   row from row-schema (:any when it cannot be resolved), [:sequential {:max n} row] where the
-   data tells how many rows (docs/queries.md#function-schemas): under {:result :one} no
-   [:maybe] where it tells one.
+   and running body, of what analyze tells: the args' types (:any for a key the query lacks), the
+   row (:any when it cannot be resolved), [:sequential {:max n} row] where the data tells how
+   many rows (docs/queries.md#function-schemas): under {:result :one} no [:maybe] where it tells
+   one.
 
    (query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]})
 
@@ -2645,16 +2665,12 @@
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
                   {:given args}))
-   (let [body (query! body)
-         registry (reading registry)
-         opts (with-defaults registry opts)
-         types (arg-types registry body opts)
-         problems (into (check registry body opts)
-                          (for [k (sort-by str (data-args body)) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))
-         row (row-schema registry body opts)]
+   (let [{types :args :keys [row rows problems]} (analyze registry body opts)
+         problems (into problems
+                        (for [k (sort-by str (data-args (query! body))) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))]
      (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
            [(into [:cat] (map #(get types % :any)) args)
-            (let [{:keys [min max]} (row-count registry body opts)]
+            (let [{:keys [min max]} rows]
               (cond (nil? row) :any
                     (= :one result) (if (or (= update-count row) (= 1 min)) row [:maybe row])
                     max [:sequential (cond-> {:max max} (pos? min) (assoc :min min)) row]
