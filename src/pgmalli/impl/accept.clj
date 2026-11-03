@@ -52,17 +52,18 @@
 
 ;;; what PostgreSQL takes
 
-(defn answers?
-  "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one."
-  [t]
-  (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]))))
-
 (defn- string-type?
   "Whether t is of PostgreSQL's string category, or an extension's type of strings (citext),
    which pg_catalog's catalog does not hold."
   [t]
   (boolean (or (= "S" (types/category t))
                (when-let [e (and (string? t) (types/entry t))] (and (:extension e) (= :string (:schema e)))))))
+
+(defn answers?
+  "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one, or an
+   extension's type of strings (citext)."
+  [t]
+  (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]) (string-type? t))))
 
 (def ^:private numbers (set (for [[t e] types/types :when (#{:integer :exact :float} (:eval e))] t)))
 
