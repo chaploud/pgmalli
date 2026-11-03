@@ -143,8 +143,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An argument (or an `unnest`'s element) that `INSERT INTO t (cols) SELECT` assigns to a NOT NULL
   column takes nil where the SELECT may drop the row before it reaches the column: `WHERE`,
   `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, or a `FROM` item other than
-  `unnest` of arguments. A SELECT of arguments alone, or from `unnest` of them, types it as
-  `:values` does.
+  `unnest` of arguments; it then takes a value beyond the column's CHECKs, length or range too,
+  which PostgreSQL checks only on a row it writes. A SELECT of arguments alone, or from `unnest`
+  of them, types it as `:values` does.
 * `h/check` and `h/arg-types` read a comparison in every clause, as in `WHERE`: in `SET`,
   `RETURNING` and the rows of `:values` too, which see the tables PostgreSQL lets them (the rows
   of `:values` not the table inserted into). The column of `unnest(?)` in `FROM` is read as its

@@ -679,12 +679,17 @@
 
 (defn- matrix-queries
   "[context query] for each place an argument :?x goes with column c: compared (=, <>, IN, =
-   ANY), assigned (UPDATE SET, INSERT VALUES), beside it (coalesce, CASE, greatest), cast to its
-   type; and LIMIT."
+   ANY, in RETURNING, an element of unnest(?) joined), assigned (UPDATE SET, INSERT VALUES,
+   INSERT ... SELECT of a row it keeps or one it drops), beside it (coalesce, CASE, greatest),
+   cast to its type; and LIMIT."
   [{:keys [table column declared writable]}]
   (let [t (keyword table) c (keyword column) where #(hash-map :select [:*] :from [t] :where %)]
-    (concat [[:= (where [:= c :?x])] [:<> (where [:<> c :?x])] [:in (where [:in c :?x])] [:any (where [:= c [:any :?x]])]]
-            (when writable [[:update {:update t :set {c :?x}}] [:insert {:insert-into t :values [{c :?x}]}]])
+    (concat [[:= (where [:= c :?x])] [:<> (where [:<> c :?x])] [:in (where [:in c :?x])] [:any (where [:= c [:any :?x]])]
+             [:returning {:delete-from t :returning [[[:= c :?x] :v]]}]
+             [:unnest {:select [:*] :from [t] :join [[[:unnest :?x] [:u {:columns [:e]}]] [:= c :u.e]]}]]
+            (when writable [[:update {:update t :set {c :?x}}] [:insert {:insert-into t :values [{c :?x}]}]
+                            [:insert-select {:insert-into [[t [c]] {:select [:?x]}]}]
+                            [:insert-select-dropped {:insert-into [[t [c]] {:select [:?x] :where false}]}]])
             [[:coalesce {:select [[[:coalesce c :?x] :v]] :from [t]}]
              [:case {:select [[[:case [:= c nil] :?x :else c] :v]] :from [t]}]
              [:greatest {:select [[[:greatest c :?x] :v]] :from [t]}]
@@ -703,7 +708,7 @@
              {:state state :message (first (str/split-lines (.getMessage e)))})))
        (finally (.rollback conn))))
 
-(def ^:private compared-contexts #{:= :<> :in :any})
+(def ^:private compared-contexts #{:= :<> :in :any :returning :unnest})
 
 (defn- outside?
   "Whether v (an array's every element) is outside a CHECK's list."
@@ -748,14 +753,14 @@
                          takes? (and sent (if cast?
                                             (accept/accepts? t sent :cast)
                                             ;; an array assigned to an array column: element by element, as array-type reads it
-                                            (let [assign? (#{:update :insert} context)
+                                            (let [assign? (#{:update :insert :insert-select :insert-select-dropped} context)
                                                   elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))]
                                               (accept/holds? (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
-                                                             (if (or (= :any context) elements?) (types/element sent) sent)
+                                                             (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
                                                              (if assign? :assign :compare)))))
                          refused? (not (try (m/validate s arg) (catch Exception _ false)))
                          ;; NULL in a NOT NULL column fails once a row is written; the table may have none
-                         null-refused? (and (nil? v) notnull (#{:update :insert} context))
+                         null-refused? (and (nil? v) notnull (#{:update :insert :insert-select} context))
                          explained? (or (and (some? v) (not takes?))
                                         (and (compared-contexts context) (or (nil? v) (and list (outside? list v))))
                                         null-refused?)

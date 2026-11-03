@@ -2117,9 +2117,11 @@
     (doseq [more [{:where [:is-not :?g nil]} {:having true} {:limit 1} {:offset 1} {:group-by [:?s]}
                   {:from [[[:unnest :?ss] [:x {:columns [:s]}]] :groups]}
                   {:from [[[:unnest :?ss] [:x {:columns [:s]}]]] :join [:groups [:= :groups.id 1]]}]]
-      (is (= [:maybe plain] (g (merge {:select [:?g :?s]} more))) (pr-str more))
+      (is (= [:maybe integer] (g (merge {:select [:?g :?s]} more))) (str (pr-str more) ": nil, and no bounds"))
       (is (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) [1 nil] {:registry registry}) (pr-str more)))
-    (is (= [:maybe plain] (g {:select-distinct [:?g :?s]})))))
+    (is (= [:maybe integer] (g {:select-distinct [:?g :?s]})))
+    (is (m/validate (:n (args {:insert-into [[:users [:nick]] {:select [:?n] :where false}]})) (apply str (repeat 41 "x")))
+        "PostgreSQL checks a length, a range or a CHECK only on a row it writes")))
 
 (deftest an-inserted-value-takes-nil-only-from-a-before-insert-trigger
   ;; PostgreSQL checks NOT NULL on the row proposed for insertion before it looks for a conflict

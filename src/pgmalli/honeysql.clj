@@ -96,7 +96,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? arg-key expression-type type-schema accepted-type driver-type quoted? call-parts)
+(declare insert-parts star? arg-key loose expression-type type-schema accepted-type driver-type quoted? call-parts)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -1489,11 +1489,12 @@
 
 (defn- assigned-type
   "The type of an argument assignment a (positions) writes to its column: NULL where
-   assigned-column says it may go."
-  [registry a opts]
+   assigned-column says it may go. Where the row may not reach the column, without the CHECKs,
+   lengths and ranges PostgreSQL checks only on a row it writes."
+  [registry {:keys [may-drop?] :as a} opts]
   (let [{s :schema :keys [nullable?]} (assigned-column registry a)]
     (if s
-      (let [inner (accepted-type registry s :assign opts)]
+      (let [inner (cond-> (accepted-type registry (cond->> s may-drop? (beyond-list registry)) :assign opts) may-drop? loose)]
         (if nullable? [:maybe inner] inner))
       :any)))
 
