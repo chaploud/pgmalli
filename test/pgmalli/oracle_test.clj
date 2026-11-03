@@ -1,7 +1,9 @@
 (ns pgmalli.oracle-test
-  "check reports nothing for a query PostgreSQL takes, and query-schema's return takes the rows
-   next.jdbc returns for it: the corpus and seeded mutants of it, against a real PostgreSQL, sent
-   inlined and as parameters (see pgmalli.oracle; bb oracle for the misses as well). JVM only:
+  "check reports nothing for a query PostgreSQL takes, query-schema's return takes the rows
+   next.jdbc returns for it and row-schema names and types its columns as PostgreSQL describes
+   them: the corpus and seeded mutants of it, against a real PostgreSQL, sent inlined and as
+   parameters (see pgmalli.oracle; bb oracle for the misses as well). arg-types takes each value
+   PostgreSQL takes for an argument but those the stricter rule leaves out (pgmalli.oracle/arg-matrix). JVM only:
    babashka has no JDBC, so bb test does not list it."
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [pgmalli.core :as pgmalli]
@@ -35,6 +37,21 @@
                        (str "\n  error:  " (:error x))
                        (str "\n  schema: " (pr-str (:schema x)) "\n  value:  " (pr-str (:value x)) "\n  explain: " (pr-str (:explain x))))
                      "\n  re-run: bb oracle 42 3 (the case is under return rejected)")))))
+
+(deftest row-schema-describes-the-columns-postgresql-returns
+  (when *db*
+    (doseq [r @results
+            x (:column-mismatches r)]
+      (is false (str "row-schema, under the unqualified builder, describes the columns of " (:id r) (some->> (:mutation r) (str " mutated by "))
+                     " sent " (name (:format r)) " otherwise than PostgreSQL's ResultSet metadata"
+                     "\n  SQL:      " (:sql r) (when (seq (:params r)) (str "\n  params:   " (pr-str (:params r))))
+                     "\n  mismatch: " (pr-str x)
+                     "\n  re-run: bb oracle 42 3 (the case is under columns described otherwise)")))))
+
+(deftest arg-types-take-what-postgresql-takes
+  (when *db*
+    (doseq [f (oracle/arg-matrix *db*)]
+      (is false (str (oracle/arg-failure-text f) "\n  re-run: bb oracle (under argument matrix failures)")))))
 
 (def ^:private wrappers
   "Places a query keeps its problems in: a FROM subquery, a CTE body, EXISTS."

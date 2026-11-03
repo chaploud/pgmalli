@@ -10,12 +10,14 @@
 ;;; what pgjdbc sends
 
 (defn- array "The class of an array of c." [c] (class (make-array c 0)))
+(defn- named "The class named n; nil where the runtime has none." [n] (try (Class/forName n) (catch Throwable _ nil)))
+(defn- array-of "The class of an array of c; nil where the runtime makes none." [c] (try (array c) (catch Throwable _ nil)))
 
 (def class-types
   "[class type]: the type pgjdbc's setObject sends a value of class as, with no extension and
    its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
    Character with setString, a Java array as an array of its elements' type."
-  [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
+  (vec (remove nil? [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
    [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
    [Boolean "boolean"] [String "character varying"] [Character "character varying"] [java.util.UUID "uuid"]
    [(Class/forName "[B") "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
@@ -26,7 +28,13 @@
    [(array Short/TYPE) "smallint[]"] [(array Short) "smallint[]"] [(array Double/TYPE) "double precision[]"]
    [(array Double) "double precision[]"] [(array Float/TYPE) "real[]"] [(array Float) "real[]"]
    [(array Boolean/TYPE) "boolean[]"] [(array Boolean) "boolean[]"] [(array String) "character varying[]"]
-   [(class (make-array Byte/TYPE 0 0)) "bytea[]"]])
+   [(class (make-array Byte/TYPE 0 0)) "bytea[]"] [(array java.math.BigDecimal) "numeric[]"]
+   ;; babashka makes no UUID[]: where it cannot, the row is left out
+   (some-> (array-of java.util.UUID) (vector "uuid[]"))
+   ;; java.sql's arrays (babashka has not all of these classes)
+   (some-> (named "java.sql.Date") array-of (vector "date[]"))
+   (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
+   (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))])))
 
 (defn class-type
   "The type pgjdbc sends value as by its class; nil for a class class-types does not list."
@@ -82,7 +90,7 @@
   (merge-with into (zipmap numbers (repeat #{"jsonb"})) (zipmap integers (repeat #{"bytea"}))
               {"boolean" #{"integer" "jsonb"} "integer" #{"boolean"} "bytea" integers}))
 
-(defn- oid? [t] (and (string? t) (str/starts-with? t "reg")))
+(defn- oid? [t] (and (string? t) (str/starts-with? t "reg") (not (str/ends-with? t "[]"))))
 
 (defn element
   "The element type of an array type t (\"bigint[]\" is bigint); nil for another."
@@ -131,7 +139,11 @@
   "Whether a value sent as type sent is one of type t's own: its type, a number of a narrower
    kind (a narrower integer, an integer for a numeric, real or double precision, a real for a
    double precision), a string of another string type, or one sent untyped where t's values are text
-   (a string type, an enum), which PostgreSQL reads as the value itself."
-  [t sent]
-  (or (= t sent) (contains? (widened t) sent) (and (strings t) (strings sent))
-      (and (= :unknown sent) (or (vector? t) (contains? strings t)))))
+   (a string type, an enum), which PostgreSQL reads as the value itself; compared, not where t is
+   a domain over an enum ([:enum name {:domain? true}]), which has no = for an untyped value."
+  ([t sent] (holds? t sent :assign))
+  ([t sent context]
+   (or (= t sent) (contains? (widened t) sent) (and (strings t) (strings sent))
+       (and (= :unknown sent)
+            (or (contains? strings t)
+                (and (vector? t) (not (and (= :compare context) (:domain? (get t 2))))))))))

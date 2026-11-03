@@ -141,6 +141,8 @@
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
   (memoize (fn [^Class c]
              (or (some (fn [[k s]] (when (= k c) s)) class-schemas)
+                 ;; java.sql's dates, times and timestamps are java.util.Dates
+                 (when (.isAssignableFrom java.util.Date c) 'inst?)
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
                  ;; column's, which array-type puts in
                  (when (and (.isArray c) (not= c (Class/forName "[B"))) [:pg/array :pgmalli/element])

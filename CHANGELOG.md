@@ -60,8 +60,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A class `:send` sends as a column's text type (a keyword as `varchar`) is held to none of the
   column's checks on text: PostgreSQL checks the text an application makes of it. A number is
   held to a number column's checks whatever its class.
-* pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...) are sent by default, and any Java array
-  `:send` names is typed by its elements (`[:pg/array element]`).
+* pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and java.sql's
+  dates, times and timestamps (untyped, their arrays typed) are sent by default, as pgjdbc's
+  `setObject` sends them; any Java array `:send` names is typed by its elements
+  (`[:pg/array element]`). A cast takes an array where PostgreSQL casts it (to text, say).
+* `min` and `max` of a varchar, `"char"` or `name` are text, of a cidr inet and of a reg* type
+  oid; `nullif` is typed only where both arguments are of one type its `=` keeps. A domain over
+  an enum takes no untyped value compared (PostgreSQL has no `=` for it); a reg* array no
+  integer.
 * An argument takes nil where any of its uses does, whatever the order they are written in.
 * An enum type's array takes a typed array of that type alone.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL

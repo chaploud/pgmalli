@@ -22,6 +22,7 @@ image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`
 | `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
+| `bb mutate --file src/... [--kind table\|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm]` | each mutant of the file (an element left out of a def's literal collection; and/or, when/when-not, =/not=, true/false swapped) against the tests (`--ns`, the bb suite by default), the file written back after each; prints the survivors with file:line and writes `--out` (target/mutate.edn) |
 
 Before a pull request: `bb lint` → `PGMALLI_SKIP_DB=1 bb test` → `bb test` → `bb test:jvm` →
 `bb test:floor` → `bb oracle` → `bb test:docs`. After `bb test:update` or `bb test:docs:update`,
@@ -57,8 +58,24 @@ it) or a miss (PostgreSQL refuses it, `check` lets it pass). Where PostgreSQL ru
 the return of `query-schema`, by default and under `{:result :one}`, must take what
 `execute!` and `execute-one!` returned, with the default builder and, for the corpus queries
 (not their mutants), with the builders of `pgmalli.oracle/builders`; it prints each return it
-refuses. `pgmalli.oracle-test` holds
-the false positives and the refused returns at none in `bb test:jvm`.
+refuses. Under the unqualified builder, the keys of `row-schema` must be the column labels of
+the ResultSet's metadata, and each `:pg/type` it gives the type PostgreSQL describes (a
+domain as its base type); an untyped column is let pass.
+
+`pgmalli.oracle/arg-matrix` breaks the circle of arguments generated from `arg-types`: an
+argument goes with each column of the oracle schema (compared with `=`, `<>`, `IN` and
+`= ANY`, set by UPDATE and INSERT, beside it in coalesce, CASE and greatest, cast to its
+type, and as LIMIT), sent a fixed list of values: one of each class of
+`pgmalli.impl.accept/class-types`, NULL, numbers at the integer bounds, a fraction, `""`,
+`"1"` and the schema's labels. It fails where PostgreSQL takes a value that the argument's
+schema refuses and the stricter rule of docs/queries.md does not leave out (a class sent as
+a type `accept/holds?` says the column does not hold, or `accept/accepts?` under a cast; a
+comparison with NULL or with a value outside a CHECK's list; NULL set into a NOT NULL
+column), and where `holds?` says a value goes and PostgreSQL refuses its type. The table
+`kinds` gives it the types the other tables lack; mutants do not draw from it.
+
+`pgmalli.oracle-test` holds the false positives, the refused returns, the columns described
+otherwise and the argument matrix's failures at none in `bb test:jvm`.
 
 `a-query-wrapped-keeps-its-problems` asks no database: each case wrapped in a FROM subquery,
 a CTE or EXISTS must have the problems it had alone.
@@ -78,6 +95,7 @@ ran. The tests that catch a change upstream, each naming the list to update:
 |---|---|
 | `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
 | `pgmalli.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops |
+| `pgmalli.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/row-schema` gives (the typing tables in src/pgmalli/honeysql.clj); a name PostgreSQL gives an unaliased expression that differs from `expression-name`'s |
 
 A type of PostgreSQL's or of an extension is one entry of `types` in
 `src/pgmalli/impl/types.clj`, or one of `unsupported` there with why. To add one, move it to

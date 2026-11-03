@@ -1,73 +1,134 @@
 (ns pgmalli.accept-test
-  "pgmalli.impl.accept against PostgreSQL itself: each sent type prepared where each type goes.
+  "pgmalli.impl.accept against pgjdbc and PostgreSQL themselves: the type setObject sends a
+   value of each class as, and each sent type prepared where a value of each type goes.
    JVM only (babashka has no java.sql), so bb test does not list it."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is use-fixtures]]
             [malli.core :as m]
             [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.jdbc :as pgjdbc]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
+            [pgmalli.impl.types :as types]
+            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
+  (:import (java.lang.reflect Array)
+           (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime Period ZoneOffset ZonedDateTime)))
 
 (use-fixtures :once with-postgres)
 
-(def ^:private scalars accept/covered)
+(defn- connection []
+  (let [{:keys [host port db user password]} *db*]
+    (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})))
 
-(def ^:private targets
-  "[column type, the type accept/accepts? takes for it]: a domain is its base type."
-  (concat (map (juxt identity identity) (concat scalars accept/covered-arrays))
-          [["feel" [:enum "feel"]] ["positive" "integer"]]))
+(def ^:private values
+  "A value of each class that is no array."
+  {Long 1 Integer (int 1) Short (short 1) Byte (byte 1) Double 1.0 Float (float 1) Boolean true Character \a String "a"
+   java.math.BigDecimal 1M java.math.BigInteger (biginteger 1) clojure.lang.BigInt 1N java.util.UUID (java.util.UUID/randomUUID)
+   LocalDate (LocalDate/of 2026 1 1) LocalTime (LocalTime/of 1 0) OffsetTime (OffsetTime/of 1 0 0 0 ZoneOffset/UTC)
+   LocalDateTime (LocalDateTime/of 2026 1 1 0 0) OffsetDateTime (OffsetDateTime/of 2026 1 1 0 0 0 0 ZoneOffset/UTC)
+   ZonedDateTime (ZonedDateTime/of 2026 1 1 0 0 0 0 ZoneOffset/UTC) Instant Instant/EPOCH
+   Duration (Duration/ofSeconds 1) Period (Period/ofDays 1)
+   java.sql.Date (java.sql.Date. 0) java.sql.Time (java.sql.Time. 0) java.sql.Timestamp (java.sql.Timestamp. 0) java.util.Date (java.util.Date. 0)
+   clojure.lang.PersistentArrayMap {"a" "b"} clojure.lang.Keyword :a
+   org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))})
 
-(def ^:private sents (concat scalars accept/covered-arrays ["feel" :unknown]))
+(def ^:private boxed {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Byte/TYPE Byte Double/TYPE Double
+                      Float/TYPE Float Boolean/TYPE Boolean Character/TYPE Character})
 
-(defn- column [t] (str "c_" (str/replace (str/replace t "[]" "_array") #"\W" "_")))
+(defn- value
+  "A value of class c: an array holds one element."
+  [^Class c]
+  (if (.isArray c)
+    (let [e (.getComponentType c)] (doto (Array/newInstance e 1) (Array/set 0 (value (boxed e e)))))
+    (or (values c) (throw (ex-info "no value of the class" {:class c})))))
 
-(defn- taken?
-  "Whether PostgreSQL prepares sql with $1 of type sent: false on a type error."
-  [con sent sql]
-  (try (jdbc/execute! con [(str "PREPARE probe(" (if (= :unknown sent) "unknown" sent) ") AS " sql)])
-       (jdbc/execute! con ["DEALLOCATE probe"])
-       true
-       (catch java.sql.SQLException e
-         (if (#{"42883" "42804" "42846" "42725"} (.getSQLState e)) false (throw e)))))
+(def ^:private candidates
+  "Classes besides class-types' an application may hand to setObject."
+  (concat (keys values)
+          (for [e (concat (keys boxed) (vals boxed) [String java.math.BigDecimal java.math.BigInteger java.util.UUID (Class/forName "[B")
+                                                     LocalDate LocalTime OffsetTime LocalDateTime OffsetDateTime Instant
+                                                     java.sql.Date java.sql.Time java.sql.Timestamp java.util.Date])]
+            (class (Array/newInstance ^Class e 0)))))
 
-(deftest accept-is-postgresqls
-  (when *db*
-    (exec-sql! (str "CREATE TYPE feel AS ENUM ('ok', 'meh'); CREATE DOMAIN positive AS integer CHECK (VALUE > 0);"
-                    "CREATE TABLE probe_target (" (str/join ", " (for [[t] targets] (str (column t) " " t))) ");"))
-    (let [{:keys [host port db user password]} *db*]
-      (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})]
-        (doseq [[t accepted-t] targets, sent sents
-                :let [sent-t (if (= "feel" sent) [:enum "feel"] sent)]
-                [context sql] {:compare (str "SELECT 1 FROM probe_target WHERE " (column t) " = $1")
-                               :assign (str "INSERT INTO probe_target (" (column t) ") VALUES ($1)")
-                               :cast (str "SELECT CAST($1 AS " t ")")}
-                :let [taken (taken? con sent sql)
-                      ;; PostgreSQL 18 adds explicit casts between bytea and the integers, which accepts? takes on every version
-                      pg18? (and (= :cast context) (some #{"bytea"} [accepted-t sent]) (some #{"smallint" "integer" "bigint"} [accepted-t sent]))]]
-          (is (if pg18? (or (not taken) (accept/accepts? accepted-t sent-t context)) (= taken (accept/accepts? accepted-t sent-t context)))
-              (str (pr-str sent) " " context " " t)))))))
+(def ^:private left-out
+  "Classes setObject sends that class-types leaves out, with why."
+  {org.postgresql.util.PGobject "a PGobject names its type itself, value by value"
+   java.sql.Date "goes untyped: a date column takes it as its own value (inst?); to a text column a date is a cast"
+   java.sql.Time "goes untyped: a time column takes it as its own value (inst?); to a text column a time is a cast"
+   java.sql.Timestamp "goes untyped: a timestamp column takes it as its own value (inst?); to a text column a timestamp is a cast"
+   clojure.lang.PersistentArrayMap "a map goes as hstore only where that extension is there"
+   clojure.lang.PersistentHashMap "a map goes as hstore only where that extension is there"})
+
+(defn- type-name
+  "t by the name types keys it by."
+  [t]
+  (if-let [e (accept/element t)] (str (type-name e) "[]") (:name (types/entry t) t)))
+
+(defn- sent-as
+  "The type PostgreSQL gets v as through setObject: :unknown for a value pgjdbc sends untyped,
+   nil for one setObject refuses."
+  [con v]
+  (with-open [ps (.prepareStatement con "SELECT pg_typeof(?)::text")]
+    (when (try (.setObject ps 1 v) true (catch java.sql.SQLException _ false))
+      (try (with-open [rs (.executeQuery ps)] (.next rs) (type-name (.getString rs 1)))
+           (catch java.sql.SQLException e
+             (if (= "42P18" (.getSQLState e)) :unknown (throw e)))))))
 
 (deftest class-types-are-the-types-pgjdbc-sends
   (when *db*
-    (let [{:keys [host port db user password]} *db*]
-      (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})]
-        (doseq [v [1 (int 1) (short 1) 1M 1N (biginteger 1) 1.0 (float 1) true "1" \1 (java.util.UUID/randomUUID) (.getBytes "a")
-                   (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
-                   (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]
-                t scalars
-                :let [pg18? (or (and (= "bytea" t) (integer? v)) (and (bytes? v) (#{"smallint" "integer" "bigint"} t)))]
-                ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
-                :let [taken? (try (with-open [ps (.prepareStatement con (str "SELECT CAST(? AS " t ")"))]
-                                    (.setObject ps 1 v)
-                                    (.execute ps))
-                                  true
-                                  ;; another error is of the value, which the type took ("1" is no regclass)
-                                  (catch java.sql.SQLException e (not (#{"42883" "42804" "42846" "42725"} (.getSQLState e)))))]]
-          ;; PostgreSQL 18 adds explicit casts between bytea and the integers, which accepts? takes on every version
-          (is (if pg18? (or (not taken?) (accept/accepts? t (accept/class-type v) :cast)) (= taken? (accept/accepts? t (accept/class-type v) :cast)))
-              (str (pr-str v) " " (class v) " " t)))))))
+    ;; pgjdbc sends a java.util.Map as an hstore where the database has one
+    (exec-sql! "CREATE EXTENSION IF NOT EXISTS hstore")
+    (with-open [con (connection)]
+      (doseq [c (distinct (concat (map first accept/class-types) candidates))
+              :let [v (value c)]
+              :when (not (left-out c))]
+        ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
+        (is (= (sent-as con v) (accept/class-type v)) (.getName ^Class c))))))
+
+(def ^:private targets
+  "[column type, the type accept/accepts? takes for it]: every type of types, an array of each,
+   an enum, and a domain as its base type."
+  (concat (for [t (keys types/types), t [t (str t "[]")]] [t t])
+          [["feel" [:enum "feel"]] ["positive" "integer"]]))
+
+(def ^:private sents (concat (distinct (map second accept/class-types)) ["feel" :unknown]))
+
+(defn- column [t] (str "c_" (str/replace (str/replace t "[]" "_array") #"\W" "_")))
+
+(defn- verdicts
+  "{:t :sent :context :taken}: whether PostgreSQL prepares a parameter of type sent where a
+   value of each target's type goes, by context, with accepts? and holds? on it."
+  []
+  (exec-sql! (str (apply str (for [e (distinct (keep :extension (vals types/types)))] (str "CREATE EXTENSION IF NOT EXISTS " e ";")))
+                  "CREATE TYPE feel AS ENUM ('ok', 'meh'); CREATE DOMAIN positive AS integer CHECK (VALUE > 0);"
+                  "CREATE TABLE probe_target (" (str/join ", " (for [[t] targets] (str (column t) " " t))) ");"
+                  ;; one round trip for every pair: an error other than a type error is thrown
+                  "CREATE FUNCTION taken(sql text) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN"
+                  " EXECUTE sql; DEALLOCATE probe; RETURN true;"
+                  " EXCEPTION WHEN SQLSTATE '42883' OR SQLSTATE '42804' OR SQLSTATE '42846' OR SQLSTATE '42725' THEN RETURN false; END $$"))
+  (let [pairs (for [[t accepted-t] targets, sent sents
+                    [context sql] {:compare (str "SELECT 1 FROM probe_target WHERE " (column t) " = $1")
+                                   :assign (str "INSERT INTO probe_target (" (column t) ") VALUES ($1)")
+                                   :cast (str "SELECT CAST($1 AS " t ")")}]
+                {:t t :accepted-t accepted-t :sent sent :context context
+                 :sql (str "PREPARE probe(" (if (= :unknown sent) "unknown" sent) ") AS " sql)})]
+    (with-open [con (connection)]
+      (map #(assoc %1 :taken (:taken %2)) pairs
+           (jdbc/execute! con ["SELECT taken(s) AS taken FROM unnest(?::text[]) WITH ORDINALITY AS u(s, n) ORDER BY n"
+                               (into-array String (map :sql pairs))]
+                          {:builder-fn rs/as-unqualified-maps})))))
+
+(deftest accept-is-postgresqls
+  (when *db*
+    (doseq [{:keys [t accepted-t sent context taken]} (verdicts)
+            :let [sent-t (if (= "feel" sent) [:enum "feel"] sent)
+                  pair (str (pr-str sent) " " context " " t)]]
+      ;; accepts? may take what PostgreSQL refuses (PostgreSQL 18 casts bytea and the integers), never the
+      ;; other way; a type it does not answer for (known? false) types its arguments :any
+      (when (and taken (accept/known? accepted-t)) (is (accept/accepts? accepted-t sent-t context) (str "PostgreSQL takes " pair)))
+      (when (and (not= :cast context) (accept/holds? accepted-t sent-t))
+        (is taken (str "PostgreSQL refuses " pair))))))
 
 (deftest the-schema-of-each-class-sent-takes-its-values
   (doseq [:let [registry (pgmalli/registry {:registry {}})]

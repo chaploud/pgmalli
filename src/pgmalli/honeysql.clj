@@ -1035,6 +1035,13 @@
              :when p]
          p)))))
 
+(defn- domain-over-enum?
+  "Whether column schema s is of a domain over an enum type."
+  [registry s]
+  (let [inner (shape/non-null s)
+        target (when (and (vector? inner) (= :ref (first inner))) (get (::schemas registry) (last inner)))]
+    (boolean (and target (not= :enum (shape/head target)) (labels registry inner) (not (list-type registry inner))))))
+
 (defn- enum-type
   "The type of an enum type's column, or of a domain over one; not of a domain whose CHECK lists
    its base type's values, whose labels name that type."
@@ -1069,7 +1076,7 @@
         d (when (and (vector? inner) (= :ref (first inner))) (get (::schemas registry) (last inner)))
         t (if-let [e (types/entry (shape/type-name p))]
             (str (:name e) (when (str/ends-with? (str (:pg/type p)) "[]") "[]"))
-            (when-let [n (enum-type registry s)] [:enum n]))]
+            (when-let [n (enum-type registry s)] (cond-> [:enum n] (domain-over-enum? registry s) (conj {:domain? true}))))]
     (cond (accept/known? t) t
           (and d (not (enum-type registry s))) (slot-type registry (shape/domain-base d)))))
 
@@ -1424,14 +1431,20 @@
                                                        %))
                                      shape/without-gen))
         t (slot-type registry s)
-        takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t %))
+        takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t % context))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
-        alts (for [p sent
-                   a (if (= :unknown p)
-                       (mapcat (fn [[schema q]] (when (= :unknown q) (shape/alternatives schema))) (jdbc/write-rows opts false))
-                       (shape/alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts)))))
-                   :when (not (untyped? a))]
-               [p a])]
+        alts (concat
+              (for [p sent
+                    a (if (= :unknown p)
+                        (mapcat (fn [[schema q]] (when (= :unknown q) (shape/alternatives schema))) (jdbc/write-rows opts false))
+                        (shape/alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts)))))
+                    :when (not (untyped? a))]
+                [p a])
+              ;; cast, an array as PostgreSQL casts it (to text, say), its elements any
+              (when (= :cast context)
+                (for [[schema q] (jdbc/write-rows opts true) :when (takes? q)
+                      a (shape/alternatives (walk/postwalk-replace {:pgmalli/element :any} schema))]
+                  [q a])))]
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
@@ -1626,7 +1639,7 @@
                                        :when r
                                        o operands
                                        :when (param-key o)]
-                                   [o (nullable (accepted-type registry (:schema r) :compare opts))])))
+                                   [o (nullable (accepted-type registry (beyond-list registry (:schema r)) :compare opts))])))
                        (statement-chains registry body opts))
          ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
@@ -1692,6 +1705,19 @@
   [t]
   (when-let [{n :name s :schema} (some-> t types/entry)]
     (if (vector? s) (into [(first s) (assoc (second s) :pg/type n)] (drop 2 s)) [s {:pg/type n}])))
+
+(def ^:private read-as
+  "Types PostgreSQL reads as another, by what reads them: min and max (defined for text, inet,
+   oid), and = (varchar has text's, cidr inet's)."
+  {:min-max {"character varying" "text" "\"char\"" "text" "name" "text" "cidr" "inet"}
+   := {"character varying" "text" "cidr" "inet"}})
+
+(defn- operator-input
+  "The type op (:min-max, :=) reads type n as, as read-as says, a reg* type as oid; n itself for
+   another."
+  [op n]
+  (cond (and n (str/starts-with? n "reg")) "oid"
+        :else (get-in read-as [op n] n)))
 
 (def ^:private aggregate-types
   "The type sum and avg give for their argument's."
@@ -1767,7 +1793,10 @@
       (#{"now" "count"} fname) (typed (word-types fname))
       (json-builders fname) (let [[t shape nullable?] (json-builders fname)]
                               {:schema (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any]) :nullable? nullable?})
-      (#{"min" "max"} fname) (when-let [t (first ts)] {:schema (loose (:schema t)) :nullable? true})
+      ;; min and max of a varchar are text: PostgreSQL has them for text alone
+      (#{"min" "max"} fname) (when-let [t (first ts)]
+                               (let [n (canonical-type t)]
+                                 {:schema (loose (if (= n (operator-input :min-max n)) (:schema t) (type-schema (operator-input :min-max n)))) :nullable? true}))
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical-type)]) typed (assoc :nullable? true))
       ;; a string or an argument takes the others' type, as PostgreSQL resolves a varchar or unknown one
       ;; [:case c1 v1 c2 v2 ... :else v]: the values resolve as coalesce's arguments; NULL without :else
@@ -1778,6 +1807,12 @@
                     (when-let [r (when (every? #(= 2 (count %)) parts) (result-type values vts))]
                       {:schema (loose (beyond-list registry (:schema r)))
                        :nullable? (or (not else?) (boolean (some #(or (nil? %) (:nullable? %)) vts)))}))
+      ;; nullif returns its first argument as the = operator reads it: of both of one type, that
+      ;; type as = reads it (a varchar's = is text's); otherwise = may promote it to the other's
+      ;; a string literal takes the other's type
+      (= "nullif" fname) (let [typed (remove :string? ts) base (if (seq typed) typed ts)]
+                           (when (and (= 2 (count ts)) (every? some? ts) (apply = (map canonical-type base)))
+                             {:schema (loose (type-schema (operator-input := (canonical-type (first base))))) :nullable? true}))
       (resolving-fns fname) (when-let [r (result-type (rest x) ts)]
                               ;; the others' values join a CHECK's list: its base type
                               {:schema (cond-> (:schema r) (next ts) (->> (beyond-list registry) loose))

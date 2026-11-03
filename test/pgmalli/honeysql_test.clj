@@ -488,7 +488,7 @@
     (is (= [:map [:n [:maybe :any]]] (row [[[:coalesce :nick :id] :n]])) "columns of different types are not resolved here")
     (is (= [:map [:g bigint] [:l [:maybe :any]]] (row [[[:greatest :id 3] :g] [[:least :id :?x] :l]]))
         "greatest and least resolve as coalesce, NULL only where every operand is; an argument may widen a number")
-    (is (= [:map [:n [:maybe nick]]] (row [[[:nullif :nick "x"] :n]])) "nullif makes NULL")
+    (is (= [:map [:n [:maybe text]]] (row [[[:nullif :nick "x"] :n]])) "nullif makes NULL; a varchar's = is text's")
     (is (= [:map [:b [:boolean {:pg/type "boolean"}]] [:c [:maybe [:boolean {:pg/type "boolean"}]]]]
            (row [[[:= :id 1] :b] [[:= :nick "a"] :c]]))
         "a comparison is NULL where an operand may be")
