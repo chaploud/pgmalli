@@ -769,6 +769,20 @@
                                           :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "short"} :pg.public/short]]]}})]
     (is (not (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :short] :c]]})) "a" {:registry reg})) "a cast keeps a CHECK's length")))
 
+(deftest min-and-max-of-a-domain-are-of-its-base-type
+  (let [reg (pgmalli/registry {:registry {:pg.public/code3 [:enum {:pg/type "character varying(3)"} "aaa" "bbb"]
+                                          :pg.public/pos [:pg/integer {:min 1 :pg/type "integer"}]
+                                          :pg.public/mood [:enum "ok" "sad"]
+                                          :pg.public/mood_d [:ref :pg.public/mood]
+                                          :pg.public/t [:map {:pg/table "public.t"}
+                                                        [:c [:ref {:pg/type "code3"} :pg.public/code3]]
+                                                        [:p [:ref {:pg/type "pos"} :pg.public/pos]]
+                                                        [:m [:ref {:pg/type "mood_d"} :pg.public/mood_d]]]}})
+        row #(h/row-schema reg {:select [[[:max %] :x]] :from [:t]} {:jdbc unqualified})]
+    (is (= [:map [:x [:maybe text]]] (row :c)) "max(varchar) is max(text)")
+    (is (= [:map [:x [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row :p)))
+    (is (= [:map [:x [:maybe [:enum {:pg/type "mood"} "ok" "sad"]]]] (row :m)) "a domain over an enum is the enum")))
+
 (deftest a-number-label-is-read-from-a-string-sent-untyped
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
     (is (m/validate (:l (h/arg-types reg {:update :t :set {:l [:cast :?l :integer]}} {:send unspecified})) "1" {:registry reg}))))

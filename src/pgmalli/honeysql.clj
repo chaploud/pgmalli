@@ -1512,6 +1512,19 @@
   [body]
   (set (keep arg-key (tree-seq #(and (branch? %) (not (seq? %))) seq body))))
 
+(defn- domain-base-type
+  "s, or the base type of the domain s refers to (through domains over domains), its :pg/type
+   without typmod: the type PostgreSQL resolves a function's argument of a domain to."
+  [registry s]
+  (let [d (shape/ref-target (::schemas registry) s)
+        base (some-> d shape/domain-base)]
+    (cond (nil? d) s
+          (shape/ref-target (::schemas registry) base)
+          (recur registry (shape/merge-props base {:pg/type (second (shape/schema-and-name (last base)))}))
+          (:pg/type (shape/column-props base))
+          (shape/merge-props base {:pg/type (str/replace (:pg/type (shape/column-props base)) #"\([^)]*\)" "")})
+          :else s)))
+
 (defn- canonical-type [{s :schema}] (some-> s shape/column-props :pg/type (#(:name (types/entry %) %))))
 
 (def ^:private resolving-fns
@@ -1838,11 +1851,13 @@
       (word-types fname) (typed (word-types fname))
       (json-builders fname) (let [[t shape nullable?] (json-builders fname)]
                               {:schema (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any]) :nullable? nullable?})
-      ;; min and max read a type as read-as says (a varchar as text, a reg* type as oid)
+      ;; min and max read a domain as its base type, and a type as read-as says (a varchar as
+      ;; text, a reg* type as oid)
       (#{"min" "max"} fname) (when-let [t (first ts)]
-                               (let [n (canonical-type t)
+                               (let [s (domain-base-type registry (:schema t))
+                                     n (canonical-type {:schema s})
                                      input (operator-input :min-max n)]
-                                 {:schema (loose (if (= n input) (:schema t) (type-schema input))) :nullable? true}))
+                                 {:schema (loose (if (= n input) s (type-schema input))) :nullable? true}))
       (#{"bool_and" "bool_or" "every"} fname) (assoc (typed "boolean") :nullable? true)
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical-type)]) typed (assoc :nullable? true))
       ;; a string takes the others' type, as PostgreSQL resolves a varchar or unknown one; result-type

@@ -47,14 +47,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   type, as `=` reads it. A string among them takes the others' type; an argument leaves the
   expression untyped unless the type is a string type, as pgjdbc sends numbers and dates typed.
   `CASE` without `:else` may be NULL. An array through them, `min` or `max` is the driver's
-  `java.sql.Array`, as the column is, unless `:read` says otherwise. `min` and `max` read a `varchar`, `"char"` or `name` as
-  `text`, a `cidr` as `inet` and a reg* type as `oid`. `bool_and`, `bool_or` and `every` are
-  `boolean`. A column cast to another type is keyed by no table, as an expression; one cast to
-  its own type, which PostgreSQL drops, is untold under qualified keys. It also types a literal
-  `[:inline ...]` writes, and the functions that build json and jsonb (`jsonb_build_object`,
-  `jsonb_agg` ...) as a column of the type is read: an object or an array under
-  `{:read {:json :parsed}}`. An unaliased CASE is named after its ELSE where that has a name of
-  its own, as PostgreSQL names it.
+  `java.sql.Array`, as the column is, unless `:read` says otherwise. `min` and `max` read a
+  domain as its base type, and a `varchar`, `"char"` or `name` as `text`, a `cidr` as `inet` and
+  a reg* type as `oid`. `bool_and`, `bool_or` and `every` are `boolean`. A column cast to
+  another type is keyed by no table, as an expression; one cast to its own type, which
+  PostgreSQL drops, is untold under qualified keys. It also types a literal `[:inline ...]`
+  writes, and the functions that build json and jsonb (`jsonb_build_object`, `jsonb_agg` ...) as
+  a column of the type is read: an object or an array under `{:read {:json :parsed}}`. An
+  unaliased CASE is named after its ELSE where that has a name of its own, as PostgreSQL names
+  it.
 * A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type, in
   `h/row-schema` and `h/arg-types`.
 * The columns of a CTE or a subquery are typed as its SELECT types them: a LATERAL subquery

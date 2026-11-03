@@ -307,9 +307,9 @@ and the functions that build json or jsonb (`jsonb_build_object`, `jsonb_agg` ..
 an array under `{:read {:json :parsed}}`, the driver's object otherwise; an aggregate is NULL
 over no row). Among those values a string takes the others' type, as PostgreSQL resolves it; an
 argument leaves the expression untyped unless the type is a string type, as pgjdbc sends a
-number or a date typed. `CASE` without `:else` may be NULL. `min` and `max` read a `varchar`,
-`"char"` or `name` as `text`, a `cidr` as `inet` and a reg* type as `oid`, the types PostgreSQL
-defines them for. Any other expression is nullable `:any`:
+number or a date typed. `CASE` without `:else` may be NULL. `min` and `max` read a domain as
+its base type, and a `varchar`, `"char"` or `name` as `text`, a `cidr` as `inet` and a reg*
+type as `oid`, the types PostgreSQL defines them for. Any other expression is nullable `:any`:
 
 ```clojure
 (h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
