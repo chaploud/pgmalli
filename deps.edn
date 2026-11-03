@@ -16,6 +16,8 @@
                       ;; dev/update_expected.clj, which bb test:update:jvm runs and dev-tools-test tests
                       rewrite-clj/rewrite-clj {:mvn/version "1.3.59"}}
          :main-opts ["-m" "cognitect.test-runner"]}
+  ;; with :test, a REPL on the test classpath: clojure -M:test:repl
+  :repl {:main-opts []}
   ;; with :test, as bb test:update:jvm runs it
   :test-update {:main-opts ["-m" "update-expected"]}
   ;; bb test:docs: README.md and docs/*.md as tests; with :test and :docs to run them, the example

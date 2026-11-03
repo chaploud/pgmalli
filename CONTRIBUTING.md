@@ -6,7 +6,7 @@ Issues and pull requests are welcome.
 
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the image).
-`bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`, `bb docs:example`,
+`bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb test:all`, `bb oracle`, `bb docs:example`,
 `bb catalog`, `bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:docs`
 and `bb fixture` do not.
 
@@ -16,22 +16,29 @@ and `bb fixture` do not.
 |---|---|
 | `bb lint` | clj-kondo |
 | `bb test` | the suite on babashka (`PGMALLI_SKIP_DB=1` skips the database tests) |
-| `bb test:jvm` | the suite on the JVM |
+| `bb test:jvm [main\|oracle]` | the suite on the JVM; `main` all but `pgmalli.oracle-test`, `oracle` that alone |
 | `bb test:matrix` | the suite on every PostgreSQL version CI covers |
 | `bb test:docs` | the code blocks of README.md and docs/, each `;; =>` asserted |
-| `bb test:floor` | the suite on the JVM with the oldest versions README supports |
+| `bb test:floor [main\|oracle]` | the suite on the JVM with the oldest versions README supports |
+| `bb test:all` | `bb lint`, `bb test`, `bb test:jvm`, `bb test:floor`, `bb oracle` and `bb test:docs` at once, each into `target/<task>.log` (`:` as `-`); prints each exit code |
 | `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
 | `bb mutate --file src/... [--kind table\|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs]` | each mutant of the file (an element left out of a def's literal collection; and/or, when/when-not, =/not=, true/false swapped) against the tests (`--ns`, or the bb suite, or the JVM suite under `--jvm`; database tests only under `--db`), each run killed after `--timeout` seconds, the file written back after each; prints the survivors with file:line and writes `--out` (target/mutate.edn) |
 
-Before a pull request: `bb lint` → `PGMALLI_SKIP_DB=1 bb test` → `bb test` → `bb test:jvm` →
-`bb test:floor` → `bb oracle` → `bb test:docs`. After `bb test:update` or `bb test:docs:update`,
+Before a pull request: `bb test:all`, then read the log of each task that did not exit 0. Each
+task starts its own PostgreSQL container. On a machine without docker, `bb lint`,
+`PGMALLI_SKIP_DB=1 bb test` and `bb test:docs` run. After `bb test:update` or `bb test:docs:update`,
 read the git diff: a rewritten expectation is a changed behaviour.
 
 `bb test` runs every `*_test` namespace but those that need next.jdbc. One namespace or one test
 on the JVM: `clojure -M:test -n pgmalli.honeysql-test`,
 `clojure -M:test -v pgmalli.honeysql-test/some-test`.
+
+In a REPL on the test classpath (`clojure -M:test:repl`, or an editor's with the `:test` alias),
+`(require 'pgmalli.honeysql-test :reload)` then `(clojure.test/run-tests 'pgmalli.honeysql-test)`
+runs one namespace. The first database test starts the container, and later runs reuse it until
+the REPL exits; each run of a namespace gets a new database.
 
 ## Documentation
 
@@ -96,7 +103,9 @@ schema's table `kinds` adds arrays of domains whose CHECK reads the value (`posi
 `money2[]`).
 
 `pgmalli.oracle-test` runs the same under the seed `PGMALLI_FUZZ_SEED`, with 3 mutants per
-query (or `PGMALLI_ORACLE_MUTANTS`) and a sample of the builders per query. It fails `bb test:jvm` on any false positive, refused return,
+query (or `PGMALLI_ORACLE_MUTANTS`) and a sample of the builders per query. The oracle and the
+argument matrix send their cases over `PGMALLI_ORACLE_WORKERS` connections (the processors, up to
+4), each to its own copy of the database. It fails `bb test:jvm` on any false positive, refused return,
 column described otherwise or argument-matrix failure, except those listed in
 `pgmalli.oracle-test/pending`: false rejections in `src` not fixed yet, each with its reason
 and a reproduction. `pending-entries-still-fail` fails on an entry that no longer fails, so a

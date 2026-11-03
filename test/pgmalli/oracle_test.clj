@@ -128,6 +128,12 @@
               :when (not-any? (fn [[t i]] (and (= test t) (re-find id i))) fs)]
         (is false (str "pending " test " " id " no longer fails: remove it from pgmalli.oracle-test/pending (" reason ")"))))))
 
+(deftest cases-over-several-workers-come-back-as-over-one
+  (when *db*
+    (let [cs (take 24 (oracle/cases (oracle/mutation-names *db*) seed 1))
+          over #(binding [oracle/*workers* %] (oracle/run-cases *db* cs seed false))]
+      (is (= (over 1) (over 3))))))
+
 (def ^:private wrappers
   "Places a query keeps its problems in: a FROM subquery, a CTE body, EXISTS."
   {:from #(hash-map :select [:*] :from [[% :sub]])
