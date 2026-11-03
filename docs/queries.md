@@ -229,7 +229,7 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 is typed as an argument assigned to it (what `:send` sends, held to the column's range) and keyed
 by any key HoneySQL writes to the column under `:format`: the key the `:jdbc` builder labels the
 column with, unqualified, so a row read and written back fits (`:group-id` under a kebab
-builder), and the column's keyword (`:group_id`); where neither is written to the column, its
+builder), the column's keyword (`:group_id`) and its kebab spelling (`:group-id`); where none is written to the column, its
 name as a string (a column with capitals where names are unquoted: PostgreSQL folds an unquoted
 name to lower case, and HoneySQL quotes a string key). A column takes one of its keys: two would
 write it twice. A column the database may fill is optional and takes HoneySQL's

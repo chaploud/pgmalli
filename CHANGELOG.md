@@ -93,8 +93,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   (`:buildr-fn`) is an error naming the key meant.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
   `:set` maps built at run time, keyed by any key HoneySQL writes to a column: the label the
-  `:jdbc` builder reads it as (`:group-id`), so a row read is written back, or its name
-  (`:group_id`), one of them a column; a column takes a HoneySQL expression too (`[:now]`,
+  `:jdbc` builder reads it as, so a row read is written back, its name (`:group_id`) or its
+  kebab spelling (`:group-id`), one of them a column; a column takes a HoneySQL expression too (`[:now]`,
   `[:+ :n 1]`, `[:lift v]` with `v` of the column's type), and generates values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.

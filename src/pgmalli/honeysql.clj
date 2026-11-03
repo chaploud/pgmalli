@@ -2728,13 +2728,13 @@
 (defn- written-keys
   "The keys of column (a keyword, or a string where the registry keys it so) in a :values or :set
    map that HoneySQL writes to column under sql/format's opts (the format), the first as reading
-   keys it: the key :jdbc's builder reads column as (unqualified) and the column's keyword, each
-   where HoneySQL writes it as column (unquoted, PostgreSQL folds a name to lower case); else the
-   column's name as a string, which HoneySQL quotes."
+   keys it: the key :jdbc's builder reads column as (unqualified), the column's keyword and its
+   kebab spelling (:group-id), each where HoneySQL writes it as column (unquoted, PostgreSQL folds
+   a name to lower case); else the column's name as a string, which HoneySQL quotes."
   [column {:keys [format] :as opts}]
   (let [n (name column)
         writes? #(= n (first (formatted-name % format false)))]
-    (or (seq (filter writes? (distinct [(jdbc/row-key nil n opts) (keyword n)])))
+    (or (seq (filter writes? (distinct [(jdbc/row-key nil n opts) (keyword n) (keyword (str/replace n "_" "-"))])))
         [(if (or (string? column) (writes? n)) n (keyword n))])))
 
 (defn- one-value

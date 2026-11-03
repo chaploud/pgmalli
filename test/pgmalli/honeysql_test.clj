@@ -976,7 +976,7 @@
   (let [v (h/values-schema registry :pg.sample/users {:schema "sample"})
         s (h/set-schema registry :pg.sample/users (sends {:schema "sample"} {Keyword :unknown}))
         ok? #(m/validate %1 %2 {:registry registry})]
-    (is (= [:born :closed_at :group_id :group_name :mood :nick :referrer_id :score :seq :total :updated_at :id :nick_upper] (map first (drop 2 v)))
+    (is (= [:born :closed_at :group_id :group_name :mood :nick :referrer_id :score :seq :total :updated_at :id :nick_upper] (map first (rest (:gen/schema (second v)))))
         "the columns the database writes last")
     (is (ok? v {:group_id 1 :score 0 :id :default :nick_upper [:default] :total :default}) "HoneySQL's :default where the database fills or writes a column")
     (is (not-any? #(ok? v %) [{:group_id 1 :score 0 :id 1} {:group_id :default :score 0}]) "a value where the database writes a column, :default where it fills none")
@@ -996,11 +996,11 @@
     (is (= [:born :closed-at :closed_at :group-id :group_id] (take 5 (written-keys (h/values-schema registry :pg.sample/users {:schema "sample" :jdbc kebab}))))
         "keyed as HoneySQL writes a column: kebab-cased as next.jdbc reads it back, and by its name")
     (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line1 :string]]}})]
-      (is (= [:address_line1] (written-keys (h/values-schema reg :t {:jdbc kebab})))
-          "next.jdbc's kebab builder reads address_line1 as :address-line-1, which HoneySQL writes as address_line_1: the column's own name instead")
+      (is (= [:address_line1 :address-line1] (written-keys (h/values-schema reg :t {:jdbc kebab})))
+          "next.jdbc's kebab builder reads address_line1 as :address-line-1, which HoneySQL writes as address_line_1: the column's name and its kebab spelling instead")
       (is (= [:address_line1] (written-keys (h/values-schema reg :t {:jdbc kebab :format {:quoted true}})))
           "quoted, HoneySQL writes a key as it is")
-      (is (= [:ADDRESS_LINE1 :address_line1] (written-keys (h/values-schema reg :t {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-modified-maps :label-fn str/upper-case}})))
+      (is (= [:ADDRESS_LINE1 :address_line1 :address-line1] (written-keys (h/values-schema reg :t {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-modified-maps :label-fn str/upper-case}})))
           "a modified builder's label, which HoneySQL writes unquoted and PostgreSQL folds back to the column"))
     (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} ["a-b" :string]]}})]
       (is (= ["a-b"] (written-keys (h/values-schema reg :t {:jdbc kebab})))
@@ -1025,6 +1025,8 @@
     (is (= {:group-id ["missing required key"] :group_id ["missing required key"]} (me/humanize (m/explain v {:score 0} {:registry registry}))))
     (is (= {:nope ["disallowed key"]} (me/humanize (m/explain v {:group_id 1 :score 0 :nope 1} {:registry registry}))) "an unknown key")
     (is (every? #(ok? s %) [{:group_id 2} {:group-id 2} {:nick-upper :default}]))
+    (is (ok? (h/values-schema registry :users {:schema "sample"}) {:group-id 1 :score 0})
+        "the kebab spelling, which HoneySQL writes to group_id, whatever the builder reads")
     (is (not-any? #(ok? s %) [{} {:group_id 2 :group-id 2} {:nope 1}]))
     (is (= v (m/form (m/schema v {:registry registry}))) "malli keeps the form as it is")
     (is (every? #(ok? v %) (mg/sample v {:registry registry :seed 1})))
