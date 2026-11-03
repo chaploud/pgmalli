@@ -8,8 +8,6 @@
             [pgmalli.impl.shape :as shape]
             [pgmalli.impl.types :as types]))
 
-(defn- code-points [^String s] (.codePointCount s 0 (count s)))
-
 (def string-schema
   ":string with :min and :max counting characters (code points), as PostgreSQL's length and
    varchar(n) do, where malli's counts UTF-16 units. :pg/max-length n is a varchar(n) or
@@ -18,13 +16,13 @@
   (m/-simple-schema
    {:type :string :pred string?
     :property-pred (fn [props]
-                     (let [bounds ((m/-min-max-pred code-points) props)
+                     (let [bounds ((m/-min-max-pred ev/char-length) props)
                            n (:pg/max-length props)
                            bits? (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
                            bounds (if bits? (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s))))) bounds)]
                        (if n
                          (fn [^String s]
-                           (let [kept (if (<= (code-points s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]
+                           (let [kept (if (<= (ev/char-length s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]
                              (boolean (and (or (identical? kept s) (re-matches #" *" (subs s (count kept))))
                                            (or (nil? bounds) (bounds kept))))))
                          bounds)))}))

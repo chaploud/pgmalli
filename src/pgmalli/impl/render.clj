@@ -22,6 +22,7 @@
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
    overrides is {constraint-name schema-or-{:skip reason}}."
   (:require [clojure.string :as str]
+            [pgmalli.impl.accept :as accept]
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.pattern :as pattern]
@@ -33,7 +34,7 @@
 (defn- base-type [data-type]
   ;; without a schema prefix or a typmod: "public.money" and "numeric(12,2)" name numeric
   (let [t (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" "")]
-    (if-let [[_ elem] (re-matches #"(.+)\[\]" t)]
+    (if-let [elem (accept/element t)]
       [:vector (base-type elem)]
       (:schema (types/entry t) :any))))
 
@@ -219,7 +220,7 @@
           {:schema base :unrendered [] :skipped [] :applied []}
           (sort-by (juxt (comp fact-order :fact) :constraint) facts)))
 
-(defn type-key
+(defn override-key
   "The :overrides key of a type: its name without schema or typmod, as a keyword
    (\"public.inet\" and \"numeric(12,2)\" are :inet and :numeric)."
   [data-type]
@@ -229,7 +230,7 @@
   "The schema an override gives every column of a type (keyword keys of :overrides name types:
    {:inet [:re ...]}), nil when there is none."
   [overrides data-type]
-  (get overrides (type-key data-type)))
+  (get overrides (override-key data-type)))
 
 (defn- column-schema
   "Schema of one column with provenance properties; nullable columns wrapped in [:maybe ...]."

@@ -227,7 +227,7 @@
         ;; col IS NULL OR <pattern>: a value that is there takes the pattern
         (map #(if (= :when-present (:fact %)) (assoc (:fact-when-present %) :column (:column %)) %)
              ;; a hint, filtered by schema: k's casts to text are taken as keeping its value
-             (pattern/column-patterns expr {(keyword (name k)) {:type "character" :keeps #{"text" "character varying"}}}))))
+             (pattern/column-patterns expr {(keyword (name k)) {:type "character" :keeps pattern/text-types}}))))
 
 (defn- bpchar-hints
   "{k hints} of the char(n) values the checks among parts read (bpchar-hint), schema-of

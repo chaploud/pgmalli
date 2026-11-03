@@ -131,7 +131,7 @@
    an application's extensions commonly do; another class is [:fn instance?]."
   [[Long :int] [Integer :int] [Short :int] [Byte :int] [clojure.lang.BigInt 'integer?] [java.math.BigInteger 'integer?]
    [java.math.BigDecimal 'decimal?] [Double :double] [Float 'float?]
-   [Boolean :boolean] [String :string] [Character 'char?] [java.util.UUID :uuid] [(Class/forName "[B") 'bytes?]
+   [Boolean :boolean] [String :string] [Character 'char?] [java.util.UUID :uuid] [accept/bytes-class 'bytes?]
    [java.time.LocalDate :time/local-date] [java.time.LocalTime :time/local-time] [java.time.OffsetTime :time/offset-time]
    [java.time.LocalDateTime :time/local-date-time] [java.time.OffsetDateTime :time/offset-date-time]
    [java.time.Instant :time/instant] [java.util.Date 'inst?] [clojure.lang.Keyword :keyword] [clojure.lang.Symbol :symbol]
@@ -146,14 +146,14 @@
                  (when (.isAssignableFrom java.util.Date c) 'inst?)
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
                  ;; column's, which array-type puts in
-                 (when (and (.isArray c) (not= c (Class/forName "[B"))) [:pg/array :pgmalli/element])
+                 (when (and (.isArray c) (not= c accept/bytes-class)) [:pg/array :pgmalli/element])
                  [:fn {:pg/class (.getName c)} (fn [x] (instance? c x))]))))
 
 (defn- array-type-name
   "\"varchar[]\" as \"character varying[]\": an array type named by an element type types knows
    (a name or an alias), by that type's name; nil otherwise."
   [t]
-  (when-let [[_ e] (and (string? t) (re-matches #"(.+)\[\]" t))]
+  (when-let [e (accept/element t)]
     (some-> (types/entry e) :name (str "[]"))))
 
 (defn- type-name
@@ -230,7 +230,7 @@
         :let [t (type-name t)
               coll (collection-schema c)
               array (or (.isArray ^Class c) (and coll (or (= :unknown t) (array-type-name t))))]
-        :when (= array? (boolean (and array (not= c (Class/forName "[B")))))]
+        :when (= array? (boolean (and array (not= c accept/bytes-class))))]
     [(if (and array coll) coll (class-schema c)) t]))
 
 (defn sent-type

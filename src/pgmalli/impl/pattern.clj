@@ -182,6 +182,8 @@
     (str/replace p (re-pattern (str "(?s)" (when (seq e) (str (java.util.regex.Pattern/quote e) "(.)|")) "\\\\"))
                  #(if-let [c (when (vector? %) (second %))] (str "\\" c) "\\\\"))))
 
+(def text-types "The text types a cast to keeps a string's value." #{"text" "character varying"})
+
 (defn- type-key
   "A type's name as a cast and a column spell it alike: no schema, no quotes, an alias as its
    type (bpchar -> character)."
@@ -197,7 +199,7 @@
   (let [t (str/replace t #"\(.*\)$" "")
         e (types/entry t)]
     {:type (type-key t)
-     :keeps (cond (or enum? (= "citext" (:name e)) (and (= :text (:eval e)) (not= "character" (:name e)))) #{"text" "character varying"}
+     :keeps (cond (or enum? (= "citext" (:name e)) (and (= :text (:eval e)) (not= "character" (:name e)))) text-types
                   (#{"bit" "bit varying"} (:name e)) #{"bit" "bit varying"}
                   :else #{})
      :float? (= :float (:eval e))
@@ -214,7 +216,7 @@
        f
        (let [[_ v t] f
              t (type-key t)]
-         (cond (literal? v) (if (or (#{"text" "character varying"} t) (some #(= t (:type %)) (vals types))) v f)
+         (cond (literal? v) (if (or (text-types t) (some #(= t (:type %)) (vals types))) v f)
                (column-ref? v) (let [c (get types v)]
                                  (if (and c (or (= t (:type c)) (contains? (:keeps c) t))) v f))
                :else f))))

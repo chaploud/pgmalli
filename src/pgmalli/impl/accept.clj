@@ -13,6 +13,8 @@
 (defn- named "The class named n; nil where the runtime has none." [n] (try (Class/forName n) (catch Throwable _ nil)))
 (defn- array-of "The class of an array of c; nil where the runtime makes none." [c] (try (array c) (catch Throwable _ nil)))
 
+(def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
+
 (def class-types
   "[class type]: the type pgjdbc's setObject sends a value of class as, with no extension and
    its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
@@ -20,7 +22,7 @@
   (filterv some? [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
    [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
    [Boolean "boolean"] [String "character varying"] [Character "character varying"] [java.util.UUID "uuid"]
-   [(Class/forName "[B") "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
+   [bytes-class "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
    [java.time.OffsetTime "time with time zone"] [java.time.LocalDateTime "timestamp without time zone"]
    [java.time.OffsetDateTime "timestamp with time zone"]
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed

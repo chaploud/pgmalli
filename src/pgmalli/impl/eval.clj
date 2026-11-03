@@ -260,7 +260,10 @@
 (defn- octets [v] (if (string? v) (alength (.getBytes ^String v "UTF-8")) (count v)))
 
 ;; PostgreSQL counts and slices strings by character (code point), Java by UTF-16 unit
-(defn- chars* [v] (if (string? v) (.codePointCount ^String v 0 (count v)) (count v)))
+(defn char-length
+  "The length of v as PostgreSQL counts it: a string's in code points."
+  [v]
+  (if (string? v) (.codePointCount ^String v 0 (count v)) (count v)))
 (defn- cp-subs [^String s start end] (subs s (.offsetByCodePoints s 0 (int start)) (.offsetByCodePoints s 0 (int end))))
 
 (defn- bpchar-value
@@ -268,7 +271,7 @@
    regex or octet_length reads it, padded to n."
   [v n padded?]
   (let [s (str/replace v #" +$" "")]
-    (if (and padded? n) (apply str s (repeat (- n (chars* s)) \space)) s)))
+    (if (and padded? n) (apply str s (repeat (- n (char-length s)) \space)) s)))
 
 (defn- code-points [^String s] (vec (.toArray (.codePoints s))))
 
@@ -288,13 +291,13 @@
   ([s from] (substr s from nil))
   ([s from n]
    (when (and n (neg? n)) (throw (ex-info "negative substring length" {})))
-   (let [len (chars* s)
+   (let [len (char-length s)
          start (min len (max 0 (dec from)))
          end (if n (min len (max start (+ (dec from) n))) len)]
      (cp-subs s start end))))
 
-(defn- left* [s n] (let [len (chars* s)] (if (neg? n) (cp-subs s 0 (max 0 (+ len n))) (cp-subs s 0 (min len n)))))
-(defn- right* [s n] (let [len (chars* s)] (if (neg? n) (cp-subs s (min len (- n)) len) (cp-subs s (max 0 (- len n)) len))))
+(defn- left* [s n] (let [len (char-length s)] (if (neg? n) (cp-subs s 0 (max 0 (+ len n))) (cp-subs s 0 (min len n)))))
+(defn- right* [s n] (let [len (char-length s)] (if (neg? n) (cp-subs s (min len (- n)) len) (cp-subs s (max 0 (- len n)) len))))
 
 (declare json-text)
 
@@ -754,7 +757,7 @@
    result NULL, an exception fails the row. Arities follow PostgreSQL's."
   {:+ plus :- minus :* times :/ divide :mod rem :pow power :abs abs
    :round round* :floor floor* :ceil ceil* :ceiling ceil* :trunc trunc*
-   :length chars* :char_length chars* :character_length chars* :octet_length octets
+   :length char-length :char_length char-length :character_length char-length :octet_length octets
    :lower str/lower-case :upper str/upper-case :reverse str/reverse
    :substr substr :substring substr :left left* :right right*
    ;; TRIM(BOTH chars FROM x) parses as [:trim chars x]; btrim(x, chars) keeps the call order;

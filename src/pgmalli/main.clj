@@ -56,7 +56,7 @@
 (defn- override-key
   "What :overrides takes for an unrendered entry: its constraint's name, or its type as a keyword."
   [{:keys [constraint type]}]
-  (or constraint (render/type-key type)))
+  (or constraint (render/override-key type)))
 
 (defn- print-unrendered [schema facts]
   (when (seq facts)
