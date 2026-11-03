@@ -2197,25 +2197,21 @@
       (or (some #(when (= n (writes %)) %) candidates) (if (string? column) n (keyword n)))
       (if (string? column) n (keyword n)))))
 
-(defn- without-keywords
-  "t without its keyword values: HoneySQL writes a keyword in :values or :set as a column."
+(defn- one-value
+  "t without what HoneySQL writes in :values or :set as something else than one value: a keyword
+   as a column (:default is added after), a Clojure vector or sequence as a row of parameters,
+   (?, ?), which no column takes; a set, or a Java array, is one value."
   [t]
   (case (shape/head t)
-    :maybe [:maybe (without-keywords (last t))]
-    :and (shape/update-base t without-keywords)
-    :or (shape/either (remove #(= :keyword (shape/kind %)) (map without-keywords (shape/alternatives t))) t)
+    :maybe [:maybe (one-value (last t))]
+    :and (shape/update-base t one-value)
+    :or (shape/either (remove #(or (= :keyword (shape/kind %)) (#{:vector :sequential} (shape/head %)))
+                              (map one-value (shape/alternatives t)))
+                      t)
     :enum (let [[h & r] t
                 [p & labels] (if (map? (first r)) r (cons nil r))]
             (into (cond-> [h] p (conj p)) (remove keyword? labels)))
-    t))
-
-(defn- one-parameter
-  "t without the Clojure vectors and sequences in it: HoneySQL writes one in :values or :set as
-   a row of parameters, (?, ?), which no column takes; a set, or a Java array, is one."
-  [t]
-  (case (shape/head t)
-    :maybe [:maybe (one-parameter (last t))]
-    :or (shape/either (remove #(#{:vector :sequential} (shape/head %)) (map one-parameter (shape/alternatives t))) t)
+    :any [:and t [:not [:or :keyword [:sequential :any]]]]
     t))
 
 (defn- written-row
@@ -2258,7 +2254,7 @@
                   (concat
                    ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
                    (for [[k props c] written
-                         :let [t (cond-> (one-parameter (without-keywords (accepted-type r c :assign opts))) (or (shape/maybe? c) triggered?) nullable)
+                         :let [t (cond-> (one-value (accepted-type r c :assign opts)) (or (shape/maybe? c) triggered?) nullable)
                                t (if (fills k) [:or t default] t)]]
                      (if (or (:optional props) triggered?) [(key k) {:optional true} t] [(key k) t]))
                    ;; one the database writes (generated, identity ALWAYS) takes it alone

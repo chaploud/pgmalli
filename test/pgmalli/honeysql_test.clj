@@ -820,6 +820,18 @@
     (doseq [v [(double-array [1.0]) (into-array BigDecimal [1M]) (boolean-array [true]) (into-array String ["1"]) (long-array [1])]]
       (is (m/validate t v {:registry reg}) (pr-str (class v))))))
 
+(deftest an-untyped-column-written-takes-no-keyword-vector-or-sequence
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:id :int]
+                                                        [:j [:any {:pg/type "json"}]]
+                                                        [:ip [:maybe [:any {:pg/type "inet"}]]]]}})]
+    (doseq [[o default] [[{} :default] [{:format {:quoted true}} [:default]]]
+            [f row] [[h/values-schema {:id 1 :j "{}"}] [h/set-schema {}]]
+            :let [ok? #(m/validate (f reg :t o) (merge row %) {:registry reg})]]
+      (is (every? ok? [{:j "{}"} {:ip "10.0.0.1"} {:ip nil}]))
+      (is (not-any? ok? [{:j :k} {:ip :k} {:j [1 2]} {:ip '("a")} {:j (list 1)}]) (pr-str f o))
+      (is (ok? {:ip default}) "HoneySQL's DEFAULT where the database fills a column"))))
+
 (deftest a-number-label-is-read-from-a-string-sent-untyped
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
     (is (m/validate (:l (h/arg-types reg {:update :t :set {:l [:cast :?l :integer]}} {:send unspecified})) "1" {:registry reg}))))
