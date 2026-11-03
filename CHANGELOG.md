@@ -144,8 +144,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 ### Changed
 
 * `now()`, the functions that build json and a function call in general are nullable: the
-  catalog does not say when a function returns NULL. `current_timestamp` and the like, `count`,
-  `row_number` and a comparison of values that are not NULL are not.
+  catalog does not say when a function returns NULL. `current_timestamp` and the like (but
+  `current_schema` and `system_user`, which may be NULL), `count`, `pg_catalog`'s `row_number`
+  and a comparison of values that are not NULL are not.
 * `coalesce`, `CASE` and the like resolve as PostgreSQL's `select_common_type`: `CASE` takes its
   `ELSE` value first, and a `varchar` before a `text` stays `varchar`. A typed string among
   numbers is no longer typed as the numbers (PostgreSQL refuses it).
@@ -187,6 +188,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `"1"` is the label `1`), an alias's column list as renaming only the first columns
   (`AS u(a)` keeps the others' names), TRIM's column as `btrim`, and `coalesce` of a column with
   a CHECK's list as its base type.
+* An argument under `SOME` (`[:= :id [:some :?ids]]`) is typed as one under `ANY`.
 * `h/check` reads an assignment target `:a.b` as the field `b` of the composite column `a`,
   where it reported `:unknown-column`; the value is not checked.
 * A list or seq of keywords, vectors, maps and values alone (a `:select` built with `map`) is

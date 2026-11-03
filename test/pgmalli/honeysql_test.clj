@@ -2124,6 +2124,11 @@
            (h/row-schema reg {:select [[[:jsonb_object :score] :o]] :from [:users]} (assoc opts :read {:json :parsed})))
         "a json builder's name of the schema's says nothing of the shape it returns")))
 
+(deftest some-of-an-argument-is-typed-as-any-of-it
+  (let [any (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]})]
+    (is (some? (second (first any))))
+    (is (= any (args {:select [:id] :from [:users] :where [:= :id [:some :?ids]]})))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

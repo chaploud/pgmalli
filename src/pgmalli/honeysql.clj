@@ -1316,10 +1316,14 @@
       (and (number? l) (number? v) (== l v))
       (and (number? l) (string? v) (some-> (parse-number v) (== l)))))
 
+(def ^:private array-comparisons
+  "ANY(a), SOME(a) and ALL(a), the right operand of an operator over a's elements (docs 9.24.3)."
+  #{:any :some :all})
+
 (defn- array-of-elements?
-  "Whether x is ANY(a), SOME(a) or ALL(a), the right operand of an operator over a's elements."
+  "Whether x is one of array-comparisons."
   [x]
-  (and (vector? x) (= 2 (count x)) (#{:any :some :all} (first x))))
+  (and (vector? x) (= 2 (count x)) (array-comparisons (first x))))
 
 (defn- side-schema
   "The column schema of one side of a comparison: a column's, or an expression's where
@@ -1563,9 +1567,9 @@
 (defn- nullable [t] (if (or (untyped? t) (shape/maybe? t)) t [:maybe t]))
 
 (defn- array-arg
-  "The argument x of [h x] with h one of heads, sent as one array: [:any x] and [:all x] by
+  "The argument x of [h x] with h one of heads, sent as one array: of array-comparisons by
    default (= ANY(?), <> ALL(?))."
-  ([v] (array-arg v #{:any :all}))
+  ([v] (array-arg v array-comparisons))
   ([v heads] (when (and (vector? v) (= 2 (count v)) (heads (first v)) (arg-key (second v))) (second v))))
 
 (defn- assigned-type
