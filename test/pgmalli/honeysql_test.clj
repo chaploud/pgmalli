@@ -2178,6 +2178,12 @@
     (is (= [:map [:ip :string]] (h/row-schema reg {:select [:ip] :from [:t]} (assoc o :read {"inet" :string}))) ":read names what an extension reads")
     (is (= {:ip ip :h hs} (h/arg-types reg {:update :t :set {:ip :?ip :h :?h}} o)))))
 
+(deftest a-value-of-the-wrong-class-for-a-driver-object-says-the-class-it-should-be
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "citext"}]]]}})
+        x (:x (h/arg-types reg {:update :t :set {:c :?x}}))]
+    (is (some #(str/includes? (str %) "should be an org.postgresql.util.PGobject")
+              (flatten [((requiring-resolve 'malli.error/humanize) (m/explain x 42 malli-opts))])))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

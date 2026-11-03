@@ -124,6 +124,11 @@
         ss (if (some #(= :sequential (first %)) ss) (remove #(= :vector (first %)) ss) ss)]
     (when (seq ss) (shape/either ss nil))))
 
+(defn- class-fn
+  "[:fn] of the values of class name n, pred telling them."
+  [n pred]
+  [:fn {:pg/class n :error/message (str "should be an " n)} pred])
+
 (def ^:private class-schemas
   "[class schema]: the malli schema of a value of class, for the classes pgjdbc sends and those
    an application's extensions commonly do; another class is [:fn instance?]."
@@ -145,7 +150,7 @@
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
                  ;; column's, which array-type puts in
                  (when (and (.isArray c) (not= c accept/bytes-class)) [:pg/array :pgmalli/element])
-                 [:fn {:pg/class (.getName c)} (fn [x] (instance? c x))]))))
+                 (class-fn (.getName c) (fn [x] (instance? c x)))))))
 
 (defn- array-type-name
   "\"varchar[]\" as \"character varying[]\": an array type named by an element type types knows
@@ -514,7 +519,7 @@
 
 (def ^:private pg-object
   "A PGobject (not a subclass of it, such as PGInterval), by name: pgjdbc need not be loaded."
-  [:fn {:pg/class "org.postgresql.util.PGobject"} (fn [x] (= "org.postgresql.util.PGobject" (some-> x class .getName)))])
+  (class-fn "org.postgresql.util.PGobject" (fn [x] (= "org.postgresql.util.PGobject" (some-> x class .getName)))))
 
 (defn column-write-type
   "column-write-type*: a column the driver reads as a PGobject (citext, bit(n > 1)) takes
