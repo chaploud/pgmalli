@@ -363,7 +363,7 @@
                                   x (try (run) (finally (.rollback conn)))]
                               (when-not (m/validate ret x)
                                 {:schema (m/form ret) :value x :explain (me/humanize (m/explain ret x))}))
-                            (let [row (h/row-schema registry query opts)]
+                            (let [row (:row (h/analyze registry query opts))]
                               (when (and (vector? row) (= :map (first row)))
                                 (some-> (result-keys conn sqlvec) (key-mismatch row)))))
                           (catch Exception e {:error (ex-message e)}))]
@@ -408,7 +408,7 @@
    write without a result set, or a row-schema that is no map, is left out (nil); row-schema
    throwing, or the run, is a mismatch {:error}."
   [registry ^java.sql.Connection conn domains query opts sqlvec]
-  (let [row (try (some-> (h/row-schema registry query opts) (m/schema {:registry registry}))
+  (let [row (try (some-> (:row (h/analyze registry query opts)) (m/schema {:registry registry}))
                  (catch Exception e {:error (str "row-schema throws: " (ex-message e))}))
         cols (when (and (m/schema? row) (= :map (m/type row)))
                (try (with-open [ps (jdbc/prepare conn sqlvec)]
@@ -582,7 +582,7 @@
                                 opts (assoc (:opts c) :format fmt)
                                 ;; a named argument takes a value of the type arg-types gives it; one it
                                 ;; types not ([:any {:pgmalli/untyped why}]) goes as NULL
-                                args (into {} (for [[k s] (h/arg-types registry query opts)]
+                                args (into {} (for [[k s] (:args (h/analyze registry query opts))]
                                                 [k (when-not (= :any (if (vector? s) (first s) s)) (generated s registry seed))]))
                                 sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception e e))]]
                       (cond
@@ -590,7 +590,7 @@
                         (= sqlvec (:sqlvec @before)) (assoc (:result @before) :format mode)
                         :else
                         (let [{:keys [result] :as v} (cond-> (verdict conn sqlvec) (= :params mode) (uncast-string (:verdict @before)))
-                              problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query opts)))
+                              problems (vec (remove #(= :unread-clause (:kind %)) (:problems (h/analyze registry query opts))))
                               returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result))
                               {described :mismatches typed :typed} (when result (column-mismatches registry conn doms query opts sqlvec))
                               r (merge c (dissoc v :result)
@@ -868,7 +868,7 @@
            (fn [conn {:keys [context query table column list notnull compared-type quoted? profile] t :type :as place}]
              (let [sends (send-profiles profile)
                    opts {:format (fmt quoted?)}
-                   s (try (or (some-> (:x (h/arg-types registry query opts)) (m/schema {:registry registry}))
+                   s (try (or (some-> (:x (:args (h/analyze registry query opts))) (m/schema {:registry registry}))
                               "arg-types gives :x no schema")
                           (catch Exception e (str "arg-types throws: " (ex-message e))))
                    failure #(merge (select-keys place [:table :column :context :type :profile]) %)]

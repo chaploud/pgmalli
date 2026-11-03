@@ -202,7 +202,7 @@
       (with-open [con (jdbc/get-connection (datasource))]
         (doseq [q [{:select [[[:concat :?x] :v]]} {:select [[[:format "%s" :?x] :v]]} {:select [[[:jsonb_build_object "k" :?x] :v]]}
                    {:select [[[:json_build_array 1 :?x] :v]]} {:select [[[:num_nulls :?x] :v]]}]
-                :let [s (:x (h/arg-types registry q))]
+                :let [s (:x (:args (h/analyze registry q)))]
                 v values
                 :let [state (refusal con (sql/format q {:params {:x v}}))]]
           (testing (pr-str q (cond-> v (some-> v class .isArray) vec))
@@ -219,7 +219,7 @@
                    {:update :sent_probe :set {:e :?x}}
                    {:select [:e] :from [:sent_probe] :where [:= :e [:cast :?x :sent_mood]]}]
                 v [:ok "ok"]
-                :let [s (:x (h/arg-types registry q))
+                :let [s (:x (:args (h/analyze registry q)))
                       state (do (.setAutoCommit con false) (try (refusal con (sql/format q {:params {:x v}})) (finally (.rollback con) (.setAutoCommit con true))))]]
           (testing (pr-str q v)
             (is (= (nil? state) (m/validate s v {:registry registry})) (str "PostgreSQL: " (or state "takes it")))))))))

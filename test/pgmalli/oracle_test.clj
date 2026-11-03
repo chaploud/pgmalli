@@ -35,7 +35,7 @@
     :id #"^gen-array-agg-(kinds\.(bigs|dbls|ints|nums|short_texts|texts)|lists\.[clw]|profiles\.(rank|tag)) "
     :reason (str "array_agg of an array column returns a two-dimensional array, read as a vector of vectors; pgmalli types"
                  " an array as one-dimensional, as PostgreSQL's type (bigint[]) does not say the dimensions")
-    :repro "(h/row-schema registry {:select [[[:array_agg :kinds.bigs] :x]] :from [:kinds]}) gives [:vector [:maybe :int]]; the row is {:x [[1]]}"}])
+    :repro "(:row (h/analyze registry {:select [[[:array_agg :kinds.bigs] :x]] :from [:kinds]})) gives [:vector [:maybe :int]]; the row is {:x [[1]]}"}])
 
 (defn- held
   "The pending entry of test that holds the failure of signature id, or nil."
@@ -175,7 +175,7 @@
 (deftest a-query-wrapped-keeps-its-problems
   (when *db*
     (let [registry (oracle/registry *db*)
-          problems (fn [q opts] (set (map (fn [p] (dissoc p :in)) (remove (comp #{:unread-clause} :kind) (h/check registry q opts)))))]
+          problems (fn [q opts] (set (map (fn [p] (dissoc p :in)) (remove (comp #{:unread-clause} :kind) (:problems (h/analyze registry q opts))))))]
       (doseq [{:keys [id mutation query opts]} (oracle/cases (oracle/mutation-names *db*) seed mutants)
               :when (and (map? query) (some query [:select :union :union-all :intersect :except]))
               :let [opts (update opts :format merge {:inline true})

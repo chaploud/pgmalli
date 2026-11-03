@@ -246,7 +246,7 @@ There are two ways to check a row read from the database:
 | way | for |
 |---|---|
 | `as-read` | the rows of one table, as next.jdbc returns them (recommended) |
-| `h/row-schema` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
+| `(:row (h/analyze ...))` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
 
 [docs/reading-rows.md](docs/reading-rows.md) has the extension and what each type comes back as.
 
@@ -263,17 +263,27 @@ There are two ways to check a row read from the database:
 
 ## Checking HoneySQL queries
 
-`h/check` reads HoneySQL query data against the registry, with no database. It returns the
-problems PostgreSQL would report. It also reports a few queries that PostgreSQL runs but that
-can match no row ([docs/queries.md](docs/queries.md#stricter-than-postgresql)):
+`h/analyze` reads HoneySQL query data against the registry, with no database. It returns the
+types of the query's arguments (`:args`), the row it returns (`:row`), how many rows where the
+data tells (`:rows`), the problems PostgreSQL would report (`:problems`) and the tables it reads
+and writes (`:tables`):
 
 ```clojure
 (require '[pgmalli.honeysql :as h])
 
-(h/check registry {:select [:id :email] :from [:users] :where [:= :status [:cast "active" :user_status]]})
+(h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
+;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
+```
+
+`:problems` also reports a few queries that PostgreSQL runs but that can match no row
+([docs/queries.md](docs/queries.md#stricter-than-postgresql)):
+
+```clojure
+
+(:problems (h/analyze registry {:select [:id :email] :from [:users] :where [:= :status [:cast "active" :user_status]]}))
 ;; => []
 
-(h/check registry {:select [:id :mail] :from [:users] :where [:= :status [:cast "gone" :user_status]]})
+(:problems (h/analyze registry {:select [:id :mail] :from [:users] :where [:= :status [:cast "gone" :user_status]]}))
 ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]} {:kind :enum-literal, :column :status, :value "gone", :allowed ["active" "closed"]}]
 ```
 
@@ -282,14 +292,14 @@ takes. Cast it; an argument takes a keyword label, which goes untyped
 ([what your application sends](docs/queries.md#what-your-application-sends)):
 
 ```clojure
-(h/check registry {:select [:id] :from [:users] :where [:= :status "active"]})
+(:problems (h/analyze registry {:select [:id] :from [:users] :where [:= :status "active"]}))
 ;; => [{:kind :uncast-string, :column :status, :value "active", :type "user_status"}]
 ```
 
 An INSERT must carry the columns its insert schema requires:
 
 ```clojure
-(h/check registry {:insert-into :users :values [{:email "ann@example.com"}]})
+(:problems (h/analyze registry {:insert-into :users :values [{:email "ann@example.com"}]}))
 ;; => [{:kind :missing-required-column, :table "public.users", :column :group_id}]
 ```
 
@@ -305,14 +315,14 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list when written into the column or compared with `=`, `IN` or `IS NOT DISTINCT FROM`; with `:allowed` |
-| `:uncast-string` | a string literal, which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...); not under `:format {:inline true}`. A named argument is `h/arg-types`' |
+| `:uncast-string` | a string literal, which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...); not under `:format {:inline true}`. A named argument is typed as `:args` types it |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
 `h/humanize` says each problem as what is wrong and what to do:
 
 ```clojure
-(h/humanize (h/check registry {:select [:nik] :from [:users]}))
+(h/humanize (:problems (h/analyze registry {:select [:nik] :from [:users]})))
 ;; => ["unknown column nik; did you mean: nick"]
 ```
 
@@ -327,7 +337,7 @@ Check every query of a project in one test:
 
 (deftest queries-agree-with-the-schema
   (doseq [[k q] queries]
-    (let [problems (h/check registry q)]
+    (let [problems (:problems (h/analyze registry q))]
       (is (= [] problems) (str k ": " (h/humanize problems))))))
 ```
 
@@ -369,14 +379,13 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
 (mi/unstrument!)
 ```
 
-`:db` is not in the query, so its schema is `:any`. A problem `h/check` finds goes into the
+`:db` is not in the query, so its schema is `:any`. A problem `h/analyze` finds goes into the
 schema's `:pgmalli/problems` property instead of an exception, so a namespace with a broken
 query still loads. `h/schema-problems` gathers them for one test
 ([docs/queries.md](docs/queries.md#problems-in-function-schemas)).
 
-`h/analyze` gives the parts `h/query-schema` is built of, for a schema of your own: the
-arguments, the row, how many rows, the problems and the tables it reads and writes
-([docs/queries.md](docs/queries.md#function-schemas)).
+`h/query-schema` is built of what `h/analyze` gives; for a schema of your own, build it of
+those parts ([docs/queries.md](docs/queries.md#function-schemas)).
 
 `pgmalli/describe` reads a schema back as PostgreSQL types, to see what a function takes and
 returns:
@@ -469,7 +478,7 @@ columns is kept or skipped whole:
 
 pgmalli still adds what the database says of the column: `[:maybe ...]` unless it is NOT
 NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are read
-(`as-read`, `h/row-schema`) and written (`h/arg-types`, `h/values-schema`, `h/set-schema`),
+(`as-read`, `h/analyze`'s `:row`) and written (`h/analyze`'s `:args`, `h/values-schema`, `h/set-schema`),
 but for a type the driver reads as an object of its own: an `inet`, read as a
 PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read; the
 `:public.hosts/ip` override above holds for what is written. A json or jsonb column is read
@@ -520,7 +529,7 @@ and pgjdbc are yours to add.
 - PRIMARY KEY, UNIQUE and foreign keys are not checked: a row schema holds for one row.
 - Triggers, EXCLUDE constraints and policies are not enforced
   ([docs/types.md](docs/types.md#what-is-read)).
-- `h/check` reads a query as data: of a query that code builds at run time, it checks only the
+- `h/analyze` reads a query as data: of a query that code builds at run time, it checks only the
   parts written as data ([docs/queries.md](docs/queries.md#not-checked)).
 - A CHECK whose result depends on what pgmalli cannot know passes
   ([docs/types.md](docs/types.md#how-pgcheck-evaluates)).
@@ -531,7 +540,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 
 1. the keys of `pgmalli.edn`
 2. the generated file and the registry names
-3. the kinds of `:unrendered` entries and of `h/check`'s problems
+3. the kinds of `:unrendered` entries and of `h/analyze`'s problems
 4. the public functions of `pgmalli.core`, `pgmalli.generate` and `pgmalli.honeysql`, and
    their options
 5. the `:pgmalli/error` kinds of the errors pgmalli throws
@@ -551,7 +560,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/fault` | pgmalli's own fault (please report it), or reading the catalog failing: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |
 
 Each error's ex-data also carries `:cognitect.anomalies/category`, and `:given`, `:known` and
-`:did-you-mean` (the names probably meant, as a problem of `h/check` names them) where they apply.
+`:did-you-mean` (the names probably meant, as a problem of `h/analyze` names them) where they apply.
 
 ## Development
 

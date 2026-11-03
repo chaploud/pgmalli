@@ -1,5 +1,5 @@
 (ns pgmalli.expression-types-test
-  "The types and names h/row-schema gives a select expression, against what PostgreSQL gives:
+  "The types and names h/analyze's :row gives a select expression, against what PostgreSQL gives:
    coalesce, greatest, least, CASE, nullif and UNION over pairs of the columns of every type (of
    the type, an array, a domain, an array of the domain), the aggregates over each, every
    function and operator of pgmalli's catalog snapshot over columns of its argument types (and
@@ -75,7 +75,7 @@
 (defn- pgmalli-types
   "{alias type} of the items pgmalli types, :any left out."
   [registry kind items]
-  (into {} (for [[k & more] (rest (h/row-schema registry (query kind items) opts))
+  (into {} (for [[k & more] (rest (:row (h/analyze registry (query kind items) opts)))
                  :let [t (normal (pg-type (last more)))] :when t]
              [k t])))
 
@@ -203,7 +203,7 @@
                (doall
                 (for [e named
                       :let [q {:select [[e]] :from [:u]}
-                            ours (some-> (h/row-schema registry q opts) second first name)]
+                            ours (some-> (:row (h/analyze registry q opts)) second first name)]
                       :when ours
                       :let [theirs (try (with-open [ps (jdbc/prepare con (sql/format q))]
                                           (.getColumnLabel (.getMetaData ps) 1))
@@ -314,7 +314,7 @@
    type is one the places of :?x hold as their own (otherwise refused by design)."
   [registry ds places]
   (let [refusals (doall (pmap (fn [[q held?]]
-                                (let [s (m/schema (:x (h/arg-types registry q opts)) {:registry registry})]
+                                (let [s (m/schema (:x (:args (h/analyze registry q opts))) {:registry registry})]
                                   [q (for [v (vals oracle/values)
                                            :let [sent (pjdbc/sent-type v {})]
                                            ;; a date or time sent untyped is its type's own value alone, by design (accept/text-untyped)
@@ -415,7 +415,7 @@
                  {:select [:*] :from [[[:double_it 1] :d]]}
                  {:select [:*] :from [[[:pick] :p]]}
                  {:select [:*] :from [[[:with-ordinality [:labels] :r]]]}]
-          ours (fn [q] (vec (for [[k & more] (rest (h/row-schema registry q o))] [(name k) (normal (pg-type (last more)))])))]
+          ours (fn [q] (vec (for [[k & more] (rest (:row (h/analyze registry q o)))] [(name k) (normal (pg-type (last more)))])))]
       (with-open [con (jdbc/get-connection (datasource))]
         (doseq [e exprs
                 :let [q {:select [[e :e]] :from [:t]}]]
@@ -424,5 +424,5 @@
           (let [theirs (own-described con typnames q)]
             (is (= (mapv pop theirs) (ours q)) (pr-str q))
             (is (every? #{""} (map peek theirs)) (str "of no table: " (pr-str q))))))
-      (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (h/arg-types registry {:select [[[:double_it :?x] :d]] :from [:t]} o))))))
+      (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (:args (h/analyze registry {:select [[[:double_it :?x] :d]] :from [:t]} o)))))))
 

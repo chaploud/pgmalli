@@ -272,7 +272,7 @@
           o {:schema "ov"}
           sends o
           row {:id 1 :input {:prompt "x"} :meta nil :n 5}
-          read (fn [k opts] (last (second (h/row-schema reg {:select [k] :from [:jobs]} opts))))]
+          read (fn [k opts] (last (second (:row (h/analyze reg {:select [k] :from [:jobs]} opts)))))]
       (is (m/validate :pg.ov/jobs row {:registry reg}))
       (doseq [bad [{:input {:prompt 1}} {:input nil} {:n 0} {:n 100}]]
         (is (not (m/validate :pg.ov/jobs (merge row bad) {:registry reg})) (pr-str bad)))
@@ -280,7 +280,7 @@
         (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (read :input o)))
         (is (= [:int {:min 1 :max 99 :pg/type "integer" :pg/constraints ["jobs_n_check"]}] (read :n o))))
       (testing "write: the declared shape for a map sent as jsonb"
-        (is (= [:or [:map {:pg/type "jsonb"} [:prompt :string]] jdbc/pg-object] (:i (h/arg-types reg {:update :jobs :set {:input :?i}} sends))))
+        (is (= [:or [:map {:pg/type "jsonb"} [:prompt :string]] jdbc/pg-object] (:i (:args (h/analyze reg {:update :jobs :set {:input :?i}} sends)))))
         (is (m/validate (h/values-schema reg :jobs sends) row {:registry reg}))
         (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg})))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #":overrides: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"

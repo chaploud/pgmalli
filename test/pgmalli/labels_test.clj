@@ -26,32 +26,32 @@
 (deftest a-domains-list-keeps-its-base-type-and-is-no-enum-type
   (is (= [:enum {:pg/type "text"} "a" "b"] (get-in generated [:registry :pg.public/lbl])))
   (is (= [:enum {:pg/type "bigint"} 1 2] (get-in generated [:registry :pg.public/lvl])))
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :l "a"]}))
+  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :l "a"]})))
       "a varchar goes to a text domain, as PostgreSQL reads it")
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:and [:= :l :?x] [:= :v :?y]]})))
+  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:and [:= :l :?x] [:= :v :?y]]}))))
   (is (= [{:kind :enum-literal :column :l :value "c" :allowed ["a" "b"]}]
-         (h/check registry {:select [:id] :from [:t] :where [:= :l "c"]}))
+         (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :l "c"]})))
       "a value outside the list still matches no row")
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:or [:<> :l "c"] [:< :l "c"] [:not-in :l ["c"]]]}))
+  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:or [:<> :l "c"] [:< :l "c"] [:not-in :l ["c"]]]})))
       "other comparisons compare it as its base type"))
 
 (deftest a-literal-is-a-number-label-as-postgresql-reads-it
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :n "1"]} {:format {:inline true}}))
+  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :n "1"]} {:format {:inline true}})))
       "an untyped '1' is 1")
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :v "2"]} {:format {:inline true}})))
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :n 1.0]})))
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:in :n ["0x1" "2" " 1 " "0b10" "0x_1"]]} {:format {:inline true}}))
+  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :v "2"]} {:format {:inline true}}))))
+  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :n 1.0]}))))
+  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:in :n ["0x1" "2" " 1 " "0b10" "0x_1"]]} {:format {:inline true}})))
       "PostgreSQL 16 reads 0x, 0o and 0b integers")
   (is (= [{:kind :enum-literal :column :n :value 3 :allowed [1 2]}]
-         (h/check registry {:select [:id] :from [:t] :where [:= :n 3]}))
+         (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :n 3]})))
       "a number outside the list matches no row")
   (is (= [{:kind :enum-literal :column :n :value 3 :allowed [1 2]}]
-         (h/check registry {:select [:id] :from [:t] :where [:in :n [1 3]]}))))
+         (:problems (h/analyze registry {:select [:id] :from [:t] :where [:in :n [1 3]]})))))
 
 (deftest a-cast-to-a-type-with-its-length-has-the-type
   (is (= [:map [:x [:maybe [:string {:pg/type "character varying"}]]]]
-         (h/row-schema registry {:select [[[:cast :s [:varchar 5]] :x]] :from [:t]} {})))
-  (is (= :string (first (second (:x (h/arg-types registry {:select [:id] :from [:t] :where [:= :s [:cast :?x [:varchar 5]]]})))))))
+         (:row (h/analyze registry {:select [[[:cast :s [:varchar 5]] :x]] :from [:t]} {}))))
+  (is (= :string (first (second (:x (:args (h/analyze registry {:select [:id] :from [:t] :where [:= :s [:cast :?x [:varchar 5]]]}))))))))
 
 (deftest a-format-that-quotes-names-writes-default-only-as-a-call
   (let [row {:l "a" :v 1 :n 1}]
@@ -65,8 +65,8 @@
          (take 3 (:known (ex-data (try (pgmalli/as-read registry :pg.public/zz) (catch clojure.lang.ExceptionInfo e e))))))))
 
 (deftest a-coalesce-of-a-check-list-takes-the-others-values-too
-  (is (= [] (h/check registry {:select [:s.id] :from [[{:select [:id [[:coalesce :n 3] :cc]] :from [:t]} :s]] :where [:= :s.cc 3]}))))
+  (is (= [] (:problems (h/analyze registry {:select [:s.id] :from [[{:select [:id [[:coalesce :n 3] :cc]] :from [:t]} :s]] :where [:= :s.cc 3]})))))
 
 (deftest a-recursive-ctes-later-rows-hold-values-beyond-its-first-members-list
-  (is (= [] (h/check registry {:with-recursive [[:c {:union-all [{:select [:n] :from [:t]} {:select [[[:+ :n 1] :n]] :from [:c]}]}]]
-                               :select [:n] :from [:c] :where [:= :c.n 3]}))))
+  (is (= [] (:problems (h/analyze registry {:with-recursive [[:c {:union-all [{:select [:n] :from [:t]} {:select [[[:+ :n 1] :n]] :from [:c]}]}]]
+                               :select [:n] :from [:c] :where [:= :c.n 3]})))))

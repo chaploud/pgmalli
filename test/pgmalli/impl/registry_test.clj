@@ -33,7 +33,7 @@
 
 (deftest a-map-of-no-schemas-is-not-a-registry
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a registry: :a maps to 1, not a schema; pass \(pgmalli.core/registry"
-                                (h/check {:a 1} {:select [:*] :from [:users]})))]
+                                (:problems (h/analyze {:a 1} {:select [:*] :from [:users]}))))]
     (is (= :pgmalli.error/not-a-registry (:pgmalli/error (ex-data e))))))
 
 (deftest generated-data-in-place-of-a-registry-names-the-call-to-make
@@ -108,7 +108,7 @@
 (deftest any-malli-registry-will-do
   (let [composite (malli.registry/composite-registry registry {:app/flag :boolean})]
     (is (m/validate :pg.sample/groups {:id 1 :name "g"} {:registry composite}))
-    (is (= [] (h/check composite {:select [:id] :from [:groups]} {:schema "sample"})))
+    (is (= [] (:problems (h/analyze composite {:select [:id] :from [:groups]} {:schema "sample"}))))
     (is (= (portable/portable-data registry (shape/schema-of registry :pg.sample/users)) (portable/portable-data composite (shape/schema-of composite :pg.sample/users)))
         "portable-data inlines references through a composite registry")
     (is (= (h/query-schema registry '[id] {:select [:id] :from [:groups]} {:schema "sample"})

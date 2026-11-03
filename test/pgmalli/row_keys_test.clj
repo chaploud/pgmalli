@@ -73,7 +73,7 @@
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [q (concat queries using-chains)
               row (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps})
-              :let [schema (h/row-schema registry q)]]
+              :let [schema (:row (h/analyze registry q))]]
         (is (= (set (keys row)) (set (map first (m/children (m/schema schema {:registry registry}))))) (pr-str q row))
         (is (m/validate schema row {:registry registry}) (pr-str q row))))))
 
@@ -113,15 +113,15 @@
                            {:n 1 :feel "ok" :bodies ["a" "b"]}]
                           [{:select [:id] :from [:notes] :where [:and [:= [:cast :n :text] :?t] [:< [:composite :n :id] [:composite :?n :?id]]]}
                            {:t "1" :n 2 :id 99}]]
-              :let [types (h/arg-types registry q opts)
+              :let [types (:args (h/analyze registry q opts))
                     params (update-vals params #(if (vector? %) (into-array String %) %))]]
         (is (m/validate (into [:map] types) params {:registry registry}) (pr-str q))
         (is (some? (jdbc/execute! ds (sql/format q {:params params}))) (pr-str q)))
       (let [q {:select [[[:cast "ok" :feel] :f] [[:cast 2 :positive] :p] [[:cast :n :int] :i] [[:cast true :bool] :b]] :from [:notes]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps}))]
         (is (some? row))
-        (is (not-any? #(= [:maybe :any] (last %)) (rest (h/row-schema registry q opts))) "each cast is typed")
-        (is (m/validate (h/row-schema registry q opts) row {:registry registry}) (pr-str row))))))
+        (is (not-any? #(= [:maybe :any] (last %)) (rest (:row (h/analyze registry q opts)))) "each cast is typed")
+        (is (m/validate (:row (h/analyze registry q opts)) row {:registry registry}) (pr-str row))))))
 
 (deftest arguments-typed-as-postgresql-takes-them-run
   (when *db*
@@ -134,11 +134,11 @@
                                 ["2026-01-01T00:00:00Z" (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0)
                                  (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
                                [{:select [:id] :from [:prices] :limit :?x} {} [nil 1]]]
-              :let [t (:x (h/arg-types registry q opts))]
+              :let [t (:x (:args (h/analyze registry q opts)))]
               v values]
         (is (m/validate t v {:registry registry}) (str (pr-str q) " " (pr-str v)))
         (is (vector? (jdbc/execute! ds (sql/format q {:params {:x v}}))) (str (pr-str q) " " (pr-str v))))
-      (is (not (m/validate (:x (h/arg-types registry {:select [:id] :from [:prices] :where [:= :id :?x]})) "1"))
+      (is (not (m/validate (:x (:args (h/analyze registry {:select [:id] :from [:prices] :where [:= :id :?x]}))) "1"))
           "a varchar compared with a bigint is no argument PostgreSQL takes"))))
 
 (deftest pg-array-is-what-the-driver-takes
@@ -157,14 +157,14 @@
     (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))
           ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
-          args (h/arg-types registry ins)
+          args (:args (h/analyze registry ins))
           v (into-array String ["a" "b"])]
       (is (m/validate (:paths args) v {:registry registry}) "a String[] for a text[] column")
       (is (not (m/validate (:paths args) ["a"] {:registry registry})) "a vector the driver refuses")
       (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
       (let [q {:select [:paths :meta] :from [:docs]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps}))]
-        (is (m/validate (h/row-schema registry q) row) (pr-str (update-vals row class)))))))
+        (is (m/validate (:row (h/analyze registry q)) row) (pr-str (update-vals row class)))))))
 
 (deftest as-read-is-the-row-the-driver-returns
   (when *db*

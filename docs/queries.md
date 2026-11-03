@@ -2,8 +2,12 @@
 
 Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md)
 
-`pgmalli.honeysql` reads a HoneySQL query as data and compares it with the registry. The
-examples use [example/schema.sql](example/schema.sql).
+`h/analyze` reads a HoneySQL query as data and compares it with the registry. It gives the
+types of the arguments (`:args`, [below](#the-types-of-the-arguments)), the row it returns
+(`:row`, [below](#the-row-a-query-returns)), how many rows where the data tells (`:rows`,
+[below](#function-schemas)), the problems PostgreSQL would report (`:problems`) and the tables it
+reads and writes (`:tables`, [below](#the-tables-a-query-uses)). The examples use
+[example/schema.sql](example/schema.sql).
 
 ```clojure
 (require '[pgmalli.core :as pgmalli]
@@ -12,11 +16,14 @@ examples use [example/schema.sql](example/schema.sql).
          '[next.jdbc.result-set :as rs])
 
 (def registry (pgmalli/registry "public"))
+
+(h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
+;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
 ```
 
 ## What a name refers to
 
-`h/check` resolves names the way PostgreSQL does:
+`h/analyze` resolves names the way PostgreSQL does:
 
 - The tables of a statement are those of `:from`, `:using`, `:cross-join`, the joins (not
   `:join-by`), `:insert-into`, `:update`, `:delete-from` and `:truncate`, under their aliases.
@@ -32,13 +39,13 @@ examples use [example/schema.sql](example/schema.sql).
 - Names are compared as HoneySQL formats them: `:group-id` is `group_id`.
 
 ```clojure
-(h/check registry {:select [:p.id]
-                   :from [[:posts :p]]
-                   :join [[:users :u] [:= :u.id :p.author_id]]
-                   :where [:= :u.title "x"]})
+(:problems (h/analyze registry {:select [:p.id]
+                               :from [[:posts :p]]
+                               :join [[:users :u] [:= :u.id :p.author_id]]
+                               :where [:= :u.title "x"]}))
 ;; => [{:kind :unknown-column, :column :u.title}]
 
-(h/check registry {:select [:id] :from [:accounts]})
+(:problems (h/analyze registry {:select [:id] :from [:accounts]}))
 ;; => [{:kind :unknown-table, :table "public.accounts"}]
 ```
 
@@ -46,7 +53,7 @@ A qualifier that names no table or alias of the statement is the problem, under 
 table under an alias is named by its alias alone, as PostgreSQL says:
 
 ```clojure
-(h/check registry {:select [:users.email] :from [[:users :u]]})
+(:problems (h/analyze registry {:select [:users.email] :from [[:users :u]]}))
 ;; => [{:kind :unknown-column, :column :users.email, :qualifier "users", :did-you-mean [:u.email]}]
 ```
 
@@ -55,7 +62,7 @@ A problem in a subquery or CTE carries `:in`, its path into the query:
 ```clojure
 (def q {:select [:id] :from [[{:select [:id] :from [:users] :where [:= :mail 1]} :s]]})
 
-(h/check registry q)
+(:problems (h/analyze registry q))
 ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email], :in [:from 0 0]}]
 
 (get-in q [:from 0 0])
@@ -65,10 +72,10 @@ A problem in a subquery or CTE carries `:in`, its path into the query:
 A clause pgmalli does not read is reported rather than passed over:
 
 ```clojure
-(h/check registry {:select [:id] :from [:users] :frobnicate [:x]})
+(:problems (h/analyze registry {:select [:id] :from [:users] :frobnicate [:x]}))
 ;; => [{:kind :unread-clause, :clause :frobnicate}]
 
-(h/check registry {:selec [:id] :from [:users]})
+(:problems (h/analyze registry {:selec [:id] :from [:users]}))
 ;; => [{:kind :unread-clause, :clause :selec, :did-you-mean [:select]}]
 ```
 
@@ -84,7 +91,7 @@ of `SELECT *`. A function of `pg_catalog` or of a generated schema in FROM
 has the columns it returns ([The row a query returns](#the-row-a-query-returns)). The columns of
 another table function (named by its alias, `WITH ORDINALITY` too), of a table written as a symbol
 (`'events_2026`, a table chosen at run time) and of an `information_schema` view the registry
-lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema` leaves untyped, are not
+lacks exist but have no type. Comparisons with them, or with an expression `:row` leaves untyped, are not
 checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
@@ -92,10 +99,10 @@ checked. Every table has the system columns (`ctid`, `xmin`, ...).
 An INSERT or UPDATE is checked against what PostgreSQL refuses to write:
 
 ```clojure
-(h/check registry {:update :users :set {:email nil} :where [:= :id 1]})
+(:problems (h/analyze registry {:update :users :set {:email nil} :where [:= :id 1]}))
 ;; => [{:kind :not-null-violation, :table "public.users", :column :email, :clause :set}]
 
-(h/check registry {:update :posts :set {:title_upper "X"} :where [:= :id 1]})
+(:problems (h/analyze registry {:update :posts :set {:title_upper "X"} :where [:= :id 1]}))
 ;; => [{:kind :read-only-column, :table "public.posts", :column :title_upper}]
 ```
 
@@ -105,19 +112,19 @@ for a key one map of `:values` lacks and another has. `users.status`
 has a default, but the first row below gets NULL:
 
 ```clojure
-(h/check registry {:insert-into :users
-                   :values [{:group_id 1 :email "ann@example.com"}
-                            {:group_id 1 :email "bob@example.com" :status [:cast "closed" :user_status] :closed_at [:now]}]})
+(:problems (h/analyze registry {:insert-into :users
+                               :values [{:group_id 1 :email "ann@example.com"}
+                                        {:group_id 1 :email "bob@example.com" :status [:cast "closed" :user_status] :closed_at [:now]}]}))
 ;; => [{:kind :not-null-violation, :table "public.users", :column :status, :clause :values}]
 ```
 
-Give `h/check` the options you give `sql/format`, as `:format`:
+Give `h/analyze` the options you give `sql/format`, as `:format`:
 
 ```clojure
-(h/check registry {:insert-into :users
-                   :values [{:group_id 1 :email "ann@example.com"}
-                            {:group_id 1 :email "bob@example.com" :status [:cast "closed" :user_status] :closed_at [:now]}]}
-         {:format {:values-default-columns #{:status :closed_at}}})
+(:problems (h/analyze registry {:insert-into :users
+                               :values [{:group_id 1 :email "ann@example.com"}
+                                        {:group_id 1 :email "bob@example.com" :status [:cast "closed" :user_status] :closed_at [:now]}]}
+                     {:format {:values-default-columns #{:status :closed_at}}}))
 ;; => []
 ```
 
@@ -128,27 +135,27 @@ A target `:a.b` (`{:set {:p.x 1}}`, `INSERT INTO t (p.x)`) is the field `b` of t
 column `a`, as PostgreSQL reads it: `a` must be a column of the table, and what goes into the
 field is not checked.
 
-`h/check` does not see what an argument holds; [`h/arg-types`](#the-types-of-the-arguments)
+`:problems` does not see what an argument holds; [`:args`](#the-types-of-the-arguments)
 types it.
 
 ## The types of the arguments
 
-`h/arg-types` gives `{arg schema}` for every named parameter of a query (`:?id`, `[:param :id]`),
+`:args` is `{arg schema}` for every named parameter of a query (`:?id`, `[:param :id]`),
 keyed as in `sql/format`'s `:params`, as the one sending sends them
 ([what your application sends](#what-your-application-sends)):
 
 ```clojure
-(h/arg-types registry {:select [:id]
-                       :from [:users]
-                       :where [:and [:= :group_id :?group] [:in :status :?statuses]]
-                       :limit :?n})
+(:args (h/analyze registry {:select [:id]
+                            :from [:users]
+                            :where [:and [:= :group_id :?group] [:in :status :?statuses]]
+                            :limit :?n}))
 ;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed]]], :n [:maybe [:int {:pg/type "bigint", :min 0}]]}
 ```
 
 | where the argument is | its type |
 |---|---|
 | compared with a column, in any clause (a condition, a select, ORDER BY, SET, RETURNING) | the column's kind without NULL: an enum type's labels kept (as keywords, [what your application sends](#what-your-application-sends)), a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type; a `PGobject` (or a subclass's instance) too where the driver reads the column as one (`json`, `jsonb`, `citext`, `bit(n)` for n > 1, `bit varying`, a domain over them), which pgjdbc sends as the type it names |
-| compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
+| compared with an expression `:row` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`), or an element of an array cast (`[:array [:?k] :text]`, `ARRAY[?]::text[]`) | what PostgreSQL casts to the type, of what [your application sends](#what-your-application-sends): a string too, to an array type (or a domain over one) any array, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); no map or collection sent as `json` or `jsonb` to a type other than those and the string types (PostgreSQL casts a `jsonb` number or boolean, and errors at run time on an object or array); no collection sent untyped (`:unknown`) to a number or boolean type, whose input refuses an array literal (`{1}`; a date, time or `uuid` type reads `{2020-01-01}` past its braces); `:any` for a type whose values pgmalli does not type (json, inet) or an extension's type, whose casts `pg_catalog` does not hold; nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned where nil may not go (as assigned below) |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it (under `ON CONFLICT DO UPDATE`, an inserted value only for a BEFORE INSERT trigger, as PostgreSQL checks NOT NULL before the conflict), or the SELECT of `INSERT ... SELECT` may drop the row (`WHERE`, `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, a `FROM` item other than `unnest` of arguments; then without the CHECKs, lengths and ranges, which PostgreSQL checks only on a row it writes): a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, a Java array ([what your application sends](#what-your-application-sends)) |
@@ -167,7 +174,7 @@ a function or a table the registry lacks, a cast to an extension's type) and `:c
 uses it):
 
 ```clojure
-(h/arg-types registry {:select [[:?label :label]] :from [:users]})
+(:args (h/analyze registry {:select [[:?label :label]] :from [:users]}))
 ;; => {:label [:any #:pgmalli{:untyped :position}]}
 ```
 
@@ -178,7 +185,7 @@ range; cast to an integer type, a fraction is held to the range half a unit wide
 rounds it (a value at exactly half a unit past may round out of range):
 
 ```clojure
-(h/arg-types registry {:select [:id] :from [:users] :where [:> :created_at [:cast :?since :timestamptz]]})
+(:args (h/analyze registry {:select [:id] :from [:users] :where [:> :created_at [:cast :?since :timestamptz]]}))
 ;; => {:since [:or [:time/instant #:pg{:type "timestamp with time zone"}] [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time :string :time/local-date :time/local-date-time :keyword]}
 ```
 
@@ -190,7 +197,7 @@ A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond t
 matches no row.
 
 ```clojure
-(h/arg-types registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
+(:args (h/analyze registry {:update :users :set {:nick :?nick} :where [:= :id :?id]}))
 ;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :id [:int #:pg{:type "bigint"}]}
 ```
 
@@ -199,23 +206,23 @@ Compare NULL in the query body: `[:= :id nil]` (HoneySQL writes `IS NULL`), or
 `IS NOT DISTINCT FROM`, which matches NULL with NULL and so takes nil:
 
 ```clojure
-(h/arg-types registry {:select [:id] :from [:users] :where [:is-not-distinct-from :id :?id]})
+(:args (h/analyze registry {:select [:id] :from [:users] :where [:is-not-distinct-from :id :?id]}))
 ;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
 ```
 
 ```clojure
-(h/arg-types registry {:select [:id] :from [:users] :where [:= [:cast :id :text] :?id]})
+(:args (h/analyze registry {:select [:id] :from [:users] :where [:= [:cast :id :text] :?id]}))
 ;; => {:id [:or [:string #:pg{:type "text"}] :keyword]}
 
-(h/arg-types registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]})
+(:args (h/analyze registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]}))
 ;; => {:author [:int #:pg{:type "bigint"}], :titles [:pg/array [:or [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}] :keyword]]}
 ```
 
-`h/params-schema` gives the same types as the `[:map ...]` of `sql/format`'s `:params`. Every
-key is required, as `sql/format` refuses a missing one:
+The `[:map ...]` of `sql/format`'s `:params` is `:args` in a map. Every key is required, as
+`sql/format` refuses a missing one:
 
 ```clojure
-(h/params-schema registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
+(into [:map] (sort-by key (:args (h/analyze registry {:update :users :set {:nick :?nick} :where [:= :id :?id]}))))
 ;; => [:map [:id [:int #:pg{:type "bigint"}]] [:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]]]]
 ```
 
@@ -287,7 +294,7 @@ this table. A value reaches an argument through its class's row or one of its su
 interfaces'.
 
 ```clojure
-(h/arg-types registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]})
+(:args (h/analyze registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}))
 ;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:pg/array [:int #:pg{:type "bigint"}]]}
 ```
 
@@ -308,7 +315,7 @@ type compares with; under `unnest`, each element assigned to the column. Without
 
 An enum argument takes its labels as keywords, which go untyped, or as strings cast
 (`[:cast :?m :user_status]`): PostgreSQL neither compares a `varchar` with an enum nor assigns
-one to it. `h/check` reports a string literal there as `:uncast-string`. A row written into a
+one to it. `:problems` reports a string literal there as `:uncast-string`. A row written into a
 table takes a keyword label as `[:lift :active]`, as HoneySQL writes a keyword in `:values` as
 a column.
 
@@ -318,14 +325,14 @@ typed alone: PostgreSQL cannot type one sent untyped there (`could not determine
 parameter`), nor NULL:
 
 ```clojure
-(let [t (:suffix (h/arg-types registry {:select [[[:concat :email :?suffix] :s]] :from [:users]}))]
+(let [t (:suffix (:args (h/analyze registry {:select [[[:concat :email :?suffix] :s]] :from [:users]})))]
   (mapv #(m/validate t % {:registry registry}) ["-x" 1 :x nil]))
 ;; => [true true false false]
 ```
 
 ## The row a query returns
 
-`h/row-schema` gives the `[:map ...]` of one row, as next.jdbc's `as-unqualified-maps` builds
+`:row` is the `[:map ...]` of one row, as next.jdbc's `as-unqualified-maps` builds
 it ([the builder](reading-rows.md#the-builder)): keyed by the labels of its columns, a name
 selected twice one key, the last column's. A column an outer
 join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
@@ -333,12 +340,12 @@ names; each column is of the type PostgreSQL resolves its members' to, as for
 `CASE`. `SELECT *` of a subquery or a CTE lists the columns its SELECT gives:
 
 ```clojure
-(h/row-schema registry {:select [:u.email :p.title]
-                        :from [[:users :u]]
-                        :left-join [[:posts :p] [:= :p.author_id :u.id]]})
+(:row (h/analyze registry {:select [:u.email :p.title]
+                           :from [[:users :u]]
+                           :left-join [[:posts :p] [:= :p.author_id :u.id]]}))
 ;; => [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
 
-(h/row-schema registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]})
+(:row (h/analyze registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]}))
 ;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
 ```
 
@@ -405,17 +412,17 @@ or its negator) of values that are not NULL. An argument of the application's ow
 `:any`:
 
 ```clojure
-(h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
-                                 [[:exists {:select [1] :from [:posts]}] :any_posts] [[:cast "active" :user_status] :s]
-                                 [[:upper :nick] :shout]]
-                        :from [:users]})
+(:row (h/analyze registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
+                                    [[:exists {:select [1] :from [:posts]}] :any_posts] [[:cast "active" :user_status] :s]
+                                    [[:upper :nick] :shout]]
+                           :from [:users]}))
 ;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [:time/instant #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe [:string #:pg{:type "text"}]]]]
 ```
 
 Its columns are read as `pgmalli.core/as-read` reads them ([the one reading](reading-rows.md#the-one-reading-and-sending)):
 
 ```clojure
-(h/row-schema registry {:select [:id :created_at] :from [:users]})
+(:row (h/analyze registry {:select [:id :created_at] :from [:users]}))
 ;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:created_at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
 ```
 
@@ -423,42 +430,41 @@ A write with no RETURNING returns the map next.jdbc builds of the driver's updat
 next.jdbc's `:return-keys` (in `:jdbc`), pgjdbc adds RETURNING to an INSERT, UPDATE or DELETE:
 
 ```clojure
-(h/row-schema registry {:delete-from :posts :where [:= :author_id 1]})
+(:row (h/analyze registry {:delete-from :posts :where [:= :author_id 1]}))
 ;; => [:map [:next.jdbc/update-count :int]]
 
-(h/row-schema registry {:delete-from :posts :where [:= :author_id 1]} {:jdbc {:return-keys ["id"]}})
+(:row (h/analyze registry {:delete-from :posts :where [:= :author_id 1]} {:jdbc {:return-keys ["id"]}}))
 ;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]]]
 ```
 
-`h/row-schema` returns nil when a selected column cannot be resolved (`h/check` says which),
+`:row` is nil when a selected column cannot be resolved (`:problems` says which),
 when a whole row is selected, when code builds the RETURNING, and for a TRUNCATE under
 `:return-keys`, which returns no row:
 
 ```clojure
-(h/row-schema registry {:select [:u] :from [[:users :u]]})
+(:row (h/analyze registry {:select [:u] :from [[:users :u]]}))
 ;; => nil
 
-(h/row-schema registry '{:delete-from :posts :returning cols})
+(:row (h/analyze registry '{:delete-from :posts :returning cols}))
 ;; => nil
 
-(h/row-schema registry {:truncate :posts} {:jdbc {:return-keys true}})
+(:row (h/analyze registry {:truncate :posts} {:jdbc {:return-keys true}}))
 ;; => nil
 ```
 
 ## The tables a query uses
 
-`h/tables` gives the tables and views a query reads and writes, in every subquery and CTE,
+`:tables` is the tables and views a query reads and writes, in every subquery and CTE,
 with aliases and CTE names resolved. Use it to find the queries a change to a table affects.
 
 ```clojure
-(h/tables registry {:update :users :set {:nick "a"} :from [[:groups :g]] :where [:= :g.id :users.group_id]})
+(:tables (h/analyze registry {:update :users :set {:nick "a"} :from [[:groups :g]] :where [:= :g.id :users.group_id]}))
 ;; => {:reads #{"public.groups"}, :writes #{"public.users"}}
 ```
 
 ## Options
 
-`h/check`, `h/arg-types`, `h/params-schema`, `h/row-schema`, `h/analyze`, `h/query-schema`,
-`h/values-schema`, `h/set-schema` and `h/tables` take the same options map. pgmalli reads what you pass to
+`h/analyze`, `h/query-schema`, `h/values-schema` and `h/set-schema` take the same options map. pgmalli reads what you pass to
 next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dialect!`,
 `set-options!`) are not read, so pass them in `:format`.
 
@@ -471,9 +477,9 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 
 ## Function schemas
 
-`h/query-schema` combines `arg-types` and `row-schema` into
+`h/query-schema` combines `:args` and `:row` into
 `[:=> [:cat arg ...] [:sequential row]]`, the arguments in the function's order. The return is
-what `execute!` returns on a datasource or connection, `:any` when `h/row-schema` gives nil.
+what `execute!` returns on a datasource or connection, `:any` where `:row` is nil.
 `{:result :one}` makes it what `execute-one!` returns:
 
 ```clojure
@@ -504,15 +510,7 @@ row, `{:result :one}` drops the `[:maybe]`:
 ;; => [:sequential {:max 1} [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]
 ```
 
-`h/analyze` gives what `h/query-schema` is built of, for code that builds a schema of its own:
-the arguments as `h/arg-types` types them, the row as `h/row-schema` (nil where it cannot be
-told), how many rows where the data tells (nil otherwise), the problems of `h/check`, and the
-tables it reads and writes, as `h/tables` gives them:
-
-```clojure
-(h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
-```
+Code that builds a schema of its own builds it of `h/analyze`'s parts, as `h/query-schema` does.
 
 A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns,
 or a value made of the rows, needs a return schema of its own.
@@ -580,10 +578,10 @@ Write the query so PostgreSQL's reading is explicit instead.
   by converting one side, which hides a mix-up the column's type would catch. Cast it in the
   query (`[:cast :?n :numeric]`) where the conversion is meant. A `numeric` (a `BigDecimal`)
   is not a `real` or `double precision` column's own either, though PostgreSQL converts it
-  implicitly. `h/check` reports only what PostgreSQL refuses, read from its catalog (`pg_cast`,
+  implicitly. `:problems` reports only what PostgreSQL refuses, read from its catalog (`pg_cast`,
   and the operator `=` resolved for the two types, in any version pgmalli covers), so a
-  `BigDecimal` sent to a `double precision` column passes `h/check` but not the argument's type
-  `h/arg-types` gives.
+  `BigDecimal` sent to a `double precision` column passes `:problems` but not the argument's type
+  `:args` gives.
 - An argument compared with a column does not take nil
   ([compare NULL in the query body](#the-types-of-the-arguments)).
 - An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list
@@ -617,7 +615,7 @@ Write the query so PostgreSQL's reading is explicit instead.
   (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`. Write the name as a
   symbol (`'events_2026`), a table chosen at run time, to leave it unjudged.
 - A string sent as `varchar` to a column of a domain over a type other than an enum (a
-  domain over `integer`), which PostgreSQL refuses; and an argument whose type `h/arg-types`
+  domain over `integer`), which PostgreSQL refuses; and an argument whose type `:args`
   leaves `:any` (an `inet` column's), which may be an object of the type.
 - Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
   PostgreSQL folds it to lower case, and check takes it as written.

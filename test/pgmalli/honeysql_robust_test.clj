@@ -42,9 +42,9 @@
 (deftest a-broken-query-returns-data-or-throws-ex-info
   (let [opts {:schema "sample"}
         keys-opts (assoc opts :jdbc {:return-keys ["id"]})
-        fs {'check #(h/check registry % opts) 'arg-types #(h/arg-types registry % opts)
-            'row-schema #(h/row-schema registry % opts) 'query-schema #(h/query-schema registry [:x] % opts)
-            'check+return-keys #(h/check registry % keys-opts) 'row-schema+return-keys #(h/row-schema registry % keys-opts)}
+        fs {'check #(:problems (h/analyze registry % opts)) 'arg-types #(:args (h/analyze registry % opts))
+            'row-schema #(:row (h/analyze registry % opts)) 'query-schema #(h/query-schema registry [:x] % opts)
+            'check+return-keys #(:problems (h/analyze registry % keys-opts)) 'row-schema+return-keys #(:row (h/analyze registry % keys-opts))}
         seed (ts/seed)
         result (tc/quick-check 1500 (prop/for-all [q broken-query] (not-any? #(crash % q) (vals fs))) :seed seed)]
     (is (:pass? result)
@@ -55,5 +55,5 @@
                "  " (ts/rerun #'a-broken-query-returns-data-or-throws-ex-info seed))))))
 
 (deftest a-registry-that-is-none-is-said-so
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry" (h/check "public" {:select [:id] :from [:users]})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry" (h/check nil {:select [:id] :from [:users]}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry" (:problems (h/analyze "public" {:select [:id] :from [:users]}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry" (:problems (h/analyze nil {:select [:id] :from [:users]})))))

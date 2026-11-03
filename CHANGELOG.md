@@ -7,6 +7,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Breaking changes and what to do
 
+* `h/check`, `h/arg-types`, `h/row-schema`, `h/tables` and `h/params-schema` are removed:
+  `h/analyze` gives what they gave, under `:problems`, `:args`, `:row` and `:tables`
+  (`(:problems (h/analyze registry q))`); the `[:map ...]` of `sql/format`'s `:params` is
+  `(into [:map] (:args (h/analyze registry q)))`. The entries below that name the removed
+  functions hold for these keys.
 * **Options.** Each removed option is an error that names its replacement. The error is
   raised when the schema is built, so a namespace whose `:malli/schema` passes one fails to
   load.
@@ -107,9 +112,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 ### Added
 
 * `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems :tables}`:
-  the arguments' types, the row, how many rows where the data tells, the problems of `h/check`
-  and the tables of `h/tables`
-  ([docs/queries.md](docs/queries.md#function-schemas)). `h/query-schema` is built of it.
+  the arguments' types, the row, how many rows where the data tells, the problems PostgreSQL
+  would report and the tables it reads and writes
+  ([docs/queries.md](docs/queries.md)). `h/query-schema` is built of it.
 * The one sending includes pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`,
   `UUID[]` and the arrays of java.sql dates, times and timestamps.
 * `:jdbc` takes the options your application passes to next.jdbc

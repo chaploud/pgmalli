@@ -101,9 +101,9 @@
           ok? #(m/validate %1 %2 {:registry registry})]
       (doseq [[ds o vs] [[(datasource) {:schema "matrix"} ["a" :a]]]
               v vs
-              [sql valid?] [["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (:v (h/arg-types registry {:update :types :set {:e :?v} :where [:= :id 2]} o)) %)]
+              [sql valid?] [["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (:v (:args (h/analyze registry {:update :types :set {:e :?v} :where [:= :id 2]} o))) %)]
                             ["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (h/set-schema registry :types o) {:e (if (keyword? %) [:lift %] %)})]
-                            ["SELECT id FROM matrix.types WHERE e = ?" #(ok? (:v (h/arg-types registry {:select [:id] :from [:types] :where [:= :e :?v]} o)) %)]]]
+                            ["SELECT id FROM matrix.types WHERE e = ?" #(ok? (:v (:args (h/analyze registry {:select [:id] :from [:types] :where [:= :e :?v]} o))) %)]]]
         (testing (str sql " " (pr-str o) " " (class v))
           (is (= (taken? ds sql v) (valid? v))))))))
 
@@ -114,5 +114,5 @@
       (is (every? #(taken? (datasource) (str "UPDATE matrix.types SET " % " = ? WHERE id = 2") v) ["c_jsonb" "c_json"]))
       (doseq [o [{:schema "matrix"}]]
         (is (m/validate (h/set-schema registry :types o) {:c_jsonb v :c_json v} {:registry registry}))
-        (is (m/validate (:v (h/arg-types registry {:update :types :set {:c_jsonb :?v} :where [:= :id 2]} o)) v {:registry registry}))))))
+        (is (m/validate (:v (:args (h/analyze registry {:update :types :set {:c_jsonb :?v} :where [:= :id 2]} o))) v {:registry registry}))))))
 

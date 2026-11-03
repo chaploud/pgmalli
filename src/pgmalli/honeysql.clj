@@ -1,9 +1,10 @@
 (ns pgmalli.honeysql
-  "HoneySQL query data checked against a registry, without a database (check): the tables and
-   columns a query names must exist, an INSERT must carry the required columns, and NULL, enum
-   literals and strings must be ones the column takes. From the same data, the types of the
-   query's arguments, of the rows it returns and of a row written into a table, as malli
-   schemas.
+  "HoneySQL query data read against a registry, without a database (analyze): the problems
+   PostgreSQL would report (the tables and columns a query names must exist, an INSERT must
+   carry the required columns, and NULL, enum literals and strings must be ones the column
+   takes), the types of the query's arguments and of the rows it returns, and the tables it
+   reads and writes; query-schema makes a function schema of them. values-schema and set-schema
+   type a row written into a table.
 
    Names resolve as PostgreSQL resolves them (docs/queries.md#what-a-name-refers-to). Types are
    what the one reading reads and the one sending sends (docs/reading-rows.md). The functions
@@ -1574,54 +1575,33 @@
             :when (and cs (not (contains? cs n)) (contains? cs (folded n)))]
         {:kind :unknown-column :column (keyword n) :did-you-mean [(keyword (folded n))]}))))
 
-(defn check
-  "[problem ...] of a HoneySQL query against the registry; [] when there are none.
+(defn- check
+  "[problem ...] of a query against the registry; [] when there are none. A problem in a nested
+   statement (a subquery, a CTE) carries :in, where the statement sits: (get-in q (:in p)) for
+   data, the position in the form for code. A clause pgmalli does not read is an :unread-clause
+   problem. Code in the query (a list with a symbol in it) is not read."
+  [registry body opts]
+  (let [sent-body (or (sent body opts) body)
+        chains (once registry statement-positions sent-body opts)
+        found (mapcat (fn [[stmt scopes path ps]]
+                        ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
+                        (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
+                      chains)]
+    (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body)))))
 
-   (check registry {:select [:id :mail] :from [:users]})
-   ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]
-
-   A problem in a nested statement (a subquery, a CTE) carries :in, where the statement sits:
-   (get-in q (:in p)) for data, the position in the form for code. humanize says each problem
-   as a sentence. Names resolve as PostgreSQL resolves them. A clause pgmalli does not read is an
-   :unread-clause problem. Code in the query (a list with a symbol in it) is not read. Options:
-   docs/queries.md#options. Throws when body is no HoneySQL data."
-  ([registry body] (check registry body {}))
-  ([registry body opts]
-   (jdbc/options! opts)
-   (let [body (query! body)
-         registry (reading registry)
-         opts (with-defaults registry opts)
-         sent-body (or (sent body opts) body)
-         chains (once registry statement-positions sent-body opts)
-         found (mapcat (fn [[stmt scopes path ps]]
-                         ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
-                         (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
-                       chains)]
-     (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body))))))
-
-(defn tables
+(defn- tables
   "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
    joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM,
-   TRUNCATE),
-   aliases and CTE names resolved as PostgreSQL resolves them. A table code in the query
-   brings in is not seen. Options: docs/queries.md#options.
-
-   (tables registry {:update :users :set {:nick \"a\"} :from [[:groups :g]] :where [:= :g.id :users.group_id]})
-   ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
-  ([registry body] (tables registry body {}))
-  ([registry body opts]
-   (jdbc/options! opts)
-   (let [body (query! body)
-         registry (reading registry)
-         {:keys [schema] :as opts} (with-defaults registry opts)
-         found (for [[stmt scopes] (once registry statement-chains body opts)
-                     :let [own (first scopes)
-                           targets (set (keep #(some-> % (table-ref schema) second) (write-targets stmt)))]
-                     [alias {:keys [table cte? excluded?]}] (when (map? own) own)
-                     :when (and table (not cte?) (not excluded?))]
-                 [(if (targets alias) :writes :reads) table])]
-     (merge {:reads #{} :writes #{}}
-            (update-vals (group-by first found) #(set (map second %)))))))
+   TRUNCATE), aliases and CTE names resolved. A table code in the query brings in is not seen."
+  [registry body {:keys [schema] :as opts}]
+  (let [found (for [[stmt scopes] (once registry statement-chains body opts)
+                    :let [own (first scopes)
+                          targets (set (keep #(some-> % (table-ref schema) second) (write-targets stmt)))]
+                    [alias {:keys [table cte? excluded?]}] (when (map? own) own)
+                    :when (and table (not cte?) (not excluded?))]
+                [(if (targets alias) :writes :reads) table])]
+    (merge {:reads #{} :writes #{}}
+           (update-vals (group-by first found) #(set (map second %))))))
 
 ;;; types
 
@@ -2052,36 +2032,25 @@
                 :else (into [:and] (sort-by pr-str [a b])))]
     (cond-> t nil? nullable)))
 
-(defn arg-types
+(defn- arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
    :params takes them (:id): every one of them, one pgmalli cannot type [:any {:pgmalli/untyped
-   why}].
-
-   (arg-types registry {:select [:id] :from [:users] :where [:= :email :?email]})
-   ;; => {:email [:string {:pg/type \"character varying\"}]}
-
-   docs/queries.md#the-types-of-the-arguments says where an argument is typed and how. Options:
-   docs/queries.md#options."
-  ([registry body] (arg-types registry body {}))
-  ([registry body opts]
-   (jdbc/options! opts)
-   (let [body (query! body)
-         registry (reading registry)
-         opts (with-defaults registry opts)
-         uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
-         typed (for [[_ _ _ ps] (once registry statement-positions body opts)
-                     f uses
-                     use (f registry ps opts)]
-                 use)
-         untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
-         types (reduce (fn [acc [x t]] (if-let [k (arg-key x)] (update acc k both-uses t) acc))
-                       untyped typed)
-         typed-keys (set (keep (comp arg-key first) typed))
-         in-data (data-args body)]
-     (into {} (for [[k t] types]
-                [k (if (= :any t)
-                     [:any {:pgmalli/untyped (cond (not (in-data k)) :code (typed-keys k) :type :else :position)}]
-                     (cond-> t (not (in-data k)) nullable))])))))
+   why}]. docs/queries.md#the-types-of-the-arguments says where an argument is typed and how."
+  [registry body opts]
+  (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
+        typed (for [[_ _ _ ps] (once registry statement-positions body opts)
+                    f uses
+                    use (f registry ps opts)]
+                use)
+        untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
+        types (reduce (fn [acc [x t]] (if-let [k (arg-key x)] (update acc k both-uses t) acc))
+                      untyped typed)
+        typed-keys (set (keep (comp arg-key first) typed))
+        in-data (data-args body)]
+    (into {} (for [[k t] types]
+               [k (if (= :any t)
+                    [:any {:pgmalli/untyped (cond (not (in-data k)) :code (typed-keys k) :type :else :position)}]
+                    (cond-> t (not (in-data k)) nullable))]))))
 
 (defn- using-merges
   "{column {:tables [alias ...] :schema s :nullable? bool}} of a statement's JOIN ... USING, each
@@ -2496,35 +2465,17 @@
              (let [v (derived-types* registry stmt opts outer)] (swap! memo assoc k v) v))))
      (derived-types* registry stmt opts outer))))
 
-(defn row-schema
+(defn- row-schema
   "The [:map ...] of one row a query returns, as next.jdbc's as-unqualified-maps builds it (for a write with no
    RETURNING, its update count); nil when that cannot be told, as
-   docs/queries.md#the-row-a-query-returns lists.
-
-   Columns an outer join may leave NULL are nullable; an expression has the type PostgreSQL
-   resolves it to, nullable :any where pgmalli cannot tell; a set operation's row is keyed by its
-   first member's names. Options: docs/queries.md#options."
-  ([registry body] (row-schema registry body {}))
-  ([registry body opts]
-   (jdbc/options! opts)
-   (let [body (query! body)]
-     (when (map? body)
-       (let [registry (reading registry)
-             opts (with-defaults registry opts)]
-         (if-let [body (sent body opts)]
-           (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts)
-           update-count))))))
-
-(defn params-schema
-  "The [:map ...] of sql/format's :params for a query: every named argument, typed as arg-types
-   types it, is required, as sql/format refuses a missing one; one that takes nil is
-   [:maybe ...]. Options: docs/queries.md#options.
-
-   (params-schema registry {:select [:id] :from [:users] :where [:= :email :?email]})
-   ;; => [:map [:email [:string {:pg/type \"character varying\"}]]]"
-  ([registry body] (params-schema registry body {}))
-  ([registry body opts]
-   (into [:map] (sort-by (comp str key) (arg-types registry body opts)))))
+   docs/queries.md#the-row-a-query-returns lists. Columns an outer join may leave NULL are
+   nullable; an expression has the type PostgreSQL resolves it to, nullable :any where pgmalli
+   cannot tell; a set operation's row is keyed by its first member's names."
+  [registry body opts]
+  (when (map? body)
+    (if-let [body (sent body opts)]
+      (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts)
+      update-count)))
 
 (defn- constant?
   "Whether x is the same value on every row: an argument, a literal (NULL too), or a cast of one."
@@ -2613,11 +2564,23 @@
       (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
 
 (defn analyze
-  "{:args :row :rows :problems :tables} of a query, what one reading of it tells: :args as
-   arg-types gives them, :row as row-schema (nil when it cannot be told), :rows {:min n :max m} of
-   the rows a statement returns where the data tells (docs/queries.md#function-schemas), nil
-   otherwise, :problems as check finds them, :tables as tables gives them. query-schema builds a
-   function schema of it. Options: docs/queries.md#options.
+  "{:args :row :rows :problems :tables} of a HoneySQL query against the registry, without a
+   database:
+
+   :args      {arg schema} for every named parameter (:?id, [:param :id]), keyed as sql/format's
+              :params takes them; one pgmalli cannot type is [:any {:pgmalli/untyped why}]
+              (docs/queries.md#the-types-of-the-arguments)
+   :row       the [:map ...] of one row it returns, as next.jdbc's as-unqualified-maps builds it
+              (a write with no RETURNING, its update count); nil when that cannot be told
+              (docs/queries.md#the-row-a-query-returns)
+   :rows      {:min n :max m} of the rows it returns where the data tells, nil otherwise
+   :problems  [problem ...] PostgreSQL would report, [] when none; one in a nested statement
+              carries :in, where it sits (get-in q (:in p)); humanize says each as a sentence
+   :tables    {:reads #{\"schema.table\" ...} :writes #{...}}, aliases and CTEs resolved
+
+   Names resolve as PostgreSQL resolves them. Code in the query (a list with a symbol in it) is
+   not read. query-schema builds a function schema of it. Options: docs/queries.md#options.
+   Throws when body is no HoneySQL data.
 
    (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
    ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}}"
@@ -2642,7 +2605,7 @@
 
    (query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]})
 
-   The problems of check, and a query argument args lack (:missing-arg), are the schema's
+   The problems analyze finds, and a query argument args lack (:missing-arg), are the schema's
    :pgmalli/problems property, not an error: the vector is then one longer, so read its parts
    with m/children. The return is what execute! returns on a datasource or connection, under
    {:result :one} what execute-one! returns. Options: docs/queries.md#options. Throws when args are
@@ -2769,7 +2732,7 @@
 
 (defn values-schema
   "The schema of one row an INSERT's :values may carry into a table, named as HoneySQL names
-   it (:users in :schema) or by its row schema (:pg.public/users), typed as arg-types types an
+   it (:users in :schema) or by its row schema (:pg.public/users), typed as analyze types an
    argument: each column as an argument assigned to it, keyed as a row is read
    (:group_id), so a row read is written back (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
@@ -2831,10 +2794,10 @@
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))})
 
 (defn humanize
-  "A sentence for each problem of check (or of query-schema's :pgmalli/problems): what is wrong
-   and what to do.
+  "A sentence for each problem of analyze's :problems (or of query-schema's :pgmalli/problems):
+   what is wrong and what to do.
 
-   (is (= [] (check registry q)) (humanize (check registry q)))"
+   (let [{:keys [problems]} (analyze registry q)] (is (= [] problems) (humanize problems)))"
   [problems]
   (mapv (fn [{:keys [kind in] :as p}]
           (str (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))
