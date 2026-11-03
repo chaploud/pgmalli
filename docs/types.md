@@ -275,7 +275,7 @@ Values are the registry's types: `java.time`, `UUID`, jsonb as maps and vectors.
 
 > NOTE: a CHECK comparing `timestamp` with `timestamptz` or `now()` converts in the JVM's time
 > zone, as pgjdbc does when it reads a `timestamp` as an `Instant`
-> ([the one reading](reading-rows.md#the-one-reading)).
+> ([the one reading](reading-rows.md#the-one-reading-and-sending)).
 
 ## What is read
 

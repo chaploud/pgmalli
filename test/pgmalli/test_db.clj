@@ -75,7 +75,7 @@
 (def ^:private said-skipped
   (delay (println "PGMALLI_SKIP_DB is set: the tests that need a database are skipped")))
 
-(def ^:private one-reading
+(def ^:private one-reading-and-sending
   ;; the doc's code itself, so what the tests read rows with is what the doc tells applications to install
   (delay (let [doc (slurp "docs/reading-rows.md")
                block (second (re-find #"(?s)## The one reading.*?```clojure\n(.*?)```" doc))]
@@ -86,13 +86,13 @@
 (defn with-postgres
   "clojure.test :once fixture. Binds *db* to an empty database for the namespace, and names the
    upstream versions that ran in every failure under it. On the JVM, rows are read as
-   docs/reading-rows.md#the-one-reading reads them. Set PGMALLI_SKIP_DB to run without docker;
+   docs/reading-rows.md#the-one-reading-and-sending reads and sends them. Set PGMALLI_SKIP_DB to run without docker;
    *db* is then nil."
   [f]
   (if (System/getenv "PGMALLI_SKIP_DB")
     (do @said-skipped (f))
     (let [{:keys [name port]} @container
-          _ (when-not (System/getProperty "babashka.version") @one-reading)
+          _ (when-not (System/getProperty "babashka.version") @one-reading-and-sending)
           dbname (str "t_" (System/nanoTime))]
       (exec-in! name "postgres" (str "CREATE DATABASE " dbname))
       (binding [*db* {:host "localhost" :port port :dbname dbname :user "postgres" :password "pw"}

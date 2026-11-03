@@ -8,12 +8,13 @@
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
+            [next.jdbc.prepare :as prepare]
             [next.jdbc.result-set :as rs]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             [pgmalli.oracle :as oracle]
-            [pgmalli.test-db :refer [*db* datasource exec-sql! jdbc-url with-postgres]]))
+            [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres
   (fn [f]
@@ -39,7 +40,7 @@
     [col (some-> v class .getName) v]))
 
 (def ^:private unreadable
-  "The columns whose arrays pgjdbc's getArray cannot read (docs/reading-rows.md#the-one-reading)."
+  "The columns whose arrays pgjdbc's getArray cannot read (docs/reading-rows.md#the-one-reading-and-sending)."
   #{:a_money :a_bit_4})
 
 (deftest as-read-is-what-next-jdbc-builds
@@ -66,25 +67,24 @@
           set (m/schema (h/set-schema registry :types o) {:registry registry})]
       (with-open [con (jdbc/get-connection ds)]
         (.setAutoCommit con false)
-        (let [;; as pgjdbc returns it, without the one reading's extension; an array is read on the
-              ;; connection it is sent over: a PgArray asks it its element type
-              row (with-open [st (.createStatement con)
-                              r (.executeQuery st "SELECT * FROM matrix.types WHERE id = 1")]
-                    (.next r)
-                    (into {} (for [i (range 1 (inc (.getColumnCount (.getMetaData r))))]
-                               [(keyword (.getColumnLabel (.getMetaData r) i)) (.getObject r (int i))])))
-              ;; pgjdbc's setObject, as next.jdbc sends a value without an extension (next.jdbc.date-time,
-              ;; which this namespace loads, cannot send a java.sql.Time)
+        (let [;; as the one reading reads it, sent as the one sending sends it
+              cols (remove unreadable (map first (filter vector? (rest (pgmalli/as-read registry :pg.matrix/types o)))))
+              row (jdbc/execute-one! con (sql/format {:select cols :from [:matrix.types] :where [:= :id 1]}) {:builder-fn rs/as-unqualified-maps})
               taken? (fn [k v] (with-open [ps (.prepareStatement con (str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2"))]
-                                 (try (.setObject ps 1 v) (.executeUpdate ps) true
+                                 (try (prepare/set-parameter v ps 1) (.executeUpdate ps) true
                                       (catch java.sql.SQLException e (oracle/refused e) false)
+                                      ;; a vector of PGobjects (a citext[]'s) has no JSON
+                                      (catch Exception _ false)
                                       (finally (.rollback con)))))
               {taken true not-taken false} (group-by #(taken? (key %) (val %)) (dissoc row :id))]
           (is (= [] (vec (for [[k v] taken
                                :when (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v))))]
                            [k (some-> v class .getName)]))))
-          ;; bit(1) reads as a Boolean, money as a Double, an enum as a String: none goes back as its type
-          (is (= [:c_bit :c_money :d_bit :d_money :e] (sort (keys not-taken))) "the values PostgreSQL does not take back"))))))
+          (let [array? #(re-find #"^d?a_" (name %))]
+            ;; bit(1) reads as a Boolean, money as a Double, an enum as a String: none goes back as its type
+            (is (= [:c_bit :c_money :d_bit :d_money :e] (sort (remove array? (keys not-taken)))) "the values PostgreSQL does not take back")
+            ;; an array reads as a vector, which goes as jsonb
+            (is (= (sort (filter array? (keys row))) (sort (filter array? (keys not-taken)))) "no array goes back")))))))
 
 (defn- taken?
   "Whether PostgreSQL takes v as sql's parameter, run and rolled back."
@@ -95,16 +95,14 @@
          (catch java.sql.SQLException e (oracle/refused e) false)
          (finally (.rollback con)))))
 
-(deftest an-enum-label-goes-as-a-string-only-where-pgjdbc-sends-it-untyped
+(deftest an-enum-label-goes-as-a-keyword-not-as-a-string
   (when *db*
     (let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
-          unspecified (jdbc/get-datasource {:jdbcUrl (str (jdbc-url) "?stringtype=unspecified") :user (:user *db*) :password (:password *db*)})
-          typed (doto (org.postgresql.util.PGobject.) (.setType "matrix.mood") (.setValue "a"))
           ok? #(m/validate %1 %2 {:registry registry})]
-      (doseq [[ds o vs] [[(datasource) {:schema "matrix"} ["a" typed]] [unspecified {:schema "matrix" :send {String :unknown}} ["a"]]]
+      (doseq [[ds o vs] [[(datasource) {:schema "matrix"} ["a" :a]]]
               v vs
               [sql valid?] [["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (:v (h/arg-types registry {:update :types :set {:e :?v} :where [:= :id 2]} o)) %)]
-                            ["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (h/set-schema registry :types o) {:e %})]
+                            ["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (h/set-schema registry :types o) {:e (if (keyword? %) [:lift %] %)})]
                             ["SELECT id FROM matrix.types WHERE e = ?" #(ok? (:v (h/arg-types registry {:select [:id] :from [:types] :where [:= :e :?v]} o)) %)]]]
         (testing (str sql " " (pr-str o) " " (class v))
           (is (= (taken? ds sql v) (valid? v))))))))
@@ -114,7 +112,7 @@
     (let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
           v (doto (org.postgresql.util.PGobject.) (.setType "jsonb") (.setValue "{}"))]
       (is (every? #(taken? (datasource) (str "UPDATE matrix.types SET " % " = ? WHERE id = 2") v) ["c_jsonb" "c_json"]))
-      (doseq [o [{:schema "matrix"} {:schema "matrix" :send {clojure.lang.IPersistentMap "jsonb"}}]]
+      (doseq [o [{:schema "matrix"}]]
         (is (m/validate (h/set-schema registry :types o) {:c_jsonb v :c_json v} {:registry registry}))
         (is (m/validate (:v (h/arg-types registry {:update :types :set {:c_jsonb :?v} :where [:= :id 2]} o)) v {:registry registry}))))))
 

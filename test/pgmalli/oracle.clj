@@ -615,10 +615,9 @@
              seed))
 
 (def option-profiles
-  "Options an application runs with, each with what its connection does to match: a String sent
-   untyped (stringtype=unspecified), comparisons lenient."
-  {:untyped-strings {:opts {:send {String :unknown}} :url-params "stringtype=unspecified"}
-   :lenient {:opts {:compare :lenient}}})
+  "Options an application runs with, each with what its connection does to match: comparisons
+   lenient."
+  {:lenient {:opts {:compare :lenient}}})
 
 (defn run-profiles
   "run-cases of the corpus' queries (no mutant, none generated) under each of option-profiles,
@@ -646,7 +645,8 @@
    java.time.Duration (java.time.Duration/ofSeconds 1) java.time.Period (java.time.Period/ofDays 1)
    java.sql.Date (java.sql.Date/valueOf "2026-01-01") java.sql.Time (java.sql.Time/valueOf "01:00:00")
    java.sql.Timestamp (java.sql.Timestamp/valueOf "2026-01-01 00:00:00") java.util.Date (java.util.Date. 0)
-   clojure.lang.PersistentArrayMap {"a" "b"} clojure.lang.Keyword :a
+   clojure.lang.PersistentArrayMap {"a" "b"} clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1]
+   clojure.lang.Keyword :a
    org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))})
 
 (def boxed
@@ -664,13 +664,14 @@
     (or (values c) (throw (ex-info "no value of the class" {:class c})))))
 
 (defn- matrix-values
-  "What each argument is sent: a value of each class pgjdbc sends, nil, numbers at the integer
-   types' bounds and a fraction, an empty string, a number as a string, and each label of the
-   schema's enums and CHECK lists, alone and in a String[]."
+  "What each argument is sent: a value of each class the one sending sends, nil, numbers at the
+   integer types' bounds and a fraction, an empty string, a number as a string, and each label
+   of the schema's enums and CHECK lists, alone, as a keyword and in a String[]."
   [labels]
   (vec (concat (map (comp value first) accept/class-types)
                [nil 0 1.5 1.5M 2147483648 -2147483649 Long/MAX_VALUE Long/MIN_VALUE 9223372036854775808N "" "1"]
                labels
+               (map keyword (filter string? labels))
                (map #(into-array String [%]) labels))))
 
 (def ^:private samples
@@ -769,15 +770,9 @@
              [:compared-and-cast (where [:and [:= c :?x] [:= c [:cast :?x (keyword (str/replace declared " " "-"))]]])]])))
 
 (def send-profiles
-  "How an application may send a parameter, each with the :send that says so, set explicitly
-   whatever namespaces the JVM has loaded: :plain, pgjdbc's setObject, as next.jdbc sends a value
-   with no SettableParameter extension; :date-time, next.jdbc.date-time's extension, which sends
-   an Instant, a LocalDate and a LocalDateTime as an untyped timestamp (its :classes, the values
-   arg-matrix sends under it)."
-  {:plain {:send {} :set (fn [^java.sql.PreparedStatement ps i v] (.setObject ps (int i) v))}
-   :date-time {:send {java.time.Instant :unknown java.time.LocalDate :unknown java.time.LocalDateTime :unknown}
-               :set (fn [ps i v] (prep/set-parameter v ps i))
-               :classes [java.time.Instant java.time.LocalDate java.time.LocalDateTime]}})
+  "How an application sends a parameter: the one sending (docs/reading-rows.md, which
+   pgmalli.test-db installs)."
+  {:one {:set (fn [ps i v] (prep/set-parameter v ps i))}})
 
 (defn- send!
   "Runs [sql & params] on conn, each parameter set as profile sets it."
@@ -842,12 +837,12 @@
             (some #(= k (first (:in %))) (:errors (m/explain s row)))))))))
 
 (defn- sent-failures
-  "Where pgjdbc/sent-type, under a profile's :send, names a type other than pg_typeof's of the
-   value sent so (typeof): :sent failures, of vs, the values each profile sends."
+  "Where pgjdbc/sent-type names a type other than pg_typeof's of the value sent so (typeof):
+   :sent failures, of vs."
   [^java.sql.Connection conn vs]
   (vec (for [[pname profile] send-profiles
-             v (if-let [cs (:classes profile)] (map values cs) vs)
-             :let [sent (pjdbc/sent-type v {:send (:send profile)})]
+             v vs
+             :let [sent (pjdbc/sent-type v {})]
              :when sent
              :let [pg (typeof conn profile v)]
              :when (not= sent pg)]
@@ -856,8 +851,7 @@
 (defn arg-matrix
   "Each argument of the queries of matrix-queries, over every column of the oracle schema and
    of matrix.types (matrix-schema!, which it creates first), sent each of matrix-values as
-   parameters under :plain of send-profiles, and its :classes under :date-time, arg-types under
-   the profile's :send. :refused: PostgreSQL takes the value, the argument's schema from
+   parameters as the one sending sends them. :refused: PostgreSQL takes the value, the argument's schema from
    arg-types refuses it, and the stricter rule of docs/queries.md does not explain it: a class
    sent as a type the column does not hold as its own (accept/holds?; under a cast, one
    PostgreSQL does not cast, accept/accepts?), a comparison with a value outside a CHECK's list
@@ -888,20 +882,21 @@
           (in-parallel
            db (for [p places profile (keys send-profiles)] (assoc p :profile profile))
            (fn [conn {:keys [context query table column list notnull compared-type quoted? profile] t :type :as place}]
-             (let [{:keys [send classes] :as sends} (send-profiles profile)
-                   opts {:format (fmt quoted?) :send send}
+             (let [sends (send-profiles profile)
+                   opts {:format (fmt quoted?)}
                    s (try (or (some-> (:x (h/arg-types registry query opts)) (m/schema {:registry registry}))
                               "arg-types gives :x no schema")
                           (catch Exception e (str "arg-types throws: " (ex-message e))))
                    failure #(merge (select-keys place [:table :column :context :type :profile]) %)]
                (if (string? s)
                  [(failure {:kind :untyped :sql (pr-str query) :schema s})]
-                 (vec (for [v (if classes (map values classes) all-values)
+                 (vec (for [v all-values
                             :let [;; IN takes a collection, which sql/format expands
                                   arg (if (= :in context) [v] v)
                                   sent (pjdbc/sent-type v opts)
                                   cast? (= :cast context)
-                                  takes? (and sent (if cast?
+                                  ;; a date or time sent untyped is its type's own value alone, by design (accept/text-untyped)
+                                  takes? (and sent (or (not= :unknown sent) (accept/text-untyped (class v)) (and cast? (string? t) (= "D" (types/category t)))) (if cast?
                                                      (accept/accepts? t sent :cast)
                                                      ;; an array assigned to an array column: element by element, as array-type reads it
                                                      (let [assign? (#{:update :insert :insert-select :insert-select-dropped} context)
@@ -913,7 +908,10 @@
                                   row-refused? (written-refuses opts table column context v)
                                   ;; NULL in a NOT NULL column fails once a row is written; the table may have none
                                   null-refused? (and (nil? v) notnull (#{:update :insert :insert-select} context))
+                                  ;; a keyword in a written row is a column to HoneySQL, a vector a row of parameters
+                                  honeysql? (or (keyword? v) (and (vector? v) (not (keyword? (first v)))))
                                   explained? (or (and (some? v) (not takes?))
+                                                 (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (or (nil? v) (and list (outside? list v))))
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs

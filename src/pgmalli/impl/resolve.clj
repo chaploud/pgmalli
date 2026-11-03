@@ -272,6 +272,19 @@
                     (not-any? #(doubtful? % ins) cs))
            (set ts)))))))
 
+(defn any-position?
+  "Whether every candidate a call with arguments of types ins (as call takes them, :free there)
+   among overloads os may be resolved to declares \"any\" at position i, in every version:
+   PostgreSQL takes a parameter's type there from the value alone, and cannot type one sent
+   untyped (could not determine data type of parameter)."
+  [ins i os]
+  (boolean (when (and (seq os) (every? some? ins))
+             (in-every-version
+              os
+              (fn [os]
+                (let [cs (filter #(viable? % ins) (candidates os (count ins)))]
+                  (and (seq cs) (every? #(= "\"any\"" (nth (:decls %) i)) cs))))))))
+
 (defn set-returning?
   "Whether a function of overloads os may return a set: one of them does, or there is none."
   [os]

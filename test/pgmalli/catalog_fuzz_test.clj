@@ -20,7 +20,6 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             next.jdbc.date-time
-            [next.jdbc.prepare :as prep]
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.impl.files :as files]
@@ -290,17 +289,18 @@
 
 ;;; running
 
-(extend-protocol prep/SettableParameter
-  ;; pgjdbc takes no Duration; an interval reads ISO 8601, as an untyped parameter
-  Duration
-  (set-parameter [v ^java.sql.PreparedStatement ps ^long i] (.setObject ps i (str v) java.sql.Types/OTHER)))
+(defn- sendable
+  "v as the one sending takes it: pgjdbc takes no Duration, which goes as an interval's ISO 8601
+   text (an extension of the JVM-wide protocol here would change what every other test sends)."
+  [v]
+  (if (instance? Duration v) (doto (org.postgresql.util.PGobject.) (.setType "interval") (.setValue (str v))) v))
 
 (defn- attempt!
   "nil when the statement went through (kept), else {:sqlstate :message} from the database (rolled
    back to a savepoint)."
   [^java.sql.Connection conn sql-params]
   (let [sp (.setSavepoint conn)]
-    (try (jdbc/execute! conn sql-params) (.releaseSavepoint conn sp) nil
+    (try (jdbc/execute! conn (into [(first sql-params)] (map sendable) (rest sql-params))) (.releaseSavepoint conn sp) nil
          (catch java.sql.SQLException e (.rollback conn sp) {:sqlstate (.getSQLState e) :message (ex-message e)}))))
 
 (defn- try-insert!

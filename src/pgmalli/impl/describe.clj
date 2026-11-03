@@ -56,7 +56,7 @@
                      (:pgmalli/problems p) (assoc :pgmalli/problems (:pgmalli/problems p)))
       (= :function head) (mapv #(describe schemas %) children)
       (= :cat head) (mapv #(describe schemas %) children)
-      ;; what :send lets an array argument be
+      ;; an argument of several collections (IN's)
       (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children))
       (let [elem (describe schemas (last (first children)))]
         (str elem "[] (" (str/join ", " (map #(name (first %)) children)) ")"))

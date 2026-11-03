@@ -298,13 +298,12 @@
                  schema))
 
 (defn read-time
-  "Schema data with the time types as a driver returns them: :instant as
-   next.jdbc.date-time/read-as-instant reads them (timestamps Instants, dates java.sql.Date,
-   hence inst?), :inst as pgjdbc does (java.sql's, inst?)."
+  "Schema data with the time types as a driver returns them: :instant as the one reading
+   reads them (timestamps Instants, the others as the registry types them), :inst as pgjdbc
+   does (java.sql's, inst?)."
   [time schema]
   (walk/postwalk (fn [f] (case [time f]
                            [:instant :time/local-date-time] :time/instant
-                           [:instant :time/local-date] 'inst?
                            (if (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst? f)))
                  schema))
 

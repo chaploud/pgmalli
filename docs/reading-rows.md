@@ -29,19 +29,21 @@ NULL column keeps its key. A query's row has the keys of its labels likewise
 ([a row written into a table](queries.md#a-row-written-into-a-table)). Another spelling, such
 as kebab-case keys, is your application's to convert where it takes the row.
 
-## The one reading
+## The one reading and sending
 
-pgmalli types rows as one reading makes them, which your application installs: pgmalli ships
-no `ReadableColumn` extension. Install the one below once, before reading rows (it extends
-next.jdbc's protocol for the whole JVM):
+pgmalli types rows as one reading makes them and arguments as one sending sends them, which
+your application installs: pgmalli ships no next.jdbc extension. Install the one below once,
+before reading rows or sending arguments (it extends next.jdbc's protocols for the whole JVM):
 
 ```clojure
 (require '[clojure.data.json :as json]
-         '[next.jdbc.date-time :as date-time]
+         '[next.jdbc.date-time]
+         '[next.jdbc.prepare :as prepare]
          '[next.jdbc.result-set :as rs])
-(import '(org.postgresql.util PGobject))
+(import '(java.sql PreparedStatement ResultSetMetaData Types)
+        '(org.postgresql.util PGobject))
 
-(date-time/read-as-instant)
+;;; reading
 
 (defn- json-type? [type-name] (contains? #{"json" "jsonb"} type-name))
 
@@ -62,13 +64,42 @@ next.jdbc's protocol for the whole JVM):
                     a))]
     (dim (.getArray v))))
 
+(defn- read-time [^java.sql.Time v ^ResultSetMetaData rsmeta i]
+  ;; pgjdbc returns a time and a timetz alike, the timetz's offset taken off: the column's type tells them
+  (if (contains? #{"time" "_time"} (.getColumnTypeName rsmeta i)) (.toLocalTime v) v))
+
 (extend-protocol rs/ReadableColumn
+  java.sql.Timestamp
+  (read-column-by-label [v _] (.toInstant v))
+  (read-column-by-index [v _ _] (.toInstant v))
+  java.sql.Date
+  (read-column-by-label [v _] (.toLocalDate v))
+  (read-column-by-index [v _ _] (.toLocalDate v))
+  java.sql.Time
+  (read-column-by-label [v _] v)
+  (read-column-by-index [v rsmeta i] (read-time v rsmeta i))
   java.sql.Array
   (read-column-by-label [v label] (read-array v #(rs/read-column-by-label % label)))
   (read-column-by-index [v rsmeta i] (read-array v #(rs/read-column-by-index % rsmeta i)))
   PGobject
   (read-column-by-label [v _] (read-pgobject v))
   (read-column-by-index [v _ _] (read-pgobject v)))
+
+;;; sending: next.jdbc.date-time, loaded above, sends an Instant, a LocalDate, a LocalDateTime
+;;; and a java.util.Date untyped; pgjdbc's setObject the rest
+
+(defn- jsonb [x] (doto (PGobject.) (.setType "jsonb") (.setValue (json/write-str x))))
+
+(extend-protocol prepare/SettableParameter
+  ;; next.jdbc.date-time sends it as a java.util.Date, whose toInstant a java.sql.Time throws on
+  java.sql.Time
+  (set-parameter [v ^PreparedStatement s ^long i] (.setTime s i v))
+  clojure.lang.Keyword
+  (set-parameter [k ^PreparedStatement s ^long i] (.setObject s i (subs (str k) 1) Types/OTHER))
+  clojure.lang.IPersistentMap
+  (set-parameter [m ^PreparedStatement s ^long i] (.setObject s i (jsonb m)))
+  clojure.lang.IPersistentVector
+  (set-parameter [v ^PreparedStatement s ^long i] (.setObject s i (jsonb v))))
 ```
 
 What each type comes back as:
@@ -76,12 +107,13 @@ What each type comes back as:
 | type | value |
 |---|---|
 | `timestamp`, `timestamptz` | `java.time.Instant` (a `timestamp`'s date and time taken in the JVM's time zone, as pgjdbc does) |
-| `date` | `java.sql.Date` (`inst?`): `read-as-instant` leaves it, it has no time of day |
-| `time`, `timetz` | `java.sql.Time` (`inst?`): `next.jdbc.date-time` converts dates and timestamps alone |
+| `date` | `java.time.LocalDate` |
+| `time` | `java.time.LocalTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Time`) |
+| `timetz` | `java.sql.Time` (`inst?`), as pgjdbc returns it: pgjdbc takes the offset off, and the extension cannot put it back |
 | an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions). pgjdbc cannot read the elements of a `money[]` or a `bit(n)[]` (n > 1): reading one throws; select it cast to `text[]` |
 | `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer a `Long` (a `BigInt` past it), a fraction a `Double`, booleans and strings as they are |
 | an enum type | its label, a `String` |
-| every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` a `Double`, an `interval` a `PGInterval`, `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |
+| every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` a `Double`, an `interval` a `PGInterval` (an interval holds months, days and a time at once, which neither a `Duration` nor a `Period` holds alone), `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |
 
 A json or jsonb column's schema is the parsed value's, as a CHECK (`jsonb_typeof`) or an
 [override](../README.md#overrides) shapes it: one override for what is read and what is
@@ -103,8 +135,8 @@ written. An override that types a JSON number takes what a JSON parser returns: 
 |---|---|
 | `:jdbc {...}` | the options you pass to next.jdbc: pgmalli reads `:return-keys` ([queries](queries.md#options)) |
 
-There is no option for how a value is read. `:time` and `:read` of earlier versions are an
-error that names the one reading:
+There is no option for how a value is read or sent. `:time`, `:read` and `:send` of earlier
+versions are an error that names the one reading or the one sending:
 
 ```clojure
 (try (pgmalli/as-read registry :pg.public/users {:time :instant})

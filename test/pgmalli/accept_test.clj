@@ -1,14 +1,18 @@
 (ns pgmalli.accept-test
-  "pgmalli.impl.accept against pgjdbc and PostgreSQL themselves: the type setObject sends a
-   value of each class as, and each sent type prepared where a value of each type goes.
+  "pgmalli.impl.accept against the one sending and PostgreSQL themselves: the type a value of
+   each class goes as, and each sent type prepared where a value of each type goes.
    JVM only (babashka has no java.sql), so bb test does not list it."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is use-fixtures]]
+            [clojure.test :refer [deftest is testing use-fixtures]]
+            [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
+            [next.jdbc.prepare :as prepare]
             [next.jdbc.result-set :as rs]
             [pgmalli.core :as pgmalli]
+            [pgmalli.honeysql :as h]
+            [pgmalli.impl.files :as files]
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.jdbc :as pgjdbc]
             [pgmalli.impl.types :as types]
@@ -20,7 +24,7 @@
 (use-fixtures :once with-postgres)
 
 (def ^:private candidates
-  "Classes besides class-types' an application may hand to setObject."
+  "Classes besides class-types' an application may send."
   (concat (keys oracle/values)
           (for [e (concat (keys oracle/boxed) (vals oracle/boxed) [String java.math.BigDecimal java.math.BigInteger java.util.UUID (Class/forName "[B")
                                                      LocalDate LocalTime OffsetTime LocalDateTime OffsetDateTime Instant
@@ -28,13 +32,8 @@
             (class (Array/newInstance ^Class e 0)))))
 
 (def ^:private left-out
-  "Classes setObject sends that class-types leaves out, with why."
-  {org.postgresql.util.PGobject "a PGobject names its type itself, value by value"
-   java.sql.Date "goes untyped: a date column takes it as its own value (inst?); to a text column a date is a cast"
-   java.sql.Time "goes untyped: a time column takes it as its own value (inst?); to a text column a time is a cast"
-   java.sql.Timestamp "goes untyped: a timestamp column takes it as its own value (inst?); to a text column a timestamp is a cast"
-   clojure.lang.PersistentArrayMap "a map goes as hstore only where that extension is there"
-   clojure.lang.PersistentHashMap "a map goes as hstore only where that extension is there"})
+  "Classes the one sending sends that class-types leaves out, with why."
+  {org.postgresql.util.PGobject "a PGobject names its type itself, value by value"})
 
 (defn- type-name
   "t by the name types keys it by."
@@ -42,25 +41,26 @@
   (if-let [e (types/element t)] (str (type-name e) "[]") (:name (types/entry t) t)))
 
 (defn- sent-as
-  "The type PostgreSQL gets v as through setObject: :unknown for a value pgjdbc sends untyped,
-   nil for one setObject refuses."
+  "The type PostgreSQL gets v as, sent as the one sending sends it (the extension of
+   docs/reading-rows.md, which pgmalli.test-db installs): :unknown for a value sent untyped, nil
+   for one it cannot send."
   [con v]
   (with-open [ps (.prepareStatement con "SELECT pg_typeof(?)::text")]
-    (when (try (.setObject ps 1 v) true (catch java.sql.SQLException _ false))
+    (when (try (prepare/set-parameter v ps 1) true (catch Exception _ false))
       (try (with-open [rs (.executeQuery ps)] (.next rs) (type-name (.getString rs 1)))
            (catch java.sql.SQLException e
              (if (= "42P18" (.getSQLState e)) :unknown (throw e)))))))
 
-(deftest class-types-are-the-types-pgjdbc-sends
+(deftest class-types-are-the-types-the-one-sending-sends
   (when *db*
-    ;; pgjdbc sends a java.util.Map as an hstore where the database has one
+    ;; pgjdbc sends a java.util.Map as an hstore where the database has one: the extension sends a map as jsonb before it
     (exec-sql! "CREATE EXTENSION IF NOT EXISTS hstore")
     (with-open [con (jdbc/get-connection (datasource))]
-      (doseq [c (distinct (concat (map first accept/class-types) candidates))
-              :let [v (oracle/value c)]
+      (doseq [c (distinct (concat (map first accept/class-types) candidates [clojure.lang.PersistentVector clojure.lang.PersistentHashMap]))
+              :let [v (case (.getName ^Class c) "clojure.lang.PersistentVector" [1] "clojure.lang.PersistentHashMap" (hash-map :a 1) (oracle/value c))]
               :when (not (left-out c))]
-        ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
-        (is (= (sent-as con v) (some (fn [[c t]] (when (instance? c v) t)) accept/class-types)) (.getName ^Class c))))))
+        (is (= (sent-as con v) (some (fn [[c t]] (when (instance? c v) t)) accept/class-types)) (.getName ^Class c)))
+      (is (= :unknown (sent-as con :ns/a)) "a qualified keyword goes as its text, ns/a"))))
 
 (def ^:private targets
   "[column type, the type accept/accepts? takes for it]: every type of pg_catalog a column may be
@@ -187,14 +187,39 @@
     (is (some (fn [[s t]] (and (= t (pgjdbc/sent-type v {})) (m/validate s v {:registry registry}))) (pgjdbc/write-rows {} false))
         (str (class v) " goes as its type"))))
 
-(deftest a-string-goes-untyped-under-stringtype-unspecified
+(defn- refusal
+  "PostgreSQL's refusal of sqlvec sent as the one sending sends it: its SQLSTATE, nil where it runs it."
+  [con sqlvec]
+  (try (jdbc/execute! con sqlvec) nil
+       (catch java.sql.SQLException e (.getSQLState e))))
+
+(deftest a-parameter-postgresql-types-from-the-value-alone-takes-a-value-sent-typed
+  ;; "any" (concat, format, jsonb_build_object): PostgreSQL types the parameter from what is sent
   (when *db*
-    (exec-sql! "CREATE TYPE untyped_mood AS ENUM ('ok'); CREATE TABLE untyped_probe (e untyped_mood, t text, i integer)")
-    (let [sent (pgjdbc/sent-type "1" {:send {String :unknown}})]
-      (is (= :unknown sent))
-      (with-open [con (jdbc/get-connection (datasource (update *db* :dbname str "?stringtype=unspecified")))]
-        (doseq [[col t v] [["e" [:enum "untyped_mood"] "ok"] ["t" "text" "1"] ["i" "integer" "1"]]
-                [context sql] {:compare (str "SELECT 1 FROM untyped_probe WHERE " col " = ?")
-                               :assign (str "INSERT INTO untyped_probe (" col ") VALUES (?)")}]
-          (is (accept/accepts? t sent context))
-          (is (with-open [ps (.prepareStatement con sql)] (.setObject ps 1 v) (.execute ps) true) (str col " " context)))))))
+    (let [registry (pgmalli/registry {:registry {}})
+          values [1 "a" 1.5M true (java.util.UUID/randomUUID) (java.time.OffsetDateTime/now) {:a 1} [1] (long-array [1])
+                  :a nil (java.time.Instant/now) (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0) (java.util.Date.)]]
+      (with-open [con (jdbc/get-connection (datasource))]
+        (doseq [q [{:select [[[:concat :?x] :v]]} {:select [[[:format "%s" :?x] :v]]} {:select [[[:jsonb_build_object "k" :?x] :v]]}
+                   {:select [[[:json_build_array 1 :?x] :v]]} {:select [[[:num_nulls :?x] :v]]}]
+                :let [s (:x (h/arg-types registry q))]
+                v values
+                :let [state (refusal con (sql/format q {:params {:x v}}))]]
+          (testing (pr-str q (cond-> v (some-> v class .isArray) vec))
+            (is (= (nil? state) (m/validate s v {:registry registry})) (str "PostgreSQL: " (or state "takes it")))
+            (when state (is (= "42P18" state) "could not determine data type of parameter"))))))))
+
+(deftest an-enum-takes-a-keyword-label-and-a-string-label-cast
+  (when *db*
+    (exec-sql! "CREATE TYPE sent_mood AS ENUM ('ok', 'meh'); CREATE TABLE sent_probe (e sent_mood)")
+    (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+      (with-open [con (jdbc/get-connection (datasource))]
+        (doseq [q [{:select [:e] :from [:sent_probe] :where [:= :e :?x]}
+                   {:insert-into :sent_probe :values [{:e :?x}]}
+                   {:update :sent_probe :set {:e :?x}}
+                   {:select [:e] :from [:sent_probe] :where [:= :e [:cast :?x :sent_mood]]}]
+                v [:ok "ok"]
+                :let [s (:x (h/arg-types registry q))
+                      state (do (.setAutoCommit con false) (try (refusal con (sql/format q {:params {:x v}})) (finally (.rollback con) (.setAutoCommit con true))))]]
+          (testing (pr-str q v)
+            (is (= (nil? state) (m/validate s v {:registry registry})) (str "PostgreSQL: " (or state "takes it")))))))))

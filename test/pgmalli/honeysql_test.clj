@@ -10,24 +10,10 @@
             [malli.experimental.time :as time]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
-            [pgmalli.impl.accept :as accept]
             [pgmalli.impl.jdbc :as jdbc]
-            [pgmalli.sample :refer [registry]])
-  (:import [clojure.lang IPersistentMap IPersistentSet IPersistentVector Keyword Sequential Symbol]))
+            [pgmalli.sample :refer [registry]]))
 
-;; the sample's enum literals are strings; how pgjdbc sends them is its own test
-(def unspecified {String :unknown})
-(def opts {:schema "sample" :send unspecified})
-
-(defn- sends
-  "o with m merged over what its :send sends (pgjdbc's by default)."
-  [o m]
-  (update o :send merge m))
-
-(defn- only
-  "A :send of m alone: every class pgjdbc sends but m's removed."
-  [m]
-  (merge (zipmap (map first accept/class-types) (repeat nil)) m))
+(def opts {:schema "sample"})
 
 (defn- written-keys
   "The keys of a values-schema or set-schema map, of every column."
@@ -45,13 +31,15 @@
 (def int4 [:int {:pg/type "integer" :min -2147483648 :max 2147483647}])
 (def text [:string {:pg/type "text"}])
 (def mood [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"])
+;; an argument's: a keyword label goes untyped, a String as varchar, which an enum refuses
+(def mood-arg [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} :happy :sad])
 (def pg-object jdbc/pg-object)
 (defn in-list [s] [:or [:sequential {:min 1} s] [:set {:min 1} s]])
 
 (deftest queries-that-agree-have-no-problems
   (is (= [] (check {:select [:id :nick] :from [:users] :where [:= :group_id 'g]})))
   (is (= [] (check {:select [:u.id [:g.name :group]] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]})))
-  (is (= [] (check {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :closed_at 'now}] :returning [:id]})))
+  (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :closed_at 'now}] :returning [:id]})))
   (is (= [] (check {:with [[:recent {:select [:id] :from [:users]}]] :select [:id] :from [:recent]})) "a CTE is an opaque table")
   (is (= [] (check '(cond-> {:select [:id] :from [:tree]} deep? (assoc :with-recursive [[:tree {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:tree]}]}]]))))
       "a CTE built up in code is one too")
@@ -73,21 +61,25 @@
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from [:users] :where [:= :nope 1]})) "compared columns too")
   (is (= [{:kind :unknown-column :column :nope}] (check {:update :users :set {:nope 1} :where [:= :id 1]})) "and set ones")
-  (is (= [{:kind :missing-required-column :table "sample.users" :column :score}]
+  (is (= [{:kind :missing-required-column :table "sample.users" :column :score}
+          {:kind :uncast-string :column :mood :value "sad" :type "mood"}]
          (check {:insert-into :users :values [{:group_id 1 :mood "sad"}]}))
       "an INSERT must carry the columns the insert schema requires")
   (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
          (check {:select [:id] :from [:users] :where [:= :mood [:cast "angry" :mood]]})))
   (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
          (check {:update :users :set {:mood "angry"} :where [:= :id 1]})) "assigned literals too")
-  (is (= [{:kind :not-null-violation :table "sample.users" :column :score :clause :values}]
+  (is (= [{:kind :not-null-violation :table "sample.users" :column :score :clause :values}
+          {:kind :uncast-string :column :mood :value "sad" :type "mood"}
+          {:kind :uncast-string :column :mood :value "sad" :type "mood"}]
          (check {:insert-into :users :values [{:group_id 1 :mood "sad"} {:group_id 1 :mood "sad" :score 1}]}))
       "a multi-row INSERT carries the union of its columns, NULL where a row lacks one")
   (is (= [{:kind :ambiguous-column :column :id :candidates ["sample.users" "sample.groups"]}]
          (check {:select [:id] :from [:users] :join [:groups [:= :groups.id :users.group_id]]})))
   (is (= [{:kind :unknown-column :column :nope}] (check {:with [[:users {:select [:id] :from [:groups]}]] :select [:nope] :from [:sample.users]}))
       "a CTE shadows a table only when the reference is written without a schema")
-  (is (= [] (check {:select [:id] :from [:users] :where [:in :mood ["happy" "sad"]]}))))
+  (is (= [{:kind :uncast-string :column :mood :value "happy" :type "mood"}
+          {:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:select [:id] :from [:users] :where [:in :mood ["happy" "sad"]]}))))
 
 (deftest named-parameters-are-arguments-under-their-params-key
   (let [body {:select [:id] :from [:users] :where [:and [:= :id :?id] [:in :mood :?moods]] :limit :?n}]
@@ -95,10 +87,13 @@
     (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m :mood] [[:unnest :?s]]]}]}))
         "selected, as INSERT ... SELECT passes values")
     (is (= {:id bigint
-            :moods (in-list mood)
+            :moods (in-list mood-arg)
             :n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (args body)))
-    (is (= {:g/id [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
+    (is (= {:g/id [:maybe
+                   [:or
+                    [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]
+                    :keyword]]}
            (args {:update :users :set {:nick :?g/id} :where [:= :id 1]}))
         "a qualified one keeps its namespace, as sql/format's :params does")
     (is (= (args body)
@@ -196,7 +191,7 @@
     (doseq [v [[] #{} 1 nil (long-array [1])]] (is (not (m/validate t v)) (pr-str v)) "IN (), or not expanded")))
 
 (deftest write-names-what-an-extension-sends
-  (let [o (sends opts {Keyword :unknown})
+  (let [o opts
         n [:or [:string {:pg/type "character varying"}] :keyword]]
     (is (= {:n n :ns (in-list n)
             :v [:maybe [:or [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] :keyword]]}
@@ -231,17 +226,18 @@
         types (args body (assoc opts :compare :lenient))]
     (is (= [:maybe bigint] (:id types)))
     (is (= [:maybe integer] (:min types)) "no range")
-    (is (= [:maybe [:string {:pg/type "character varying"}]] (:nick types)) "no length")
-    (is (= [:maybe mood] (:mood types))
+    (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]] (:nick types)) "no length")
+    (is (= [:maybe mood-arg] (:mood types))
         "an enum stays: PostgreSQL refuses a value outside it")
     (is (= (in-list [:maybe integer]) (:gs types))
         "nil among :in's elements, not as :in's own: it formats as IN ?")
     (is (= [:maybe [:int {:pg/type "bigint" :min 0}]] (:n types)))
-    (is (= {:v [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
+    (is (= {:v [:maybe
+                [:or [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] :keyword]]}
            (args {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
         "an assigned one keeps the column's bounds")
-    (is (= {:ids [:maybe [:or [:pg/array [:maybe bigint]] [:sequential [:maybe bigint]]]]}
-           (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (sends (assoc opts :compare :lenient) {Sequential :unknown})))
+    (is (= {:ids [:maybe [:pg/array [:maybe bigint]]]}
+           (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :compare :lenient)))
         "an array's too")))
 
 (def docs
@@ -266,33 +262,25 @@
 
 (deftest an-array-columns-argument-is-an-array
   (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
-    (is (= {:paths [:maybe [:pg/array text]] :meta [:any {:pg/type "jsonb"}]} (select-keys (h/arg-types docs body) [:paths :meta]))
-        "an assigned array is one the driver takes, a String[] by default")
-    (is (= {:paths [:maybe [:or [:pg/array text] [:vector text]]]}
-           (select-keys (h/arg-types docs body (sends {} {IPersistentVector :unknown})) [:paths])))
-    (is (= {:p [:or [:pg/array text] [:vector text]]}
-           (h/arg-types docs {:select [:id] :from [:docs] :where [:= :paths :?p]} (sends {} {IPersistentVector :unknown})))
+    (is (= {:paths [:maybe [:pg/array text]] :meta [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]} (select-keys (h/arg-types docs body) [:paths :meta]))
+        "an assigned array is a Java array: a vector goes as jsonb")
+    (is (= {:p [:pg/array text]} (h/arg-types docs {:select [:id] :from [:docs] :where [:= :paths :?p]}))
         "compared too")))
 
 (deftest an-any-or-all-argument-is-an-array
   (let [body {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:<> :group_id [:all :?gs]]]}]
     (is (= {:ids [:pg/array bigint] :gs [:pg/array integer]} (args body))
         "the Java arrays pgjdbc sends as an array of the column's type: a long[] as bigint[], an int[] as integer[]")
-    (is (= {:ids [:or [:pg/array bigint] [:set bigint] [:sequential bigint]]}
-           (select-keys (args body (sends opts {Sequential :unknown IPersistentSet :unknown})) [:ids]))
-        "the collections an extension sends instead; empty is an empty array, which SQL takes")
-    (let [t (:ids (args body (sends opts {Sequential :unknown})))]
-      (doseq [v [(long-array [1 2]) (into-array Long [1]) (long-array []) [1] '()]] (is (m/validate t v {:registry registry}) (pr-str v)))
-      (doseq [v [(object-array [1]) (into-array String ["a"]) #{1} nil]] (is (not (m/validate t v {:registry registry})) (pr-str v)))
-      (is (= [:or [:pg/array bigint] [:sequential bigint]] t)
-          ":pg/array is what the driver takes (Object[] it refuses)"))
-    (is (= {:ids [:or [:pg/array [:or bigint :string]] [:vector [:or bigint :string]]]}
-           (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (sends opts {String "bigint" IPersistentVector :unknown}))))))
+    (let [t (:ids (args body))]
+      (doseq [v [(long-array [1 2]) (into-array Long [1]) (long-array [])]] (is (m/validate t v {:registry registry}) (pr-str v)))
+      (doseq [v [(object-array [1]) (into-array String ["a"]) [1] '(1) #{1} nil]] (is (not (m/validate t v {:registry registry})) (pr-str v)))
+      (is (= [:pg/array bigint] t)
+          ":pg/array is what the driver takes (Object[] it refuses); a vector goes as jsonb, no array"))))
 
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
     (is (= {'id bigint
-            'moods (in-list mood)
+            'moods (in-list mood-arg)
             'min integer
             'n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (args body)))
@@ -332,7 +320,8 @@
   (is (= [{:kind :unknown-column :column :nope}]
          (check {:insert-into [[:users [:group_id :mood :score :nope]] {:select [:group_id :mood :score 1] :from [:users]}]}))
       "the column list of INSERT ... SELECT")
-  (is (= [{:kind :unknown-column :column :nope}] (check {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]}))
+  (is (= [{:kind :unknown-column :column :nope}
+          {:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]}))
       "an unknown :values column is reported once")
   (is (= [] (check '{:insert-into tbl :values rows})) "a target passed in says nothing")
   (let [with-interval (assoc registry :pg.sample/spans [:map {:pg/table "sample.spans"} [:id :int] [:span [:time/duration {:pg/type "interval"}]]])]
@@ -365,16 +354,16 @@
 
 (def ^:private shapes
   "[query expected-problems note]: the shapes of HoneySQL data the checker must read."
-  '[[{:insert-into [{:overriding-value :system} :users] :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]}
+  '[[{:insert-into [{:overriding-value :system} :users] :values [{:group_id 1 :mood [:cast "sad" :mood] :score 1 :nope 1}]}
      [{:kind :unknown-column :column :nope}]
      "the option map inserts itself emits"]
-    [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad" 2]]}
+    [{:insert-into :users :columns [:group_id :mood :score] :values [[1 [:cast "sad" :mood] 2]]}
      []
      ":columns with positional rows"]
-    [{:insert-into :users :columns [:group_id :mood :nope] :values [[1 "sad" 2]]}
+    [{:insert-into :users :columns [:group_id :mood :nope] :values [[1 [:cast "sad" :mood] 2]]}
      [{:kind :unknown-column :column :nope} {:kind :missing-required-column :table "sample.users" :column :score}]
      "an unknown column in :columns leaves the column it stands in for missing"]
-    [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "sad"]]}
+    [{:insert-into :users :columns [:group_id :mood :score] :values [[1 [:cast "sad" :mood]]]}
      [{:kind :values-arity :table "sample.users" :row 0 :columns 3 :values 2}]
      "a row shorter than the column list"]
     [{:insert-into :users :columns [:group_id :mood :score] :values [[1 "angry" 2]]}
@@ -426,7 +415,7 @@
     (testing note
       (is (= expected (check query)))))
   (testing "the types the same shapes give"
-    (is (= {'m mood}
+    (is (= {'m mood-arg}
            (args '{:insert-into :users :columns [:group_id :mood :score] :values [[1 m 2]]})))
     (is (= {'gid integer}
            (args '{:select [:id] :from [:users] :where [:= gid :group_id]}))
@@ -524,7 +513,7 @@
     (is (= [:map [:i [:maybe :any]] [:s text]]
            (h/row-schema registry {:select [[1 :i] ["s" :s]] :from [:users]} (assoc opts :format {:inline true})))
         "an inlined number is typed by its text, which is not read here; an inlined string is text")
-    (is (= [:map [:s text]] (h/row-schema registry {:select [["s" :s]] :from [:users]} opts)))
+    (is (= [:map [:s [:string {:pg/type "character varying"}]]] (h/row-schema registry {:select [["s" :s]] :from [:users]} opts)))
     (is (= [:map [:b [:maybe [:int {:pg/type "bigint"}]]]] (row [[[(keyword "~") :id] :b]])) "~ alone is bitwise NOT, of a bigint a bigint")
     (is (= [:map [:k [:maybe text]] [:v [:maybe :any]]] (row [[[:->> [:cast :nick :jsonb] "k"] :k] [[:->> :nick "k"] :v]]))
         "jsonb ->> text is text; PostgreSQL has no ->> of a varchar")
@@ -535,7 +524,8 @@
         "ROLLUP adds rows whose columns are NULL")))
 
 (deftest an-argument-compared-with-an-expression-takes-its-type
-  (let [args #(h/arg-types registry {:select [:id] :from [:users] :where %} opts)]
+  (let [args #(h/arg-types registry {:select [:id] :from [:users] :where %} opts)
+        text [:or text :keyword]]
     (is (= {:k text} (args [:= [:->> [:cast :nick :jsonb] "k"] :?k])))
     (is (= {:t text} (args [:not [:= [:cast :id :text] :?t]])))
     (is (= {:ts (in-list text)} (args [:in [:cast :id :text] :?ts])))
@@ -545,26 +535,26 @@
     (is (= {:a text :b text} (args [:between [:cast :id :text] :?a :?b])))
     (is (= {:x text} (args [:= [:upper :nick] :?x])) "upper of a varchar is text")
     (is (= {:x [:any {:pgmalli/untyped :type}]} (args [:= [:public.my-fn :nick] :?x])) "an expression of no known type types nothing")
-    (let [check #(h/check registry {:select [:id] :from [:users] :where %} (dissoc opts :send))]
-      (is (= [{:kind :uncast-string :column [:cast :nick :mood] :arg :m :type "mood"}] (check [:= [:cast :nick :mood] :?m]))
-          "a string compared with an enum-typed expression reaches it as varchar")
-      (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}] (check [:= [:composite :mood :id] [:composite :?m :?i]]))
+    (let [check #(h/check registry {:select [:id] :from [:users] :where %} opts)]
+      (is (= [] (check [:= [:cast :nick :mood] :?m]))
+          "an argument is arg-types'")
+      (is (= [] (check [:= [:composite :mood :id] [:composite :?m :?i]]))
           "a row is checked element by element")
       (is (= [{:kind :unknown-column :column :nope}] (check [:< [:composite :nope :id] [:composite 1 2]]))))))
 
 (deftest an-insert-select-assigns-its-items-to-the-columns-listed
   (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
     (is (= {:g int4
-            :m pg-object
-            :s [:sequential int4]
-            :n [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
-           (args q (assoc opts :send (only {Sequential "integer[]"}))))
+            :m [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]
+            :s [:pg/array int4]
+            :n [:maybe [:or [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] :keyword]]}
+           (args q opts))
         "by position: an argument takes its column's type, an unnest one an array of it")
-    (is (= [] (check q (dissoc opts :send))))
-    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood" :in [:insert-into 1]}]
-           (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m] [:?s]]}]} (dissoc opts :send)))
+    (is (= [] (check q opts)))
+    (is (= []
+           (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m] [:?s]]}]} opts))
         "in the SELECT, where the argument is")
-    (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :send)))
+    (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} opts))
         "an array is not judged: a java.sql.Array of the enum type is taken, a String[] is not")
     (is (= {:s [:any {:pgmalli/untyped :position}]} (args {:insert-into [[:users [:group_id :nick :score]] {:select [:g.* :?s] :from [[:groups :g]]}]}))
         "a star stands for columns the data does not count")))
@@ -575,27 +565,26 @@
          (row {:select [[[:cast "sad" :mood] :m] [[:cast :id :int] :i] [[:cast true :bool] :b] [[:cast :score :float] :f]] :from [:users]}))))
 
 (deftest an-argument-takes-its-slots-own-values
-  (let [native (dissoc opts :send)
+  (let [native opts
         args #(h/arg-types registry {:select [:id] :from [:users] :where %} (merge native %2))
         numeric ['decimal? {:pg/type "numeric"}]]
     (is (= {:x bigint} (args [:= :id :?x] {})) "a column's own values")
     (is (= {:x [:or numeric 'integer? :int]} (args [:= [:cast :id :numeric] :?x] {}))
         "a numeric takes an integer too, a BigInt and a BigInteger as pgjdbc sends any Number: the same number")
-    (is (= {:x bigint} (args [:= :id :?x] {:send unspecified})) "an untyped string is no bigint's own value")))
+    (is (= {:x bigint} (args [:= :id :?x] {})) "an untyped string is no bigint's own value")))
 
 (deftest a-cast-argument-takes-what-postgresql-casts
-  (let [args #(h/arg-types registry % (dissoc opts :send))
-        cast-to-bigint [:or bigint 'decimal? 'integer? :double 'float? :string 'bytes?]]
+  (let [args #(h/arg-types registry % opts)
+        cast-to-bigint [:or bigint 'decimal? 'integer? :double 'float? :string 'bytes? :keyword pg-object]]
     (is (= {:x cast-to-bigint} (args {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]}))
         "compared: NULL never matches")
     (is (= {:x [:maybe cast-to-bigint]} (args {:select [[[:cast :?x :bigint] :n]]})) "selected: NULL is a value")
     (let [{:keys [x n]} (args {:insert-into [[:users [:score :nick]] {:select [[[:cast :?x :bigint]] [[:cast :?n :text]]]}]})]
       (is (= cast-to-bigint x) "assigned to a NOT NULL column: no NULL")
       (is (= :maybe (first n)) "assigned to a nullable one: NULL"))
-    (is (= {:x [:enum {:pg/type "mood"} "happy" "sad"]} (args {:select [:id] :from [:users] :where [:= :mood [:cast :?x :mood]]})))
-    (is (= {:x [:or bigint :string]}
-           (h/arg-types registry {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]} {:schema "sample" :send (only {Long "bigint" String "character varying"})}))
-        ":send narrows a cast's argument")))
+    (is (= {:x [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]} (args {:select [:id] :from [:users] :where [:= :mood [:cast :?x :mood]]})))
+    (is (= {:x [:maybe [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]]} (args {:select [[[:cast :?x :mood] :m]]}))
+        "cast, an enum's labels as strings")))
 
 (deftest limit-and-offset-take-nil-for-none
   (let [t (:n (args {:select [:id] :from [:users] :limit :?n}))]
@@ -615,18 +604,10 @@
   (let [t (:x (args {:update :users :set {:nick [:cast :?x :varchar]} :where [:= :id 1]} {:schema "sample"}))]
     (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number")))
 
-(deftest a-misspelt-type-in-send-is-an-error
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: \"timestamp\"" (args {:select [:id] :from [:users]} {:schema "sample" :send {java.time.Instant "timestampz"}})))
-  (is (= (args {:select [:id] :from [:users] :where [:= :id :?x]} {:schema "sample" :send {Symbol "bigint"}})
-         (args {:select [:id] :from [:users] :where [:= :id :?x]} {:schema "sample" :send {Symbol "int8"}}))
-      "an alias is a name")
-  (is (= (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]} {:schema "sample" :send {IPersistentVector "bigint[]"}})
-         (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]} {:schema "sample" :send {IPersistentVector "int8[]"}}))
-      "an array type, by an alias of its element too"))
-
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
-  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: .* is :send"]
-                    [{:stringtype :unspecified} #":stringtype.* is no longer read: .*\{String :unknown\} for stringtype=unspecified"]
+  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: pgmalli types arguments as one sending sends them"]
+                    [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as one sending sends them"]
+                    [{:send {String :unknown}} #":send.* is no longer read: pgmalli types arguments as one sending sends them: .*docs/reading-rows.md#the-one-reading-and-sending"]
                     [{:qualified? false} #":qualified\? false.* is no longer read: .*\{:builder-fn next.jdbc.result-set/as-unqualified-maps\}"]
                     [{:kebab? true} #":kebab\? true.* is no longer read"]
                     [{:return-keys true} #":return-keys is no longer read: pass it as \{:jdbc \{:return-keys ...\}\}; see https://github.com/chaploud/pgmalli/blob/main/CHANGELOG.md$"]]]
@@ -658,25 +639,11 @@
   (is (= [:map [:x bigint]] (row {:select [:x] :from [[{:union [{:select [[:id :x]] :from [:users]} {:select [[:score :x]] :from [:users]}]} :s]]}))
       "a set operation's column is of the type PostgreSQL resolves its members' to: numbers the widest"))
 
-(deftest a-misshapen-send-names-what-is-wrong
-  (doseq [[o says] [[{:send [[String :unknown]]} #":send is a map of classes to types"]
-                    [{:send {:keyword :unknown}} #":send's key :keyword is no class"]
-                    [{:send {"java.lang.String" :unknown}} #":send's key \"java.lang.String\" is no class"]
-                    [{:send {String :untyped}} #"java.lang.String goes as :untyped, which is no type"]
-                    [{:send {Keyword "user_status"}} #"clojure.lang.Keyword goes as \"user_status\", which is no type .* or :unknown for a value sent untyped \(an enum's or a domain's value too\)"]
-                    [{:send {Long "bigit"}} #"did you mean: \"bigint\""]]]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo says (args {:select [:id] :from [:users]} o)) (pr-str o))))
-
-(deftest send-nil-removes-a-class-pgjdbc-sends
-  (let [at #(:x (args {:update :users :set {:updated_at :?x} :where [:= :id 1]} (merge {:schema "sample"} %)))
-        local (java.time.LocalDateTime/of 2026 1 1 0 0)]
-    (is (m/validate (at {}) local {:registry registry}) "pgjdbc sends a LocalDateTime as a timestamp")
-    (is (not (m/validate (at {:send {java.time.LocalDateTime nil}}) local {:registry registry})) "a class mapped to nil is a value not sent"))
+(deftest the-one-sending-sends-a-local-date-time-and-a-long-array
+  (let [at #(:x (args {:update :users :set {:updated_at :?x} :where [:= :id 1]} {:schema "sample"}))]
+    (is (m/validate (at) (java.time.LocalDateTime/of 2026 1 1 0 0) {:registry registry}) "next.jdbc.date-time sends a LocalDateTime untyped, a timestamp's own value"))
   (is (= {:ids [:pg/array bigint]} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} {:schema "sample"}))
-      "pgjdbc sends a long[] as a bigint[]")
-  (is (= {:ids [:any {:pgmalli/untyped :type}]} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]}
-                           {:schema "sample" :send (into {} (for [[c] accept/class-types :when (.isArray ^Class c)] [c nil]))}))
-      "with no array sent, nothing an array argument could be"))
+      "pgjdbc sends a long[] as a bigint[]"))
 
 (deftest a-cast-arguments-nil-follows-every-use-of-the-cast
   (let [nullable? #(= :maybe (first (:x (args % (merge {:schema "sample"} %2)))))
@@ -695,12 +662,11 @@
                                           :pg.public/t [:map {:pg/table "public.t"} [:at [:ref {:pg/type "at3"} :pg.public/at3]]]}})]
     (is (m/validate (:x (h/arg-types reg {:update :t :set {:at :?x}})) (java.time.OffsetDateTime/now) {:registry reg}))))
 
-(deftest send-names-what-goes-in-a-cast-too
-  (let [o (sends {:schema "sample"} {Keyword :unknown})]
+(deftest a-keyword-goes-in-a-cast-too
+  (let [o {:schema "sample"}]
     (is (m/validate (:x (args {:select [[[:cast :?x :text] :t]]} o)) :skill {:registry registry}))
-    (is (= [[:double {:pg/type "double precision"}] :int]
-           (rest (:x (args {:select [:id] :from [:users] :where [:= [:cast :id :double-precision] :?x]}
-                           {:schema "sample" :send (only {Double "double precision" Long "bigint"})}))))
+    (is (= [:double {:pg/type "double precision"}]
+           (second (:x (args {:select [:id] :from [:users] :where [:= [:cast :id :double-precision] :?x]} o))))
         "a column's own values are kept whole, first")))
 
 (deftest a-comparison-in-a-select-or-order-by-is-read
@@ -708,16 +674,14 @@
          (args {:select [:id [[:case [:= :id :?t] 1 :else 0] :c]] :from [:users] :order-by [[[:case [:= :score :?o] 0 :else 1]]]})))
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [[[:case [:= :nope 1] 1 :else 0] :c]] :from [:users]}))))
 
-(deftest send-is-all-an-application-sends
+(deftest a-map-goes-as-jsonb
   (is (= {:m [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]}
-         (h/arg-types docs {:update :docs :set {:meta :?m} :where [:= :id 1]} {:send {IPersistentMap "jsonb"}}))
+         (h/arg-types docs {:update :docs :set {:meta :?m} :where [:= :id 1]} {}))
       "what goes as a shaped json column's type takes its shape")
-  (is (= {:m [:or [:map-of :any :any] pg-object]}
+  (is (= {:m [:or [:map-of :any :any] [:vector :any] pg-object]}
          (h/arg-types (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
-                      {:update :t :set {:j :?m}} {:send {IPersistentMap "jsonb"}}))
-      "what goes as a type pgmalli has the driver's object for is all its argument takes")
-  (is (= {:id bigint} (args {:select [:id] :from [:users] :where [:= :id :?id]} {:schema "sample" :send (only {})}))
-      "a column's own values, as pgmalli reads them, whatever :send says"))
+                      {:update :t :set {:j :?m}} {}))
+      "what goes as a type pgmalli has the driver's object for is all its argument takes"))
 
 (deftest a-domain-keeps-its-checks-whatever-send-sends
   (let [reg (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:> 0]]
@@ -749,7 +713,7 @@
                                                             [:v [:enum {:pg/type "character varying(10)"} "a"]]]}})]
     (doseq [c [:w :v]
             :let [x (:x (h/arg-types reg {:insert-into [[:lists [c]] {:select [:?x] :where false}]}))]]
-      (is (= [:maybe [:string {:pg/type "character varying"}]] x) (str c)))))
+      (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]] x) (str c)))))
 
 (deftest a-number-check-lists-labels-go-as-each-number-sent
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
@@ -764,13 +728,13 @@
 
 (deftest a-string-of-another-string-type-is-a-string-columns-own
   (is (= {:n [:maybe [:or text :keyword]]}
-         (args {:update :users :set {:group_name :?n} :where [:= :id 1]} (sends {:schema "sample"} {Keyword "varchar"})))))
+         (args {:update :users :set {:group_name :?n} :where [:= :id 1]} {:schema "sample"}))))
 
 (deftest an-enum-domain-takes-its-labels-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
                                           :pg.public/good [:and [:ref {:pg/type "mood"} :pg.public/mood] [:not= "ok"]]
                                           :pg.public/t [:map {:pg/table "public.t"} [:g [:ref {:pg/type "good"} :pg.public/good]]]}})
-        t (:g (h/arg-types reg {:update :t :set {:g :?g}} (sends {} {Keyword :unknown})))]
+        t (:g (h/arg-types reg {:update :t :set {:g :?g}} {}))]
     (is (m/validate t :sad {:registry reg}))
     (is (not (m/validate t :glad {:registry reg})) "no keyword but a label")))
 
@@ -857,11 +821,10 @@
 
 (deftest a-number-label-is-read-from-a-string-sent-untyped
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
-    (is (m/validate (:l (h/arg-types reg {:update :t :set {:l [:cast :?l :integer]}} {:send unspecified})) "1" {:registry reg}))))
+    (is (m/validate (:l (h/arg-types reg {:update :t :set {:l [:cast :?l :integer]}} {})) "1" {:registry reg}))))
 
-(deftest an-integer-sent-as-integer-is-a-bigint-columns-own
-  (is (= {:x [:or bigint :symbol]}
-         (args {:select [:id] :from [:users] :where [:= :id :?x]} (sends {:schema "sample"} {Symbol "integer"})))))
+(deftest an-integer-is-a-bigint-columns-own
+  (is (m/validate (:x (args {:select [:id] :from [:users] :where [:= :id :?x]} {:schema "sample"})) (int 1) {:registry registry})))
 
 (deftest a-registry-without-the-derived-schema-says-so
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry has no insert schema"
@@ -869,25 +832,23 @@
       "a hand-written row schema has none"))
 
 (deftest an-untyped-value-is-a-text-or-enum-columns-own
-  (is (= {:x pg-object}
-         (args {:select [:id] :from [:users] :where [:= :mood :?x]} (sends {:schema "sample"} {Keyword "character varying"})))
-      "a keyword sent as varchar is no enum's label, nor a String")
+  (is (= {:x [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} :happy :sad]}
+         (args {:select [:id] :from [:users] :where [:= :mood :?x]} {:schema "sample"}))
+      "a keyword sent untyped is an enum's label, a String sent as varchar is not")
   (is (= {:x [:any {:pg/type "json"}]}
          (h/arg-types (pgmalli/registry {:registry {:pg.public/j [:map {:pg/table "public.j"} [:doc [:any {:pg/type "json"}]]]}})
-                      {:select [:doc] :from [:j] :where [:= :doc :?x]} {:send unspecified}))
+                      {:select [:doc] :from [:j] :where [:= :doc :?x]} {}))
       "json has no =, untyped or not")
-  (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:schema "sample" :send unspecified}))
-      "a String sent untyped reaches an enum")
-  (doseq [t ["varchar" "text"]]
-    (is (= [:uncast-string] (map :kind (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:schema "sample" :send {String t}})))
-        (str "a String sent as " t)))
-  (is (= [:uncast-string] (map :kind (check {:select [:id] :from [:users] :where [:= :mood :?m]} {:schema "sample" :send {String "text"}})))))
+  (is (= [:uncast-string] (map :kind (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:schema "sample"})))
+      "a String literal goes as varchar")
+  (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {:schema "sample"}))
+      "an argument is arg-types'"))
 
 (deftest a-number-going-to-a-checked-number-column-is-held-to-the-check
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                          [:n [:and {:pg/type "numeric" :pg/constraints ["t_n_check"]} 'decimal? [:> 0]]]
                                                          [:k [:enum {:pg/type "integer" :pg/constraints ["t_k_check"]} 1 2]]]}})
-        {:keys [n k]} (h/arg-types reg {:update :t :set {:n :?n :k :?k}} (sends {} {Keyword :unknown}))]
+        {:keys [n k]} (h/arg-types reg {:update :t :set {:n :?n :k :?k}} {})]
     (is (m/validate n 3 {:registry reg}))
     (is (not (m/validate n -3 {:registry reg})) "PostgreSQL checks the CHECK after converting it")
     (is (= [:enum {:pg/type "integer" :pg/constraints ["t_k_check"]} 1 2] k) "a number label has no keyword")))
@@ -899,7 +860,7 @@
 
 (deftest a-json-document-cast-to-a-scalar-type-is-not-taken
   (let [reg (pgmalli/registry {:registry {}})
-        o {:send {IPersistentMap "jsonb" IPersistentVector "jsonb"}}
+        o {}
         x (fn [t] (:x (h/arg-types reg {:select [[[:cast :?x t] :b]]} o)))]
     (doseq [t [:int :numeric :boolean :double-precision]]
       (is (not (m/validate (x t) {:a 1} {:registry reg})) (str "a jsonb object cast to " t " errors"))
@@ -908,25 +869,13 @@
       (is (m/validate (x t) {:a 1} {:registry reg}) (str "a jsonb object casts to " t))
       (is (m/validate (x t) [1] {:registry reg}) (str "a jsonb array casts to " t)))))
 
-(deftest an-untyped-collection-cast-to-a-number-or-boolean-is-not-taken
-  (let [reg (pgmalli/registry {:registry {}})
-        o {:send {Sequential :unknown IPersistentSet :unknown}}
-        x (fn [t] (:x (h/arg-types reg {:select [[[:cast :?x t] :b]]} o)))]
-    (doseq [t [:int :bigint :numeric :boolean :double-precision]]
-      (is (m/validate (x t) "1" {:registry reg}))
-      (is (not (m/validate (x t) [1] {:registry reg})) (str "an array literal cast to " t " errors"))
-      (is (not (m/validate (x t) #{1} {:registry reg})) (str "an array literal cast to " t " errors")))
-    (doseq [t [:text :timestamptz :date :interval :uuid]]
-      (is (m/validate (x t) ["2020-01-01"] {:registry reg}) (str "PostgreSQL reads a one-element array literal as " t)))))
-
 (deftest an-arrays-elements-are-read-as-the-columns-type
-  (let [t (:xs (args {:select [:id] :from [:users] :where [:= :id [:any :?xs]]}
-                     (sends {:schema "sample"} {Sequential :unknown})))]
-    (is (m/validate t [1] {:registry registry}))
-    (is (not (m/validate t [1.5M] {:registry registry})) "'{1.5}'::bigint[] is invalid input"))
-  (let [t (:xs (args {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
-                     {:schema "sample" :send (only {Sequential "numeric[]"})}))]
-    (is (= [:any {:pgmalli/untyped :type}] t) "unnest takes a typed array whose elements the column holds as its own, which a numeric is not for an integer")))
+  (let [t (:xs (args {:select [:id] :from [:users] :where [:= :id [:any :?xs]]} {:schema "sample"}))]
+    (is (m/validate t (long-array [1]) {:registry registry}))
+    (is (not (m/validate t (into-array java.math.BigDecimal [1.5M]) {:registry registry})) "a numeric[] is no bigint[]'s own"))
+  (let [t (:xs (args {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]} {:schema "sample"}))]
+    (is (not (m/validate t (into-array java.math.BigDecimal [1M]) {:registry registry}))
+        "unnest takes a typed array whose elements the column holds as its own, which a numeric is not for an integer")))
 
 (deftest a-types-own-values-come-first-however-many-kinds-it-takes
   (is (= text (second (second (:x (args {:select [[[:cast :?x :text] :t]]} {:schema "sample"})))))))
@@ -950,7 +899,7 @@
 
 (deftest values-and-set-schemas-type-a-row-written
   (let [v (h/values-schema registry :pg.sample/users {:schema "sample"})
-        s (h/set-schema registry :pg.sample/users (sends {:schema "sample"} {Keyword :unknown}))
+        s (h/set-schema registry :pg.sample/users {:schema "sample"})
         ok? #(m/validate %1 %2 {:registry registry})]
     (is (= [:born :closed_at :group_id :group_name :mood :nick :referrer_id :score :seq :total :updated_at :id :nick_upper] (map first (rest (:gen/schema (second v)))))
         "the columns the database writes last")
@@ -961,7 +910,7 @@
     (is (ok? v {:group_id 1 :score 0}) "those it fills optional")
     (is (not-any? #(ok? v %) [{:score 0} {:group_id 1 :score 0 :id 1} {:group_id 1 :score 0 :mood "glad"} {:group_id 1 :score 0 :nick nil :born "x"}]))
     (is (every? #(ok? s %) [{:nick nil} {:mood :default} {:nick "abc"}]) "every column optional")
-    (is (not-any? #(ok? s %) [{:mood :sad} {:nick :abc}]) "HoneySQL writes a keyword in :set as a column, whatever :send sends")
+    (is (not-any? #(ok? s %) [{:mood :sad} {:nick :abc}]) "HoneySQL writes a keyword in :set as a column")
     (is (not-any? #(ok? s %) [{:score nil} {:id 1} {:mood :glad}]))
     (is (not (ok? s {})) "HoneySQL writes an empty :set as SET alone, which PostgreSQL refuses")
     (is (= ["should not be {}"] (me/humanize (m/explain s {} {:registry registry}))))
@@ -1010,13 +959,13 @@
   (is (= [] (check {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:name :excluded.name}}))))
 
 (deftest a-misspelt-option-is-an-error
-  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:send {String :untyped}} {:compare :loose} {:result :first} {:jdbc {:return-keys []}} {:jdbc {:return-keys "id"}}]]
+  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:compare :loose} {:result :first} {:jdbc {:return-keys []}} {:jdbc {:return-keys "id"}}]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (args {:select [:id] :from [:users]} (merge opts o))) (pr-str o))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (check {:select [:id] :from [:users]} (merge opts o))) (pr-str o))))
 
 (deftest insert-into-a-table-as-an-alias
   (let [body {:insert-into [:users :u] :values [{:group_id :?g :mood "sad" :score 1}] :on-conflict [:id] :do-update-set {:score :?s} :where [:> :u.score 0]}]
-    (is (= [] (check body)))
+    (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check body)))
     (is (= int4 (:g (args body))))))
 
 (deftest a-from-of-any-shape-is-read-or-left-alone
@@ -1057,18 +1006,14 @@
   (is (= [] (check '{:select [:t.x :u.id] :from [[:users :u]] :left-join [t [:= :t.uid :u.id]]}))))
 
 (deftest a-typed-use-wins-over-a-driver-object
-  (is (= {:x bigint} (h/arg-types docs {:select [:id] :from [:docs] :where [:and [:= :meta :?x] [:= :id :?x]]}))
-      "[:any {...}] says nothing either"))
+  (is (= {:x [:and bigint [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]]} (h/arg-types docs {:select [:id] :from [:docs] :where [:and [:= :meta :?x] [:= :id :?x]]}))
+      "a jsonb compared: the values sent as jsonb"))
 
 (deftest a-set-operations-row-keeps-a-null-columns-key
   (is (= [:map
           [:id [:int {:pg/identity :always :pg/type "bigint"}]]
           [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
          (row {:union [{:select [:id :nick] :from [:users]} {:select [:id :nick] :from [:users]}]} opts))))
-
-(deftest an-array-columns-elements-take-what-send-sends
-  (is (= {:p [:maybe [:or [:pg/array [:or text :keyword]] [:vector [:or text :keyword]]]]}
-         (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} (sends {} {Keyword "text" IPersistentVector :unknown})))))
 
 (deftest query-schema-carries-the-problems-check-finds
   (let [s (h/query-schema registry [:id] {:select [:nick_name] :from [:users] :where [:= :id :?id]} opts)]
@@ -1089,15 +1034,15 @@
 
 (deftest a-lenient-comparison-is-a-schema-for-every-kind-of-column
   (doseq [col [:role_key :nick :mail :level :kind]
-          o [{:compare :lenient} (sends {:compare :lenient} {Keyword :unknown})]
+          o [{:compare :lenient} {:compare :lenient}]
           :let [t (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= col :?x]} o))]]
     (is (m/schema t {:registry checked}) (pr-str col o t)))
-  (is (= [:maybe [:string {:pg/type "character varying"}]]
+  (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]]
          (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} {:compare :lenient})))
       "a CHECKed column's base type, without the CHECK and the length")
   (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]]
-         (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} (sends {:compare :lenient} {Keyword :unknown}))))
-      "and what :send sends untyped"))
+         (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} {:compare :lenient})))
+      "and a keyword, sent untyped"))
 
 (deftest nil-options-are-none
   (is (= [] (h/check {:app/x :int} {:select [1]} nil)))
@@ -1109,7 +1054,7 @@
       "longer than the column's 40"))
 
 (deftest insert-into-a-table-as-an-alias-with-columns
-  (is (= [] (check '{:insert-into [[:users :u] [:group_id :mood :score]] :values [[?a "sad" ?c]] :returning [:u.id]})))
+  (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check '{:insert-into [[:users :u] [:group_id :mood :score]] :values [[?a "sad" ?c]] :returning [:u.id]})))
   (is (= [] (check '{:insert-into (t) :values [{:a 1}]})) "a target code names: its columns are not judged")
   (is (= [] (check '{:update (t) :set {:a 1} :where [:= :id 1]}))))
 
@@ -1122,7 +1067,7 @@
     (is (= [:sequential {:min 1} bigint] (second (:ids types))) ":not-in as :in")
     (is (= (:lo types) (:hi types) integer))
     (is (= [:maybe (:lo types)] (:g types)) "IS DISTINCT FROM compares NULL as a value")
-    (is (= [:string {:pg/type "character varying"}] (:p types)))))
+    (is (= [:or [:string {:pg/type "character varying"}] :keyword] (:p types)))))
 
 (deftest a-select-of-every-set-operation-and-the-dot
   (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]
@@ -1133,7 +1078,8 @@
 (deftest a-clause-read-nowhere-is-a-problem
   (is (= [{:kind :unread-clause :clause :join-by}] (check {:select [:id] :from [:users] :join-by [:left [:groups [:= 1 1]]]})))
   (is (= [] (check {:select [:id] :from [:users] :for :update :window [:w {:partition-by [:id]}]})) "clauses that change nothing read here")
-  (is (= [{:kind :unknown-column :column :table}] (check {:insert-into :users :values [{:table 1 :group_id 1 :mood "sad" :score 1}]}))
+  (is (= [{:kind :unknown-column :column :table}
+          {:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:table 1 :group_id 1 :mood "sad" :score 1}]}))
       "a row's column named like a clause is a column"))
 
 (deftest query-schema-names-an-argument-its-args-lack
@@ -1176,7 +1122,7 @@
       "a CTE body does not see the tables of the statement its :with belongs to"))
 
 (deftest every-comparison-reads-its-value-as-the-columns
-  (doseq [w [[:< :mood "bogus"] [:between :mood "happy" "bogus"] [:is-distinct-from :mood "bogus"]]]
+  (doseq [w [[:< :mood "bogus"] [:between :mood [:cast "happy" :mood] "bogus"] [:is-distinct-from :mood "bogus"]]]
     (is (= [:enum-literal] (map :kind (check {:select [:id] :from [:users] :where w}))) (pr-str w))))
 
 (deftest a-subquery-in-a-row-is-read
@@ -1244,16 +1190,16 @@
         ro (fn [col] {:kind :read-only-column :table "sample.users" :column col})]
     (testing "NULL into a NOT NULL column"
       (is (= [(nn :score :set)] (check {:update :users :set {:score nil} :where [:= :id 1]})))
-      (is (= [(nn :group_id :values)] (check {:insert-into :users :values [{:group_id nil :mood "sad" :score 1 :closed_at 'now}]})))
-      (is (= [(nn :group_id :values)] (check {:insert-into :users :columns [:group_id :mood :score] :values [[nil "happy" 1]]})))
+      (is (= [(nn :group_id :values)] (check {:insert-into :users :values [{:group_id nil :mood [:cast "sad" :mood] :score 1 :closed_at 'now}]})))
+      (is (= [(nn :group_id :values)] (check {:insert-into :users :columns [:group_id :mood :score] :values [[nil [:cast "happy" :mood] 1]]})))
       (is (= [(nn :score :do-update-set)] (check {:insert-into :users :values [{:group_id 1 :score 1}] :on-conflict [:id] :do-update-set {:score nil}})))
-      (is (= [(nn :mood :values)] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}))
+      (is (= [(nn :mood :values)] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood [:cast "happy" :mood]}]}))
           "HoneySQL writes NULL for a key one row of :values lacks and another has")
       (is (= [] (check {:update :users :set {:nick nil :score :?score} :where [:= :id 1]})) "a nullable column, an argument")
-      (is (= [] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}
+      (is (= [{:kind :uncast-string :column :mood :value "happy" :type "mood"}] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}
                        (assoc opts :format {:values-default-columns #{:mood}})))
           "with sql/format's :values-default-columns the missing key is DEFAULT")
-      (is (= [] (check {:insert-into :users :columns [:group_id :score :mood] :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}))
+      (is (= [{:kind :uncast-string :column :mood :value "happy" :type "mood"}] (check {:insert-into :users :columns [:group_id :score :mood] :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood "happy"}]}))
           "under a column list, the keys reaching each column depend on the HoneySQL version"))
     (testing "a column only the database writes"
       (is (= [(ro :id)] (check {:update :users :set {:id 5} :where [:= :id 1]})))
@@ -1344,20 +1290,20 @@
   (is (= [] (check {:update :users :set {:nick :group_name} :where [:= :id 1]}))))
 
 (deftest a-string-reaches-an-enum-column-as-varchar
-  (let [check #(h/check registry %1 (merge (dissoc opts :send) %2))
+  (let [check #(h/check registry %1 (merge opts %2))
         uncast (fn [v] {:kind :uncast-string :column :mood :value v :type "mood"})]
     (is (= [(uncast "sad")] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {}))
         "pgjdbc sends a String as varchar, which no enum takes without a cast")
     (is (= [(uncast "sad")] (check {:update :users :set {:mood "sad"} :where [:= :id 1]} {})))
     (is (= [(uncast "sad") (uncast "happy")] (check {:select [:id] :from [:users] :where [:in :mood ["sad" "happy"]]} {})))
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:cast "sad" :mood]]} {})) "a cast is what it takes")
-    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:send unspecified})) "or stringtype=unspecified")
+    (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {})) "or stringtype=unspecified")
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood "sad"]} {:format {:inline true}})) "or the value inlined")
-    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {:send unspecified}))
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {}))
         "an argument too is untyped under stringtype=unspecified")))
 
 (deftest an-argument-cast-to-an-enum-is-of-the-enum
-  (is (= {:m [:enum {:pg/type "mood"} "happy" "sad"]}
+  (is (= {:m [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]}
          (update-vals (args {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]}) m/form))))
 
 (deftest kebab-and-camel-names-as-postgresql-folds-them
@@ -1425,8 +1371,8 @@
 
 (deftest each-problem-reads-as-what-to-do
   (is (= ["unknown column nik; did you mean: nick"
-          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, typed as :send sends it: varchar under pgjdbc's default); write [:cast \"sad\" :mood], or pass {:send {String :unknown}} when the connection sets stringtype=unspecified"]
-         (h/humanize (check {:select [:nik] :from [:users] :where [:= :mood "sad"]} (dissoc opts :send)))))
+          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:cast \"sad\" :mood]"]
+         (h/humanize (check {:select [:nik] :from [:users] :where [:= :mood "sad"]} opts))))
   (is (every? string? (h/humanize [{:kind :something-new}])) "a kind with no sentence still prints"))
 
 (def ^{:malli/schema (h/query-schema registry [:id] {:select [:nik] :from [:users] :where [:= :id :?id]} opts)} a-broken-query-fn identity)
@@ -1452,22 +1398,19 @@
       "PostgreSQL reads t.name as name(t)"))
 
 (deftest write-enum-names-what-an-extension-sends-for-an-enum
-  (let [types #(update-vals (args % (sends opts {Keyword :unknown})) m/form)]
-    (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad" :happy :sad]
+  (let [types #(update-vals (args % opts) m/form)]
+    (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} :happy :sad]
            (:m (types {:select [:id] :from [:users] :where [:= :mood :?m]})))
-        "the enum's labels kept, as strings and as keywords")
+        "the enum's labels kept, as keywords")
     (is (= [:enum {:pg/type "mood"} "happy" "sad" :happy :sad] (:m (types {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]})))
-        "an argument cast to an enum too")
-    (is (= {:m mood}
-           (update-vals (args {:select [:id] :from [:users] :where [:= :mood :?m]}) m/form))
-        "without it, the labels as strings")))
+        "an argument cast to an enum, as strings too")))
 
 (deftest keywords-sent-untyped-take-a-columns-labels
   (let [reg (pgmalli/registry {:registry {:pg.public/attempts [:map {:pg/table "public.attempts"}
                                                                [:id [:int {:pg/type "bigint"}]]
                                                                [:role [:string {:pg/type "character varying"}]]
                                                                [:status [:enum {:pg/constraints ["attempts_status_check"] :pg/type "character varying"} "active" "submitted"]]]}})
-        o (sends {} {Keyword :unknown})]
+        o {}]
     (is (= {:status [:enum {:pg/constraints ["attempts_status_check"] :pg/type "character varying"} "active" "submitted" :active :submitted]}
            (update-vals (h/arg-types reg {:select [:id] :from [:attempts] :where [:= :status :?status]} o) m/form))
         "a column with labels keeps them, as keywords too")
@@ -1483,15 +1426,15 @@
     (is (= [:E :e-mail] (map first (drop 1 (row {:select [[:nick :E] [:nick :e-mail]] :from [:users]}
                                                  (assoc opts :format {:quoted true})))))))
   (testing "IS [NOT] DISTINCT FROM takes NULL"
-    (is (= [:maybe [:string {:pg/type "character varying"}]]
+    (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]]
            (m/form (:n (args {:select [:id] :from [:users] :where [:is-distinct-from :nick :?n]}))))))
   (testing "an argument reaching an enum type's column as a String"
-    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
-           (check {:select [:id] :from [:users] :where [:= :mood :?m]} (dissoc opts :send))))
-    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
-           (check {:select [:id] :from [:users] :where [:= :mood :?m]} (sends (dissoc opts :send) {Keyword :unknown})))
+    (is (= []
+           (check {:select [:id] :from [:users] :where [:= :mood :?m]} opts)))
+    (is (= []
+           (check {:select [:id] :from [:users] :where [:= :mood :?m]} opts))
         "an extension sending a keyword as a String sends varchar all the same")
-    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} (dissoc opts :send)))))
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} opts))))
   (testing ":join-by leaves its tables open"
     (is (= [{:kind :unread-clause :clause :join-by}]
            (check {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:left [[:groups :g] [:= :g.id :u.group_id]]]}))))
@@ -1552,13 +1495,13 @@
              (check {:select [:id] :from [:hosts] :where [:between :seen "2020-01-01" "2021-01-01"]} {})))
       (is (= [{:kind :uncast-string :column :id :value "1" :type "integer"}] (check {:update :hosts :set {:id "1"}} {})))
       (is (= [{:kind :uncast-string :column :paths :value "{a}" :type "text[]"}] (check {:update :hosts :set {:paths "{a}"}} {})) "an array")
-      (is (= [] (check {:select [:id] :from [:hosts] :where [:= :born "2020-01-01"]} {:send unspecified})) "sent untyped")
+      (is (= [{:kind :uncast-string :column :born :value "2020-01-01" :type "date"}] (check {:select [:id] :from [:hosts] :where [:= :born "2020-01-01"]} {})) "sent untyped")
       (is (= [] (check {:select [:id] :from [:hosts] :where [:= :born :?b]} {})) "an argument arg-types types as a date"))
     (is (= [{:kind :uncast-string :column :ip :value "10.0.0.1" :type "inet"}] (check {:select [:id] :from [:hosts] :where [:= :ip "10.0.0.1"]} {})))
     (is (= [{:kind :uncast-string :column :flags :value "1010" :type "varbit"}] (check {:update :hosts :set {:flags "1010"}} {}))
         "bit takes varbit, which keeps the length")
     (is (= [{:kind :uncast-string :column :doc :value "{}" :type "jsonb"}] (check {:update :hosts :set {:doc "{}"}} {})))
-    (is (= [{:kind :uncast-string :column :flags :arg :f :type "varbit"}] (check {:select [:id] :from [:hosts] :where [:= :flags :?f]} {})))
+    (is (= [] (check {:select [:id] :from [:hosts] :where [:= :flags :?f]} {})))
     (is (= [] (check {:select [:id] :from [:hosts] :where [:= :ip :?ip]} {})) "an argument arg-types leaves :any may be an object of the type")
     (is (= [] (check {:update :hosts :set {:mask :?m} :where [:= :id 1]} {}))
         "an argument assigned to a nullable column may be nil, which PostgreSQL takes")
@@ -1625,7 +1568,7 @@
                                               [:m [:ref {:pg/type "mood"} :pg.public/mood]]]}}))
 
 (deftest a-check-list-narrows-writes-and-equality-not-other-comparisons
-  (let [q #(h/check check-list-registry {:select [:id] :from [:t] :where %} {:send unspecified})]
+  (let [q #(h/check check-list-registry {:select [:id] :from [:t] :where %} {})]
     (doseq [w [[:= :state "archived"] [:in :state ["archived"]] [:is-not-distinct-from :state "archived"]
                [:= "archived" :state] [:not [:<> :state "archived"]] [:not [:not [:= :state "archived"]]]]]
       (is (= [:enum-literal] (map :kind (q w))) (pr-str w)))
@@ -1640,27 +1583,33 @@
       (is (= [:enum-literal] (map :kind (q w))) (str (pr-str w) ": an enum type refuses the value however compared")))))
 
 (deftest an-argument-compared-with-a-check-list-takes-its-base-type-except-under-equality
-  (let [args #(h/arg-types check-list-registry {:select [:id] :from [:t] :where %})]
-    (is (= {:x [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]} (args [:= :state :?x])))
+  (let [args #(h/arg-types check-list-registry {:select [:id] :from [:t] :where %})
+        text [:or text :keyword]]
+    (is (= {:x [:enum
+                {:pg/type "text" :pg/constraints ["t_state_check"]}
+                "open"
+                "closed"
+                :open
+                :closed]} (args [:= :state :?x])))
     (is (= {:x text} (args [:<> :state :?x])))
     (is (= {:x text} (args [:< :state :?x])))
     (is (= {:x (in-list text)}
            (args [:not-in :state :?x])))
-    (is (= {:x [:enum {:pg/type "mood"} "ok" "sad"]} (h/arg-types check-list-registry {:select [:id] :from [:t] :where [:<> :m :?x]} {:send unspecified}))
+    (is (= {:x [:enum {:pg/type "mood"} :ok :sad]} (h/arg-types check-list-registry {:select [:id] :from [:t] :where [:<> :m :?x]} {}))
         "an enum type keeps its labels")
-    (is (= {:x (in-list [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"])}
+    (is (= {:x (in-list [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed" :open :closed])}
            (args [:in :state :?x])))
     (is (= {:lo text :hi text} (args [:between :state :?lo :?hi])))
     (is (= {:x [:maybe text]} (args [:is-distinct-from :state :?x])))
     (is (= {:x text} (args [:not [:= :state :?x]])) "NOT = is <>")
     (is (= {:x integer} (args [:<> :n :?x])) "an integer column's list, its base type")
     (is (= {:x [:enum {:pg/type "integer" :pg/constraints ["t_n_check"]} 1 2]} (args [:= :n :?x])))
-    (is (= {:x [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"] :y text}
+    (is (= {:x [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed" :open :closed] :y text}
            (h/arg-types check-list-registry {:update :t :set {:state :?x} :where [:<> :state :?y]}))
         "the write keeps the list, the comparison in the same statement does not")
-    (is (= {:x [:or text :keyword]}
-           (h/arg-types check-list-registry {:select [:id] :from [:t] :where [:<> :state :?x]} (sends {} {Keyword :unknown})))
-        "an extension that sends labels as keywords sends any keyword compared with the base type")))
+    (is (= {:x text}
+           (h/arg-types check-list-registry {:select [:id] :from [:t] :where [:<> :state :?x]} {}))
+        "a keyword, sent untyped, compared with the base type")))
 
 (deftest null-in-any-case-is-sql-null
   (is (= [{:kind :not-null-violation :table "sample.users" :column :score :clause :set}]
@@ -1668,7 +1617,7 @@
   (is (= [] (check {:select [:id] :from [:users] :where [:is :nick :NULL]})) "not a column named NULL"))
 
 (deftest not-negates-through-and-or-only-and-each-occurrence-on-its-own
-  (let [q #(map :kind (h/check check-list-registry {:select [:id] :from [:t] :where %} {:send unspecified}))
+  (let [q #(map :kind (h/check check-list-registry {:select [:id] :from [:t] :where %} {}))
         c [:= :state "archived"]]
     (is (= [:enum-literal] (q [:not [:case [:= :state "archived"] true :else false]])) "a CASE's condition is not negated")
     (is (= [:enum-literal] (q [:not [:= :id [:case [:= :state "archived"] 1 :else 2]]])))
@@ -1676,11 +1625,11 @@
     (is (= [] (q [:not [:or [:= :state "archived"] [:= :id 1]]])))))
 
 (deftest an-sql-word-in-any-case-names-its-column-as-postgresql-does
-  (is (= [:map [:current_date ['inst? {:pg/type "date"}]]] (row {:select [:CURRENT_DATE] :from [:users]})))
+  (is (= [:map [:current_date [:time/local-date {:pg/type "date"}]]] (row {:select [:CURRENT_DATE] :from [:users]})))
   (is (= [:map [:?column? [:maybe :any]]] (row {:select [:NULL] :from [:users]}))))
 
 (deftest a-check-lists-labels-go-as-keywords-assigned-too
-  (let [s (:v (h/arg-types check-list-registry {:update :t :set {:state :?v}} (sends {} {Keyword :unknown})))]
+  (let [s (:v (h/arg-types check-list-registry {:update :t :set {:state :?v}} {}))]
     (is (m/validate s :open {:registry check-list-registry}))
     (is (not (m/validate s :archived {:registry check-list-registry})))))
 
@@ -1702,17 +1651,14 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (h/values-schema registry :users {:schema "sample" :nope 1})))
     (is (= [:map [:s [:string {:pg/type "character varying"}]]] (row {:select [["s" :s]] :from [:users]} {:schema "sample"}))
         "a String goes as varchar by default")
-    (is (= [:map [:s text]] (row {:select [["s" :s]] :from [:users]} {:schema "sample" :send unspecified}))
-        "untyped, PostgreSQL types it text")
-    (is (= [:uncast-string] (map :kind (h/check reg {:update :t :set {:i :?x}} (sends {} {Keyword "inet"})))) "an inet column with an :or of its own")
     (is (not (ok? (:d (h/arg-types reg {:update :t :set {:dl :?d}})) 1)) "1.5 is no integer label")
-    (is (= {:x [:any {:pg/type "json"}]} (h/arg-types reg {:update :t :set {:j :?x}} {:send unspecified})))))
+    (is (= {:x [:any {:pg/type "json"}]} (h/arg-types reg {:update :t :set {:j :?x}} {})))))
 
 (deftest an-enum-domains-checks-stay-around-its-labels
   (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
                                           :pg.public/good [:and [:ref {:pg/type "mood"} :pg.public/mood] [:not= "ok"]]
                                           :pg.public/t [:map {:pg/table "public.t"} [:g [:ref {:pg/type "good"} :pg.public/good]]]}})
-        t (:g (h/arg-types reg {:update :t :set {:g :?g}} (sends {} {Keyword :unknown})))]
+        t (:g (h/arg-types reg {:update :t :set {:g :?g}} {}))]
     (is (not (m/validate t "ok" {:registry reg})))))
 
 (deftest each-rule-of-a-row-written-holds
@@ -1722,24 +1668,17 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/short [:string {:pg/type "character varying(10)" :max 5 :pg/max-length 10}]
                                           :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "short"} :pg.public/short]]]}})]
     (is (not (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :short] :c]]})) "abcdef" {:registry reg})) "a cast keeps a CHECK's :max"))
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:string {:pg/type "inet"}]]]}})]
-    (is (= [] (h/check reg {:update :t :set {:i :?x}} {:send {String "inet"}})) "a String sent as inet"))
-  (is (= [:map [:a text]] (row {:select [["x" :a]]} {:schema "sample" :send {String "text"}})))
-  (is (= {:x [:or integer :symbol]}
-         (args {:select [:id] :from [:users] :where [:= :group_id :?x]} (sends {:schema "sample"} {Symbol "smallint"})))
+  (is (m/validate (:x (args {:select [:id] :from [:users] :where [:= :group_id :?x]} {:schema "sample"})) (short 1) {:registry registry})
       "an integer column takes a smallint")
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes a table as a keyword" (h/values-schema registry 'users {:schema "sample"}))))
 
-(deftest a-collection-row-goes-where-postgresql-takes-its-array
+(deftest a-java-array-goes-where-postgresql-takes-its-array
   (let [unnest {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
         any {:select [:id] :from [:users] :where [:= :score [:any :?xs]]}
-        xs #(:xs (args %1 {:schema "sample" :send (only {Sequential %2})}))]
-    (is (= [:any {:pgmalli/untyped :type}] (xs unnest :unknown)) "unnest(unknown) is ambiguous")
-    (is (= [:any {:pgmalli/untyped :type}] (xs unnest "text[]")) "a text is no integer, assigned")
-    (is (= [:any {:pgmalli/untyped :type}] (xs unnest "bigint[]")) "a bigint is no integer column's own value")
-    (is (not= :any (xs unnest "smallint[]")) "a smallint is")
-    (is (not= :any (xs any :unknown)) "= ANY types an untyped array from the column")
-    (is (= [:any {:pgmalli/untyped :type}] (xs any "text[]")) "integer = text has no operator")))
+        ok? #(m/validate (:xs (args %1 {:schema "sample"})) %2 {:registry registry})]
+    (is (not (ok? unnest (into-array String ["1"]))) "a text is no integer, assigned")
+    (is (ok? unnest (short-array [1])) "a smallint is")
+    (is (not (ok? any (into-array String ["1"]))) "integer = text has no operator")))
 
 (deftest a-row-schema-keys-as-each-format-writes-it-back
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line :string]]}})
@@ -1754,14 +1693,12 @@
     (is (= [:MixedCase] (keys {:format {:quoted true}})))))
 
 (deftest the-same-query-and-options-give-equal-schemas
-  (let [q {:update :users :set {:score [:cast :?x :integer] :nick :?n} :where [:= :id 1]}
-        o (sends opts {java.net.URI :unknown})]
-    (is (= (args q o) (args q o)) "a class pgmalli has no schema for is one [:fn] per class")
-    (is (= "java.net.URI" (-> (args q o) :n last last (pgmalli/describe) (#(re-find #"java.net.URI" %)))))))
+  (let [q {:update :users :set {:score [:cast :?x :integer] :nick :?n} :where [:= :id 1]}]
+    (is (= (args q opts) (args q opts)) "a class's schema is one [:fn] per class")))
 
 (deftest an-argument-of-a-resolving-function-takes-the-others-type
   (is (= {:x [:maybe bigint]} (args {:select [:id] :from [:users] :where [:> [:greatest :id :?x] 5]})))
-  (is (= {:n [:maybe [:string {:pg/type "character varying"}]]} (args {:update :users :set {:nick [:coalesce :?n :nick]} :where [:= :id 1]})))
+  (is (= {:n [:maybe [:or [:string {:pg/type "character varying"}] :keyword]]} (args {:update :users :set {:nick [:coalesce :?n :nick]} :where [:= :id 1]})))
   (is (= {:x [:maybe bigint]} (args {:select [:id] :from [:users] :where [:= :id [:nullif :?x 0]]})))
   (is (= {:a [:any {:pgmalli/untyped :position}] :b [:any {:pgmalli/untyped :position}]} (args {:select [[[:least :?a :?b] :m]]})) "arguments alone resolve to nothing pgmalli tells"))
 
@@ -1790,7 +1727,7 @@
   (let [recent {:with [[:recent {:select [:id :nick] :from [:users]}]]}]
     (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
            (row (merge recent {:select [:id :nick] :from [:recent]}))))
-    (is (= {:n [:string {:pg/type "character varying"}]} (args (merge recent {:select [:id] :from [:recent] :where [:= :nick :?n]}))))
+    (is (= {:n [:or [:string {:pg/type "character varying"}] :keyword]} (args (merge recent {:select [:id] :from [:recent] :where [:= :nick :?n]}))))
     (is (= [{:kind :unknown-column :column :mail}] (check (merge recent {:select [:mail] :from [:recent]})))
         "a column its SELECT does not give is none")
     (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}] [:b {:select [:id] :from [:a]}]] :select [:id] :from [:b]}))
@@ -1810,14 +1747,12 @@
     (is (= [] (check {:select [:x.n] :from [:users [[:lateral {:select [[:id :n]] :from [:groups] :where [:= :groups.id :users.group_id]}] :x]]})))))
 
 (deftest an-unnest-tables-argument-is-an-array-of-where-its-column-goes
-  (let [o (sends opts {clojure.lang.IPersistentVector "bigint[]" clojure.lang.Sequential "varchar[]"})
-        ids [:or [:pg/array bigint] [:vector bigint]]]
+  (let [o opts
+        ids [:pg/array bigint]]
     (is (= {:ids ids} (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]} o))
         "an unnest of one, named by its alias")
     (is (= {:ids ids} (args {:update :users :set {:nick "x"} :from [[[:unnest :?ids] [:x {:columns [:i]}]]] :where [:= :users.id :x.i]} o))
         "a column its alias lists")
-    (is (= {:ids [:pg/array bigint]} (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]}))
-        "pgjdbc's long[] alone by default")
     (is (= {:ids [:any {:pgmalli/untyped :position}]} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o)) "a column that goes nowhere typed")))
 
 (deftest a-json-builder-is-json-as-its-type-is-read
@@ -1846,8 +1781,8 @@
 
 (deftest an-unnest-into-a-nullable-column-takes-nil-elements
   (let [t (:n (args {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [:?s] [[:unnest :?n]]]}]}
-                    (sends opts {clojure.lang.IPersistentVector "varchar[]"})))]
-    (is (m/validate t ["a" nil] {:registry registry}))))
+                    opts))]
+    (is (m/validate t (into-array String ["a" nil]) {:registry registry}))))
 
 (deftest a-subquery-reading-a-cte-is-read-under-it
   (is (= {:n integer} (args {:with [[:users {:select [[[:cast 1 :integer] :nick]]}]] :select [:s.nick] :from [[{:select [:nick] :from [:users]} :s]] :where [:= :s.nick :?n]}))
@@ -1893,12 +1828,6 @@
     (is (m/validate (h/set-schema reg :t) {:slug nil} {:registry reg}))
     (is (= :maybe (first (:s (h/arg-types reg {:insert-into :t :values [{:id 1 :slug :?s}]})))))))
 
-(deftest a-collection-interface-sends-each-clojure-collection-implementing-it
-  (is (= {:ids [:or [:pg/array bigint] [:sequential bigint]]}
-         (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send {java.util.List :unknown}))))
-  (is (= {:ids [:or [:pg/array bigint] [:set bigint] [:sequential bigint]]}
-         (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send {java.util.Collection :unknown})))))
-
 (deftest an-argument-assigned-to-an-unknown-table-is-any
   (is (= [:any {:pgmalli/untyped :type}] (:n (args {:update :nosuch :set {:nick :?n} :where [:= :id :?id]})))))
 
@@ -1913,19 +1842,20 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
                                                         [:na [:maybe [:vector {:pg/type "numeric[]"} [decimal? {:pg/type "numeric"}]]]]
                                                         [:da [:maybe [:vector {:pg/type "double precision[]"} [:double {:pg/type "double precision"}]]]]]}})
-        o {:send {clojure.lang.IPersistentVector "bigint[]"}}]
+        o {}]
     (doseq [c [:na :da]]
-      (is (m/validate (:v (h/arg-types reg {:update :t :set {c :?v} :where [:= :id 1]} o)) [1 2] {:registry reg}) (name c)))))
+      (is (m/validate (:v (h/arg-types reg {:update :t :set {c :?v} :where [:= :id 1]} o)) (long-array [1 2]) {:registry reg}) (name c)))))
 
 (deftest a-lenient-comparison-takes-nil-elements
   (let [o (assoc opts :compare :lenient)]
     (is (m/validate (:v (args {:select [:id] :from [:users] :where [:in :id :?v]} o)) [1 nil] {:registry registry}))
-    (is (m/validate (:v (args {:select [:id] :from [:users] :where [:= :id [:any :?v]]} (sends o {clojure.lang.IPersistentVector :unknown}))) [1 nil] {:registry registry}))))
+    (is (m/validate (:v (args {:select [:id] :from [:users] :where [:= :id [:any :?v]]} o)) (into-array Long [1 nil]) {:registry registry}))))
 
 (deftest a-written-row-takes-no-keyword-honeysql-would-write-as-a-column
-  (let [s (h/values-schema registry :users (sends opts {clojure.lang.Keyword :unknown}))]
+  (let [s (h/values-schema registry :users opts)]
     (is (not (m/validate s {:group_id 1 :score 1 :mood :sad} {:registry registry})))
-    (is (m/validate s {:group_id 1 :score 1 :mood "sad"} {:registry registry}))))
+    (is (not (m/validate s {:group_id 1 :score 1 :mood "sad"} {:registry registry})) "a String goes as varchar, which an enum column refuses")
+    (is (m/validate s {:group_id 1 :score 1 :mood [:lift :sad]} {:registry registry}) "a keyword label as one parameter, untyped")))
 
 (deftest an-argument-takes-nil-where-any-use-does
   (is (= {:v [:maybe bigint]} (args {:select [:id] :from [:users] :where [:or [:= :id :?v] [:is-distinct-from :id :?v]]})))
@@ -1936,14 +1866,13 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/feel [:enum "a" "b"]
                                           :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
                                                         [:fs [:maybe [:vector {:pg/type "feel[]"} [:ref {:pg/type "feel"} :pg.public/feel]]]]]}})
-        t (:v (h/arg-types reg {:update :t :set {:fs :?v} :where [:= :id 1]} {:send {clojure.lang.IPersistentVector :unknown}}))]
-    (is (m/validate t ["a"] {:registry reg}) "an untyped array PostgreSQL reads as feel[]")
-    (is (not (m/validate t (into-array String ["a"]) {:registry reg})) "a String[] goes as varchar[], which feel[] does not take")))
+        t (:v (h/arg-types reg {:update :t :set {:fs :?v} :where [:= :id 1]}))]
+    (is (= [:any {:pgmalli/untyped :type}] t) "no Java array goes as feel[]: a String[] goes as varchar[], which feel[] does not take, a vector as jsonb")))
 
 (deftest a-written-row-takes-no-vector-honeysql-would-write-as-a-row
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
                                                         [:tags [:maybe [:vector {:pg/type "text[]"} [:string {:pg/type "text"}]]]]]}})
-        s (h/values-schema reg :t {:send {clojure.lang.IPersistentVector :unknown}})]
+        s (h/values-schema reg :t)]
     (is (not (m/validate s {:id 1 :tags ["a"]} {:registry reg})))
     (is (m/validate s {:id 1 :tags (into-array String ["a"])} {:registry reg}))))
 
@@ -1959,36 +1888,33 @@
     (is (not (ok? v (assoc row :score :seq))) "a column in VALUES, which PostgreSQL refuses")
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] is v as one parameter; a vector not headed by a keyword a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be either \"happy\" or \"sad\"" "should be either :default or [:default]" "should be a HoneySQL expression, a vector headed by a keyword" "should be a word HoneySQL writes as one, such as :current_timestamp"]}
+    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be either :default or [:default]" "should be a HoneySQL expression, a vector headed by a keyword" "should be a word HoneySQL writes as one, such as :current_timestamp"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (is (not-any? (fn [r] (some #(and (sequential? %) (keyword? (first %)) (not= [:default] %)) (vals r)))
                   (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))
         "generated as the values a column takes, no expression")))
 
-(deftest an-enum-column-takes-its-labels-as-strings-where-a-string-goes-untyped
-  (let [o (dissoc opts :send)
+(deftest an-enum-column-takes-its-labels-as-keywords-not-as-strings
+  (let [o opts
         q {:select [:id] :from [:users] :where [:= :mood :?m]}
         ok? #(m/validate %1 %2 {:registry registry})]
     (is (not (ok? (:m (args q o)) "sad")) "pgjdbc sends a String as varchar, which PostgreSQL neither compares with nor assigns to an enum")
     (is (not (ok? (h/set-schema registry :users o) {:mood "sad"})))
-    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}] (check q o)) "as check reports it")
-    (is (ok? (:m (args q)) "sad"))
+    (is (= [] (check q o)) "an argument is arg-types'")
     (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} :happy :sad]
-           (:m (args q (sends o {Keyword :unknown})))) "a keyword sent untyped as the label it names")
+           (:m (args q o))) "a keyword sent untyped as the label it names")
     (is (ok? (:x (args {:select [[[:cast :?x :mood] :m]]} o)) "sad") "PostgreSQL casts a varchar to an enum")))
 
 (deftest a-class-sent-as-text-is-held-to-no-check-on-text
   (let [reg (pgmalli/registry {:registry {:pg.public/roles [:map {:pg/table "public.roles"}
                                                             [:k [:and {:pg/constraints ["f"] :pg/type "character varying"} [:string {:max 255 :pg/type "character varying"}] [:re "^[a-z0-9-]+$"]]]
                                                             [:n [:and {:pg/type "numeric"} 'decimal? [:> 0]]]]}})
-        a (h/arg-types reg {:insert-into :roles :values [{:k :?k :n :?n}]} {:send {clojure.lang.Keyword "character varying"}})]
+        a (h/arg-types reg {:insert-into :roles :values [{:k :?k :n :?n}]})]
     (is (m/validate (:k a) :store-manager {:registry reg}) "the text an application makes of a keyword is its own")
     (is (not (m/validate (:k a) "Bad!" {:registry reg})) "a string is held to the CHECK")
     (is (not (m/validate (:n a) -3 {:registry reg})) "a number to a number column's CHECK, whatever its class")))
 
 (deftest a-boxed-or-other-java-array-is-typed-by-its-elements
-  (is (= {:ids [:pg/array bigint]}
-         (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send (only {(class (make-array Long 0)) "bigint[]"})))))
   (is (m/validate (:ids (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]})) (into-array Long [1 2]) {:registry registry})
       "pgjdbc sends a Long[] as a bigint[]"))
 
@@ -2037,8 +1963,8 @@
 
 (deftest an-unnest-tables-column-assigned-by-update-or-cast-types-its-argument
   (is (= {:ids [:pg/array bigint] :ss [:pg/array int4]}
-         (args {:update :users :set {:score :r.s} :from [[[:unnest :?ids :?ss] [:r {:columns [:i :s]}]]] :where [:= :users.id :r.i]} (dissoc opts :send))))
-  (is (m/validate (:ns (args {:update :users :set {:nick [:cast :r.n :text]} :from [[[:unnest :?ids :?ns] [:r {:columns [:i :n]}]]] :where [:= :users.id :r.i]} (dissoc opts :send)))
+         (args {:update :users :set {:score :r.s} :from [[[:unnest :?ids :?ss] [:r {:columns [:i :s]}]]] :where [:= :users.id :r.i]} opts)))
+  (is (m/validate (:ns (args {:update :users :set {:nick [:cast :r.n :text]} :from [[[:unnest :?ids :?ns] [:r {:columns [:i :n]}]]] :where [:= :users.id :r.i]} opts))
                   (into-array String ["a"]) {:registry registry})
       "an array of what casts to the type"))
 
@@ -2234,7 +2160,7 @@
     (is (= [:map [:x [:enum {:pg/type "mood"} "happy" "sad"]]] (row {:select [[[:mood [:inline "sad"]] :x]]}))
         "a type of the registry's")
     (is (= [:map [:x [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row {:select [[[:int4 :?n] :x]]})))
-    (is (= [:map [:x [:maybe ['inst? {:pg/type "date"}]]]] (row {:select [[[:date :closed_at] :x]] :from [:users]}))
+    (is (= [:map [:x [:maybe [:time/local-date {:pg/type "date"}]]]] (row {:select [[[:date :closed_at] :x]] :from [:users]}))
         "date(timestamptz) is a function: no cast")
     (let [{:keys [v d]} (args {:select [[[:timestamptz :?v] :x] [[:date :?d] :y]]})]
       (is (m/validate v (java.time.OffsetDateTime/now) malli-opts) "timestamptz($1) is a cast, which takes a timestamptz")
@@ -2270,7 +2196,10 @@
               (flatten [((requiring-resolve 'malli.error/humanize) (m/explain x 42 malli-opts))])))))
 
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
-  (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
+  (is (= {:now [:or
+                [:time/instant {:pg/type "timestamptz"}]
+                ['inst? {:pg/type "timestamptz"}]
+                :time/offset-date-time]
           :d [:any {:pg/type "interval"}]
           :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
@@ -2284,7 +2213,7 @@
         reg (pgmalli/registry {:registry {:app/input shapes
                                           :pg.public/jobs [:map {:pg/table "public.jobs"}
                                                            [:input [:ref {:pg/type "jsonb"} :app/input]]]}})
-        o {:send {clojure.lang.IPersistentMap "jsonb"}}
+        o {}
         ok? #(m/validate %1 %2 {:registry reg})
         arg (:input (h/arg-types reg {:insert-into :jobs :values [{:input :?input}]} o))
         row (h/row-schema reg {:select [:input] :from [:jobs]} o)]
@@ -2311,11 +2240,10 @@
   (is (= [:any {:pgmalli/untyped :type}] (:s (args {:insert-into :users :values [{:group_id 1 :score 1 :nick [:case [:= :score :?s] "a" :else "b"]}]})))))
 
 (deftest an-unnest-tables-column-is-read-as-a-parameter-is
-  (let [o (sends opts {IPersistentVector "bigint[]"})
-        ids #(:ids (args % o))
+  (let [ids #(:ids (args % opts))
         q (fn [op] {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [op :users.id :i]]})]
-    (is (m/validate (ids (q :is-not-distinct-from)) [1 nil] {:registry registry}) "IS NOT DISTINCT FROM takes NULL")
-    (is (not (m/validate (ids (q :=)) [1 nil] {:registry registry})) "= matches no NULL")
+    (is (m/validate (ids (q :is-not-distinct-from)) (into-array Long [1 nil]) {:registry registry}) "IS NOT DISTINCT FROM takes NULL")
+    (is (not (m/validate (ids (q :=)) (into-array Long [1 nil]) {:registry registry})) "= matches no NULL")
     (is (= (ids {:select [:id] :from [:users] :where [:= :users.group_id [:cast :x.i :integer]] :join [[[:unnest :?ids] [:x {:columns [:i]}]] true]})
            (ids {:select [:id] :from [:users] :join [[[:unnest :?ids] [:x {:columns [:i]}]] true]
                  :where [:exists {:select [1] :from [:groups] :where [:= :groups.id [:cast :x.i :integer]]}]}))
@@ -2324,17 +2252,17 @@
 (deftest an-insert-selects-argument-takes-nil-where-the-select-may-drop-its-row
   (let [q (fn [select] {:insert-into [[:users [:group_id :score]] select]})
         g #(:g (args (q %)))
-        ss #(:ss (args (q %) (sends opts {IPersistentVector "integer[]"})))
+        ss #(:ss (args (q %) opts))
         plain (g {:select [:?g :?s]})
         elements (ss {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})]
     (is (= plain (:g (args {:insert-into :users :values [{:group_id :?g :score :?s}]}))) "a row of arguments reaches the column, as one of :values does")
-    (is (not (m/validate elements [1 nil] {:registry registry})) "unnest of arguments drops no element")
+    (is (not (m/validate elements (into-array Integer [(int 1) nil]) {:registry registry})) "unnest of arguments drops no element")
     (is (= plain (g {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})))
     (doseq [more [{:where [:is-not :?g nil]} {:having true} {:limit 1} {:offset 1} {:group-by [:?s]}
                   {:from [[[:unnest :?ss] [:x {:columns [:s]}]] :groups]}
                   {:from [[[:unnest :?ss] [:x {:columns [:s]}]]] :join [:groups [:= :groups.id 1]]}]]
       (is (= [:maybe integer] (g (merge {:select [:?g :?s]} more))) (str (pr-str more) ": nil, and no bounds"))
-      (is (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) [1 nil] {:registry registry}) (pr-str more)))
+      (is (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) (into-array Integer [(int 1) nil]) {:registry registry}) (pr-str more)))
     (is (= [:maybe integer] (g {:select-distinct [:?g :?s]})))
     (is (m/validate (:n (args {:insert-into [[:users [:nick]] {:select [:?n] :where false}]})) (apply str (repeat 41 "x")))
         "PostgreSQL checks a length, a range or a CHECK only on a row it writes")))
@@ -2411,20 +2339,21 @@
 
 (deftest an-operator-over-any-or-all-is-boolean-and-compares-the-elements
   (is (= [:map [:hit [:maybe [:boolean {:pg/type "boolean"}]]]] (row {:select [[[:= :id [:any [:array [1 2]]]] :hit]] :from [:users]})))
-  (is (= {:x text} (args {:select [:id] :from [:users] :where [:= :?x [:any [:array [[:cast :nick :text]]]]]}))
+  (is (= {:x [:or text :keyword]} (args {:select [:id] :from [:users] :where [:= :?x [:any [:array [[:cast :nick :text]]]]]}))
       "x = ANY(a) takes a's element type"))
 
 (deftest a-parameter-a-call-may-resolve-several-ways-takes-the-values-of-each
   (is (= {:n [:maybe [:or 'decimal? 'integer? :int]]} (args {:select [:*] :from [[[:generate_series 1 :?n] :g]]}))
       "an int, an int8 or a numeric each picks its overload")
-  (is (= {:at [:maybe [:or 'inst? :time/local-date-time :time/offset-time :time/offset-date-time]]}
+  (is (= {:at [:maybe
+               [:or :time/local-date-time 'inst? :time/offset-time :time/instant :time/offset-date-time]]}
          (args {:select [[[:timezone :nick :?at] :t]] :from [:users]}))))
 
 (deftest an-array-cast-casts-each-element
   (is (= (args {:select [[[:cast :?k :text] :a]]}) (args {:select [[[:array [:?k] :text] :a]]}))))
 
 (deftest an-argument-of-several-uses-takes-what-each-takes
-  (let [native (dissoc opts :send)]
+  (let [native opts]
     (is (= {:id [:maybe integer]}
            (args {:select [[[:cast :?id :bigint] :a]] :from [:groups] :where [:= :id :?id]} native))
         "a cast takes what converts to a bigint, a comparison an integer column's values; the selected cast nil")
@@ -2436,7 +2365,7 @@
         "nil where any use takes it")))
 
 (deftest a-pg-catalog-relation-has-the-columns-of-the-catalog-snapshot
-  (is (= {:names [:pg/array [:string {:pg/type "name"}]]}
+  (is (= {:names [:pg/array [:or [:string {:pg/type "name"}] :keyword]]}
          (args {:select [:c.oid] :from [[:pg_class :c]] :where [:= :c.relname [:any :?names]]})))
   (is (= [:map [:relname [:string {:pg/type "name"}]]]
          (row {:select [:c.relname] :from [[:pg_class :c]]} opts)))

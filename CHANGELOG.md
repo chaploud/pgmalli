@@ -10,16 +10,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * **Options.** Each removed option is an error that names its replacement. The error is
   raised when the schema is built, so a namespace whose `:malli/schema` passes one fails to
   load.
-  * `{:stringtype :unspecified}` is `{:send {String :unknown}}`.
-  * `:write` is `:send`, a map of the classes your application sends to the type each goes as
-    ([docs/queries.md](docs/queries.md#what-your-application-sends)):
-    * `:write {"text" [:or :string :keyword]}` and `:write {:enum [:string :keyword]}` are
-      `{:send {clojure.lang.Keyword :unknown}}`, or the type your extension sends a keyword as.
-    * `:write {:array [...]}` is `{:send {clojure.lang.IPersistentVector :unknown}}`, and the
-      same for each collection class you send, or the array type your extension sends it as
-      (`"bigint[]"`); `unnest` needs a typed one.
-    * `:write {"T" s}` is the class of `s`'s values mapped to `"T"`. Leave out a class pgjdbc
-      already sends as `"T"`.
+  * `:write` and `:stringtype` are removed: an error names the one sending (below).
   * `:qualified?`, `:kebab?`, `:lower?` and `:nil-columns` are removed: pass
     `{:builder-fn next.jdbc.result-set/as-unqualified-maps}` to next.jdbc
     ([docs/reading-rows.md](docs/reading-rows.md#the-builder)).
@@ -30,14 +21,29 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `{:builder-fn next.jdbc.result-set/as-unqualified-maps}`; convert keys to another spelling in
   your application. A query selecting one name twice (`:u.id :g.id`) is one key, the last
   column's, as the builder keeps it: alias one of them.
-* **Rows are read one way,** the way
-  [docs/reading-rows.md](docs/reading-rows.md#the-one-reading) gives: timestamps (with and
-  without time zone) as `Instant`s, as `next.jdbc.date-time/read-as-instant` reads them, arrays
-  as vectors of their elements, json and jsonb parsed with keyword keys, enum values as strings,
-  every other type as pgjdbc returns it. pgmalli ships no extension: install the
-  `ReadableColumn` extension of that page in your application. A json column's override or CHECK
-  shape now holds for what is read.
-  * `:time` and `:read` are removed: an error names the one reading.
+* **Rows are read one way and arguments sent one way,** as the extension of
+  [docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending) reads and sends them.
+  pgmalli ships no extension: install that page's code in your application, once.
+  * Read: timestamps (with and without time zone) as `Instant`s, dates as `LocalDate`s, times as
+    `LocalTime`s (a `timetz` as pgjdbc's `java.sql.Time`, an `interval` as its `PGInterval`),
+    arrays as vectors of their elements, json and jsonb parsed with keyword keys, enum values as
+    strings, every other type as pgjdbc returns it. A json column's override or CHECK shape now
+    holds for what is read.
+  * Sent: pgjdbc's `setObject` (a `String` as `varchar`, a Java array as an array of its
+    elements' type), `next.jdbc.date-time` (an `Instant`, a `LocalDate`, a `LocalDateTime`, a
+    `java.util.Date` untyped), a keyword's text untyped, a map and a vector as `jsonb`
+    ([docs/queries.md](docs/queries.md#what-your-application-sends)). A vector is no array: pass
+    a Java array (`(long-array ids)`, `(into-array String xs)`) where an array goes. A connection
+    with `stringtype=unspecified` sends otherwise than pgmalli types.
+  * An enum argument takes a keyword label (`:active`), which goes untyped, or a string cast
+    (`[:cast :?s :user_status]`), not a string, which goes as `varchar`. In a row written into
+    a table, give a label as `[:lift :active]`: HoneySQL writes a keyword in `:values` as a
+    column. A date or a time column's argument takes its type's java.time value too (a
+    `LocalDate` a `date`'s), and a string literal compared with one is `:uncast-string`.
+  * An argument of a function's `"any"` parameter (`concat`, `format`, `jsonb_build_object`)
+    takes a value sent typed alone, not a keyword, a date sent untyped or nil: PostgreSQL
+    cannot type the parameter then.
+  * `:time`, `:read` and `:send` are removed: an error names the one reading or the one sending.
   * `pgmalli.core/transformer` is removed: read rows with the extension instead of decoding them.
 * `pgmalli.core/read-options` is removed.
 * `h/row-schema`'s `:pgmalli/untold` property is removed: with unqualified keys, every key is
@@ -62,15 +68,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     an array of one, is typed too.
   * An argument of several uses takes what each of them takes, whatever their order, and nil
     where any of them does; on 0.3.3 its first use typed it.
-  * An argument compared with or assigned to an enum column takes its labels as strings only
-    where a `String` goes untyped (`{:send {String :unknown}}`) or cast: PostgreSQL refuses a
-    varchar there. Under pgjdbc's default it takes a `PGobject` instead.
   * An instrumented function's return is checked against more: `h/row-schema` types what was
     nullable `:any`, such as a call of a function or an operator or a CTE's or a subquery's
     column.
   * `h/check` now reports a select or ORDER BY expression comparing an unknown column, or an
-    enum with a literal outside its labels; a string sent as a type the column does not take,
-    whatever type `:send` sends it as, not only `varchar`; a string assigned to a reg* column
+    enum with a literal outside its labels; a string literal assigned to a reg* column
     other than `regclass`; a CHECK's list of numbers compared with a value outside it; and a
     column a CTE or a subquery does not give.
 * `:overrides` takes two keys: a column, `:schema.table/column`, with its schema, and a
@@ -100,13 +102,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/arg-types` (and `h/query-schema`) type an argument where a whole row goes, `:values
   [:?row]`, `:values :?rows` and `:set :?row`, as `h/values-schema` and `h/set-schema` type the
   row ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
-* `{:read {:enum :keyword}}`: an extension reading every enum type's value as a keyword
-  ([docs/reading-rows.md](docs/reading-rows.md#your-own-extensions)).
-
-* `:send` says what your application sends, as pgjdbc's `setObject` decides it by a value's
-  class ([docs/queries.md](docs/queries.md#what-your-application-sends)). pgjdbc's own classes
-  include its boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and the arrays
-  of java.sql dates, times and timestamps.
+* The one sending includes pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`,
+  `UUID[]` and the arrays of java.sql dates, times and timestamps.
 * `:jdbc` takes the options your application passes to next.jdbc
   ([docs/reading-rows.md](docs/reading-rows.md#the-options-of-nextjdbc)): `:return-keys` adds
   RETURNING to a write; `:builder-fn` is `as-unqualified-maps`, and another builder,
@@ -119,14 +116,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `[:+ :n 1]`, `:current_timestamp`, a column in `:set`, `[:lift v]` with `v` of the column's type), and generates values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
-* Array arguments: a Clojure collection whose class `:send` sends as an array type or
-  `:unknown`, and a Java array, typed by its elements (`[:pg/array element]`), where it is
+* Array arguments: a Java array, typed by its elements (`[:pg/array element]`), where it is
   compared with `= ANY(?)`, assigned to an array column, or passed to `unnest`, which takes
   only a typed array ([docs/queries.md](docs/queries.md#what-your-application-sends)).
 * `h/arg-types` types more arguments
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)): under a cast, with what
-  PostgreSQL casts to the type (a collection sent untyped not to a number or boolean type, whose
-  input refuses an array literal); an argument of `coalesce`, `greatest`, `least` or `nullif`; one
+  PostgreSQL casts to the type, its CHECKs and ranges left out where every use of the cast is
+  compared; an argument of `coalesce`, `greatest`, `least` or `nullif`; one
   compared in a select or ORDER BY expression; one of an `unnest` in FROM, as an array of the
   type of where its column goes; one compared with `ANY(array)` as the array's element; an
   element of `[:array [...] :text]`, as cast; one of a function or an operator PostgreSQL may
@@ -182,7 +178,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `:overrides` takes one column, `:schema.table/column`: its schema replaces that column's
   value, read and written, NULL-ability and CHECKs still the database's
   ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
-  read under `{:read {:json :parsed}}`, written for what `:send` sends as its type.
+  read parsed, written for a map and a vector, which go as `jsonb`.
 * `pgmalli.main` suggests the column's `:overrides` key for an unrendered type, and
   `{:skip reason}` for an unrendered CHECK.
 
@@ -198,15 +194,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `coalesce`, `CASE` and the like resolve as PostgreSQL's `select_common_type`: `CASE` takes its
   `ELSE` value first, and a `varchar` before a `text` stays `varchar`. A typed string among
   numbers is no longer typed as the numbers (PostgreSQL refuses it).
-* A json or jsonb column a CHECK or an override shapes takes that shape as an argument for what
-  `:send` sends as its type, not any value of the class.
+* A jsonb column a CHECK or an override shapes takes that shape as an argument for a map and a
+  vector, not any value of the class.
 * A domain whose CHECK lists its values
   (`CREATE DOMAIN lbl AS text CHECK (VALUE IN ('a', 'b'))`) keeps its base type
   (`[:enum {:pg/type "text"} "a" "b"]`). `h/check` no longer reads it as an enum type, so a
   string sent as `varchar` to it is not `:uncast-string`.
-* A number is checked against a number column's CHECKs whatever its class. A value sent as a
-  text type (a keyword sent as `varchar`) is not checked against the column's CHECKs on text:
-  PostgreSQL checks the text your extension makes of it.
+* A number is checked against a number column's CHECKs whatever its class. A keyword is not
+  checked against the column's CHECKs on text: PostgreSQL checks the text sent of it.
+* A `citext` column, or a domain over one, takes as an argument what a `text` column takes.
 * An argument in `:limit` or `:offset` takes nil (no limit).
 * Cast to an integer type, a fraction is held to the range half a unit wider, as PostgreSQL
   rounds it. An argument cast to a number domain with a CHECK list takes another

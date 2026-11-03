@@ -36,11 +36,11 @@
       "other comparisons compare it as its base type"))
 
 (deftest a-literal-is-a-number-label-as-postgresql-reads-it
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :n "1"]} {:send {String :unknown}}))
+  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :n "1"]} {:format {:inline true}}))
       "an untyped '1' is 1")
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :v "2"]} {:send {String :unknown}})))
+  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :v "2"]} {:format {:inline true}})))
   (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :n 1.0]})))
-  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:in :n ["0x1" "2" " 1 " "0b10" "0x_1"]]} {:send {String :unknown}}))
+  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:in :n ["0x1" "2" " 1 " "0b10" "0x_1"]]} {:format {:inline true}}))
       "PostgreSQL 16 reads 0x, 0o and 0b integers")
   (is (= [{:kind :enum-literal :column :n :value 3 :allowed [1 2]}]
          (h/check registry {:select [:id] :from [:t] :where [:= :n 3]}))

@@ -1,7 +1,6 @@
 (ns pgmalli.impl.jdbc
   "The JDBC side: what a column comes back as under the one reading (docs/reading-rows.md) and
-   what PostgreSQL's JDBC driver takes for it, under the options that say what an application
-   sends; and the row shapes next.jdbc's as-unqualified-maps returns. as-read and
+   what PostgreSQL takes for it under the one sending (docs/reading-rows.md); and the row shapes next.jdbc's as-unqualified-maps returns. as-read and
    pgmalli.honeysql both read columns and key rows here."
   (:require [clojure.string :as str]
             [clojure.walk]
@@ -23,8 +22,6 @@
    [:schema {:optional true} :string]
    [:jdbc {:optional true} [:map
                             [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
-   ;; {class type}, which options! checks
-   [:send {:optional true} [:map-of :any :any]]
    [:compare {:optional true} [:enum :strict :lenient]]
    [:result {:optional true} [:enum :one]]
    [:format {:optional true} :map]])
@@ -59,20 +56,6 @@
 
 ;;; what an application sends
 
-(def ^:private collections
-  "The Clojure collections an application may send as an array, a value of each, and the malli
-   schema of one, :pgmalli/element in an element's place."
-  [[[] [:vector :pgmalli/element]] [#{} [:set :pgmalli/element]] ['(nil) [:sequential :pgmalli/element]]])
-
-(defn- collection-schema
-  "The schema of the Clojure collections a value of class c may be (an interface such as
-   java.util.List or java.util.Collection takes several); nil for none."
-  [^Class c]
-  (let [ss (for [[v s] collections :when (instance? c v)] s)
-        ;; a sequential takes a vector
-        ss (if (some #(= :sequential (first %)) ss) (remove #(= :vector (first %)) ss) ss)]
-    (when (seq ss) (shape/either ss nil))))
-
 (defn- class-fn
   "[:fn] of the values of class name n, pred telling them."
   [n pred]
@@ -88,19 +71,6 @@
                  ;; column's, which array-type puts in
                  (when (and (.isArray c) (not= c accept/bytes-class)) [:pg/array :pgmalli/element])
                  (class-fn (.getName c) (fn [x] (instance? c x)))))))
-
-(defn- sent-name
-  "A :send type by its name (types/canonical-name): :unknown, a type types knows or an array of
-   one; nil otherwise."
-  [t]
-  (if (= :unknown t) t (when (types/entry (or (types/element t) (when (string? t) t))) (types/canonical-name t))))
-
-(defn send-map
-  "{class type} an application sends: pgjdbc's (accept/class-types) but a Character, which a
-   char? on every string argument would say nothing of, with :send merged over it, a class
-   :send maps to nil left out."
-  [{:keys [send]}]
-  (into {} (remove (comp nil? val)) (merge (dissoc (into {} accept/class-types) Character) send)))
 
 (def ^:private jdbc-read
   "The keys of :jdbc pgmalli reads."
@@ -119,10 +89,16 @@
        " pass it to next.jdbc as {:builder-fn next.jdbc.result-set/as-unqualified-maps}"))
 
 (def ^:private one-reading
-  (str "pgmalli types rows as one reading makes them: timestamps as Instants (next.jdbc.date-time/read-as-instant),"
+  (str "pgmalli types rows as one reading makes them: timestamps as Instants, dates as LocalDates, times as LocalTimes,"
        " arrays as vectors, json and jsonb parsed (keyword keys), enum values as strings, every other"
        " type as pgjdbc returns it; the ReadableColumn extension that reads so is in"
-       " https://github.com/chaploud/pgmalli/blob/main/docs/reading-rows.md"))
+       " https://github.com/chaploud/pgmalli/blob/main/docs/reading-rows.md#the-one-reading-and-sending"))
+
+(def ^:private one-sending
+  (str "pgmalli types arguments as one sending sends them: pgjdbc's setObject (a String as varchar),"
+       " next.jdbc.date-time (an Instant, a LocalDate, a LocalDateTime, a java.util.Date untyped), a keyword's"
+       " text untyped, a map and a vector as jsonb; the SettableParameter extension that sends so is in"
+       " https://github.com/chaploud/pgmalli/blob/main/docs/reading-rows.md#the-one-reading-and-sending"))
 
 (defn- the-builder?
   "Whether f is next.jdbc.result-set/as-unqualified-maps: the function, its var or its symbol,
@@ -133,16 +109,12 @@
     (or (= sym f) (and v (or (= v f) (= @v f))))))
 
 (defn options!
-  "opts when pgmalli takes them: their keys and values; :send a map of classes to a type types
-   knows (a name or an alias), an array of one (\"bigint[]\"), :unknown or nil. An error names
-   what it does not take, with the one meant; :write and :stringtype of pgmalli 0.3 name :send."
+  "opts when pgmalli takes them: their keys and values. An error names what it does not take,
+   with the one meant; an option of an earlier version what replaced it."
   [opts]
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
-    (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
-      (fail! (str (pr-str old) " is no longer read: what an application sends is :send, a map of classes to the type"
-                  " each goes as ({String :unknown} for stringtype=unspecified); see https://github.com/chaploud/pgmalli/blob/main/docs/queries.md#what-your-application-sends"
-                  " and " error/changelog)
-             old))
+    (when-let [old (not-empty (select-keys opts [:send :write :stringtype]))]
+      (fail! (str (pr-str old) " is no longer read: " one-sending "; see " error/changelog) old))
     (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns]))]
       (fail! (str (pr-str old) " is no longer read: " builder-only "; see " error/changelog) old))
     (when-let [old (not-empty (select-keys opts [:time :read]))]
@@ -150,17 +122,6 @@
     (when (contains? opts :return-keys)
       (fail! (str ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}; see " error/changelog)
              (select-keys opts [:return-keys])))
-    (when (contains? opts :send)
-      (when-not (map? (:send opts))
-        (fail! (str ":send is a map of classes to types, {clojure.lang.Keyword :unknown}; got " (pr-str (:send opts))) (:send opts)))
-      (doseq [[c t :as e] (:send opts)]
-        (cond (not (class? c))
-              (fail! (str ":send's key " (pr-str c) " is no class; a key is the class of a value sent (String, clojure.lang.Keyword)") e)
-              (and (some? t) (not (sent-name t)))
-              (fail! (str ":send's " (pr-str c) " goes as " (pr-str t) ", which is no type of docs/types.md, an array of one (\"bigint[]\")"
-                          " or :unknown for a value sent untyped (an enum's or a domain's value too)"
-                          (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
-                     e))))
     (let [jdbc (:jdbc opts)]
       (doseq [k (when (map? jdbc) (keys jdbc))
               :let [meant (when-not (next-jdbc-options k) (error/suggest k jdbc-read))]
@@ -175,47 +136,37 @@
     (checked! @options opts)
     opts))
 
-(def ^:private class-order (zipmap (map first accept/class-types) (range)))
-
 (def ^:private sends
-  "[m entries] of a :send: send-map with each type by its name (sent-name), and its entries in
-   pgjdbc's order (accept/class-types), then by class name. Memoized: every argument reads them."
-  (memoize (fn [send]
-             (let [m (update-vals (send-map {:send send}) sent-name)]
-               [m (sort-by (fn [[c]] [(class-order c Long/MAX_VALUE) (str c)]) m)]))))
+  "{class type} the one sending sends (accept/class-types) but a Character, which a char? on
+   every string argument would say nothing of."
+  (dissoc (into {} accept/class-types) Character))
 
-(def ^:private write-rows*
-  (memoize (fn [send array?]
-             (vec (for [[c t] (second (sends send))
-                        :let [coll (collection-schema c)
-                              array (or (.isArray ^Class c) (and coll (or (= :unknown t) (types/element t))))]
-                        :when (= array? (boolean (and array (not= c accept/bytes-class))))]
-                    [(if (and array coll) coll (class-schema c)) t])))))
+(def ^:private sent-rows
+  "{array? [[schema type] ...]}: of sends, in accept/class-types' order, an array argument's (a
+   Java array but byte[]) and another's."
+  (group-by (fn [[s]] (= [:pg/array :pgmalli/element] s))
+            (for [[c t] accept/class-types :when (contains? sends c)] [(class-schema c) t c])))
 
 (defn write-rows
-  "[schema type] for each class send-map sends, in pgjdbc's order (accept/class-types) and then
-   by name, by array? an array argument's (a Clojure
-   collection or a Java array sent as an array type or untyped, the collection's elements
-   :pgmalli/element) or another's."
+  "[schema type class] for each class the one sending sends, in accept/class-types' order, by array?
+   an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
+   none under ::nothing-sent, where a type is taken as the driver reads it alone."
   [opts array?]
-  (write-rows* (:send opts) array?))
+  (if (::nothing-sent opts) [] (get sent-rows array? [])))
 
 (defn sent-type
   "The type a literal value goes to PostgreSQL as: :unknown under sql/format's :inline, which
-   writes it into the SQL; otherwise as send-map sends its class, nil for a class it does not
-   list."
-  [value {:keys [format] :as opts}]
+   writes it into the SQL; otherwise as the one sending sends its class, nil for a class it does
+   not send."
+  [value {:keys [format]}]
   (if (:inline format)
     :unknown
-    (let [[m entries] (sends (:send opts))]
-      ;; its class's entry, else its superclasses' and interfaces' in pgjdbc's order (write-rows's)
-      (or (get m (class value))
-          (some (fn [[c t]] (when (instance? c value) t)) entries)))))
+    (or (get sends (class value))
+        (some (fn [[c t]] (when (and (contains? sends c) (instance? c value)) t)) accept/class-types))))
 
-(defn string-sends
-  "The types a String is sent as: send-map's for String and Character."
-  [opts]
-  (vec (distinct (keep (first (sends (:send opts))) [String Character]))))
+(def string-sends
+  "The types a String is sent as."
+  (vec (distinct (keep sends [String Character]))))
 
 (defn- pg-type [s] (:pg/type (shape/props s)))
 
@@ -250,10 +201,10 @@
 
 (defn read-type
   "A column's schema (without NULL) as the one reading (docs/reading-rows.md) makes it: dates a
-   java.sql.Date, timestamps (with and without time zone) an Instant, an array a vector of its
+   LocalDate, times a LocalTime, timestamps (with and without time zone) an Instant, an array a vector of its
    elements so read, json and jsonb parsed as the registry shapes them; or, pgjdbc?, as pgjdbc
    returns them with no extension (dates and timestamps inst?, an array a java.sql.Array, json a
-   PGobject). Either way: time and timetz a java.sql.Time, an interval a PGInterval, citext,
+   PGobject, time a java.sql.Time). Either way: timetz a java.sql.Time, an interval a PGInterval, citext,
    bit(n > 1) and bit varying a PGobject (these :any), real a Float, bit(1) a Boolean, numeric
    a Double for NaN."
   [schema pgjdbc?]
@@ -266,15 +217,14 @@
           driver-read [driver-read {:pg/type t}]
           ;; the driver's own object, whatever an override says the value is
           (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
-          (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
+          (= :time/offset-time head) ['inst? {:pg/type t}]
           :else (driver-type schema pgjdbc?))))
 
 (declare write-type)
 
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
-   column; :unnest, unnest(?) assigned): the collections and Java arrays :send sends as an
-   array (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
+   column; :unnest, unnest(?) assigned): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
    element type is one of t's own (accept/holds?), as a column takes a value, its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
@@ -323,13 +273,19 @@
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's
    argument is an array of its elements' (array-type); otherwise the types read-type shares
-   with it (:time extends both sides), and what :send sends as its type, which is all of it
+   with it, and what the one sending sends as its type, which is all of it
    where read-type has the driver's object (:any)."
   [schema opts]
   (if (array-column? schema)
     ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
     (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) :assign)
-    (let [t (driver-type schema true)
+    (let [k (shape/kind schema)
+          t (driver-type schema true)
+          ;; a date or time column takes the java.time value its type is (the one reading's, which
+          ;; goes untyped or as the type) and pgjdbc's inst? (a java.sql value, a java.util.Date, an Instant)
+          t (if (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k))
+              (shape/update-base t #(shape/either (distinct [(shape/domain-base schema) %]) %))
+              t)
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
           ;; keeps those a class sent goes as (pgmalli.honeysql's labelled-type)
@@ -370,8 +326,6 @@
     (when-not (shape/read-row? s)
       (shape/not-a-row! registry name "as-read"))
     (shape/row-map s)))
-
-(def ^:private no-sends (zipmap (map first accept/class-types) (repeat nil)))
 
 (defn- through-domain
   "A column of a domain whose type the driver returns as something else (a date as a
@@ -422,13 +376,22 @@
         d (shape/ref-target schemas (shape/non-null s))
         ;; (a number domain's: its checks read the number; another's may hold code only the registry runs)
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
-    (write-type (through-domain schemas s #(write-type % (assoc opts :send no-sends))) opts)))
+    (write-type (through-domain schemas s #(write-type % (assoc opts ::nothing-sent true))) opts)))
 
 (def pg-object
   "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
    the type its getType names, which is known at run time alone."
   (class-fn "org.postgresql.util.PGobject"
             (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
+
+(def typed
+  "The values the one sending sends with a type of their own (nil and a value sent untyped are
+   not): what a parameter PostgreSQL takes the type of from the value alone takes (a function's
+   \"any\" argument)."
+  (shape/either (distinct (concat (for [rows (vals sent-rows) [s t] rows :when (not= :unknown t)]
+                                    (clojure.walk/postwalk-replace {:pgmalli/element :any} s))
+                                  [pg-object]))
+                :any))
 
 (defn column-write-type
   "column-write-type*: a column pgjdbc returns as a PGobject (json, jsonb, citext, bit(n > 1))

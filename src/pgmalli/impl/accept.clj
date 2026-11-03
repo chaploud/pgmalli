@@ -1,14 +1,14 @@
 (ns pgmalli.impl.accept
-  "Which parameter goes where, in two steps: the type pgjdbc sends a value of a class as, and
+  "Which parameter goes where, in two steps: the type the one sending sends a value of a class as, and
    whether PostgreSQL takes a parameter of that type where a value of another goes: compared
    with it (an operator), assigned to it (INSERT, UPDATE) or cast to it. Types are the names
    pgmalli.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
-   a caller passes a domain as its base type. pgmalli.accept-test holds both against pgjdbc
-   and PostgreSQL."
+   a caller passes a domain as its base type. pgmalli.accept-test holds both against the one
+   sending and PostgreSQL."
   (:require [pgmalli.impl.resolve :as resolve]
             [pgmalli.impl.types :as types]))
 
-;;; what pgjdbc sends
+;;; what an application sends
 
 (defn- array "The class of an array of c." [c] (class (make-array c 0)))
 (defn- named "The class named n; nil where the runtime has none." [n] (try (Class/forName n) (catch Throwable _ nil)))
@@ -17,18 +17,22 @@
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
 
 (def classes
-  "[class type schema]: the type pgjdbc's setObject sends a value of class as, with no extension
-   and its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
-   Character with setString, a Java array as an array of its elements' type; nil for a class it
-   sends no type of its own for. schema is the malli schema of a value of class, for the classes
-   pgjdbc sends and those an application's extensions commonly do; nil for a Java array."
+  "[class type schema]: the one sending (docs/reading-rows.md#the-one-reading-and-sending), the
+   type a value of class goes to PostgreSQL as, :unknown for one sent untyped, which PostgreSQL
+   types from where it goes; schema is the malli schema of a value of class, nil for a Java
+   array. pgjdbc's setObject with its default stringtype (varchar): BigInt and BigInteger as
+   setNumber sends a Number, a Character with setString, a Java array as an array of its
+   elements' type; next.jdbc.date-time's setTimestamp (an Instant, a LocalDate, a LocalDateTime,
+   a java.util.Date) and setDate (a java.sql.Date), untyped; and the doc's extension: a
+   java.sql.Time with setTime, untyped, a keyword its text untyped, a map and a vector as jsonb.
+   A value goes as its class's row, else as the first row of a superclass or interface of it."
   (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
    [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
    [Double "double precision" :double] [Float "real" 'float?]
    [Boolean "boolean" :boolean] [String "character varying" :string] [Character "character varying" 'char?]
-   [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate "date" :time/local-date]
+   [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate :unknown :time/local-date]
    [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]
-   [java.time.LocalDateTime "timestamp without time zone" :time/local-date-time]
+   [java.time.LocalDateTime :unknown :time/local-date-time]
    [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
    [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
@@ -42,20 +46,24 @@
    (some-> (named "java.sql.Date") array-of (vector "date[]"))
    (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
    (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))
-   [java.time.Instant nil :time/instant] [java.util.Date nil 'inst?] [clojure.lang.Keyword nil :keyword] [clojure.lang.Symbol nil :symbol]
-   [clojure.lang.IPersistentMap nil [:map-of :any :any]] [clojure.lang.IPersistentVector nil [:vector :any]]
-   [clojure.lang.IPersistentSet nil [:set :any]] [clojure.lang.Sequential nil [:sequential :any]]]))
+   [java.time.Instant :unknown :time/instant]
+   ;; before java.util.Date, its superclass
+   (some-> (named "java.sql.Time") (vector :unknown 'inst?))
+   [java.util.Date :unknown 'inst?]
+   [clojure.lang.Keyword :unknown :keyword]
+   [clojure.lang.IPersistentMap "jsonb" [:map-of :any :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
 (def class-types
-  "[class type] of classes, for the classes pgjdbc sends a type of its own for, in its order."
-  (vec (for [[c t] classes :when t] [c t])))
+  "[class type] of classes, in its order."
+  (mapv (fn [[c t]] [c t]) classes))
+
+(def text-untyped
+  "The classes sent untyped whose text is any text, which PostgreSQL reads as a value of a string
+   type or an enum's label; the others sent untyped are dates and times, a column's own values
+   where it is of their type (pgmalli.impl.jdbc's write-type)."
+  #{clojure.lang.Keyword})
 
 ;;; what PostgreSQL takes
-
-(defn answers?
-  "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one."
-  [t]
-  (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]))))
 
 (defn- string-type?
   "Whether t is of PostgreSQL's string category, or an extension's type of strings (citext),
@@ -63,6 +71,12 @@
   [t]
   (boolean (or (= "S" (types/category t))
                (when-let [e (and (string? t) (types/entry t))] (and (:extension e) (= :string (:schema e)))))))
+
+(defn answers?
+  "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one, or an
+   extension's type of strings (citext)."
+  [t]
+  (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]) (string-type? t))))
 
 (def ^:private numbers (set (for [[t e] types/types :when (#{:integer :exact :float} (:eval e))] t)))
 
@@ -96,16 +110,18 @@
 
 (def ^:private compares?
   "Whether PostgreSQL resolves operator = for a value of type t and one of type sent, in some
-   version the catalog holds."
+   version the catalog holds; an extension's type of strings (citext), whose operators the
+   catalog does not hold, as text, which it casts to implicitly."
   (memoize
    (fn [t sent]
-     (let [os (resolve/overloads :operators "=")]
+     (let [os (resolve/overloads :operators "=")
+           [t sent] (map #(if (and (string? %) (not= "S" (types/category %)) (string-type? %)) "text" %) [t sent])]
        (boolean (some (fn [v] (resolve/call :operators "=" [t sent] (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in))))
                       (:versions @types/catalog)))))))
 
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context (:compare,
-   :assign or :cast). sent :unknown is a value sent untyped (:send's :unknown), which PostgreSQL
+   :assign or :cast). sent :unknown is a value sent untyped, which PostgreSQL
    types from the context. A type sent that pgmalli does not know (an extension's) is taken: its
    extension's casts are not in the catalog."
   [t sent context]

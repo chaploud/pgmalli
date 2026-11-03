@@ -317,7 +317,8 @@
                                 (let [s (m/schema (:x (h/arg-types registry q opts)) {:registry registry})]
                                   [q (for [v (vals oracle/values)
                                            :let [sent (pjdbc/sent-type v {})]
-                                           :when (and sent (held? sent) (not (m/validate s v)))]
+                                           ;; a date or time sent untyped is its type's own value alone, by design (accept/text-untyped)
+                                           :when (and sent (or (not= :unknown sent) (accept/text-untyped (class v))) (held? sent) (not (m/validate s v)))]
                                        v)]))
                               places))]
     (with-open [con (jdbc/get-connection ds)]

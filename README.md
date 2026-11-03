@@ -229,10 +229,12 @@ schema names its constraint in `:pg/constraint`, which humanize's `:wrap` can re
 ## Rows read through next.jdbc
 
 pgjdbc does not return the registry's types. pgmalli types rows as one reading makes them:
-timestamps as `Instant`s (`next.jdbc.date-time/read-as-instant`), arrays as vectors, json and
-jsonb parsed with keyword keys, enum values as strings, every other type as pgjdbc returns it.
-Install the `ReadableColumn` extension of
-[docs/reading-rows.md](docs/reading-rows.md#the-one-reading) in your application; `as-read`
+timestamps as `Instant`s, dates as `LocalDate`s, times as `LocalTime`s, arrays as vectors, json
+and jsonb parsed with keyword keys, enum values as strings, every other type as pgjdbc returns
+it; and arguments as one sending sends them: pgjdbc's `setObject` (a `String` as `varchar`),
+`next.jdbc.date-time` (an `Instant`, a `LocalDate`, a `LocalDateTime` untyped), a keyword's
+text untyped, a map and a vector as `jsonb`. Install the extension of
+[docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending) in your application; `as-read`
 gives the row as next.jdbc then builds it, to validate results as they come back:
 
 ```clojure
@@ -313,16 +315,12 @@ can match no row ([docs/queries.md](docs/queries.md#stricter-than-postgresql)):
 ```
 
 HoneySQL sends a string as a parameter, and pgjdbc sends it as `varchar`, which no enum column
-takes. Cast it, or tell `h/check` your connection sends a `String` untyped
-(`stringtype=unspecified`):
+takes. Cast it; an argument takes a keyword label, which goes untyped
+([what your application sends](docs/queries.md#what-your-application-sends)):
 
 ```clojure
 (h/check registry {:select [:id] :from [:users] :where [:= :status "active"]})
 ;; => [{:kind :uncast-string, :column :status, :value "active", :type "user_status"}]
-
-(h/check registry {:select [:id] :from [:users] :where [:= :status "active"]}
-         {:send {String :unknown}})
-;; => []
 ```
 
 An INSERT must carry the columns its insert schema requires:
@@ -344,7 +342,7 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list when written into the column or compared with `=`, `IN` or `IS NOT DISTINCT FROM`; with `:allowed` |
-| `:uncast-string` | a string sent typed (`varchar` under pgjdbc's default, or the type `:send` sends it as) where the column's type takes none (an enum, a number, a date ...); not where `:send` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}` |
+| `:uncast-string` | a string literal, which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...); not under `:format {:inline true}`. A named argument is `h/arg-types`' |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
@@ -522,9 +520,9 @@ NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are 
 datasets included, but for a type the driver reads as an object of its own: an `inet`, read as a
 PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read; the
 `:public.hosts/ip` override above holds for what is written. A json or jsonb column is read
-parsed ([the one reading](docs/reading-rows.md#the-one-reading)), so its shape holds for what is
-read, and an argument takes it for the classes `:send` sends as the column's type
-(`{clojure.lang.IPersistentMap "jsonb"}`); without those, an argument is the driver's object. `generate` checks every key against
+parsed ([the one reading](docs/reading-rows.md#the-one-reading-and-sending)), so its shape holds for what is
+read, and an argument to a jsonb column takes it for a map and a vector, which go as `jsonb`; a
+json column's argument is the driver's object. `generate` checks every key against
 the schemas generated: a column and a constraint name must be theirs, `{:skip reason}` goes
 under a constraint name and nothing else does, and a value must be a malli schema (a qualified
 name passes, as your registry's). An error names the key meant; a type key (`:inet`) names the
