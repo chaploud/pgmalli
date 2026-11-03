@@ -253,6 +253,14 @@
         ;; [[:unnest ...] [:t {:columns [:x]}]]: t.f reads as f(t), the function on a scalar result,
         ;; so a function's alias is not held to the columns it lists
         (alias? b) [nil (alias-name b) nil (when-not (vector? a) listed)]
+        ;; [[:with-ordinality [:f args...] alias]]: f WITH ORDINALITY alias, named after the function
+        ;; without one
+        (and (nil? b) (vector? a) (= :with-ordinality (first a)))
+        (let [[_ f al] a]
+          [nil (cond (alias? al) (alias-name al)
+                     (and (vector? f) (keyword? (first f))) (folded (last (str/split (name (first f)) #"\.")))
+                     :else "with_ordinality")
+           nil])
         ;; [[:f args...]]: a table function, named after the function
         (and (nil? b) (vector? a) (keyword? (first a))) [nil (folded (last (str/split (name (first a)) #"\."))) nil]
         ;; [subquery]: one with no alias

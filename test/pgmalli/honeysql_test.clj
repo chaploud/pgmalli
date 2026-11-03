@@ -1816,3 +1816,13 @@
                                                         [:ds [:maybe [:vector {:pg/type "dd[]"} [:ref {:pg/type "dd"} :pg.public/dd]]]]]}})]
     (is (m/validate (:x (h/arg-types reg {:select [:id] :from [:t] :where [:= :n :?x]})) 1N {:registry reg}) "a BigInt as a numeric")
     (is (not (m/validate (:x (h/arg-types reg {:update :t :set {:n :?x} :where [:= :id 1]})) -1N {:registry reg})) "held to the domain's CHECK")))
+
+(deftest a-domain-arrays-elements-read-as-the-drivers-objects
+  (let [reg (pgmalli/registry {:registry {:pg.public/posint [:int {:pg/type "integer" :min 1}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:ps [:vector {:pg/type "posint[]"} [:ref {:pg/type "posint"} :pg.public/posint]]]]}})]
+    (is (m/validate (pgmalli/as-read reg :pg.public/t {:read {:array :vector} :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}})
+                    {:ps [(Object.)]} {:registry reg})
+        "pgjdbc returns a domain's elements as PGobjects")))
+
+(deftest a-with-ordinality-table-function-is-named-by-its-alias
+  (is (= [] (check {:select [:r.value :r.ordinality] :from [:users [[:with-ordinality [:jsonb_array_elements :users.nick] :r]]]}))))

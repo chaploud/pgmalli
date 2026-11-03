@@ -443,7 +443,11 @@
   "read-type of a column schema (without NULL) of a registry's schemas, a domain read as the
    driver reads its base; :read may still name the domain's type."
   [schemas s {:keys [read] :as opts}]
-  (or (shape/read-as read s) (read-type (through-domain schemas s opts read-type) opts)))
+  (let [;; the driver returns an array's elements of a domain (but an enum's) as PGobjects
+        x (when (array-column? s) (last s))
+        target (when (and (vector? x) (= :ref (first x))) (get schemas (last x)))
+        s (if (and target (not= :enum (shape/head target))) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
+    (or (shape/read-as read s) (read-type (through-domain schemas s opts read-type) opts))))
 
 (defn column-write-type
   "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the

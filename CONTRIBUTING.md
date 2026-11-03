@@ -71,8 +71,13 @@ type, and as LIMIT), sent a fixed list of values: one of each class of
 schema refuses and the stricter rule of docs/queries.md does not leave out (a class sent as
 a type `accept/holds?` says the column does not hold, or `accept/accepts?` under a cast; a
 comparison with NULL or with a value outside a CHECK's list; NULL set into a NOT NULL
-column), and where `holds?` says a value goes and PostgreSQL refuses its type. The table
-`kinds` gives it the types the other tables lack; mutants do not draw from it.
+column), and where `holds?` says a value goes and PostgreSQL refuses its type. Besides the
+oracle schema's columns, it creates the schema `matrix`, whose table `types` holds, for each
+type of `pgmalli.impl.types` (an extension's where the server has it) and the typmods
+numeric(10,2), varchar(5), char(3), timestamp(3) and bit(4), a column of the type, of its
+array, of a domain over it and of an array of that domain. A type added to
+`pgmalli.impl.types` without `:literals` needs a value in `pgmalli.oracle/samples`, the
+text of the row the table holds. Mutants draw from neither `matrix` nor the table `kinds`.
 
 `pgmalli.oracle-test` holds the false positives, the refused returns, the columns described
 otherwise and the argument matrix's failures at none in `bb test:jvm`.
