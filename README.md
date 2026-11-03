@@ -551,7 +551,7 @@ A `[:ref ...]` to your own schema needs a registry holding it:
 
 | | |
 |---|---|
-| PostgreSQL | 16 and later, to generate |
+| PostgreSQL | 16, 17 and 18, to generate; a newer one is a warning (its new functions and types are not typed), an older one an error |
 | Clojure | 1.11.4 and later |
 | JDK | 25 (what CI runs) |
 | malli | 0.20.0 and later |
@@ -604,7 +604,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/reference-cycle` | tables referencing each other in a cycle |
 | `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |
 | `:pgmalli.error/db-unavailable`, `psql-missing` | the database, or psql, out of reach |
-| `:pgmalli.error/fault` | pgmalli's own fault (please report it), or psql failing to read the catalog: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |
+| `:pgmalli.error/fault` | pgmalli's own fault (please report it), or reading the catalog failing: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |
 
 Each error's ex-data also carries `:cognitect.anomalies/category`, and `:given`, `:known` and
 `:did-you-mean` (the names probably meant, as a problem of `h/check` names them) where they apply.

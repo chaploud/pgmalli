@@ -139,12 +139,20 @@
                                 {:given k} e)))))
     overrides))
 
+(defn major-version
+  "\"PostgreSQL 17\" of the server's \"PostgreSQL 17.6 (Debian ...)\": a minor upgrade changes no
+   schema. A server older than 16 is an error."
+  [version]
+  (let [major (parse-long (or (re-find #"\d+" version) "0"))]
+    (when (< major 16)
+      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL 16 or later") {:given version}))
+    (str "PostgreSQL " major)))
+
 (defn- read-schema
   "[database-version facts] of one schema, read from the database."
   [db schema]
   (let [ir (ir/from-db (assoc db :schema schema))]
-    ;; the major version alone: a minor upgrade changes no schema
-    [(str/replace (:database_version ir) #"^(PostgreSQL \d+)\.\d+$" "$1") (pattern/facts ir)]))
+    [(major-version (:database_version ir)) (pattern/facts ir)]))
 
 (defn from-database
   "Generated data for one schema, read from the database."

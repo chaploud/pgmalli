@@ -90,6 +90,11 @@
                                                                            {:kind :type :table "public.t" :column "p" :type "pair"}
                                                                            {:kind :type :table "public.t" :column "z" :type "timestamp with time zone"}]))))))
 
+(deftest a-server-newer-than-the-catalog-snapshot-is-a-warning
+  (is (nil? (#'main/version-warning "PostgreSQL 18")))
+  (is (= "PostgreSQL 19 is newer than the versions this pgmalli knows (16, 17, 18): a query's pg_catalog functions and types are typed as PostgreSQL 18 has them"
+         (#'main/version-warning "PostgreSQL 19"))))
+
 (deftest check-names-a-missing-file-and-the-command-that-writes-it
   (when *db*
     (let [out-dir (temp-dir)

@@ -17,7 +17,8 @@
             [pgmalli.impl.error :as error]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.render :as render]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 (defn- warn [& xs] (binding [*out* *err*] (apply println "pgmalli:" xs)))
 
@@ -89,11 +90,21 @@
         (println "  file:" (pr-str file))
         (println "  db:  " (pr-str db)))))
 
+(defn- version-warning
+  "Why a file of a server's version (\"PostgreSQL 19\") is typed as an older one, nil when the
+   catalog snapshot has it."
+  [database-version]
+  (let [versions (:versions @types/catalog)]
+    (when-not (some #(= database-version (str "PostgreSQL " %)) versions)
+      (str database-version " is newer than the versions this pgmalli knows (" (str/join ", " versions)
+           "): a query's pg_catalog functions and types are typed as PostgreSQL " (last versions) " has them"))))
+
 (defn- generate! [config path]
   (let [written (generate/generate! config)
         out-dir (:out-dir (files/config config))]
     (when-not (= "pgmalli" (last (str/split (str/replace out-dir #"/+$" "") #"/")))
       (warn (str ":out-dir " out-dir " does not end in pgmalli: pgmalli.core/registry reads pgmalli/<schema>.edn from the classpath")))
+    (when-let [w (some-> written vals first files/read-edn :database-version version-warning)] (warn w))
     (doseq [[schema out] written
             :let [data (files/read-edn out)]]
       (println "wrote" out (str "(schema " schema "; " (counts data) ")"))

@@ -60,3 +60,10 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:overrides: :other.jobs/input names no table or view of the schemas generated: public$"
                           (checked {:other.jobs/input :map}))
         "a column of a schema not generated is none")))
+
+(deftest a-file-names-the-servers-major-version-and-16-is-the-oldest
+  (is (= ["PostgreSQL 17" "PostgreSQL 17" "PostgreSQL 19" "PostgreSQL 16"]
+         (map files/major-version ["PostgreSQL 17.6" "PostgreSQL 17.6 (Debian 17.6-1.pgdg120+1)" "PostgreSQL 19beta1" "PostgreSQL 16devel"])))
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^PostgreSQL 15.4 is older than pgmalli reads: generate from PostgreSQL 16 or later$"
+                                (files/major-version "PostgreSQL 15.4")))]
+    (is (= :pgmalli.error/fault (:pgmalli/error (ex-data e))))))

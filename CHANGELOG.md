@@ -208,7 +208,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   of a name ending in one (`:db?`). A misspelt option or config key reads
   `{:shcema ["disallowed key"]}; did you mean: :schema`.
 * A `:db` holding next.jdbc's `:dbtype` is an error saying to drop it.
-* `pgmalli.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`.
+* `pgmalli.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`, and warns of
+  a PostgreSQL newer than 18: its new functions and types are not typed. A PostgreSQL older
+  than 16 is an error.
+* A file's `:database-version` is the major version for a server whose version names its build
+  too (`17.6 (Debian 17.6-1.pgdg120+1)`), which a minor upgrade no longer makes stale.
 * A column overridden by its type is no longer listed in `:unrendered`.
 * A domain over a type with a typmod inside its name (`timestamp(3) with time zone`,
   `time(0)`) has the type's schema instead of `:any`.
