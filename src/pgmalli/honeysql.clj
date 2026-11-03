@@ -96,7 +96,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? expression-type type-schema accepted-type driver-type quoted? call-parts)
+(declare insert-parts star? arg-key expression-type type-schema accepted-type driver-type quoted? call-parts)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -125,12 +125,6 @@
   "A query map; one holding only a set operation is one too, its members statements of their own."
   [x]
   (and (map? x) (some statement-keys (keys x))))
-
-(defn- own-nodes
-  "The nodes of one statement's part, not descending into the statements nested in it: those
-   are statements of their own, judged in their own scope."
-  [part]
-  (tree-seq #(and (branch? %) (not (statement? %))) seq part))
 
 (defn- statements
   "The statements in a query (a map, or Clojure data holding maps); a subquery is one too."
@@ -314,8 +308,22 @@
              (concat (joins stmt)
                      (for [k [:right-join :full-join :outer-join] :when (seq? (get stmt k))] [k nil]))))))
 
+(defn- unnest-elements
+  "{column argument} of a FROM item unnest(?, ...) of arguments: the column each argument's
+   elements become, by position in the columns its alias lists ([:x {:columns [:a]}]), or the
+   alias itself of an unnest of one ([[:unnest :?ids] :id])."
+  [item]
+  (when (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)))
+    (let [ps (rest (first item))
+          b (second item)
+          cs (cond (and (vector? b) (map? (second b))) (:columns (second b))
+                   (and (alias? b) (= 1 (count ps))) [b])]
+      (when (and (seq ps) (every? arg-key ps) (sequential? cs))
+        (not-empty (into {} (map (fn [p c] [(folded (name c)) p]) ps cs)))))))
+
 (defn- scope
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool :nullable? bool}} of one statement;
+   :elements {column argument} of an unnest of arguments (unnest-elements);
    ctes are the query's CTE names, which shadow a table only when the reference is written
    without a schema. :nullable? marks a table an outer join may leave NULL."
   [registry stmt ctes {:keys [schema]}]
@@ -343,7 +351,8 @@
                             listed (assoc :columns listed
                                           :all-listed? (let [v (when (and (vector? r) (map? (first r))) (:values (first r)))]
                                                          (boolean (and (vector? v) (seq v) (every? vector? v) (<= (count (first v)) (count listed))))))
-                            (nullable alias) (assoc :nullable? true))]))]
+                            (nullable alias) (assoc :nullable? true)
+                            (unnest-elements r) (assoc :elements (unnest-elements r)))]))]
     ;; ON CONFLICT: EXCLUDED is the row proposed for insertion, with the target's columns
     (if-let [[_ alias] (when (contains? stmt :on-conflict) (some-> (insert-target stmt) (table-ref schema)))]
       (let [target (assoc (get sc alias) :excluded? true)] (assoc sc "excluded" target))
@@ -465,7 +474,8 @@
                    (map-indexed (fn [i t] [[k i] t (if (lateral? t) :lateral :outer)]) v)
                    (and (vector? v) (some #{k} join-keys))
                    (map-indexed (fn [i t] [[k i] t (cond (odd? i) :own (lateral? t) :lateral :else :outer)]) v)
-                   (some #{k} (concat from-keys join-keys)) [[[k] v :outer]]
+                   (some #{k} from-keys) [[[k] v :outer]]
+                   ;; code builds the joins: their conditions, which see the statement's tables, are in it
                    :else [[[k] v :own]])]
     part))
 
@@ -536,16 +546,16 @@
         :else (let [cs (table-columns registry table)] (or (contains? cs column) (contains? cs (folded column))))))
 
 (defn- own-hits
-  "[[alias table opaque? nullable? types origins] ...] of the tables of one scope a column may belong to."
+  "[[alias table opaque? nullable? types origins elements] ...] of the tables of one scope a column may belong to."
   [registry scope col]
   (let [[alias column] (split-column col)]
     (if alias
-      (when-let [{:keys [table opaque? nullable? types origins] :as entry} (get scope alias)]
-        (when (has-column? registry entry column) [[alias table opaque? nullable? types origins]]))
+      (when-let [{:keys [table opaque? nullable? types origins elements] :as entry} (get scope alias)]
+        (when (has-column? registry entry column) [[alias table opaque? nullable? types origins elements]]))
       ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
-      (distinct (for [[a {:keys [table opaque? excluded? nullable? types origins] :as entry}] scope
+      (distinct (for [[a {:keys [table opaque? excluded? nullable? types origins elements] :as entry}] scope
                       :when (and (not excluded?) (has-column? registry entry column))]
-                  [a table opaque? nullable? types origins])))))
+                  [a table opaque? nullable? types origins elements])))))
 
 (defn- chain [scope] (if (map? scope) [scope] scope))
 
@@ -571,7 +581,8 @@
    scopes of a nested statement), :table the alias for an opaque table, :schema the type a
    subquery's or CTE's SELECT gives the column (nil for an opaque table without one), :origin
    the table its SELECT takes it from as PostgreSQL tells the driver (\"\" none, nil not told),
-   :nullable? when an outer join may leave the table NULL; nil when the column resolves to no
+   :nullable? when an outer join may leave the table NULL, :element the argument whose elements
+   an unnest's column is; nil when the column resolves to no
    table or to several known ones. A column an opaque table may hold besides one known table is
    the opaque one's, untyped: which of them PostgreSQL takes is not in the data."
   [registry scope col]
@@ -580,14 +591,15 @@
         column (second (split-column col))
         [opaque & _] (filter #(nth % 2) hits)]
     (cond (= 1 (count hits))
-          (let [[alias table opaque? nullable? types origins] (first hits)
+          (let [[alias table opaque? nullable? types origins elements] (first hits)
                 ;; a subquery's or a CTE's columns, as its SELECT types them
                 cs (or types (when-not opaque? (table-columns registry table)))
                 ;; the column's own name, as next.jdbc keys the row: :group-id is group_id
                 column (if (or (nil? cs) (contains? cs column)) column (folded column))]
             {:table (or table alias) :column column
              :schema (get cs column)
-             :nullable? (boolean nullable?) :opaque? (boolean opaque?) :origin (get origins column)})
+             :nullable? (boolean nullable?) :opaque? (boolean opaque?) :origin (get origins column)
+             :element (get elements (folded column))})
           (and opaque (>= 1 (count (remove #(nth % 2) hits))))
           (let [[alias table] opaque] {:table (or table alias) :column column :schema nil :nullable? true :opaque? true}))))
 
@@ -678,55 +690,11 @@
   {:= :<> :<> := :not= := :!= := :in :not-in :not-in :in
    :is-not-distinct-from :is-distinct-from :is-distinct-from :is-not-distinct-from})
 
-(defn- conditions
-  "The parts of a statement comparisons are read in: its conditions, and the expressions of
-   its select and ORDER BY."
-  [stmt]
-  ;; a vector of them: a map holding :select reads as a statement, which a walk does not enter
-  (cond-> (vec (vals (select-keys stmt (into [:where :having :on-conflict :select :select-distinct :select-distinct-on :order-by] join-keys))))
-    ;; the condition of ON CONFLICT DO UPDATE SET {:fields ... :where ...}
-    (map? (:do-update-set stmt)) (conj (:where (:do-update-set stmt)))))
-
-(defn- condition-nodes [stmt] (own-nodes (conditions stmt)))
-
-(defn- polar-nodes
-  "[node negated?] for the nodes of part, as own-nodes walks them: negated? under an odd number
-   of :not, through :and and :or alone ([:not [:= :state \"x\"]] is state <> 'x'; a CASE or a
-   function's argument under NOT is not negated)."
-  [part]
-  (letfn [(walk [x neg?]
-            (lazy-seq
-             (cons [x neg?]
-                   (when (and (branch? x) (not (statement? x)))
-                     (let [neg? (case (when (vector? x) (first x))
-                                  :not (not neg?)
-                                  (:and :or) neg?
-                                  false)]
-                       (mapcat #(walk % neg?) (seq x)))))))]
-    (walk part false)))
-
 (defn- comparison?
   "A comparison node: [op a b] of comparison-ops, or [:between a b c]."
   [x]
   (and (vector? x) (or (and (= 3 (count x)) (comparison-ops (first x)))
                        (and (= 4 (count x)) (#{:between :not-between} (first x))))))
-
-(defn- comparison-sides
-  "[op side other] for each side of the comparisons in a statement's conditions (BETWEEN's
-   first, against each bound), element by element where a row meets a row of its length
-   ([:< [:composite :a :b] [:composite :?a :?b]]): a side is a column, an expression or a
-   value, other whatever it is. Under an odd number of :not, op is its negation (= is <>)."
-  [stmt]
-  (for [[x negated?] (polar-nodes (conditions stmt))
-        :when (comparison? x)
-        :let [[op a b c] x
-              row? #(and (vector? %) (= :composite (first %)))]
-        [side other] (cond (= 4 (count x)) [[a b] [a c]]
-                           (and (row? a) (row? b) (= (count a) (count b))) (mapcat (fn [l r] [[l r] [r l]]) (rest a) (rest b))
-                           :else [[a b] [b a]])]
-    [(if negated? (negated-op op op) op) side other]))
-
-(defn- comparisons [stmt] (filter (comp column-keyword? second) (comparison-sides stmt)))
 
 (defn- target-column
   "A column as HoneySQL writes it where a statement assigns it: without its namespace."
@@ -777,24 +745,87 @@
               (when (and columns (vector? (:values stmt)))
                 (for [row (filter vector? (:values stmt)), [c v] (map vector columns row)] [c v :insert :values])))))))
 
-(defn- assignments
-  "[column value] pairs a statement assigns: what it writes (a column taken from EXCLUDED with
-   no value), and the items of INSERT ... SELECT under the columns listed, by position."
-  [stmt]
-  (let [{:keys [columns select]} (insert-parts stmt)]
-    (filter (comp column-keyword? first)
-            (map (fn [[c v]] [(target-column c) (when-not (= ::untold v) v)])
-                 (concat (writes stmt)
-                         ;; a star or :raw makes columns the data does not count
-                         (let [items (map bare (selected-items select))]
-                           (when (and columns (map? select) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
-                             (map (comp to-field vector) columns items))))))))
-
 (defn- target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
   [scopes stmt schema]
   (let [[_ alias] (some-> (or (:update stmt) (insert-target stmt)) (table-ref schema))]
     (select-keys (first (chain scopes)) [alias])))
+
+;;; the expression positions of a statement
+
+(defn- positions
+  "The expression positions of statement stmt, one read for check and arg-types: {:x node
+   :clause k :chain scopes :negated? bool} for every node of every clause sql/format writes, in
+   its order, as a walk of each clause's value meets them, not descending into the statements nested in it, scopes the chain clause-parts says the node is read in,
+   negated? under an odd number of :not through :and and :or alone ([:not [:= :a 1]] is a <> 1;
+   CASE or a function's argument under NOT is not negated). A value written to a column is
+   besides {:x value :assign column :event e :target scope :may-drop? bool}: e the write
+   (:insert, :update), scope the target table's, may-drop? where the row may not reach the
+   column. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
+   its items go to those columns by position."
+  [stmt chain outer feed {:keys [schema]}]
+  (let [nodes (fn [k x c]
+                (letfn [(walk [x neg?]
+                          (lazy-seq
+                           (cons {:x x :clause k :chain c :negated? neg?}
+                                 (when (and (branch? x) (not (statement? x)))
+                                   (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
+                                     (mapcat #(walk % neg?) (seq x)))))))]
+                  (walk x false)))
+        target (target-scope chain stmt schema)
+        written (group-by #(nth % 3) (writes stmt))
+        assigned (fn [clause c]
+                   (for [[col v event] (written clause) :when (not= ::untold v)]
+                     {:x v :assign col :event event :target target :may-drop? false :chain c :clause clause}))]
+    (concat
+     (for [[[k] v sees] (clause-parts stmt)
+           :let [c (part-chain sees v chain outer schema)]
+           p (case k
+               (:insert-into :columns) nil
+               :values (concat (for [row (when (vector? v) v), x (cond (map? row) (vals row) (vector? row) row)] (nodes k x c))
+                               [(assigned :values c)])
+               :set (concat (map #(nodes k % c) (when (map? v) (vals v))) [(assigned :set c)])
+               :do-update-set (concat (map #(nodes k % c) (cond (and (map? v) (contains? v :fields)) (remove nil? [(:where v)])
+                                                                (map? v) (vals v)))
+                                      [(assigned :do-update-set c)])
+               [(nodes k v c)])
+           e p]
+       e)
+     ;; a star or :raw makes columns the data does not count
+     (let [items (map bare (selected-items stmt))]
+       (when (and (:columns feed) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
+         (for [[col v] (map (comp to-field vector) (:columns feed) items)
+               :when (not= ::untold v)]
+           {:x v :assign (target-column col) :event :insert :target (:target feed) :may-drop? false
+            :chain chain :clause :select}))))))
+
+(defn- expression-nodes [ps] (remove :assign ps))
+(defn- assignments [ps] (filter #(column-keyword? (:assign %)) ps))
+
+(defn- comparison-sides
+  "[op side other chain] for each side of the comparisons among positions ps (BETWEEN's first,
+   against each bound), element by element where a row meets a row of its length ([:<
+   [:composite :a :b] [:composite :?a :?b]]): a side is a column, an expression or a value,
+   other whatever it is. Under an odd number of :not, op is its negation (= is <>)."
+  [ps]
+  (for [{:keys [x negated? chain]} (expression-nodes ps)
+        :when (comparison? x)
+        :let [[op a b c] x
+              row? #(and (vector? %) (= :composite (first %)))]
+        [side other] (cond (= 4 (count x)) [[a b] [a c]]
+                           (and (row? a) (row? b) (= (count a) (count b))) (mapcat (fn [l r] [[l r] [r l]]) (rest a) (rest b))
+                           :else [[a b] [b a]])]
+    [(if negated? (negated-op op op) op) side other chain]))
+
+(defn- statement-positions
+  "[statement scopes path positions] for the statements of query body (statement-chains), the
+   SELECT of an INSERT ... SELECT fed the INSERT's columns."
+  [registry body opts]
+  (let [chains (statement-chains registry body opts)
+        feeds (for [[s c] chains :let [{:keys [columns select]} (insert-parts s)] :when (and columns (map? select))]
+                [select {:columns columns :target (target-scope c s (:schema opts))}])]
+    (for [[s c path outer] chains]
+      [s c path (positions s c outer (some (fn [[select f]] (when (identical? select s) f)) feeds) opts)])))
 
 ;;; the name PostgreSQL gives an output column
 
@@ -1018,22 +1049,22 @@
                     [(keyword (str alias "." c)) d])]
         [a (some->> (seq meant) (sort-by second) (map first) distinct (take 3) vec)]))))
 
-(defn- column-problems [registry sc stmt {:keys [schema] :as opts}]
+(defn- column-problems [registry sc stmt ps {:keys [schema] :as opts}]
   (let [target (target-scope sc stmt schema)
         ;; a target code names is not in the data: its columns are not judged
         assigned (when (seq target) (concat (map #(or (field-column %) %) (filter column-keyword? (:columns (insert-parts stmt))))
-                                            (map first (assignments stmt))))]
+                                            (filter column-keyword? (map (comp target-column first) (writes stmt)))))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (select-parts % opts)) (selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
-                                        (for [[_ c] (comparisons stmt)] [c sc])
-                                        (for [x (condition-nodes stmt)
+                                        (for [[_ c _ chain] (comparison-sides ps) :when (column-keyword? c)] [c chain])
+                                        (for [{:keys [x chain]} (expression-nodes ps)
                                               :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
                                                          (column-keyword? (second x)))]
-                                          [(second x) sc])
+                                          [(second x) chain])
                                         ;; a keyword assigned in SET is a column the statement sees
-                                        (for [[_ v _ clause] (writes stmt)
-                                              :when (and (not= :values clause) (not= ::untold v) (column-keyword? v))]
-                                          [v sc])
+                                        (for [{:keys [x chain clause]} (assignments ps)
+                                              :when (and (#{:set :do-update-set} clause) (column-keyword? x))]
+                                          [x chain])
                                         (for [c assigned] [c target])))
           :when (if (or (star? col) (whole-row? scope col))
                   ;; :t.* names a table of the scope, unless the data does not show them all
@@ -1059,6 +1090,16 @@
    properties props: it may fill a column before NOT NULL is checked."
   [props event]
   (boolean (get-in props [:pg/before-triggers event])))
+
+(defn- assigned-column
+  "{:schema :table :opaque? :nullable?} of the column an assignment (positions) writes, nil
+   :schema where it is not told; nullable? where NULL may go there: the column takes it, a
+   BEFORE row trigger for the write may fill it (an INSERT's value is the row proposed, whose
+   NOT NULL PostgreSQL checks before ON CONFLICT DO UPDATE), or the row may not reach it."
+  [registry {:keys [assign target event may-drop?]}]
+  (let [{s :schema :keys [table opaque?] :as c} (resolve-column registry target assign)]
+    (assoc c :nullable? (boolean (or may-drop? (and s (shape/maybe? s))
+                                     (and s (not opaque?) (filled-by-trigger? (table-props registry table) event)))))))
 
 (defn- insert-problems [registry stmt schema]
   (let [{:keys [table columns]} (insert-parts stmt)
@@ -1200,26 +1241,25 @@
    default), a string HoneySQL sends as a parameter (not inlined, not cast) to a column
    PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar): a
    literal, or an argument to an enum column or to one whose own values are strings."
-  [registry sc stmt {:keys [schema] :as opts}]
-  (let [uses (concat (for [[op side value] (comparison-sides stmt)
+  [registry ps opts]
+  (let [uses (concat (for [[op side value chain] (comparison-sides ps)
                            :when (not (like-ops op))
-                           :let [s (side-schema registry sc side opts)]
+                           :let [s (side-schema registry chain side opts)]
                            :when (or s (column-keyword? side))]
                        {:col side :value value :op op :schema s})
-                     (let [target (target-scope sc stmt schema)]
-                       (when (seq target)
-                         (for [[col value] (assignments stmt)]
-                           {:col col :value value :assigned? true :schema (:schema (resolve-column registry target col))}))))
+                     (for [{:keys [assign x target] :as a} (assignments ps) :when (seq target)
+                           :let [{s :schema :keys [nullable?]} (assigned-column registry a)]]
+                       {:col assign :value x :assigned? true :schema s :nullable? nullable?}))
         sends (jdbc/string-sends opts)
         typed? (not= :unknown (jdbc/sent-type "" opts))]
     (concat
      ;; an argument to an enum type's column, or to one whose own values are strings: a String,
      ;; which goes typed unless :send sends it untyped (stringtype=unspecified)
-     (for [{:keys [col value assigned?] s :schema} uses
+     (for [{:keys [col value assigned? nullable?] s :schema} uses
            :let [k (param-key value)] :when (and k typed?)
            :let [t (some->> s (uncast-type registry))]
-           ;; one assigned to a nullable column may be nil, which PostgreSQL takes
-           :when (and t (not (takes-string? registry s assigned? sends)) (not (and assigned? (shape/maybe? s)))
+           ;; one assigned where NULL may go may be nil, which PostgreSQL takes
+           :when (and t (not (takes-string? registry s assigned? sends)) (not nullable?)
                       (or (enum-type registry s) (some #(= :string (shape/kind %)) (shape/alternatives (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
      (for [{:keys [col value assigned? op] s :schema} uses
@@ -1248,7 +1288,7 @@
    the enum (compared with, or assigned to, the column). scope is the statement's (from scope)
    or, for a nested statement, the chain of its own and the enclosing ones. Empty when the
    statement agrees with the registry."
-  [registry stmt scope {:keys [schema] :as opts}]
+  [registry stmt scope ps {:keys [schema] :as opts}]
   (let [registry (reading registry)
         scopes (chain scope)
         known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
@@ -1257,10 +1297,10 @@
                        :let [same-name (sort (filter #(= (table-name %) (table-name table)) known))
                              meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
                    (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
-                 (column-problems registry scopes stmt opts)
+                 (column-problems registry scopes stmt ps opts)
                  (insert-problems registry stmt schema)
                  (write-problems registry scopes stmt opts)
-                 (string-problems registry scopes stmt opts)))))
+                 (string-problems registry ps opts)))))
 
 (def ^:private read-clauses
   "The clauses check, arg-types and row-schema read."
@@ -1373,10 +1413,10 @@
          opts (with-defaults opts)
          registry (reading registry)
          sent-body (or (sent body opts) body)
-         chains (statement-chains registry sent-body opts)
-         found (mapcat (fn [[stmt scopes path]]
+         chains (statement-positions registry sent-body opts)
+         found (mapcat (fn [[stmt scopes path ps]]
                          ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
-                         (cond->> (problems registry stmt scopes opts) (seq path) (map #(assoc % :in (vec path)))))
+                         (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
                        chains)]
      (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body))))))
 
@@ -1434,15 +1474,13 @@
   ([v heads] (when (and (vector? v) (= 2 (count v)) (heads (first v)) (arg-key (second v))) (second v))))
 
 (defn- assigned-type
-  "The type of an argument stmt assigns to col of its target: NULL where the column takes it,
-   or a BEFORE row trigger for the write (:insert, :update for an UPDATE or ON CONFLICT DO
-   UPDATE) may fill it."
-  [registry sc stmt col {:keys [schema] :as opts}]
-  (let [{s :schema :keys [table opaque?]} (resolve-column registry (target-scope sc stmt schema) col)
-        events (cond-> #{} (:insert-into stmt) (conj :insert) (or (:update stmt) (:do-update-set stmt)) (conj :update))]
+  "The type of an argument assignment a (positions) writes to its column: NULL where
+   assigned-column says it may go."
+  [registry a opts]
+  (let [{s :schema :keys [nullable?]} (assigned-column registry a)]
     (if s
       (let [inner (accepted-type registry s :assign opts)]
-        (if (or (shape/maybe? s) (and (not opaque?) (some #(filled-by-trigger? (table-props registry table) %) events))) [:maybe inner] inner))
+        (if nullable? [:maybe inner] inner))
       :any)))
 
 (defn- compared-arg-type
@@ -1669,56 +1707,59 @@
                    (cond-> (:schema (first typed)) (next ms) (->> (beyond-list registry) loose))
                    (result-schema registry t typed))}))))
 
-(defn- unnest-columns
-  "{[alias column] arg} of the unnest(?, ...) items of stmt's FROM and joins: the column each
-   argument's elements become, by position in the columns its alias lists ([:x {:columns [:a]}]),
-   or the alias itself of an unnest of one ([[:unnest :?ids] :id])."
-  [stmt]
-  (into {} (for [item (table-items stmt)
-                 :when (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)))
-                 :let [ps (rest (first item))
-                       b (second item)
-                       [alias cs] (cond (and (vector? b) (map? (second b))) [(first b) (:columns (second b))]
-                                        (and (keyword? b) (= 1 (count ps))) [b [b]])]
-                 :when (and alias (every? param-key ps) (sequential? cs))
-                 [p c] (map vector ps cs)]
-             [[(folded (name alias)) (folded (name c))] p])))
-
-(defn- unnest-arg
-  "The argument whose elements column x is, of unnest-columns m: x named with its alias or alone."
-  [m x]
-  (when (column-keyword? x)
-    (let [[q c] (split-column x)]
-      (some (fn [[[a col] p]] (when (and (= col (folded c)) (or (nil? q) (= q a))) p)) m))))
+(defn- value-arg
+  "[argument array?] of a value where an argument goes: an argument itself, or a column of
+   unnest(?) of arguments (array? true: the argument's elements go there); nil for any other."
+  [registry chain x]
+  (cond (arg-key x) [x false]
+        (column-keyword? x) (some-> (:element (resolve-column registry chain x)) (vector true))))
 
 (defn- comparison-args
-  "An argument compared with a column or a typed expression, as compared-type types it."
-  [registry stmt sc opts]
-  (for [[op side value] (comparison-sides stmt)
-        :let [x (array-arg value)]
-        :when (arg-key (or x value))]
-    [(or x value) (compared-type op (compared-arg-type registry sc side op opts) x opts)]))
+  "An argument compared with a column or a typed expression, as compared-type types it; an
+   unnest's column, its argument an array of that."
+  [registry ps opts]
+  (for [[op side value chain] (comparison-sides ps)
+        :let [x (array-arg value)
+              [k elements?] (if x [x false] (value-arg registry chain value))]
+        :when (and k (not (and elements? (or (in-ops op) (second (value-arg registry chain side))))))
+        :let [t (compared-type op (compared-arg-type registry chain side op opts) (when-not elements? x) opts)]
+        :when (not (and elements? (untyped? t)))]
+    [k (if elements? (jdbc/array-type t opts :unnest) t)]))
 
 (defn- limit-args
   "LIMIT and OFFSET take a bigint of at least 0 by assignment, NULL for none."
-  [registry stmt _ opts]
-  (for [[_ v] (select-keys stmt [:limit :offset])]
-    [v (nullable (accepted-type registry [:int {:pg/type "bigint" :min 0}] :assign opts))]))
+  [registry ps opts]
+  (for [{:keys [x clause]} (expression-nodes ps)
+        :when (#{:limit :offset} clause)
+        :when (arg-key x)]
+    [x (nullable (accepted-type registry [:int {:pg/type "bigint" :min 0}] :assign opts))]))
+
+(defn- cast-arrays
+  "The arrays whose elements PostgreSQL casts to the type of column schema s, elements of
+   element type, typed; :any for none."
+  [registry s element opts]
+  (let [t (slot-type registry s)]
+    (shape/either (distinct (for [[sch sent] (jdbc/write-rows opts true)
+                                  :when (and t (string? sent) (accept/accepts? t (types/element sent) :cast))]
+                              (walk/postwalk-replace {:pgmalli/element element} sch)))
+                  :any)))
 
 (defn- cast-args
   "[:cast :?x :timestamptz]: what PostgreSQL casts to the type; nil too unless every use of the
    cast is compared (not under IS [NOT] DISTINCT FROM, not with NULL, not under {:compare
-   :lenient}) or assigned to a NOT NULL column. sources are the SELECTs of INSERT ... SELECT,
-   whose items the INSERT's casts count."
-  [sources registry stmt sc opts]
-  (let [casts (filter #(and (vector? %) (= :cast (first %)) (= 3 (count %)) (arg-key (second %)))
-                      (mapcat own-nodes (cons (selected-items (:select (insert-parts stmt)))
-                                              (map val (clause-entries (cond-> stmt (sources stmt) (dissoc :select)))))))
-        target (target-scope sc stmt (:schema opts))
+   :lenient}) or assigned where NULL may not go (assigned-column). [:cast :x.a :date] of an
+   unnest's column: an array of that, typed."
+  [registry ps opts]
+  (let [nodes (expression-nodes ps)
+        casts (for [{:keys [x chain]} nodes
+                    :when (and (vector? x) (= :cast (first x)) (= 3 (count x)))
+                    :let [[k elements?] (value-arg registry chain (second x))]
+                    :when k]
+                [x chain k elements?])
         refusing (frequencies
                   (concat (when-not (= :lenient (:compare opts))
                             ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
-                            (for [[x] (polar-nodes (conditions stmt))
+                            (for [{:keys [x]} nodes
                                   :when (comparison? x)
                                   :let [[op & operands] x]
                                   :when (not (or (distinct-ops op)
@@ -1726,59 +1767,28 @@
                                   o operands
                                   o (if (and (in-ops op) (vector? o) (not (keyword? (first o)))) o [o])]
                               o))
-                          (for [[col v] (assignments stmt)
-                                :let [c (:schema (resolve-column registry target col))]
-                                :when (and c (not (shape/maybe? c)))]
-                            v)))
-        uses (frequencies casts)]
-    (for [x (distinct casts)
-          :let [s (:schema (expression-type registry sc x opts))]
-          :when s]
-      [(second x) (cond-> (accepted-type registry s :cast opts)
-                    (< (get refusing x 0) (uses x)) nullable)])))
+                          (for [a (assignments ps)
+                                :let [{c :schema :keys [nullable?]} (assigned-column registry a)]
+                                :when (and c (not nullable?))]
+                            (:x a))))
+        uses (frequencies (map first casts))]
+    (for [[x chain k elements?] (distinct casts)
+          :let [s (:schema (expression-type registry chain x opts))]
+          :when s
+          :let [t (cond-> (accepted-type registry s :cast opts)
+                    (< (get refusing x 0) (uses x)) nullable)]]
+      [k (if elements? (cast-arrays registry s t opts) t)])))
 
 (defn- assignment-args
   "An argument assigned to a column; unnest(?), of a typed array (unnest(unknown) is ambiguous),
-   each element assigned to it."
-  [registry stmt sc opts]
-  (for [[col v] (assignments stmt)
-        :let [t (assigned-type registry sc stmt col opts)]]
-    (if-let [x (array-arg v #{:unnest})] [x (jdbc/array-type t opts :unnest)] [v t])))
-
-(defn- unnest-args
-  "unnest(?) AS x(a), in stmt's FROM or its INSERT ... SELECT's: the elements of ? are a, typed
-   where a goes, as a typed array."
-  [registry stmt sc opts]
-  (let [m (unnest-columns stmt)
-        {:keys [select]} (insert-parts stmt)]
-    (concat
-     (when (seq m)
-       (for [[op side value] (comparison-sides stmt)
-             :let [p (unnest-arg m value)]
-             :when (and p (column-keyword? side) (not (unnest-arg m side)))
-             :let [t (compared-arg-type registry sc side op opts)]
-             :when (not (untyped? t))]
-         [p (jdbc/array-type t opts :unnest)]))
-     ;; UPDATE ... SET col = x.a FROM unnest(?) AS x(a), and INSERT ... SELECT x.a FROM unnest(?) AS x(a)
-     (for [m [m (when (map? select) (unnest-columns select))] :when (seq m)
-           [col v] (assignments stmt)
-           :let [p (unnest-arg m v)]
-           :when p]
-       [p (jdbc/array-type (assigned-type registry sc stmt col opts) opts :unnest)])
-     ;; [:cast :x.a :date]: an array of what PostgreSQL casts to the type, typed
-     (when (seq m)
-       (for [x (mapcat own-nodes (map val (clause-entries stmt)))
-             :when (and (vector? x) (= :cast (first x)) (= 3 (count x)))
-             :let [p (unnest-arg m (second x))]
-             :when p
-             :let [s (:schema (expression-type registry sc x opts))
-                   t (some->> s (slot-type registry))]
-             :when t
-             :let [element (accepted-type registry s :cast opts)
-                   arrays (for [[sch sent] (jdbc/write-rows opts true)
-                                :when (and (string? sent) (accept/accepts? t (types/element sent) :cast))]
-                            (walk/postwalk-replace {:pgmalli/element element} sch))]]
-         [p (shape/either (distinct arrays) :any)])))))
+   or an unnest's column, each element assigned to it."
+  [registry ps opts]
+  (for [{:keys [x chain] :as a} (assignments ps)
+        :let [t (assigned-type registry a opts)
+              u (array-arg x #{:unnest})
+              [k elements?] (if u [u true] (value-arg registry chain x))]
+        :when k]
+    [k (if elements? (jdbc/array-type t opts :unnest) t)]))
 
 (defn- resolving-operands
   "The operands x has PostgreSQL resolves to one type: coalesce's, greatest's, least's,
@@ -1790,11 +1800,11 @@
 (defn- resolving-args
   "coalesce(?, col), CASE ... ELSE col and the like: PostgreSQL resolves an argument to the
    others' type; nil is a value there."
-  [registry stmt sc opts]
-  (for [x (mapcat own-nodes (map val (clause-entries (dissoc stmt :insert-into))))
+  [registry ps opts]
+  (for [{:keys [x chain]} (expression-nodes ps)
         :let [operands (resolving-operands x)]
         :when (some param-key operands)
-        :let [r (common registry (map #(expression-type registry sc % opts) (remove arg-key operands)))]
+        :let [r (common registry (map #(expression-type registry chain % opts) (remove arg-key operands)))]
         :when (:schema r)
         o operands
         :when (param-key o)]
@@ -1804,11 +1814,11 @@
 (defn- call-args
   "An argument of a function or an operator: of the one type every candidate PostgreSQL may
    resolve the call to takes there, as an untyped value is resolved; nil may go there too."
-  [registry stmt sc opts]
-  (for [x (mapcat own-nodes (map val (clause-entries (dissoc stmt :insert-into))))
+  [registry ps opts]
+  (for [{:keys [x chain]} (expression-nodes ps)
         :let [[kind n args] (when-not (comparison? x) (call-parts x))]
         :when (and kind (some arg-key args))
-        :let [ins (mapv #(:type (expression-type registry sc % opts)) args)]
+        :let [ins (mapv #(:type (expression-type registry chain % opts)) args)]
         [i a] (map-indexed vector args)
         :when (arg-key a)
         :let [t (resolve/argument-type kind n ins i)
@@ -1831,11 +1841,10 @@
    (let [body (query! body)
          opts (with-defaults opts)
          registry (reading registry)
-         sources (set (keep #(:select (insert-parts %)) (statements body)))
-         uses [comparison-args limit-args (partial cast-args sources) assignment-args unnest-args resolving-args call-args]
-         typed (for [[stmt sc] (statement-chains registry body opts)
+         uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
+         typed (for [[_ _ _ ps] (statement-positions registry body opts)
                      f uses
-                     use (f registry stmt sc opts)]
+                     use (f registry ps opts)]
                  use)
          ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
