@@ -109,10 +109,7 @@
   "Mismatches in src that src does not fix yet, which report holds out until it does: {:label
    :match :reason :repro}, :match a predicate of [expression pgmalli postgresql] under report's
    label. report fails on an entry that matches no mismatch, so a fix empties it."
-  [{:label "UNION with NULL"
-    :match (fn [[_ o t]] (and (str/starts-with? o "matrix.d_") (not (str/ends-with? o "[]")) (not= o t)))
-    :reason "a domain's column united with NULL: PostgreSQL types it as the domain's base type (select_common_type keeps a domain only where every input is of it), pgmalli as the domain"
-    :repro "(h/row-schema registry {:union [{:select [[:d_integer :x]] :from [:u]} {:select [[nil :x]] :from [:u]}]} opts) names :pg/type \"matrix.d_integer\"; PostgreSQL's pg_typeof(x) of it is integer"}])
+  [])
 
 (defn- report
   "Fails where pgmalli types an expression of cs otherwise than PostgreSQL but as a pending entry
@@ -435,3 +432,4 @@
             (is (= (mapv pop theirs) (ours q)) (pr-str q))
             (is (every? #{""} (map peek theirs)) (str "of no table: " (pr-str q))))))
       (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (h/arg-types registry {:select [[[:double_it :?x] :d]] :from [:t]} o))))))
+

@@ -2485,7 +2485,15 @@
                 ;; PostgreSQL resolves each column's type as CASE's
                 (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts)
                                 (cond (not united?) :any
-                                      (= 1 (count inners)) (first inners)
+                                      ;; with an untyped member, a domain resolves to its base type, as CASE's does
+                                      (= 1 (count inners)) (let [[s] inners
+                                                                 k (if (= :ref (shape/head s))
+                                                                     (last s)
+                                                                     (some-> (:pg/type (shape/column-props s)) keyword (#(first (registry-type registry % opts)))))
+                                                                 d (get (::schemas registry) k)]
+                                                             (if (and d (not= :enum (shape/head d)) (< (count known) (count schemas)))
+                                                               (domain-base-type registry [:ref k])
+                                                               s))
                                       ;; the members' schemas are as the driver reads them: one of them, or untold
                                       :else (let [r (:schema (common registry (for [s inners] {:schema s :type (resolver-type registry s)})))]
                                               (if (and r (some #(= r (loose (beyond-list registry %))) inners)) r :any)))
