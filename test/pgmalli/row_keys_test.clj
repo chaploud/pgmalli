@@ -77,11 +77,11 @@
               row (jdbc/execute! ds (sql/format q) {:builder-fn @(requiring-resolve builder)})
               :let [schema (h/row-schema registry q {:jdbc {:builder-fn @(requiring-resolve builder)}})
                     entries (m/children (m/schema schema))
-                    untold (:pgmalli/untold (m/properties (m/schema schema)))]]
-        (is (= (count untold) (count (remove (set (map first entries)) (keys row))))
-            (str "a key the row lacks is one :pgmalli/untold names " (pr-str builder q row)))
-        (is (or (empty? untold) (not= builder 'next.jdbc.result-set/as-unqualified-kebab-maps))
-            (str "only a qualified key is untold (a cast column, one through a subquery): " (pr-str q)))
+                    unknown-keys (:pgmalli/unknown-keys (m/properties (m/schema schema)))]]
+        (is (= (count unknown-keys) (count (remove (set (map first entries)) (keys row))))
+            (str "a key the row lacks is one :pgmalli/unknown-keys names " (pr-str builder q row)))
+        (is (or (empty? unknown-keys) (not= builder 'next.jdbc.result-set/as-unqualified-kebab-maps))
+            (str "only a qualified key is unknown (a cast column, one through a subquery): " (pr-str q)))
         (is (clojure.set/subset? (set (for [[k p] entries :when (not (:optional p))] k)) (set (keys row)))
             (pr-str builder q))
         (is (m/validate schema row) (pr-str builder q row))))))

@@ -342,6 +342,20 @@ next.jdbc's `:return-keys` (in `:jdbc`), pgjdbc adds RETURNING to an INSERT, UPD
 ;; => [:map [:posts/id [:int #:pg{:identity :always, :type "bigint"}]]]
 ```
 
+Under qualified keys (next.jdbc's default), the driver qualifies some columns by a table the
+query data does not show: a column cast to its own type, which PostgreSQL drops; `:raw` SQL,
+which may be a column; a subquery's or a CTE's column that is one of these; or a column of a
+table the registry lacks. `h/row-schema` leaves those keys out of the map, which is open, and
+lists their unqualified names under the `:pgmalli/unknown-keys` property:
+
+```clojure
+(h/row-schema registry {:select [:id [[:cast :email :varchar] :e]] :from [:users]})
+;; => [:map #:pgmalli{:unknown-keys [:e]} [:users/id [:int #:pg{:identity :always, :type "bigint"}]]]
+```
+
+A subquery's or a CTE's column is otherwise keyed by the table PostgreSQL traces it to, as the
+driver keys it; an expression's, a set operation's and a recursive CTE's by none.
+
 `h/row-schema` returns nil when a selected column cannot be resolved (`h/check` says which),
 when a whole row is selected, when code builds the RETURNING, and for a TRUNCATE under
 `:return-keys`, which returns no row:
@@ -515,11 +529,6 @@ Write the query so PostgreSQL's reading is explicit instead.
   leaves `:any` (an `inet` column's), which may be an object of the type.
 - Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
   PostgreSQL folds it to lower case, and check takes it as written.
-- Under qualified keys, the key of a column next.jdbc qualifies by a table the data does not
-  show (`:raw` SQL, which may be a column; a cast column, whose cast PostgreSQL drops when the type is the column's own; a
-  subquery's or a CTE's column that is itself one of these; or one from a table the registry
-  lacks):
-  `h/row-schema` leaves it out of the map, which is open, and names it under the
-  `:pgmalli/untold` property. A subquery's or a CTE's column is otherwise keyed by the table
-  PostgreSQL traces it to, as the driver keys it; an expression's, a set operation's and a
-  recursive CTE's by none.
+- Under qualified keys, the key of a column next.jdbc qualifies by a table the query data does
+  not show: `h/row-schema` lists it under `:pgmalli/unknown-keys`
+  ([The row a query returns](#the-row-a-query-returns)).

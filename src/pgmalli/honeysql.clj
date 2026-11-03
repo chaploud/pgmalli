@@ -1917,7 +1917,7 @@
   "The row a SELECT returns. Under a qualifying builder, a cast column, or a column through an
    opaque table whose table this cannot trace, has a key this cannot tell: the driver keys it by
    the table PostgreSQL traces it to, which keeps a column's table under a cast to its own type.
-   The row leaves those out, an open map, and names them under :pgmalli/untold."
+   The row leaves those out, an open map, and names them under :pgmalli/unknown-keys."
   [registry stmt chain {:keys [schema] :as opts}]
   (let [registry (reading registry)
         qualified? (:qualified? (jdbc/row-keys opts))
@@ -1935,22 +1935,22 @@
                                 ;; ::columns: a derived table's columns, as the registry's are, for its outer statement
                                 (cond (nil? schema) :any (::columns opts) (shape/non-null schema) :else (driver-type registry jdbc/read-type schema opts))
                                 (or nullable? regrouped? (nil? schema) (shape/maybe? schema)) opts))
-        untold (fn [n] [[::untold n]])
+        unknown-key (fn [n] [[::unknown-key n]])
         merges (using-merges registry stmt sc schema)
         merged (fn [label m]
                  (if (and qualified? (some #(:opaque? (get sc %)) (:tables m)))
-                   (untold label)
+                   (unknown-key label)
                    (let [{:keys [sides nullable?] s :schema} m
                          by-key (into {} (for [a sides :let [t (some-> a sc :table)]] [(jdbc/row-key t label opts) t]))
                          ;; keys the driver may give it: each optional
                          props (when (next by-key) {:optional true})]
                      (for [[_ t] by-key] (entry t label s nullable? props)))))
         ;; [[column entry] ...] of a table, or of a typed subquery or CTE, in order; the entry
-        ;; [::untold c] for a column whose key is not told
+        ;; [::unknown-key c] for a column whose key is not told
         columns (fn [{:keys [table nullable? opaque? order types origins]}]
                   (if opaque?
                     (for [c order :let [o (get origins c)]]
-                      [c (if (and qualified? (nil? o)) [::untold c] (entry [nil o] c (get types c) nullable? nil))])
+                      [c (if (and qualified? (nil? o)) [::unknown-key c] (entry [nil o] c (get types c) nullable? nil))])
                     (for [[c s] (column-entries registry table)] [c (entry table c s nullable? nil)])))
         star (fn [col]
                (let [[a] (split-column col)
@@ -1977,7 +1977,7 @@
                   (nil? col) (when-let [n (item-name item opts)]
                                (let [x (if alias (first item) (item-expression item))]
                                  (if (and qualified? (or (raw? x) (and (cast-of-column? x) (kept-column? x))))
-                                   (untold n)
+                                   (unknown-key n)
                                    (let [{s :schema :keys [nullable?]} (expression-type registry chain x opts)]
                                      [(entry nil n s nullable? nil)]))))
                   (star? col) (star col)
@@ -1987,16 +1987,16 @@
                             (cond m (merged label m)
                                   ;; the driver keys a derived table's column by the table PostgreSQL traces it to
                                   (and qualified? opaque? origin) [(entry [nil origin] label schema nullable? nil)]
-                                  (and qualified? opaque?) (untold label)
+                                  (and qualified? opaque?) (unknown-key label)
                                   ;; a column under an alias is still keyed by its table: the driver reads the table from the field
                                   :else [(entry table label schema nullable? nil)])))))]
     (when (and (seq items) (every? some? items) (not-any? :unknown? (vals sc)))
       ;; a name selected twice is one key, the driver keeping the last column's value
       (let [entries (apply concat items)
-            untold (vec (distinct (keep #(when (= ::untold (first %)) (keyword (second %))) entries)))
-            entries (remove #(= ::untold (first %)) entries)
+            unknown-keys (vec (distinct (keep #(when (= ::unknown-key (first %)) (keyword (second %))) entries)))
+            entries (remove #(= ::unknown-key (first %)) entries)
             last-of (into {} (map (juxt first identity)) entries)]
-        (into (cond-> [:map] (seq untold) (conj {:pgmalli/untold untold})) (map last-of) (distinct (map first entries)))))))
+        (into (cond-> [:map] (seq unknown-keys) (conj {:pgmalli/unknown-keys unknown-keys})) (map last-of) (distinct (map first entries)))))))
 
 (defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
@@ -2027,10 +2027,10 @@
     (when-let [row (row-schema* registry stmt [] chains opts)]
       ;; read again as the default builder keys it: by the table each column comes from
       (let [keyed (row-schema* registry stmt [] chains (dissoc opts ::jdbc/member))
-            untold (set (map name (:pgmalli/untold (shape/row-props keyed))))
+            unknown-keys (set (map name (:pgmalli/unknown-keys (shape/row-props keyed))))
             tables (group-by name (map first (some-> keyed shape/entries)))
             origin (fn [c] (let [ns (distinct (map namespace (get tables c)))]
-                             (when (and (= 1 (count ns)) (not (untold c))) (or (first ns) ""))))]
+                             (when (and (= 1 (count ns)) (not (unknown-keys c))) (or (first ns) ""))))]
         (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
                [(name k) (when-not (= :any s) s) (origin (name k))]))))))
 
@@ -2055,7 +2055,7 @@
    docs/queries.md#the-row-a-query-returns lists, nullable :any otherwise; a set operation's row
    is its first member's names. Under qualified keys, a column next.jdbc keys
    by a table the data does not show (one through a subquery or a CTE, a cast column) is left
-   out of the map, which is open, and named under the :pgmalli/untold property. Options:
+   out of the map, which is open, and named under the :pgmalli/unknown-keys property. Options:
    docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]

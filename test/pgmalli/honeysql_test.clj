@@ -171,9 +171,9 @@
   (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]] [:top-id [:maybe bigint]]]
          (row {:select [:id [[:max :id] :top_id]] :from [:users]} (built opts 'next.jdbc.result-set/as-kebab-maps)))
       "an expression has no table: its key is unqualified, kebab-cased as the builder does")
-  (is (= [:map {:pgmalli/untold [:name]}] (row {:select [[[:cast :name :text]]] :from [:groups]} (dissoc opts :jdbc)))
+  (is (= [:map {:pgmalli/unknown-keys [:name]}] (row {:select [[[:cast :name :text]]] :from [:groups]} (dissoc opts :jdbc)))
       "a cast to the column's own type is dropped and the key keeps the table: not told without the types")
-  (is (= [:map {:pgmalli/untold [:n]}] (row {:select [[[:cast :name :text] :n]] :from [:groups]} (dissoc opts :jdbc)))
+  (is (= [:map {:pgmalli/unknown-keys [:n]}] (row {:select [[[:cast :name :text] :n]] :from [:groups]} (dissoc opts :jdbc)))
       "an alias keeps the table all the same")
   (is (= [:map [:nick [:maybe text]]] (row {:select [[[:cast :nick :text]]] :from [:users]} (dissoc opts :jdbc)))
       "a varchar cast to text is an expression of no table"))
@@ -652,15 +652,15 @@
         "bool_or, bool_and and every are boolean, NULL over no row")
     (is (= [:map [:token [:string {:pg/type "text"}]]] (row {:select [[[:cast :id :text] :token]] :from [:users]} lower))
         "a cast to another type is an expression: no table keys it")
-    (is (= [:map {:pgmalli/untold [:n]}] (row {:select [[[:cast :nick :varchar] :n]] :from [:users]} lower))
+    (is (= [:map {:pgmalli/unknown-keys [:n]}] (row {:select [[[:cast :nick :varchar] :n]] :from [:users]} lower))
         "a cast to the column's own type is dropped: its table keys it")
     (is (= [:map [:uid [:int {:pg/identity :always :pg/type "bigint"}]] [:one int4]]
            (row {:select [:*] :from [[{:select [[:id :uid] [[:inline 1] :one]] :from [:users]} :m]]}))
         "SELECT * of a subquery lists its columns in order")
-    (is (= [:map {:pgmalli/untold [:n]} [:users/uid [:int {:pg/identity :always :pg/type "bigint"}]] [:one int4]]
+    (is (= [:map {:pgmalli/unknown-keys [:n]} [:users/uid [:int {:pg/identity :always :pg/type "bigint"}]] [:one int4]]
            (row {:select [:m/*] :from [[{:select [[:id :uid] [[:cast :nick :varchar] :n] [[:inline 1] :one]] :from [:users]} :m]]}
                 (dissoc opts :jdbc)))
-        "under SELECT * a column is keyed by the table PostgreSQL traces it to, or untold")
+        "under SELECT * a column is keyed by the table PostgreSQL traces it to, or named unknown")
     (is (= [:map [:x bigint]] (row {:select [:x] :from [[{:union [{:select [[:id :x]] :from [:users]} {:select [[:score :x]] :from [:users]}]} :s]]}))
         "a set operation's column is of the type PostgreSQL resolves its members' to: numbers the widest")))
 
@@ -1107,7 +1107,7 @@
   (doseq [body ["SELECT 1" ["SELECT 1"] nil]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reads HoneySQL query data" (check body)) (pr-str body))))
 
-(deftest a-row-of-a-table-the-registry-lacks-is-untold
+(deftest a-row-of-a-table-the-registry-lacks-is-nil
   (is (nil? (h/row-schema registry {:select [:id] :from [:users]})) ":schema left out: no sample here")
   (is (= [{:kind :unknown-table :table "public.users"}] (h/check registry {:select [:id] :from [:users]}))))
 

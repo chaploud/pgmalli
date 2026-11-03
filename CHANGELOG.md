@@ -52,7 +52,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   domain as its base type, and a `varchar`, `"char"` or `name` as `text`, a `cidr` as `inet` and
   a reg* type as `oid`. `bool_and`, `bool_or` and `every` are `boolean`. A column cast to
   another type is keyed by no table, as an expression; one cast to its own type, which
-  PostgreSQL drops, is untold under qualified keys. It also types a literal `[:inline ...]`
+  PostgreSQL drops, is under `:pgmalli/unknown-keys` under qualified keys. It also types a literal `[:inline ...]`
   writes, and the functions that build json and jsonb (`jsonb_build_object`, `jsonb_agg` ...) as
   a column of the type is read: an object or an array under `{:read {:json :parsed}}`. An
   unaliased CASE is named after its ELSE where that has a name of its own, as PostgreSQL names
@@ -63,7 +63,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   with the tables before it, a recursive CTE as its first member, NULL allowed and a CHECK's
   list read as its base type; a column it does not give is `:unknown-column`. Under qualified
   keys, a CTE's or a subquery's column is keyed by the table PostgreSQL traces it to (an expression's, a set
-  operation's and a recursive CTE's by none), where it was left untold. `SELECT *` of one lists
+  operation's and a recursive CTE's by none), where it was under `:pgmalli/unknown-keys`. `SELECT *` of one lists
   its columns. A set operation's column is of the type PostgreSQL resolves its members' to (an
   integer and a bigint a bigint), where it was `:any` unless they agreed. A table function
   (`WITH ORDINALITY` too) is named by its alias. An argument of an `unnest` in `FROM` is an
@@ -105,7 +105,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A list or seq of keywords, vectors, maps and values alone (a `:select` built with `map`) is
   read as a vector, as HoneySQL reads it, where it was taken for code and left unchecked; a list
   with a symbol in it is still code.
+* `h/row-schema`'s `:pgmalli/untold` property is `:pgmalli/unknown-keys`.
 * What to do:
+  * Code reading `:pgmalli/untold` off a row schema reads `:pgmalli/unknown-keys`.
   * Options: `{:stringtype :unspecified}` is `{:send {String :unknown}}`. `:write {"text" [:or
     :string :keyword]}` and `:write {:enum [:string :keyword]}` are `{:send
     {clojure.lang.Keyword :unknown}}` (or the type your extension sends a keyword as).
