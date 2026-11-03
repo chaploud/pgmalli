@@ -3,13 +3,13 @@
    into HoneySQL-style data. Only that output format is supported, not arbitrary SQL.
 
    Covered: comparison, logical, arithmetic, string, array, jsonb and regex operators (see
-   edn-safe-ops); IS [NOT] NULL/TRUE/FALSE; IS [NOT] DISTINCT FROM; [NOT] IN; ANY/ALL (ARRAY[...]);
+   named-ops); IS [NOT] NULL/TRUE/FALSE; IS [NOT] DISTINCT FROM; [NOT] IN; ANY/ALL (ARRAY[...]);
    [NOT] BETWEEN [SYMMETRIC]; [NOT] LIKE/ILIKE; ::casts; function calls; TRIM(BOTH FROM x);
    CASE; CURRENT_TIMESTAMP and friends; AT TIME ZONE; (x).field; x[i]; quoted identifiers;
    string, number, boolean and NULL literals.
 
    Operators whose symbol is not a readable EDN keyword (~, @>, ...) get a named keyword
-   (see edn-safe-ops); ->honeysql maps them back when SQL has to be generated."
+   (named-ops)."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]))
 
@@ -84,10 +84,6 @@
    "#>" [7 :json-path] "#>>" [7 :json-path-text] "@>" [7 :contains] "<@" [7 :contained-by]
    "?" [7 :has-key] "?|" [7 :has-any-key] "?&" [7 :has-all-keys] "&&" [7 :overlaps]
    "%" [9 :mod] "^" [10 :pow]})
-
-(def edn-safe-ops
-  "PostgreSQL operators whose keyword form is not readable EDN, and the names used instead."
-  (update-vals named-ops second))
 
 (def ^:private binary-ops
   "operator -> [precedence keyword], following PostgreSQL precedence."
@@ -383,8 +379,3 @@
          f)))
    e))
 
-(defn ->honeysql
-  "Replaces the EDN-safe operator names with the symbols HoneySQL formats."
-  [e]
-  (let [back (into {} (keep (fn [[op k]] (when-not (#{:like :ilike :not-like :not-ilike} k) [k (keyword op)])) edn-safe-ops))]
-    (walk/postwalk (fn [f] (if (and (vector? f) (contains? back (first f))) (assoc f 0 (back (first f))) f)) e)))

@@ -59,7 +59,7 @@
               :let [v (oracle/value c)]
               :when (not (left-out c))]
         ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
-        (is (= (sent-as con v) (accept/class-type v)) (.getName ^Class c))))))
+        (is (= (sent-as con v) (some (fn [[c t]] (when (instance? c v) t)) accept/class-types)) (.getName ^Class c))))))
 
 (def ^:private targets
   "[column type, the type accept/accepts? takes for it]: every type of types, an array of each,

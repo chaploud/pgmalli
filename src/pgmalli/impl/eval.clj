@@ -796,6 +796,76 @@
   {"CURRENT_TIMESTAMP" #(Instant/now) "CURRENT_DATE" #(LocalDate/now) "LOCALTIMESTAMP" #(LocalDateTime/now)
    "CURRENT_TIME" #(OffsetTime/now) "LOCALTIME" #(LocalTime/now)})
 
+(declare ev)
+
+(def ^:private comparison-ops #{:= :<> :< :> :<= :>=})
+(def ^:private arithmetic-ops #{:+ :- :* :/ :mod :abs})
+
+(defn- all
+  "The values of args on row, lazily: AND, OR and COALESCE stop at the first decisive one (args
+   is a chunked seq, a list of them is not)."
+  [args row]
+  (map (fn [x] (ev x row)) (apply list args)))
+
+(defn- compared [op]
+  (fn [[l r] row]
+    (cond (and (vector? r) (= :any (first r))) (let [v (ev l row) vs (ev (second r) row)] (when (and (some? v) (some? vs)) (or3 (map #(cmp op v %) vs))))
+          (and (vector? r) (= :all (first r))) (let [v (ev l row) vs (ev (second r) row)] (when (and (some? v) (some? vs)) (and3 (map #(cmp op v %) vs))))
+          :else (cmp op (ev l row) (ev r row)))))
+
+(defn- now [_ _] (Instant/now))
+
+(def ^:private non-strict
+  "Operators that read their arguments themselves: (f args row)."
+  (merge
+   (zipmap comparison-ops (map compared comparison-ops))
+   {:cast (fn [[x t] row]
+            (let [v (cast-to (ev x row) (cast-type t))]
+              ;; an explicit cast to varchar(n) cuts the value to n characters
+              (cond (and (vector? t) (text-types (cast-type t)) (not (bpchar-types (cast-type t))) (integer? (second t)) (string? v))
+                    (let [n (int (second t))] (if (< n (.codePointCount ^String v 0 (count v))) (subs v 0 (.offsetByCodePoints ^String v 0 n)) v))
+                    ;; numeric(p,s) rounds to s places, and fails past p digits
+                    (and (vector? t) (exact-types (cast-type t)) (integer? (second t)) (decimal? v))
+                    (let [[_ p sc] t
+                          sc (or sc 0)
+                          r (when (<= (integer-digits v) (inc (- p sc))) (rounded v sc))]
+                      (if (and r (< (integer-digits r) (inc (- p sc)))) r (throw (ex-info "numeric field overflow" {}))))
+                    :else v)))
+    :array (fn [[xs] row] (mapv #(ev % row) xs))
+    :raw (fn [[v] _] ((raw-values v)))
+    ::bpchar (fn [[col n padded?] row] (some-> (ev col row) (bpchar-value n padded?)))
+    ::int (fn [[t x] row] (some->> (ev x row) (in-range t)))
+    ::jsonb-text (fn [[x] row] (some-> (ev x row) json-text*))
+    ::concat (fn [[x y jx jy] row] (let [vx (ev x row) vy (ev y row)] (when (and (some? vx) (some? vy)) (concat* vx vy jx jy))))
+    :now now :transaction_timestamp now :statement_timestamp now :clock_timestamp now
+    :and (fn [args row] (and3 (all args row)))
+    :or (fn [args row] (or3 (all args row)))
+    :not (fn [[x] row] (not3 (ev x row)))
+    :is (fn [[x w] row] (let [v (ev x row)] (if (nil? w) (nil? v) (= v w))))
+    :is-not (fn [[x w] row] (let [v (ev x row)] (if (nil? w) (some? v) (not= v w))))
+    :is-distinct-from (fn [[x y] row] (let [l (ev x row) r (ev y row)] (not (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r))))))
+    :is-not-distinct-from (fn [[x y] row] (let [l (ev x row) r (ev y row)] (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r)))))
+    :in (fn [[x vs] row] (in3 (ev x row) (map #(ev % row) vs)))
+    :not-in (fn [[x vs] row] (not3 (in3 (ev x row) (map #(ev % row) vs))))
+    :between (fn [args row] (let [[v lo hi] (all args row)] (and3 [(cmp :>= v lo) (cmp :<= v hi)])))
+    :between-symmetric (fn [args row] (let [[v lo hi] (all args row)] (or3 [(and3 [(cmp :>= v lo) (cmp :<= v hi)]) (and3 [(cmp :>= v hi) (cmp :<= v lo)])])))
+    :nullif (fn [[x y] row] (let [l (ev x row) r (ev y row)] (when-not (and (some? l) (some? r) (same? l r)) l)))
+    :greatest (fn [args row] (let [vs (remove nil? (all args row))] (when (seq vs) (reduce #(if (cmp :> %2 %1) %2 %1) vs))))
+    :least (fn [args row] (let [vs (remove nil? (all args row))] (when (seq vs) (reduce #(if (cmp :< %2 %1) %2 %1) vs))))
+    :coalesce (fn [args row] (first (filter some? (all args row))))
+    :concat (fn [args row] (apply str (map #(text-out % false) (remove nil? (all args row)))))
+    ::unordered (fn [[x cols] row]
+                  (if (some #(let [v (ev % row)] (or (string? v) (keyword? v) (coll? v))) cols) (unknowable :order) (ev x row)))
+    ;; a hash partition's bound: the row's key hashed as the database hashes it
+    :satisfies_hash_partition (fn [args row] (let [[_ modulus remainder & vs] (all args row)] (pghash/satisfies-hash-partition? modulus remainder vs)))
+    :case (fn [args row]
+            (let [[clauses else] (if (= :else (last (butlast args)))
+                                   [(butlast (butlast args)) (last args)]
+                                   [args nil])
+                  ;; the first true condition selects the branch; its result may itself be NULL or false
+                  branch (some (fn [[cnd r]] (when (true? (ev cnd row)) [r])) (partition 2 clauses))]
+              (ev (if branch (first branch) else) row)))}))
+
 ;; ev's throws ("cannot add" and the like) are control flow, not messages a user sees: an
 ;; expression PostgreSQL would fail on fails the row, and checker's try/catch turns that into
 ;; false.
@@ -806,73 +876,18 @@
     (keyword? e) (let [v (if (contains? row e) (get row e) (get row (name e)))]
                    (if (or (map? v) (sequential? v)) (json-normal v) v))
     :else
-    (let [[op & args] e
-          a #(ev (first args) row)
-          b #(ev (second args) row)
-          ;; args is a chunked seq; mapping over a list keeps AND, OR and COALESCE from
-          ;; evaluating past the first decisive operand
-          all #(map (fn [x] (ev x row)) (apply list args))]
+    (let [[op & args] e]
       (if-let [f (strict op)]
         ;; every argument is evaluated (an error in any fails the row), then strictness applies
-        (let [vs (doall (all))] (when (every? some? vs) (apply f vs)))
-        (case op
-          :cast (let [t (second args) v (cast-to (a) (cast-type t))]
-                  ;; an explicit cast to varchar(n) cuts the value to n characters
-                  (cond (and (vector? t) (text-types (cast-type t)) (not (bpchar-types (cast-type t))) (integer? (second t)) (string? v))
-                        (let [n (int (second t))] (if (< n (.codePointCount ^String v 0 (count v))) (subs v 0 (.offsetByCodePoints ^String v 0 n)) v))
-                        ;; numeric(p,s) rounds to s places, and fails past p digits
-                        (and (vector? t) (exact-types (cast-type t)) (integer? (second t)) (decimal? v))
-                        (let [[_ p sc] t
-                              sc (or sc 0)
-                              r (when (<= (integer-digits v) (inc (- p sc))) (rounded v sc))]
-                          (if (and r (< (integer-digits r) (inc (- p sc)))) r (throw (ex-info "numeric field overflow" {}))))
-                        :else v))
-          :array (mapv #(ev % row) (first args))
-          :raw ((raw-values (first args)))
-          ::bpchar (let [[col n padded?] args] (some-> (ev col row) (bpchar-value n padded?)))
-          ::int (let [[t x] args] (some->> (ev x row) (in-range t)))
-          ::jsonb-text (some-> (a) json-text*)
-          ::concat (let [[x y jx jy] args vx (ev x row) vy (ev y row)] (when (and (some? vx) (some? vy)) (concat* vx vy jx jy)))
-          (:now :transaction_timestamp :statement_timestamp :clock_timestamp) (Instant/now)
-          :and (and3 (all))
-          :or (or3 (all))
-          :not (not3 (a))
-          (:= :<> :< :> :<= :>=) (let [r (second args)]
-                                   (cond (and (vector? r) (= :any (first r))) (let [v (a) vs (ev (second r) row)] (when (and (some? v) (some? vs)) (or3 (map #(cmp op v %) vs))))
-                                         (and (vector? r) (= :all (first r))) (let [v (a) vs (ev (second r) row)] (when (and (some? v) (some? vs)) (and3 (map #(cmp op v %) vs))))
-                                         :else (cmp op (a) (b))))
-          :is (let [v (a)] (if (nil? (second args)) (nil? v) (= v (second args))))
-          :is-not (let [v (a)] (if (nil? (second args)) (some? v) (not= v (second args))))
-          :is-distinct-from (let [l (a) r (b)] (not (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r)))))
-          :is-not-distinct-from (let [l (a) r (b)] (or (and (nil? l) (nil? r)) (and (some? l) (some? r) (same? l r))))
-          :in (in3 (a) (map #(ev % row) (second args)))
-          :not-in (not3 (in3 (a) (map #(ev % row) (second args))))
-          :between (let [[v lo hi] (all)] (and3 [(cmp :>= v lo) (cmp :<= v hi)]))
-          :between-symmetric (let [[v lo hi] (all)] (or3 [(and3 [(cmp :>= v lo) (cmp :<= v hi)]) (and3 [(cmp :>= v hi) (cmp :<= v lo)])]))
-          :nullif (let [l (a) r (b)] (when-not (and (some? l) (some? r) (same? l r)) l))
-          :greatest (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (cmp :> %2 %1) %2 %1) vs)))
-          :least (let [vs (remove nil? (all))] (when (seq vs) (reduce #(if (cmp :< %2 %1) %2 %1) vs)))
-          :coalesce (first (filter some? (all)))
-          :concat (apply str (map #(text-out % false) (remove nil? (all))))
-          ::unordered (let [[x cols] args]
-                        (if (some #(let [v (ev % row)] (or (string? v) (keyword? v) (coll? v))) cols) (unknowable :order) (ev x row)))
-          ;; a hash partition's bound: the row's key hashed as the database hashes it
-          :satisfies_hash_partition (let [[_ modulus remainder & vs] (all)] (pghash/satisfies-hash-partition? modulus remainder vs))
-          :case (let [[clauses else] (if (= :else (last (butlast args)))
-                                       [(butlast (butlast args)) (last args)]
-                                       [args nil])
-                      ;; the first true condition selects the branch; its result may itself be NULL or false
-                      branch (some (fn [[cnd r]] (when (true? (ev cnd row)) [r])) (partition 2 clauses))]
-                  (ev (if branch (first branch) else) row))
+        (let [vs (doall (all args row))] (when (every? some? vs) (apply f vs)))
+        (if-let [f (non-strict op)]
+          (f args row)
           (throw (ex-info (str "unsupported in CHECK: " op) {:unsupported op})))))))
 
 ;;; vocabulary
 
 (def ^:private supported-ops
-  (into (set (keys strict))
-        [:cast :array :raw :now :transaction_timestamp :statement_timestamp :clock_timestamp
-         :and :or :not := :<> :< :> :<= :>= :is :is-not :is-distinct-from :is-not-distinct-from
-         :in :not-in :between :between-symmetric :nullif :greatest :least :coalesce :concat :case :satisfies_hash_partition]))
+  (into #{} (remove namespace) (concat (keys strict) (keys non-strict))))
 
 (defn- literal-arg [v] (if (and (vector? v) (= :cast (first v))) (second v) v))
 
@@ -932,11 +947,9 @@
     (cond (keyword? e) (let [t (get types e)] (when (rank t) t))
           (int? e) (if (<= -2147483648 e 2147483647) :integer :bigint)
           (not (vector? e)) nil
-          :else (case (first e)
-                  ::int (second e)
-                  (:+ :- :* :/ :mod :abs) (widest (map #(int-type % types) (rest e)))
-                  :cast (let [t (cast-type (nth e 2))] (when (rank t) t))
-                  nil))))
+          (= ::int (first e)) (second e)
+          (arithmetic-ops (first e)) (widest (map #(int-type % types) (rest e)))
+          (= :cast (first e)) (let [t (cast-type (nth e 2))] (when (rank t) t)))))
 
 (defn- jsonb-expr?
   "Whether e is a jsonb by its form: ->, #>, a cast to jsonb, || or - of jsonb."
@@ -974,14 +987,23 @@
             bpchar? #(and (vector? %) (= ::bpchar (first %)))
             e (cond (and (padded-ops op) (bpchar? (second e))) (assoc-in e [1 3] true)
                     ;; a literal compared with a char(n) is one too
-                    (and (#{:= :<> :< :> :<= :>=} op) (some bpchar? (rest e))) (mapv #(if (string? %) (bpchar-value % nil false) %) e)
+                    (and (comparison-ops op) (some bpchar? (rest e))) (mapv #(if (string? %) (bpchar-value % nil false) %) e)
                     :else e)
-            t (when (#{:+ :- :* :/ :mod :abs} op) (int-type e types))
+            t (when (arithmetic-ops op) (int-type e types))
             ;; an enum orders by its labels, which the evaluator does not have
             unordered (when (ordering-ops op) (seq (filter #(and (keyword? %) (= :unordered (get types %))) (rest e))))]
         (cond t [::int t e]
               unordered [::unordered e (vec unordered)]
               :else e)))))
+
+(defn- outcome
+  "What e evaluates to on row: ::unknowable where that depends on what the evaluator does not
+   know, false for an error."
+  [e row]
+  (try (ev e row)
+       ;; a value nested deeper than the stack goes: unknowable, as a regex's
+       (catch StackOverflowError _ ::unknowable)
+       (catch Exception ex (if (::unknowable (ex-data ex)) ::unknowable false))))
 
 (defn checker
   "Row predicate of a CHECK expression: true when the result is true or NULL, as in PostgreSQL.
@@ -993,18 +1015,9 @@
          stored (if reals
                   (fn [row] (reduce (fn [r k] (let [v (get r k)] (if (and (number? v) (float4? v)) (assoc r k (Float/valueOf (unchecked-float v))) r))) row reals))
                   identity)]
-     (fn [row] (not (false? (try (ev e (stored row))
-                                ;; a value nested deeper than the stack goes: unknowable, as a regex's
-                                (catch StackOverflowError _ true)
-                                (catch Exception ex (boolean (::unknowable (ex-data ex)))))))))))
+     (fn [row] (not (false? (outcome e (stored row))))))))
 
 (defn unknowable?
   "Whether the row's verdict depends on what the evaluator does not know, so checker passes it."
   [e row types]
-  (try (ev (typed (x/canonical e) types) row) false
-       (catch StackOverflowError _ true)
-       (catch Exception ex (boolean (::unknowable (ex-data ex))))))
-
-(defn passes?
-  ([e row] ((checker e) row))
-  ([e row types] ((checker e types) row)))
+  (= ::unknowable (outcome (typed (x/canonical e) types) row)))

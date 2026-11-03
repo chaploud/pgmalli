@@ -36,11 +36,6 @@
    (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
    (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))]))
 
-(defn class-type
-  "The type pgjdbc sends value as by its class; nil for a class class-types does not list."
-  [value]
-  (some (fn [[c t]] (when (instance? c value) t)) class-types))
-
 ;;; what PostgreSQL takes
 
 (def covered

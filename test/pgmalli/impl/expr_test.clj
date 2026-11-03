@@ -1,12 +1,19 @@
 (ns pgmalli.impl.expr-test
   (:require [clojure.edn :as edn]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [clojure.walk :as walk]
             [honey.sql :as sql]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.ir :as ir]
             [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
+
+(defn ->honeysql
+  "Data as parse gives it with the operators named for EDN (named-ops) as the symbols HoneySQL formats."
+  [e]
+  (let [back (into {} (keep (fn [[op [_ k]]] (when-not (#{:like :ilike :not-like :not-ilike} k) [k (keyword op)])) @#'x/named-ops))]
+    (walk/postwalk (fn [f] (if (and (vector? f) (contains? back (first f))) (assoc f 0 (back (first f))) f)) e)))
 
 (def ^:private golden
   [["difficulty >= 1 AND difficulty <= 5" [:and [:>= :difficulty 1] [:<= :difficulty 5]]]
@@ -46,7 +53,7 @@
   (let [e (x/parse "a ~* 'x' AND (j #> '{a}'::text[]) @> '1'::jsonb")]
     (is (= e (edn/read-string (pr-str e))))
     (is (= [:and [(keyword "~*") :a "x"] [(keyword "@>") [(keyword "#>") :j [:cast "{a}" :text-array]] [:cast "1" :jsonb]]]
-           (x/->honeysql e)))))
+           (->honeysql e)))))
 
 (deftest a-literal-with-a-point-or-an-exponent-is-a-numeric
   (is (= [:> :d 0.5M] (x/parse "d > 0.5")))
@@ -101,7 +108,7 @@
   (when *db*
     (let [ddl (str "CREATE TYPE mood AS ENUM ('happy', 'sad');\nCREATE TABLE rt (" roundtrip-columns
                    (apply str (map-indexed (fn [i [e _]]
-                                             (str ",\n  CONSTRAINT c" i " CHECK (" (first (sql/format (x/->honeysql e) {:inline true})) ")"))
+                                             (str ",\n  CONSTRAINT c" i " CHECK (" (first (sql/format (->honeysql e) {:inline true})) ")"))
                                            roundtrip-exprs))
                    ");")
           _ (exec-sql! ddl)

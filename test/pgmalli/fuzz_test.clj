@@ -11,6 +11,7 @@
             [malli.generator :as mg]
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.expr :as x]
+            [pgmalli.impl.expr-test :refer [->honeysql]]
             [pgmalli.impl.ir :as ir]
             [pgmalli.impl.json :as json]
             [pgmalli.test-db :as test-db :refer [*container* *db* exec-sql! with-postgres]]
@@ -146,7 +147,7 @@
                                       (cond (and (vector? f) (= :subscript (first f))) [:raw [(name (second f)) "[" (nth f 2) "]"]]
                                             (and (vector? f) (= :cast (first f)) (= :text-array (nth f 2))) [:raw (str "'" (second f) "'::text[]")]
                                             :else f))
-                                    (x/->honeysql e))
+                                    (->honeysql e))
                      {:inline true})))
 
 (defn- normalize
@@ -244,7 +245,7 @@
       (testing (str "seed " seed ", " (count exprs) " expressions x " (count rows) " rows")
         (doseq [[j row] (map-indexed vector rows)
                 [i e] (map-indexed vector exprs)]
-          (is (let [pg (get-in verdicts [j i]) ours (ev/passes? e row column-types)]
+          (is (let [pg (get-in verdicts [j i]) ours ((ev/checker e column-types) row)]
                 (or (= pg ours)
                     ;; a verdict that depends on what pgmalli cannot know passes the row
                     (ev/unknowable? e row column-types)
@@ -271,7 +272,7 @@
                     s (Character/toString (int (parse-long c)))
                     clause (x/check-clause (str "CHECK (s ~ " (test-db/sql-literal pattern) "::text)"))
                     pg? (= "t" v)
-                    accepted? (ev/passes? clause {:s s})]]
+                    accepted? ((ev/checker clause) {:s s})]]
         (if (< (parse-long c) 128)
           (is (= pg? accepted? (some? (re-find (re-pattern (ev/java-regex pattern)) s))) (str pattern " on " (pr-str s)))
           (when pg? (is (and accepted? (re-find (re-pattern (ev/java-regex pattern)) s)) (str pattern " on U+" (format "%04X" (parse-long c))))))))))

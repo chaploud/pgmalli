@@ -5,7 +5,11 @@
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.pgtypes :as pgtypes]))
 
-(defn- passes? [clause row] (ev/passes? (x/check-clause clause) row))
+(defn- checks?
+  ([e row] ((ev/checker e) row))
+  ([e row types] ((ev/checker e types) row)))
+
+(defn- passes? [clause row] (checks? (x/check-clause clause) row))
 
 (deftest three-valued-logic
   (let [clause "CHECK (status = 'pending'::approval_status AND closed_at IS NULL OR status = 'approved'::approval_status AND closed_at IS NOT NULL)"]
@@ -221,17 +225,17 @@
 
 (deftest integer-arithmetic-overflows-at-its-types-range
   (let [e (x/check-clause "CHECK ((n + m) > 0)")]
-    (is (not (ev/passes? e {:n 2147483647 :m 1} {:n :integer :m :integer})) "integer + integer")
-    (is (ev/passes? e {:n 2147483647 :m 1} {:n :integer :m :bigint}) "integer + bigint is bigint")
-    (is (ev/passes? e {:n 2147483647 :m 1}) "operand types unknown: no range"))
-  (is (not (ev/passes? (x/check-clause "CHECK ((n * 100000) > 0)") {:n 100000} {:n :integer})))
-  (is (ev/passes? (x/check-clause "CHECK ((n + 1) > 0)") {:n 32767} {:n :smallint}) "smallint + integer literal is integer")
-  (is (not (ev/passes? (x/check-clause "CHECK ((n + m) > 0)") {:n 32767 :m 1} {:n :smallint :m :smallint})))
-  (is (ev/passes? (x/check-clause "CHECK ((- n) < 0)") {:n 5}) "unary minus"))
+    (is (not (checks? e {:n 2147483647 :m 1} {:n :integer :m :integer})) "integer + integer")
+    (is (checks? e {:n 2147483647 :m 1} {:n :integer :m :bigint}) "integer + bigint is bigint")
+    (is (checks? e {:n 2147483647 :m 1}) "operand types unknown: no range"))
+  (is (not (checks? (x/check-clause "CHECK ((n * 100000) > 0)") {:n 100000} {:n :integer})))
+  (is (checks? (x/check-clause "CHECK ((n + 1) > 0)") {:n 32767} {:n :smallint}) "smallint + integer literal is integer")
+  (is (not (checks? (x/check-clause "CHECK ((n + m) > 0)") {:n 32767 :m 1} {:n :smallint :m :smallint})))
+  (is (checks? (x/check-clause "CHECK ((- n) < 0)") {:n 5}) "unary minus"))
 
 (deftest char-n-ignores-trailing-spaces-except-where-padded
   (let [types {:c [:character 4]}
-        ok? (fn [clause v] (ev/passes? (x/check-clause clause) {:c v} types))]
+        ok? (fn [clause v] (checks? (x/check-clause clause) {:c v} types))]
     (doseq [v ["ab" "ab  "]]
       (is (ok? "CHECK (c = 'ab'::bpchar)" v))
       (is (ok? "CHECK (c = 'ab  '::bpchar)" v))
@@ -266,7 +270,7 @@
 
 (deftest an-enum-orders-by-its-labels-which-the-evaluator-does-not-have
   (let [types {:m :unordered :n :unordered}
-        ok? (fn [clause row] (ev/passes? (x/check-clause clause) row types))]
+        ok? (fn [clause row] (checks? (x/check-clause clause) row types))]
     (is (= :unordered (ev/column-type {:pg/type "mood"})))
     (is (nil? (ev/column-type {:pg/type "numeric(10,2)"})))
     (is (ok? "CHECK (m < n)" {:m "happy" :n "ok"}) "happy may come before ok")
@@ -417,7 +421,7 @@
   (is (passes? "CHECK ((v >= (0)::double precision))" {:v Float/NaN}))
   (is (passes? "CHECK ((v)::boolean)" {:v 5}))
   (is (not (passes? "CHECK ((v)::boolean)" {:v 0})))
-  (is (ev/passes? (x/check-clause "CHECK ((v <= ARRAY['happy'::ord]))") {:v ["sad"]} {:v :unordered}) "an enum array orders by its labels"))
+  (is (checks? (x/check-clause "CHECK ((v <= ARRAY['happy'::ord]))") {:v ["sad"]} {:v :unordered}) "an enum array orders by its labels"))
 
 (deftest a-numeric-literal-beyond-bigint-is-read
   (is (not (passes? "CHECK ((v > ('100000000000000000000000000000000000000'::numeric)::double precision))" {:v 1.0}))))
@@ -439,18 +443,18 @@
   (is (not (ev/supported? (x/check-clause "CHECK ((t)::character(3) = 'abc'::bpchar)")))))
 
 (deftest a-real-is-checked-as-stored-and-casts-that-round-are-not-evaluated
-  (is (ev/passes? (x/check-clause "CHECK (ag >= 0::double precision AND ag <= 1::double precision)") {:ag 1.0000000001} {:ag :real}))
+  (is (checks? (x/check-clause "CHECK (ag >= 0::double precision AND ag <= 1::double precision)") {:ag 1.0000000001} {:ag :real}))
   (is (passes? "CHECK ((x)::numeric(2,0) = 1::numeric)" {:x 1.4M}) "numeric(p,s) rounds")
   (is (not (passes? "CHECK ((x)::numeric(2,0) = 1::numeric)" {:x 1.5M})))
   (is (not (ev/supported? (x/check-clause "CHECK ((t)::timestamp(0) without time zone = '2020-01-01 10:00:01'::timestamp without time zone)")))))
 
 (deftest a-real-casts-to-numeric-as-its-shortest-decimal
-  (is (ev/passes? (x/check-clause "CHECK ((x)::numeric = 0.1)") {:x 0.1} {:x :real})))
+  (is (checks? (x/check-clause "CHECK ((x)::numeric = 0.1)") {:x 0.1} {:x :real})))
 
 
 (deftest floats-go-to-numeric-and-to-real-as-postgresql-converts-them
   (is (passes? "CHECK ((x)::numeric(2,0) = 3::numeric)" {:x 2.4999999999999996}) "15 significant digits: 2.50000000000000")
-  (is (ev/passes? (x/check-clause "CHECK (x = (0.105)::real)") {:x 0.105} {:x :real}))
+  (is (checks? (x/check-clause "CHECK (x = (0.105)::real)") {:x 0.105} {:x :real}))
   (is (m/validate [:double {:pg/type "real"}] (float 0.5) {:registry (merge (m/default-schemas) pgtypes/schemas)}) "a Float, as pgjdbc reads a real"))
 
 (defn- ms [f] (let [t (System/nanoTime)] (f) (quot (- (System/nanoTime) t) 1000000)))
