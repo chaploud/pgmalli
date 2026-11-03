@@ -62,6 +62,8 @@
                       :task (apply update-expected/-main *command-line-args*)}
          test:update:jvm {:doc "bb test:update:jvm [ns ...]: bb test:update on the JVM, for the namespaces that need next.jdbc too"
                           :task (apply shell "clojure -M:test:test-update" *command-line-args*)}
+         test:stricter {:doc "Rewrite test/resources/pgmalli/stricter.edn, where PostgreSQL takes a parameter that accept/holds? leaves out (JVM, docker); read the diff"
+                        :task (shell {:extra-env {"PGMALLI_UPDATE_STRICTER" "1"}} "clojure -M:test -n pgmalli.accept-test")}
          test:docs:update {:doc "bb test:docs:update [file.md ...]: rewrite each ;; => of the docs with what its form gives (JVM); read the git diff"
                            :task (apply shell "clojure -M:test:docs-update" *command-line-args*)}
          test:jvm {:doc "bb test:jvm [main|oracle]: run the test suite on the JVM, or one part of it"

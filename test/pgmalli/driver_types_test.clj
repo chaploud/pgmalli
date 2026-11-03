@@ -70,19 +70,24 @@
     (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
           o {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps} :schema "matrix"}
-          row (jdbc/execute-one! ds ["SELECT * FROM matrix.types WHERE id = 1"] (:jdbc o))
           values (m/schema (h/values-schema registry :types o) {:registry registry})
           set (m/schema (h/set-schema registry :types o) {:registry registry})]
       (with-open [con (jdbc/get-connection ds)]
         (.setAutoCommit con false)
-        (let [;; another test may load next.jdbc.date-time, which cannot send a java.sql.Time
-              taken? (fn [k v] (try (jdbc/execute! con [(str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2") v]) true
-                                    (catch Exception _ false)
-                                    (finally (.rollback con))))]
-          (is (= [] (vec (for [[k v] (dissoc row :id)
-                               :when (and (taken? k v)
-                                          (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v)))))]
-                           [k (some-> v class .getName)])))))))))
+        (let [;; an array is read on the connection it is sent over: a PgArray asks it its element type
+              row (jdbc/execute-one! con ["SELECT * FROM matrix.types WHERE id = 1"] (:jdbc o))
+              ;; pgjdbc's setObject, as next.jdbc sends a value without an extension (next.jdbc.date-time,
+              ;; which this namespace loads, cannot send a java.sql.Time)
+              taken? (fn [k v] (with-open [ps (.prepareStatement con (str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2"))]
+                                 (try (.setObject ps 1 v) (.executeUpdate ps) true
+                                      (catch java.sql.SQLException e (oracle/refused e) false)
+                                      (finally (.rollback con)))))
+              {taken true not-taken false} (group-by #(taken? (key %) (val %)) (dissoc row :id))]
+          (is (= [] (vec (for [[k v] taken
+                               :when (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v))))]
+                           [k (some-> v class .getName)]))))
+          ;; bit(1) reads as a Boolean, money as a Double, an enum as a String: none goes back as its type
+          (is (= [:c_bit :c_money :d_bit :d_money :e] (sort (keys not-taken))) "the values PostgreSQL does not take back"))))))
 
 (defn- taken?
   "Whether PostgreSQL takes v as sql's parameter, run and rolled back."
@@ -90,7 +95,7 @@
   (with-open [con (jdbc/get-connection ds)]
     (.setAutoCommit con false)
     (try (jdbc/execute! con [sql v]) true
-         (catch Exception _ false)
+         (catch java.sql.SQLException e (oracle/refused e) false)
          (finally (.rollback con)))))
 
 (deftest an-enum-label-goes-as-a-string-only-where-pgjdbc-sends-it-untyped
