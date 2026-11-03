@@ -244,7 +244,7 @@
   [t]
   (if (and (vector? t) (= :or (first t))) (remove map? (rest t)) [t]))
 
-(def ^:private collection-kinds #{:map :map-of :vector :sequential :set :tuple})
+(def collection-kinds #{:map :map-of :vector :sequential :set :tuple})
 
 (defn distinct-kinds
   "Alternatives ts, the first of each kind, in their order (an argument's own values come

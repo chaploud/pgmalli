@@ -116,6 +116,23 @@
       (when (and (not= :cast context) (accept/holds? accepted-t sent-t) (not (and (= :compare context) (not (compares-itself t)))))
         (is taken (str "PostgreSQL refuses " pair))))))
 
+(deftest a-jsonb-cast-to-a-scalar-type-takes-a-scalar-alone
+  (when *db*
+    (with-open [con (jdbc/get-connection (datasource))]
+      (let [casts? (fn [doc t] (try (jdbc/execute! con [(str "SELECT CAST(?::jsonb AS " t ")") doc]) true
+                                    (catch java.sql.SQLException _ false)))]
+        (doseq [t ["integer" "numeric" "double precision" "boolean"]
+                doc ["{\"a\": 1}" "[1]"]]
+          (is (accept/accepts? t "jsonb" :cast) t)
+          (is (not (casts? doc t)) (str doc " to " t))
+          (is (accept/scalar-cast? t "jsonb") t))
+        (doseq [t ["text" "character varying" "json" "jsonb"]
+                doc ["{\"a\": 1}" "[1]"]]
+          (is (casts? doc t) (str doc " to " t))
+          (is (not (accept/scalar-cast? t "jsonb")) t))
+        (is (casts? "1" "integer"))
+        (is (casts? "true" "boolean"))))))
+
 (deftest the-schema-of-each-class-sent-takes-its-values
   (doseq [:let [registry (pgmalli/registry {:registry {}})]
           v [1 (int 1) (short 1) 1M 1N (biginteger 1) 1.0 (float 1) true "1" (java.util.UUID/randomUUID) (.getBytes "a")

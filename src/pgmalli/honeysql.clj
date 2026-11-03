@@ -1770,7 +1770,8 @@
                     a (if (= :unknown p)
                         (mapcat (fn [[schema q]] (when (= :unknown q) (shape/alternatives schema))) (jdbc/write-rows opts false))
                         (shape/alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts)))))
-                    :when (not (untyped? a))]
+                    :when (and (not (untyped? a))
+                               (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a)))))]
                 [p a])
               cast-arrays)]
     (cond
