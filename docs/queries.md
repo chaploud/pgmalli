@@ -18,8 +18,9 @@ examples use [example/schema.sql](example/schema.sql).
 
 `h/check` resolves names the way PostgreSQL does:
 
-- The tables of a statement are those of `:from`, `:using`, `:cross-join`, the joins (not
-  `:join-by`), `:insert-into`, `:update`, `:delete-from` and `:truncate`, under their aliases.
+- The tables of a statement are those of `:from`, `:using`, `:cross-join`, the joins
+  (`:join-by`'s in its order), `:insert-into`, `:update`, `:delete-from` and `:truncate`, under
+  their aliases; `{:table t}` is `SELECT * FROM t`.
 - `:email` is a column of one of those tables; `:u.email` and `:u/email` a column of the alias
   `u`. A column a subquery does not find is looked for in the enclosing statements.
 - A table is looked up in the `:schema` option (`"public"` by default); `:other.t` names its schema.
@@ -164,9 +165,11 @@ keyed as in `sql/format`'s `:params`, here for an application that sends a `Stri
 | anywhere else | `:any` |
 
 An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one of `:position`
-(no use of it is one the table above types), `:type` (where it is used, pgmalli knows no type:
-a function or a table the registry lacks, a cast to an extension's type) and `:code` (only code
-uses it):
+(no use of it is one the table above types: an argument of a function the registry lacks, or of
+a polymorphic one, is one), `:type` (it is compared with or cast to what pgmalli knows no type
+of: the result of a function the registry lacks, a column of a table it lacks, an extension's
+type) and `:code` (only code uses it). An argument where a value of a type pgmalli does not
+type goes (json, inet, interval) is `[:any {:pg/type ...}]`, without `:pgmalli/untyped`:
 
 ```clojure
 (h/arg-types registry {:select [[:?label :label]] :from [:users]})
@@ -228,11 +231,12 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 (`:users` in `:schema`, `:app.users`) or as the registry does (`:pg.public/users`). Each column
 is typed as an argument assigned to it (what `:send` sends, held to the column's range) and keyed
 by any key HoneySQL writes to the column under `:format`: the key the `:jdbc` builder labels the
-column with, unqualified, so a row read and written back fits (`:group-id` under a kebab
-builder), the column's keyword (`:group_id`) and its kebab spelling (`:group-id`); where none is written to the column, its
-name as a string (a column with capitals where names are unquoted: PostgreSQL folds an unquoted
-name to lower case, and HoneySQL quotes a string key). A column takes one of its keys: two would
-write it twice. A column the database may fill is optional and takes HoneySQL's
+column with, unqualified or qualified by the table, so a row read and written back fits
+(`:group-id` under a kebab builder), the key next.jdbc's default builder reads it as
+(`:users/group_id`; HoneySQL drops the namespace), the column's keyword (`:group_id`), its kebab
+spelling (`:group-id`), and its name as a string (`"group_id"`; HoneySQL quotes a string key, so
+a column with capitals where names are unquoted takes that alone: PostgreSQL folds an unquoted
+name to lower case). A column takes one of its keys: two would write it twice. A column the database may fill is optional and takes HoneySQL's
 `:default` too; one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
 BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
 takes nil: the trigger may fill it. In
@@ -240,8 +244,9 @@ takes nil: the trigger may fill it. In
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
 A column takes a value, or a HoneySQL expression: a vector or list headed by a keyword
-(`[:cast "closed" :user_status]`, `[:now]`, `[:+ :n 1]`) or an SQL word
-(`:current_timestamp`, `:current_user`). An expression is not checked, except `[:lift v]`, which
+(`[:cast "closed" :user_status]`, `[:now]`, `[:+ :n 1]`), an SQL word
+(`:current_timestamp`, `:current_user`) or a map of clauses, which HoneySQL writes as a subquery
+(`{:select [[[:max :id]]] :from [:groups]}`). An expression is not checked, except `[:lift v]`, which
 HoneySQL sends as one parameter: `v` must be of the column's type. Another keyword is a column,
 which `:set` takes (`SET score = seq`) and `:values` does not (PostgreSQL refuses a column
 there); a vector or list not headed by a keyword is a row of parameters, which no column takes. `mg/generate` gives values alone, no
@@ -325,7 +330,8 @@ An enum argument takes its labels as strings where a `String` goes untyped (`{St
 or cast. Under pgjdbc's default, which sends a `String` as `varchar`, PostgreSQL neither
 compares a varchar with an enum nor assigns one to it: the argument takes no label then (a
 keyword label where a keyword is sent untyped), and a `PGobject` where no label goes, which
-pgjdbc sends as the type it names; `h/check` reports the string as `:uncast-string`.
+pgjdbc sends as the type it names. `h/check` reports a string literal there (or `[:lift "s"]`)
+as `:uncast-string`; an argument is the argument type's.
 
 ## The row a query returns
 
@@ -360,7 +366,7 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   common type of their values
   ([10.5](https://www.postgresql.org/docs/current/typeconv-union-case.html)), NULL and a literal
   of no type left out as PostgreSQL leaves them out (a set operation's two members at a time
-  from the left: `NULL UNION NULL` is `text`); `nullif`, of its first argument as `=` reads it.
+  from the left: `NULL UNION NULL` is `text`, a domain united with NULL its base type); `nullif`, of its first argument as `=` reads it.
 - A scalar subquery, of its one column's type, nullable: no row is NULL
   ([4.2.11](https://www.postgresql.org/docs/current/sql-expressions.html#SQL-SYNTAX-SCALAR-SUBQUERIES));
   `[[f x]]`, HoneySQL's `(f(x))`, of `f(x)`'s. A recursive CTE's columns are of its first
@@ -495,16 +501,16 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 ## Function schemas
 
 `h/query-schema` combines `arg-types` and `row-schema` into
-`[:=> [:cat arg ...] [:sequential row]]`, the arguments in the function's order. The return is
+`[:=> {:pgmalli/problems [...]} [:cat arg ...] [:sequential row]]`, the arguments in the function's order. The return is
 what `execute!` returns on a datasource or connection, `:any` when `h/row-schema` gives nil.
 `{:result :one}` makes it what `execute-one!` returns:
 
 ```clojure
 (h/query-schema registry [:id] {:select [:email] :from [:users] :where [:= :id :?id]} {:result :one})
-;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:maybe [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:maybe [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 
 (h/query-schema registry [:id] {:delete-from :users :where [:= :id :?id]} {:result :one})
-;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
 ```
 
 Where the data tells how many rows a statement returns, the return says so
@@ -520,7 +526,7 @@ row, `{:result :one}` drops the `[:maybe]`:
 
 ```clojure
 (h/query-schema registry [:db] {:select [[[:count :*] :n]] :from [:users]} {:result :one})
-;; => [:=> [:cat :any] [:map [:n [:int #:pg{:type "bigint"}]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat :any] [:map [:n [:int #:pg{:type "bigint"}]]]]
 
 (last (h/query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]}))
 ;; => [:sequential {:max 1} [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]
@@ -557,8 +563,7 @@ The schema may use types malli's default registry lacks (`:time/instant`). That 
 
 ### Problems in function schemas
 
-The `:pgmalli/problems` property makes the vector one longer, so read the parts with
-`m/children`, not by position:
+A query schema's properties hold `:pgmalli/problems`, `[]` for none:
 
 ```clojure
 (def broken
@@ -597,7 +602,8 @@ pgmalli reports or refuses some of what PostgreSQL runs, where it is almost alwa
 Write the query so PostgreSQL's reading is explicit instead.
 
 - An argument takes its column's own values, not all PostgreSQL converts: a `bigint` column
-  compared with a `numeric` argument, or a number assigned to a `text` column, PostgreSQL runs
+  compared with a `numeric` argument, a `timestamptz` column with a `date` (a `LocalDate`), or a
+  number assigned to a `text` column, PostgreSQL runs
   by converting one side, which hides a mix-up the column's type would catch. Cast it in the
   query (`[:cast :?n :numeric]`) where the conversion is meant. A `numeric` (a `BigDecimal`)
   is not a `real` or `double precision` column's own either, though PostgreSQL converts it
@@ -624,7 +630,6 @@ Write the query so PostgreSQL's reading is explicit instead.
   inside it are checked, but a column it computes (`(keyword c)`) is not. A list or seq of
   keywords, vectors, maps and values alone (`(map keyword cols)` run) is read as a vector, as
   HoneySQL reads it.
-- The tables of `:join-by`.
 - A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
   reported as `:unread-clause`.
 - Values written in the query beyond NULL, enum literals and strings sent typed (`varchar`

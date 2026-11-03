@@ -33,6 +33,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/query-schema`'s return states the row count where the data tells it
   (`[:sequential {:max 1} row]`): an instrumented function's return is checked against it, and
   code that reads the row by position (`(second ret)`) reads it with `last` or `m/children`.
+  Its properties map is always there (`{:pgmalli/problems []}` for none), so the arguments are
+  `(nth s 2)` and the return `(nth s 3)`.
 * In `pgmalli.edn`, the database name under `:db` is `:dbname`, as in next.jdbc and libpq:
   `:db {:db "app"}` is `:db {:dbname "app"}`. The old key is an error naming the new one.
 * `h/row-schema`'s `:pgmalli/untold` property is renamed `:pgmalli/unknown-keys`.
@@ -49,7 +51,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     where any of them does; on 0.3.3 its first use typed it.
   * An argument compared with or assigned to an enum column takes its labels as strings only
     where a `String` goes untyped (`{:send {String :unknown}}`) or cast: PostgreSQL refuses a
-    varchar there. Under pgjdbc's default it takes a `PGobject` instead.
+    varchar there. Under pgjdbc's default it takes a `PGobject` instead. To send labels as
+    strings, connect with `stringtype=unspecified` and pass `{:send {String :unknown}}`, or cast
+    the argument (`[:cast :?status :user_status]`); write a constant label as
+    `[:inline "active"]`.
   * An instrumented function's return is checked against more: `h/row-schema` types what was
     nullable `:any`, such as a call of a function or an operator or a CTE's or a subquery's
     column.
@@ -80,7 +85,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   row ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `{:read {:enum :keyword}}`: an extension reading every enum type's value as a keyword
   ([docs/reading-rows.md](docs/reading-rows.md#your-own-extensions)).
-
 * `:send` says what your application sends, as pgjdbc's `setObject` decides it by a value's
   class ([docs/queries.md](docs/queries.md#what-your-application-sends)). pgjdbc's own classes
   include its boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and the arrays
@@ -92,11 +96,17 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   a write. A key spelled close to one pgmalli reads and read by no next.jdbc function
   (`:buildr-fn`) is an error naming the key meant.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
-  `:set` maps built at run time, keyed by any key HoneySQL writes to a column: the label the
-  `:jdbc` builder reads it as, so a row read is written back, its name (`:group_id`) or its
-  kebab spelling (`:group-id`), one of them a column; a column takes a HoneySQL expression too (`[:now]`,
-  `[:+ :n 1]`, `:current_timestamp`, a column in `:set`, `[:lift v]` with `v` of the column's type), and generates values alone
+  `:set` maps built at run time, keyed by any one key HoneySQL writes to a column: the label
+  the `:jdbc` builder reads it as, unqualified or qualified by the table (`:users/group_id`, as
+  next.jdbc's default builder reads it), so a row read is written back, its name (`:group_id`),
+  its kebab spelling (`:group-id`) or its name as a string (`"group_id"`). A column takes a
+  HoneySQL expression too (`[:now]`, `[:+ :n 1]`, `:current_timestamp`, a column in `:set`,
+  `[:lift v]` with `v` of the column's type, a subquery map), and generates values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
+* `h/check` and `h/row-schema` read `:join-by`'s joins as the join clauses', in its order, and
+  `{:table t}` as `SELECT * FROM t`.
+* A column of an enum type or a domain of another schema the registry holds is of that type:
+  `h/check` reads its labels, and an argument takes them as one of the schema's own.
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
 * Array arguments: a Clojure collection whose class `:send` sends as an array type or
   `:unknown`, and a Java array, typed by its elements (`[:pg/array element]`), where it is
@@ -176,11 +186,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   catalog does not say when a function returns NULL. `current_timestamp` and the like (but
   `current_schema` and `system_user`, which may be NULL), `count`, `pg_catalog`'s `row_number`
   and a comparison of values that are not NULL are not.
-* `coalesce`, `CASE` and the like resolve as PostgreSQL's `select_common_type`: `CASE` takes its
-  `ELSE` value first, and a `varchar` before a `text` stays `varchar`. A typed string among
-  numbers is no longer typed as the numbers (PostgreSQL refuses it).
-* A json or jsonb column a CHECK or an override shapes takes that shape as an argument for what
-  `:send` sends as its type, not any value of the class.
 * A domain whose CHECK lists its values
   (`CREATE DOMAIN lbl AS text CHECK (VALUE IN ('a', 'b'))`) keeps its base type
   (`[:enum {:pg/type "text"} "a" "b"]`). `h/check` no longer reads it as an enum type, so a
@@ -208,9 +213,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   argument's elements wherever it goes, in a subquery too, and compared under `IS [NOT] DISTINCT
   FROM` takes nil. A problem with an item of `INSERT ... SELECT` is reported in the SELECT
   (`:in`).
-* An argument compared with or assigned to a column the driver reads as a PGobject (`json`,
-  `jsonb`, `citext`, `bit(n)` for n > 1, `bit varying`, a domain over them) takes a PGobject or
-  an instance of a subclass, so a value read can be written back.
+* An argument compared with or assigned to a column the driver reads as a PGobject (`citext`,
+  `bit(n)` for n > 1, `bit varying`, a domain over them) takes a PGobject or an instance of a
+  subclass, so a value read can be written back. An array argument whose elements take a
+  PGobject takes one too (`= ANY(?)` of an enum column, a PGobject of type `"status[]"`).
 * A domain over `bit`, `bit varying` or `numeric(p,s)` is read as the driver returns its base
   type: a Boolean for `bit(1)`, a PGobject for another bit string, a Double too for a
   `numeric`'s NaN.
@@ -261,6 +267,19 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A column overridden by its type is no longer listed in `:unrendered`.
 * A domain over a type with a typmod inside its name (`timestamp(3) with time zone`,
   `time(0)`) has the type's schema instead of `:any`.
+* `h/check` leaves a named argument to `h/arg-types`, which types it by the class sent (a
+  `PGobject`, or a value `:send` sends untyped, reaches an enum column): `:uncast-string` is a
+  literal string's alone, `[:lift "s"]` too.
+* An expression of a `numeric(p,s)` column (`round`, `coalesce`, `-`) is typed as `numeric`: an
+  argument compared with it takes an integer, and its value read a Double for NaN.
+* A `citext` column, or a domain over one, takes as an argument what a `text` column takes.
+* `:read` names a type by its alias too (`"int4"`, `"timestamptz"`); a type neither pgmalli nor
+  the registry knows, or a value that is no malli schema, is an `:invalid-options` error.
+* A table of a query read against a registry holding no schema pgmalli generates is a
+  `:pgmalli.error/not-a-registry` error, not `:unknown-table`; `(pgmalli.core/registry)` of no
+  schema is an `:invalid-options` error.
+* `h/humanize` begins a problem of `h/schema-problems` with its var; `h/schema-problems` of a
+  namespace not loaded is an `:invalid-options` error.
 
 ## 0.3.3 (2026-11-03)
 

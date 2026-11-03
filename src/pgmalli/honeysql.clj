@@ -2725,7 +2725,7 @@
       :problems (check registry body opts)})))
 
 (defn query-schema
-  "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
+  "[:=> {:pgmalli/problems [...]} [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
    and running body, of what analyze tells: the args' types (:any for a key the query lacks), the
    row (:any when it cannot be resolved), [:sequential {:max n} row] where the data tells how
    many rows (docs/queries.md#function-schemas): under {:result :one} no [:maybe] where it tells
@@ -2897,7 +2897,9 @@
    argument: each column as an argument assigned to it, keyed by one of the keys HoneySQL writes
    to the column (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
-   (generated, identity ALWAYS) taking :default alone. Where a BEFORE row trigger runs for the
+   (generated, identity ALWAYS) taking :default alone. A column takes a HoneySQL expression
+   too, untyped ([:now], [:+ :n 1]), an SQL word (:current_timestamp), a map of clauses
+   (a subquery), and [:lift v] with v of its type. Where a BEFORE row trigger runs for the
    write, every column is optional and takes nil. Options: docs/queries.md#options.
 
    (values-schema registry :users)"

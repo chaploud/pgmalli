@@ -53,7 +53,7 @@
       (#{:sequential :vector :set :pg/array} head) (or (type-label p) [(describe schemas (first children))])
       (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " children))
       (= :=> head) (cond-> {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
-                     (:pgmalli/problems p) (assoc :pgmalli/problems (:pgmalli/problems p)))
+                     (seq (:pgmalli/problems p)) (assoc :pgmalli/problems (:pgmalli/problems p)))
       (= :function head) (mapv #(describe schemas %) children)
       (= :cat head) (mapv #(describe schemas %) children)
       ;; what :send lets an array argument be

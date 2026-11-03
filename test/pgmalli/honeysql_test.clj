@@ -2574,5 +2574,5 @@
       "schema-problems' :var first")
   (is (= {:pgmalli/problems []} (second (h/query-schema registry [] {:select [:id] :from [:users]} opts)))
       "a query schema's parts are where they are, problems or not")
-  (is (= {:args [["bigint"]] :returns [{:id "bigint"}] :pgmalli/problems []}
+  (is (= {:args [["bigint"]] :returns [{:id "bigint"}]}
          (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))
