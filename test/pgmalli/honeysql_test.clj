@@ -1090,7 +1090,7 @@
          (m/properties (m/schema (h/query-schema registry [:db :iid] {:select [:id] :from [:users] :where [:= :id :?id]} opts))))))
 
 (deftest a-misspelt-option-names-the-one-meant
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be spelled :compare" (check {} {:compre :lenient}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:compre \[\"disallowed key\"\]\}; did you mean: :compare" (check {} {:compre :lenient}))))
 
 (deftest a-lifted-value-is-data
   (is (= [] (check {:select [:id] :from [:users] :where [:= :id [:lift {:select true :update true :delete false}]]})))

@@ -42,7 +42,7 @@
 (deftest a-misspelt-config-key-exits-2-with-the-key-meant
   (let [{:keys [code err]} (cli "check" (config-file {:outdir "x"}))]
     (is (= 2 code))
-    (is (= "pgmalli: invalid config: {:outdir [\"should be spelled :out-dir\"]}\n" err))))
+    (is (= "pgmalli: invalid config: {:outdir [\"disallowed key\"]}; did you mean: :out-dir\n" err))))
 
 (deftest a-missing-psql-exits-3-on-one-line
   (let [{:keys [code out err]} (cli "check" (config-file {:out-dir (temp-dir) :db {:psql "/nonexistent/psql"}}))]

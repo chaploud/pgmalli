@@ -48,14 +48,12 @@
   ([schema opts kind label]
    (if (m/validate schema (or opts {}))
      opts
-     (let [errors (-> (m/explain schema opts) me/with-spell-checking me/humanize)
+     (let [errors (me/humanize (m/explain schema opts))
            known (when (= :map (m/type schema)) (map first (m/children (m/schema schema))))
-           ;; malli's spelling check leaves out short keys (:dbb for :db)
            stray (when (map? opts) (remove (set known) (keys opts)))
            suggest (some #(error/suggest % known) stray)]
        (error/fail! kind (str label ": " (pr-str errors)
-                              (cond (str/includes? (pr-str errors) "should be spelled") ""
-                                    suggest (error/did-you-mean suggest)
+                              (cond suggest (error/did-you-mean suggest)
                                     (and (seq stray) (seq known)) (str "; it takes " (str/join ", " known))))
                     (cond-> {:given (cond-> opts
                                       (and (map? opts) known) (select-keys known)

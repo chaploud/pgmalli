@@ -107,7 +107,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   with a symbol in it is still code.
 * `h/row-schema`'s `:pgmalli/untold` property is `:pgmalli/unknown-keys`.
 * An error or a problem names the one probably meant as `; did you mean: x`, where it said
-  `; did you mean x?`, which doubled the `?` of a name ending in one (`:db?`).
+  `; did you mean x?`, which doubled the `?` of a name ending in one (`:db?`). A misspelt option
+  or config key reads one way, `{:shcema ["disallowed key"]}; did you mean: :schema`, where
+  some said `should be spelled :schema`.
 * A schema name the registry lacks given unqualified (`:users`) or of another schema
   (`:pg.public/users`) is an error naming the registry's schema of that name
   (`:pg.sample/users`).

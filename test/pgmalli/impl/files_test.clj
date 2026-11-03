@@ -11,7 +11,7 @@
     (is (not (str/includes? s "#:pg")))))
 
 (deftest a-misspelt-config-key-names-the-key-meant
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid config: .*:out_dir .*should be spelled :out-dir" (files/config {:out_dir "x"})))]
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid config: .*:out_dir .*; did you mean: :out-dir" (files/config {:out_dir "x"})))]
     (is (= :pgmalli.error/invalid-config (:pgmalli/error (ex-data e))))
     (is (= :cognitect.anomalies/incorrect (:cognitect.anomalies/category (ex-data e))))))
 
