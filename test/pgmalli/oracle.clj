@@ -18,7 +18,8 @@
    for a corpus query (not a mutant), with each of builders: a case it refuses carries
    :return-rejections; where row-schema, under the unqualified builder, names or types a column
    otherwise than the ResultSet's metadata, :column-mismatches. arg-matrix sends fixed values
-   as each argument beside each column of the schema, whatever arg-types says of it.
+   as each argument beside each column of the schema and of a column of each type
+   pgmalli.impl.types lists, whatever arg-types says of it.
 
    bb oracle [seed] [mutants-per-query] prints the counts and every case but the agreeing ones;
    pgmalli.oracle-test holds the false positives, the return rejections, the column mismatches
@@ -348,20 +349,59 @@
                labels
                (map #(into-array String [%]) labels))))
 
+(def ^:private samples
+  "A value as text of each type of pgmalli.impl.types without :literals, for the row of matrix.types."
+  {"smallint" "1" "integer" "1" "bigint" "1" "oid" "1" "numeric" "1.5" "real" "1.5" "double precision" "1.5"
+   "text" "a" "character varying" "a" "character" "a" "name" "a" "\"char\"" "a" "citext" "a"
+   "bit" "1" "bit varying" "101" "boolean" "true" "uuid" "00000000-0000-0000-0000-000000000001" "bytea" "\\x01"
+   "date" "2026-01-01" "time without time zone" "01:00" "time with time zone" "01:00+00"
+   "timestamp without time zone" "2026-01-01 00:00" "timestamp with time zone" "2026-01-01 00:00+00"
+   "interval" "1 day" "json" "{}" "jsonb" "{}"})
+
+(def ^:private typmods
+  "[name type sample]: the typmods a column bounds its values with."
+  [["numeric_10_2" "numeric(10,2)" "1.5"] ["varchar_5" "character varying(5)" "a"] ["char_3" "character(3)" "a"]
+   ["timestamp_3" "timestamp(3) without time zone" "2026-01-01 00:00"] ["bit_4" "bit(4)" "1010"]])
+
+(defn- matrix-schema!
+  "The schema matrix: its table types holds, for each type of pgmalli.impl.types (an
+   extension's where the server has it) and each of typmods, c_<t> of the type, a_<t> an array
+   of it, d_<t> of a domain over it CHECK (VALUE IS NOT NULL), da_<t> an array of the domain;
+   one row of a sample of each."
+  [conn]
+  (let [available (set (map :name (jdbc/execute! conn ["SELECT name FROM pg_available_extensions"] unqualified)))
+        exts (filter available (distinct (keep :extension (vals types/types))))
+        lit test-db/sql-literal
+        ts (concat (for [[t e] (sort-by key types/types)
+                         :when (or (nil? (:extension e)) (available (:extension e)))]
+                     [(str/replace (str/replace t #"[^a-z0-9]+" "_") #"^_|_$" "")
+                      (cond->> t (:extension e) (str "matrix."))
+                      (or (samples t) (first (:literals e)) (throw (ex-info "no sample for a type" {:type t})))])
+                   typmods)]
+    (jdbc/execute! conn ["DROP SCHEMA IF EXISTS matrix CASCADE; CREATE SCHEMA matrix; CREATE TABLE matrix.types (id serial PRIMARY KEY); INSERT INTO matrix.types DEFAULT VALUES"])
+    (doseq [e exts] (jdbc/execute! conn [(str "CREATE EXTENSION IF NOT EXISTS \"" e "\" SCHEMA matrix")]))
+    (doseq [[n t v] ts :let [d (str "matrix.d_" n)]]
+      (jdbc/execute! conn [(str "CREATE DOMAIN " d " AS " t " CHECK (VALUE IS NOT NULL);"
+                                "ALTER TABLE matrix.types ADD c_" n " " t ", ADD a_" n " " t "[], ADD d_" n " " d " DEFAULT " (lit v) "::text::" d ", ADD da_" n " " d "[];"
+                                "UPDATE matrix.types SET c_" n " = " (lit v) ", a_" n " = ARRAY[" (lit v) "::" t "], da_" n " = ARRAY[" (lit v) "::" d "]")]))))
+
 (defn- matrix-columns
-  "Each column of the oracle schema's tables: its type as pgmalli.impl.accept names it (a domain
-   as its base type, [:enum name] for an enum), the type it is declared with, whether a write
-   may set it, whether it is NOT NULL, and the labels of a CHECK (col IN (...)) on it."
+  "Each column of the oracle schema's tables, and of matrix.types: its type as
+   pgmalli.impl.accept names it (a domain as its base type, [:enum name] for an enum), the type
+   it is declared with, whether a write may set it, whether it is NOT NULL, and the labels of a
+   CHECK (col IN (...)) on it."
   [conn]
   (let [checks (group-by (juxt :tbl :col)
                          (jdbc/execute! conn ["SELECT c.relname AS tbl, a.attname AS col, pg_get_constraintdef(k.oid) AS def
                                                FROM pg_constraint k JOIN pg_class c ON c.oid = k.conrelid
+                                               JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'public'
                                                JOIN pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = k.conkey[1]
                                                WHERE k.contype = 'c' AND cardinality(k.conkey) = 1"] unqualified))
         list-of (fn [def] (when-let [[_ items] (re-find #"ARRAY\[(.*)\]" def)]
                             (vec (for [[_ s n] (re-seq #"'([^']*)'|(-?\d+(?:\.\d+)?)" items)] (if s s (bigdec n))))))]
     (vec (for [{:keys [tbl col declared base enum domain domain_array writable notnull]}
-               (jdbc/execute! conn ["SELECT c.relname AS tbl, a.attname AS col, format_type(a.atttypid, NULL) AS declared,
+               (jdbc/execute! conn ["SELECT CASE n.nspname WHEN 'public' THEN c.relname ELSE n.nspname || '.' || c.relname END AS tbl,
+                                       a.attname AS col, format_type(a.atttypid, NULL) AS declared,
                                        -- an array of a domain reads as an array of its base
                                        CASE WHEN b.typcategory = 'A' THEN (SELECT format_type(coalesce(nullif(e.typbasetype, 0), e.oid), NULL) || '[]'
                                                                            FROM pg_type e WHERE e.oid = b.typelem)
@@ -372,7 +412,7 @@
                                      FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
                                      JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_type t ON t.oid = a.atttypid
                                      JOIN pg_type b ON b.oid = coalesce(nullif(t.typbasetype, 0), t.oid)
-                                     WHERE n.nspname = 'public' AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
+                                     WHERE n.nspname IN ('public', 'matrix') AND c.relkind = 'r' AND a.attnum > 0 AND NOT a.attisdropped
                                      ORDER BY 1, a.attnum"] unqualified)]
            {:table tbl :column col :declared declared :writable writable :notnull notnull
             :type (if enum (cond-> [:enum base] domain (conj {:domain? true})) (canonical {} base))
@@ -415,7 +455,8 @@
     (if (and v (.isArray (class v))) (not-any? in? (seq v)) (not (in? v)))))
 
 (defn arg-matrix
-  "Each argument of the queries of matrix-queries, over every column of the oracle schema, sent
+  "Each argument of the queries of matrix-queries, over every column of the oracle schema and
+   of matrix.types (matrix-schema!, which it creates first), sent
    each of matrix-values as parameters. :refused: PostgreSQL takes the value, the argument's
    schema from arg-types refuses it, and the stricter rule of docs/queries.md does not explain
    it: a class sent as a type the column does not hold as its own (accept/holds?; under a cast,
@@ -423,12 +464,13 @@
    list or with NULL. :rule: holds? (accepts? under a cast) says PostgreSQL takes a value there,
    and PostgreSQL refuses its type (SQLSTATE class 42)."
   [db]
-  (let [ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db)) :user (:user db) :password (:password db)})
-        registry (pgmalli/registry (files/from-database {:db db} "public"))]
+  (let [ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db)) :user (:user db) :password (:password db)})]
     (with-open [conn (jdbc/get-connection ds)]
+      (matrix-schema! conn)
       (jdbc/execute! conn ["SET statement_timeout = 3000"])
       (.setAutoCommit conn false)
-      (let [cols (matrix-columns conn)
+      (let [registry (pgmalli/registry (files/from-database {:db db} "public") (files/from-database {:db db} "matrix"))
+            cols (matrix-columns conn)
             labels (distinct (concat (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified))
                                      (filter string? (mapcat :list cols))))
             values (matrix-values labels)

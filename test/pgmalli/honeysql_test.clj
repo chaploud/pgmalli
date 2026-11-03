@@ -1807,3 +1807,12 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
                                                         [:vs [:maybe [:vector {:pg/type "character varying[]"} [:string {:max 5 :pg/max-length 5 :pg/type "character varying"}]]]]]}})]
     (is (m/validate (:p (h/arg-types reg {:select [:id] :from [:z] :where [:= :vs :?p]})) (into-array String ["abcdefg"]) {:registry reg}))))
+
+(deftest a-domains-value-is-sent-as-its-base-types
+  (let [reg (pgmalli/registry {:registry {:pg.public/dn [:and {:pg/type "numeric"} 'decimal? [:> 0]]
+                                          :pg.public/dd [:time/local-date {:pg/type "date"}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
+                                                        [:n [:ref {:pg/type "dn"} :pg.public/dn]]
+                                                        [:ds [:maybe [:vector {:pg/type "dd[]"} [:ref {:pg/type "dd"} :pg.public/dd]]]]]}})]
+    (is (m/validate (:x (h/arg-types reg {:select [:id] :from [:t] :where [:= :n :?x]})) 1N {:registry reg}) "a BigInt as a numeric")
+    (is (not (m/validate (:x (h/arg-types reg {:update :t :set {:n :?x} :where [:= :id 1]})) -1N {:registry reg})) "held to the domain's CHECK")))

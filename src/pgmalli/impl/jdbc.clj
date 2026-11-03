@@ -320,6 +320,12 @@
                          (clojure.walk/postwalk-replace {:pgmalli/element (element sent)} a)))]
     (shape/either alts :any)))
 
+(defn- base-type-name
+  "The type a column schema names, on itself or on the base of its [:and base checks...]
+   (numeric(10,2) keeps it on its decimal?), without typmod or brackets."
+  [schema]
+  (some #(shape/type-name (shape/column-props %)) [schema (shape/domain-base schema)]))
+
 (def ^:private numbers
   "The kinds of the number classes a CHECK on a number column reads."
   #{:int :double 'decimal? 'integer? 'float? :pg/integer :pg/smallint})
@@ -334,7 +340,7 @@
     ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
     (array-type (write-type (last schema) opts) (assoc opts ::element-type (accept/element (pg-type schema))) :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
-          n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
+          n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
           sent (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
                      a (shape/alternatives s)]
@@ -449,10 +455,15 @@
         s (cond (nil? target) s
                 (= :enum (shape/head target))
                 (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (remove map? (rest target))))
-                ;; a domain's array reads as its base type's
+                ;; a domain's array reads as its base type's, elements and all
                 :else (if-let [base (some #(shape/type-name (shape/column-props %)) [target (shape/domain-base target)])]
-                        (assoc-in s [1 :pg/type] (str base "[]"))
-                        s))]
+                        (-> s (assoc-in [1 :pg/type] (str base "[]")) (assoc (dec (count s)) (shape/domain-base target)))
+                        s))
+        ;; a domain's value is sent as its base type's: the classes sent as that type, held to the
+        ;; domain's checks, its definition in place of the reference
+        d (let [x (shape/non-null s)] (when (and (vector? x) (= :ref (first x))) (get schemas (last x))))
+        ;; (a number domain's: its checks read the number; another's may hold code only the registry runs)
+        s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
     (write-type (through-domain schemas s opts write-type) opts)))
 
 (defn as-read
