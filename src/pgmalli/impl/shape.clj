@@ -277,15 +277,6 @@
   [schema]
   (if (maybe? schema) (last schema) schema))
 
-(defn read-as
-  "A column schema under :read, {pg-type schema}: the schema a type is read as when a driver
-   extension (next.jdbc's ReadableColumn) reads it otherwise, NULL still allowed where it was.
-   nil when the column's :pg/type is not among them."
-  [read schema]
-  (let [inner (non-null schema)]
-    (when-let [s (get read (:pg/type (props inner)))]
-      (if (identical? inner schema) s [:maybe s]))))
-
 (defn merge-props
   "Schema data with properties merged in (plainly; render's with-props narrows bounds)."
   [s p]
@@ -307,14 +298,13 @@
                  schema))
 
 (defn read-time
-  "Schema data with the time types a driver returns under :time: :instant when timestamps
-   arrive as Instants (dates stay java.sql.Date, hence inst?), :local when timestamptz arrives
-   as LocalDateTime, :inst when the schema is read without malli.experimental.time."
+  "Schema data with the time types as a driver returns them: :instant as
+   next.jdbc.date-time/read-as-instant reads them (timestamps Instants, dates java.sql.Date,
+   hence inst?), :inst as pgjdbc does (java.sql's, inst?)."
   [time schema]
   (walk/postwalk (fn [f] (case [time f]
                            [:instant :time/local-date-time] :time/instant
                            [:instant :time/local-date] 'inst?
-                           [:local :time/instant] :time/local-date-time
                            (if (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst? f)))
                  schema))
 

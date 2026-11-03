@@ -7,8 +7,7 @@ PostgreSQL's JDBC driver returns, read with next.jdbc's `as-unqualified-maps`. T
 
 ```clojure
 (require '[pgmalli.core :as pgmalli]
-         '[malli.core :as m]
-         '[malli.util :as mu])
+         '[malli.core :as m])
 
 (def registry (pgmalli/registry "public"))
 ```
@@ -30,16 +29,70 @@ NULL column keeps its key. A query's row has the keys of its labels likewise
 ([a row written into a table](queries.md#a-row-written-into-a-table)). Another spelling, such
 as kebab-case keys, is your application's to convert where it takes the row.
 
-With no extension, dates and timestamps are `java.sql.Date` and
-`java.sql.Timestamp` (`inst?`), and arrays, json, intervals, `citext` and `bit varying` are the
-driver's own objects (`:any`). `real` is a `Float`, `bit(1)` a `Boolean`, and a numeric `NaN` a
-`Double`. `time` and `timetz` are a `java.sql.Time` under every `:time`: `next.jdbc.date-time`
-converts dates and timestamps alone:
+## The one reading
+
+pgmalli types rows as one reading makes them, which your application installs: pgmalli ships
+no `ReadableColumn` extension. Install the one below once, before reading rows (it extends
+next.jdbc's protocol for the whole JVM):
+
+```clojure
+(require '[clojure.data.json :as json]
+         '[next.jdbc.date-time :as date-time]
+         '[next.jdbc.result-set :as rs])
+(import '(org.postgresql.util PGobject))
+
+(date-time/read-as-instant)
+
+(defn- json-type? [type-name] (contains? #{"json" "jsonb"} type-name))
+
+(defn- parse-json [s] (json/read-str s :key-fn keyword))
+
+(defn- read-pgobject [^PGobject v]
+  (if (json-type? (.getType v)) (parse-json (.getValue v)) v))
+
+(def ^:private object-array-class (class (object-array 0)))
+
+(defn- read-array [^java.sql.Array v read]
+  ;; pgjdbc returns a json[]'s elements as their text, a multi-dimensional array's as arrays
+  (let [json? (json-type? (.getBaseTypeName v))
+        dim (fn dim [a]
+              (mapv #(cond (instance? object-array-class %) (dim %)
+                           (and json? (string? %)) (parse-json %)
+                           :else (read %))
+                    a))]
+    (dim (.getArray v))))
+
+(extend-protocol rs/ReadableColumn
+  java.sql.Array
+  (read-column-by-label [v label] (read-array v #(rs/read-column-by-label % label)))
+  (read-column-by-index [v rsmeta i] (read-array v #(rs/read-column-by-index % rsmeta i)))
+  PGobject
+  (read-column-by-label [v _] (read-pgobject v))
+  (read-column-by-index [v _ _] (read-pgobject v)))
+```
+
+What each type comes back as:
+
+| type | value |
+|---|---|
+| `timestamp`, `timestamptz` | `java.time.Instant` (a `timestamp`'s date and time taken in the JVM's time zone, as pgjdbc does) |
+| `date` | `java.sql.Date` (`inst?`): `read-as-instant` leaves it, it has no time of day |
+| `time`, `timetz` | `java.sql.Time` (`inst?`): `next.jdbc.date-time` converts dates and timestamps alone |
+| an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions). pgjdbc cannot read the elements of a `money[]` or a `bit(n)[]` (n > 1): reading one throws; select it cast to `text[]` |
+| `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer a `Long` (a `BigInt` past it), a fraction a `Double`, booleans and strings as they are |
+| an enum type | its label, a `String` |
+| every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` a `Double`, an `interval` a `PGInterval`, `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |
+
+A json or jsonb column's schema is the parsed value's, as a CHECK (`jsonb_typeof`) or an
+[override](../README.md#overrides) shapes it: one override for what is read and what is
+written. An override that types a JSON number takes what a JSON parser returns: an integer
+`integer?`, a fraction `double?`: data.json, as here, gives a `Long` or a `BigInt` and a
+`Double`; jsonista an `Integer`, a `Long` or a `BigInteger` and a `Double`.
 
 ```clojure
 (m/validate (pgmalli/as-read registry :pg.public/users)
             {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
-             :closed_at nil :created_at (java.sql.Timestamp. 0)}
+             :closed_at nil :created_at (java.time.Instant/EPOCH)}
             {:registry registry})
 ;; => true
 ```
@@ -49,20 +102,22 @@ converts dates and timestamps alone:
 | option | for |
 |---|---|
 | `:jdbc {...}` | the options you pass to next.jdbc: pgmalli reads `:return-keys` ([queries](queries.md#options)) |
-| `:time :inst` | the default: dates and timestamps as `java.sql.Date` and `Timestamp` (`inst?`) |
-| `:time :instant` | `next.jdbc.date-time/read-as-instant` |
-| `:time :local` | `next.jdbc.date-time/read-as-local` |
-| `:read {pg-type schema}` | what your own `ReadableColumn` extension returns for a column type |
-| `:read {:array :vector}` | an extension returning arrays as vectors (`:sequential` for any sequence) |
-| `:read {:json :parsed}` | an extension returning json parsed: a json column's schema, as a CHECK or an [override](../README.md#overrides) shapes it |
-| `:read {:enum :keyword}` | an extension returning an enum type's value as a keyword: its labels as keywords, of a domain over one too |
+
+There is no option for how a value is read. `:time` and `:read` of earlier versions are an
+error that names the one reading:
+
+```clojure
+(try (pgmalli/as-read registry :pg.public/users {:time :instant})
+     (catch clojure.lang.ExceptionInfo e (:pgmalli/error (ex-data e))))
+;; => :pgmalli.error/invalid-options
+```
 
 An option pgmalli does not know is an error that suggests the intended name:
 
 ```clojure
-(try (pgmalli/as-read registry :pg.public/users {:tmie :instant})
+(try (pgmalli/as-read registry :pg.public/users {:jdcb {}})
      (catch clojure.lang.ExceptionInfo e (ex-message e)))
-;; => "pgmalli options: {:tmie [\"disallowed key\"]}; did you mean: :time"
+;; => "pgmalli options: {:jdcb [\"disallowed key\"]}; did you mean: :jdbc"
 ```
 
 ## The options of next.jdbc
@@ -73,57 +128,3 @@ var, or its symbol, which names it where next.jdbc does not load, as in babashka
 builder, `:label-fn` or `:qualifier-fn` is an error naming the one builder. A key spelled close
 to one pgmalli reads and read by no next.jdbc function (`:return-key`) is an error naming the
 key meant.
-
-## Your own extensions
-
-A `ReadableColumn` extension changes what a column type comes back as. Key it by the
-`:pg/type` and give the schema of the value returned:
-
-```clojure
-(-> (pgmalli/as-read registry :pg.public/users {:read {"timestamp with time zone" :time/instant}})
-    (m/schema {:registry registry})
-    (mu/get :created_at)
-    (m/form))
-;; => :time/instant
-```
-
-An extension that reads every enum type's value as a keyword, as `(keyword s)` makes it, is
-`{:read {:enum :keyword}}`:
-
-```clojure
-(-> (pgmalli/as-read registry :pg.public/users {:read {:enum :keyword}})
-    (m/schema {:registry registry})
-    (mu/get :status)
-    (m/form))
-;; => [:enum {:default :active, :pg/default "active", :pg/type "user_status"} :active :closed]
-```
-
-## Decoding instead
-
-`transformer` turns JDBC values into the registry's types, for an application that works
-with `java.time`. It converts rows as `as-unqualified-maps` builds them, keyed as the
-registry's row schemas are:
-
-```clojure
-(def user
-  (m/decode :pg.public/users
-            {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
-             :closed_at nil :created_at (java.sql.Timestamp. 0)}
-            {:registry registry}
-            (pgmalli/transformer)))
-
-(= (java.time.Instant/parse "1970-01-01T00:00:00Z") (:created_at user))
-;; => true
-
-(m/validate :pg.public/users user {:registry registry})
-;; => true
-```
-
-`:zone` (the JVM's by default) is the zone some values convert in:
-`(pgmalli/transformer {:zone (java.time.ZoneId/of "UTC")})`.
-
-- In a `timestamp` (without time zone) column, a `java.sql.Timestamp`, which pgjdbc returns,
-  keeps its date and time and does not use `:zone`. A `java.util.Date` or an `Instant` converts
-  in `:zone`.
-- In a `date` column, a `java.sql.Date` keeps its date. A `java.sql.Timestamp`, a
-  `java.util.Date` or an `Instant` converts in `:zone`.

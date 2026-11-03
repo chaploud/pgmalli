@@ -1698,7 +1698,7 @@
                            (into [(first base) {:pg/type pg}] (rest base))
                            (if (and (keyword? base) (:pg/type p)) [base {:pg/type (:pg/type p)}] base)))
             (= :maybe h) [h (loose (last t))]
-            ;; an array column's :pg/type is what tells the driver's java.sql.Array from :read's vector
+            ;; an array column's :pg/type is what tells pgjdbc's java.sql.Array (an argument) from a read vector
             (#{:vector :sequential :set :pg/array} h) (if-let [pg (:pg/type p)] [h {:pg/type pg} (loose (last t))] [h (loose (last t))])
             (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
             (seq children) t
@@ -2196,8 +2196,8 @@
           (get-in (second (get (::schemas registry) (shape/routines-key s))) [({:functions :pg/functions :operators :pg/operators} kind) n]))))
 
 (def ^:private json-shapes
-  "The shape of the json or jsonb value a function builds, as a column of the type is read under
-   {:read {:json :parsed}}: an object or an array."
+  "The shape of the json or jsonb value a function builds, parsed as the one reading reads a column of
+   the type: an object or an array."
   (into {} (for [p ["json" "jsonb"], [f shape] [["_build_object" :map] ["_build_array" :sequential] ["_agg" :sequential]
                                                 ["_object_agg" :map] ["_object" :map]]]
              [(str p f) shape])))

@@ -1,16 +1,14 @@
 (ns pgmalli.impl.jdbc
-  "The JDBC side: the transformer decoding driver and string values into the registry's types;
-   what PostgreSQL's JDBC driver returns and takes for a column, under the options that say what
-   an application's next.jdbc does differently; and the row shapes next.jdbc's
-   as-unqualified-maps returns. as-read and pgmalli.honeysql both read columns and key rows here."
+  "The JDBC side: what a column comes back as under the one reading (docs/reading-rows.md) and
+   what PostgreSQL's JDBC driver takes for it, under the options that say what an application
+   sends; and the row shapes next.jdbc's as-unqualified-maps returns. as-read and
+   pgmalli.honeysql both read columns and key rows here."
   (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
             [malli.error :as me]
-            [malli.transform :as mt]
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.error :as error]
-            [pgmalli.impl.json :as json]
             [pgmalli.impl.pgtypes :as pgtypes]
             [pgmalli.impl.shape :as shape]
             [pgmalli.impl.types :as types]))
@@ -23,11 +21,6 @@
    sql/format, open: pgmalli reads the keys of them it names."
   [:map {:closed true}
    [:schema {:optional true} :string]
-   [:time {:optional true} [:enum :inst :instant :local]]
-   [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json :enum]] :any]
-                            [:map [:array {:optional true} [:enum :vector :sequential]]
-                             [:json {:optional true} [:enum :parsed]]
-                             [:enum {:optional true} [:enum :keyword]]]]]
    [:jdbc {:optional true} [:map
                             [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
    ;; {class type}, which options! checks
@@ -125,6 +118,12 @@
   (str "pgmalli types rows as next.jdbc.result-set/as-unqualified-maps builds them, keyed by the columns' names;"
        " pass it to next.jdbc as {:builder-fn next.jdbc.result-set/as-unqualified-maps}"))
 
+(def ^:private one-reading
+  (str "pgmalli types rows as one reading makes them: timestamps as Instants (next.jdbc.date-time/read-as-instant),"
+       " arrays as vectors, json and jsonb parsed (keyword keys), enum values as strings, every other"
+       " type as pgjdbc returns it; the ReadableColumn extension that reads so is in"
+       " https://github.com/chaploud/pgmalli/blob/main/docs/reading-rows.md"))
+
 (defn- the-builder?
   "Whether f is next.jdbc.result-set/as-unqualified-maps: the function, its var or its symbol,
    which names it where next.jdbc does not load (babashka)."
@@ -146,6 +145,8 @@
              old))
     (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns]))]
       (fail! (str (pr-str old) " is no longer read: " builder-only "; see " error/changelog) old))
+    (when-let [old (not-empty (select-keys opts [:time :read]))]
+      (fail! (str (pr-str old) " is no longer read: " one-reading "; see " error/changelog) old))
     (when (contains? opts :return-keys)
       (fail! (str ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}; see " error/changelog)
              (select-keys opts [:return-keys])))
@@ -223,38 +224,50 @@
   [s]
   (and (vector? s) (= :vector (first s)) (types/element (pg-type s))))
 
+(declare read-type)
+
+(defn- element
+  "An array column's element schema, with the element's :pg/type where pgjdbc returns that type
+   otherwise than the registry's schema says (a citext[]'s PGobjects, a bit[]'s Booleans)."
+  [schema]
+  (let [e (last schema)
+        t (types/element (pg-type schema))
+        entry (types/entry (shape/type-name {:pg/type t}))]
+    (if (and (nil? (pg-type e)) (or (:read entry) (= :any (:schema entry))))
+      (shape/merge-props e {:pg/type t})
+      e)))
+
 (defn- driver-type
-  "What read-type and write-type share: dates and timestamps under :time, arrays, json and
-   intervals the driver's objects (:any)."
-  [schema {:keys [time read] :or {time :inst} :as opts} element]
+  "What read-type and write-type share: dates and timestamps as the one reading makes them, or,
+   pgjdbc?, as pgjdbc returns them (inst?); arrays and json as the one reading makes them, or
+   the driver's objects (:any); intervals the driver's objects."
+  [schema pgjdbc?]
   (let [driver-object [:any {:pg/type (pg-type schema)}]]
-    (cond (array-column? schema) (if-let [kind (:array read)] [kind (element (last schema) opts)] driver-object)
-          (and (types/json? (pg-type schema)) (not= :parsed (:json read))) driver-object
+    (cond (array-column? schema) (if pgjdbc? driver-object [:vector {:pg/type (pg-type schema)} [:maybe (read-type (element schema) false)]])
+          (types/json? (pg-type schema)) (if pgjdbc? driver-object schema)
           (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
-          :else (shape/read-time time schema))))
+          :else (shape/read-time (if pgjdbc? :inst :instant) schema))))
 
 (defn read-type
-  "A column's schema (without NULL) as PostgreSQL's JDBC driver returns it through next.jdbc:
-   dates and timestamps under :time (inst? by default), an array a java.sql.Array, json and
-   jsonb a PGobject, an interval a PGInterval, citext, bit(n > 1) and bit varying a PGobject
-   (these :any); real a Float, bit(1) a Boolean, numeric a Double for NaN, time and timetz a
-   java.sql.Time under every :time (next.jdbc.date-time converts dates and timestamps alone).
-   :read names what a ReadableColumn extension returns instead: a :pg/type's schema,
-   {:array :vector} for arrays as vectors of their elements, {:json :parsed} for json as the
-   data the registry shapes."
-  [schema {:keys [read] :as opts}]
+  "A column's schema (without NULL) as the one reading (docs/reading-rows.md) makes it: dates a
+   java.sql.Date, timestamps (with and without time zone) an Instant, an array a vector of its
+   elements so read, json and jsonb parsed as the registry shapes them; or, pgjdbc?, as pgjdbc
+   returns them with no extension (dates and timestamps inst?, an array a java.sql.Array, json a
+   PGobject). Either way: time and timetz a java.sql.Time, an interval a PGInterval, citext,
+   bit(n > 1) and bit varying a PGobject (these :any), real a Float, bit(1) a Boolean, numeric
+   a Double for NaN."
+  [schema pgjdbc?]
   (let [t (pg-type schema)
         head (if (vector? schema) (first schema) schema)
         ;; a domain's base comes with its typmod: "bit(4)"
         driver-read (when-not (array-column? schema) (:read (types/entry (shape/type-name {:pg/type t}))))]
-    (or (shape/read-as read schema)
-        (cond (= :bit driver-read) (if (or (= 1 (:max (second schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
-              (= :or-double driver-read) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
-              driver-read [driver-read {:pg/type t}]
-              ;; the driver's own object, whatever an override says the value is
-              (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
-              (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
-              :else (driver-type schema opts read-type)))))
+    (cond (= :bit driver-read) (if (or (= 1 (:max (second schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
+          (= :or-double driver-read) [:or (driver-type schema pgjdbc?) ['double? {:pg/type t}]]
+          driver-read [driver-read {:pg/type t}]
+          ;; the driver's own object, whatever an override says the value is
+          (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
+          (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
+          :else (driver-type schema pgjdbc?))))
 
 (declare write-type)
 
@@ -316,7 +329,7 @@
   (if (array-column? schema)
     ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
     (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) :assign)
-    (let [t (driver-type schema (dissoc opts :read) write-type)
+    (let [t (driver-type schema true)
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
           ;; keeps those a class sent goes as (pgmalli.honeysql's labelled-type)
@@ -350,34 +363,6 @@
    (let [s (if nullable? [:maybe inner] inner)]
      (if (empty? props) [k s] [k props s]))))
 
-(defn transformer
-  "Decodes JDBC and string values into the registry's types: java.sql.Timestamp and
-   java.util.Date -> Instant, java.sql.Date -> LocalDate, an Instant or java.util.Date landing
-   in a date or timestamp (without time zone) column is read in :zone, default the JVM's;
-   JSON text in a json or jsonb column is parsed."
-  ([] (transformer {}))
-  ([{:keys [zone] :or {zone (java.time.ZoneId/systemDefault)}}]
-   (let [instant (fn [x] (cond (instance? java.sql.Date x) (.toInstant (.atStartOfDay (.toLocalDate ^java.sql.Date x) zone))
-                               (instance? java.util.Date x) (.toInstant ^java.util.Date x)
-                               :else x))]
-     (mt/transformer
-      mt/string-transformer
-      {:name :pgmalli
-       :decoders {:any {:compile (fn [schema _]
-                                  (when (types/json? (:pg/type (m/properties schema)))
-                                    (fn [x] (if (string? x) (json/parse x) x))))}
-                  ;; the bounded numbers, from text as :int and :double are
-                  :pg/integer (fn [x] (if (string? x) (or (parse-long x) x) x))
-                  :pg/smallint (fn [x] (if (string? x) (or (parse-long x) x) x))
-                  :pg/numeric (fn [x] (if (string? x) (try (bigdec x) (catch Exception _ x)) x))
-                  :time/instant instant
-                  :time/local-date (fn [x] (cond (instance? java.sql.Date x) (.toLocalDate ^java.sql.Date x)
-                                                 (or (instance? java.util.Date x) (instance? java.time.Instant x)) (.toLocalDate (.atZone ^java.time.Instant (instant x) zone))
-                                                 :else x))
-                  :time/local-date-time (fn [x] (cond (instance? java.sql.Timestamp x) (.toLocalDateTime ^java.sql.Timestamp x)
-                                                      (or (instance? java.util.Date x) (instance? java.time.Instant x)) (java.time.LocalDateTime/ofInstant (instant x) zone)
-                                                      :else x))}}))))
-
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."
   [registry name]
@@ -391,38 +376,32 @@
 (defn- through-domain
   "A column of a domain whose type the driver returns as something else (a date as a
    java.sql.Date, a citext as a PGobject) as that type, without the domain's CHECKs, which read
-   the registry's types; a domain the driver returns (or, f write-type, takes) as the registry
-   holds it stays a reference."
-  [schemas s opts f]
+   the registry's types; a domain the driver returns (or, f a write type, takes) as the registry
+   holds it stays a reference. f is called with nothing sent, as sends add values to the base
+   type and do not change how the driver reads it."
+  [schemas s f]
   (if-let [d (shape/ref-target schemas s)]
-    (let [base (through-domain schemas (shape/domain-base d) opts f)]
-      ;; compared with nothing sent, as sends add values to the base type and do not change how the driver reads it
-      (if (= base (f base (assoc opts :send no-sends)))
+    (let [base (through-domain schemas (shape/domain-base d) f)]
+      (if (= base (f base))
         s
         (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))
 
-(defn- keyword-enum
-  "s, a column of an enum type or of a domain over one, read as {:read {:enum :keyword}} says: its
-   labels keywords. nil for another column."
-  [schemas s]
-  (let [{:keys [base enum?]} (shape/resolved schemas s)]
-    (when enum?
-      (into [:enum (cond-> (shape/column-props s) (:default (shape/column-props s)) (update :default keyword))]
-            (map keyword (shape/entries base))))))
-
-(defn column-read-type
-  "read-type of a column schema (without NULL) of a registry's schemas, a domain read as the
-   driver reads its base; :read may still name the domain's type."
-  [schemas s {:keys [read] :as opts}]
-  (let [;; the driver returns an array's elements of a domain (but an enum's) as PGobjects
+(defn- column-read-type*
+  [schemas s pgjdbc?]
+  (let [;; the driver returns an array's elements of a domain (but an enum type's) as PGobjects;
+        ;; a domain that is a CHECK's list alone is an [:enum] of its base's :pg/type
         x (when (array-column? s) (last s))
         target (shape/ref-target schemas x)
-        s (if (and target (not= :enum (shape/head target))) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
-    (or (shape/read-as read s)
-        ;; PostgreSQL describes a domain's column as its base type's, which a ReadableColumn sees
-        (when (= :keyword (:enum read)) (keyword-enum schemas s))
-        (read-type (through-domain schemas s opts read-type) opts))))
+        enum-type? (and (= :enum (shape/head target)) (nil? (pg-type target)))
+        s (if (and target (not enum-type?)) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
+    (read-type (through-domain schemas s #(read-type % pgjdbc?)) pgjdbc?)))
+
+(defn column-read-type
+  "read-type of a column schema (without NULL) of a registry's schemas under the one reading, a
+   domain read as its base is. opts are a write type's, which the one reading does not read."
+  [schemas s _opts]
+  (column-read-type* schemas s false))
 
 (defn- column-write-type*
   "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the
@@ -443,7 +422,7 @@
         d (shape/ref-target schemas (shape/non-null s))
         ;; (a number domain's: its checks read the number; another's may hold code only the registry runs)
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
-    (write-type (through-domain schemas s opts write-type) opts)))
+    (write-type (through-domain schemas s #(write-type % (assoc opts :send no-sends))) opts)))
 
 (def pg-object
   "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
@@ -452,11 +431,11 @@
             (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
 (defn column-write-type
-  "column-write-type*: a column the driver reads as a PGobject (json, jsonb, citext, bit(n > 1))
-   takes one too, so a value read is written back."
+  "column-write-type*: a column pgjdbc returns as a PGobject (json, jsonb, citext, bit(n > 1))
+   takes one too, so a value read without an extension is written back."
   [schemas s opts]
   (let [w (column-write-type* schemas s opts)
-        r (column-read-type schemas s (dissoc opts :read))
+        r (column-read-type* schemas s true)
         t (pg-type r)]
     (if (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (types/element t))
              (or (types/json? t) (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t}))))))

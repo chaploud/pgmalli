@@ -178,7 +178,7 @@
                                    WHERE n.nspname = ANY (?) AND c.relkind IN ('r', 'v', 'p') AND NOT c.relispartition AND a.attnum > 0 AND NOT a.attisdropped
                                    ORDER BY 1, 2, a.attnum"
                                   (into-array String (schemas conn))] unqualified)
-        arr #(some-> ^java.sql.Array % .getArray vec)
+        arr vec
         list-of (fn [def] (when-let [[_ items] (re-find #"ARRAY\[(.*)\]" def)]
                             (vec (for [[_ s n] (re-seq #"'([^']*)'|(-?\d+(?:\.\d+)?)" items)] (if s s (bigdec n))))))]
     (vec (for [r rows]
@@ -616,9 +616,8 @@
 
 (def option-profiles
   "Options an application runs with, each with what its connection does to match: a String sent
-   untyped (stringtype=unspecified), timestamps read as Instants, comparisons lenient."
+   untyped (stringtype=unspecified), comparisons lenient."
   {:untyped-strings {:opts {:send {String :unknown}} :url-params "stringtype=unspecified"}
-   :instant {:opts {:time :instant} :read-as next.jdbc.date-time/read-as-instant}
    :lenient {:opts {:compare :lenient}}})
 
 (defn run-profiles
@@ -626,11 +625,9 @@
    their opts merged under a query's own, each result with its :profile."
   [db seed]
   (into []
-        (mapcat (fn [[profile {:keys [opts url-params read-as]}]]
-                  (when read-as (read-as))
-                  (try (map #(assoc % :profile profile)
-                            (run-cases db (for [[id q o] corpus] {:id id :query q :opts (merge opts o)}) seed url-params))
-                       (finally (next.jdbc.date-time/read-as-default)))))
+        (mapcat (fn [[profile {:keys [opts url-params]}]]
+                  (map #(assoc % :profile profile)
+                       (run-cases db (for [[id q o] corpus] {:id id :query q :opts (merge opts o)}) seed url-params))))
         option-profiles))
 
 ;;; the argument matrix

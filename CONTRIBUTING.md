@@ -120,8 +120,7 @@ column described otherwise or argument-matrix failure, except those listed in
 `pgmalli.oracle-test/pending`: false rejections in `src` not fixed yet, each with its reason
 and a reproduction. `pending-entries-still-fail` fails on an entry that no longer fails, so a
 fix removes it. The corpus runs again under `pgmalli.oracle/option-profiles` (`:send {String
-:unknown}` over `stringtype=unspecified`, `:time :instant` reading timestamps as Instants,
-`:compare :lenient`). A statement that runs out of its timeout fails the test, as does a corpus
+:unknown}` over `stringtype=unspecified`, `:compare :lenient`). A statement that runs out of its timeout fails the test, as does a corpus
 id or query listed twice, and a corpus query that did not run in both formats (one the pinned
 HoneySQL cannot write).
 

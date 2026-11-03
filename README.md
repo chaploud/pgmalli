@@ -228,16 +228,19 @@ schema names its constraint in `:pg/constraint`, which humanize's `:wrap` can re
 
 ## Rows read through next.jdbc
 
-pgjdbc does not return the registry's types: a timestamp comes back as a `java.sql.Timestamp`,
-an array as a `java.sql.Array`, a jsonb as a `PGobject`. `as-read` gives the row as next.jdbc
-builds it, to validate results as they come back:
+pgjdbc does not return the registry's types. pgmalli types rows as one reading makes them:
+timestamps as `Instant`s (`next.jdbc.date-time/read-as-instant`), arrays as vectors, json and
+jsonb parsed with keyword keys, enum values as strings, every other type as pgjdbc returns it.
+Install the `ReadableColumn` extension of
+[docs/reading-rows.md](docs/reading-rows.md#the-one-reading) in your application; `as-read`
+gives the row as next.jdbc then builds it, to validate results as they come back:
 
 ```clojure
 (def user-row (pgmalli/as-read registry :pg.public/users))
 
 (m/validate user-row
             {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
-             :closed_at nil :created_at (java.sql.Timestamp. 0)}
+             :closed_at nil :created_at (java.time.Instant/EPOCH)}
             {:registry registry})
 ;; => true
 ```
@@ -248,16 +251,14 @@ names (`:group_id`), a NULL column's key kept. Read rows with it:
 spelling of the keys is your application's to convert where it takes the row
 ([docs/reading-rows.md](docs/reading-rows.md#the-builder)).
 
-There are three ways to check a row read from the database:
+There are two ways to check a row read from the database:
 
 | way | for |
 |---|---|
 | `as-read` | the rows of one table, as next.jdbc returns them (recommended) |
 | `h/row-schema` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
-| `m/decode` with `pgmalli/transformer` ([reading rows](docs/reading-rows.md#decoding-instead)) | rows turned into the registry's types first |
 
-[docs/reading-rows.md](docs/reading-rows.md) has every option: `next.jdbc.date-time`
-and the types your own `ReadableColumn` extensions return.
+[docs/reading-rows.md](docs/reading-rows.md) has the extension and what each type comes back as.
 
 ## Generating test data
 
@@ -519,12 +520,11 @@ pgmalli still adds what the database says of the column: `[:maybe ...]` unless i
 NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are read
 (`as-read`, `h/row-schema`) and written (`h/arg-types`, `h/values-schema`, `h/set-schema`),
 datasets included, but for a type the driver reads as an object of its own: an `inet`, read as a
-PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read unless `:read`
-names what your extension reads it as (`{:read {"inet" :string}}`); the `:public.hosts/ip`
-override above holds for what is written. A json or jsonb column's driver object is a PGobject,
-so its shape is the parsed value's: it is read under `{:read {:json :parsed}}`, and an argument
-takes it for the classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`).
-Without those, a read or an argument is the driver's object. `generate` checks every key against
+PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read; the
+`:public.hosts/ip` override above holds for what is written. A json or jsonb column is read
+parsed ([the one reading](docs/reading-rows.md#the-one-reading)), so its shape holds for what is
+read, and an argument takes it for the classes `:send` sends as the column's type
+(`{clojure.lang.IPersistentMap "jsonb"}`); without those, an argument is the driver's object. `generate` checks every key against
 the schemas generated: a column and a constraint name must be theirs, `{:skip reason}` goes
 under a constraint name and nothing else does, and a value must be a malli schema (a qualified
 name passes, as your registry's). An error names the key meant; a type key (`:inet`) names the

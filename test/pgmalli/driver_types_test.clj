@@ -1,14 +1,14 @@
 (ns pgmalli.driver-types-test
   "as-read and query-schema against the rows next.jdbc builds from PostgreSQL's JDBC driver: the
    rows of matrix.types (pgmalli.oracle/matrix-schema!: every type pgmalli renders, as itself, an
-   array, a domain, an array of the domain), read through next.jdbc's as-unqualified-maps, under
-   every :time. JVM only (babashka has no java.sql), so bb test does not list it."
+   array, a domain, an array of the domain), read through next.jdbc's as-unqualified-maps under
+   the one reading (docs/reading-rows.md, which pgmalli.test-db installs). JVM only (babashka has
+   no java.sql), so bb test does not list it."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
-            next.jdbc.date-time
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
@@ -29,11 +29,6 @@
                   CREATE VIEW matrix.v AS SELECT * FROM matrix.types;"))
     (f)))
 
-(def ^:private time-readers
-  {:inst next.jdbc.date-time/read-as-default
-   :instant next.jdbc.date-time/read-as-instant
-   :local next.jdbc.date-time/read-as-local})
-
 (defn- disagreements
   "[column class value] of each column of rows schema, of a sequence of rows, refuses."
   [registry schema rows]
@@ -43,21 +38,24 @@
         :when (= row (nth rows (first (:in e))))]
     [col (some-> v class .getName) v]))
 
+(def ^:private unreadable
+  "The columns whose arrays pgjdbc's getArray cannot read (docs/reading-rows.md#the-one-reading)."
+  #{:a_money :a_bit_4})
+
 (deftest as-read-is-what-next-jdbc-builds
   (when *db*
     (with-open [con (jdbc/get-connection (datasource))]
-      (try
-        (doseq [:let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))]
-                [time read-as] time-readers
-                table [:types :v]
-                :let [_ (read-as)
-                      q {:select [:*] :from [(keyword (str "matrix." (name table)))] :order-by [:id]}
-                      rows (jdbc/execute! con (sql/format q) {:builder-fn rs/as-unqualified-maps})
-                      opts {:time time :schema "matrix"}]]
-          (testing (str ":time " time " " table)
-            (is (= [] (vec (distinct (disagreements registry [:sequential (pgmalli/as-read registry (keyword "pg.matrix" (name table)) opts)] rows)))))
-            (is (= [] (vec (distinct (disagreements registry (last (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))) rows)))))))
-        (finally (next.jdbc.date-time/read-as-default))))))
+      (doseq [:let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))]
+              table [:types :v]
+              :let [read (into [] (remove #(and (vector? %) (unreadable (first %))))
+                               (pgmalli/as-read registry (keyword "pg.matrix" (name table)) {:schema "matrix"}))
+                    q {:select (map first (filter vector? (rest read)))
+                       :from [(keyword (str "matrix." (name table)))] :order-by [:id]}
+                    rows (jdbc/execute! con (sql/format q) {:builder-fn rs/as-unqualified-maps})
+                    opts {:schema "matrix"}]]
+        (testing table
+          (is (= [] (vec (distinct (disagreements registry [:sequential read] rows)))))
+          (is (= [] (vec (distinct (disagreements registry (last (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))) rows))))))))))
 
 (deftest a-value-read-is-written-back-where-postgresql-takes-it
   (when *db*
@@ -68,8 +66,13 @@
           set (m/schema (h/set-schema registry :types o) {:registry registry})]
       (with-open [con (jdbc/get-connection ds)]
         (.setAutoCommit con false)
-        (let [;; an array is read on the connection it is sent over: a PgArray asks it its element type
-              row (jdbc/execute-one! con ["SELECT * FROM matrix.types WHERE id = 1"] {:builder-fn rs/as-unqualified-maps})
+        (let [;; as pgjdbc returns it, without the one reading's extension; an array is read on the
+              ;; connection it is sent over: a PgArray asks it its element type
+              row (with-open [st (.createStatement con)
+                              r (.executeQuery st "SELECT * FROM matrix.types WHERE id = 1")]
+                    (.next r)
+                    (into {} (for [i (range 1 (inc (.getColumnCount (.getMetaData r))))]
+                               [(keyword (.getColumnLabel (.getMetaData r) i)) (.getObject r (int i))])))
               ;; pgjdbc's setObject, as next.jdbc sends a value without an extension (next.jdbc.date-time,
               ;; which this namespace loads, cannot send a java.sql.Time)
               taken? (fn [k v] (with-open [ps (.prepareStatement con (str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2"))]

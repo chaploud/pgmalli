@@ -52,9 +52,9 @@
   (portable/portable registry name))
 
 (defn as-read
-  "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it from
-   what PostgreSQL's JDBC driver returns: keyed by the columns' names (:group_id), the types
-   docs/reading-rows.md lists. Validate with {:registry registry}.
+  "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it under
+   the one reading docs/reading-rows.md gives (the ReadableColumn extension your application
+   installs): keyed by the columns' names (:group_id). Validate with {:registry registry}.
 
    (as-read registry :pg.public/users)
 
@@ -63,16 +63,6 @@
    Throws when an option is unknown, or name is no table's or view's row schema."
   ([registry name] (as-read registry name {}))
   ([registry name opts] (jdbc/as-read registry name opts)))
-
-(defn transformer
-  "malli transformer decoding JDBC and string values into the registry's types. An Instant or
-   java.util.Date in a date or timestamp (without time zone) column is read in :zone, default
-   the JVM's, except a java.sql.Timestamp in a timestamp column (its date and time are kept)
-   and a java.sql.Date in a date column; JSON text in json and jsonb columns is parsed."
-  ([] (jdbc/transformer))
-  ([opts]
-   (jdbc/checked! [:map {:closed true} [:zone {:optional true} [:fn {:error/message "should be a java.time.ZoneId"} #(instance? java.time.ZoneId %)]]] opts)
-   (jdbc/transformer opts)))
 
 (defn- schema!
   "schema when malli reads it under registry; an error naming the type it does not know."

@@ -30,6 +30,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `{:builder-fn next.jdbc.result-set/as-unqualified-maps}`; convert keys to another spelling in
   your application. A query selecting one name twice (`:u.id :g.id`) is one key, the last
   column's, as the builder keeps it: alias one of them.
+* **Rows are read one way,** the way
+  [docs/reading-rows.md](docs/reading-rows.md#the-one-reading) gives: timestamps (with and
+  without time zone) as `Instant`s, as `next.jdbc.date-time/read-as-instant` reads them, arrays
+  as vectors of their elements, json and jsonb parsed with keyword keys, enum values as strings,
+  every other type as pgjdbc returns it. pgmalli ships no extension: install the
+  `ReadableColumn` extension of that page in your application. A json column's override or CHECK
+  shape now holds for what is read.
+  * `:time` and `:read` are removed: an error names the one reading.
+  * `pgmalli.core/transformer` is removed: read rows with the extension instead of decoding them.
 * `pgmalli.core/read-options` is removed.
 * `h/row-schema`'s `:pgmalli/untold` property is removed: with unqualified keys, every key is
   told.

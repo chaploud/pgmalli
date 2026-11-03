@@ -378,9 +378,8 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   tables above): a call one of them resolves otherwise is untyped, and a function of PostgreSQL
   18 alone (`uuidv7`) is typed for a registry generated on 18. Of an argument whose type is not
   told, a call is typed where every overload of its number of arguments returns one type that is
-  not polymorphic (`count`, `jsonb_build_object`). Under `{:read {:json :parsed}}`, a function of
-  `pg_catalog` that builds a `json` or `jsonb` object is a map, one that builds an array
-  (`jsonb_agg`) a sequential.
+  not polymorphic (`count`, `jsonb_build_object`). Read parsed, a function of `pg_catalog` that
+  builds a `json` or `jsonb` object is a map, one that builds an array (`jsonb_agg`) a sequential.
 - A call of a function or an operator of a generated schema, from its file's `:functions` and
   `:operators` ([types.md](types.md#the-generated-file)). pgmalli takes the search path to be
   `pg_catalog`, then `:schema`, as PostgreSQL puts `pg_catalog` first when the path does not
@@ -409,13 +408,13 @@ or its negator) of values that are not NULL. An argument of the application's ow
                                  [[:exists {:select [1] :from [:posts]}] :any_posts] [[:cast "active" :user_status] :s]
                                  [[:upper :nick] :shout]]
                         :from [:users]})
-;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [inst? #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe [:string #:pg{:type "text"}]]]]
+;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [:time/instant #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe [:string #:pg{:type "text"}]]]]
 ```
 
-It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):
+Its columns are read as `pgmalli.core/as-read` reads them ([the one reading](reading-rows.md#the-one-reading)):
 
 ```clojure
-(h/row-schema registry {:select [:id :created_at] :from [:users]} {:time :instant})
+(h/row-schema registry {:select [:id :created_at] :from [:users]})
 ;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:created_at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
 ```
 
@@ -465,7 +464,7 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
-| `:jdbc`, `:time`, `:read` | the options you pass to next.jdbc and how the driver reads values ([reading-rows.md](reading-rows.md#options)); `:jdbc`'s `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
+| `:jdbc` | the options you pass to next.jdbc ([reading-rows.md](reading-rows.md#options)); its `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
 | `:send {Class type}` | what your application sends, and the type each class goes as: [what your application sends](#what-your-application-sends); pgjdbc's by default |
 | `:compare :lenient` | arguments compared with a column take nil too, and so do the elements of one in `:in` or `= ANY` (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them and the dialect `sql/set-dialect!` set |

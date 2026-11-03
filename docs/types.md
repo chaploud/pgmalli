@@ -274,8 +274,8 @@ outside them (a function of your own, a cast to a range type, `AT TIME ZONE`) is
 Values are the registry's types: `java.time`, `UUID`, jsonb as maps and vectors.
 
 > NOTE: a CHECK comparing `timestamp` with `timestamptz` or `now()` converts in the JVM's time
-> zone. Give [`transformer`](reading-rows.md#decoding-instead) the zone pgjdbc
-> used (`{:zone ...}`).
+> zone, as pgjdbc does when it reads a `timestamp` as an `Instant`
+> ([the one reading](reading-rows.md#the-one-reading)).
 
 ## What is read
 

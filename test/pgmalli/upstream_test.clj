@@ -95,7 +95,7 @@
   (when *db*
     (let [ds (datasource)
           version (first (str/split (first (column ds "SHOW server_version")) #"\."))
-          server (source/shape (json/read-str (str (first (column ds source/query)))))
+          server (source/shape (json/read-str (first (column ds (str "SELECT (" source/query ")::text")))))
           snapshot @types/catalog
           here? (fn [{:keys [in]}] (or (nil? in) (some #{version} in)))
           ;; what the snapshot says this version has

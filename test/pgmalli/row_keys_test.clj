@@ -74,8 +74,8 @@
       (doseq [q (concat queries using-chains)
               row (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps})
               :let [schema (h/row-schema registry q)]]
-        (is (= (set (keys row)) (set (map first (m/children (m/schema schema))))) (pr-str q row))
-        (is (m/validate schema row) (pr-str q row))))))
+        (is (= (set (keys row)) (set (map first (m/children (m/schema schema {:registry registry}))))) (pr-str q row))
+        (is (m/validate schema row {:registry registry}) (pr-str q row))))))
 
 (deftest a-writes-row-is-what-next-jdbc-returns
   (when *db*

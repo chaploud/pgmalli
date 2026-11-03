@@ -41,7 +41,12 @@
     :reason (str "a citext column (an extension's string type), or a domain over it, takes no class :send sends :unknown"
                  " but String, where a text column takes it (:time/local-date for a LocalDate); PostgreSQL reads an untyped value there as citext")
     :repro (str "(h/arg-types registry {:select [:id] :from [:shapes] :where [:= :name :?x]} {:send {java.time.LocalDate :unknown}})"
-                " gives [:or [:string {:pg/type \"citext\"}] PGobject]; with :nick (text), [:or [:string ...] :time/local-date]")}])
+                " gives [:or [:string {:pg/type \"citext\"}] PGobject]; with :nick (text), [:or [:string ...] :time/local-date]")}
+   {:test :return
+    :id #"^gen-array-agg-(kinds\.(bigs|dbls|ints|nums|short_texts|texts)|lists\.[clw]|profiles\.(rank|tag)) "
+    :reason (str "array_agg of an array column returns a two-dimensional array, read as a vector of vectors; pgmalli types"
+                 " an array as one-dimensional, as PostgreSQL's type (bigint[]) does not say the dimensions")
+    :repro "(h/row-schema registry {:select [[[:array_agg :kinds.bigs] :x]] :from [:kinds]}) gives [:vector [:maybe :int]]; the row is {:x [[1]]}"}])
 
 (defn- held
   "The pending entry of test that holds the failure of signature id, or nil."

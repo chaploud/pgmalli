@@ -167,7 +167,7 @@
 
 (deftest an-expression-with-no-alias-has-the-name-postgresql-gives-it
   (is (= [:map [:count bigint] [:?column? [:maybe bigint]] [:my_fn [:maybe :any]] [:nick [:maybe text]]
-          [:case [:maybe bigint]] [:exists [:boolean {:pg/type "boolean"}]] [:current_timestamp ['inst? {:pg/type "timestamp with time zone"}]]
+          [:case [:maybe bigint]] [:exists [:boolean {:pg/type "boolean"}]] [:current_timestamp [:time/instant {:pg/type "timestamp with time zone"}]]
           [:coalesce bigint]]
          (row {:select [[[:count :*]] [[:+ :id 1]] [[:public.my-fn 1]] [[:cast :nick :text]] [[:case [:= :id 1] 2]]
                         [[:exists {:select [1]}]] :current_timestamp [[:coalesce :id 0]]]
@@ -256,21 +256,13 @@
         row #(h/row-schema reg {:select % :from [:rels]} {})]
     (is (not (str/includes? (pr-str (row [[[:min :rs] :m] [[:max :rs] :x] [[:nullif :rs :rs] :n]])) "oid")))))
 
-(deftest arrays-and-json-are-the-drivers-objects-unless-read-says-otherwise
-  (let [body {:select [:paths :meta] :from [:docs]}]
-    (is (= [:map [:paths [:maybe [:any {:pg/type "text[]"}]]] [:meta [:any {:pg/type "jsonb"}]]] (h/row-schema docs body {}))
-        "a java.sql.Array and a PGobject")
-    (is (= [:map [:paths [:maybe [:vector text]]] [:meta [:map {:pg/type "jsonb"} [:a :int]]]]
-           (h/row-schema docs body {:read {:array :vector :json :parsed}})))
-    (is (= [:map [:paths [:maybe [:sequential :string]]] [:meta [:any {:pg/type "jsonb"}]]]
-           (h/row-schema docs body {:read {"text[]" [:sequential :string]}}))
-        "a :pg/type over :array")))
+(deftest an-array-is-read-as-a-vector-and-json-parsed
+  (is (= [:map [:paths [:maybe [:vector {:pg/type "text[]"} [:maybe text]]]] [:meta [:map {:pg/type "jsonb"} [:a :int]]]]
+         (h/row-schema docs {:select [:paths :meta] :from [:docs]} {}))))
 
-(deftest an-array-through-coalesce-min-max-case-or-greatest-is-still-the-drivers-array
-  (let [row #(h/row-schema docs {:select [[% :x]] :from [:docs]} {:read %2})]
-    (doseq [e [[:coalesce :paths :paths] [:max :paths] [:min :paths] [:case [:= :id 1] :paths :else :paths] [:greatest :paths :paths]]]
-      (is (= [:map [:x [:maybe [:any {:pg/type "text[]"}]]]] (row e {})) (pr-str e))
-      (is (= [:map [:x [:maybe [:vector text]]]] (row e {:array :vector})) (pr-str e)))))
+(deftest an-array-through-coalesce-min-max-case-or-greatest-is-still-a-vector
+  (doseq [e [[:coalesce :paths :paths] [:max :paths] [:min :paths] [:case [:= :id 1] :paths :else :paths] [:greatest :paths :paths]]]
+    (is (= [:map [:x [:maybe [:vector {:pg/type "text[]"} [:maybe text]]]]] (h/row-schema docs {:select [[e :x]] :from [:docs]} {})) (pr-str e))))
 
 (deftest an-array-columns-argument-is-an-array
   (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
@@ -297,12 +289,6 @@
     (is (= {:ids [:or [:pg/array [:or bigint :string]] [:vector [:or bigint :string]]]}
            (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (sends opts {String "bigint" IPersistentVector :unknown}))))))
 
-(deftest read-names-the-types-an-extension-reads-otherwise
-  (is (= [:map
-          [:born [:maybe :time/local-date]]
-          [:closed_at [:maybe ['inst? {:pg/type "timestamptz"}]]]]
-         (row {:select [:born :closed_at] :from [:users]} (assoc opts :read {"date" :time/local-date})))))
-
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
     (is (= {'id bigint
@@ -310,7 +296,7 @@
             'min integer
             'n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (args body)))
-    (let [row (h/row-schema registry body (assoc opts :time :instant))]
+    (let [row (h/row-schema registry body opts)]
       (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]
               [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]
               [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
@@ -326,9 +312,6 @@
     (is (= [:map [:group_id int4]] (row '{:select [:group_id] :from [:users]} opts)))
     (is (= {'x bigint} (args '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]}))
         "an untyped use never hides a typed one")
-    (let [row (h/row-schema registry body opts)]
-      (is (= [:closed_at [:maybe ['inst? {:pg/type "timestamptz"}]]] (nth row 3)) "by default time columns are inst?, which the default registry has")
-      (is (m/validate row {:id 1 :nick nil :g 2 :closed_at (java.util.Date.)}) "and no registry is needed"))
     (is (= [:=> [:cat bigint :any] [:sequential {:max 1 :min 1} [:map [:n bigint]]]]
            (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
         "a symbol used nowhere is :any")
@@ -1085,11 +1068,7 @@
 
 (deftest an-array-columns-elements-take-what-send-sends
   (is (= {:p [:maybe [:or [:pg/array [:or text :keyword]] [:vector [:or text :keyword]]]]}
-         (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} (sends {} {Keyword "text" IPersistentVector :unknown}))))
-  (is (= [:map [:paths [:maybe [:vector :keyword]]]] (h/row-schema docs {:select [:paths] :from [:docs]} {:read {:array :vector "text" :keyword}})))
-  (is (= {:p [:maybe [:or [:pg/array text] [:vector text]]]}
-         (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} (sends {:read {"text" :keyword}} {IPersistentVector :unknown})))
-      ":read is the rows' alone"))
+         (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} (sends {} {Keyword "text" IPersistentVector :unknown})))))
 
 (deftest query-schema-carries-the-problems-check-finds
   (let [s (h/query-schema registry [:id] {:select [:nick_name] :from [:users] :where [:= :id :?id]} opts)]
@@ -1844,16 +1823,11 @@
 (deftest a-json-builder-is-json-as-its-type-is-read
   (let [q {:select [[[:jsonb_build_object "a" :id] :o] [[:jsonb_agg :id] :a] [[:json_build_array :id] :b]] :from [:users]}]
     (is (= [:map
-            [:o [:maybe [:any {:pg/type "jsonb"}]]]
-            [:a [:maybe [:any {:pg/type "jsonb"}]]]
-            [:b [:maybe [:any {:pg/type "json"}]]]] (row q))
-        "the driver's object, which may be NULL: the catalog does not say when a function returns NULL")
-    (is (= [:map
             [:o [:maybe [:map {:pg/type "jsonb"}]]]
             [:a [:maybe [:sequential {:pg/type "jsonb"} :any]]]
             [:b [:maybe [:sequential {:pg/type "json"} :any]]]]
-           (row q (assoc opts :read {:json :parsed})))
-        "parsed, an object or an array")))
+           (row q))
+        "parsed, an object or an array, which may be NULL: the catalog does not say when a function returns NULL")))
 
 (deftest a-row-count-is-told-only-where-nothing-may-change-it
   (let [ret #(last (h/query-schema registry [:db] % (merge opts %2)))
@@ -1907,9 +1881,9 @@
   (is (= ["unknown table sample.usres; did you mean: sample.users"] (h/humanize (check {:select [:id] :from [:usres]})))))
 
 (deftest a-misspelt-option-names-the-one-meant-in-its-data
-  (let [d (ex-data (try (h/check registry {:select [:id] :from [:users]} {:tmie :instant}) (catch clojure.lang.ExceptionInfo e e)))]
-    (is (= [:time] (:did-you-mean d)))
-    (is (= [:tmie] (:unknown d)))))
+  (let [d (ex-data (try (h/check registry {:select [:id] :from [:users]} {:jdcb {}}) (catch clojure.lang.ExceptionInfo e e)))]
+    (is (= [:jdbc] (:did-you-mean d)))
+    (is (= [:jdcb] (:unknown d)))))
 
 (deftest a-column-a-before-trigger-may-fill-takes-nil-or-nothing
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"] :update ["fill"]}}
@@ -2093,7 +2067,7 @@
 (deftest a-domain-arrays-elements-read-as-the-drivers-objects
   (let [reg (pgmalli/registry {:registry {:pg.public/posint [:int {:pg/type "integer" :min 1}]
                                           :pg.public/t [:map {:pg/table "public.t"} [:ps [:vector {:pg/type "posint[]"} [:ref {:pg/type "posint"} :pg.public/posint]]]]}})]
-    (is (m/validate (pgmalli/as-read reg :pg.public/t {:read {:array :vector}})
+    (is (m/validate (pgmalli/as-read reg :pg.public/t)
                     {:ps [(Object.)]} {:registry reg})
         "pgjdbc returns a domain's elements as PGobjects")))
 
@@ -2145,23 +2119,23 @@
     (is (= [:map
             [:i [:any {:pg/type "interval"}]]
             [:w [:maybe [:any {:pg/type "interval"}]]]
-            [:later [:maybe ['inst? {:pg/type "timestamptz"}]]]
-            [:ago [:maybe ['inst? {:pg/type "timestamp with time zone"}]]]
+            [:later [:maybe [:time/instant {:pg/type "timestamptz"}]]]
+            [:ago [:maybe [:time/instant {:pg/type "timestamp with time zone"}]]]
             [:user [:string {:pg/type "name"}]]
             [:sys [:maybe [:string {:pg/type "text"}]]]] (row {:i [:interval "1 day"] :w [:* 7 day] :later [:+ :closed_at [:cast [:inline "7 days"] :interval]]
                      :ago [:- :current_timestamp day] :user :current_user :sys :system_user}))
         "INTERVAL '1 day'; a bigint times an interval; timestamptz plus or minus an interval")
     (is (= [:map
             [:epoch [:maybe [:double {:pg/type "double precision"}]]]
-            [:nicks [:any {:pg/type "text[]"}]]
-            [:ids [:any {:pg/type "bigint[]"}]]
+            [:nicks [:vector {:pg/type "text[]"} [:maybe :string]]]
+            [:ids [:vector {:pg/type "bigint[]"} [:maybe :int]]]
             [:l [:maybe [:string {:pg/type "text"}]]]
-            [:ts [:maybe [:any {:pg/type "text[]"}]]]
+            [:ts [:maybe [:vector {:pg/type "text[]"} [:maybe :string]]]]
             [:c [:maybe [:string {:pg/type "text"}]]]
             [:d [:double {:pg/type "double precision"}]]
             [:minutes [:maybe [:double {:pg/type "double precision"}]]]
             [:p [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
-            [:none [:any {:pg/type "text[]"}]]] (row {:epoch [:date_part [:inline "epoch"] [:- [:now] :closed_at]]
+            [:none [:vector {:pg/type "text[]"} [:maybe :string]]]] (row {:epoch [:date_part [:inline "epoch"] [:- [:now] :closed_at]]
                      :minutes [:/ [:coalesce [:date_part [:inline "epoch"] [:- [:now] :closed_at]] 0] 60]
                      :d [:cast :score :double-precision] :ts [:cast :nick (keyword "text[]")]
                      :none [:array [] :text] :nicks [:array [:nick] :text] :ids [:array [:id :score]]
@@ -2169,7 +2143,7 @@
         "date_part of an interval is a double precision; ARRAY[]::text[]; ARRAY of the elements' common type")
     (is (= [:map
             [:n [:int {:pg/type "bigint"}]]
-            [:m [:maybe ['inst? {:pg/type "timestamptz"}]]]
+            [:m [:maybe [:time/instant {:pg/type "timestamptz"}]]]
             [:s [:maybe [:int {:pg/type "bigint"}]]]
             [:a [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
             [:b [:maybe [:boolean {:pg/type "boolean"}]]]] (h/row-schema registry {:select [[[:filter [:count :*] {:where [:= :id 1]}] :n] [[:filter [:min :closed_at] {:where [:= :id 1]}] :m]
@@ -2231,7 +2205,7 @@
            (h/row-schema reg {:select [[[:over [[:my_rank] {} :r]]]] :from [:users]} opts))
         "a window function of no argument of the schema's may return NULL; row_number never does")
     (is (= [:map [:o [:maybe [:any {:pg/type "jsonb"}]]]]
-           (h/row-schema reg {:select [[[:jsonb_object :score] :o]] :from [:users]} (assoc opts :read {:json :parsed})))
+           (h/row-schema reg {:select [[[:jsonb_object :score] :o]] :from [:users]} opts))
         "a json builder's name of the schema's says nothing of the shape it returns")))
 
 (deftest some-of-an-argument-is-typed-as-any-of-it
@@ -2285,10 +2259,8 @@
     (is (= [:map [:ip [:any {:pg/type "inet"}]] [:h [:any {:pg/type "hstore"}]]] (h/row-schema reg {:select [:ip :h] :from [:t]} o))
         "pgjdbc reads inet as a PGobject, hstore as a java.util.Map")
     (is (= [:map {:pg/table "public.t"} [:ip [:any {:pg/type "inet"}]] [:h [:any {:pg/type "hstore"}]]] (pgmalli/as-read reg :pg.public/t o)))
-    (is (= [:map [:ip :string]] (h/row-schema reg {:select [:ip] :from [:t]} (assoc o :read {"inet" :string}))) ":read names what an extension reads")
     (let [reg (pgmalli/registry {:registry {:pg.public/r [:map {:pg/table "public.r"} [:v [:some {:pg/type "tstzrange"}]]]}})]
-      (is (= [:map [:v [:some {:pg/type "tstzrange"}]]] (h/row-schema reg {:select [:v] :from [:r]} o)) "a column never NULL stays so")
-      (is (= [:map [:v :string]] (h/row-schema reg {:select [:v] :from [:r]} (assoc o :read {"tstzrange" :string})))))
+      (is (= [:map [:v [:some {:pg/type "tstzrange"}]]] (h/row-schema reg {:select [:v] :from [:r]} o)) "a column never NULL stays so"))
     (is (= {:ip ip :h hs} (h/arg-types reg {:update :t :set {:ip :?ip :h :?h}} o)))))
 
 (deftest a-value-of-the-wrong-class-for-a-driver-object-says-the-class-it-should-be
@@ -2312,7 +2284,7 @@
         reg (pgmalli/registry {:registry {:app/input shapes
                                           :pg.public/jobs [:map {:pg/table "public.jobs"}
                                                            [:input [:ref {:pg/type "jsonb"} :app/input]]]}})
-        o {:send {clojure.lang.IPersistentMap "jsonb"} :read {:json :parsed}}
+        o {:send {clojure.lang.IPersistentMap "jsonb"}}
         ok? #(m/validate %1 %2 {:registry reg})
         arg (:input (h/arg-types reg {:insert-into :jobs :values [{:input :?input}]} o))
         row (h/row-schema reg {:select [:input] :from [:jobs]} o)]
@@ -2429,11 +2401,11 @@
   (let [r (row {:select [[[:count [:distinct :x.v]] :n] [[:jsonb_build_object "k" :x.v] :j] [[:upper :x.v] :u]]
                 :from [[{:select [[[:raw "1"] :v]]} :x]]})]
     (is (= [:n bigint] (nth r 1)) "count is a bigint, never NULL")
-    (is (= [:j [:maybe [:any {:pg/type "jsonb"}]]] (nth r 2)))
+    (is (= [:j [:maybe [:map {:pg/type "jsonb"}]]] (nth r 2)))
     (is (= [:u [:maybe :any]] (nth r 3)) "upper of a range is a range")))
 
 (deftest an-aggregates-order-by-leaves-its-type
-  (is (= [:map [:ids [:maybe [:any {:pg/type "bigint[]"}]]] [:s [:maybe text]]]
+  (is (= [:map [:ids [:maybe [:vector {:pg/type "bigint[]"} [:maybe :int]]]] [:s [:maybe text]]]
          (row {:select [[[:array_agg [:order-by :id [:id :desc]]] :ids] [[:string_agg [:cast :id :text] [:order-by [:inline ","] :id]] :s]]
                :from [:users]}))))
 
@@ -2501,16 +2473,3 @@
   (is (= [:any {:pgmalli/untyped :position}] (get (args '{:insert-into t :values [:?row]}) :row))
       "a table code names"))
 
-(deftest an-enum-read-as-a-keyword
-  (let [o (assoc opts :read {:enum :keyword})
-        kw [:enum {:pg/type "mood" :default :happy :pg/default "happy"} :happy :sad]]
-    (is (= [:map [:mood kw] [:m [:maybe kw]]] (row {:select [:mood [[:nullif :mood "sad"] :m]] :from [:users]} o)))
-    (is (= [:mood kw] (some #(when (and (vector? %) (= :mood (first %))) %) (pgmalli/as-read registry :pg.sample/users (dissoc o :schema)))))
-    (is (= [:map [:mood [:enum {:pg/type "mood"} :happy :sad]]] (row {:select [[[:cast "sad" :mood] :mood]]} o)))
-    (is (= {:m mood} (select-keys (args {:select [:id] :from [:users] :where [:= :mood :?m]} o) [:m])) "an argument is sent as before")
-    (is (= (row {:select [:nick] :from [:users]} opts) (row {:select [:nick] :from [:users]} o))))
-  (let [r (pgmalli/registry {:registry {:pg.public/mood [:enum "a" "b"]
-                                        :pg.public/dmood [:and [:ref {:pg/type "mood"} :pg.public/mood]]
-                                        :pg.public/t [:map {:pg/table "public.t"} [:m [:ref {:pg/type "dmood"} :pg.public/dmood]]]}})]
-    (is (= [:map {:pg/table "public.t"} [:m [:enum {:pg/type "dmood"} :a :b]]] (pgmalli/as-read r :pg.public/t {:read {:enum :keyword}}))
-        "a domain's column is described as its base type's")))

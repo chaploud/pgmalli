@@ -22,7 +22,7 @@
       (is (= 'bytes? (get-in (pgmalli/portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
       (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
   (testing "as-read: the map as next.jdbc builds it"
-    (let [r (pgmalli/as-read registry :pg.sample/users {:time :instant})]
+    (let [r (pgmalli/as-read registry :pg.sample/users)]
       (is (= [:group_name [:maybe [:string {:pg/type "text"}]]] (nth r 5)))
       (is (= [:updated_at [:maybe [:time/instant {:pg/type "timestamp"}]]] (last r)) "timestamps as Instants")
       (is (= [:born [:maybe ['inst? {:pg/type "date"}]]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
@@ -52,11 +52,6 @@
 (deftest a-misspelt-name-suggests-the-one-meant
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :pg.sample.users/insert" (pgmalli/columns registry :pg.sample/users_insert)))]
     (is (= [:pg.sample.users/insert] (:did-you-mean (ex-data e))))))
-
-(deftest read-names-the-types-an-extension-reads-otherwise
-  (let [r (pgmalli/as-read registry :pg.sample/users {:time :instant :read {"date" :time/local-date}})]
-    (is (= [:born [:maybe :time/local-date]] (nth r 2)) "over :time, NULL still allowed")
-    (is (= [:updated_at [:maybe [:time/instant {:pg/type "timestamp"}]]] (last r)) "the other types as :time reads them")))
 
 (deftest as-read-defaults-its-options
   (is (= (pgmalli/as-read registry :pg.sample/users {}) (pgmalli/as-read registry :pg.sample/users))))

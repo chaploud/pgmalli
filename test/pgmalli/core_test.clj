@@ -275,9 +275,9 @@
                                    CREATE DOMAIN dr.email AS public.citext CHECK (VALUE ~ '@'); CREATE DOMAIN dr.doc AS jsonb;
                                    CREATE TABLE dr.t (id int PRIMARY KEY, e dr.email, j dr.doc);")]
       (is (= [:map {:pg/primary-key ["id"] :pg/table "dr.t"}
-              [:e [:maybe [:any {:pg/type "public.citext"}]]] [:id [:pg/integer {:pg/type "integer"}]] [:j [:maybe [:any {:pg/type "jsonb"}]]]]
+              [:e [:maybe [:any {:pg/type "public.citext"}]]] [:id [:pg/integer {:pg/type "integer"}]] [:j [:maybe [:ref {:pg/type "doc"} :pg.dr/doc]]]]
              (pgmalli/as-read reg :pg.dr/t {}))
-          "a PGobject, as pgjdbc returns citext and jsonb"))))
+          "a citext a PGobject, as pgjdbc returns it; jsonb parsed, the domain's own"))))
 
 (deftest an-exclude-constraint-is-on-the-table-and-datasets-keep-its-equal-columns-apart
   (when *db*
@@ -385,9 +385,8 @@
       (is (m/validate :pg.ov/jobs row {:registry reg}))
       (doseq [bad [{:input {:prompt 1}} {:input nil} {:n 0} {:n 100}]]
         (is (not (m/validate :pg.ov/jobs (merge row bad) {:registry reg})) (pr-str bad)))
-      (testing "read: the declared shape under {:read {:json :parsed}}, the driver's object without it"
-        (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (read :input (assoc o :read {:json :parsed}))))
-        (is (= [:any {:pg/type "jsonb"}] (read :input o)))
+      (testing "read: the declared shape, parsed"
+        (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (read :input o)))
         (is (= [:int {:min 1 :max 99 :pg/type "integer" :pg/constraints ["jobs_n_check"]}] (read :n o))))
       (testing "write: the declared shape for what :send sends as jsonb"
         (is (= [:or [:map {:pg/type "jsonb"} [:prompt :string]] jdbc/pg-object] (:i (h/arg-types reg {:update :jobs :set {:input :?i}} sends))))
