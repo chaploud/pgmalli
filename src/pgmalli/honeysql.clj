@@ -2759,11 +2759,14 @@
 (defn- expression
   "What HoneySQL writes in :values or :set as an expression, a vector or list headed by a keyword
    but :default ([:cast \"a\" :t], [:now]): [:lift v] v as one parameter, of type a; another
-   untyped."
-  [a]
-  [:alt {:error/message "should be a HoneySQL expression, a vector headed by a keyword"}
-   [:cat [:= :lift] a]
-   [:cat [:and :keyword [:not [:enum :lift :default]]] [:* [:or :nil :some]]]])
+   untyped; and words, the keywords it writes as one there (:current_timestamp, a column in :set)."
+  [a words]
+  (let [e [:alt {:error/message "should be a HoneySQL expression, a vector headed by a keyword"}
+           [:cat [:= :lift] a]
+           [:cat [:and :keyword [:not [:enum :lift :default]]] [:* [:or :nil :some]]]]]
+    (if (seq words)
+      [:or e (into [:enum {:error/message "should be a word HoneySQL writes as one, such as :current_timestamp"}] (sort words))]
+      e)))
 
 (defn- generated-values
   "t without the values of a class alone (a PGobject), which malli does not generate; nil where
@@ -2789,6 +2792,9 @@
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
           triggered? (filled-by-trigger? (shape/row-props s) (keyword derived))
+          ;; the SQL words a value may be; in :set, the table's columns too (SET a = b)
+          words (cond-> (set (keys sql-value-types))
+                  (= "update" derived) (into (for [[k] (shape/column-entries s) :when (keyword? k)] k)))
           ;; [keys required? type generated] of each column, generated the values it takes that
           ;; malli generates (nil for none)
           columns (concat
@@ -2797,7 +2803,7 @@
                          :let [a (cond-> (accepted-type r c :assign opts) (or (shape/maybe? c) triggered?) nullable)
                                t (one-value a)
                                plain (if (fills k) [:or t default] t)]]
-                     [(written-keys k opts) (not (or (:optional props) triggered?)) [:or plain (expression a)] (generated-values plain)])
+                     [(written-keys k opts) (not (or (:optional props) triggered?)) [:or plain (expression a words)] (generated-values plain)])
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(written-keys k opts) false default default]))

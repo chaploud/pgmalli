@@ -1993,9 +1993,12 @@
         row {:group_id 1 :score 1}]
     (is (every? #(ok? v (merge row %)) [{:mood [:cast "sad" :mood]} {:closed_at [:now]} {:score [:raw "1"]} {:score '(:abs -1)} {:score [:lift 1]} {:nick [:lift nil]}]))
     (is (every? #(ok? s %) [{:score [:+ :score 1]} {:mood [:cast "sad" :mood]}]))
+    (is (ok? v (assoc row :closed_at :current_timestamp)) "a keyword HoneySQL writes as an SQL word, CURRENT_TIMESTAMP")
+    (is (ok? s {:score :seq}) "in SET, a column: SET score = seq")
+    (is (not (ok? v (assoc row :score :seq))) "a column in VALUES, which PostgreSQL refuses")
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] is v as one parameter; a vector not headed by a keyword a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be either \"happy\" or \"sad\"" "should be either :default or [:default]" "should be a HoneySQL expression, a vector headed by a keyword"]}
+    (is (= {:mood ["should be either \"happy\" or \"sad\"" "should be either :default or [:default]" "should be a HoneySQL expression, a vector headed by a keyword" "should be a word HoneySQL writes as one, such as :current_timestamp"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (is (not-any? (fn [r] (some #(and (sequential? %) (keyword? (first %)) (not= [:default] %)) (vals r)))
                   (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))

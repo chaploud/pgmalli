@@ -240,10 +240,11 @@ takes nil: the trigger may fill it. In
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
 A column takes a value, or a HoneySQL expression: a vector or list headed by a keyword
-(`[:cast "closed" :user_status]`, `[:now]`, `[:+ :n 1]`), untyped but `[:lift v]`, which
-HoneySQL sends as one parameter and which holds `v` to the column's type. A keyword other than
-`:default` is no value, as HoneySQL writes it as a column; nor is a vector or list not headed by
-a keyword, which it writes as a row of parameters. `mg/generate` gives values alone, no
+(`[:cast "closed" :user_status]`, `[:now]`, `[:+ :n 1]`) or an SQL word
+(`:current_timestamp`, `:current_user`). An expression is not checked, except `[:lift v]`, which
+HoneySQL sends as one parameter: `v` must be of the column's type. Another keyword is a column,
+which `:set` takes (`SET score = seq`) and `:values` does not (PostgreSQL refuses a column
+there); a vector or list not headed by a keyword is a row of parameters, which no column takes. `mg/generate` gives values alone, no
 expression, and leaves out a column of whose values malli generates none (a `PGobject`).
 Validate a row under the registry (`{:registry registry}`). The table's CHECKs across columns
 are not in it; where they matter, validate an inserted row with `:pg.public.users/insert` too.

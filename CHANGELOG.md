@@ -95,7 +95,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `:set` maps built at run time, keyed by any key HoneySQL writes to a column: the label the
   `:jdbc` builder reads it as, so a row read is written back, its name (`:group_id`) or its
   kebab spelling (`:group-id`), one of them a column; a column takes a HoneySQL expression too (`[:now]`,
-  `[:+ :n 1]`, `[:lift v]` with `v` of the column's type), and generates values alone
+  `[:+ :n 1]`, `:current_timestamp`, a column in `:set`, `[:lift v]` with `v` of the column's type), and generates values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
 * Array arguments: a Clojure collection whose class `:send` sends as an array type or
