@@ -92,7 +92,12 @@
   (concat (for [t (keys types/types), t [t (str t "[]")]] [t t])
           [["feel" [:enum "feel"]] ["positive" "integer"]]))
 
-(def ^:private sents (concat (distinct (map second accept/class-types)) ["feel" :unknown]))
+(def ^:private sents
+  "Every type a value may be sent as: pgjdbc's, and any other :send names (a map as jsonb, an
+   extension's) that pgmalli.impl.accept answers for (known?), and an enum's and none."
+  (distinct (concat (map second accept/class-types)
+                    (filter #(and (string? %) (accept/known? %)) (map first targets))
+                    ["feel" :unknown])))
 
 (defn- column [t] (str "c_" (str/replace (str/replace t "[]" "_array") #"\W" "_")))
 
@@ -121,13 +126,16 @@
 
 (deftest accept-is-postgresqls
   (when *db*
-    (doseq [{:keys [t accepted-t sent context taken]} (verdicts)
+    (doseq [:let [vs (verdicts)
+                  compares-itself (set (for [{:keys [t sent context taken]} vs :when (and taken (= :compare context) (= t sent))] t))]
+            {:keys [t accepted-t sent context taken]} vs
             :let [sent-t (if (= "feel" sent) [:enum "feel"] sent)
                   pair (str (pr-str sent) " " context " " t)]]
       ;; accepts? may take what PostgreSQL refuses (PostgreSQL 18 casts bytea and the integers), never the
       ;; other way; a type it does not answer for (known? false) types its arguments :any
       (when (and taken (accept/known? accepted-t)) (is (accept/accepts? accepted-t sent-t context) (str "PostgreSQL takes " pair)))
-      (when (and (not= :cast context) (accept/holds? accepted-t sent-t))
+      ;; a type with no = (json, point, xml) compares with nothing, its own type neither
+      (when (and (not= :cast context) (accept/holds? accepted-t sent-t) (not (and (= :compare context) (not (compares-itself t)))))
         (is taken (str "PostgreSQL refuses " pair))))))
 
 (deftest the-schema-of-each-class-sent-takes-its-values
