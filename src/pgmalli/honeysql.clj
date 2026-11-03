@@ -1396,7 +1396,9 @@
                          (if-let [pg (and (vector? base) (not (map? (second base))) (:pg/type p))]
                            (into [(first base) {:pg/type pg}] (rest base))
                            (if (and (keyword? base) (:pg/type p)) [base {:pg/type (:pg/type p)}] base)))
-            (#{:maybe :vector :sequential :set :pg/array} h) [h (loose (last t))]
+            (= :maybe h) [h (loose (last t))]
+            ;; an array column's :pg/type is what tells the driver's java.sql.Array from :read's vector
+            (#{:vector :sequential :set :pg/array} h) (if-let [pg (:pg/type p)] [h {:pg/type pg} (loose (last t))] [h (loose (last t))])
             (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
             (seq children) t
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))

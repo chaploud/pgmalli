@@ -252,6 +252,12 @@
            (h/row-schema docs body {:jdbc unqualified :read {"text[]" [:sequential :string]}}))
         "a :pg/type over :array")))
 
+(deftest an-array-through-coalesce-min-max-case-or-greatest-is-still-the-drivers-array
+  (let [row #(h/row-schema docs {:select [[% :x]] :from [:docs]} {:jdbc unqualified :read %2})]
+    (doseq [e [[:coalesce :paths :paths] [:max :paths] [:min :paths] [:case [:= :id 1] :paths :else :paths] [:greatest :paths :paths]]]
+      (is (= [:map [:x [:maybe [:any {:pg/type "text[]"}]]]] (row e {})) (pr-str e))
+      (is (= [:map [:x [:maybe [:vector text]]]] (row e {:array :vector})) (pr-str e)))))
+
 (deftest an-array-columns-argument-is-an-array
   (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
     (is (= {:paths [:maybe [:pg/array text]] :meta [:any {:pg/type "jsonb"}]} (select-keys (h/arg-types docs body) [:paths :meta]))

@@ -46,7 +46,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   numbers the widest of them (an `integer` and a `bigint` a `bigint`); `nullif` of two of one
   type, as `=` reads it. A string among them takes the others' type; an argument leaves the
   expression untyped unless the type is a string type, as pgjdbc sends numbers and dates typed.
-  `CASE` without `:else` may be NULL. `min` and `max` read a `varchar`, `"char"` or `name` as
+  `CASE` without `:else` may be NULL. An array through them, `min` or `max` is the driver's
+  `java.sql.Array`, as the column is, unless `:read` says otherwise. `min` and `max` read a `varchar`, `"char"` or `name` as
   `text`, a `cidr` as `inet` and a reg* type as `oid`. `bool_and`, `bool_or` and `every` are
   `boolean`. A column cast to another type is keyed by no table, as an expression; one cast to
   its own type, which PostgreSQL drops, is untold under qualified keys. It also types a literal
