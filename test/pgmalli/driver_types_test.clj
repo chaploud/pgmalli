@@ -10,27 +10,30 @@
             next.jdbc.optional
             next.jdbc.result-set
             [pgmalli.core :as pgmalli]
+            [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             pgmalli.impl.jdbc
             [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
 
-(use-fixtures :once with-postgres)
 
 (def ^:private schema-sql
   "CREATE EXTENSION citext;
    CREATE TYPE mood AS ENUM ('a', 'b');
    CREATE DOMAIN posint AS int CHECK (VALUE > 0);
+   CREATE DOMAIN email AS citext CHECK (VALUE ~ '@');
    CREATE TABLE t (id int PRIMARY KEY, i2 smallint, i8 bigint, num numeric(10,2), nn numeric, r real, d double precision,
      b1 bit(1), b8 bit(8), vb varbit, ct citext, bp char(3), vc varchar(5), tx text, u uuid,
      dt date, tm time, ttz timetz, ts timestamp, tstz timestamptz, iv interval, js json, jb jsonb,
-     arr int[], tarr text[], e mood, dom posint, by bytea, o oid, bo boolean);
+     arr int[], tarr text[], e mood, dom posint, by bytea, o oid, bo boolean, em email);
    CREATE VIEW v AS SELECT id, ct, r FROM t;
    INSERT INTO t VALUES
      (1, 1, 2, 3.45, 1.5, 1.5, 2.5, B'1', B'10101010', B'101', 'Ab', 'ab', 'abc', 'x', gen_random_uuid(),
       '2026-01-01', '12:00', '12:00+09', '2026-01-01 00:00', '2026-01-01 00:00+00', '1 day', '{\"a\":1}', '{\"a\":1}',
-      '{1,2}', '{a}', 'a', 5, '\\x00', 26, true),
+      '{1,2}', '{a}', 'a', 5, '\\x00', 26, true, 'a@b'),
      (2, NULL, NULL, NULL, 'NaN', 'NaN', 'Infinity', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);")
+      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);")
+
+(use-fixtures :once with-postgres (fn [f] (when *db* (exec-sql! schema-sql)) (f)))
 
 (def ^:private time-readers
   {:inst next.jdbc.date-time/read-as-default
@@ -48,7 +51,6 @@
 
 (deftest as-read-is-what-next-jdbc-builds
   (when *db*
-    (exec-sql! schema-sql)
     (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (try
@@ -63,3 +65,22 @@
           (testing (str builder " :time " time " " table)
             (is (= [] (vec (distinct (disagreements registry schema rows)))))))
         (finally (next.jdbc.date-time/read-as-default))))))
+
+(deftest a-value-read-is-written-back-where-postgresql-takes-it
+  (when *db*
+    (let [ds (datasource)
+          registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+          o {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps}}
+          row (jdbc/execute-one! ds ["SELECT * FROM t WHERE id = 1"] (:jdbc o))
+          values (m/schema (h/values-schema registry :t o) {:registry registry})
+          set (m/schema (h/set-schema registry :t o) {:registry registry})
+          ;; another test may load next.jdbc.date-time, which cannot send a java.sql.Time
+          taken? (fn [k v] (with-open [con (jdbc/get-connection ds)]
+                             (.setAutoCommit con false)
+                             (try (jdbc/execute! con [(str "UPDATE t SET " (name k) " = ? WHERE id = 2") v]) true
+                                  (catch Exception _ false)
+                                  (finally (.rollback con)))))]
+      (is (= [] (vec (for [[k v] (dissoc row :id)
+                           :when (and (taken? k v)
+                                      (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v)))))]
+                       [k (some-> v class .getName)])))))))

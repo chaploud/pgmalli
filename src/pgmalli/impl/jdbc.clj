@@ -458,7 +458,7 @@
         s (if (and target (not= :enum (shape/head target))) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
     (or (shape/read-as read s) (read-type (through-domain schemas s opts read-type) opts))))
 
-(defn column-write-type
+(defn- column-write-type*
   "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the
    driver takes its base."
   [schemas s opts]
@@ -478,6 +478,22 @@
         ;; (a number domain's: its checks read the number; another's may hold code only the registry runs)
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
     (write-type (through-domain schemas s opts write-type) opts)))
+
+(def ^:private pg-object
+  "A PGobject (not a subclass of it, such as PGInterval), by name: pgjdbc need not be loaded."
+  [:fn {:pg/class "org.postgresql.util.PGobject"} (fn [x] (= "org.postgresql.util.PGobject" (some-> x class .getName)))])
+
+(defn column-write-type
+  "column-write-type*: a column the driver reads as a PGobject (citext, bit(n > 1)) takes
+   one too: pgjdbc sends it as the type it names, so a value read is written back."
+  [schemas s opts]
+  (let [w (column-write-type* schemas s opts)
+        r (column-read-type schemas s (dissoc opts :read))
+        t (pg-type r)]
+    (if (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (str/ends-with? t "[]"))
+             (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t})))))
+      (shape/either (concat (shape/alternatives w) [pg-object]) w)
+      w)))
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
