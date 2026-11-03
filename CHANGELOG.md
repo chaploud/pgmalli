@@ -47,7 +47,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   assigned argument take a column left out or NULL, as `h/check` already did.
 * A collection interface in `:send` (`{java.util.List :unknown}`) sends each Clojure collection
   that implements it (a vector, a list) as an array argument.
-* An integer assigned to a `numeric(p,s)` column is an argument it takes, as to a `numeric` one.
+* An integer assigned to a `numeric(p,s)` column is an argument it takes, as to a `numeric` one,
+  and a typed array of a narrower number (`"bigint[]"`) one a `numeric[]`, `real[]` or `double
+  precision[]` column takes.
+* Under `{:compare :lenient}` the elements of an argument in `:in` or `= ANY` take nil too.
+* `h/values-schema` and `h/set-schema` take no keyword but `:default`: HoneySQL writes one as a
+  column, whatever `:send` sends.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does

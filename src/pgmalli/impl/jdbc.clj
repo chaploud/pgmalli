@@ -12,6 +12,7 @@
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.json :as json]
+            [pgmalli.impl.pgtypes :as pgtypes]
             [pgmalli.impl.shape :as shape]
             [pgmalli.impl.types :as types]))
 
@@ -278,6 +279,8 @@
               (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
               :else (driver-type schema opts read-type)))))
 
+(declare write-type)
+
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
    column; :unnest, unnest(?) assigned): the collections and Java arrays :send sends as an
@@ -293,9 +296,21 @@
                    (not= :unnest use)
                    (or (not (and elem (accept/known? elem)))
                        (accept/holds? elem (accept/element sent)))))
+        ;; a typed array's elements are also the values of its element type, where the column
+        ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
+        element (fn [sent]
+                  (let [x (when (string? sent) (accept/element sent))
+                        e (when (and x (not= x elem)) (types/entry x))]
+                    (if-let [s (:schema e)]
+                      (let [;; pgmalli's integer types are integers, as :int is
+                            kind #(let [k (shape/kind %)] (if (pgtypes/int-ranges k) :int k))
+                            own (set (map kind (shape/alternatives (shape/non-null t))))
+                            more (remove #(own (kind %)) (shape/alternatives (write-type (if (keyword? s) [s {:pg/type (:name e)}] s) opts)))]
+                        (shape/either (distinct (concat (shape/alternatives t) more)) t))
+                      t)))
         alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)
                              a (shape/alternatives s)]
-                         (clojure.walk/postwalk-replace {:pgmalli/element t} a)))]
+                         (clojure.walk/postwalk-replace {:pgmalli/element (element sent)} a)))]
     (shape/either alts :any)))
 
 (defn write-type

@@ -1412,11 +1412,13 @@
    (its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond them, matching
    no row), without NULL; :in's a non-empty vector, list or set of it, as
    sql/format expands it (IN () is not SQL); an array's the collections and Java arrays :send sends as an array (jdbc/array-type).
-   {:compare :lenient} takes nil too but in :in (nil formats as IN ?)."
+   {:compare :lenient} takes nil too: :in's and an array's elements, and the argument itself
+   but in :in (nil formats as IN ?)."
   [op t array? {:keys [compare] :as opts}]
-  (let [lenient? (= :lenient compare)]
-    (cond-> (cond array? (jdbc/array-type t opts :compare)
-                  (and (in-ops op) (not (untyped? t))) [:or [:sequential {:min 1} t] [:set {:min 1} t]]
+  (let [lenient? (= :lenient compare)
+        element (cond-> t (and lenient? (not (untyped? t))) nullable)]
+    (cond-> (cond array? (jdbc/array-type element opts :compare)
+                  (and (in-ops op) (not (untyped? t))) [:or [:sequential {:min 1} element] [:set {:min 1} element]]
                   :else t)
       ;; IS [NOT] DISTINCT FROM compares NULL as a value
       (or (and lenient? (not (in-ops op))) (#{:is-distinct-from :is-not-distinct-from} op)) nullable)))
@@ -1949,6 +1951,18 @@
       (or (some #(when (= n (writes %)) %) candidates) (if (string? column) n (keyword n)))
       (if (string? column) n (keyword n)))))
 
+(defn- without-keywords
+  "t without its keyword values: HoneySQL writes a keyword in :values or :set as a column."
+  [t]
+  (case (shape/head t)
+    :maybe [:maybe (without-keywords (last t))]
+    :and (shape/update-base t without-keywords)
+    :or (shape/either (remove #(= :keyword (shape/kind %)) (map without-keywords (shape/alternatives t))) t)
+    :enum (let [[h & r] t
+                [p & labels] (if (map? (first r)) r (cons nil r))]
+            (into (cond-> [h] p (conj p)) (remove keyword? labels)))
+    t))
+
 (defn- written-row
   "The [:map ...] of the derived schema (\"insert\", \"update\") of the table name names (a
    registry row name, or a table keyword as HoneySQL names it, in :schema): each column typed as
@@ -1990,7 +2004,7 @@
                   (concat
                    ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
                    (for [[k props c] written
-                         :let [t (cond-> (accepted-type r c :assign opts) (or (maybe? c) triggered?) nullable)
+                         :let [t (cond-> (without-keywords (accepted-type r c :assign opts)) (or (maybe? c) triggered?) nullable)
                                t (if (fills k) [:or t default] t)]]
                      (if (or (:optional props) triggered?) [(key k) {:optional true} t] [(key k) t]))
                    ;; one the database writes (generated, identity ALWAYS) takes it alone

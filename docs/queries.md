@@ -197,7 +197,8 @@ takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
-They type values: a HoneySQL expression other than `:default` (`[:cast "closed" :user_status]`,
+They type values: a keyword other than `:default`, which HoneySQL writes as a column, and a
+HoneySQL expression other than `:default` (`[:cast "closed" :user_status]`,
 `[:now]`) is not one. Under pgjdbc's default they still take an enum column's label as a
 String, which PostgreSQL refuses (it goes as varchar), as `h/check` reports of a query.
 Validate a row under the registry (`{:registry registry}`). The table's CHECKs across columns
@@ -367,7 +368,7 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 | `:jdbc {...}` | the options you pass to next.jdbc: `:builder-fn` (the function, its var, or its qualified symbol where next.jdbc does not load) keys the rows, `:label-fn` and `:qualifier-fn` under a modified builder ([reading-rows.md](reading-rows.md#keys-from-a-nextjdbc-builder)); `:return-keys true` or `["col" ...]` adds RETURNING to a write |
 | `:time`, `:read` | how the driver reads values ([reading-rows.md](reading-rows.md#options)) |
 | `:send {Class type}` | what your application sends, and the type each class goes as: [what your application sends](#what-your-application-sends); pgjdbc's by default |
-| `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
+| `:compare :lenient` | arguments compared with a column take nil too, and so do the elements of one in `:in` or `= ANY` (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read |
 | `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |
 

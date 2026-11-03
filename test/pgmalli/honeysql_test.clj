@@ -216,13 +216,13 @@
     (is (= [:maybe [:string {:pg/type "character varying"}]] (:nick types)) "no length")
     (is (= [:maybe mood] (:mood types))
         "an enum stays: PostgreSQL refuses a value outside it")
-    (is (= (in-list integer) (:gs types))
-        "nil not in :in's: it formats as IN ?")
+    (is (= (in-list [:maybe integer]) (:gs types))
+        "nil among :in's elements, not as :in's own: it formats as IN ?")
     (is (= [:maybe [:int {:pg/type "bigint" :min 0}]] (:n types)))
     (is (= {:v [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (args {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
         "an assigned one keeps the column's bounds")
-    (is (= {:ids [:maybe [:or [:pg/array bigint] [:sequential bigint]]]}
+    (is (= {:ids [:maybe [:or [:pg/array [:maybe bigint]] [:sequential [:maybe bigint]]]]}
            (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (sends (assoc opts :compare :lenient) {Sequential :unknown})))
         "an array's too")))
 
@@ -805,7 +805,8 @@
     (is (not (ok? s {:score :default})) "a NOT NULL column with no default has no DEFAULT to set")
     (is (ok? v {:group_id 1 :score 0}) "those it fills optional")
     (is (not-any? #(ok? v %) [{:score 0} {:group_id 1 :score 0 :id 1} {:group_id 1 :score 0 :mood "glad"} {:group_id 1 :score 0 :nick nil :born "x"}]))
-    (is (every? #(ok? s %) [{:nick nil} {:mood :sad} {:nick :abc}]) "every column optional, as :send sends it")
+    (is (every? #(ok? s %) [{:nick nil} {:mood "sad"} {:nick "abc"}]) "every column optional")
+    (is (not-any? #(ok? s %) [{:mood :sad} {:nick :abc}]) "HoneySQL writes a keyword in :set as a column, whatever :send sends")
     (is (not-any? #(ok? s %) [{:score nil} {:id 1} {:mood :glad}]))
     (is (not (ok? s {})) "HoneySQL writes an empty :set as SET alone, which PostgreSQL refuses")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes its row schema :pg.sample/users" (h/values-schema registry :pg.sample.users/insert)))
@@ -1470,9 +1471,9 @@
   (is (= [:map [:?column? [:maybe :any]]] (row {:select [:NULL] :from [:users]}))))
 
 (deftest a-check-lists-labels-go-as-keywords-assigned-too
-  (let [s (h/set-schema check-list-registry :pg.public/t (sends {} {Keyword :unknown}))]
-    (is (m/validate s {:state :open} {:registry check-list-registry}))
-    (is (not (m/validate s {:state :archived} {:registry check-list-registry})))))
+  (let [s (:v (h/arg-types check-list-registry {:update :t :set {:state :?v}} (sends {} {Keyword :unknown})))]
+    (is (m/validate s :open {:registry check-list-registry}))
+    (is (not (m/validate s :archived {:registry check-list-registry})))))
 
 (def ^:private kinds-registry
   (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:>= 1]]
@@ -1687,3 +1688,21 @@
             v [12 (int 12) 12N 12.5M]]
       (is (m/validate (:v (h/arg-types reg q)) v {:registry reg}) (pr-str q v)))
     (is (m/validate (h/values-schema reg :t) {:n 12} {:registry reg}))))
+
+(deftest an-array-column-takes-a-narrower-numbers-typed-array
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
+                                                        [:na [:maybe [:vector {:pg/type "numeric[]"} [decimal? {:pg/type "numeric"}]]]]
+                                                        [:da [:maybe [:vector {:pg/type "double precision[]"} [:double {:pg/type "double precision"}]]]]]}})
+        o {:send {clojure.lang.IPersistentVector "bigint[]"}}]
+    (doseq [c [:na :da]]
+      (is (m/validate (:v (h/arg-types reg {:update :t :set {c :?v} :where [:= :id 1]} o)) [1 2] {:registry reg}) (name c)))))
+
+(deftest a-lenient-comparison-takes-nil-elements
+  (let [o (assoc opts :compare :lenient)]
+    (is (m/validate (:v (args {:select [:id] :from [:users] :where [:in :id :?v]} o)) [1 nil] {:registry registry}))
+    (is (m/validate (:v (args {:select [:id] :from [:users] :where [:= :id [:any :?v]]} (sends o {clojure.lang.IPersistentVector :unknown}))) [1 nil] {:registry registry}))))
+
+(deftest a-written-row-takes-no-keyword-honeysql-would-write-as-a-column
+  (let [s (h/values-schema registry :users (sends opts {clojure.lang.Keyword :unknown}))]
+    (is (not (m/validate s {:group_id 1 :score 1 :mood :sad} {:registry registry})))
+    (is (m/validate s {:group_id 1 :score 1 :mood "sad"} {:registry registry}))))
