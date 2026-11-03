@@ -79,9 +79,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)): under a cast, with what
   PostgreSQL casts to the type; an argument of `coalesce`, `greatest`, `least` or `nullif`; one
   compared in a select or ORDER BY expression; one of an `unnest` in FROM, as an array of the
-  type of where its column goes. An argument takes nil where any of its uses does, whatever
-  their order, and in `:limit` or `:offset` (no limit); under `{:compare :lenient}` the elements
-  of one in `:in` or `= ANY` take nil too.
+  type of where its column goes; one compared with `ANY(array)` as the array's element; an
+  element of `[:array [...] :text]`, as cast; one of a function or an operator PostgreSQL may
+  resolve several ways, the values of each (`generate_series(1, ?)`, `timezone(zone, ?)`). An
+  argument of several uses takes what each of them takes, whatever their order, and nil where
+  any of them does, and in `:limit` or `:offset` (no limit); under `{:compare :lenient}` the
+  elements of one in `:in` or `= ANY` take nil too.
 * `h/row-schema` types an expression as PostgreSQL resolves it
   ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): `CASE`, `coalesce`, `greatest`,
   `least`, `ARRAY[...]`, `VALUES` and a set operation's columns of their values' common type, and
@@ -94,7 +97,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   unqualified. The columns of a CTE or a subquery are typed as
   its SELECT types them, and keyed by the table PostgreSQL traces them to; a set operation's
   column is of the type PostgreSQL resolves its members' to; `SELECT *` of a CTE or a subquery
-  lists its columns; a table function (`WITH ORDINALITY` too) is named by its alias.
+  lists its columns; a table function (`WITH ORDINALITY` too) is named by its alias. Also a
+  scalar subquery (its column's type, nullable), `[[f x]]`, an aggregate with `ORDER BY`,
+  `x = ANY(array)` (boolean), a function returning `void` (`[:any {:pg/type "void"}]`), a call
+  whose overloads all return one type that is not polymorphic (`count`, `jsonb_build_object`)
+  even of arguments it cannot type, and a set operation's column of a NULL member. A recursive
+  CTE keeps its types through a CTE or a subquery reading it, and a subquery reading a CTE is
+  read under it. A table or view of `pg_catalog` has its columns, from the snapshot.
 * A schema's own functions and operators are typed as `pg_catalog`'s
   ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): the generated file holds them,
   and a call resolves among `pg_catalog`'s and `:schema`'s as PostgreSQL's search path does,
