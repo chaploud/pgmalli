@@ -38,14 +38,16 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/query-schema`'s return says how many rows the data tells (`[:sequential {:max 1} row]`):
   one of a SELECT of aggregates alone, at most one where the WHERE holds a primary key or a
   UNIQUE constraint equal to a value, up to as many as an INSERT's `:values` has rows under RETURNING,
-  at most `:limit`; where it is one, `{:result :one}` gives no `[:maybe]`. A table other tables
-  inherit has `:pg/inherited true`, a DEFERRABLE primary key `:pg/primary-key-deferrable true`
-  and a DEFERRABLE UNIQUE constraint `:deferrable true`; an invalid unique index (a failed
-  `CREATE INDEX CONCURRENTLY`) is no longer in `:pg/unique`.
+  at most `:limit`; where it is one, `{:result :one}` gives no `[:maybe]`.
+* A table's map carries `:pg/inherited true` for a table other tables inherit (not as
+  partitions), `:pg/primary-key-deferrable true`, and `:deferrable true` on a DEFERRABLE
+  `:pg/unique` entry. An invalid unique index (a failed `CREATE INDEX CONCURRENTLY`) is no
+  longer in `:pg/unique`.
 * Where a BEFORE row trigger runs for the write, `h/values-schema`, `h/set-schema` and an
   assigned argument take a column left out or NULL, as `h/check` already did.
 * A collection interface in `:send` (`{java.util.List :unknown}`) sends each Clojure collection
-  it holds.
+  that implements it (a vector, a list) as an array argument.
+* An integer assigned to a `numeric(p,s)` column is an argument it takes, as to a `numeric` one.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does

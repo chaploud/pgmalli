@@ -100,7 +100,7 @@ A table with a BEFORE row trigger for the statement (`:pg/before-triggers`) gets
 `:not-null-violation` nor `:missing-required-column`: the trigger may fill the row.
 
 `h/check` does not see what an argument holds; `h/arg-types` types one assigned to a NOT NULL
-column without nil.
+column without nil, unless such a trigger may fill it.
 
 ## The types of the arguments
 
@@ -191,7 +191,9 @@ column with, unqualified, where HoneySQL writes that key back to the column (`:g
 a kebab builder); otherwise the column's keyword, or its name as a string for a column with
 capitals where names are unquoted (PostgreSQL folds an unquoted name to lower case, and HoneySQL
 quotes a string key). A column the database may fill is optional and takes HoneySQL's
-`:default` too; one it writes (generated, identity ALWAYS) takes `:default` alone. In
+`:default` too; one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
+BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
+takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
@@ -278,7 +280,8 @@ its labels as strings, though PostgreSQL takes no varchar for an enum: `h/check`
 
 `h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
 join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
-names, as unqualified keys:
+names, keyed as next.jdbc keys a column of no table: unqualified, unless a `:qualifier-fn`
+makes a name of `""`:
 
 ```clojure
 (h/row-schema registry {:select [:u.email :p.title]
@@ -385,12 +388,13 @@ datasource or connection, `:any` when `h/row-schema` gives nil. `{:result :one}`
 
 Where the data tells how many rows a statement returns, the return says so (`[:sequential {:max
 1} row]`; read the row with `last` or `m/children`, not by position): one row of a SELECT of
-aggregates over columns alone (no GROUP BY, HAVING, OFFSET or a limit a parameter gives); at
-most one of a statement on one table (no CTE of its name, no table inheriting it) whose WHERE
-holds its primary key's or a whole UNIQUE constraint's columns equal to a value; up to one for
-each row of an INSERT's `:values` with RETURNING; at most `:limit`. A function anywhere in the
-select list, ORDER BY or `:values` may return a set, so then it says nothing. Where it is one
-row, `{:result :one}` drops the `[:maybe]`:
+aggregates of columns or constants alone (no GROUP BY, HAVING, OFFSET or a limit a parameter
+gives); at most one of a statement on one table (no CTE of its name, no table inheriting it)
+whose WHERE holds the columns of its primary key or of a UNIQUE constraint or index (neither
+partial nor DEFERRABLE) equal to a value; up to one for each row of an INSERT's `:values` with
+RETURNING; at most `:limit`. Any other function in the select list, or any function in ORDER BY
+or `:values`, may return a set, so there it says nothing. Where it is one row, `{:result :one}`
+drops the `[:maybe]`:
 
 ```clojure
 (h/query-schema registry [:db] {:select [[[:count :*] :n]] :from [:users]} {:result :one})

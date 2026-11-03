@@ -1028,8 +1028,8 @@
   (when-let [t (slot-type registry s)] (boolean (some #(accept/accepts? t % (if assigned? :assign :compare)) types))))
 
 (defn- number-text
-  "The number string v is as PostgreSQL reads a numeric input: spaces around it, 16's
-   underscores between digits and 0x, 0o and 0b integers; nil for none."
+  "The number string v is as PostgreSQL reads a numeric input: spaces around it, PostgreSQL 16's
+   underscores between digits or after a base prefix, and 0x, 0o and 0b integers; nil for none."
   [v]
   (let [t (str/replace (str/trim v) #"(?<=[0-9a-fA-FxXoObB])_(?=[0-9a-fA-F])" "")
         [_ sign base digits] (re-matches #"([+-]?)0([xXoObB])([0-9a-fA-F]+)" t)]
@@ -1843,7 +1843,7 @@
 (defn- row-count
   "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
    any part may be a function, which may return a set, it tells nothing. One of a SELECT of
-   aggregates over columns alone (no GROUP BY, HAVING or OFFSET); at most one of a SELECT,
+   aggregates of columns or constants alone (no GROUP BY, HAVING or OFFSET); at most one of a SELECT,
    UPDATE or DELETE on one table (no CTE of its name, no table inheriting it) whose WHERE holds
    its primary key's or a (whole) UNIQUE constraint's columns equal to a value (NULL equals
    none); up to as many as :values has rows of an INSERT returning (a trigger or ON CONFLICT
@@ -1876,7 +1876,7 @@
                            :when (or (nil? q) (= q alias))]
                        (folded col)))
           props (when table (shape/row-props (get (::schemas registry) (shape/table-key table))))
-          ;; a partial UNIQUE index holds over some rows alone, a DEFERRABLE key only at commit
+          ;; a partial UNIQUE index holds over some rows alone; a DEFERRABLE key may be checked only at commit
           key-columns (cond-> (map :columns (remove #(or (:where %) (:deferrable %)) (:pg/unique props)))
                         (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props)))
           unique? (and (not (:pg/inherited props)) (some #(every? equal %) key-columns))

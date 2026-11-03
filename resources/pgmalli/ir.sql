@@ -44,7 +44,6 @@ cons AS (
                        JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = c.attnum),
            'check_clause', CASE WHEN k.contype = 'c' THEN pg_catalog.pg_get_constraintdef(k.oid, true) END,
            'is_valid', k.convalidated,
-           -- DEFERRABLE: checked at commit, so a transaction may hold duplicates before it
            'deferrable', k.condeferrable,
            -- NOT ENFORCED (PostgreSQL 18): conenforced is absent before, hence read through jsonb
            'is_enforced', COALESCE((pg_catalog.to_jsonb(k) ->> 'conenforced'::text)::boolean, true),

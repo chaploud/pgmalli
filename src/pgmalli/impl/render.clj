@@ -350,7 +350,6 @@
     {:pg/view (str schema-name "." table)}
     (prune {:pg/table (str schema-name "." table)
          :pg/primary-key (some #(when (= :primary-key (:fact %)) (:columns %)) tfacts)
-         ;; DEFERRABLE: checked at commit, so a transaction may read duplicates before it
          :pg/primary-key-deferrable (when (some #(and (= :primary-key (:fact %)) (:deferrable? %)) tfacts) true)
          :pg/unique (not-empty (vec (for [f (sort-by :columns (filter (comp #{:unique} :fact) tfacts))]
                                       (cond-> {:columns (:columns f)}

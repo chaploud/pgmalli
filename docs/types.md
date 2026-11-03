@@ -58,7 +58,7 @@ The table's map carries:
 |---|---|
 | `:pg/table` | `"public.users"` (`:pg/view` for a view) |
 | `:pg/primary-key` | `["id"]` |
-| `:pg/primary-key-deferrable` | `true`: the primary key is DEFERRABLE, checked at commit |
+| `:pg/primary-key-deferrable` | `true`: the primary key is DEFERRABLE, so it may be checked only at commit |
 | `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, `:where true` for a partial one, `:deferrable true` for a DEFERRABLE one; an invalid unique index is left out |
 | `:pg/inherited` | `true`: other tables inherit it (not as partitions), so a query reads their rows too |
 | `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |

@@ -1672,7 +1672,7 @@
     (is (m/validate (h/set-schema reg :t) {:slug nil} {:registry reg}))
     (is (= :maybe (first (:s (h/arg-types reg {:insert-into :t :values [{:id 1 :slug :?s}]})))))))
 
-(deftest a-collection-interface-sends-each-clojure-collection-it-holds
+(deftest a-collection-interface-sends-each-clojure-collection-implementing-it
   (is (= {:ids [:or [:pg/array bigint] [:sequential bigint]]}
          (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send {java.util.List :unknown}))))
   (is (= {:ids [:or [:pg/array bigint] [:set bigint] [:sequential bigint]]}
@@ -1680,3 +1680,10 @@
 
 (deftest an-argument-assigned-to-an-unknown-table-is-any
   (is (= :any (:n (args {:update :nosuch :set {:nick :?n} :where [:= :id :?id]})))))
+
+(deftest a-numeric-with-a-precision-takes-an-integer-assigned
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 6 :scale 2}]]]]}})]
+    (doseq [q [{:insert-into :t :values [{:n :?v}]} {:update :t :set {:n :?v}}]
+            v [12 (int 12) 12N 12.5M]]
+      (is (m/validate (:v (h/arg-types reg q)) v {:registry reg}) (pr-str q v)))
+    (is (m/validate (h/values-schema reg :t) {:n 12} {:registry reg}))))
