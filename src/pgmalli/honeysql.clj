@@ -1268,7 +1268,9 @@
    to lower case. nil without HoneySQL."
   (memoize (fn [k format]
              (when-let [f (honeysql 'honey.sql/format)]
-               (let [col (second (re-find #"\((.*?)\)" (first (f {:insert-into :t :values [{k 1}]} (dissoc (or format {}) :params)))))]
+               ;; an option the loaded HoneySQL does not take (a dialect of a later one) formats nothing
+               (when-let [col (try (second (re-find #"\((.*?)\)" (first (f {:insert-into :t :values [{k 1}]} (dissoc (or format {}) :params)))))
+                                   (catch Exception _ nil))]
                  (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" col)] [q true] [(str/lower-case col) false]))))))
 
 (defn- quoted?
