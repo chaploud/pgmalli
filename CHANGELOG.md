@@ -114,8 +114,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 ### Added
 
 * `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems :tables}`:
-  the arguments' types, the row, how many rows where the data tells, the problems PostgreSQL
-  would report and the tables it reads and writes
+  the arguments' types, the row, how many rows where the data tells (not where a UNIQUE column
+  is compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows), the problems
+  PostgreSQL would report and the tables it reads and writes
   ([docs/queries.md](docs/queries.md)). `h/query-schema` is built of it.
 * The one sending includes pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`,
   `UUID[]` and the arrays of java.sql dates, times and timestamps.
@@ -303,11 +304,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `coalesce`, `greatest`, `least`, `CASE` and a set operation of columns all of one domain are of
   that domain, as PostgreSQL resolves them.
 * An array read as a vector takes nil elements: PostgreSQL returns NULL elements of
-  `array_agg`, `ARRAY[...]` and an array column.
+  `array_agg`, `ARRAY[...]` and an array column. An element of `citext`, or of a domain but
+  over an enum, is the driver's `PGobject`, and `array_agg` and `ARRAY[...]` of a domain's
+  values are an array of the domain, as PostgreSQL types them. `array_agg` of an array,
+  which adds a dimension its type does not name, is `:any`.
 * A set operation of a domain's column and an untyped literal is of the domain's base type,
   without the domain's CHECKs or its base type's length, as PostgreSQL resolves it.
-* `:rows` and `query-schema`'s return no longer tell one row at most where a UNIQUE column is
-  compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows.
 * Under `{:format {:inline true}}`, an argument the query tests for NULL
   (`[:or [:= :?id nil] [:= :id :?id]]`, `NULL IS NULL OR id = NULL`) takes nil, whatever its
   other uses.

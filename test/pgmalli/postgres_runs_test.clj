@@ -23,15 +23,15 @@
                          CREATE TABLE accounts (id bigserial PRIMARY KEY, email text NOT NULL, group_id int,
                            status status NOT NULL DEFAULT 'draft', amount numeric(10,2), plain numeric,
                            flags varbit, created timestamptz, tags status[], name citext, nick ci, mail mail);
-                         INSERT INTO accounts (email, mail) VALUES ('a', 'a@x'), ('b', NULL);
+                         INSERT INTO accounts (email, mail, name, nick) VALUES ('a', 'a@x', 'n', 'k'), ('b', NULL, NULL, NULL);
                          CREATE DOMAIN d3 AS varchar(3);
                          CREATE DOMAIN dpos AS int CHECK (VALUE BETWEEN 1 AND 9);
                          CREATE TABLE dd (a d3, n dpos);
                          INSERT INTO dd VALUES ('abc', 1);
                          CREATE TABLE uq (id int PRIMARY KEY, code text UNIQUE, a int, b int, UNIQUE (a, b));
                          INSERT INTO uq VALUES (1, NULL, 1, NULL), (2, NULL, 1, NULL);
-                         CREATE TABLE arr (xs int[]);
-                         INSERT INTO arr VALUES ('{1,NULL}');
+                         CREATE TABLE arr (xs int[], cs citext[]);
+                         INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
@@ -119,6 +119,25 @@
                  {:select [[[:array_append :xs nil] :x]] :from [:arr]}]]
         (testing (pr-str q)
           (is (returned? reg q {} {})))))))
+
+(deftest an-array-of-citext-or-of-a-domain-holds-the-drivers-objects
+  (when *db*
+    (let [reg (registry)]
+      (doseq [q [{:select [:cs] :from [:arr]}
+                 {:select [[[:array_agg :name] :x]] :from [:accounts]}
+                 {:select [[[:array_agg :nick] :x]] :from [:accounts]}
+                 {:select [[[:array_agg :n] :x]] :from [:dd]}
+                 {:select [[[:array_agg :a] :x]] :from [:dd]}
+                 {:select [[[:array [:n]] :x]] :from [:dd]}
+                 ;; array_agg of an array adds a dimension: {{1,NULL}}
+                 {:select [[[:array_agg :xs] :x]] :from [:arr]}
+                 {:select [[[:array_agg :cs] :x]] :from [:arr]}]]
+        (testing (pr-str q)
+          (is (some? (runs! q {} {})))
+          (is (returned? reg q {} {}))))
+      (is (m/validate [:sequential (pgmalli/as-read reg :pg.public/arr {})]
+                      (runs! {:select [:*] :from [:arr]} {} {})
+                      {:registry reg})))))
 
 (deftest a-named-argument-is-left-to-arg-types-and-a-lifted-string-is-a-literal
   (when *db*

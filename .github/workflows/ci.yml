@@ -48,7 +48,7 @@ jobs:
         # by digest, which Renovate updates: a new image runs in a pull request of its own
         include:
           - pg: "16"
-            image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+            image: &floor-image postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
           - pg: "17"
             image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
           - pg: "18"
@@ -97,7 +97,7 @@ jobs:
       matrix:
         suite: [main, oracle]
     env:
-      PGMALLI_PG_IMAGE: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+      PGMALLI_PG_IMAGE: *floor-image
       SUITE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7

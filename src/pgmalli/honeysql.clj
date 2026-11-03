@@ -1890,6 +1890,16 @@
           (next refs) (shape/merge-props (peek refs) {:pg/type (second (shape/schema-and-name (last (peek refs))))})
           :else s)))
 
+(defn- domain-array
+  "The schema of an array of values of column schema s where s is of a domain (but over an enum):
+   the domain's array, as PostgreSQL keeps it in ARRAY[...] and in a polymorphic function's
+   anyarray bound by anyelement (array_agg); nil otherwise."
+  [registry s]
+  (let [s (some-> s shape/non-null)
+        {:keys [refs enum?]} (shape/resolved (::schemas registry) s)]
+    (when (and (seq refs) (not enum?))
+      [:vector {:pg/type (types/array-of (:pg/type (shape/column-props s) (second (shape/schema-and-name (last s)))))} s])))
+
 (defn- canonical-type [{s :schema}] (some-> s shape/column-props :pg/type types/canonical-name))
 
 (defn- resolver-type
@@ -2241,7 +2251,14 @@
     (let [catalog? (= "pg_catalog" (:schema o))
           schema (if-let [shape (and catalog? (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
-                   (or (result-schema registry t ts) (some->> (:schema o) (own-type-schema registry t))))]
+                   (or (when (= "anyarray" (:result o))
+                         (some (fn [[d m]] (when (#{"anyelement" "anynonarray"} d) (domain-array registry (:schema m))))
+                               (map vector (:args o) ts)))
+                       ;; array_agg of arrays adds a dimension, which an array type does not name
+                       (when (and catalog? (= "array_agg" (name n)) (= ["anyarray"] (:args o)))
+                         [:any {:pg/type t}])
+                       (result-schema registry t ts)
+                       (some->> (:schema o) (own-type-schema registry t))))]
       (when schema
         {:type t :schema schema
          ;; the catalog does not say when a function returns NULL: pg_catalog's aggregates that
@@ -2300,7 +2317,9 @@
       (some-> (of-type (types/array-of (types/cast-name t))) (assoc :nullable? false))
       (when-let [r (when (seq es) (common registry ms))]
         (when (and (string? (:type r)) (not (types/element (:type r))))
-          (some-> (of-type (types/array-of (:type r))) (assoc :nullable? false)))))))
+          (some-> (or (some->> (domain-array registry (:schema r)) (hash-map :type (types/array-of (:type r)) :schema))
+                      (of-type (types/array-of (:type r))))
+                  (assoc :nullable? false)))))))
 
 (defn- nullif-type
   "The expression type of nullif of arguments of expression types ms: its first argument's, as =
@@ -2785,7 +2804,7 @@
                (shape/table-key (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
                                   (qualified name nil)
                                   (qualified name (:schema (with-defaults r opts))))))
-        _ (when-not (or (::generated? r) (contains? registry name))
+        _ (when-not (contains? registry name)
             (unknown-table! r (if (namespace name) (str/join "." (shape/schema-and-name name)) (clojure.core/name name))))
         s (shape/schema-of registry name)]
     (cond (shape/row-schema? s) nil
