@@ -939,7 +939,7 @@
     (cond (int-ranges t) t
           (bpchar-types t) [t max-length]
           (real-types t) :real
-          (and type (nil? (types/entry (str/replace type #"\(.*\)|\[\]" "")))) :unordered)))
+          (and type (nil? (types/entry (str/replace type "[]" "")))) :unordered)))
 
 (defn- int-type
   "The integer type of an expression whose operand types are known: smallint, integer or

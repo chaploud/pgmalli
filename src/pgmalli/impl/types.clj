@@ -138,12 +138,18 @@
 (def ^:private by-name
   (into {} (for [[t e] types, n (cons t (:aliases e))] [n (assoc e :name t)])))
 
+(defn bare-name
+  "A type's name without the schema it is qualified with (a type outside the search path:
+   \"ext.citext\") or its typmod, wherever format_type prints it: \"timestamp(3) with time
+   zone\" is \"timestamp with time zone\", \"bit(8)[]\" \"bit[]\"."
+  [t]
+  (some-> t (str/replace #"^[^.\"(]+\.|\([^)]*\)" "")))
+
 (defn entry
-  "The entry of a type, by its name or an alias (the :name it is keyed by added); nil for
-   another type."
+  "The entry of a type, by its name or an alias, with or without a schema or typmod (the :name
+   it is keyed by added); nil for another type."
   [type-name]
-  ;; a type outside the search path comes schema-qualified: "ext.citext"
-  (by-name (some-> type-name (str/replace #"^[^.\"]+\." ""))))
+  (by-name (bare-name type-name)))
 
 (defn known?
   "Whether a column type has an entry: a pg_catalog type in pg_catalog (type-schema nil or

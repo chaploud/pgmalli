@@ -1023,7 +1023,7 @@
   "s, or the base type of a CHECK's list it is: the type of a value computed from it and others
    (coalesce, CASE, a recursive CTE's later rows), which the list does not hold."
   [registry s]
-  (if-let [t (list-type registry s)] (type-schema t) s))
+  (or (some-> (list-type registry s) type-schema) s))
 
 (defn- compared-schema
   "The schema a value op compares with a column of schema s must fit: under equality-ops, or
@@ -1724,18 +1724,17 @@
           (shape/ref-target (::schemas registry) base)
           (recur registry (shape/merge-props base {:pg/type (second (shape/schema-and-name (last base)))}))
           (:pg/type (shape/column-props base))
-          (shape/merge-props base {:pg/type (str/replace (:pg/type (shape/column-props base)) #"\([^)]*\)" "")})
+          (shape/merge-props base {:pg/type (types/bare-name (:pg/type (shape/column-props base)))})
           :else s)))
 
 (defn- type-name
-  "The name of type t as format_type prints it: an alias (timestamptz) by its name, without a
-   schema or typmod, an array of a known type as \"x[]\"."
+  "The name of type t as format_type prints it: a known type (timestamptz) by its name, without a
+   schema or typmod, an array of one as \"x[]\"; another as it is."
   [t]
   (when (string? t)
-    (let [t (str/replace t #"\([^)]*\)" "")]
-      (if-let [e (types/element t)]
-        (some-> (type-name e) (str "[]"))
-        (:name (types/entry t) t)))))
+    (if-let [e (types/element t)]
+      (some-> (type-name e) (str "[]"))
+      (:name (types/entry t) t))))
 
 (defn- canonical-type [{s :schema}] (some-> s shape/column-props :pg/type type-name))
 
@@ -2251,7 +2250,7 @@
         kept-column? (fn kept? [x]
                        (or (not (cast-of-column? x))
                            ;; a type named with its schema (:public.mood) is the type of that name
-                           (let [[a b] (map #(some-> (canonical-type (expression-type registry chain % opts)) (str/replace #"^[^.\"]+\." ""))
+                           (let [[a b] (map #(some-> (canonical-type (expression-type registry chain % opts)) types/bare-name)
                                             [x (second x)])]
                              (and (or (nil? a) (nil? b) (= a b)) (kept? (second x))))))
         items (for [item (selected-items stmt)

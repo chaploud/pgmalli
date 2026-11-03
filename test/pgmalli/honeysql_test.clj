@@ -753,6 +753,15 @@
     (is (every? ok? [1 2 1.0 (float 1) 1.5 1.5M true]))
     (is (not (ok? 3)) "a Long outside the list stays refused")))
 
+(deftest an-argument-a-row-may-not-carry-to-a-check-list-of-a-type-with-a-typmod-takes-the-base-type
+  (let [reg (pgmalli/registry {:registry {:pg.public/wd [:enum {:pg/type "character varying(10)"} "a" "b"]
+                                          :pg.public/lists [:map {:pg/table "public.lists"}
+                                                            [:w [:ref {:pg/type "wd"} :pg.public/wd]]
+                                                            [:v [:enum {:pg/type "character varying(10)"} "a"]]]}})]
+    (doseq [c [:w :v]
+            :let [x (:x (h/arg-types reg {:insert-into [[:lists [c]] {:select [:?x] :where false}]}))]]
+      (is (= [:maybe [:string {:pg/type "character varying"}]] x) (str c)))))
+
 (deftest a-number-check-lists-labels-go-as-each-number-sent
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                          [:d [:enum {:pg/type "double precision" :pg/constraints ["t_d_check"]} 1.0 2.0]]
