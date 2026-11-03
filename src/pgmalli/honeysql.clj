@@ -88,20 +88,43 @@
                                       (shape/read-row? v) (first (shape/schema-and-name k))))
                     schemas))))
 
+(def ^:private last-read
+  "[schemas r] of the last registry reading read: callers pass the same one over and over."
+  (atom nil))
+
 (defn- reading
   "The registry as this namespace reads it: its schemas taken once (a composite registry merges
    them on every lookup), the columns of a table memoized, since a column is looked for in
-   every table in scope, and the schemas' own functions and operators read once. The public
-   functions take a registry and make one of it; one passed on again is left as it is."
+   every table in scope, and the schemas' own functions and operators read once, all of it kept
+   for the next call with the same schemas; and, for this call alone, the rows of derived tables
+   and the statements of a query (::calls). The public functions take a registry and make one
+   of it; one passed on again is left as it is."
   [registry]
   (if (::schemas registry)
     registry
     (let [schemas (shape/schemas-of registry)
-          r {::schemas schemas ::versions (versions schemas) ::derived (atom {})}]
-      (assoc r
-             ::held (held-schemas schemas)
-             ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (map (fn [[c s]] [c s])) (into system-columns)))
-             ::routines (memoize #(own-routines r %1 %2 %3))))))
+          [read r] @last-read
+          r (if (identical? read schemas)
+              r
+              (let [r {::schemas schemas ::versions (versions schemas)}
+                    r (assoc r
+                             ::held (held-schemas schemas)
+                             ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (map (fn [[c s]] [c s])) (into system-columns)))
+                             ::routines (memoize #(own-routines r %1 %2 %3)))]
+                (reset! last-read [schemas r])
+                r))]
+      (assoc r ::derived (atom {}) ::calls (atom {})))))
+
+(defn- once
+  "(f registry & args), once per call of a public function (reading's ::calls): the functions a
+   call makes of one another read the same statements."
+  [registry f & args]
+  (if-let [memo (::calls registry)]
+    (let [k (into [f] args)]
+      (if (contains? @memo k)
+        (@memo k)
+        (let [v (apply f registry args)] (swap! memo assoc k v) v)))
+    (apply f registry args)))
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
 
@@ -963,7 +986,7 @@
   "[statement scopes path positions] for the statements of query body (statement-chains), the
    SELECT of an INSERT ... SELECT fed the INSERT's columns."
   [registry body opts]
-  (let [chains (statement-chains registry body opts)
+  (let [chains (once registry statement-chains body opts)
         feeds (for [[s c] chains :let [{:keys [columns select]} (insert-parts s)] :when (and columns (map? select))]
                 [select {:columns columns :target (target-scope c s (:schema opts))}])]
     (for [[s c path outer] chains]
@@ -1590,7 +1613,7 @@
          registry (reading registry)
          opts (with-defaults registry opts)
          sent-body (or (sent body opts) body)
-         chains (statement-positions registry sent-body opts)
+         chains (once registry statement-positions sent-body opts)
          found (mapcat (fn [[stmt scopes path ps]]
                          ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
                          (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
@@ -1612,7 +1635,7 @@
    (let [body (query! body)
          registry (reading registry)
          {:keys [schema] :as opts} (with-defaults registry opts)
-         found (for [[stmt scopes] (statement-chains registry body opts)
+         found (for [[stmt scopes] (once registry statement-chains body opts)
                      :let [own (first scopes)
                            targets (set (keep #(some-> % (table-ref schema) second) (write-targets stmt)))]
                      [alias {:keys [table cte? excluded?]}] (when (map? own) own)
@@ -2075,7 +2098,7 @@
          registry (reading registry)
          opts (with-defaults registry opts)
          uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
-         typed (for [[s scopes _ ps] (statement-positions registry body opts)
+         typed (for [[s scopes _ ps] (once registry statement-positions body opts)
                      use (concat (mapcat #(% registry ps opts) uses) (row-args registry s scopes opts))]
                  use)
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
@@ -2563,7 +2586,7 @@
        (let [registry (reading registry)
              opts (with-defaults registry opts)]
          (if-let [body (sent body opts)]
-           (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry body opts)) opts)
+           (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts)
            update-count))))))
 
 (defn params-schema

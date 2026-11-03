@@ -230,10 +230,20 @@
 
 (def ^:private class-order (zipmap (map first accept/class-types) (range)))
 
-(defn- sorted-sends
-  "The entries of a send-map in pgjdbc's order (accept/class-types), then by class name."
-  [m]
-  (sort-by (fn [[c]] [(class-order c Long/MAX_VALUE) (str c)]) m))
+(def ^:private sends
+  "[m entries] of a :send: send-map with each type by its name (sent-name), and its entries in
+   pgjdbc's order (accept/class-types), then by class name. Memoized: every argument reads them."
+  (memoize (fn [send]
+             (let [m (update-vals (send-map {:send send}) sent-name)]
+               [m (sort-by (fn [[c]] [(class-order c Long/MAX_VALUE) (str c)]) m)]))))
+
+(def ^:private write-rows*
+  (memoize (fn [send array?]
+             (vec (for [[c t] (second (sends send))
+                        :let [coll (collection-schema c)
+                              array (or (.isArray ^Class c) (and coll (or (= :unknown t) (types/element t))))]
+                        :when (= array? (boolean (and array (not= c accept/bytes-class))))]
+                    [(if (and array coll) coll (class-schema c)) t])))))
 
 (defn write-rows
   "[schema type] for each class send-map sends, in pgjdbc's order (accept/class-types) and then
@@ -241,12 +251,7 @@
    collection or a Java array sent as an array type or untyped, the collection's elements
    :pgmalli/element) or another's."
   [opts array?]
-  (for [[c t] (sorted-sends (send-map opts))
-        :let [t (sent-name t)
-              coll (collection-schema c)
-              array (or (.isArray ^Class c) (and coll (or (= :unknown t) (types/element t))))]
-        :when (= array? (boolean (and array (not= c accept/bytes-class))))]
-    [(if (and array coll) coll (class-schema c)) t]))
+  (write-rows* (:send opts) array?))
 
 (defn sent-type
   "The type a literal value goes to PostgreSQL as: :unknown under sql/format's :inline, which
@@ -255,15 +260,15 @@
   [value {:keys [format] :as opts}]
   (if (:inline format)
     :unknown
-    (let [m (send-map opts)]
+    (let [[m entries] (sends (:send opts))]
       ;; its class's entry, else its superclasses' and interfaces' in pgjdbc's order (write-rows's)
-      (or (some-> (get m (class value)) sent-name)
-          (some (fn [[c t]] (when (instance? c value) (sent-name t))) (sorted-sends m))))))
+      (or (get m (class value))
+          (some (fn [[c t]] (when (instance? c value) t)) entries)))))
 
 (defn string-sends
   "The types a String is sent as: send-map's for String and Character."
   [opts]
-  (vec (distinct (keep #(some-> (get (send-map opts) %) sent-name) [String Character]))))
+  (vec (distinct (keep (first (sends (:send opts))) [String Character]))))
 
 (defn- pg-type [s] (:pg/type (shape/props s)))
 
@@ -454,6 +459,8 @@
       (shape/not-a-row! registry name "as-read"))
     (shape/row-map s)))
 
+(def ^:private no-sends (zipmap (map first accept/class-types) (repeat nil)))
+
 (defn- through-domain
   "A column of a domain whose type the driver returns as something else (a date as a
    java.sql.Date, a citext as a PGobject) as that type, without the domain's CHECKs, which read
@@ -463,7 +470,7 @@
   (if-let [d (shape/ref-target schemas s)]
     (let [base (through-domain schemas (shape/domain-base d) opts f)]
       ;; compared with nothing sent, as sends add values to the base type and do not change how the driver reads it
-      (if (= base (f base (assoc opts :send (zipmap (map first accept/class-types) (repeat nil)))))
+      (if (= base (f base (assoc opts :send no-sends)))
         s
         (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))
