@@ -62,9 +62,12 @@
         (is (= (sent-as con v) (some (fn [[c t]] (when (instance? c v) t)) accept/class-types)) (.getName ^Class c))))))
 
 (def ^:private targets
-  "[column type, the type accept/accepts? takes for it]: every type of types, an array of each,
-   an enum, and a domain as its base type."
-  (concat (for [t (keys types/types), t [t (str t "[]")]] [t t])
+  "[column type, the type accept/accepts? takes for it]: every type of pg_catalog a column may be
+   of (not a pseudo-type or the catalog's own) and of types, an array of each, an enum, and a domain as its base type."
+  (concat (for [t (distinct (concat (for [[t {:keys [category]}] (:types @types/catalog) :when (not (#{"P" "X" "Z"} category))] t)
+                                    (keys types/types)))
+                t [t (str t "[]")]]
+            [t t])
           [["feel" [:enum "feel"]] ["positive" "integer"]]))
 
 (def ^:private sents

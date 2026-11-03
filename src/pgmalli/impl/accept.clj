@@ -5,7 +5,7 @@
    pgmalli.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
    a caller passes a domain as its base type. pgmalli.accept-test holds both against pgjdbc
    and PostgreSQL."
-  (:require [clojure.string :as str]
+  (:require [pgmalli.impl.resolve :as resolve]
             [pgmalli.impl.types :as types]))
 
 ;;; what pgjdbc sends
@@ -41,102 +41,69 @@
 
 ;;; what PostgreSQL takes
 
-(def covered
-  "The scalar types pgmalli.accept-test holds accepts? to; a caller asks known? before
-   trusting it."
-  #{"smallint" "integer" "bigint" "real" "double precision" "numeric" "character varying" "text" "character" "name"
-    "boolean" "bytea" "uuid" "date" "time without time zone" "time with time zone" "timestamp without time zone"
-    "timestamp with time zone" "interval" "json" "jsonb" "inet" "regclass"})
-
-(def covered-arrays #{"integer[]" "bigint[]" "character varying[]" "text[]"})
-
 (defn known?
-  "Whether accepts? answers for type t."
+  "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one."
   [t]
-  (boolean (or (vector? t) (covered t) (covered-arrays t))))
+  (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]))))
 
-(def ^:private integers #{"smallint" "integer" "bigint"})
-(def ^:private numbers (into integers ["real" "double precision" "numeric"]))
-(def ^:private strings "The string types." #{"character varying" "text" "character" "name" "citext"})
+(defn- string-type?
+  "Whether t is of PostgreSQL's string category, or an extension's type of strings (citext),
+   which pg_catalog's catalog does not hold."
+  [t]
+  (boolean (or (= "S" (types/category t))
+               (when-let [e (and (string? t) (types/entry t))] (and (:extension e) (= :string (:schema e)))))))
+
+(def ^:private numbers (set (for [[t e] types/types :when (#{:integer :exact :float} (:eval e))] t)))
 
 (defn number-type? [t] (contains? numbers t))
 
-(defn integer-type? [t] (contains? integers t))
+(defn integer-type? [t] (and (string? t) (= :integer (:eval (types/types t)))))
 
-(def ^:private families
-  "Types whose comparison operators take each other: implicit casts and cross-type operators."
-  [numbers strings #{"date" "timestamp without time zone" "timestamp with time zone"}])
+(defn- converts?
+  "Whether PostgreSQL converts a value of type from to type to in context (:assign or :cast), in
+   some version the catalog holds (find_coercion_pathway): by pg_cast (an explicit cast only
+   under :cast), an array element by element, by I/O conversion to a string type, and under
+   :cast from one."
+  [to from context]
+  (let [a (types/element to) b (types/element from)]
+    (boolean (or (= to from)
+                 (some (if (= :cast context) #{"i" "a" "e"} #{"i" "a"}) (types/cast-contexts from to))
+                 (and a b (converts? a b context))
+                 (string-type? to)
+                 (and (= :cast context) (string-type? from))))))
 
-(def ^:private compared
-  "Types a type's comparison operators take besides its own and its family's."
-  {"time without time zone" #{"time with time zone" "interval"}
-   "time with time zone" #{"time without time zone"}
-   "interval" #{"time without time zone"}})
-
-(def ^:private assigned
-  "Types an assignment cast turns into a type, besides what its comparisons take; a type of
-   strings takes any type."
-  {"time without time zone" #{"timestamp without time zone" "timestamp with time zone"}
-   "time with time zone" #{"timestamp with time zone"}
-   "json" #{"jsonb"}
-   "jsonb" #{"json"}})
-
-(def ^:private explicit
-  "Types an explicit cast turns into a type, besides what an assignment takes and the I/O
-   conversion from strings."
-  ;; PostgreSQL 18 casts bytea and the integers both ways; earlier versions refuse it
-  (merge-with into (zipmap numbers (repeat #{"jsonb"})) (zipmap integers (repeat #{"bytea"}))
-              {"boolean" #{"integer" "jsonb"} "integer" #{"boolean"} "bytea" integers}))
-
-(defn- oid? "Whether t is a reg* type (an oid), not an array of one." [t] (and (string? t) (str/starts-with? t "reg") (not (str/ends-with? t "[]"))))
+(def ^:private compares?
+  "Whether PostgreSQL resolves operator = for a value of type t and one of type sent, in some
+   version the catalog holds."
+  (memoize
+   (fn [t sent]
+     (let [os (resolve/overloads :operators "=")]
+       (boolean (some (fn [v] (resolve/call :operators "=" [t sent] (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in))))
+                      (:versions @types/catalog)))))))
 
 (defn accepts?
-  "Whether a parameter of type sent goes where a value of type t does, in context
-   (:compare, :assign or :cast). sent :unknown is a value sent untyped (:send's :unknown), which PostgreSQL
-   types from the context: anywhere but a comparison with json, which has no operator."
+  "Whether a parameter of type sent goes where a value of type t does, in context (:compare,
+   :assign or :cast). sent :unknown is a value sent untyped (:send's :unknown), which PostgreSQL
+   types from the context. A type sent that pgmalli does not know (an extension's) is taken: its
+   extension's casts are not in the catalog."
   [t sent context]
-  (let [json-compared? (and (= "json" t) (= :compare context))]
-    (cond
-      (= :unknown sent) (not json-compared?)
-      json-compared? false
-      (= t sent) true
-      ;; an enum takes its own type alone, and its labels as text when cast
-      (vector? t) (and (= :cast context) (contains? strings sent))
-      :else
-      (boolean
-       (or (some #(and (% t) (% sent)) families)
-           ;; a reg* type is an oid: it takes any integer; integer and bigint take it by
-           ;; assignment and cast too, smallint compared only
-           (let [[_ other] (cond (oid? t) [t sent] (oid? sent) [sent t])]
-             (or (#{"integer" "bigint"} other) (and (= "smallint" other) (or (oid? t) (= :compare context)))))
-           (contains? (compared t) sent)
-           (and (#{:assign :cast} context)
-                (or (contains? strings t)
-                    (contains? (assigned t) sent)
-                    ;; text and varchar go to a regclass by assignment
-                    (and (= "regclass" t) (#{"character varying" "text"} sent))
-                    (and (types/element t) (types/element sent) (accepts? (types/element t) (types/element sent) context))))
-           (and (= :cast context)
-                (or (contains? strings sent)
-                    (contains? (explicit t) sent))))))))
-
-(def ^:private widened
-  "The number types a number type takes as its own besides its own: the integers to a wider
-   number type, real to double precision. PostgreSQL also converts numeric to real and double
-   precision implicitly; pgmalli leaves that out, a decimal sent to a float column being the
-   mix-up a type would catch."
-  {"bigint" #{"smallint" "integer"} "integer" #{"smallint"}
-   "numeric" integers "double precision" (conj integers "real") "real" integers})
+  (cond (not (or (= :unknown sent) (known? sent) (string-type? sent))) true
+        (= :compare context) (or (and (string-type? t) (string-type? sent)) (compares? t sent))
+        :else (or (= :unknown sent) (converts? t sent context))))
 
 (defn holds?
-  "Whether a value sent as type sent is one of type t's own: its type, a number of a narrower
-   kind (a narrower integer, an integer for a numeric, real or double precision, a real for a
-   double precision), a string of another string type, or one sent untyped where t's values are text
-   (a string type, an enum), which PostgreSQL reads as the value itself; compared, not where t is
-   a domain over an enum ([:enum name {:domain? true}]), which has no = for an untyped value."
+  "Whether a value sent as type sent is one of type t's own: its type, a number of a type
+   PostgreSQL converts to t implicitly, a string of another string type, or one sent untyped
+   where t's values are text (a string type, an enum), which PostgreSQL reads as the value
+   itself; compared, not where t is a domain over an enum ([:enum name {:domain? true}]), which
+   has no = for an untyped value. Stricter than accepts?: a numeric is not one of a real's or a
+   double precision's own, a decimal sent to a float column being the mix-up a type would catch."
   ([t sent] (holds? t sent :assign))
   ([t sent context]
-   (or (= t sent) (contains? (widened t) sent) (and (strings t) (strings sent))
+   (or (= t sent)
+       (and (number-type? t) (number-type? sent) (types/implicit? sent t)
+            (not (and (= "numeric" sent) (= :float (:eval (types/types t))))))
+       (and (string-type? t) (string-type? sent))
        (and (= :unknown sent)
-            (or (contains? strings t)
+            (or (string-type? t)
                 (and (vector? t) (not (and (= :compare context) (:domain? (get t 2))))))))))

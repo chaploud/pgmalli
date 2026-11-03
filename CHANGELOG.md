@@ -40,7 +40,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   * An argument that was `:any` now has a type, and an instrumented function checks it: one
     under a cast, compared in a select or ORDER BY expression, inside `coalesce`, `CASE` and the
     like, an argument of a function or an operator of `pg_catalog` that takes one type there,
-    in an `unnest` in FROM, or compared with a CTE's or subquery's column.
+    in an `unnest` in FROM, or compared with a CTE's or subquery's column. What PostgreSQL
+    takes where a column's value goes is read from its catalog (`pg_cast`, and `=` resolved for
+    the two types) for every type of `pg_catalog` and an array of each, not 23 types and 4
+    arrays: an argument where a `bit`, `bit varying`, `oid` or `"char"` value goes, or an array
+    of any of them, is typed too.
   * An instrumented function whose return schema now states a row count (`{:max 1}`) is
     checked against it.
   * `h/check` now reports a select or ORDER BY expression comparing an unknown column, or an

@@ -904,8 +904,9 @@
     (is (= [:enum {:pg/type "integer" :pg/constraints ["t_k_check"]} 1 2] k) "a number label has no keyword")))
 
 (deftest a-cast-to-a-type-pgmalli-does-not-answer-for-takes-anything
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:b [:string {:pg/type "bit"}]]]}})]
-    (is (= {:x :any} (h/arg-types reg {:select [[[:cast :?x :bit] :b]]})) "PostgreSQL casts a bigint to bit")))
+  (let [reg (pgmalli/registry {:registry {}})]
+    (is (= {:x :any} (h/arg-types reg {:select [[[:cast :?x :ltree] :b]]})) "an extension's casts are not in pg_catalog")
+    (is (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :bit] :b]]})) 1 {:registry reg}) "PostgreSQL casts a bigint to bit")))
 
 (deftest an-arrays-elements-are-read-as-the-columns-type
   (let [t (:xs (args {:select [:id] :from [:users] :where [:= :id [:any :?xs]]}
