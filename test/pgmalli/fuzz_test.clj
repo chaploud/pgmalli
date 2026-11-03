@@ -19,9 +19,6 @@
 
 (use-fixtures :once with-postgres)
 
-(doseq [op ["@>" "<@" "->" "->>" "#>" "#>>" "~" "~*" "!~" "!~*" "&&" "^"]]
-  (sql/register-op! (keyword op)))
-
 (def ^:private columns
   "n integer, m integer, s text, t text, e mood, b boolean, d numeric(10,2), j jsonb, arr text[], dt date, ts timestamptz, u uuid, c char(4)")
 
