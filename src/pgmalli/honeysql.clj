@@ -1506,7 +1506,12 @@
         known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
                 (str/join "." (shape/schema-and-name k)))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
-                       :let [same-name (sort (filter #(= (table-name %) (table-name table)) known))
+                       :let [_ (when-not (some shape/generated-name? (keys (::schemas registry)))
+                                 (error/fail! :pgmalli.error/not-a-registry
+                                              (str "the registry holds no schema pgmalli generates, so table " table
+                                                   " is unknown; pass (pgmalli.core/registry \"<schema>\")")
+                                              {:given table}))
+                             same-name (sort (filter #(= (table-name %) (table-name table)) known))
                              meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
                    (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
                  (column-problems registry scopes stmt ps opts)
@@ -1628,7 +1633,7 @@
    docs/queries.md#options. Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)
@@ -1651,7 +1656,7 @@
    ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
   ([registry body] (tables registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          {:keys [schema] :as opts} (with-defaults registry opts)
@@ -2113,7 +2118,7 @@
    docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)
@@ -2599,7 +2604,7 @@
    the table PostgreSQL traces it to. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)]
      (when (map? body)
        (let [registry (reading registry)
@@ -2710,7 +2715,7 @@
    ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:users/email ...]], :rows {:min 0, :max 1}, :problems []}"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)]
@@ -2729,13 +2734,12 @@
    (query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]})
 
    The problems of check, and a query argument args lack (:missing-arg), are the schema's
-   :pgmalli/problems property, not an error: the vector is then one longer, so read its parts
-   with m/children. The return is what execute! returns on a datasource or connection, under
+   :pgmalli/problems property ([] for none), not an error. The return is what execute! returns on a datasource or connection, under
    {:result :one} what execute-one! returns. Options: docs/queries.md#options. Throws when args are
    not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
@@ -2743,7 +2747,7 @@
    (let [{types :args :keys [row rows problems]} (analyze registry body opts)
          problems (into problems
                         (for [k (sort-by str (data-args (query! body))) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))]
-     (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
+     (into [:=> {:pgmalli/problems problems}]
            [(into [:cat] (map #(get types % :any)) args)
             (let [{:keys [min max]} rows]
               (cond (nil? row) :any
@@ -2862,7 +2866,7 @@
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
    names it, in :schema); an error naming what was meant for another name."
   [registry name derived what opts]
-  (jdbc/options! opts)
+  (jdbc/options! registry opts)
   (when-not (keyword? name)
     (error/fail! :pgmalli.error/invalid-options
                  (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
@@ -2957,8 +2961,9 @@
 
    (is (= [] (check registry q)) (humanize (check registry q)))"
   [problems]
-  (mapv (fn [{:keys [kind in] :as p}]
-          (str (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))
+  (mapv (fn [{:keys [kind in var] :as p}]
+          (str (when var (str (symbol var) ": "))
+               (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))
         problems))
 
 (defn schema-problems
@@ -2970,7 +2975,10 @@
   ([] (schema-problems {}))
   ([{:keys [ns] :or {ns (all-ns)}}]
    (vec (for [n (if (sequential? ns) ns [ns])
-              [_ v] (sort-by key (ns-interns (the-ns n)))
+              [_ v] (sort-by key (ns-interns (or (if (symbol? n) (find-ns n) n)
+                                                 (error/fail! :pgmalli.error/invalid-options
+                                                              (str "schema-problems reads loaded namespaces; " (pr-str n) " is none (require it first)")
+                                                              {:given n}))))
               :let [s (:malli/schema (meta v))
                     props (cond (satisfies? malli.core/Schema s) (malli.core/properties s)
                                 (and (vector? s) (map? (second s))) (second s))]

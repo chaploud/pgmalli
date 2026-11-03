@@ -334,7 +334,7 @@
     (let [row (h/row-schema registry body (built opts 'next.jdbc.optional/as-unqualified-maps))]
       (is (= [:closed_at {:optional true} ['inst? {:pg/type "timestamptz"}]] (nth row 3)) "by default time columns are inst?, which the default registry has")
       (is (m/validate row {:id 1 :g 2 :closed_at (java.util.Date.)}) "and no registry is needed"))
-    (is (= [:=> [:cat bigint :any] [:sequential {:max 1 :min 1} [:map [:n bigint]]]]
+    (is (= [:=> {:pgmalli/problems []} [:cat bigint :any] [:sequential {:max 1 :min 1} [:map [:n bigint]]]]
            (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
         "a symbol used nowhere is :any")
     (is (= [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
@@ -474,7 +474,7 @@
       "a body that is code, after another CTE, is a table whose columns are not known"))
 
 (deftest one-row-results
-  (is (= [:=> [:cat bigint] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]
+  (is (= [:=> {:pgmalli/problems []} [:cat bigint] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
@@ -488,7 +488,7 @@
                {:truncate :users}]]
       (is (= counted (row q)) (pr-str q))
       (is (= counted (row q {:schema "sample"})) "whatever the builder: next.jdbc builds this map itself")
-      (is (= [:=> [:cat] counted] (h/query-schema registry [] q (assoc opts :result :one))) "execute-one! returns it, never nil"))
+      (is (= [:=> {:pgmalli/problems []} [:cat] counted] (h/query-schema registry [] q (assoc opts :result :one))) "execute-one! returns it, never nil"))
     (is (= [:map [:id int4]]
            (row {:delete-from :groups :returning [:id]})))
     (is (= [:map [:id int4] [:name text]]
@@ -496,7 +496,7 @@
         "pgjdbc adds RETURNING * under :return-keys true")
     (is (= [:map [:name text]]
            (row {:update :groups :set {:name "b"}} (assoc-in opts [:jdbc :return-keys] ["name"]))))
-    (is (= [:=> [:cat] [:maybe [:map [:name text]]]]
+    (is (= [:=> {:pgmalli/problems []} [:cat] [:maybe [:map [:name text]]]]
            (h/query-schema registry [] {:delete-from :groups} (-> opts (assoc-in [:jdbc :return-keys] ["name"]) (assoc :result :one))))
         "a write returning rows may return none")
     (is (nil? (row {:truncate :users} (assoc-in opts [:jdbc :return-keys] true)))
@@ -1117,7 +1117,7 @@
   (let [s (h/query-schema registry [:id] {:select [:nick_name] :from [:users] :where [:= :id :?id]} opts)]
     (is (= {:pgmalli/problems [{:kind :unknown-column :column :nick_name}]} (m/properties (m/schema s))))
     (is (= :any (last s)) "the row it cannot tell"))
-  (is (nil? (m/properties (m/schema (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} opts) {:registry registry})))
+  (is (= {:pgmalli/problems []} (m/properties (m/schema (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} opts) {:registry registry})))
       "none on a query that agrees"))
 
 (def checked
@@ -1194,7 +1194,7 @@
   (is (vector? (check {:select [:a] :from [[[:jsonb_to_record :x] [:r {:columns [[:raw "a int"]]}]]]}))))
 
 (deftest a-local-code-binds-is-no-missing-arg
-  (is (nil? (m/properties (m/schema (h/query-schema registry '[ids] '{:select [:id] :from [:users] :where (into [:or] (for [i ids] [:= :id i]))} opts))))))
+  (is (= {:pgmalli/problems []} (m/properties (m/schema (h/query-schema registry '[ids] '{:select [:id] :from [:users] :where (into [:or] (for [i ids] [:= :id i]))} opts))))))
 
 (deftest a-call-in-the-wrong-shape-is-an-error
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes the function's args first" (h/query-schema registry {:select [:id] :from [:users]} opts)))
@@ -2521,7 +2521,7 @@
   (is (= {:y [:any {:pgmalli/untyped :position}]} (args {:select [[:?y :y]] :from [:users]})))
   (is (= [:any {:pgmalli/untyped :code}] (:x (args '{:select [:id] :from [:users] :where [:= :id (inc :?x)]}))))
   (is (= [:any {:pgmalli/untyped :type}] (:x (args {:update :users :set {:no_such :?x} :where [:= :id 1]}))))
-  (is (= [:=> [:cat :any [:any {:pgmalli/untyped :position}]] [:sequential [:map [:y [:maybe :any]]]]]
+  (is (= [:=> {:pgmalli/problems []} [:cat :any [:any {:pgmalli/untyped :position}]] [:sequential [:map [:y [:maybe :any]]]]]
          (h/query-schema registry [:db :y] {:select [[:?y :y]] :from [:users]} opts))
       "an argument the query lacks stays :any"))
 
@@ -2531,7 +2531,7 @@
     (is (= values (get (args '{:insert-into :users :values [row]}) 'row)) "a symbol, as code puts it in")
     (is (= [:sequential {:min 1} values] (:rows (args {:insert-into :users :values :?rows}))))
     (is (= (h/set-schema registry :users opts) (:row (args {:update [:users :u] :set :?row :where [:= :u.id :?id]}))))
-    (is (= [:=> [:cat :any values] [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]]
+    (is (= [:=> {:pgmalli/problems []} [:cat :any values] [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]]
            (h/query-schema registry [:db :row] {:insert-into :users :values [:?row] :returning [:id]} opts))))
   (is (= (h/values-schema registry :users (built opts (:builder-fn kebab))) (:row (args {:insert-into :users :values [:?row]} (built opts (:builder-fn kebab)))))
       "keyed as the builder keys a row")
@@ -2553,3 +2553,26 @@
                                         :pg.public/t [:map {:pg/table "public.t"} [:m [:ref {:pg/type "dmood"} :pg.public/dmood]]]}})]
     (is (= [:map {:pg/table "public.t"} [:t/m [:enum {:pg/type "dmood"} :a :b]]] (pgmalli/as-read r :pg.public/t {:read {:enum :keyword}}))
         "a domain's column is described as its base type's")))
+
+(deftest a-wrong-input-fails-saying-what-to-do
+  (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
+    (is (= :int (-> (pgmalli/as-read registry :pg.sample/users {:read {"int4" :int}}) (nth 4) last))
+        ":read names a type by an alias too")
+    (is (re-find #"no type of docs/types.md nor of the registry" (second (fails #(pgmalli/as-read registry :pg.sample/users {:read {"bogus" :string}})))))
+    (is (re-find #"no malli schema" (second (fails #(h/row-schema registry {:select [:id] :from [:users]} {:schema "sample" :read {"integer" :strin}})))))
+    (is (nil? (fails #(pgmalli/as-read registry :pg.sample/users {:read {"mood" :keyword "sample.mood[]" [:vector :keyword]}})))
+        "a type of the registry")
+    (is (re-find #"fully qualified, next.jdbc.result-set/as-unqualified-maps"
+                 (second (fails #(check {:select [:id] :from [:users]} {:jdbc {:builder-fn 'rs/as-unqualified-maps}})))))
+    (is (re-find #"should be true, false or a vector of column names" (second (fails #(check {:select [:id] :from [:users]} {:jdbc {:return-keys "id"}})))))
+    (is (= :pgmalli.error/invalid-options (first (fails #(h/schema-problems {:ns 'no.such.ns})))))
+    (is (= :pgmalli.error/invalid-options (first (fails #(pgmalli/registry)))))
+    (is (= :pgmalli.error/not-a-registry (first (fails #(h/check (m/default-schemas) {:select [:id] :from [:users]}))))
+        "a table no registry pgmalli generates can hold"))
+  (is (= ["clojure.core/map: the query takes argument :y, which the function's args lack; a typo in args?"]
+         (h/humanize [{:kind :missing-arg :arg :y :var #'map}]))
+      "schema-problems' :var first")
+  (is (= {:pgmalli/problems []} (second (h/query-schema registry [] {:select [:id] :from [:users]} opts)))
+      "a query schema's parts are where they are, problems or not")
+  (is (= {:args [["bigint"]] :returns [{:id "bigint"}] :pgmalli/problems []}
+         (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))
