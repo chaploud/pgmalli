@@ -95,7 +95,7 @@
           r {::schemas schemas ::versions (versions schemas) ::derived (atom {})}]
       (assoc r
              ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (map (fn [[c s]] [c s])) (into system-columns)))
-             ::routines (delay (own-routines r))))))
+             ::routines (memoize #(own-routines r %1 %2 %3))))))
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
 
@@ -1985,7 +1985,7 @@
               os (reached registry opts parts)]
         [i a] (map-indexed vector args)
         :when (arg-key a)
-        :let [ss (map type-schema (resolve/argument-types kind n ins i os))]
+        :let [ss (map type-schema (resolve/argument-types ins i os))]
         :when (and (seq ss) (every? some? ss))]
     [a (nullable (if (next ss)
                    ;; a value of each type, which a :pg/type of one would misname
@@ -2131,7 +2131,7 @@
    name it (docs 5.9.6). A schema the registry has no :functions of (a file generated before
    them, a schema not generated) has none."
   [registry {:keys [schema]} [kind n _ q]]
-  (in-versions (resolve/overloads kind n (some-> (::routines registry) deref) (if q [q] ["pg_catalog" schema]))
+  (in-versions (resolve/overloads kind n (::routines registry) (if q [q] ["pg_catalog" schema]))
                (::versions registry)))
 
 (defn- own-type-schema
@@ -2144,17 +2144,13 @@
       [:ref {:pg/type n} k])))
 
 (defn- own-routines
-  "{schema {:functions {name [overload ...]} :operators {...}}} of the registry's generated files,
-   the argument and result types as pgmalli.impl.resolve takes them (an enum type [:enum name], a
-   domain its base type)."
-  [registry]
-  (into {} (for [[k s] (::schemas registry)
-                 :when (and (keyword? k) (= (namespace (shape/routines-key "")) (namespace k)))
-                 :let [schema (name k)
-                       {fs :pg/functions ops :pg/operators} (second s)
-                       resolved #(if-let [r (own-type-schema registry % schema)] (resolver-type registry r) %)
-                       each (fn [m] (update-vals m (fn [os] (mapv #(-> % (update :args (partial mapv resolved)) (update :result resolved)) os))))]]
-             [schema {:functions (each fs) :operators (each ops)}])))
+  "The overloads of function (kind :functions) or operator (:operators) n of schema s's generated
+   file, the argument and result types as pgmalli.impl.resolve takes them (an enum type [:enum
+   name], a domain its base type)."
+  [registry s kind n]
+  (let [resolved #(if-let [r (own-type-schema registry % s)] (resolver-type registry r) %)]
+    (mapv #(-> % (update :args (partial mapv resolved)) (update :result resolved))
+          (get-in (second (get (::schemas registry) (shape/routines-key s))) [({:functions :pg/functions :operators :pg/operators} kind) n]))))
 
 (def ^:private json-shapes
   "The shape of the json or jsonb value a function builds, as a column of the type is read under
@@ -2272,7 +2268,7 @@
       ;; nullif returns its first argument as = reads it
       (= "nullif" (called x)) (let [ts (map sub (rest x))]
                                 (when (= 2 (count ts))
-                                  (when-let [{[t] :args :as r} (resolve/call :operators "=" (mapv :type ts))]
+                                  (when-let [{[t] :args :as r} (resolve/call :operators "=" (mapv :type ts) (resolve/overloads :operators "="))]
                                     (when (= "boolean" (:result r))
                                       (when-let [s (result-schema registry t ts)] {:type t :schema s :nullable? true})))))
       ;; x op ANY(array) is boolean (docs 9.24.3), NULL where an element is
@@ -2534,7 +2530,7 @@
   (or (and (keyword? x) (not (shorthand-fn x))) (constant? x) (nil? x) (= [:default] x)
       (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? registry opts (second x)))
       (boolean (when-let [[kind n args :as parts] (call-parts x)]
-                 (and (or (= :operators kind) (not (resolve/set-returning? n (reached registry opts parts))))
+                 (and (or (= :operators kind) (not (resolve/set-returning? (reached registry opts parts))))
                       (every? #(plain-value? registry opts %) args))))))
 
 (defn- row-count
@@ -2551,7 +2547,7 @@
     (let [write? (some #(contains? stmt %) write-keys)
           items (map bare (selected-items stmt))
           order (map bare (vectorish (:order-by stmt)))
-          aggregates-only? (every? #(when-let [[_ n :as parts] (call-parts %)] (resolve/aggregate? n (reached registry opts parts))) items)
+          aggregates-only? (every? #(when-let [parts (call-parts %)] (resolve/aggregate? (reached registry opts parts))) items)
           rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (insert-parts stmt)))) (:values stmt))
           plain? (and (every? #(plain-value? registry opts %) (concat order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
                       (or (every? #(plain-value? registry opts %) items)

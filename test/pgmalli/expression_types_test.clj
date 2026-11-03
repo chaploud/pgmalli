@@ -268,7 +268,7 @@
                         :let [cs (map by-type args)]
                         :when (every? some? cs)
                         i (range (count cs))
-                        :let [ts (resolve/argument-types :functions n (assoc (vec args) i :free) i)]
+                        :let [ts (resolve/argument-types (assoc (vec args) i :free) i (resolve/overloads :functions n))]
                         :when (next ts)]
                     [(into [(keyword n)] (assoc (vec cs) i :?x)) ts]))
           fails (with-open [con (jdbc/get-connection ds)]
