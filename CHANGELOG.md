@@ -52,8 +52,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   unique constraint, an invalid unique index, or a domain whose CHECK lists its values: their
   files change, and `pgmalli.main check` reports them stale.
 * Generate again: every file has the schema's functions and operators (`:functions`,
-  `:operators`), and `pgmalli.main check` reports a file without them stale. Until then, a call
-  is typed by `pg_catalog`'s functions alone.
+  `:operators`), and `pgmalli.main check` reports a file without them stale, in one line. Until
+  then, a call is typed by `pg_catalog`'s functions alone. A function or operator that differs
+  is reported by its name (`{:key :functions :name "f" :file ... :db ...}`).
 
 ### Added
 

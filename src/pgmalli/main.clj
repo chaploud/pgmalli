@@ -79,11 +79,13 @@
     (println (str schema ": diagnostics (" (count ds) "):"))
     (doseq [d ds] (println (str "  " (name (:severity d)) " " (:table d) ": " (:message d))))))
 
-(defn- print-difference [schema {:keys [name key column property checks order file db]}]
-  (println (str/join " " (remove nil? [schema (pr-str (or key name)) (some-> column pr-str) (some-> property pr-str)
-                                       (cond checks "CHECKs" order "column order")])))
-  (println "  file:" (pr-str file))
-  (println "  db:  " (pr-str db)))
+(defn- print-difference [schema {:keys [name key column property checks order absent file db]}]
+  (if absent
+    (println (str schema " " key ": the " (clojure.core/name absent) " has none, as an older pgmalli wrote it; generate writes them"))
+    (do (println (str/join " " (remove nil? [schema (some-> key pr-str) (some-> name pr-str) (some-> column pr-str) (some-> property pr-str)
+                                             (cond checks "CHECKs" order "column order")])))
+        (println "  file:" (pr-str file))
+        (println "  db:  " (pr-str db)))))
 
 (defn- generate! [config path]
   (let [written (generate/generate! config)

@@ -71,6 +71,13 @@
     (is (= 1 (count (str/split-lines err))))
     (is (not (str/includes? err "s3cret")))))
 
+(deftest a-function-differs-by-name-and-a-file-without-functions-in-one-line
+  (let [printed #(str/split-lines (with-out-str (#'main/print-difference "public" %)))]
+    (is (= ["public :functions \"g\"" "  file: [{:args [], :result \"text\"}]" "  db:   nil"]
+           (printed {:key :functions :name "g" :file [{:args [] :result "text"}] :db nil})))
+    (is (= ["public :operators: the file has none, as an older pgmalli wrote it; generate writes them"]
+           (printed {:key :operators :absent :file})))))
+
 (deftest check-names-a-missing-file-and-the-command-that-writes-it
   (when *db*
     (let [out-dir (temp-dir)

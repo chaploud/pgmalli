@@ -15,8 +15,18 @@
 
 (deftest a-file-generated-before-functions-were-read-is-stale
   (let [now (pgmalli/generated "other")]
-    (is (= [{:key :functions :file nil :db {"note_count" [{:args [] :result "bigint"}]}} {:key :operators :file nil :db {}}]
+    (is (= [{:key :functions :absent :file} {:key :operators :absent :file}]
            (generate/diff (dissoc now :functions :operators) now)))))
+
+(deftest functions-and-operators-differ-by-name
+  (let [now (pgmalli/generated "other")
+        before (-> now (assoc-in [:functions "gone"] [{:args [] :result "text"}])
+                   (assoc-in [:functions "note_count" 0 :result] "integer")
+                   (assoc-in [:operators "~~~"] [{:args ["text" "text"] :result "boolean"}]))]
+    (is (= [{:key :functions :name "gone" :file [{:args [] :result "text"}] :db nil}
+            {:key :functions :name "note_count" :file [{:args [] :result "integer"}] :db [{:args [] :result "bigint"}]}
+            {:key :operators :name "~~~" :file [{:args ["text" "text"] :result "boolean"}] :db nil}]
+           (generate/diff before now)))))
 
 (deftest check-without-a-database-reports-a-missing-file
   (let [out-dir (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete))]
