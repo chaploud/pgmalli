@@ -42,6 +42,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   inherit has `:pg/inherited true`, a DEFERRABLE primary key `:pg/primary-key-deferrable true`
   and a DEFERRABLE UNIQUE constraint `:deferrable true`; an invalid unique index (a failed
   `CREATE INDEX CONCURRENTLY`) is no longer in `:pg/unique`.
+* Where a BEFORE row trigger runs for the write, `h/values-schema`, `h/set-schema` and an
+  assigned argument take a column left out or NULL, as `h/check` already did.
+* A collection interface in `:send` (`{java.util.List :unknown}`) sends each Clojure collection
+  it holds.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does

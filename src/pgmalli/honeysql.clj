@@ -1270,14 +1270,22 @@
   ([v] (array-arg v #{:any :all}))
   ([v heads] (when (and (vector? v) (= 2 (count v)) (heads (first v)) (arg-key (second v))) (second v))))
 
+(defn- written-events
+  "The writes a statement's assignments are: :insert, and :update for an UPDATE or ON CONFLICT
+   DO UPDATE."
+  [stmt]
+  (cond-> #{} (:insert-into stmt) (conj :insert) (or (:update stmt) (:do-update-set stmt)) (conj :update)))
+
 (defn- column-type
   "The type of an argument for a column: compared with it (a comparison with NULL is never true, so no
-   [:maybe]) or, when assigned?, assigned to it."
-  [registry sc col assigned? opts]
-  (if-let [s (:schema (resolve-column registry sc col))]
-    (let [inner (accepted-type registry s (if assigned? :assign :compare) opts)]
-      (if (and assigned? (maybe? s)) [:maybe inner] inner))
-    :any))
+   [:maybe]) or, when assigned?, assigned to it by a write of events (:insert, :update): NULL
+   where the column takes it, or a BEFORE row trigger for one of them may fill it."
+  ([registry sc col opts] (column-type registry sc col false #{} opts))
+  ([registry sc col assigned? events opts]
+   (if-let [{s :schema :keys [table opaque?]} (some-> (resolve-column registry sc col) (#(when (:schema %) %)))]
+     (let [inner (accepted-type registry s (if assigned? :assign :compare) opts)]
+       (if (and assigned? (or (maybe? s) (and (not opaque?) (some #(filled-by-trigger? registry table %) events)))) [:maybe inner] inner))
+     :any)))
 
 (defn- compared-schema-type
   "The type of an argument op compares with a value of column schema s, as compared-schema
@@ -1513,7 +1521,7 @@
                                      [(second x) (cond-> (accepted-type registry s :cast opts)
                                                    (< (get refusing x 0) (uses x)) nullable)]))
                                  (for [[col v] (assignments stmt)
-                                       :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
+                                       :let [t (column-type registry (target-scope sc stmt schema) col true (written-events stmt) opts)]]
                                    ;; unnest(?), of a typed array (unnest(unknown) is ambiguous): each element assigned to the column
                                    (if-let [x (array-arg v #{:unnest})] [x (jdbc/array-type t opts :unnest)] [v t]))
                                  ;; unnest(?) AS x(a): the elements of ? are a, typed where a goes, as a typed array
@@ -1531,7 +1539,7 @@
                                      (for [[col v] (assignments stmt)
                                            :let [p (unnest-arg m v)]
                                            :when p
-                                           :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
+                                           :let [t (column-type registry (target-scope sc stmt schema) col true (written-events stmt) opts)]]
                                        [p (jdbc/array-type t opts :unnest)])))
                                  ;; coalesce(?, col) and the like: PostgreSQL resolves an argument to the others' type;
                                  ;; nil is a value there (coalesce and greatest skip it, nullif's first may be NULL)
@@ -1976,13 +1984,15 @@
           default (into [:enum] (sort-by vector? (default-values (:format opts))))
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
+          ;; a BEFORE row trigger runs before NOT NULL is checked: it may fill any column
+          triggered? (get-in (shape/row-props s) [:pg/before-triggers (keyword derived)])
           m (into [:map {:closed true}]
                   (concat
                    ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
                    (for [[k props c] written
-                         :let [t (cond-> (accepted-type r c :assign opts) (maybe? c) nullable)
+                         :let [t (cond-> (accepted-type r c :assign opts) (or (maybe? c) triggered?) nullable)
                                t (if (fills k) [:or t default] t)]]
-                     (if (:optional props) [(key k) {:optional true} t] [(key k) t]))
+                     (if (or (:optional props) triggered?) [(key k) {:optional true} t] [(key k) t]))
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(key k) {:optional true} default])))]

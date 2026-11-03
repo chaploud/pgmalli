@@ -1663,3 +1663,20 @@
   (let [d (ex-data (try (h/check registry {:select [:id] :from [:users]} {:tmie :instant}) (catch clojure.lang.ExceptionInfo e e)))]
     (is (= [:time] (:did-you-mean d)))
     (is (= [:tmie] (:unknown d)))))
+
+(deftest a-column-a-before-trigger-may-fill-takes-nil-or-nothing
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"] :update ["fill"]}}
+                                                        [:id [:int {:pg/type "integer"}]] [:slug [:string {:pg/type "text"}]]]}})]
+    (is (m/validate (h/values-schema reg :t) {:id 1} {:registry reg}))
+    (is (m/validate (h/values-schema reg :t) {:id 1 :slug nil} {:registry reg}))
+    (is (m/validate (h/set-schema reg :t) {:slug nil} {:registry reg}))
+    (is (= :maybe (first (:s (h/arg-types reg {:insert-into :t :values [{:id 1 :slug :?s}]})))))))
+
+(deftest a-collection-interface-sends-each-clojure-collection-it-holds
+  (is (= {:ids [:or [:pg/array bigint] [:sequential bigint]]}
+         (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send {java.util.List :unknown}))))
+  (is (= {:ids [:or [:pg/array bigint] [:set bigint] [:sequential bigint]]}
+         (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send {java.util.Collection :unknown})))))
+
+(deftest an-argument-assigned-to-an-unknown-table-is-any
+  (is (= :any (:n (args {:update :nosuch :set {:nick :?n} :where [:= :id :?id]})))))

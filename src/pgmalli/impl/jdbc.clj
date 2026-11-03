@@ -110,10 +110,18 @@
 ;;; what an application sends
 
 (def ^:private collections
-  "The Clojure collections an application may send as an array, and the malli schema of one,
-   :pgmalli/element in an element's place."
-  [[clojure.lang.IPersistentVector [:vector :pgmalli/element]] [clojure.lang.IPersistentSet [:set :pgmalli/element]]
-   [clojure.lang.Sequential [:sequential :pgmalli/element]]])
+  "The Clojure collections an application may send as an array, a value of each, and the malli
+   schema of one, :pgmalli/element in an element's place."
+  [[[] [:vector :pgmalli/element]] [#{} [:set :pgmalli/element]] ['(nil) [:sequential :pgmalli/element]]])
+
+(defn- collection-schema
+  "The schema of the Clojure collections a value of class c may be (an interface such as
+   java.util.List or java.util.Collection takes several); nil for none."
+  [^Class c]
+  (let [ss (for [[v s] collections :when (instance? c v)] s)
+        ;; a sequential takes a vector
+        ss (if (some #(= :sequential (first %)) ss) (remove #(= :vector (first %)) ss) ss)]
+    (when (seq ss) (shape/either ss nil))))
 
 (def ^:private class-schemas
   "[class schema]: the malli schema of a value of class, for the classes pgjdbc sends and those
@@ -211,7 +219,7 @@
   [opts array?]
   (for [[c t] (sorted-sends (send-map opts))
         :let [t (type-name t)
-              coll (some (fn [[k s]] (when (.isAssignableFrom ^Class k c) s)) collections)
+              coll (collection-schema c)
               array (or (.isArray ^Class c) (and coll (or (= :unknown t) (array-type-name t))))]
         :when (= array? (boolean (and array (not= c (Class/forName "[B")))))]
     [(if (and array coll) coll (class-schema c)) t]))
@@ -285,7 +293,9 @@
                    (not= :unnest use)
                    (or (not (and elem (accept/known? elem)))
                        (accept/holds? elem (accept/element sent)))))
-        alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)] (clojure.walk/postwalk-replace {:pgmalli/element t} s)))]
+        alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)
+                             a (shape/alternatives s)]
+                         (clojure.walk/postwalk-replace {:pgmalli/element t} a)))]
     (shape/either alts :any)))
 
 (defn write-type
