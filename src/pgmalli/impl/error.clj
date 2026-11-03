@@ -54,9 +54,13 @@
 (defn suggestions
   "Up to n of the known names closest to a misspelt one, closest first; nil when none is close."
   [given known n]
-  (let [g (str given)]
+  (let [g (str given)
+        most (close-enough g)]
     (->> known
-         (keep #(let [d (edit-distance g (str %))] (when (<= d (close-enough g)) [% d])))
+         ;; the edits are at least the difference in length
+         (keep #(let [k (str %)]
+                  (when (<= (abs (- (count g) (count k))) most)
+                    (let [d (edit-distance g k)] (when (<= d most) [% d])))))
          (sort-by second) (take n) (map first) seq)))
 
 (defn suggest
