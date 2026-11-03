@@ -1983,3 +1983,16 @@
     (is (= ["clause :selec is no clause HoneySQL or pgmalli knows; did you mean: :select"] (h/humanize ps))))
   (is (= [{:kind :unread-clause :clause :frobnicate}] (check {:select [:id] :from [:users] :frobnicate [:x]}))
       "nothing close, nothing suggested"))
+
+(deftest a-json-column-of-several-shapes-keeps-each-shape
+  (let [shapes [:or [:map {:closed true} [:a :string]] [:map {:closed true} [:b :int]]]
+        reg (pgmalli/registry {:registry {:app/input shapes
+                                          :pg.public/jobs [:map {:pg/table "public.jobs"}
+                                                           [:input [:ref {:pg/type "jsonb"} :app/input]]]}})
+        o {:send {clojure.lang.IPersistentMap "jsonb"} :read {:json :parsed}}
+        ok? #(m/validate %1 %2 {:registry reg})
+        arg (:input (h/arg-types reg {:insert-into :jobs :values [{:input :?input}]} o))
+        row (h/row-schema reg {:select [:input] :from [:jobs]} (assoc o :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}))]
+    (is (ok? arg {:a "x"}))
+    (is (ok? arg {:b 1}) "the second shape too")
+    (is (ok? row {:input {:b 1}}))))
