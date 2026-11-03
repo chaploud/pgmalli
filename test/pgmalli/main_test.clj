@@ -52,7 +52,7 @@
     (is (= 1 (count (str/split-lines err))) "no stack trace")))
 
 (deftest an-unreachable-database-exits-3-without-the-password
-  (let [{:keys [code err]} (cli "check" (config-file {:out-dir (temp-dir) :db {:host "localhost" :port 1 :db "nope" :user "u" :password "s3cret"}}))]
+  (let [{:keys [code err]} (cli "check" (config-file {:out-dir (temp-dir) :db {:host "localhost" :port 1 :dbname "nope" :user "u" :password "s3cret"}}))]
     (is (= 3 code))
     (is (str/starts-with? err "pgmalli: cannot connect to localhost:1/nope with psql: "))
     (is (= 1 (count (str/split-lines err))))

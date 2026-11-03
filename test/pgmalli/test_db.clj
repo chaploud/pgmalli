@@ -77,7 +77,7 @@
     (let [{:keys [name port]} @container
           dbname (str "t_" (System/nanoTime))]
       (exec-in! name "postgres" (str "CREATE DATABASE " dbname))
-      (binding [*db* {:host "localhost" :port port :db dbname :user "postgres" :password "pw"}
+      (binding [*db* {:host "localhost" :port port :dbname dbname :user "postgres" :password "pw"}
                 *container* name]
         (t/testing @upstream (f))))))
 
@@ -89,12 +89,12 @@
 (defn exec-sql!
   "Runs SQL against the namespace's database through the container's psql."
   [sql]
-  (exec-in! *container* (:db *db*) sql))
+  (exec-in! *container* (:dbname *db*) sql))
 
 (defn jdbc-url
   "The JDBC URL of db, *db* by default."
   ([] (jdbc-url *db*))
-  ([{:keys [host port db]}] (str "jdbc:postgresql://" host ":" port "/" db)))
+  ([{:keys [host port dbname]}] (str "jdbc:postgresql://" host ":" port "/" dbname)))
 
 (defn datasource
   "A next.jdbc datasource of db, *db* by default (JVM only: babashka has no next.jdbc)."

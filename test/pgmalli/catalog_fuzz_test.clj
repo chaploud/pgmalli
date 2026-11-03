@@ -376,7 +376,7 @@
 (defn findings
   "[{:case :ddl :findings}] for the cases with findings, case i built from seed + i."
   [seed cases]
-  (let [ds (jdbc/get-datasource {:dbtype "postgresql" :host (:host *db*) :port (:port *db*) :dbname (:db *db*)
+  (let [ds (jdbc/get-datasource {:dbtype "postgresql" :host (:host *db*) :port (:port *db*) :dbname (:dbname *db*)
                                  :user (:user *db*) :password (:password *db*)})]
     (vec (for [i cases
                :let [schema (str "fz" i "_" (System/nanoTime))

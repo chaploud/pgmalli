@@ -106,7 +106,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   read as a vector, as HoneySQL reads it, where it was taken for code and left unchecked; a list
   with a symbol in it is still code.
 * `h/row-schema`'s `:pgmalli/untold` property is `:pgmalli/unknown-keys`.
+* `:db` in `pgmalli.edn` names the database `:dbname`, as next.jdbc and libpq do, where it was
+  `:db`. A `:db` holding next.jdbc's `:dbtype` is an error saying to drop it.
 * What to do:
+  * In `pgmalli.edn`, `:db {:db "app"}` is `:db {:dbname "app"}`; the old key is an error
+    naming the new one.
   * Code reading `:pgmalli/untold` off a row schema reads `:pgmalli/unknown-keys`.
   * Options: `{:stringtype :unspecified}` is `{:send {String :unknown}}`. `:write {"text" [:or
     :string :keyword]}` and `:write {:enum [:string :keyword]}` are `{:send

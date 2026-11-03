@@ -48,7 +48,7 @@
     :else x))
 
 (def ^:private env-keys
-  {:host "PGHOST" :port "PGPORT" :db "PGDATABASE" :user "PGUSER" :password "PGPASSWORD" :sslmode "PGSSLMODE"})
+  {:host "PGHOST" :port "PGPORT" :dbname "PGDATABASE" :user "PGUSER" :password "PGPASSWORD" :sslmode "PGSSLMODE"})
 
 (defn- query-sql []
   (slurp (or (io/resource "pgmalli/ir.sql")
@@ -100,12 +100,18 @@
    keys of two, is an error, since the others would be left out and psql reach the database its
    environment names."
   [db]
+  (when (contains? db :db)
+    (error/fail! :pgmalli.error/invalid-config
+                 (str ":db's :db is no longer read: the database name is :dbname, as next.jdbc and libpq name it; see " error/changelog)
+                 {:given [:db] :did-you-mean [:dbname]}))
   (let [via (cond (contains? db :datasource) :datasource (contains? db :jdbc-url) :jdbc :else :psql)
         stray (remove (conj (db-keys via) :schema) (keys db))]
     (when (seq stray)
       (error/fail! :pgmalli.error/invalid-config
-                   (str ":db keys " (vec stray) " do not go with " (name via)
-                        (error/did-you-mean (some #(error/suggest % (db-keys via)) stray))
+                   (str (if (contains? db :dbtype)
+                          (str ":db keys " (vec stray) " are next.jdbc's, which pgmalli does not read (it reads PostgreSQL alone); drop them")
+                          (str ":db keys " (vec stray) " do not go with " (name via)
+                               (error/did-you-mean (some #(error/suggest % (db-keys via)) stray))))
                         "; psql takes " (vec (sort (db-keys :psql))) ", JDBC :jdbc-url :user :password, or :datasource alone")
                    {:given (vec stray) :known (vec (sort (db-keys via)))}))
     (when (and (not= :psql via) (System/getProperty "babashka.version"))

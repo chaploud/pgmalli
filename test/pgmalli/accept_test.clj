@@ -126,7 +126,7 @@
     (exec-sql! "CREATE TYPE untyped_mood AS ENUM ('ok'); CREATE TABLE untyped_probe (e untyped_mood, t text, i integer)")
     (let [sent (pgjdbc/sent-type "1" {:send {String :unknown}})]
       (is (= :unknown sent))
-      (with-open [con (jdbc/get-connection (datasource (update *db* :db str "?stringtype=unspecified")))]
+      (with-open [con (jdbc/get-connection (datasource (update *db* :dbname str "?stringtype=unspecified")))]
         (doseq [[col t v] [["e" [:enum "untyped_mood"] "ok"] ["t" "text" "1"] ["i" "integer" "1"]]
                 [context sql] {:compare (str "SELECT 1 FROM untyped_probe WHERE " col " = ?")
                                :assign (str "INSERT INTO untyped_probe (" col ") VALUES (?)")}]

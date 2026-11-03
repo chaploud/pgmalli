@@ -64,7 +64,7 @@
                                    ;; regression scripts drop their tables at the end; keep them
                                    _ (psql! dbname (str/replace (slurp f) #"(?m)^\s*DROP\b" "-- DROP"))]
                              s (schemas dbname)
-                             e (expressions (ir/from-db (assoc db/*db* :db dbname :schema s)))]
+                             e (expressions (ir/from-db (assoc db/*db* :dbname dbname :schema s)))]
                          e)
                        (remove (comp str/blank? :sql))
                        distinct

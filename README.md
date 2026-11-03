@@ -100,12 +100,13 @@ command (`generate ci.edn`):
 ```clojure
 {:schemas ["public"]                  ; the default
  :out-dir "resources/pgmalli"         ; the default; keep it on the classpath
- :db {:host "localhost" :port 5432 :db "app_dev" :user "app"}}
+ :db {:host "localhost" :port 5432 :dbname "app_dev" :user "app"}}
 ```
 
 It reads the database with `psql`. Without `:db`, psql's own settings apply (`PGHOST`,
-`PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). `:db` takes `:host`, `:port`, `:db`, `:user`,
-`:password`, `:sslmode` and `:psql`, the psql binary to run. On the JVM, a `:db` with `:jdbc-url`
+`PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). `:db` takes `:host`, `:port`, `:dbname`, `:user`,
+`:password`, `:sslmode` and `:psql`, the psql binary to run; a next.jdbc db-spec is one without
+its `:dbtype`. On the JVM, a `:db` with `:jdbc-url`
 reads through pgjdbc (PostgreSQL's JDBC driver) instead, no psql needed:
 
 ```clojure

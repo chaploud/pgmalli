@@ -231,7 +231,7 @@
                  "DECLARE r boolean; BEGIN EXECUTE q INTO r USING rid; RETURN r; EXCEPTION WHEN OTHERS THEN RETURN false; END $f$;\n"
                  "SELECT " selects " FROM judge ORDER BY id;")
         {:keys [exit out err]} (p/sh ["docker" "exec" "-i" *container* "psql" "-X" "-q" "-A" "-t" "-F" "\t"
-                                      "-v" "ON_ERROR_STOP=1" "-U" "postgres" "-d" (:db *db*)]
+                                      "-v" "ON_ERROR_STOP=1" "-U" "postgres" "-d" (:dbname *db*)]
                                      {:in sql})]
     (when-not (zero? exit) (throw (ex-info err {:sql sql})))
     (mapv #(mapv (fn [v] (= "t" v)) (str/split % #"\t")) (str/split-lines (str/trim out)))))
@@ -264,7 +264,7 @@
           cps (concat (range 1 128) [0xA0 0xAA 0xB2 0xD7 0xDF 0xE9 0xAD 0x1C5 0x301 0x663 0x1680 0x2007 0x2028 0x202F 0x203F 0x20AC 0x3000 0x3042 0x1F600])
           sql (str "SELECT p.i, c, chr(c) ~ p.pat FROM unnest(ARRAY[" (str/join ", " (map test-db/sql-literal patterns)) "]) WITH ORDINALITY p(pat, i), "
                    "unnest(ARRAY[" (str/join ", " cps) "]) c;")
-          {:keys [exit out err]} (p/sh ["docker" "exec" "-i" *container* "psql" "-X" "-q" "-A" "-t" "-F" "\t" "-U" "postgres" "-d" (:db *db*)] {:in sql})]
+          {:keys [exit out err]} (p/sh ["docker" "exec" "-i" *container* "psql" "-X" "-q" "-A" "-t" "-F" "\t" "-U" "postgres" "-d" (:dbname *db*)] {:in sql})]
       (is (zero? exit) err)
       (doseq [line (str/split-lines (str/trim out))
               :let [[i c v] (str/split line #"\t")

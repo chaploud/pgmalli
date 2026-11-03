@@ -81,7 +81,7 @@
 
 (deftest psql-that-cannot-connect-names-the-target-on-one-line
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope with psql: [^\n]*; check :db in pgmalli.edn"
-                                (ir/from-db {:host "localhost" :port 1 :db "nope" :user "u" :password "s3cret"})))]
+                                (ir/from-db {:host "localhost" :port 1 :dbname "nope" :user "u" :password "s3cret"})))]
     (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
     (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e))) "s3cret")))))
 
@@ -103,8 +103,8 @@
   ;; babashka has no java.sql
   (when (and *db* (not (System/getProperty "babashka.version")))
     (exec-sql! "CREATE SCHEMA \"o'dd\"\"s\"; CREATE TABLE \"o'dd\"\"s\".t (id int PRIMARY KEY CHECK (id > 0), name text);")
-    (let [{:keys [host port db user password]} *db*
-          jdbc {:jdbc-url (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password :schema "o'dd\"s"}]
+    (let [{:keys [host port dbname user password]} *db*
+          jdbc {:jdbc-url (str "jdbc:postgresql://" host ":" port "/" dbname) :user user :password password :schema "o'dd\"s"}]
       (is (= (ir/from-db (assoc *db* :schema "o'dd\"s")) (ir/from-db jdbc)))
       (is (= ["id" "name"] (map :name (get-in (ir/from-db jdbc) [:tables "t" :columns])))))))
 
@@ -113,3 +113,13 @@
                    [{:jdbc-url "x" :host "h"} #"do not go with jdbc"]
                    [{:datasource :ds :user "u"} #"do not go with datasource"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo re (ir/from-db db)) (pr-str db))))
+
+(deftest the-database-name-is-dbname-and-the-old-key-names-it
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db's :db is no longer read: the database name is :dbname"
+                                (ir/from-db {:host "h" :db "app"})))]
+    (is (= [:dbname] (:did-you-mean (ex-data e))))
+    (is (not (str/includes? (pr-str (ex-data e)) "app")))))
+
+(deftest a-next-jdbc-db-spec-says-to-drop-its-dbtype
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db keys \[:dbtype\] are next.jdbc's, which pgmalli does not read .*; drop them"
+                        (ir/from-db {:dbtype "postgresql" :dbname "app" :host "h" :psql "/nonexistent/psql"}))))

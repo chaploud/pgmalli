@@ -92,7 +92,7 @@
 (defn- sweep-schema
   "Every finding of one schema of a database."
   [dbname schema]
-  (let [config {:db (assoc db/*db* :db dbname)}
+  (let [config {:db (assoc db/*db* :dbname dbname)}
         [data e1] (try-step :generate #(files/from-database config schema))]
     (if e1
       [e1]
