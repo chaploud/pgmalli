@@ -73,10 +73,11 @@ A clause pgmalli does not read is reported rather than passed over:
 The columns of a CTE or a subquery are typed as its SELECT types them, read as a query of its
 own (a CTE under the ones before it, a LATERAL subquery with the tables before it, a recursive
 CTE as its first member, NULL allowed and a CHECK's list read as its base type); a column it
-does not give is `:unknown-column`. The columns of a table function (named by its alias,
-`WITH ORDINALITY` too), of a table written as a symbol (`'events_2026`, a table chosen at run
-time) and of a `pg_catalog` or `information_schema` table the registry lacks exist but have no
-type. Comparisons with them, or with an expression `h/row-schema` leaves untyped, are not
+does not give is `:unknown-column`. A function of `pg_catalog` in FROM has the columns it
+returns ([The row a query returns](#the-row-a-query-returns)). The columns of another table
+function (named by its alias, `WITH ORDINALITY` too), of a table written as a symbol
+(`'events_2026`, a table chosen at run time) and of a `pg_catalog` or `information_schema` table
+the registry lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema` leaves untyped, are not
 checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
@@ -144,7 +145,8 @@ keyed as in `sql/format`'s `:params`:
 | cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, to an array type (or a domain over one) any array, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | an array, typed as `:send` sends one, of where its column goes: compared with a column, assigned by `INSERT ... SELECT` or `UPDATE ... SET`, or cast (an array of what PostgreSQL casts to the type) |
-| an argument of `coalesce`, `greatest`, `least` or `nullif` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
+| an argument of `coalesce`, `greatest`, `least` or `nullif`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
+| an argument of a function or an operator of `pg_catalog` (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the one type every function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil; `:any` where they take more than one |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
 | used only inside code (`(when x ...)`) | its type or nil |
@@ -166,7 +168,8 @@ Where its uses type an argument differently, the first statement wins (an enclos
 its subqueries; among those, the ones of `:with`, then of `:from` and the joins, then of the
 other clauses in the order HoneySQL writes them), and within it a comparison (the first),
 then `:limit` / `:offset`, a cast, an assignment, an `unnest`'s array, an argument of
-`coalesce`, `greatest`, `least` or `nullif`. It takes nil where any of its uses does.
+`coalesce`, `greatest`, `least`, `nullif` or `CASE`, of a function or an operator. It takes nil
+where any of its uses does.
 
 A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
 matches no row.
@@ -316,28 +319,46 @@ makes a name of `""`; each column is of the type PostgreSQL resolves its members
 ;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
 ```
 
-An expression has its type and nullability for these forms: a literal (as HoneySQL sends it, by
-its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
-`:timestamptz`), with its length (`[:varchar 10]`), or to an enum type or domain of the
-registry, `count`, `sum`, `avg`, `min`, `max`, `bool_and`, `bool_or`, `every`, `coalesce`,
-`greatest`, `least` and `CASE` of values of one type, or of numbers the widest of them, `nullif`
-of two of one type, as `=` reads it, a literal `[:inline ...]` writes, an operator that makes a
-boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`, `IS`), the clock's values (`now()`,
-`current_date` ...), `->>`, and the functions that build json or jsonb (`jsonb_build_object`,
-`jsonb_agg` ...: an object or an array under `{:read {:json :parsed}}`, the driver's object
-otherwise; an aggregate is NULL over no row). Among those values a string takes the others'
-type, as PostgreSQL resolves it; an argument leaves the expression untyped unless the type is a
-string type, as pgjdbc sends a number or a date typed. `CASE` without `:else` may be NULL. `min`
-and `max` read a domain as its base type, and a `varchar`, `"char"` or `name` as `text`, a
-`cidr` as `inet` and a reg* type as `oid`, the types PostgreSQL defines them for. Any other
-expression is nullable `:any`:
+An expression has the type PostgreSQL resolves it to, from the types of what it is made of:
+
+- a literal, as HoneySQL sends it (by its class), or as `[:inline ...]` writes it; an SQL word
+  (`current_date`, `current_user` ...) as PostgreSQL's grammar types it
+  ([9.9.5](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT),
+  [9.27](https://www.postgresql.org/docs/current/functions-info.html)); a cast, to a type named
+  as PostgreSQL prints it or by its alias (`:bigint`, `:timestamptz`, `:double-precision`,
+  `(keyword "text[]")`), with its length (`[:varchar 10]`), or to an enum type or domain of the registry;
+  `[:interval "1 day"]` and `[:array [...] :text]`.
+- `CASE`, `coalesce`, `greatest`, `least`, `ARRAY[...]` and a set operation's columns, of the
+  common type of their values
+  ([10.5](https://www.postgresql.org/docs/current/typeconv-union-case.html)); `nullif`, of its
+  first argument as `=` reads it.
+- A call of a function or an operator of `pg_catalog`, of the type PostgreSQL resolves it to
+  ([10.2](https://www.postgresql.org/docs/current/typeconv-oper.html),
+  [10.3](https://www.postgresql.org/docs/current/typeconv-func.html), polymorphic types as
+  [38.2.5](https://www.postgresql.org/docs/current/extend-type-system.html#EXTEND-TYPES-POLYMORPHIC)
+  says): aggregates (with `FILTER` too), window functions under `:over`, and a function in FROM,
+  whose columns (its OUT arguments, or one named after the alias; `ordinality` under
+  `WITH ORDINALITY`) are of no table. pgmalli reads the functions, operators and implicit casts
+  from a snapshot of `pg_catalog` (`resources/pgmalli/catalog.edn`) of the PostgreSQL versions it
+  supports; a call one of them resolves otherwise is untyped. A function of `json` or `jsonb` that
+  builds an object or an array is one under `{:read {:json :parsed}}`.
+
+An argument among the values of `CASE` and the like leaves the expression untyped unless the
+type is a string type, as pgjdbc sends a number or a date typed; in a call, it leaves it untyped
+unless every function or operator the call may resolve to gives one type. A column of a domain
+is of its base type, a CHECK's list of the base type, where values are computed from it. The
+catalog does not say when a function returns NULL, so a call is nullable, but `count`, a window
+function of no argument (`row_number`) and a comparison (an operator of a btree operator family,
+or its negator) of values that are not NULL. An argument of the application's own type
+(an extension's, a composite), the application's own function, and anything else is nullable
+`:any`:
 
 ```clojure
 (h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
                                  [[:exists {:select [1] :from [:posts]}] :any_posts] [[:cast "active" :user_status] :s]
                                  [[:upper :nick] :shout]]
                         :from [:users]})
-;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [inst? #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe :any]]]
+;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [inst? #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe [:string #:pg{:type "text"}]]]]
 ```
 
 It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):
@@ -361,7 +382,8 @@ next.jdbc's `:return-keys` (in `:jdbc`), pgjdbc adds RETURNING to an INSERT, UPD
 
 Under qualified keys (next.jdbc's default), the driver may qualify some columns by a table the
 query data does not show: a column cast to its own type, which PostgreSQL drops; `:raw` SQL,
-which may be a column; a column of a table function or of a table the registry lacks; or a
+which may be a column; a column of a table function not of `pg_catalog` or of a table the
+registry lacks; or a
 subquery's or a CTE's column that is one of these. `h/row-schema` leaves those keys out of the
 map, which is open, and lists their unqualified names under the `:pgmalli/unknown-keys`
 property:
@@ -436,8 +458,9 @@ row of a SELECT of aggregates of columns or constants alone (no GROUP BY, HAVING
 limit a parameter gives); at most one of a statement on one table (no CTE of its name, no table
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
 index (neither partial nor DEFERRABLE) equal to a value; up to one for each row of an INSERT's
-`:values` with RETURNING; at most `:limit`. Any other function in the select list, or any
-function in ORDER BY or `:values`, may return a set, so there it says nothing. Where it is one
+`:values` with RETURNING; at most `:limit`. A function that may return a set (one of
+`pg_catalog` that does, as `generate_series`, or the application's own) in the select list, ORDER
+BY or `:values` makes it say nothing. Where it is one
 row, `{:result :one}` drops the `[:maybe]`:
 
 ```clojure
@@ -522,6 +545,11 @@ Write the query so PostgreSQL's reading is explicit instead.
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 
 ## Not checked
+
+- A function or an operator the schema defines with the name of one of `pg_catalog`'s (an
+  extension's `||` of `ltree` and `text`): `h/row-schema` types a call by `pg_catalog`'s alone,
+  which PostgreSQL may resolve to the schema's instead. A call whose argument is of an
+  extension's type is untyped.
 
 - What code in the query (a list with a symbol in it) builds at run time: the vectors written
   inside it are checked, but a column it computes (`(keyword c)`) is not. A list or seq of

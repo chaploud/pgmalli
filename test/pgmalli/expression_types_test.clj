@@ -1,8 +1,9 @@
 (ns pgmalli.expression-types-test
   "The types and names h/row-schema gives a select expression, against what PostgreSQL gives:
    coalesce, greatest, least, CASE, nullif and UNION over every pair of the types a column holds,
-   the aggregates over each, SQL words, the json builders, literals and parameters. pgmalli may
-   type an expression :any; where it names a type, PostgreSQL's pg_typeof names it too. JVM only
+   the aggregates over each, every function and operator of pgmalli's catalog snapshot over
+   columns of its argument types (and NULL, an unknown), SQL words, literals and parameters.
+   pgmalli may type an expression :any; where it names a type, PostgreSQL names it too. JVM only
    (next.jdbc), so bb test does not list it."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is use-fixtures]]
@@ -16,8 +17,9 @@
             [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
 
 (def ^:private columns
-  "{column type}: one column of every type types lists, named after it."
-  (into (sorted-map) (for [t (keys types/types)] [(keyword (str "c_" (str/replace t #"[^a-z0-9]+" "_"))) t])))
+  "{column type}: one column of every type types lists, and of a few arrays, named after it."
+  (into (sorted-map) (for [t (concat (keys types/types) ["integer[]" "text[]" "bigint[]" "jsonb[]"])]
+                       [(keyword (str "c_" (str/replace (str/replace t "[]" " array") #"[^a-z0-9]+" "_"))) t])))
 
 (use-fixtures :once
   (fn [t]
@@ -164,3 +166,71 @@
       (when-let [ms (seq (remove (fn [[_ o t]] (= o t)) cs))]
         (is false (str "pgmalli names these otherwise than PostgreSQL (expression, pgmalli, PostgreSQL)\n  "
                        (str/join "\n  " (map pr-str ms))))))))
+
+(defn- described
+  "{alias type} PostgreSQL describes items as (prepared, not run, so no function runs), an item
+   it refuses left out: a batch it refuses is split in two until each part prepares."
+  [con typnames items]
+  (try (with-open [ps (jdbc/prepare con (sql/format {:select (for [[a e] items] [e a]) :from [:u]}))]
+         (let [md (.getMetaData ps)]
+           (into {} (for [i (range 1 (inc (.getColumnCount md)))]
+                      [(keyword (.getColumnLabel md i)) (typnames (.getColumnTypeName md i))]))))
+       (catch Exception _
+         (when (next items)
+           (let [[l r] (split-at (quot (count items) 2) items)]
+             (merge (described con typnames l) (described con typnames r)))))))
+
+(def ^:private stand-ins
+  "A column for each polymorphic argument type: of an element, an array, a range, a multirange."
+  {"anyelement" ["c_integer" "c_text"] "anynonarray" ["c_integer" "c_text"] "anycompatible" ["c_integer" "c_text"]
+   "anycompatiblenonarray" ["c_integer"] "\"any\"" ["c_integer" "c_text"]
+   "anyarray" ["c_integer_array" "c_text_array"] "anycompatiblearray" ["c_integer_array" "c_text_array"]
+   "anyrange" ["c_int4range"] "anycompatiblerange" ["c_int4range"] "anymultirange" ["c_int4multirange"]
+   "anycompatiblemultirange" ["c_int4multirange"]})
+
+(defn- calls
+  "[kind expressions] of the overloads of the catalog the server's version has, each called with
+   columns of its argument types (stand-ins for a polymorphic one), and with NULL, an unknown, in
+   one argument: aggregates apart, as an aggregate beside a column wants a GROUP BY."
+  [version]
+  (let [by-type (into {} (map (fn [[c t]] [t c])) columns)
+        arg (fn [d] (if-let [c (by-type d)] [c] (map keyword (stand-ins d))))
+        exprs (fn [n {:keys [args]}]
+                (let [cols (map arg args)
+                      call (fn [as] (into [(keyword n)] as))]
+                  (when (every? seq cols)
+                    (concat [(call (map first cols))]
+                            (when (every? next cols) [(call (map second cols))])
+                            (for [i (range (count args))] (call (assoc (vec (map first cols)) i nil)))))))]
+    (group-by first
+              (for [kind [:functions :operators]
+                    [n os] (kind @types/catalog)
+                    o os
+                    :when (and (or (nil? (:in o)) (some #{version} (:in o)))
+                               (not (#{:w} (:kind o)))
+                               (or (= :functions kind) (re-matches #"[+\-*/<>=~!@#%^&|`?]+" n)))
+                    e (exprs n o)]
+                [(if (= :a (:kind o)) :aggregates :plain) e]))))
+
+(deftest every-function-and-operator-of-the-catalog-is-typed-as-postgresql-types-it
+  (when *db*
+    (let [registry (registry)
+          ds (datasource)
+          version (first (str/split (:server_version (jdbc/execute-one! ds ["SHOW server_version"])) #"\."))
+          typnames (into {} (map (juxt :typname :t)) (jdbc/execute! ds ["SELECT typname, format_type(oid, NULL) AS t FROM pg_type"]
+                                                                   {:builder-fn next.jdbc.result-set/as-unqualified-maps}))
+          ;; HoneySQL writes an operator it has not registered as a function call
+          _ (doseq [[n] (:operators @types/catalog)] (when-not (sql/registered-op? (keyword n)) (sql/register-op! (keyword n))))
+          cs (with-open [con (jdbc/get-connection ds)]
+               (doall
+                (for [[_ es] (calls version)
+                      batch (partition-all 300 (distinct (map second es)))
+                      :let [items (vec (map-indexed (fn [i e] [(keyword (str "e" i)) e]) batch))
+                            ours (pgmalli-types registry :select items)
+                            theirs (described con typnames (filter (comp ours first) items))]
+                      [a e] items
+                      :let [o (ours a) t (some-> (theirs a) normal)]
+                      :when (and o t)]
+                  [e o t])))]
+      (is (< 3000 (count cs)) (str "pgmalli and PostgreSQL type " (count cs) " of the calls"))
+      (report "functions and operators" cs))))

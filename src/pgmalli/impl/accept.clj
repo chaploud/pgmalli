@@ -57,7 +57,7 @@
 
 (def ^:private integers #{"smallint" "integer" "bigint"})
 (def ^:private numbers (into integers ["real" "double precision" "numeric"]))
-(def strings "The string types." #{"character varying" "text" "character" "name" "citext"})
+(def ^:private strings "The string types." #{"character varying" "text" "character" "name" "citext"})
 
 (defn number-type? [t] (contains? numbers t))
 
@@ -88,7 +88,7 @@
   (merge-with into (zipmap numbers (repeat #{"jsonb"})) (zipmap integers (repeat #{"bytea"}))
               {"boolean" #{"integer" "jsonb"} "integer" #{"boolean"} "bytea" integers}))
 
-(defn oid? "Whether t is a reg* type (an oid), not an array of one." [t] (and (string? t) (str/starts-with? t "reg") (not (str/ends-with? t "[]"))))
+(defn- oid? "Whether t is a reg* type (an oid), not an array of one." [t] (and (string? t) (str/starts-with? t "reg") (not (str/ends-with? t "[]"))))
 
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context

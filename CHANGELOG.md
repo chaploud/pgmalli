@@ -38,7 +38,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * Checks and argument types are stricter, so a test that passed on 0.3.3 may fail; each
   failure is a real mismatch with the schema.
   * An argument that was `:any` now has a type, and an instrumented function checks it: one
-    under a cast, compared in a select or ORDER BY expression, inside `coalesce` and the like,
+    under a cast, compared in a select or ORDER BY expression, inside `coalesce`, `CASE` and the
+    like, an argument of a function or an operator of `pg_catalog` that takes one type there,
     in an `unnest` in FROM, or compared with a CTE's or subquery's column.
   * An instrumented function whose return schema now states a row count (`{:max 1}`) is
     checked against it.
@@ -78,18 +79,23 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   type of where its column goes. An argument takes nil where any of its uses does, whatever
   their order, and in `:limit` or `:offset` (no limit); under `{:compare :lenient}` the elements
   of one in `:in` or `= ANY` take nil too.
-* `h/row-schema` types more expressions
-  ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): `coalesce`, `greatest`, `least`,
-  `CASE` and `nullif`; `min` and `max` of a domain (as its base type) and of `varchar`,
-  `"char"`, `name`, `cidr` and reg* types (as `text`, `inet` or `oid`); `bool_and`, `bool_or`
-  and `every`; a literal `[:inline ...]` writes; the functions that build json and jsonb; a cast
-  to a type with its length (`[:varchar 10]`). The columns of a CTE or a subquery are typed as
+* `h/row-schema` types an expression as PostgreSQL resolves it
+  ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): `CASE`, `coalesce`, `greatest`,
+  `least`, `ARRAY[...]`, `VALUES` and a set operation's columns of their values' common type, and
+  every function and operator of `pg_catalog` (aggregates, with `FILTER` too, window functions
+  under `:over`, polymorphic ones) of the type it resolves to, from a snapshot of `pg_catalog`
+  of PostgreSQL 16, 17 and 18 (`resources/pgmalli/catalog.edn`, which `bb catalog` rewrites);
+  a literal `[:inline ...]` writes; `INTERVAL '1 day'`; a cast to a type with its length
+  (`[:varchar 10]`) or to an array type; `current_user` and the like as `name`. A function of
+  `pg_catalog` in FROM has its columns, of no table, so a qualified builder keys them
+  unqualified. The columns of a CTE or a subquery are typed as
   its SELECT types them, and keyed by the table PostgreSQL traces them to; a set operation's
   column is of the type PostgreSQL resolves its members' to; `SELECT *` of a CTE or a subquery
   lists its columns; a table function (`WITH ORDINALITY` too) is named by its alias.
 * `h/query-schema`'s return states how many rows the query data shows it returns
   (`[:sequential {:max 1} row]`), and where that is exactly one, `{:result :one}` drops the
-  `[:maybe]` ([docs/queries.md](docs/queries.md#function-schemas)).
+  `[:maybe]` ([docs/queries.md](docs/queries.md#function-schemas)). A function of `pg_catalog`
+  that returns no set keeps the count (`SELECT lower(email) ... WHERE id = ?` is `{:max 1}`).
 * A table's map carries `:pg/inherited true` for a table other tables inherit (not as
   partitions), `:pg/primary-key-deferrable true`, and `:deferrable true` on a DEFERRABLE
   `:pg/unique` entry ([docs/types.md](docs/types.md#properties)).
@@ -106,6 +112,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `PGMALLI_DEBUG`.
 
 ### Changed
+
+* `now()`, the functions that build json and a function call in general are nullable: the
+  catalog does not say when a function returns NULL. `current_timestamp` and the like, `count`,
+  `row_number` and a comparison of values that are not NULL are not.
+* `coalesce`, `CASE` and the like resolve as PostgreSQL's `select_common_type`: `CASE` takes its
+  `ELSE` value first, and a `varchar` before a `text` stays `varchar`. A typed string among
+  numbers is no longer typed as the numbers (PostgreSQL refuses it).
 
 * A domain whose CHECK lists its values
   (`CREATE DOMAIN lbl AS text CHECK (VALUE IN ('a', 'b'))`) keeps its base type

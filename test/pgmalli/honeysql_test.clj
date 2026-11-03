@@ -160,7 +160,7 @@
     (is (vector? (h/query-schema registry '[] body opts)) (pr-str body))))
 
 (deftest an-expression-with-no-alias-has-the-name-postgresql-gives-it
-  (is (= [:map [:count bigint] [:?column? [:maybe :any]] [:my_fn [:maybe :any]] [:nick [:maybe text]]
+  (is (= [:map [:count bigint] [:?column? [:maybe bigint]] [:my_fn [:maybe :any]] [:nick [:maybe text]]
           [:case [:maybe bigint]] [:exists [:boolean {:pg/type "boolean"}]] [:current_timestamp ['inst? {:pg/type "timestamp with time zone"}]]
           [:coalesce bigint]]
          (row {:select [[[:count :*]] [[:+ :id 1]] [[:public.my-fn 1]] [[:cast :nick :text]] [[:case [:= :id 1] 2]]
@@ -367,7 +367,8 @@
          (row {:select [:groups/*] :from [:groups]})) ":t/* is the table's columns")
   (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row {:select [:*] :from [[{:select [:id] :from [:users]} :r]]}))
       "a subquery's * is the columns its SELECT gives")
-  (is (nil? (row {:select [:*] :from [[[:generate_series 1 3] :r]]})) "an opaque table's * is unknown")
+  (is (nil? (row {:select [:*] :from [[[:public.my-fn 1 3] :r]]})) "an opaque table's * is unknown")
+    (is (= [:map [:r [:maybe bigint]]] (row {:select [:*] :from [[[:generate_series 1 3] :r]]})) "a function's of pg_catalog is its columns")
   (is (= [] (check {:select [:cp.id] :from [[:users :cp]] :join [[:groups :c] [:= :c.id :cp.group_id]]
                     :left-join [[{:select-distinct-on [[:group_id] :group_id :score] :from [:users] :where [:= :group_id 'g] :order-by [[:group_id :asc] [:id :desc]]} :latest]
                                 [:= :latest.group_id :cp.group_id]]}))
@@ -522,7 +523,8 @@
     (is (= [:map [:b [:boolean {:pg/type "boolean"}]] [:c [:maybe [:boolean {:pg/type "boolean"}]]]]
            (row [[[:= :id 1] :b] [[:= :nick "a"] :c]]))
         "a comparison is NULL where an operand may be")
-    (is (= [:map [:u [:maybe :any]] [:p [:maybe :any]]] (row [[[:upper :nick] :u] [:?x :p]])) "other forms stay untyped")
+    (is (= [:map [:u [:maybe text]] [:p [:maybe :any]] [:f [:maybe :any]]] (row [[[:upper :nick] :u] [:?x :p] [[:public.my-fn :nick] :f]]))
+        "a function of pg_catalog has the type it resolves to; an argument, or the application's function, is untyped")
     (is (= [:map [:n [:double {:pg/type "double precision"}]]] (row [[[:coalesce :score 1.5] :n]]))
         "a number is a typed parameter, which PostgreSQL resolves with the column's type to the wider")
     (is (= [:map [:i int4] [:f ['float? {:pg/type "real"}]] [:d [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
@@ -532,8 +534,9 @@
            (h/row-schema registry {:select [[1 :i] ["s" :s]] :from [:users]} (assoc opts :format {:inline true})))
         "an inlined number is typed by its text, which is not read here; an inlined string is text")
     (is (= [:map [:s text]] (h/row-schema registry {:select [["s" :s]] :from [:users]} opts)))
-    (is (= [:map [:b [:maybe :any]]] (row [[[(keyword "~") :id] :b]])) "~ alone is bitwise NOT")
-    (is (= [:map [:k [:maybe text]]] (row [[[:->> :nick "k"] :k]])) "->> is text")
+    (is (= [:map [:b [:maybe [:int {:pg/type "bigint"}]]]] (row [[[(keyword "~") :id] :b]])) "~ alone is bitwise NOT, of a bigint a bigint")
+    (is (= [:map [:k [:maybe text]] [:v [:maybe :any]]] (row [[[:->> [:cast :nick :jsonb] "k"] :k] [[:->> :nick "k"] :v]]))
+        "jsonb ->> text is text; PostgreSQL has no ->> of a varchar")
     (is (= [:map [:s [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]] (row [[[:sum :id] :s]]))
         "sum of a bigint is a numeric")
     (is (= [:map [:mood [:maybe mood]] [:n [:maybe bigint]]]
@@ -542,14 +545,15 @@
 
 (deftest an-argument-compared-with-an-expression-takes-its-type
   (let [args #(h/arg-types registry {:select [:id] :from [:users] :where %} opts)]
-    (is (= {:k text} (args [:= [:->> :nick "k"] :?k])))
+    (is (= {:k text} (args [:= [:->> [:cast :nick :jsonb] "k"] :?k])))
     (is (= {:t text} (args [:not [:= [:cast :id :text] :?t]])))
     (is (= {:ts (in-list text)} (args [:in [:cast :id :text] :?ts])))
     (is (= {:s integer :i bigint}
            (args [:< [:composite :score :id] [:composite :?s :?i]]))
         "a row compares element by element")
     (is (= {:a text :b text} (args [:between [:cast :id :text] :?a :?b])))
-    (is (= {:x :any} (args [:= [:upper :nick] :?x])) "an expression of no known type types nothing")
+    (is (= {:x text} (args [:= [:upper :nick] :?x])) "upper of a varchar is text")
+    (is (= {:x :any} (args [:= [:public.my-fn :nick] :?x])) "an expression of no known type types nothing")
     (let [check #(h/check registry {:select [:id] :from [:users] :where %} (dissoc opts :send))]
       (is (= [{:kind :uncast-string :column [:cast :nick :mood] :arg :m :type "mood"}] (check [:= [:cast :nick :mood] :?m]))
           "a string compared with an enum-typed expression reaches it as varchar")
@@ -995,7 +999,7 @@
     (is (nil? (row [[:cast [:case [:= :id 1] 2] :int]])))
     (is (= [:map [:coalesce int4]] (row [[:cast [:coalesce :id 0] :int]])) "a function cast keeps its name")
     (is (= [:map [:?column? [:maybe :any]]] (row [[:-> :nick "a"]])) "an operator not an identifier")
-    (is (= [:map [:max [:maybe :any]]] (row :%max.id)) ":%f.args calls f")
+    (is (= [:map [:max [:maybe [:int {:pg/type "bigint"}]]]] (row :%max.id)) ":%f.args calls f")
     (is (nil? (row [[:raw "now()"]])) ":raw may be named anything")
     (is (nil? (row [{:select [1]}])) "a subquery is named after its column"))
   (is (= [] (check {:select [:%max.id [:%count.* :c]] :from [:users]})))
@@ -1379,7 +1383,7 @@
         "a value outside the CHECK's list is still reported")))
 
 (deftest a-function-alias-is-not-held-to-the-columns-it-lists
-  (is (= [] (check {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]}))
+  (is (= [{:kind :unknown-column :column :t.name}] (check {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]}))
       "PostgreSQL reads t.name as name(t)"))
 
 (deftest write-enum-names-what-an-extension-sends-for-an-enum
@@ -1436,7 +1440,7 @@
     (is (nullable? {:select [:group_id] :from [:users] :group-by [[:raw "CUBE(group_id)"]]}))))
 
 (deftest an-argument-no-use-types-is-any
-  (is (= {:e :any :n [:maybe [:int {:pg/type "bigint" :min 0}]]} (args {:select [:id] :from [:users] :where [:= [:lower :nick] :?e] :offset :?n}))))
+  (is (= {:e :any :n [:maybe [:int {:pg/type "bigint" :min 0}]]} (args {:select [:id] :from [:users] :where [:= [:public.my-fn :nick] :?e] :offset :?n}))))
 
 (deftest params-schema-is-sql-formats-params-map
   (let [body {:update :users :set {:nick :?nick} :where [:= :id :?id]}
@@ -1745,9 +1749,15 @@
 
 (deftest a-json-builder-is-json-as-its-type-is-read
   (let [q {:select [[[:jsonb_build_object "a" :id] :o] [[:jsonb_agg :id] :a] [[:json_build_array :id] :b]] :from [:users]}]
-    (is (= [:map [:o [:any {:pg/type "jsonb"}]] [:a [:maybe [:any {:pg/type "jsonb"}]]] [:b [:any {:pg/type "json"}]]] (row q))
-        "the driver's object; an aggregate is NULL over no row")
-    (is (= [:map [:o [:map {:pg/type "jsonb"}]] [:a [:maybe [:sequential {:pg/type "jsonb"} :any]]] [:b [:sequential {:pg/type "json"} :any]]]
+    (is (= [:map
+            [:o [:maybe [:any {:pg/type "jsonb"}]]]
+            [:a [:maybe [:any {:pg/type "jsonb"}]]]
+            [:b [:maybe [:any {:pg/type "json"}]]]] (row q))
+        "the driver's object, which may be NULL: the catalog does not say when a function returns NULL")
+    (is (= [:map
+            [:o [:maybe [:map {:pg/type "jsonb"}]]]
+            [:a [:maybe [:sequential {:pg/type "jsonb"} :any]]]
+            [:b [:maybe [:sequential {:pg/type "json"} :any]]]]
            (row q (assoc opts :read {:json :parsed})))
         "parsed, an object or an array")))
 
@@ -1979,3 +1989,71 @@
     (is (= ["clause :selec is no clause HoneySQL or pgmalli knows; did you mean: :select"] (h/humanize ps))))
   (is (= [{:kind :unread-clause :clause :frobnicate}] (check {:select [:id] :from [:users] :frobnicate [:x]}))
       "nothing close, nothing suggested"))
+
+(deftest functions-and-operators-have-the-type-pg-catalog-resolves-them-to
+  (let [row #(h/row-schema registry {:select (vec (for [[k e] %] [e k])) :from [:users]} opts)
+        day [:cast [:inline "1 day"] :interval]]
+    (is (= [:map
+            [:i [:any {:pg/type "interval"}]]
+            [:w [:maybe [:any {:pg/type "interval"}]]]
+            [:later [:maybe ['inst? {:pg/type "timestamptz"}]]]
+            [:ago [:maybe ['inst? {:pg/type "timestamp with time zone"}]]]
+            [:user [:string {:pg/type "name"}]]
+            [:sys [:string {:pg/type "text"}]]] (row {:i [:interval "1 day"] :w [:* 7 day] :later [:+ :closed_at [:cast [:inline "7 days"] :interval]]
+                     :ago [:- :current_timestamp day] :user :current_user :sys :system_user}))
+        "INTERVAL '1 day'; a bigint times an interval; timestamptz plus or minus an interval")
+    (is (= [:map
+            [:epoch [:maybe [:double {:pg/type "double precision"}]]]
+            [:nicks [:any {:pg/type "text[]"}]]
+            [:ids [:any {:pg/type "bigint[]"}]]
+            [:l [:maybe [:string {:pg/type "text"}]]]
+            [:ts [:maybe [:any {:pg/type "text[]"}]]]
+            [:c [:maybe [:string {:pg/type "text"}]]]
+            [:d [:double {:pg/type "double precision"}]]
+            [:minutes [:maybe [:double {:pg/type "double precision"}]]]
+            [:p [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
+            [:none [:any {:pg/type "text[]"}]]] (row {:epoch [:date_part [:inline "epoch"] [:- [:now] :closed_at]]
+                     :minutes [:/ [:coalesce [:date_part [:inline "epoch"] [:- [:now] :closed_at]] 0] 60]
+                     :d [:cast :score :double-precision] :ts [:cast :nick (keyword "text[]")]
+                     :none [:array [] :text] :nicks [:array [:nick] :text] :ids [:array [:id :score]]
+                     :l [:lower :nick] :p [:position "a" :nick] :c [:concat :nick 1]}))
+        "date_part of an interval is a double precision; ARRAY[]::text[]; ARRAY of the elements' common type")
+    (is (= [:map
+            [:n [:int {:pg/type "bigint"}]]
+            [:m [:maybe ['inst? {:pg/type "timestamptz"}]]]
+            [:s [:maybe [:int {:pg/type "bigint"}]]]
+            [:a [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
+            [:b [:maybe [:boolean {:pg/type "boolean"}]]]] (h/row-schema registry {:select [[[:filter [:count :*] {:where [:= :id 1]}] :n] [[:filter [:min :closed_at] {:where [:= :id 1]}] :m]
+                                                [[:sum :score] :s] [[:avg :id] :a] [[:bool_or [:> :score 1]] :b]]
+                                       :from [:users]} opts))
+        "an aggregate with FILTER has the aggregate's type; count is never NULL")
+    (is (= [:map
+            [:id [:int {:pg/identity :always :pg/type "bigint"}]]
+            [:rn [:int {:pg/type "bigint"}]]
+            [:prev [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (h/row-schema registry {:select [:id [[:over [[:row_number] {:partition-by [:group_id]} :rn] [[:lag :score] {} :prev]]]] :from [:users]} opts))
+        "a window function: row_number is a bigint")
+    (is (= [:map
+            [:value [:any {:pg/type "jsonb"}]]
+            [:ordinality [:int {:pg/type "bigint"}]]
+            [:g [:maybe [:int {:pg/type "bigint"}]]]] (h/row-schema registry {:select [:e.value :e.ordinality :g]
+                                       :from [[[:with-ordinality [:jsonb_array_elements [:cast :nick :jsonb]] :e]]
+                                              [[:generate_series 1 3] :g]]}
+                             (dissoc opts :jdbc)))
+        "a function's columns in FROM, of no table")
+    (is (= {:max 1} (-> (h/query-schema registry [:id] {:select [[[:lower :nick] :l]] :from [:users] :where [:= :id :?id]} opts) last second))
+        "a function that returns no set keeps one row")))
+
+(deftest a-values-list-is-of-its-columns-common-types
+  (is (= [:map
+          [:column1 [:double {:pg/type "double precision"}]]
+          [:column2 [:maybe [:string {:pg/type "text"}]]]] (h/row-schema registry {:select [:*] :from [[{:values [[1 [:inline "a"]] [2.5 nil]]} :v]]} opts))))
+
+(deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
+  (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
+          :d [:any {:pg/type "interval"}]
+          :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
+                    :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
+                            [:< [:+ :closed_at :?d] :current_timestamp]
+                            [:= :nick [:repeat "a" :?n]]]})))
+  (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (args {:select [[[:case [:= :id 1] :?x :else :score] :c]] :from [:users]}))
+      "CASE's values resolve as coalesce's arguments"))
