@@ -96,7 +96,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   only a typed array ([docs/queries.md](docs/queries.md#what-your-application-sends)).
 * `h/arg-types` types more arguments
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)): under a cast, with what
-  PostgreSQL casts to the type; an argument of `coalesce`, `greatest`, `least` or `nullif`; one
+  PostgreSQL casts to the type (a collection sent untyped not to a number or boolean type, whose
+  input refuses an array literal); an argument of `coalesce`, `greatest`, `least` or `nullif`; one
   compared in a select or ORDER BY expression; one of an `unnest` in FROM, as an array of the
   type of where its column goes; one compared with `ANY(array)` as the array's element; an
   element of `[:array [...] :text]`, as cast; one of a function or an operator PostgreSQL may

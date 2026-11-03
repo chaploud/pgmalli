@@ -1762,7 +1762,7 @@
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
         ;; cast, an array as PostgreSQL casts it (to text, say), its elements any
         cast-arrays (when (= :cast context)
-                      (for [[schema q] (jdbc/write-rows opts true) :when (takes? q)
+                      (for [[schema q] (jdbc/write-rows opts true) :when (and (takes? q) (not (accept/scalar-cast? t q)))
                             a (shape/alternatives (walk/postwalk-replace {:pgmalli/element :any} schema))]
                         [q a]))
         alts (concat

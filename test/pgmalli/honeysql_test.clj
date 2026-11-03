@@ -919,6 +919,17 @@
       (is (m/validate (x t) {:a 1} {:registry reg}) (str "a jsonb object casts to " t))
       (is (m/validate (x t) [1] {:registry reg}) (str "a jsonb array casts to " t)))))
 
+(deftest an-untyped-collection-cast-to-a-number-or-boolean-is-not-taken
+  (let [reg (pgmalli/registry {:registry {}})
+        o {:send {Sequential :unknown IPersistentSet :unknown}}
+        x (fn [t] (:x (h/arg-types reg {:select [[[:cast :?x t] :b]]} o)))]
+    (doseq [t [:int :bigint :numeric :boolean :double-precision]]
+      (is (m/validate (x t) "1" {:registry reg}))
+      (is (not (m/validate (x t) [1] {:registry reg})) (str "an array literal cast to " t " errors"))
+      (is (not (m/validate (x t) #{1} {:registry reg})) (str "an array literal cast to " t " errors")))
+    (doseq [t [:text :timestamptz :date :interval :uuid]]
+      (is (m/validate (x t) ["2020-01-01"] {:registry reg}) (str "PostgreSQL reads a one-element array literal as " t)))))
+
 (deftest an-arrays-elements-are-read-as-the-columns-type
   (let [t (:xs (args {:select [:id] :from [:users] :where [:= :id [:any :?xs]]}
                      (sends {:schema "sample"} {Sequential :unknown})))]

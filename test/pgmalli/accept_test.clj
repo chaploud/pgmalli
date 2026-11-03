@@ -133,6 +133,24 @@
         (is (casts? "1" "integer"))
         (is (casts? "true" "boolean"))))))
 
+(deftest an-untyped-array-literal-cast-to-a-number-or-boolean-errors
+  (when *db*
+    (with-open [con (jdbc/get-connection (datasource))]
+      (let [casts? (fn [s t] (try (with-open [ps (.prepareStatement con (str "SELECT CAST(? AS " t ")"))]
+                                    (.setObject ps 1 s java.sql.Types/OTHER)
+                                    (.close (.executeQuery ps))
+                                    true)
+                                  (catch java.sql.SQLException _ false)))]
+        (doseq [t ["integer" "bigint" "numeric" "double precision" "money" "oid" "regclass" "boolean"]
+                s ["{}" "{1}" "{1,2}" "{true}" "{pg_class}"]]
+          (is (accept/scalar-cast? t :unknown) t)
+          (is (not (casts? s t)) (str s " to " t)))
+        ;; the date and time parser skips the braces
+        (doseq [[s t] [["{2020-01-01}" "timestamp with time zone"] ["{2020-01-01}" "date"] ["{1 day}" "interval"]
+                       ["{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11}" "uuid"] ["{1}" "text"] ["{1}" "integer[]"]]]
+          (is (not (accept/scalar-cast? t :unknown)) t)
+          (is (casts? s t) (str s " to " t)))))))
+
 (deftest the-schema-of-each-class-sent-takes-its-values
   (doseq [:let [registry (pgmalli/registry {:registry {}})]
           v [1 (int 1) (short 1) 1M 1N (biginteger 1) 1.0 (float 1) true "1" (java.util.UUID/randomUUID) (.getBytes "a")
