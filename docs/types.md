@@ -111,6 +111,7 @@ then `:min` and `:max` count what it keeps.
 A row schema differs from PostgreSQL in a few places:
 
 - An array's elements are not NULL: PostgreSQL takes NULL elements, a row schema refuses them.
+  What a row is read as (`as-read`, `h/row-schema` under `{:read {:array :vector}}`) takes them.
 - A `numeric(p, s)` value is checked by the column's CHECKs before PostgreSQL rounds it to `s`
   places.
 - A `varchar(n)` value with spaces past `n` is checked by its CHECKs before those spaces are

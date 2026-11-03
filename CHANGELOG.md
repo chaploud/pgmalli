@@ -286,6 +286,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `:read` names a type by any of its spellings: an alias (`"int4"`, `"timestamptz"`), an enum
   type or a domain of the registry with its schema or without (`"app.mood"` reads a column
   of type `mood` too).
+* Under `{:read {:array :vector}}` (or `:sequential`), an array's elements take nil: PostgreSQL
+  returns NULL elements of `array_agg`, `ARRAY[...]` and an array column.
+* A set operation of a domain's column and an untyped literal is of the domain's base type,
+  without the domain's CHECKs or its base type's length, as PostgreSQL resolves it.
+* `:rows` and `query-schema`'s return no longer tell one row at most where a UNIQUE column is
+  compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows.
+* Under `{:format {:inline true}}`, an argument the query tests for NULL
+  (`[:or [:= :?id nil] [:= :id :?id]]`, `NULL IS NULL OR id = NULL`) takes nil, whatever its
+  other uses.
 * A table of a query, or of `h/values-schema` and `h/set-schema`, read against a registry
   holding no schema pgmalli generates is a `:pgmalli.error/not-a-registry` error from every
   function, not `:unknown-table` or an untyped result; a table of `pg_catalog` still reads; `(pgmalli.core/registry)` of no

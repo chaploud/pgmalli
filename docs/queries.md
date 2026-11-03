@@ -200,7 +200,16 @@ matches no row.
 ```
 
 A comparison with NULL is never true (it matches no row), so `:?id` above does not take nil.
-To take nil, pass `{:compare :lenient}`:
+Under `{:format {:inline true}}`, an argument the query also tests for NULL takes nil, as an
+optional filter does (`NULL IS NULL OR id = NULL`); sent as a parameter, it does not:
+PostgreSQL refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
+
+```clojure
+(h/arg-types registry {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]} {:format {:inline true}})
+;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
+```
+
+To take nil everywhere, pass `{:compare :lenient}`:
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:compare :lenient})
@@ -230,13 +239,15 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 `h/values-schema` and `h/set-schema` type it. The table is a keyword, as HoneySQL names it
 (`:users` in `:schema`, `:app.users`) or as the registry does (`:pg.public/users`). Each column
 is typed as an argument assigned to it (what `:send` sends, held to the column's range) and keyed
-by any key HoneySQL writes to the column under `:format`: the key the `:jdbc` builder labels the
+by one of these keys, those of them HoneySQL writes to the column under `:format`: the key the `:jdbc` builder labels the
 column with, unqualified or qualified by the table, so a row read and written back fits
 (`:group-id` under a kebab builder), the key next.jdbc's default builder reads it as
 (`:users/group_id`; HoneySQL drops the namespace), the column's keyword (`:group_id`), its kebab
 spelling (`:group-id`), and its name as a string (`"group_id"`; HoneySQL quotes a string key, so
 a column with capitals where names are unquoted takes that alone: PostgreSQL folds an unquoted
-name to lower case). A column takes one of its keys: two would write it twice. A column the database may fill is optional and takes HoneySQL's
+name to lower case). HoneySQL drops any keyword's namespace, so it writes `:app.users/group_id`
+or `:x/group_id` to the column too; the map is closed and takes no other key than those
+listed. A column takes one of its keys: two would write it twice. A column the database may fill is optional and takes HoneySQL's
 `:default` too; one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
 BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
 takes nil: the trigger may fill it. In
@@ -613,8 +624,9 @@ Write the query so PostgreSQL's reading is explicit instead.
   and the operator `=` resolved for the two types, in any version pgmalli covers), so a
   `BigDecimal` sent to a `double precision` column passes `h/check` but not the argument's type
   `h/arg-types` gives.
-- An argument compared with a column does not take nil
-  ([`{:compare :lenient}`](#the-types-of-the-arguments) lets it).
+- An argument compared with a column does not take nil, unless the query also tests it for NULL
+  (`[:= :?id nil]`, `[:is :?id nil]`) under `:inline`
+  ([`{:compare :lenient}`](#the-types-of-the-arguments) lets it everywhere).
 - An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list
   (`CHECK (state IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`,
   `NOT IN` and `<` match rows and are not reported; nor is `NOT (state = ...)`.

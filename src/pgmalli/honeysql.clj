@@ -2091,6 +2091,21 @@
                    (shape/either (shape/distinct-kinds (mapcat #(map unlabel (shape/alternatives (accepted-type registry % :compare opts))) ss)) :any)
                    (accepted-type registry (first ss) :compare opts)))]))
 
+(defn- null-tested-args
+  "The arguments a statement among positions ps tests for NULL ([:= :?x nil], which HoneySQL
+   writes ? IS NULL, and [:is :?x nil], IS NOT NULL alike) under sql/format's :inline: NULL IS
+   NULL OR id = NULL runs, whatever the other uses. Sent as a parameter, NULL there has no type,
+   which PostgreSQL refuses (42P18)."
+  [ps {:keys [format]}]
+  (for [{:keys [x]} (when (:inline format) (expression-nodes ps))
+        :when (and (vector? x) (= 3 (count x)) (#{:= :<> :not= :!= :is :is-not} (first x)))
+        :let [[_ a b] x]
+        [v other] [[a b] [b a]]
+        :when (null-value? other format)
+        :let [k (arg-key v)]
+        :when k]
+    k))
+
 (defn- both-uses
   "The type of an argument two of its uses type a and b: PostgreSQL types a parameter once, so
    a value goes where each use takes it; a use that types nothing takes any. nil where either
@@ -2151,11 +2166,12 @@
          types (reduce (fn [acc [x t]] (if-let [k (arg-key x)] (update acc k both-uses t) acc))
                        untyped typed)
          typed-keys (set (keep (comp arg-key first) typed))
+         null-tested (set (for [[_ _ _ ps] (once registry statement-positions body opts), k (null-tested-args ps opts)] k))
          in-data (data-args body)]
      (into {} (for [[k t] types]
                 [k (if (= :any t)
                      [:any {:pgmalli/untyped (cond (not (in-data k)) :code (typed-keys k) :type :else :position)}]
-                     (cond-> t (not (in-data k)) nullable))])))))
+                     (cond-> t (or (not (in-data k)) (null-tested k)) nullable))])))))
 
 (defn- using-merges
   "{column {:tables [alias ...] :sides [alias ...] :schema s :nullable? bool}} of a
@@ -2552,7 +2568,7 @@
                                                                      (some-> (:pg/type (shape/column-props s)) keyword (#(first (registry-type registry % opts)))))
                                                                  d (get (::schemas registry) k)]
                                                              (if (and d (not= :enum (shape/head d)) (< (count known) (count schemas)))
-                                                               (domain-base-type registry [:ref k])
+                                                               (computed registry (domain-base-type registry [:ref k]))
                                                                s))
                                       ;; the members' schemas are as the driver reads them: one of them, or untold
                                       :else (let [r (:schema (common registry (for [s inners] {:schema s :type (resolver-type registry s)})))]
@@ -2671,18 +2687,21 @@
 (defn- unique-row?
   "Whether statement stmt on the one table of targets (no CTE of its name, no table inheriting it)
    reads one row at most: its WHERE holds the columns of its primary key or a UNIQUE key, neither
-   partial nor DEFERRABLE, equal to a value (NULL equals none)."
+   partial nor DEFERRABLE, equal to a value; to NULL, which HoneySQL writes IS NULL, a column
+   NOT NULL alone."
   [registry stmt targets schema]
   (let [[table alias written] (when (= 1 (count targets)) (table-ref (first targets) schema))
         ;; a CTE of the table's name hides it
         table (when-not (and written (contains? (query-ctes stmt) (folded written))) table)
         where (:where stmt)
+        columns (when table (table-columns registry table))
         equal (set (for [c (if (and (vector? where) (= :and (first where))) (rest where) [where])
                          :when (and (vector? c) (= := (first c)) (= 3 (count c)))
                          [a b] [[(second c) (nth c 2)] [(nth c 2) (second c)]]
                          :when (and (column-keyword? a) (constant? b))
                          :let [[q col] (split-column a)]
-                         :when (or (nil? q) (= q alias))]
+                         :when (and (or (nil? q) (= q alias))
+                                    (not (and (null-value? b nil) (shape/maybe? (get columns (folded col) [:maybe :any])))))]
                      (folded col)))
         props (when table (table-props registry table))
         ;; a partial UNIQUE index holds over some rows alone; a DEFERRABLE key may be checked only at commit

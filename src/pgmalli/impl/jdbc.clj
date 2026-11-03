@@ -361,7 +361,10 @@
    intervals the driver's objects (:any)."
   [schema {:keys [time read] :or {time :inst} :as opts} element]
   (let [driver-object [:any {:pg/type (pg-type schema)}]]
-    (cond (array-column? schema) (if-let [kind (:array read)] [kind (element (last schema) opts)] driver-object)
+    (cond (array-column? schema) (if-let [kind (:array read)]
+                                   ;; an array of any type may hold NULL elements
+                                   [kind (let [e (element (last schema) opts)] (if (shape/maybe? e) e [:maybe e]))]
+                                   driver-object)
           (and (types/json? (pg-type schema)) (not= :parsed (:json read))) driver-object
           (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
           :else (shape/read-time time schema))))

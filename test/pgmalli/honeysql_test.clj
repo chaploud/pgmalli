@@ -264,7 +264,7 @@
   (let [body {:select [:paths :meta] :from [:docs]}]
     (is (= [:map [:paths [:maybe [:any {:pg/type "text[]"}]]] [:meta [:any {:pg/type "jsonb"}]]] (h/row-schema docs body {:jdbc unqualified}))
         "a java.sql.Array and a PGobject")
-    (is (= [:map [:paths [:maybe [:vector text]]] [:meta [:map {:pg/type "jsonb"} [:a :int]]]]
+    (is (= [:map [:paths [:maybe [:vector [:maybe text]]]] [:meta [:map {:pg/type "jsonb"} [:a :int]]]]
            (h/row-schema docs body {:jdbc unqualified :read {:array :vector :json :parsed}})))
     (is (= [:map [:paths [:maybe [:sequential :string]]] [:meta [:any {:pg/type "jsonb"}]]]
            (h/row-schema docs body {:jdbc unqualified :read {"text[]" [:sequential :string]}}))
@@ -274,7 +274,7 @@
   (let [row #(h/row-schema docs {:select [[% :x]] :from [:docs]} {:jdbc unqualified :read %2})]
     (doseq [e [[:coalesce :paths :paths] [:max :paths] [:min :paths] [:case [:= :id 1] :paths :else :paths] [:greatest :paths :paths]]]
       (is (= [:map [:x [:maybe [:any {:pg/type "text[]"}]]]] (row e {})) (pr-str e))
-      (is (= [:map [:x [:maybe [:vector text]]]] (row e {:array :vector})) (pr-str e)))))
+      (is (= [:map [:x [:maybe [:vector [:maybe text]]]]] (row e {:array :vector})) (pr-str e)))))
 
 (deftest an-array-columns-argument-is-an-array
   (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
@@ -1108,7 +1108,7 @@
 (deftest an-array-columns-elements-take-what-send-sends
   (is (= {:p [:maybe [:or [:pg/array [:or text :keyword]] [:vector [:or text :keyword]]]]}
          (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} (sends {} {Keyword "text" IPersistentVector :unknown}))))
-  (is (= [:map [:paths [:maybe [:vector :keyword]]]] (h/row-schema docs {:select [:paths] :from [:docs]} {:jdbc unqualified :read {:array :vector "text" :keyword}})))
+  (is (= [:map [:paths [:maybe [:vector [:maybe :keyword]]]]] (h/row-schema docs {:select [:paths] :from [:docs]} {:jdbc unqualified :read {:array :vector "text" :keyword}})))
   (is (= {:p [:maybe [:or [:pg/array text] [:vector text]]]}
          (h/arg-types docs {:update :docs :set {:paths :?p} :where [:= :id 1]} (sends {:read {"text" :keyword}} {IPersistentVector :unknown})))
       ":read is the rows' alone"))
@@ -2074,7 +2074,7 @@
   (is (= [:map [:m [:maybe int4]]]
          (row {:with [[:s {:update :users :set {:score 1} :returning [:score]}]] :select [[[:max :score] :m]] :from [:s]}))))
 
-(deftest a-key-compared-with-null-matches-at-most-one-row
+(deftest a-not-null-key-compared-with-null-matches-at-most-one-row
   (is (= {:max 1} (second (last (h/query-schema registry [:db] {:select [:nick] :from [:users] :where [:= :id nil]} opts))))))
 
 (deftest trim-names-its-column-btrim
@@ -2584,6 +2584,12 @@
                                                                [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]}})]
     (is (= [:map [:m [:enum {:pg/type "a.mood"} "x" "y"]] [:ms [:any {:pg/type "a.mood[]"}]] [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]
            (h/row-schema reg {:select [:m :ms :v :t] :from [:t]} {:schema "b" :jdbc unqualified})))))
+
+(deftest an-argument-tested-for-null-alone-stays-untyped-and-takes-nil-inlined-where-compared-too
+  (let [inline (assoc opts :format {:inline true})]
+    (is (= {:id [:any {:pgmalli/untyped :position}]} (args {:select [:id] :from [:users] :where [:is :?id nil]} inline)))
+    (is (= {:id [:maybe bigint]} (args {:select [:id] :from [:users] :where [:or [:<> :?id nil] [:= :id :?id]]} inline)))
+    (is (= {:id bigint} (args {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]})))))
 
 (deftest read-names-each-type-once
   (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
