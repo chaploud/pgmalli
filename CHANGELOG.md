@@ -67,6 +67,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Added
 
+* `{:read {:enum :keyword}}`: an extension reading every enum type's value as a keyword
+  ([docs/reading-rows.md](docs/reading-rows.md#your-own-extensions)).
 * `:send` says what your application sends, as pgjdbc's `setObject` decides it by a value's
   class ([docs/queries.md](docs/queries.md#what-your-application-sends)). pgjdbc's own classes
   include its boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and the arrays

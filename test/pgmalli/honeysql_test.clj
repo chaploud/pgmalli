@@ -2396,3 +2396,17 @@
       "keyed by its table, as the driver keys it")
   (is (= [{:kind :unknown-column :column :c.nope}] (check {:select [:c.nope] :from [[:pg_class :c]]})))
   (is (= [] (check {:select [:attstattarget] :from [:pg_attribute]})) "a column one version has"))
+
+(deftest an-enum-read-as-a-keyword
+  (let [o (assoc opts :read {:enum :keyword})
+        kw [:enum {:pg/type "mood" :default :happy :pg/default "happy"} :happy :sad]]
+    (is (= [:map [:mood kw] [:m [:maybe kw]]] (row {:select [:mood [[:nullif :mood "sad"] :m]] :from [:users]} o)))
+    (is (= [:mood kw] (some #(when (and (vector? %) (= :mood (first %))) %) (pgmalli/as-read registry :pg.sample/users (dissoc o :schema)))))
+    (is (= [:map [:mood [:enum {:pg/type "mood"} :happy :sad]]] (row {:select [[[:cast "sad" :mood] :mood]]} o)))
+    (is (= {:m mood} (select-keys (args {:select [:id] :from [:users] :where [:= :mood :?m]} o) [:m])) "an argument is sent as before")
+    (is (= (row {:select [:nick] :from [:users]} opts) (row {:select [:nick] :from [:users]} o))))
+  (let [r (pgmalli/registry {:registry {:pg.public/mood [:enum "a" "b"]
+                                        :pg.public/dmood [:and [:ref {:pg/type "mood"} :pg.public/mood]]
+                                        :pg.public/t [:map {:pg/table "public.t"} [:m [:ref {:pg/type "dmood"} :pg.public/dmood]]]}})]
+    (is (= [:map {:pg/table "public.t"} [:t/m [:enum {:pg/type "dmood"} :a :b]]] (pgmalli/as-read r :pg.public/t {:read {:enum :keyword}}))
+        "a domain's column is described as its base type's")))

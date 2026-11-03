@@ -41,6 +41,7 @@ converts dates and timestamps alone:
 | `:read {pg-type schema}` | what your own `ReadableColumn` extension returns for a column type |
 | `:read {:array :vector}` | an extension returning arrays as vectors (`:sequential` for any sequence) |
 | `:read {:json :parsed}` | an extension returning json parsed: a json column's schema, as a CHECK or an [override](../README.md#overrides) shapes it |
+| `:read {:enum :keyword}` | an extension returning an enum type's value as a keyword: its labels as keywords, of a domain over one too |
 
 An option pgmalli does not know is an error that suggests the intended name:
 
@@ -95,6 +96,17 @@ A `ReadableColumn` extension changes what a column type comes back as. Key it by
     (mu/get :users/created_at)
     (m/form))
 ;; => :time/instant
+```
+
+An extension that reads every enum type's value as a keyword, as `(keyword s)` makes it, is
+`{:read {:enum :keyword}}`:
+
+```clojure
+(-> (pgmalli/as-read registry :pg.public/users {:read {:enum :keyword}})
+    (m/schema {:registry registry})
+    (mu/get :users/status)
+    (m/form))
+;; => [:enum {:default :active, :pg/default "active", :pg/type "user_status"} :active :closed]
 ```
 
 ## Decoding instead

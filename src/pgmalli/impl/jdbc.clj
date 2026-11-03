@@ -25,9 +25,10 @@
   [:map {:closed true}
    [:schema {:optional true} :string]
    [:time {:optional true} [:enum :inst :instant :local]]
-   [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json]] :any]
+   [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json :enum]] :any]
                             [:map [:array {:optional true} [:enum :vector :sequential]]
-                             [:json {:optional true} [:enum :parsed]]]]]
+                             [:json {:optional true} [:enum :parsed]]
+                             [:enum {:optional true} [:enum :keyword]]]]]
    [:jdbc {:optional true} [:map
                             [:builder-fn {:optional true} [:or ifn? qualified-symbol?]]
                             [:label-fn {:optional true} [:or fn? [:fn var?]]]
@@ -486,6 +487,17 @@
         (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))
 
+(defn- keyword-enum
+  "s, a column of an enum type or of a domain over one, read as {:read {:enum :keyword}} says: its
+   labels keywords. nil for another column."
+  [schemas s]
+  (loop [t s]
+    (when-let [target (shape/ref-target schemas t)]
+      (if (= :enum (shape/head target))
+        (into [:enum (cond-> (shape/column-props s) (:default (shape/column-props s)) (update :default keyword))]
+              (map keyword (remove map? (rest target))))
+        (recur (shape/domain-base target))))))
+
 (defn column-read-type
   "read-type of a column schema (without NULL) of a registry's schemas, a domain read as the
    driver reads its base; :read may still name the domain's type."
@@ -494,7 +506,10 @@
         x (when (array-column? s) (last s))
         target (shape/ref-target schemas x)
         s (if (and target (not= :enum (shape/head target))) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
-    (or (shape/read-as read s) (read-type (through-domain schemas s opts read-type) opts))))
+    (or (shape/read-as read s)
+        ;; PostgreSQL describes a domain's column as its base type's, which a ReadableColumn sees
+        (when (= :keyword (:enum read)) (keyword-enum schemas s))
+        (read-type (through-domain schemas s opts read-type) opts))))
 
 (defn- column-write-type*
   "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the
