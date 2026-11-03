@@ -715,8 +715,12 @@
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [[[:case [:= :nope 1] 1 :else 0] :c]] :from [:users]}))))
 
 (deftest send-is-all-an-application-sends
-  (is (= {:m [:map-of :any :any]}
+  (is (= {:m [:map {:pg/type "jsonb"} [:a :int]]}
          (h/arg-types docs {:update :docs :set {:meta :?m} :where [:= :id 1]} {:send {IPersistentMap "jsonb"}}))
+      "what goes as a shaped json column's type takes its shape")
+  (is (= {:m [:map-of :any :any]}
+         (h/arg-types (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
+                      {:update :t :set {:j :?m}} {:send {IPersistentMap "jsonb"}}))
       "what goes as a type pgmalli has the driver's object for is all its argument takes")
   (is (= {:id bigint} (args {:select [:id] :from [:users] :where [:= :id :?id]} {:schema "sample" :send (only {})}))
       "a column's own values, as pgmalli reads them, whatever :send says"))
