@@ -2334,6 +2334,9 @@
         (into [:map]
               (for [[j entries] (map-indexed vector (apply map vector (map rest rows)))
                     :let [schemas (map last entries)
+                          ;; PostgreSQL resolves a UNION b UNION c as (a UNION b) UNION c
+                          ts (map (fn [s u] (if (contains? u j) :unknown (resolver-type registry (shape/non-null s)))) schemas unknown)
+                          united? (or (not-every? some? ts) (some? (reduce #(some-> %1 (vector %2) resolve/common-type) ts)))
                           known (keep identity (map (fn [s u] (when-not (contains? u j) s)) schemas unknown))
                           ;; a literal is a value of the type, not of the column's bounds
                           literal? (and (seq known) (some #(get % j) unknown))
@@ -2341,7 +2344,8 @@
                                                 (or (seq known) schemas)))]]
                 ;; PostgreSQL resolves each column's type as CASE's
                 (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts)
-                                (cond (= 1 (count inners)) (first inners)
+                                (cond (not united?) :any
+                                      (= 1 (count inners)) (first inners)
                                       ;; the members' schemas are as the driver reads them: one of them, or untold
                                       :else (let [r (:schema (common registry (for [s inners] {:schema s :type (resolver-type registry s)})))]
                                               (if (and r (some #(= r (loose (beyond-list registry %))) inners)) r :any)))

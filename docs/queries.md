@@ -336,8 +336,8 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
 - `CASE`, `coalesce`, `greatest`, `least`, `ARRAY[...]` and a set operation's columns, of the
   common type of their values
   ([10.5](https://www.postgresql.org/docs/current/typeconv-union-case.html)), NULL and a literal
-  of no type left out as PostgreSQL leaves them out; `nullif`, of its first argument as `=` reads
-  it.
+  of no type left out as PostgreSQL leaves them out (a set operation's two members at a time
+  from the left: `NULL UNION NULL` is `text`); `nullif`, of its first argument as `=` reads it.
 - A scalar subquery, of its one column's type, nullable: no row is NULL
   ([4.2.11](https://www.postgresql.org/docs/current/sql-expressions.html#SQL-SYNTAX-SCALAR-SUBQUERIES));
   `[[f x]]`, HoneySQL's `(f(x))`, of `f(x)`'s. A recursive CTE's columns are of its first

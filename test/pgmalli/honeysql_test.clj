@@ -2129,6 +2129,11 @@
     (is (some? (second (first any))))
     (is (= any (args {:select [:id] :from [:users] :where [:= :id [:some :?ids]]})))))
 
+(deftest a-set-operation-resolves-its-members-two-at-a-time-from-the-left
+  (is (= [:map [:a [:maybe :any]]] (row {:union [{:select [[nil :a]]} {:select [[nil :a]]} {:select [[[:inline 1] :a]]}]}))
+      "NULL UNION NULL is text, which PostgreSQL does not unite with an integer")
+  (is (= [:map [:a [:maybe int4]]] (row {:union [{:select [[nil :a]]} {:select [[[:inline 1] :a]]} {:select [[nil :a]]}]}))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]
