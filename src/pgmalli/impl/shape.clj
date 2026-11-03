@@ -44,9 +44,10 @@
                (and (string? x) (re-find #"^pg\.[^/]+/" x)))))
 
 (defn- generated-names
-  "The generated names of a registry: the pg.* ones, all of them when there are none."
+  "The generated names of a registry: the pg.* ones, all of them when there are none; tables,
+   views and types before the schemas derived from them (:pg.public.users/insert)."
   [schemas]
-  (let [ks (sort-by str (keys schemas))
+  (let [ks (sort-by (juxt #(count (re-seq #"\." (str (when (keyword? %) (namespace %))))) str) (keys schemas))
         pg (filter generated-name? ks)]
     (vec (or (seq pg) ks))))
 

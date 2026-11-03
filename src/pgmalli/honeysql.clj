@@ -94,11 +94,14 @@
   [stmt]
   (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
 
-(def ^:private default-values
-  "How HoneySQL writes DEFAULT, the value a column's default fills."
-  #{:default [:default]})
-
 (declare insert-parts star? expression-type type-schema accepted-type driver-type quoted?)
+
+(defn- default-values
+  "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
+   :default and [:default], or [:default] alone where the format quotes names (\"default\")."
+  [format]
+  (if (quoted? format) #{[:default]} #{:default [:default]}))
+
 
 (defn- code-sources?
   "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
@@ -714,18 +717,22 @@
 
 ;;; problems
 
-(defn- enum-values
-  "The labels of an enum column, in the enum's order: of a CHECK's list, an enum type or a
-   domain over one."
+(defn- labels
+  "The [:enum ...] of an enum column: a CHECK's list, an enum type, or a domain over either."
   [registry schema]
   (let [s (shape/non-null schema)]
     (when (vector? s)
       (case (first s)
-        :enum (vec (remove map? (rest s)))
-        :ref (enum-values registry (get (::schemas registry) (last s)))
+        :enum s
+        :ref (labels registry (get (::schemas registry) (last s)))
         ;; a domain's CHECKs narrow its base as [:and base ...]
-        :and (enum-values registry (first (shape/entries s)))
+        :and (labels registry (first (shape/entries s)))
         nil))))
+
+(defn- enum-values
+  "The labels of an enum column, in the enum's order."
+  [registry schema]
+  (some->> (labels registry schema) rest (remove map?) vec))
 
 (defn- check-list?
   "Whether a column's labels are a CHECK's list ([:enum {:pg/constraints ...} ...]), not an
@@ -899,7 +906,7 @@
                               (map? do-update) (for [[c v] do-update] [(target-column c) v :update :do-update-set])
                               (vector? do-update) (for [c do-update] [c ::excluded :update :do-update-set]))
                         (for [row maps, c (if columns (keys row) union)]
-                          [c (cond (contains? row c) (get row c) (defaults c) :default) :insert :values])
+                          [c (cond (contains? row c) (get row c) (defaults c) [:default]) :insert :values])
                         (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert :values])))]
     (when (seq target)
       (distinct
@@ -907,7 +914,7 @@
              :when (column-keyword? col)
              :let [{:keys [table] s :schema} (resolve-column registry target col)
                    cp (some-> s shape/column-props)
-                   p (cond (or (nil? s) (default-values v)) nil
+                   p (cond (or (nil? s) ((default-values format) v)) nil
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
@@ -917,10 +924,12 @@
          p)))))
 
 (defn- enum-type
-  "The type of an enum type's column, or of a domain over one."
+  "The type of an enum type's column, or of a domain over one; not of a domain whose CHECK lists
+   its base type's values, whose labels name that type."
   [registry s]
-  (let [inner (shape/non-null s)]
-    (when (and (vector? inner) (= :ref (first inner)) (enum-values registry inner))
+  (let [inner (shape/non-null s)
+        e (when (and (vector? inner) (= :ref (first inner))) (labels registry inner))]
+    (when (and e (not (:pg/type (shape/column-props e))))
       (shape/type-name (shape/column-props s)))))
 
 (defn- uncast-type
@@ -951,13 +960,21 @@
             (str (:name e) (when (str/ends-with? (str (:pg/type p)) "[]") "[]"))
             (when-let [n (enum-type registry s)] [:enum n]))]
     (cond (accept/known? t) t
-          (and d (nil? (enum-values registry inner))) (slot-type registry (shape/domain-base d)))))
+          (and d (not (enum-type registry s))) (slot-type registry (shape/domain-base d)))))
 
 (defn- takes-string?
   "Whether a column of schema s takes a string sent as one of types, compared or assigned; nil
    where pgmalli.impl.accept does not answer."
   [registry s assigned? types]
   (when-let [t (slot-type registry s)] (boolean (some #(accept/accepts? t % (if assigned? :assign :compare)) types))))
+
+(defn- label=
+  "Whether literal v is label l as PostgreSQL reads it: a number of the same value, or a string,
+   which it reads as a number label's type ('1' is 1)."
+  [l v]
+  (or (= l v)
+      (and (number? l) (number? v) (== l v))
+      (and (number? l) (string? v) (some-> (try (bigdec (str/trim v)) (catch NumberFormatException _ nil)) (== l)))))
 
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
@@ -990,14 +1007,15 @@
      (for [{:keys [col value scope assigned? op] :as use} uses
            :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
                  strings? (or (string? value) (and (vector? value) (every? string? value)))
-                 values (cond strings? (if (string? value) [value] value)
-                              (and (vector? value) (#{:cast :inline} (first value)) (string? (second value))) [(second value)])
+                 numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
+                 values (cond (or strings? numbers?) (if (vector? value) value [value])
+                              (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
                  allowed (when s (enum-values registry (cond-> s (not assigned?) (compared-schema op))))
                  uncast (when (and s typed? strings? (not (takes-string? registry s assigned? sends)))
                           (uncast-type registry s))]
            :when (seq values)
            v values
-           :let [invalid? (and allowed (not (some #{v} allowed)))]
+           :let [invalid? (and allowed (not (some #(label= % v) allowed)))]
            p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
               ;; a value outside the enum fails however it is sent
               (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
@@ -1486,7 +1504,9 @@
                        (when-let [{s :schema :keys [nullable? opaque?]} (when (column-keyword? x) (resolve-column registry chain x))]
                          (when (and s (not opaque?)) {:schema (shape/non-null s) :nullable? (boolean (or nullable? (maybe? s)))})))
       (not (keyword? h)) nil
-      (= :cast h) (let [[_ v t] x]
+      (= :cast h) (let [[_ v t] x
+                        ;; [:varchar 10], a type with its typmod, as HoneySQL writes varchar(10)
+                        t (if (and (vector? t) (keyword? (first t))) (first t) t)]
                     (when-let [s (or (when (keyword? t) (type-schema (str/lower-case (str/replace (name t) "-" " "))))
                                      ;; an enum type or a domain of the registry, read as a column of it is
                                      (when-let [[k] (registry-type registry t opts)] [:ref {:pg/type (name t)} k]))]
@@ -1704,7 +1724,7 @@
                                     (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
                                     {:given dn})))
           key #(written-key % opts)
-          default (into [:enum] default-values)
+          default (into [:enum] (sort-by vector? (default-values (:format opts))))
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
           m (into [:map {:closed true}]

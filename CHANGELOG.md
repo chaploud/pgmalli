@@ -28,6 +28,16 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/check` reports a string sent as any type a column does not take, not only varchar, and a
   string assigned to a reg* column other than regclass.
 * `pgmalli.core/describe` refuses a type neither malli nor the registry knows.
+* A domain whose CHECK lists its values (`CREATE DOMAIN lbl AS text CHECK (VALUE IN ('a',
+  'b'))`) keeps its base type (`[:enum {:pg/type "text"} "a" "b"]`), and `h/check` no longer
+  reads it as an enum type: a string sent as `varchar` to it is no `:uncast-string`.
+* `h/check` reads a literal against a CHECK's list of numbers as PostgreSQL does: an untyped
+  `"1"` is the label `1`, and a number outside the list is an `:enum-literal`.
+* A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type.
+* Where the format quotes names, HoneySQL writes `:default` as the column `"default"`:
+  `h/values-schema` and `h/set-schema` take `[:default]` alone there.
+* A name the registry lacks is an error listing its tables, views and types before the schemas
+  derived from them.
 * What to do:
   * Options: `{:stringtype :unspecified}` is `{:send {String :unknown}}`. `:write {"text" [:or
     :string :keyword]}` and `:write {:enum [:string :keyword]}` are `{:send
