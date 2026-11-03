@@ -1,7 +1,7 @@
 (ns catalog
   "Rewrites resources/pgmalli/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs:
    bb catalog dumps each version in a babashka of its own (pgmalli.test-db starts one image per
-   process). An overload not every version has names the versions it is :in;
+   process). A type, range, cast or overload not every version has names the versions it is :in;
    pgmalli.upstream-test checks the file against the server it runs on."
   (:require [babashka.process :as p]
             [cheshire.core :as json]
@@ -18,13 +18,19 @@
        (or (json/parse-string out) (throw (ex-info err {}))))))
 
 (defn- merged
-  "The catalogs of versions as one: the types and casts, which must be alike in each, and every
-   overload of a function or operator, :in the versions that have it where not all do."
+  "The catalogs of versions as one: every type, range, cast and overload of a function or
+   operator, :in the versions that have it where not all do (a cast [source target {:in [v ...]}])."
   [versions cs]
-  (doseq [k [:types :casts :ranges]]
-    (when-not (apply = (map k cs))
-      (throw (ex-info (str (name k) " differ between PostgreSQL " (str/join ", " versions) ": pgmalli.impl.types reads one of each") {}))))
-  (let [overloads (fn [k] (into (sorted-map)
+  (let [in (fn [has?] (vec (for [[v c] (map vector versions cs) :when (has? c)] v)))
+        named (fn [k] (into (sorted-map)
+                            (for [n (distinct (mapcat (comp keys k) cs))
+                                  :let [facts (distinct (keep #(get-in % [k n]) cs))
+                                        vs (in #(contains? (k %) n))]]
+                              (if (next facts)
+                                (throw (ex-info (str "PostgreSQL " (str/join ", " versions) " differ in " (name k) " " n ": " (pr-str facts)
+                                                     "; pgmalli.impl.types reads one of each") {}))
+                                [n (cond-> (first facts) (not= vs versions) (assoc :in vs))]))))
+        overloads (fn [k] (into (sorted-map)
                                 (for [n (distinct (mapcat (comp keys k) cs))]
                                   [n (vec (sort-by pr-str (for [o (distinct (mapcat #(get-in % [k n]) cs))
                                                                 :let [in (vec (for [[v c] (map vector versions cs) :when (contains? (get-in c [k n]) o)] v))]]
@@ -37,9 +43,10 @@
                         [n (vec (for [col (distinct (mapcat #(get-in % [:relations n]) (reverse cs)))
                                       :let [in (vec (for [[v c] (map vector versions cs) :when (some #{col} (get-in c [:relations n]))] v))]]
                                   (cond-> col (not= in versions) (assoc :in in))))]))
-     :types (into (sorted-map) (:types (first cs)))
-     :casts (into (sorted-set) (:casts (first cs)))
-     :ranges (into (sorted-map) (:ranges (first cs)))
+     :types (named :types)
+     :casts (into (sorted-set) (for [c (distinct (mapcat :casts cs)) :let [vs (in #(contains? (:casts %) c))]]
+                                 (cond-> c (not= vs versions) (conj {:in vs}))))
+     :ranges (named :ranges)
      :functions (overloads :functions)
      :operators (overloads :operators)}))
 

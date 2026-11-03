@@ -1,6 +1,7 @@
 (ns pgmalli.dev-tools-test
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
+            [pgmalli.impl.types :as types]
             [update-docs]
             [update-expected]))
 
@@ -39,3 +40,8 @@
 
 (deftest update-docs-rewrites-a-wrong-result-line
   (is (= ";; => 2" (second (first (#'update-docs/update-block ["(+ 1 1)" ";; => 3"]))))))
+
+(deftest the-catalog-snapshot-is-of-the-postgresql-versions-ci-runs
+  (is (= (:versions @types/catalog)
+         (re-seq #"\d+" (second (re-find #"(?m)^\s+pg: \[(.*)\]" (slurp ".github/workflows/ci.yml")))))
+      "a version added to or dropped from CI's matrix: run bb catalog"))
