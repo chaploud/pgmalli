@@ -2160,6 +2160,13 @@
   (is (= {:w :any} (args {:select [[1 :x]] :where [:= :?w [:inline "1"]]}))
       "'1' is unknown, which PostgreSQL reads as the argument's type"))
 
+(deftest an-operator-of-one-operand-honeysql-writes-as-the-operand-is-the-operand
+  (let [qualified (dissoc opts :jdbc)]
+    (is (= (row {:select [[:score :x]] :from [:users]} qualified) (row {:select [[[:and :score] :x]] :from [:users]} qualified)))
+    (is (= (row {:select [:score] :from [:users]} qualified) (row {:select [[[:* [:or :score]]]] :from [:users]} qualified)))
+    (is (= (row {:select [[:score :x]] :from [:users]}) (row {:select [[[:|| :score] :x]] :from [:users]})))
+    (is (= [:map [:x [:maybe int4]]] (row {:select [[[:- [:inline 1]] :x]]})) "- x is an operator")))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

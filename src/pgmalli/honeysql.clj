@@ -137,7 +137,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? arg-key loose expression-type accepted-type driver-type quoted? call-parts reached own-type-schema type-call registry-type)
+(declare insert-parts star? arg-key loose expression-type accepted-type driver-type quoted? call-parts reached own-type-schema type-call registry-type operator?)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -725,14 +725,33 @@
   [x]
   (if (vector? x) (first x) x))
 
+(def ^:private format-expr (delay (honeysql 'honey.sql/format-expr)))
+
+(def ^:private alone?
+  (memoize (fn [h] (boolean (when-let [f @format-expr]
+                              (= (f :operand) (try (f [h :operand]) (catch Exception _ nil))))))))
+
+(defn- operand-alone
+  "The operand of [op x] where the loaded HoneySQL writes it as x alone ([:and x], [:* x]),
+   through such ops in turn; x itself otherwise."
+  [x]
+  (if (and (vector? x) (= 2 (count x)) (keyword? (first x)) (operator? (first x))
+           (not (#{:inline :lift :param} (first x))) (alone? (first x)))
+    (recur (second x))
+    x))
+
 (defn- selected-items
   "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
-   or :returning."
+   or :returning, an expression HoneySQL writes as its operand alone (operand-alone) that
+   operand."
   [stmt]
   (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))
         after-first (or (:select-distinct-on stmt) (:select-top stmt) (:select-distinct-top stmt))]
-    (cond (or (vector? s) (keyword? s)) (vectorish s)
-          (vector? after-first) (rest after-first))))
+    (for [item (cond (or (vector? s) (keyword? s)) (vectorish s)
+                     (vector? after-first) (rest after-first))]
+      (if (and (vector? item) (<= 1 (count item) 2))
+        (let [e (operand-alone (first item))] (if (and (= 1 (count item)) (keyword? e)) e (assoc item 0 e)))
+        item))))
 
 (defn- select-parts
   "[column alias] of a select item: a column, a column under an alias (a keyword, or a string
@@ -2039,8 +2058,6 @@
   "The operators PostgreSQL's grammar writes words as."
   {"LIKE" "~~" "NOT LIKE" "!~~" "ILIKE" "~~*" "NOT ILIKE" "!~~*"})
 
-(def ^:private format-expr (delay (honeysql 'honey.sql/format-expr)))
-
 (defn- operator-name
   "The SQL operator HoneySQL writes [h a b] with (:not= as <>, :like as ~~), or [h a] as a
    prefix one (- a; [:@@ a] is a alone), as the loaded HoneySQL formats it; without HoneySQL,
@@ -2164,6 +2181,7 @@
       (statement? x) (subquery-type registry chain x opts)
       ;; [[f x]], HoneySQL's (f(x))
       (and (vector? h) (= 1 (count x))) (sub h)
+      (not= x (operand-alone x)) (sub (operand-alone x))
       (and (not (keyword? x)) (not (keyword? h))) nil
       ;; [:inline v] writes v into the SQL: a string an unknown literal, a number by its value
       (= :inline h) (let [v (second x)]
