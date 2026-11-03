@@ -179,6 +179,20 @@
   (let [data (files/from-database {:db *db*} schema)]
     [(pgmalli/registry data) data]))
 
+(deftest a-schemas-functions-are-the-ones-sql-calls-built-as-pg-catalogs-are
+  (when *db*
+    (let [[_ data] (registry-of "fx" "CREATE SCHEMA fx;
+                                      CREATE FUNCTION fx.add_one(n bigint, m bigint) RETURNS bigint LANGUAGE sql AS 'SELECT n + 1';
+                                      CREATE AGGREGATE fx.total(bigint) (SFUNC = fx.add_one, STYPE = bigint, INITCOND = '0');
+                                      CREATE AGGREGATE fx.maybe_total(bigint) (SFUNC = fx.add_one, STYPE = bigint);
+                                      CREATE FUNCTION fx.text_in(cstring) RETURNS text LANGUAGE internal IMMUTABLE STRICT AS 'textin';
+                                      CREATE FUNCTION fx.am(internal) RETURNS index_am_handler LANGUAGE internal AS 'bthandler';")]
+      (is (= {"add_one" [{:args ["bigint" "bigint"] :result "bigint"}]
+              "maybe_total" [{:args ["bigint"] :result "bigint" :kind :a}]
+              "total" [{:args ["bigint"] :result "bigint" :kind :a :non-null true}]}
+             (:functions data))
+          "an aggregate starting from a value is never NULL, as count; internal and cstring are no values of SQL"))))
+
 (deftest a-partitioned-table-whose-only-partition-is-default-takes-every-row
   (when *db*
     (let [[reg] (registry-of "pdef" "CREATE SCHEMA pdef;

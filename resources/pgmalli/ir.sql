@@ -158,7 +158,8 @@ types AS (
   JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
   WHERE n.nspname = :'schema' AND t.typtype IN ('e', 'd')
 ),
--- what a query calls: no procedure, no trigger function (no query calls one)
+-- what a query calls: no procedure, no trigger function, nothing taking or returning a type
+-- SQL has no value of (internal, cstring, an access method's or a language's handler)
 functions AS (
   SELECT pg_catalog.json_build_object(
            'name', p.proname,
@@ -168,6 +169,9 @@ functions AS (
            'kind', p.prokind,
            'variadic', p.provariadic <> 0::oid,
            'defaults', p.pronargdefaults,
+           -- an aggregate whose state starts from a value and is its result (count), a window
+           -- function of no argument (row_number)
+           'non_null', (a.agginitval IS NOT NULL AND a.aggfinalfn = 0::oid) OR (p.prokind = 'w' AND p.pronargs = 0),
            -- the columns it returns in FROM: its OUT (and TABLE) arguments, else its composite type's
            'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(u.n, pg_catalog.format_type(u.t, NULL)) ORDER BY u.i)
                                 FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
@@ -179,8 +183,11 @@ functions AS (
          p.proname, p.oid
   FROM pg_catalog.pg_proc p
   JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+  LEFT JOIN pg_catalog.pg_aggregate a ON a.aggfnoid = p.oid
   WHERE n.nspname = :'schema' AND p.prokind <> 'p'
-    AND p.prorettype NOT IN ('trigger'::pg_catalog.regtype::pg_catalog.oid, 'event_trigger'::pg_catalog.regtype::pg_catalog.oid)
+    AND NOT (ARRAY[p.prorettype] || p.proargtypes::pg_catalog.oid[])
+            && ARRAY['trigger', 'event_trigger', 'internal', 'cstring', 'language_handler', 'fdw_handler',
+               'index_am_handler', 'table_am_handler', 'tsm_handler']::pg_catalog.regtype[]::pg_catalog.oid[]
 ),
 operators AS (
   SELECT pg_catalog.json_build_object(
