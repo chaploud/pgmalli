@@ -47,6 +47,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     an array of one, is typed too.
   * An argument of several uses takes what each of them takes, whatever their order, and nil
     where any of them does; on 0.3.3 its first use typed it.
+  * An argument compared with or assigned to an enum column takes its labels as strings only
+    where a `String` goes untyped (`{:send {String :unknown}}`) or cast: PostgreSQL refuses a
+    varchar there. Under pgjdbc's default it takes a `PGobject` instead.
   * An instrumented function's return is checked against more: `h/row-schema` types what was
     nullable `:any`, such as a call of a function or an operator or a CTE's or a subquery's
     column.
@@ -91,7 +94,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
   `:set` maps built at run time, keyed by any key HoneySQL writes to a column: the label the
   `:jdbc` builder reads it as (`:group-id`), so a row read is written back, or its name
-  (`:group_id`), one of them a column
+  (`:group_id`), one of them a column; a column takes a HoneySQL expression too (`[:now]`,
+  `[:+ :n 1]`, `[:lift v]` with `v` of the column's type), and generates values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
 * Array arguments: a Clojure collection whose class `:send` sends as an array type or
@@ -204,9 +208,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   argument's elements wherever it goes, in a subquery too, and compared under `IS [NOT] DISTINCT
   FROM` takes nil. A problem with an item of `INSERT ... SELECT` is reported in the SELECT
   (`:in`).
-* An argument compared with or assigned to a column the driver reads as a PGobject (`citext`,
-  `bit(n)` for n > 1, `bit varying`, a domain over them) takes a PGobject, so a value read can
-  be written back.
+* An argument compared with or assigned to a column the driver reads as a PGobject (`json`,
+  `jsonb`, `citext`, `bit(n)` for n > 1, `bit varying`, a domain over them) takes a PGobject or
+  an instance of a subclass, so a value read can be written back.
 * A domain over `bit`, `bit varying` or `numeric(p,s)` is read as the driver returns its base
   type: a Boolean for `bit(1)`, a PGobject for another bit string, a Double too for a
   `numeric`'s NaN.

@@ -134,19 +134,21 @@ types it.
 ## The types of the arguments
 
 `h/arg-types` gives `{arg schema}` for every named parameter of a query (`:?id`, `[:param :id]`),
-keyed as in `sql/format`'s `:params`:
+keyed as in `sql/format`'s `:params`, here for an application that sends a `String` untyped
+([what your application sends](#what-your-application-sends)):
 
 ```clojure
 (h/arg-types registry {:select [:id]
                        :from [:users]
                        :where [:and [:= :group_id :?group] [:in :status :?statuses]]
-                       :limit :?n})
+                       :limit :?n}
+             {:send {String :unknown}})
 ;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:maybe [:int {:pg/type "bigint", :min 0}]]}
 ```
 
 | where the argument is | its type |
 |---|---|
-| compared with a column, in any clause (a condition, a select, ORDER BY, SET, RETURNING) | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type; a `PGobject` too where the driver reads the column as one (`citext`, `bit(n)` for n > 1, `bit varying`, a domain over them), which pgjdbc sends as the type it names |
+| compared with a column, in any clause (a condition, a select, ORDER BY, SET, RETURNING) | the column's kind without NULL: an enum type's labels kept (as [`:send`](#what-your-application-sends) sends them), a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type; a `PGobject` (or a subclass's instance) too where the driver reads the column as one (`json`, `jsonb`, `citext`, `bit(n)` for n > 1, `bit varying`, a domain over them), which pgjdbc sends as the type it names |
 | compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`), or an element of an array cast (`[:array [:?k] :text]`, `ARRAY[?]::text[]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, to an array type (or a domain over one) any array, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); no map or collection sent as `json` or `jsonb` to a type other than those and the string types (PostgreSQL casts a `jsonb` number or boolean, and errors at run time on an object or array); no collection sent untyped (`:unknown`) to a number or boolean type, whose input refuses an array literal (`{1}`; a date, time or `uuid` type reads `{2020-01-01}` past its braces); `:any` for a type whose values pgmalli does not type (json, inet) or an extension's type, whose casts `pg_catalog` does not hold; nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned where nil may not go (as assigned below) |
@@ -237,11 +239,12 @@ takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
-They type values: a keyword other than `:default`, which HoneySQL writes as a column, a vector
-or a sequence, which it writes as a row of parameters, and a HoneySQL expression other than
-`:default` (`[:cast "closed" :user_status]`,
-`[:now]`) is not one. Under pgjdbc's default they still take an enum column's label as a
-String, which PostgreSQL refuses (it goes as varchar), as `h/check` reports of a query.
+A column takes a value, or a HoneySQL expression: a vector or list headed by a keyword
+(`[:cast "closed" :user_status]`, `[:now]`, `[:+ :n 1]`), untyped but `[:lift v]`, which
+HoneySQL sends as one parameter and which holds `v` to the column's type. A keyword other than
+`:default` is no value, as HoneySQL writes it as a column; nor is a vector or list not headed by
+a keyword, which it writes as a row of parameters. `mg/generate` gives values alone, no
+expression, and leaves out a column of whose values malli generates none (a `PGobject`).
 Validate a row under the registry (`{:registry registry}`). The table's CHECKs across columns
 are not in it; where they matter, validate an inserted row with `:pg.public.users/insert` too.
 An UPDATE's `:set` cannot be checked this way: a CHECK applies to the whole updated row, and
@@ -317,9 +320,11 @@ reads each element as the column's type; a typed one takes the elements its type
 `unnest` takes a typed array alone, each element assigned to the column (PostgreSQL cannot
 resolve `unnest` of an untyped one). Without such a class an array argument is `:any`.
 
-Under pgjdbc's default, which sends a `String` as `varchar`, an enum argument is still typed as
-its labels as strings, though PostgreSQL takes no varchar for an enum: `h/check` reports it as
-`:uncast-string`.
+An enum argument takes its labels as strings where a `String` goes untyped (`{String :unknown}`)
+or cast. Under pgjdbc's default, which sends a `String` as `varchar`, PostgreSQL neither
+compares a varchar with an enum nor assigns one to it: the argument takes no label then (a
+keyword label where a keyword is sent untyped), and a `PGobject` where no label goes, which
+pgjdbc sends as the type it names; `h/check` reports the string as `:uncast-string`.
 
 ## The row a query returns
 

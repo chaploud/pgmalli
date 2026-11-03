@@ -387,7 +387,8 @@
     (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
           n (some-> (base-type-name schema) types/entry :name)
-          ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
+          ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
+          ;; keeps those a class sent goes as (pgmalli.honeysql's labelled-type)
           sent (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
                      a (shape/alternatives s)]
                  a)]
@@ -532,19 +533,21 @@
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
     (write-type (through-domain schemas s opts write-type) opts)))
 
-(def ^:private pg-object
-  "A PGobject (not a subclass of it, such as PGInterval), by name: pgjdbc need not be loaded."
-  (class-fn "org.postgresql.util.PGobject" (fn [x] (= "org.postgresql.util.PGobject" (some-> x class .getName)))))
+(def pg-object
+  "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
+   the type its getType names, which is known at run time alone."
+  (class-fn "org.postgresql.util.PGobject"
+            (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
 (defn column-write-type
-  "column-write-type*: a column the driver reads as a PGobject (citext, bit(n > 1)) takes
-   one too: pgjdbc sends it as the type it names, so a value read is written back."
+  "column-write-type*: a column the driver reads as a PGobject (json, jsonb, citext, bit(n > 1))
+   takes one too, so a value read is written back."
   [schemas s opts]
   (let [w (column-write-type* schemas s opts)
         r (column-read-type schemas s (dissoc opts :read))
         t (pg-type r)]
     (if (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (str/ends-with? t "[]"))
-             (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t})))))
+             (or (types/json? t) (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t}))))))
       (shape/either (concat (shape/alternatives w) [pg-object]) w)
       w)))
 

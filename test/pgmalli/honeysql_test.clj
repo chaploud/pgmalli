@@ -11,6 +11,7 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.accept :as accept]
+            [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.sample :refer [registry]])
   (:import [clojure.lang IPersistentMap IPersistentSet IPersistentVector Keyword Sequential Symbol]))
 
@@ -48,6 +49,7 @@
 (def int4 [:int {:pg/type "integer" :min -2147483648 :max 2147483647}])
 (def text [:string {:pg/type "text"}])
 (def mood [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"])
+(def pg-object jdbc/pg-object)
 (defn in-list [s] [:or [:sequential {:min 1} s] [:set {:min 1} s]])
 
 (deftest queries-that-agree-have-no-problems
@@ -575,7 +577,7 @@
 (deftest an-insert-select-assigns-its-items-to-the-columns-listed
   (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
     (is (= {:g int4
-            :m [:enum {:pg/type "mood"} "happy" "sad"]
+            :m pg-object
             :s [:sequential int4]
             :n [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]}
            (args q (assoc opts :send (only {Sequential "integer[]"}))))
@@ -731,10 +733,10 @@
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [[[:case [:= :nope 1] 1 :else 0] :c]] :from [:users]}))))
 
 (deftest send-is-all-an-application-sends
-  (is (= {:m [:map {:pg/type "jsonb"} [:a :int]]}
+  (is (= {:m [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]}
          (h/arg-types docs {:update :docs :set {:meta :?m} :where [:= :id 1]} {:send {IPersistentMap "jsonb"}}))
       "what goes as a shaped json column's type takes its shape")
-  (is (= {:m [:map-of :any :any]}
+  (is (= {:m [:or [:map-of :any :any] pg-object]}
          (h/arg-types (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
                       {:update :t :set {:j :?m}} {:send {IPersistentMap "jsonb"}}))
       "what goes as a type pgmalli has the driver's object for is all its argument takes")
@@ -891,9 +893,9 @@
       "a hand-written row schema has none"))
 
 (deftest an-untyped-value-is-a-text-or-enum-columns-own
-  (is (= {:x mood}
+  (is (= {:x pg-object}
          (args {:select [:id] :from [:users] :where [:= :mood :?x]} (sends {:schema "sample"} {Keyword "character varying"})))
-      "a keyword sent as varchar is no enum's label")
+      "a keyword sent as varchar is no enum's label, nor a String")
   (is (= {:x [:any {:pg/type "json"}]}
          (h/arg-types (pgmalli/registry {:registry {:pg.public/j [:map {:pg/table "public.j"} [:doc [:any {:pg/type "json"}]]]}})
                       {:select [:doc] :from [:j] :where [:= :doc :?x]} {:send unspecified}))
@@ -982,7 +984,7 @@
     (is (not (ok? s {:score :default})) "a NOT NULL column with no default has no DEFAULT to set")
     (is (ok? v {:group_id 1 :score 0}) "those it fills optional")
     (is (not-any? #(ok? v %) [{:score 0} {:group_id 1 :score 0 :id 1} {:group_id 1 :score 0 :mood "glad"} {:group_id 1 :score 0 :nick nil :born "x"}]))
-    (is (every? #(ok? s %) [{:nick nil} {:mood "sad"} {:nick "abc"}]) "every column optional")
+    (is (every? #(ok? s %) [{:nick nil} {:mood :default} {:nick "abc"}]) "every column optional")
     (is (not-any? #(ok? s %) [{:mood :sad} {:nick :abc}]) "HoneySQL writes a keyword in :set as a column, whatever :send sends")
     (is (not-any? #(ok? s %) [{:score nil} {:id 1} {:mood :glad}]))
     (is (not (ok? s {})) "HoneySQL writes an empty :set as SET alone, which PostgreSQL refuses")
@@ -1679,7 +1681,8 @@
     (is (= {:x text} (args [:< :state :?x])))
     (is (= {:x (in-list text)}
            (args [:not-in :state :?x])))
-    (is (= {:x [:enum {:pg/type "mood"} "ok" "sad"]} (args [:<> :m :?x])) "an enum type keeps its labels")
+    (is (= {:x [:enum {:pg/type "mood"} "ok" "sad"]} (h/arg-types check-list-registry {:select [:id] :from [:t] :where [:<> :m :?x]} {:send unspecified}))
+        "an enum type keeps its labels")
     (is (= {:x (in-list [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"])}
            (args [:in :state :?x])))
     (is (= {:lo text :hi text} (args [:between :state :?lo :?hi])))
@@ -1980,6 +1983,33 @@
         s (h/values-schema reg :t {:send {clojure.lang.IPersistentVector :unknown}})]
     (is (not (m/validate s {:id 1 :tags ["a"]} {:registry reg})))
     (is (m/validate s {:id 1 :tags (into-array String ["a"])} {:registry reg}))))
+
+(deftest a-written-row-takes-a-honeysql-expression-as-a-columns-value
+  (let [v (h/values-schema registry :users opts)
+        s (h/set-schema registry :users opts)
+        ok? #(m/validate %1 %2 {:registry registry})
+        row {:group_id 1 :score 1}]
+    (is (every? #(ok? v (merge row %)) [{:mood [:cast "sad" :mood]} {:closed_at [:now]} {:score [:raw "1"]} {:score '(:abs -1)} {:score [:lift 1]} {:nick [:lift nil]}]))
+    (is (every? #(ok? s %) [{:score [:+ :score 1]} {:mood [:cast "sad" :mood]}]))
+    (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
+        "[:lift v] is v as one parameter; a vector not headed by a keyword a row of parameters; DEFAULT where the database fills nothing")
+    (is (= {:mood ["should be either \"happy\" or \"sad\"" "should be either :default or [:default]" "should be a HoneySQL expression, a vector headed by a keyword"]}
+           (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
+    (is (not-any? (fn [r] (some #(and (sequential? %) (keyword? (first %)) (not= [:default] %)) (vals r)))
+                  (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))
+        "generated as the values a column takes, no expression")))
+
+(deftest an-enum-column-takes-its-labels-as-strings-where-a-string-goes-untyped
+  (let [o (dissoc opts :send)
+        q {:select [:id] :from [:users] :where [:= :mood :?m]}
+        ok? #(m/validate %1 %2 {:registry registry})]
+    (is (not (ok? (:m (args q o)) "sad")) "pgjdbc sends a String as varchar, which PostgreSQL neither compares with nor assigns to an enum")
+    (is (not (ok? (h/set-schema registry :users o) {:mood "sad"})))
+    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}] (check q o)) "as check reports it")
+    (is (ok? (:m (args q)) "sad"))
+    (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} :happy :sad]
+           (:m (args q (sends o {Keyword :unknown})))) "a keyword sent untyped as the label it names")
+    (is (ok? (:x (args {:select [[[:cast :?x :mood] :m]]} o)) "sad") "PostgreSQL casts a varchar to an enum")))
 
 (deftest a-class-sent-as-text-is-held-to-no-check-on-text
   (let [reg (pgmalli/registry {:registry {:pg.public/roles [:map {:pg/table "public.roles"}

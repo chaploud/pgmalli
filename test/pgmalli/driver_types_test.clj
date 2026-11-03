@@ -13,7 +13,7 @@
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             pgmalli.impl.jdbc
-            [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*db* datasource exec-sql! jdbc-url with-postgres]]))
 
 
 (def ^:private schema-sql
@@ -84,3 +84,35 @@
                            :when (and (taken? k v)
                                       (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v)))))]
                        [k (some-> v class .getName)])))))))
+
+(defn- taken?
+  "Whether PostgreSQL takes v as sql's parameter, run and rolled back."
+  [ds sql v]
+  (with-open [con (jdbc/get-connection ds)]
+    (.setAutoCommit con false)
+    (try (jdbc/execute! con [sql v]) true
+         (catch Exception _ false)
+         (finally (.rollback con)))))
+
+(deftest an-enum-label-goes-as-a-string-only-where-pgjdbc-sends-it-untyped
+  (when *db*
+    (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+          unspecified (jdbc/get-datasource {:jdbcUrl (str (jdbc-url) "?stringtype=unspecified") :user (:user *db*) :password (:password *db*)})
+          typed (doto (org.postgresql.util.PGobject.) (.setType "mood") (.setValue "a"))
+          ok? #(m/validate %1 %2 {:registry registry})]
+      (doseq [[ds o vs] [[(datasource) {} ["a" typed]] [unspecified {:send {String :unknown}} ["a"]]]
+              v vs
+              [sql valid?] [["UPDATE t SET e = ? WHERE id = 2" #(ok? (:v (h/arg-types registry {:update :t :set {:e :?v} :where [:= :id 2]} o)) %)]
+                            ["UPDATE t SET e = ? WHERE id = 2" #(ok? (h/set-schema registry :t o) {:e %})]
+                            ["SELECT id FROM t WHERE e = ?" #(ok? (:v (h/arg-types registry {:select [:id] :from [:t] :where [:= :e :?v]} o)) %)]]]
+        (testing (str sql " " (pr-str o) " " (class v))
+          (is (= (taken? ds sql v) (valid? v))))))))
+
+(deftest a-json-column-takes-a-pgobject-whatever-is-sent-as-json
+  (when *db*
+    (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+          v (doto (org.postgresql.util.PGobject.) (.setType "jsonb") (.setValue "{}"))]
+      (is (every? #(taken? (datasource) (str "UPDATE t SET " % " = ? WHERE id = 2") v) ["jb" "js"]))
+      (doseq [o [{} {:send {clojure.lang.IPersistentMap "jsonb"}}]]
+        (is (m/validate (h/set-schema registry :t o) {:jb v :js v} {:registry registry}))
+        (is (m/validate (:v (h/arg-types registry {:update :t :set {:jb :?v} :where [:= :id 2]} o)) v {:registry registry}))))))

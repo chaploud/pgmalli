@@ -32,7 +32,11 @@
    case's id (its corpus id for a mutant), for :return followed by the keys the return
    refuses; \"table.column context\" for :arg. pending-entries-still-fail fails on an entry
    that no longer matches a failure, so a fix empties it."
-  [])
+  [{:test :false-positive
+    :id #"^enum-arg$"
+    :reason (str "check reports :uncast-string for an argument compared with an enum column under pgjdbc's default whatever it holds;"
+                 " arg-types takes a PGobject there (or NULL, which the oracle sends as it generates no PGobject), which PostgreSQL takes")
+    :repro "{:select [:id] :from [:users] :where [:= :mood :?m]} with :m nil"}])
 
 (defn- held
   "The pending entry of test that holds the failure of signature id, or nil."
