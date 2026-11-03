@@ -2613,12 +2613,14 @@
         join-keys))
 
 (defn- plain-value?
-  "Whether x yields one value per row: a column, a constant, DEFAULT, a cast of one, or a call of
+  "Whether x yields one value per row: a column, a constant, DEFAULT, a subquery, EXISTS, a cast of one, or a call of
    them to an operator or a function that returns no set, of pg_catalog or a generated schema
    (generate_series and unnest return more rows; a function the registry has none of may)."
   [registry opts x]
   ;; :%f.a is HoneySQL's f(a)
   (or (and (keyword? x) (not (shorthand-fn x))) (constant? x) (nil? x) (= [:default] x)
+      ;; a scalar subquery is one value, or an error where it gives more rows
+      (map? x) (and (vector? x) (#{:exists :not-exists} (first x)) (map? (second x)))
       (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? registry opts (second x)))
       (boolean (when-let [[kind _ args :as parts] (call-parts x)]
                  (and (or (= :operators kind) (not (resolve/set-returning? (reached registry opts parts))))
@@ -2650,8 +2652,9 @@
   "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
    any part may be a function that returns a set (plain-value?), it tells nothing. One of a SELECT of
    aggregates of columns or constants alone (no GROUP BY, HAVING or OFFSET); at most one of a SELECT,
-   UPDATE or DELETE of one row (unique-row?); up to as many as :values has rows of an INSERT returning (a trigger or ON CONFLICT
-   may skip one); at most :limit, from none where a parameter or code gives the limit."
+   UPDATE or DELETE of one row (unique-row?), and of a SELECT without FROM; up to as many as
+   :values has rows of an INSERT returning (a trigger, a rule or ON CONFLICT may skip one); at most
+   :limit, from none where a parameter or code gives the limit."
   [registry stmt {:keys [schema] :as opts}]
   ;; a clause this does not read (:join-by, :fetch, a set operation ...) may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)) (not (code-sources? stmt)))
@@ -2670,8 +2673,11 @@
           unbounded-limit? (and (contains? stmt :limit) (not limit))
           aggregates? (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not-any? #(contains? stmt %) [:group-by :having :offset])
                            aggregates-only?)
+          ;; SELECT without FROM: one row, none where WHERE is false
+          fromless? (and (:select stmt) (seq items) (not-any? #(contains? stmt %) (concat [:from :group-by :having :offset] join-keys)))
           counted (cond (not plain?) nil
                         aggregates? {:min 1 :max 1}
+                        fromless? {:min (if (contains? stmt :where) 0 1) :max 1}
                         (and rows (:returning stmt)) {:min 0 :max (count rows)}
                         (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items)) {:min 0 :max 1})
           m (cond-> counted

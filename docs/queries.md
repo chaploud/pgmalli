@@ -510,7 +510,8 @@ what `execute!` returns on a datasource or connection, `:any` when `h/row-schema
 Where the data tells how many rows a statement returns, the return says so
 (`[:sequential {:max 1} row]`; read the row with `last` or `m/children`, not by position): one
 row of a SELECT of aggregates of columns or constants alone (no GROUP BY, HAVING, OFFSET or a
-limit a parameter gives); at most one of a statement on one table (no CTE of its name, no table
+limit a parameter gives), and of a SELECT without FROM (at most one with a WHERE); a subquery
+or EXISTS in the select list is one value; at most one of a statement on one table (no CTE of its name, no table
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
 index (neither partial nor DEFERRABLE) equal to a value; up to one for each row of an INSERT's
 `:values` with RETURNING; at most `:limit`. A function that may return a set (one that does, of
