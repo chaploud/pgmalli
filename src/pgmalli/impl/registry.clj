@@ -369,9 +369,11 @@
     (merge base
            (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
                         #(walk/postwalk dispatch-by-key %))
-           ;; a file generated before them lacks them: its schema's calls resolve by pg_catalog alone
-           (into {} (for [d data :when (and (:schema d) (contains? d :functions))]
-                      [(shape/routines-key (:schema d)) [:any {:pg/functions (:functions d) :pg/operators (:operators d)}]])))))
+           ;; a file generated before them lacks :functions and :operators: its schema's calls resolve
+           ;; by pg_catalog alone
+           (into {} (for [d data :when (:schema d)]
+                      [(shape/routines-key (:schema d))
+                       [:any {:pg/functions (:functions d) :pg/operators (:operators d) :pg/database-version (:database-version d)}]])))))
 
 (defn columns
   "The [:map ...] of a row or insert schema, without the table-level constraints."

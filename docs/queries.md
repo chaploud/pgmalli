@@ -74,8 +74,10 @@ The columns of a CTE or a subquery are typed as its SELECT types them, read as a
 own (a CTE under the ones before it, a subquery under the CTEs of the query it reads, a LATERAL
 subquery with the tables before it, a recursive CTE as its first member, NULL allowed and a
 CHECK's list read as its base type); a column it does not give is `:unknown-column`. A table or
-view of `pg_catalog` (`pg_class`) the registry lacks has the columns of the catalog snapshot,
-those of every version pgmalli supports. A function of `pg_catalog` or of a generated schema in FROM
+view of `pg_catalog` (`pg_class`) the registry lacks has the columns of the catalog snapshot in
+the PostgreSQL versions the registry's files were generated on (each file's `:database-version`;
+every version pgmalli supports where a file names none of them): `SELECT *` gives a column one
+of them lacks as an optional key. A function of `pg_catalog` or of a generated schema in FROM
 has the columns it returns ([The row a query returns](#the-row-a-query-returns)). The columns of
 another table function (named by its alias, `WITH ORDINALITY` too), of a table written as a symbol
 (`'events_2026`, a table chosen at run time) and of an `information_schema` view the registry
@@ -353,7 +355,9 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   whose columns (its OUT arguments, or one named after the alias; `ordinality` under
   `WITH ORDINALITY`) are of no table. pgmalli reads the functions, operators and implicit casts
   from a snapshot of `pg_catalog` (`resources/pgmalli/catalog.edn`) of the PostgreSQL versions it
-  supports; a call one of them resolves otherwise is untyped. Of an argument whose type is not
+  supports, as of the versions the registry's files were generated on (as for `pg_catalog`'s
+  tables above): a call one of them resolves otherwise is untyped, and a function of PostgreSQL
+  18 alone (`uuidv7`) is typed for a registry generated on 18. Of an argument whose type is not
   told, a call is typed where every overload of its number of arguments returns one type that is
   not polymorphic (`count`, `jsonb_build_object`). A function of `json` or `jsonb` that
   builds an object or an array is one under `{:read {:json :parsed}}`.

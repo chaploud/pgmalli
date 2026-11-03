@@ -35,24 +35,44 @@
 
 (declare type-schema)
 
+(defn- versions
+  "The versions of the catalog snapshot the registry's generated files are of: each file's
+   PostgreSQL major, every version the snapshot holds where a file's is none of them, or there
+   is no file."
+  [schemas]
+  (let [all (:versions @types/catalog)
+        vs (for [[k s] schemas :when (and (keyword? k) (= (namespace (shape/routines-key "")) (namespace k)))]
+             (some->> (:pg/database-version (second s)) str (re-find #"^PostgreSQL (\d+)") second))]
+    (if (and (seq vs) (every? (set all) vs)) (vec (distinct vs)) all)))
+
+(defn- in-versions
+  "Overloads or columns xs of the catalog snapshot as of versions vs: one of none of them
+   left out, :in narrowed to vs, and left out where it holds them all."
+  [xs vs]
+  (for [x xs :let [in (when (:in x) (filter (set (:in x)) vs))] :when (or (nil? (:in x)) (seq in))]
+    (if (or (nil? (:in x)) (= (count in) (count vs))) (dissoc x :in) (assoc x :in (vec in)))))
+
 (defn- catalog-columns
-  "[[column-name schema] ...] of a table or view of pg_catalog (\"pg_catalog.pg_class\"), as
-   the catalog snapshot holds it: a column of a type the versions disagree on, or pgmalli does
-   not type, :any; nullable where one version's is."
-  [table]
+  "[[column-name schema props] ...] of a table or view of pg_catalog (\"pg_catalog.pg_class\"),
+   as the catalog snapshot holds it in versions vs: a column of a type they disagree on, or
+   pgmalli does not type, :any; nullable where one version's is; optional where one lacks it."
+  [table vs]
   (when-let [cs (some->> table (re-matches #"pg_catalog\.(.+)") second (get (:relations @types/catalog)))]
-    (let [by-name (group-by :name cs)]
+    (let [cs (in-versions cs vs)
+          by-name (group-by :name cs)]
       (for [c (distinct (map :name cs))
-            :let [ts (distinct (map :type (by-name c)))
+            :let [es (by-name c)
+                  ts (distinct (map :type es))
                   s (when-not (next ts) (type-schema (first ts)))]]
-        [c (cond (nil? s) :any (every? :not-null (by-name c)) s :else [:maybe s])]))))
+        [c (cond (nil? s) :any (every? :not-null es) s :else [:maybe s])
+         (when (and (every? :in es) (not= (count vs) (count (distinct (mapcat :in es))))) {:optional true})]))))
 
 (defn- column-entries
-  "[[column-name schema] ...] of a table (or view) in the registry, in its order, or of
+  "[[column-name schema props] ...] of a table (or view) in the registry, in its order, or of
    pg_catalog's; nil when it is not there."
   [registry table]
   (or (some->> (get (::schemas registry) (shape/table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s])))
-      (catalog-columns table)))
+      (catalog-columns table (::versions registry))))
 
 (def ^:private system-columns
   "The columns every table has besides its own."
@@ -70,9 +90,10 @@
   [registry]
   (if (::schemas registry)
     registry
-    (let [r {::schemas (shape/schemas-of registry) ::derived (atom {})}]
+    (let [schemas (shape/schemas-of registry)
+          r {::schemas schemas ::versions (versions schemas) ::derived (atom {})}]
       (assoc r
-             ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (into system-columns)))
+             ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (map (fn [[c s]] [c s])) (into system-columns)))
              ::routines (delay (own-routines r))))))
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
@@ -2046,7 +2067,8 @@
    name it (docs 5.9.6). A schema the registry has no :functions of (a file generated before
    them, a schema not generated) has none."
   [registry {:keys [schema]} [kind n _ q]]
-  (resolve/overloads kind n (some-> (::routines registry) deref) (if q [q] ["pg_catalog" schema])))
+  (in-versions (resolve/overloads kind n (some-> (::routines registry) deref) (if q [q] ["pg_catalog" schema]))
+               (::versions registry)))
 
 (defn- own-type-schema
   "The column schema of a value of an enum type or a domain of the registry, t named as a
@@ -2233,7 +2255,7 @@
                   (if opaque?
                     (for [c order :let [o (get origins c)]]
                       [c (if (and qualified? (nil? o)) [::unknown-key c] (entry [nil o] c (get types c) nullable? nil))])
-                    (for [[c s] (column-entries registry table)] [c (entry table c s nullable? nil)])))
+                    (for [[c s props] (column-entries registry table)] [c (entry table c s nullable? props)])))
         star (fn [col]
                (let [[a] (split-column col)
                      tables (if a (some-> (get sc a) vector) (vals sc))]

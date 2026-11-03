@@ -104,6 +104,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   even of arguments it cannot type, and a set operation's column of a NULL member. A recursive
   CTE keeps its types through a CTE or a subquery reading it, and a subquery reading a CTE is
   read under it. A table or view of `pg_catalog` has its columns, from the snapshot.
+* The snapshot is read as of the PostgreSQL versions the registry's files were generated on
+  (`:database-version`): a function of PostgreSQL 18 alone (`uuidv7`, `casefold`) is typed for a
+  registry generated on 18, and a column of `pg_catalog`'s tables one supported version lacks
+  (`pg_class.relallfrozen`) is an optional key of `SELECT *` for a registry of no version it
+  knows, and absent for one generated on that version.
 * A schema's own functions and operators are typed as `pg_catalog`'s
   ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): the generated file holds them,
   and a call resolves among `pg_catalog`'s and `:schema`'s as PostgreSQL's search path does,

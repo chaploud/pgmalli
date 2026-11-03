@@ -2009,6 +2009,26 @@
   (is (= [:map [:s [:maybe [:string {:pg/type "name"}]]] [:u [:maybe [:string {:pg/type "text"}]]] [:c [:string {:pg/type "name"}]]]
          (row {:select [[:current_schema :s] [:system_user :u] [:current_catalog :c]]}))))
 
+(defn- generated-on
+  "The sample registry, its file generated on PostgreSQL version v."
+  [v]
+  (pgmalli/registry (assoc (pgmalli/generated "sample") :database-version v)))
+
+(deftest a-pg-catalog-column-not-in-every-version-the-registry-is-of-is-optional
+  (let [frozen #(some (fn [e] (when (= :relallfrozen (first e)) e)) (rest (h/row-schema % {:select [:*] :from [:pg_class]} opts)))]
+    (is (= [:relallfrozen {:optional true} int4] (frozen registry)) "a file of no version known: any version the catalog holds")
+    (is (= [:relallfrozen int4] (frozen (generated-on "PostgreSQL 18"))))
+    (is (nil? (frozen (generated-on "PostgreSQL 17"))))
+    (is (= [{:kind :unknown-column :column :relallfrozen}]
+           (h/check (generated-on "PostgreSQL 17") {:select [:relallfrozen] :from [:pg_class]} opts)))
+    (is (= [] (check {:select [:relallfrozen] :from [:pg_class]})))))
+
+(deftest a-function-of-the-version-the-registry-is-of-alone-is-typed-there
+  (let [q {:select [[[:uuidv7] :u] [[:casefold [:inline "a"]] :c]]}]
+    (is (= [:map [:u [:maybe [:uuid {:pg/type "uuid"}]]] [:c [:maybe [:string {:pg/type "text"}]]]]
+           (h/row-schema (generated-on "PostgreSQL 18") q opts)))
+    (is (= [:map [:u [:maybe :any]] [:c [:maybe :any]]] (row q)) "PostgreSQL 16 and 17 have neither")))
+
 (deftest functions-and-operators-have-the-type-pg-catalog-resolves-them-to
   (let [row #(h/row-schema registry {:select (vec (for [[k e] %] [e k])) :from [:users]} opts)
         day [:cast [:inline "1 day"] :interval]]
