@@ -1052,7 +1052,7 @@
   [alias opts]
   (if (string? alias)
     alias
-    (or (first (formatted-name (keyword (name alias)) (:format opts)))
+    (or (first (formatted-name alias (:format opts) true))
         (if (quoted? (:format opts)) (name alias) (folded (name alias))))))
 
 (defn- item-name
@@ -1263,22 +1263,23 @@
              {:kind :missing-required-column :table table :column (keyword c)})))))))
 
 (def ^:private formatted-name
-  "[name quoted?] of the column k (a keyword, or a string) as the loaded HoneySQL writes it under
-   sql/format's options format, name as PostgreSQL reads it: a quoted one as it is, else folded
-   to lower case. nil without HoneySQL."
-  (memoize (fn [k format]
+  "[name quoted?] of k (a keyword, or a string) as the loaded HoneySQL writes it under sql/format's
+   options format, as a column of :values or, alias? true, as an alias of a select item; name as
+   PostgreSQL reads it: a quoted one as it is, else folded to lower case. nil without HoneySQL."
+  (memoize (fn [k format alias?]
              (when-let [f (honeysql 'honey.sql/format)]
                ;; an option the loaded HoneySQL does not take (a dialect of a later one) formats nothing
-               (when-let [col (try (second (re-find #"\((.*?)\)" (first (f {:insert-into :t :values [{k 1}]} (dissoc (or format {}) :params)))))
-                                   (catch Exception _ nil))]
-                 (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" col)] [q true] [(str/lower-case col) false]))))))
+               (when-let [n (try (let [sql (first (f (if alias? {:select [[:a k]]} {:insert-into :t :values [{k 1}]}) (dissoc (or format {}) :params)))]
+                                   (second (re-find (if alias? #" AS (.*)$" #"\((.*?)\)") sql)))
+                                 (catch Exception _ nil))]
+                 (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" n)] [q true] [(str/lower-case n) false]))))))
 
 (defn- quoted?
   "Whether sql/format's options quote a name, as the loaded HoneySQL writes one (a dialect set
    with set-dialect! too); without HoneySQL, under :quoted, or a :dialect other than :nrql unless
    :quoted false."
   [{:keys [quoted dialect] :as format}]
-  (if-let [[_ q?] (formatted-name :a format)]
+  (if-let [[_ q?] (formatted-name :a format false)]
     q?
     (if (contains? format :quoted) quoted (and (contains? format :dialect) (not= :nrql dialect)))))
 
@@ -2669,7 +2670,7 @@
   [column {:keys [format] :as opts}]
   (let [n (name column)
         candidates (distinct [(jdbc/row-key nil n opts) (keyword n) n])]
-    (or (some #(when (= n (first (formatted-name % format))) %) candidates)
+    (or (some #(when (= n (first (formatted-name % format false))) %) candidates)
         (if (string? column) n (keyword n)))))
 
 (defn- one-value

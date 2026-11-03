@@ -1369,7 +1369,8 @@
     (is (= :user-id (key {:quoted true})))
     (is (= :user_id (key {:quoted true :quoted-snake true})) ":quoted-snake writes it with _")
     (is (= :user-id (key {:dialect :ansi})) "a dialect quotes")
-    (is (= :user_id (key {:dialect :ansi :quoted false})))))
+    (is (= :user_id (key {:dialect :ansi :quoted false})))
+    (is (= :%count.c (ffirst (rest (row {:select [[:%count.* :%count.c]] :from [:users]})))) "an alias is no column: its dots stay")))
 
 (deftest a-table-of-another-schema-is-the-one-meant-when-schema-is-left-out
   (let [ps (h/check (pgmalli/registry "sample" "other") {:select [:id] :from [:users]} {:schema "other"})]
