@@ -30,17 +30,19 @@
   "The edits from a to b: insertions, deletions, substitutions and swaps of adjacent letters
    (nmae is one edit from name)."
   [^String a ^String b]
-  (let [n (count a) m (count b)
-        d (reduce (fn [d [i j]]
-                    (let [cost (if (= (.charAt a (dec i)) (.charAt b (dec j))) 0 1)
-                          v (min (inc (d [(dec i) j])) (inc (d [i (dec j)])) (+ (d [(dec i) (dec j)]) cost))
-                          v (if (and (> i 1) (> j 1) (= (.charAt a (dec i)) (.charAt b (- j 2))) (= (.charAt a (- i 2)) (.charAt b (dec j))))
-                              (min v (inc (d [(- i 2) (- j 2)])))
-                              v)]
-                      (assoc d [i j] v)))
-                  (into {} (concat (for [i (range (inc n))] [[i 0] i]) (for [j (range (inc m))] [[0 j] j])))
-                  (for [i (range 1 (inc n)), j (range 1 (inc m))] [i j]))]
-    (d [n m])))
+  (let [n (count a) m (count b) w (inc m)
+        d (long-array (* (inc n) w))
+        at (fn [i j] (aget d (+ (* i w) j)))]
+    (dotimes [i (inc n)] (aset d (* i w) (long i)))
+    (dotimes [j w] (aset d j (long j)))
+    (doseq [i (range 1 (inc n)), j (range 1 w)]
+      (let [cost (if (= (.charAt a (dec i)) (.charAt b (dec j))) 0 1)
+            v (min (inc (at (dec i) j)) (inc (at i (dec j))) (+ (at (dec i) (dec j)) cost))
+            v (if (and (> i 1) (> j 1) (= (.charAt a (dec i)) (.charAt b (- j 2))) (= (.charAt a (- i 2)) (.charAt b (dec j))))
+                (min v (inc (at (- i 2) (- j 2))))
+                v)]
+        (aset d (+ (* i w) j) (long v))))
+    (at n m)))
 
 (defn- close-enough
   "How many edits a name may be from the one meant: 2 for five letters or more, 1 below."
