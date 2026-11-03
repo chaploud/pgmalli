@@ -1936,7 +1936,9 @@
           typed (remove (comp resolve/unbound? :type) ms)]
       (when (and t (or (not-any? #{:free} ts) (= "S" (types/category t))))
         {:type t
-         :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %)))) typed)) (own-type? (first typed) (:type (first typed))))
+         ;; inputs all of one domain resolve to it (select_common_type); with another, to its base type
+         :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %)))) typed))
+                          (or (own-type? (first typed) (:type (first typed))) (= (count typed) (count ms))))
                    (cond->> (:schema (first typed)) (next ms) (computed registry))
                    (result-schema registry t typed))}))))
 
@@ -1975,7 +1977,8 @@
                   :any)))
 
 (defn- cast-args
-  "[:cast :?x :timestamptz]: what PostgreSQL casts to the type; nil too unless every use of the
+  "[:cast :?x :timestamptz]: what PostgreSQL casts to the type, its CHECKs, lengths and ranges
+   left out where every use of the cast is compared; nil too unless every use of the
    cast is compared (not under IS [NOT] DISTINCT FROM, not with NULL, not under {:compare
    :lenient}) or assigned where NULL may not go (assigned-column). [:cast :x.a :date] of an
    unnest's column: an array of that, typed."
@@ -2005,11 +2008,17 @@
                                 :let [{c :schema :keys [nullable?]} (assigned-column registry a)]
                                 :when (and c (not nullable?))]
                             (:x a))))
+        compared (frequencies (for [{:keys [x]} nodes :when (comparison? x) o (rest x)
+                                    o (if (and (in-ops (first x)) (vector? o) (not (keyword? (first o)))) o [o])]
+                                o))
         uses (frequencies (map first casts))]
     (for [[x chain k elements?] (distinct casts)
           :let [s (:schema (expression-type registry chain x opts))]
           :when s
           :let [t (cond-> (accepted-type registry s :cast opts)
+                    ;; compared, PostgreSQL evaluates the cast only where its plan reaches it (a row
+                    ;; the other conditions keep, or once ahead of the scan), so its CHECKs and ranges may never run
+                    (= (get compared x 0) (uses x)) loose
                     (< (get refusing x 0) (uses x)) nullable)]]
       [k (if elements? (cast-arrays registry s t opts) t)])))
 

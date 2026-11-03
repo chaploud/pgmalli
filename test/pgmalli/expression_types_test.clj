@@ -105,6 +105,10 @@
           :when (and o t)]
       [e o t])))
 
+(def ^:private domain-bases
+  "{domain base}: matrix.d_<name>'s base type, as normal names it."
+  (into {} (for [[n t] matrix] [(str "matrix.d_" n) (normal t)])))
+
 (def pending
   "Mismatches in src that src does not fix yet, which report holds out until it does: {:label
    :match :reason :repro}, :match a predicate of [expression pgmalli postgresql] under report's
@@ -116,7 +120,9 @@
    holds, or types no more than at-least of them."
   [label at-least cs]
   (is (< at-least (count cs)) (str label ": pgmalli types " (count cs) " of them"))
-  (let [ms (remove (fn [[_ o t]] (= o t)) cs)
+  ;; a column of a domain the driver reads otherwise than the registry holds it (a date as a
+  ;; java.sql.Date) reads as its base type, which RowDescription names, where pg_typeof names the domain
+  (let [ms (remove (fn [[_ o t]] (or (= o t) (= o (domain-bases t)))) cs)
         held (filter #(= label (:label %)) pending)]
     (when-let [ms (seq (remove (fn [m] (some #((:match %) m) held)) ms))]
       (is false (str label ": pgmalli types these otherwise than PostgreSQL (expression, pgmalli, PostgreSQL)\n  "

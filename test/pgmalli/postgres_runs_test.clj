@@ -18,9 +18,11 @@
              (exec-sql! "CREATE EXTENSION citext;
                          CREATE TYPE status AS ENUM ('draft', 'live');
                          CREATE DOMAIN ci AS citext;
+                         CREATE DOMAIN mail AS citext CHECK (VALUE ~ '@');
                          CREATE TABLE accounts (id bigserial PRIMARY KEY, email text NOT NULL, group_id int,
                            status status NOT NULL DEFAULT 'draft', amount numeric(10,2), plain numeric,
-                           flags varbit, created timestamptz, tags status[], name citext, nick ci);
+                           flags varbit, created timestamptz, tags status[], name citext, nick ci, mail mail);
+                         INSERT INTO accounts (email, mail) VALUES ('a', 'a@x'), ('b', NULL);
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
@@ -104,3 +106,12 @@
                         (java.time.LocalDate/of 2020 1 1) {:registry reg})
             (str c " = '2020-01-01'")))
       (is (some? (runs! {:select [:id] :from [:accounts] :where [:= :name [:inline "2020-01-01"]]} {} {}))))))
+
+(deftest a-cast-compared-leaves-out-its-domains-check-which-runs-only-where-the-plan-reaches-it
+  (when *db*
+    (let [reg (registry)
+          q {:select [:id] :from [:accounts] :where [:and [:= :mail :?m] [:= :mail [:cast :?m :mail]]]}]
+      (is (some? (runs! q {:m "a"} {})) "mail = 'a' (as text) keeps no row, so the cast is never evaluated")
+      (is (accepted? reg q {:m "a"} {}))
+      (is (thrown? Exception (runs! {:select [[[:cast :?m :mail] :v]]} {:m "a"} {})))
+      (is (not (m/validate (:m (h/arg-types reg {:select [[[:cast :?m :mail] :v]]})) "a" {:registry reg}))))))

@@ -97,10 +97,12 @@
 
 (def ^:private compares?
   "Whether PostgreSQL resolves operator = for a value of type t and one of type sent, in some
-   version the catalog holds."
+   version the catalog holds; an extension's type of strings (citext), whose operators the
+   catalog does not hold, as text, which it casts to implicitly."
   (memoize
    (fn [t sent]
-     (let [os (resolve/overloads :operators "=")]
+     (let [os (resolve/overloads :operators "=")
+           [t sent] (map #(if (and (string? %) (not= "S" (types/category %)) (string-type? %)) "text" %) [t sent])]
        (boolean (some (fn [v] (resolve/call :operators "=" [t sent] (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in))))
                       (:versions @types/catalog)))))))
 

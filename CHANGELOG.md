@@ -274,6 +274,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An expression of a `numeric(p,s)` column (`round`, `coalesce`, `-`) is typed as `numeric`: an
   argument compared with it takes an integer, and its value read a Double for NaN.
 * A `citext` column, or a domain over one, takes as an argument what a `text` column takes.
+* An argument cast where every use of the cast is compared (`[:= :mail [:cast :?m :email]]`)
+  leaves out the CHECKs, lengths and ranges of the type cast to: PostgreSQL evaluates the cast
+  only where its plan reaches it, for a row the other conditions keep or once ahead of the scan.
+* `coalesce`, `greatest`, `least`, `CASE` and a set operation of columns all of one domain are of
+  that domain, as PostgreSQL resolves them.
 * `:read` names a type by its alias too (`"int4"`, `"timestamptz"`); a type neither pgmalli nor
   the registry knows, or a value that is no malli schema, is an `:invalid-options` error.
 * A table of a query read against a registry holding no schema pgmalli generates is a

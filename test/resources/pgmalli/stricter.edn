@@ -32,6 +32,7 @@
 ["cidr[]" :assign] ["character" "character varying" "character varying[]" "character[]" "citext" "citext[]" "inet[]" "name" "name[]" "text" "text[]"]
 ["circle" :assign] ["character" "character varying" "citext" "name" "text"]
 ["circle[]" :assign] ["character" "character varying" "character varying[]" "character[]" "citext" "citext[]" "name" "name[]" "text" "text[]"]
+["citext" :compare] ["\"char\""]
 ["date" :assign] ["character" "character varying" "citext" "name" "text" "timestamp with time zone" "timestamp without time zone"]
 ["date" :compare] ["timestamp with time zone" "timestamp without time zone"]
 ["date[]" :assign] ["character" "character varying" "character varying[]" "character[]" "citext" "citext[]" "name" "name[]" "text" "text[]" "timestamp with time zone[]" "timestamp without time zone[]"]
