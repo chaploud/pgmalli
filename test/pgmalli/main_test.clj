@@ -78,6 +78,18 @@
     (is (= ["public :operators: the file has none, as an older pgmalli wrote it; generate writes them"]
            (printed {:key :operators :absent :file})))))
 
+(deftest an-unrendered-type-no-keyword-names-is-overridden-by-its-column
+  (is (= ["public: unrendered (3), left out of the schemas:"
+          "  public.t ps: type pair[]"
+          "    to keep it, add to pgmalli.edn :overrides {:public.t/ps <malli schema>}"
+          "  public.t p: type pair"
+          "    to keep it, add to pgmalli.edn :overrides {:pair <malli schema>}"
+          "  public.t z: type timestamp with time zone"
+          "    to keep it, add to pgmalli.edn :overrides {:timestamptz <malli schema>}"]
+         (str/split-lines (with-out-str (#'main/print-unrendered "public" [{:kind :type :table "public.t" :column "ps" :type "pair[]"}
+                                                                           {:kind :type :table "public.t" :column "p" :type "pair"}
+                                                                           {:kind :type :table "public.t" :column "z" :type "timestamp with time zone"}]))))))
+
 (deftest check-names-a-missing-file-and-the-command-that-writes-it
   (when *db*
     (let [out-dir (temp-dir)

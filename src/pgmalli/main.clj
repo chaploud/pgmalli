@@ -60,9 +60,10 @@
          "; unrendered: " (count (:unrendered data)) ", diagnostics: " (count (:diagnostics data)))))
 
 (defn- override-key
-  "What :overrides takes for an unrendered entry: its constraint's name, or its type as a keyword."
-  [{:keys [constraint type]}]
-  (or constraint (render/override-key type)))
+  "What :overrides takes for an unrendered entry: its constraint's name, its type as a keyword,
+   or the column's key for a type no keyword names (pair[])."
+  [{:keys [constraint type table column]}]
+  (or constraint (render/override-key type) (when (and table column) (keyword table column))))
 
 (defn- print-unrendered [schema facts]
   (when (seq facts)
@@ -71,8 +72,9 @@
             :let [k (override-key f)]]
       (println (str "  " (or table domain) " " (or constraint column) ": "
                     (cond sql sql type (str "type " type) :else (name kind))))
-      (println (str "    to keep it, add to pgmalli.edn :overrides {" (pr-str k) " <malli schema>}"
-                    (when (string? k) (str ", or {" (pr-str k) " {:skip \"<why>\"}} to silence it")))))))
+      (when k
+        (println (str "    to keep it, add to pgmalli.edn :overrides {" (pr-str k) " <malli schema>}"
+                      (when (string? k) (str ", or {" (pr-str k) " {:skip \"<why>\"}} to silence it"))))))))
 
 (defn- print-diagnostics [schema ds]
   (when (seq ds)

@@ -577,6 +577,35 @@
     (is (= [:maybe [:vector {:pg/type "inet[]"} :any]] (get-in registry [:pg.public/t 3 1])) "arrays keep their element type as it is")
     (is (empty? unrendered))))
 
+(deftest a-type-key-is-a-name-an-alias-or-a-cast-spelling-of-the-type
+  (let [column (fn [type overrides]
+                 (get-in (:registry (r/rendered (p/facts {:name "public" :types {}
+                                                          :tables {"t" {:columns [{:name "c" :position 1 :data_type type :is_nullable false}] :constraints {}}}})
+                                                overrides))
+                         [:pg.public/t 2 1]))]
+    (is (= [:string {:pg/type "timestamp with time zone"}] (column "timestamp with time zone" {:timestamptz :string})))
+    (is (= [:string {:pg/type "timestamp with time zone"}] (column "timestamp with time zone" {:timestamp-with-time-zone :string})))
+    (is (= [:int {:pg/type "character varying"}] (column "character varying" {:varchar :int})))
+    (is (= [:int {:pg/type "integer"}] (column "integer" {:int4 :int})))))
+
+(deftest a-column-of-an-unknown-type-overridden-by-its-type-is-not-left-out
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
+                                                            :tables {"t" {:columns [{:name "g" :position 1 :data_type "geometry" :type_schema "public" :is_nullable false}]
+                                                                          :constraints {}}}})
+                                                  {:geometry :string})]
+    (is (= [:string {:pg/type "geometry"}] (get-in registry [:pg.public/t 2 1])))
+    (is (empty? unrendered))))
+
+(deftest a-typmod-inside-a-type-name-is-no-other-type
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :tables {}
+                                                            :types {"at" {:kind "DOMAIN" :base_type "timestamp(3) with time zone" :not_null false :constraints []}
+                                                                    "t0" {:kind "DOMAIN" :base_type "time(0) without time zone" :not_null false :constraints []}
+                                                                    "vs" {:kind "DOMAIN" :base_type "character varying(5)[]" :not_null false :constraints []}}}))]
+    (is (= [:time/instant {:pg/type "timestamp(3) with time zone"}] (:pg.public/at registry)))
+    (is (= [:time/local-time {:pg/type "time(0) without time zone"}] (:pg.public/t0 registry)))
+    (is (= [:vector {:pg/type "character varying(5)[]"} [:string {:max 5 :pg/max-length 5}]] (:pg.public/vs registry)))
+    (is (empty? unrendered))))
+
 (deftest an-override-keyed-by-column
   (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["a" "b"]}}
                                                             :tables {"jobs" {:columns [{:name "input" :position 1 :data_type "jsonb" :is_nullable false}
