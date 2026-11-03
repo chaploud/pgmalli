@@ -1467,6 +1467,11 @@
         t (slot-type registry s)
         takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t % context))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
+        ;; cast, an array as PostgreSQL casts it (to text, say), its elements any
+        cast-arrays (when (= :cast context)
+                      (for [[schema q] (jdbc/write-rows opts true) :when (takes? q)
+                            a (shape/alternatives (walk/postwalk-replace {:pgmalli/element :any} schema))]
+                        [q a]))
         alts (concat
               (for [p sent
                     a (if (= :unknown p)
@@ -1474,11 +1479,7 @@
                         (shape/alternatives (unlabel (loose (driver-type registry jdbc/write-type (type-schema p) opts)))))
                     :when (not (untyped? a))]
                 [p a])
-              ;; cast, an array as PostgreSQL casts it (to text, say), its elements any
-              (when (= :cast context)
-                (for [[schema q] (jdbc/write-rows opts true) :when (takes? q)
-                      a (shape/alternatives (walk/postwalk-replace {:pgmalli/element :any} schema))]
-                  [q a])))]
+              cast-arrays)]
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
@@ -1504,8 +1505,10 @@
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
             ;; a string's or a date's cannot be said of the value sent
             alts (for [[p a] alts] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
-            all (shape/distinct-kinds (concat own-alts alts))]
-        (if (= (count all) (count own-alts)) own (into [:or] all))))))
+            ;; a cast's array of any elements is broader than an array of the type's own
+            cast-kinds (set (map (comp shape/kind second) cast-arrays))
+            all (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))]
+        (if (= all own-alts) own (into [:or] all))))))
 
 (defn- compared-type
   "The type of an argument compared with a column by op, t as accepted-type gives it compared

@@ -36,8 +36,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   trigger runs for the write, they and an assigned argument take a column left out or NULL, as
   `h/check` already did.
 * `h/arg-types` types an argument under a cast (`[:cast :?at :timestamptz]`) with what
-  PostgreSQL casts to the type: a string too, and an enum type's labels alone. Assigned or cast
-  to an integer type, a fraction is held to the range half a unit wider, as PostgreSQL rounds it.
+  PostgreSQL casts to the type: a string too, to an array type any array, and an enum type's
+  labels alone. Assigned or cast to an integer type, a fraction is held to the range half a unit
+  wider, as PostgreSQL rounds it.
   An argument of `coalesce` and the like takes the type the other arguments resolve to, and a
   comparison in a select or ORDER BY expression types its argument, which `h/check` reads too.
 * An argument takes nil where any of its uses does, whatever their order; in `:limit` or

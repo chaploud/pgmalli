@@ -814,6 +814,12 @@
         "the column of the field is looked for")
     (is (= {:v :any} (h/arg-types reg {:update :t :set {:p.b :?v} :where [:= :id 1]})))))
 
+(deftest an-array-cast-to-an-array-domain-is-any-array-postgresql-casts
+  (let [reg (pgmalli/registry {:registry {:pg.public/ints_d [:vector {:pg/type "integer[]"} :pg/integer]}})
+        t (:x (h/arg-types reg {:select [[[:cast :?x :ints_d] :c]]}))]
+    (doseq [v [(double-array [1.0]) (into-array BigDecimal [1M]) (boolean-array [true]) (into-array String ["1"]) (long-array [1])]]
+      (is (m/validate t v {:registry reg}) (pr-str (class v))))))
+
 (deftest a-number-label-is-read-from-a-string-sent-untyped
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
     (is (m/validate (:l (h/arg-types reg {:update :t :set {:l [:cast :?l :integer]}} {:send unspecified})) "1" {:registry reg}))))
