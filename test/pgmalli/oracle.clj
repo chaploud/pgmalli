@@ -566,9 +566,10 @@
                (vec (for [[mode fmt] formats
                           :let [fmt (merge fmt (:format (:opts c)))
                                 opts (assoc (:opts c) :format fmt)
-                                ;; a named argument takes a value of the type arg-types gives it
+                                ;; a named argument takes a value of the type arg-types gives it; one it
+                                ;; types not ([:any {:pgmalli/untyped why}]) goes as NULL
                                 args (into {} (for [[k s] (h/arg-types registry query opts)]
-                                                [k (when-not (= :any s) (generated s registry seed))]))
+                                                [k (when-not (= :any (if (vector? s) (first s) s)) (generated s registry seed))]))
                                 sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception e e))]]
                       (cond
                         (instance? Exception sqlvec) (assoc c :format mode :outcome :unformatted :format-error (ex-message sqlvec))
