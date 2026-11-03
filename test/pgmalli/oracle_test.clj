@@ -139,6 +139,14 @@
     (let [n (reduce + (keep :columns-typed (remove :profile @results)))]
       (is (< 17000 n) (str "row-schema names a :pg/type of " n " columns PostgreSQL returned: fewer typed, or fewer cases")))))
 
+(deftest every-option-profile-ran-the-corpus-and-typed-about-as-many-columns
+  (when *db*
+    (doseq [p (keys oracle/option-profiles)
+            :let [rs (filter #(= p (:profile %)) @results)
+                  n (reduce + (keep :columns-typed rs))]]
+      (is (= (set (map first oracle/corpus)) (set (map :id rs))) (str "under " p " not every corpus query ran"))
+      (is (< 850 n) (str "under " p " row-schema names a :pg/type of " n " columns PostgreSQL returned: fewer typed, or fewer cases")))))
+
 (deftest no-case-runs-out-of-time
   (when *db*
     (doseq [r @results :when (= :timeout (:outcome r))]
