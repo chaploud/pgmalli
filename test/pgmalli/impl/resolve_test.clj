@@ -39,3 +39,15 @@
   (is (= #{"integer" "bigint" "numeric"} (r/argument-types ["integer" :free] 1 (r/overloads :functions "generate_series"))))
   (is (= #{"timestamp with time zone" "timestamp without time zone" "time with time zone"}
          (r/argument-types ["text" :free] 1 (r/overloads :functions "timezone")))))
+
+(deftest an-unknown-argument-beside-known-ones-of-one-type-is-taken-as-of-that-type
+  ;; as PostgreSQL types '12:00'::time + '01:00', '10.0.0.0/8'::cidr - '10.0.0.1' and
+  ;; percentile_cont('0.5') WITHIN GROUP (ORDER BY x::float8)
+  (is (= "time without time zone" (call :operators "+" ["time without time zone" :unknown] ["pg_catalog"])))
+  (is (= "time without time zone" (call :operators "+" [:unknown "time without time zone"] ["pg_catalog"])))
+  (is (= "bigint" (call :operators "-" ["cidr" :unknown] ["pg_catalog"])))
+  (is (= "double precision" (call :functions "percentile_cont" [:unknown "double precision"] ["pg_catalog"]))))
+
+(deftest a-function-of-one-unknown-argument-finds-no-exact-match-as-an-operator-does
+  ;; PostgreSQL: function pg_catalog.bit(unknown, integer) is not unique
+  (is (nil? (call :functions "bit" [:unknown "integer"] ["pg_catalog"]))))

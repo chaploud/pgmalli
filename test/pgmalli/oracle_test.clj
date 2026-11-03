@@ -116,6 +116,11 @@
                      "\n  mismatch: " (pr-str x)
                      (re-run "the case is under columns described otherwise"))))))
 
+(deftest row-schema-types-about-as-many-columns-as-it-did
+  (when *db*
+    (let [n (reduce + (keep :columns-typed @results))]
+      (is (< 17000 n) (str "row-schema names a :pg/type of " n " columns PostgreSQL returned: fewer typed, or fewer cases")))))
+
 (deftest arg-types-take-what-postgresql-takes
   (when *db*
     (doseq [f @arg-failures :when (not (held :arg (arg-id f)))]
