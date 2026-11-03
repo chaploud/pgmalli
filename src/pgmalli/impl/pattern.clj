@@ -510,6 +510,7 @@
                   constraints (sort-by :name (vals (:constraints t)))]
             f (concat (when view? [(assoc base :fact :view :materialized? (= "MATERIALIZED VIEW" (:kind t)))])
                       (for [tr (:triggers t)] (merge base {:fact :trigger} (select-keys tr [:name :before :insert :update :delete])))
+                      (when (:inherited t) [(assoc base :fact :inherited)])
                       ;; nothing marks a view's column NOT NULL in the catalog, so every one may be NULL
                       (mapcat #(column-facts base (cond-> % view? (assoc :is_nullable true)) enums domains) (sort-by :name (:columns t)))
                       (mapcat #(key-facts base %) constraints)

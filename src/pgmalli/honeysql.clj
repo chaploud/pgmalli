@@ -1029,7 +1029,7 @@
   "The number string v is as PostgreSQL reads a numeric input: spaces around it, 16's
    underscores between digits and 0x, 0o and 0b integers; nil for none."
   [v]
-  (let [t (str/replace (str/trim v) #"(?<=[0-9a-fA-F])_(?=[0-9a-fA-F])" "")
+  (let [t (str/replace (str/trim v) #"(?<=[0-9a-fA-FxXoObB])_(?=[0-9a-fA-F])" "")
         [_ sign base digits] (re-matches #"([+-]?)0([xXoObB])([0-9a-fA-F]+)" t)]
     (try (if base
            (cond-> (bigint (BigInteger. ^String digits (int (case (str/lower-case base) "x" 16 "o" 8 "b" 2)))) (= "-" sign) -)
@@ -1822,25 +1822,40 @@
           :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :for}
         join-keys))
 
+(defn- plain-value?
+  "Whether x yields one value per row and names no function, which may return a set
+   (generate_series, unnest) and so more rows: a column, a constant, DEFAULT, a cast of one."
+  [x]
+  (or (keyword? x) (constant? x) (nil? x) (= [:default] x)
+      (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? (second x)))))
+
 (defn- row-count
-  "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise: one of
-   a SELECT of aggregates alone (no GROUP BY, HAVING or OFFSET); at most one of a statement on
-   one table whose WHERE holds its primary key's or a UNIQUE constraint's columns equal to a
-   value (NULL equals none); as many as :values has rows of an INSERT returning (from none to that many
-   under ON CONFLICT); at most :limit."
+  "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
+   any part may be a function, which may return a set, it tells nothing. One of a SELECT of
+   aggregates over columns alone (no GROUP BY, HAVING or OFFSET); at most one of a SELECT,
+   UPDATE or DELETE on one table (no CTE of its name, no table inheriting it) whose WHERE holds
+   its primary key's or a (whole) UNIQUE constraint's columns equal to a value (NULL equals
+   none); up to as many as :values has rows of an INSERT returning (a trigger or ON CONFLICT
+   may skip one); at most :limit, from none where a parameter or code gives the limit."
   [registry stmt {:keys [schema] :or {schema default-schema}}]
   ;; a clause this does not read (:join-by, :fetch, a set operation ...) may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)) (not (code-sources? stmt)))
     (let [write? (some #(contains? stmt %) write-keys)
-          items (selected-items stmt)
+          ;; an item [x] or [x alias] is x
+          items (map #(if (vector? %) (first %) %) (selected-items stmt))
+          ;; an ORDER BY item [x direction ...] is x
+          order (for [o (vectorish (:order-by stmt))] (if (vector? o) (first o) o))
+          rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (insert-parts stmt)))) (:values stmt))
+          plain? (and (every? plain-value? (concat order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
+                      (or (every? plain-value? items)
+                          ;; aggregates over plain values
+                          (every? #(and (vector? %) (keyword? (first %)) (aggregate-fns (function-name (name (first %))))
+                                        (every? plain-value? (rest %)))
+                                  items)))
           targets (if write? (write-targets stmt) (table-items stmt))
           [table alias written] (when (= 1 (count targets)) (table-ref (first targets) schema))
           ;; a CTE of the table's name hides it
           table (when-not (and written (contains? (query-ctes stmt) (folded written))) table)
-          ;; a function in the select list may return a set (generate_series, unnest): rows per row
-          plain? (every? #(let [x (item-expression (if (and (vector? %) (= 2 (count %))) (first %) %))]
-                            (not (and (vector? x) (keyword? (first x)))))
-                         items)
           where (:where stmt)
           equal (set (for [c (if (and (vector? where) (= :and (first where))) (rest where) [where])
                            :when (and (vector? c) (= := (first c)) (= 3 (count c)))
@@ -1850,23 +1865,23 @@
                            :when (or (nil? q) (= q alias))]
                        (folded col)))
           props (when table (shape/row-props (get (::schemas registry) (shape/table-key table))))
-          unique? (and plain? (some #(every? equal %) (cond-> (map :columns (:pg/unique props)) (:pg/primary-key props) (conj (:pg/primary-key props)))))
-          rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (insert-parts stmt)))) (count (:values stmt)))
-          ;; a BEFORE INSERT trigger may skip a row
-          skipping? (some-> props :pg/before-triggers :insert)
+          ;; a partial UNIQUE index holds over some rows alone
+          key-columns (cond-> (map :columns (remove :where (:pg/unique props))) (:pg/primary-key props) (conj (:pg/primary-key props)))
+          unique? (and (not (:pg/inherited props)) (some #(every? equal %) key-columns))
           limit (let [n (:limit stmt)] (when (and (integer? n) (<= 0 n)) n))
           ;; a limit only a parameter or code tells may be 0
           unbounded-limit? (and (contains? stmt :limit) (not limit))
-          counted (cond (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not-any? #(contains? stmt %) [:group-by :having :offset])
-                             (every? #(let [e (when (vector? %) (first %))] (and (vector? e) (keyword? (first e)) (aggregate-fns (function-name (name (first e)))))) items))
-                        {:min 1 :max 1}
-                        (and rows (:returning stmt)) {:min (if (or skipping? (contains? stmt :on-conflict)) 0 rows) :max rows}
-                        (and unique? (or (not write?) (:returning stmt)) (not (:insert-into stmt))) {:min 0 :max 1})
+          aggregates? (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not-any? #(contains? stmt %) [:group-by :having :offset])
+                           (every? #(and (vector? %) (keyword? (first %)) (aggregate-fns (function-name (name (first %))))) items))
+          counted (cond (not plain?) nil
+                        aggregates? {:min 1 :max 1}
+                        (and rows (:returning stmt)) {:min 0 :max (count rows)}
+                        (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? plain-value? items)) {:min 0 :max 1})
           m (cond-> counted
               limit (update :max #(min (or % limit) limit))
               (and limit (not counted)) (assoc :min 0)
               unbounded-limit? (assoc :min 0))]
-      (when (:max m) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
+      (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
 
 (defn query-schema
   "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args

@@ -1568,8 +1568,8 @@
     (is (= 5 (:max (second (ret {:select [:nick] :from [:users] :limit 5} {})))))
     (is (not (map? (second (ret {:select [:u.nick] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :where [:= :u.id :?id]} {}))))
         "a join may repeat a row")
-    (is (= :map (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :returning [:id]} {:result :one})))
-        "an INSERT returns a row for each of its rows")
+    (is (= :maybe (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :returning [:id]} {:result :one})))
+        "an INSERT returns up to a row for each of its rows: a trigger, a rule or ON CONFLICT may skip one")
     (is (= :maybe (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :on-conflict [] :do-nothing true :returning [:id]} {:result :one})))
         "unless ON CONFLICT skips it")))
 
@@ -1617,6 +1617,9 @@
     (is (not (counted? '{:select [:groups.name] :from [:groups] :join (joins) :where [:= :groups.id 1]})) "code may join")
     (is (not (counted? {:with [[:users {:select [[:group_id :id]] :from [:sample.users]}]] :select [:id] :from [:users] :where [:= :id 1]}))
         "a CTE named as a table has none of its keys")
+    (is (not (counted? {:select [:nick] :from [:users] :where [:= :id 1] :order-by [[[:generate_series 1 3]]]})) "in ORDER BY too")
+    (is (not (counted? {:select [[[:count :*] :n]] :from [:users] :order-by [[[:generate_series 1 3]]]})))
+    (is (not (counted? {:insert-into :users :values [{:group_id [:generate_series 1 3] :mood "sad" :score 1}] :returning [:id]})) "and in :values")
     (doseq [q [{:limit :?n} {:limit [:inline 0]} {:fetch 0}]]
       (is (= :maybe (first (ret (merge {:select [[[:count :*] :n]] :from [:users]} q) {:result :one}))) (pr-str q)))))
 
@@ -1635,7 +1638,19 @@
 (deftest the-same-query-in-another-key-order-has-the-same-types
   (let [q1 (array-map :where [:= :id {:select [:id] :from [:users] :where [:= :id :?x]}] :select [[{:select [:nick] :from [:users] :where [:= :nick :?x]} :n]] :from [:users])
         q2 (array-map :select (:select q1) :where (:where q1) :from [:users])]
-    (is (= (args q1) (args q2)) "the first use is the first in the SQL")))
+    (is (= (args q1) (args q2)) "the first use is the first in the SQL"))
+  (let [q1 (array-map :where [:= :id [:cast :?x :integer]] :select [[[:cast :?x :text] :t]] :from [:users])
+        q2 (array-map :select (:select q1) :where (:where q1) :from [:users])]
+    (is (= (args q1) (args q2)) "casts too")))
+
+(deftest a-key-is-unique-only-over-the-whole-table
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/primary-key ["id"] :pg/unique [{:columns ["e"] :where true}]}
+                                                        [:id [:int {:pg/type "integer"}]] [:e [:string {:pg/type "text"}]]]
+                                          :pg.public/p [:map {:pg/table "public.p" :pg/primary-key ["id"] :pg/inherited true} [:id [:int {:pg/type "integer"}]]]}})
+        ret #(last (h/query-schema reg [:db] %))]
+    (is (= {:max 1} (second (ret {:select [:id] :from [:t] :where [:= :id 1]}))))
+    (is (not (map? (second (ret {:select [:id] :from [:t] :where [:= :e "a"]})))) "a partial UNIQUE index holds over some rows")
+    (is (not (map? (second (ret {:select [:id] :from [:p] :where [:= :id 1]})))) "a table inheriting it may hold the same key")))
 
 (deftest an-unknown-table-names-the-one-meant
   (is (= [{:kind :unknown-table :table "sample.usres" :did-you-mean ["sample.users"]}] (check {:select [:id] :from [:usres]})))

@@ -142,7 +142,8 @@ it; a value at exactly half a unit past may round out of range):
 ```
 
 Where its uses type an argument differently, the first statement wins (an enclosing one before
-its subqueries; the first in the SQL HoneySQL writes), and within it a comparison (the first),
+its subqueries; among those, the ones of `:with`, then of `:from` and the joins, then of the
+other clauses in the order HoneySQL writes them), and within it a comparison (the first),
 then `:limit` / `:offset`, a cast, an assignment, an `unnest`'s array, an argument of
 `coalesce`, `greatest`, `least` or `nullif`.
 
@@ -384,11 +385,12 @@ datasource or connection, `:any` when `h/row-schema` gives nil. `{:result :one}`
 
 Where the data tells how many rows a statement returns, the return says so (`[:sequential {:max
 1} row]`; read the row with `last` or `m/children`, not by position): one row of a SELECT of
-aggregates alone (no GROUP BY, HAVING, OFFSET or a limit a parameter gives); at most one of a
-statement on one table (no CTE of its name) selecting columns, whose WHERE holds its primary
-key's or a UNIQUE constraint's columns equal to a value; one for each row of an INSERT's
-`:values` with RETURNING (from none to that many under ON CONFLICT or a BEFORE INSERT trigger);
-at most `:limit`. Where it is one row, `{:result :one}` drops the `[:maybe]`:
+aggregates over columns alone (no GROUP BY, HAVING, OFFSET or a limit a parameter gives); at
+most one of a statement on one table (no CTE of its name, no table inheriting it) whose WHERE
+holds its primary key's or a whole UNIQUE constraint's columns equal to a value; up to one for
+each row of an INSERT's `:values` with RETURNING; at most `:limit`. A function anywhere in the
+select list, ORDER BY or `:values` may return a set, so then it says nothing. Where it is one
+row, `{:result :one}` drops the `[:maybe]`:
 
 ```clojure
 (h/query-schema registry [:db] {:select [[[:count :*] :n]] :from [:users]} {:result :one})

@@ -599,3 +599,9 @@
                                                                :constraints {"c_check" {:name "c_check" :type "CHECK"
                                                                                         :check_clause "CHECK (c IS NULL OR c ~ '^z'::text)"}}}}}))]
     (is (re-find #"violates check constraint c_check: CHECK \(c IS NULL OR c ~ '\^z'::text\)" (pr-str (:pg.public/t registry))))))
+
+(deftest a-table-others-inherit-says-so
+  (let [table {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}
+        {:keys [registry]} (r/rendered (p/facts {:name "public" :types {} :tables {"par" (assoc table :inherited true) "solo" table}}))]
+    (is (true? (:pg/inherited (second (:pg.public/par registry)))))
+    (is (not (contains? (second (:pg.public/solo registry)) :pg/inherited)))))

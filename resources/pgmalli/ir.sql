@@ -131,7 +131,10 @@ tables AS (
                                                                     'insert', (t.tgtype::int4 & 4) = 4, 'update', (t.tgtype::int4 & 16) = 16, 'delete', (t.tgtype::int4 & 8) = 8)
                                                   ORDER BY t.tgname), '[]'::json)
                         FROM pg_catalog.pg_trigger t
-                        WHERE t.tgrelid = c.oid AND NOT t.tgisinternal AND t.tgenabled <> 'D' AND (t.tgtype::int4 & 1) = 1)
+                        WHERE t.tgrelid = c.oid AND NOT t.tgisinternal AND t.tgenabled <> 'D' AND (t.tgtype::int4 & 1) = 1),
+           -- a table other tables inherit (not as partitions): a query reads their rows too, which its keys do not span
+           'inherited', EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
+                                WHERE i.inhparent = c.oid AND NOT ch.relispartition)
          ) AS tbl
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

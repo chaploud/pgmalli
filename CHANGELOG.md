@@ -37,8 +37,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   an argument of any of them with the type the other arguments resolve to.
 * `h/query-schema`'s return says how many rows the data tells (`[:sequential {:max 1} row]`):
   one of a SELECT of aggregates alone, at most one where the WHERE holds a primary key or a
-  UNIQUE constraint equal to a value, as many as an INSERT's `:values` has rows under RETURNING,
-  at most `:limit`; where it is one, `{:result :one}` gives no `[:maybe]`.
+  UNIQUE constraint equal to a value, up to as many as an INSERT's `:values` has rows under RETURNING,
+  at most `:limit`; where it is one, `{:result :one}` gives no `[:maybe]`. A table other tables
+  inherit has `:pg/inherited true`.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does
   not take is an error whose data names it (`:unknown`) and the one meant (`:did-you-mean`).
 * The columns of a CTE or a subquery are typed as its SELECT types them; a column it does not
