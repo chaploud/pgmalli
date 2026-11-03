@@ -33,7 +33,7 @@
                          CREATE TABLE arr (xs int[], cs citext[]);
                          INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
                          CREATE TABLE typed (id int, i int, b bigint, n numeric, u uuid, d date, ts timestamp, tz timestamptz,
-                           ok boolean, j jsonb, s status, p dpos, xs int[], ip inet);
+                           ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[]);
                          INSERT INTO typed (id) VALUES (1);
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
@@ -45,14 +45,19 @@
 
 (defn- runs!
   "Runs q with params and opts' :format, rolled back, on a stringtype=unspecified connection
-   where opts send a String :unknown; throws what PostgreSQL refuses. Each java.sql.Array is
+   where opts send a String :unknown, each parameter set with setObject, as next.jdbc sets it
+   without a SettableParameter extension (next.jdbc.date-time, which another test may load,
+   cannot set a java.sql.Time); throws what PostgreSQL refuses. Each java.sql.Array is
    read as a vector while connected (an array of citext needs the connection), as a
    ReadableColumn extension under {:read {:array :vector}} reads it."
   [q params opts]
   (with-open [con (jdbc/get-connection (datasource (cond-> *db* (= :unknown (get-in opts [:send String])) (assoc :url-params "stringtype=unspecified"))))]
     (.setAutoCommit con false)
     (try (walk/postwalk #(if (instance? java.sql.Array %) (vec (.getArray ^java.sql.Array %)) %)
-                        (jdbc/execute! con (sql/format q (assoc (:format opts) :params params))))
+                        (let [[sql & ps] (sql/format q (assoc (:format opts) :params params))]
+                          (with-open [st (jdbc/prepare con [sql])]
+                            (doseq [[i v] (map-indexed vector ps)] (.setObject st (int (inc i)) v))
+                            (jdbc/execute! st))))
          (finally (.rollback con)))))
 
 (defn- accepted?
@@ -200,21 +205,39 @@
       (is (thrown? Exception (runs! {:select [[[:cast :?m :mail] :v]]} {:m "a"} {})))
       (is (not (m/validate (:m (h/arg-types reg {:select [[[:cast :?m :mail] :v]]})) "a" {:registry reg}))))))
 
-(deftest a-java-sql-date-or-timestamp-goes-to-a-date-or-timestamp-under-every-time
+(deftest a-java-sql-date-time-or-timestamp-goes-to-a-date-time-or-timestamp-under-every-time
   (when *db*
     (let [reg (registry)
           ts (java.sql.Timestamp. 0)
-          sd (java.sql.Date/valueOf "1990-01-02")]
+          sd (java.sql.Date/valueOf "1990-01-02")
+          st (java.sql.Time/valueOf "10:00:00")]
       (doseq [opts [{} {:time :local} {:time :instant}]
               [q params] [[{:select [:id] :from [:typed] :where [:>= :tz :?x]} {:x ts}]
                           [{:select [:id] :from [:typed] :where [:< :ts :?x]} {:x ts}]
                           [{:select [:id] :from [:typed] :where [:= :d :?x]} {:x sd}]
+                          [{:select [:id] :from [:typed] :where [:< :t :?x]} {:x st}]
+                          [{:select [:id] :from [:typed] :where [:= :tt :?x]} {:x st}]
                           [{:update :typed :set {:tz :?x :ts :?x} :where [:= :id 1]} {:x ts}]
                           [{:update :typed :set {:d :?x} :where [:= :id 1]} {:x sd}]
+                          [{:update :typed :set {:t :?x :tt :?x} :where [:= :id 1]} {:x st}]
+                          [{:update :typed :set {:tts :?x} :where [:= :id 1]} {:x (into-array java.sql.Time [st])}]
+                          [{:insert-into :typed :values [{:tts :?x}]} {:x (into-array java.sql.Time [st])}]
                           [{:select [:id] :from [:typed] :where [:< [:composite :tz :id] [:composite :?c :?i]]} {:c ts :i 1}]]]
         (testing (pr-str opts q)
           (is (some? (runs! q params opts)))
           (is (accepted? reg q params opts)))))))
+
+(deftest a-java-sql-date-time-or-timestamp-goes-untyped-to-a-column-of-any-type
+  (when *db*
+    (let [reg (registry)]
+      (doseq [opts [{} {:time :local} {:time :instant}]
+              v [(java.sql.Timestamp. 0) (java.sql.Date/valueOf "1990-01-02") (java.sql.Time/valueOf "10:00:00")]
+              q [{:select [:id] :from [:accounts] :where [:= :email :?x]}
+                 {:update :accounts :set {:email :?x} :where [:= :id 1]}
+                 {:insert-into :accounts :values [{:email :?x}]}]]
+        (testing (pr-str opts q v)
+          (is (some? (runs! q {:x v} opts)))
+          (is (accepted? reg q {:x v} opts)))))))
 
 (deftest a-string-sent-untyped-goes-to-a-column-of-any-type
   (when *db*

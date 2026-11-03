@@ -814,10 +814,11 @@
 (def send-profiles
   "How an application may send a parameter, each with the :send that says so, set explicitly
    whatever namespaces the JVM has loaded: :plain, pgjdbc's setObject, as next.jdbc sends a value
-   with no SettableParameter extension; :date-time, next.jdbc.date-time's extension, which sends
+   with no SettableParameter extension, under each of its :times (what a column's date or time
+   types take depends on :time); :date-time, next.jdbc.date-time's extension, which sends
    an Instant, a LocalDate and a LocalDateTime as an untyped timestamp (its :classes, the values
    arg-matrix sends under it)."
-  {:plain {:send {} :set (fn [^java.sql.PreparedStatement ps i v] (.setObject ps (int i) v))}
+  {:plain {:send {} :set (fn [^java.sql.PreparedStatement ps i v] (.setObject ps (int i) v)) :times [nil :local :instant]}
    :date-time {:send date-time-send
                :set (fn [ps i v] (prep/set-parameter v ps i))
                :classes [java.time.Instant java.time.LocalDate java.time.LocalDateTime]}})
@@ -907,12 +908,21 @@
                (type-refusals (:state (refusal conn (sql/format (walk/postwalk-replace {:?x own} query) (if quoted? {:quoted true} {}))
                                                sends column false)))))))
 
+(defn- described?
+  "Whether PostgreSQL parses sqlvec's statement, its parameters untyped: then a refusal of a value
+   sent untyped is its text's, which a type's input function refuses (regproc's 42883), not its
+   type's."
+  [^java.sql.Connection conn [sql]]
+  (try (with-open [ps (.prepareStatement conn sql)] (.getParameterMetaData ps) true)
+       (catch PSQLException _ false)
+       (finally (.rollback conn))))
+
 (defn arg-matrix
   "Each argument of the queries of matrix-queries, over every column of the oracle schema and
    of matrix.types (matrix-schema!, which it creates first), sent each of matrix-values as
-   parameters under :plain of send-profiles, and its :classes under :date-time, arg-types under
-   the profile's :send. :refused: PostgreSQL takes the value, the argument's schema from
-   arg-types refuses it, and the stricter rule of docs/queries.md does not explain it: a class
+   parameters under :plain of send-profiles, under each of its :times, and its :classes under
+   :date-time, arg-types under the profile's :send and :time. :refused: PostgreSQL takes the
+   value, the argument's schema from arg-types refuses it, and the stricter rule of docs/queries.md does not explain it: a class
    sent as a type the column does not hold as its own (accept/holds?; under a cast, one
    PostgreSQL does not cast, accept/accepts?), a comparison with a value outside a CHECK's list
    or with NULL. :written: as :refused, the schema of the row an UPDATE's :set or an INSERT's
@@ -940,14 +950,15 @@
             (sent-failures conn all-values))
           cat
           (in-parallel
-           db (for [p places profile (keys send-profiles)] (assoc p :profile profile))
-           (fn [conn {:keys [context query table column list notnull compared-type quoted? profile] t :type :as place}]
+           db (for [p places [profile {:keys [times]}] send-profiles time (or times [nil])]
+                (cond-> (assoc p :profile profile) time (assoc :time time)))
+           (fn [conn {:keys [context query table column list notnull compared-type quoted? profile time] t :type :as place}]
              (let [{:keys [send classes] :as sends} (send-profiles profile)
-                   opts {:format (fmt quoted?) :send send}
+                   opts (cond-> {:format (fmt quoted?) :send send} time (assoc :time time))
                    s (try (or (some-> (:x (h/arg-types registry query opts)) (m/schema {:registry registry}))
                               "arg-types gives :x no schema")
                           (catch Exception e (str "arg-types throws: " (ex-message e))))
-                   failure #(merge (select-keys place [:table :column :context :type :profile]) %)]
+                   failure #(merge (select-keys place [:table :column :context :type :profile :time]) %)]
                (if (string? s)
                  [(failure {:kind :untyped :sql (pr-str query) :schema s})]
                  (vec (for [v (if classes (map values classes) all-values)
@@ -979,7 +990,8 @@
                                   kind (cond (:timeout? pg) :timeout
                                              (and refused? taken?) :refused
                                              (and row-refused? taken?) :written
-                                             (and rule? (type-refusals (:state pg)) (not (own-refused? conn place sends))) :rule)]
+                                             (and rule? (type-refusals (:state pg)) (not (own-refused? conn place sends))
+                                                  (not (and (= :unknown sent) (described? conn sqlvec)))) :rule)]
                             :when kind]
                         (failure {:kind kind :sql (first sqlvec) :value v :class (some-> v class .getName) :sent sent
                                   :schema (if (= :written kind) (str (if (= :update context) "set-schema" "values-schema") " refuses it") (m/form s))
@@ -987,11 +999,11 @@
 
 (defn arg-failure-text
   "An arg-matrix failure as bb oracle and pgmalli.oracle-test print it."
-  [{:keys [kind profile table column context type sql value sent schema pg] cls :class}]
+  [{:keys [kind profile time table column context type sql value sent schema pg] cls :class}]
   (if (= :sent kind)
     (str kind " " cls " under " profile ": sent-type says " (pr-str sent) ", PostgreSQL gets " (pr-str pg)
          "\n  value: " (pr-str (cond-> value (some-> value class .isArray) vec)))
-    (str kind " " table "." column " " context " under " profile " (column type " (pr-str type) ")"
+    (str kind " " table "." column " " context " under " profile (some->> time (str " :time ")) " (column type " (pr-str type) ")"
          "\n  SQL:        " sql
          "\n  value:      " (pr-str (cond-> value (some-> value class .isArray) vec)) " " cls " sent as " (pr-str sent)
          "\n  arg schema: " (pr-str (walk/postwalk #(if (fn? %) 'fn %) schema))

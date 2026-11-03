@@ -362,6 +362,11 @@
   [opts array?]
   (write-rows* (:send opts) array?))
 
+(defn sent-as
+  "The alternatives of the schemas of the classes, no array, :send sends as type t."
+  [opts t]
+  (distinct (for [[s q] (write-rows opts false) :when (= t q) a (shape/alternatives s)] a)))
+
 (defn sent-type
   "The type a literal value goes to PostgreSQL as: :unknown under sql/format's :inline, which
    writes it into the SQL; otherwise as send-map sends its class, nil for a class it does not
@@ -458,16 +463,18 @@
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
                          (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
+        untyped (set (sent-as opts :unknown))
         ;; a typed array's elements are its type's, never a scalar sent untyped (a String's, where
-        ;; t takes one): t without those
-        untyped (set (for [[s q] (write-rows opts false) :when (= :unknown q) a (shape/alternatives s)] a))
-        typed (let [strip #(shape/either (remove untyped (shape/alternatives %)) %)]
-                (if (shape/maybe? t) [:maybe (strip (shape/non-null t))] (strip t)))
+        ;; t takes one) but where its type takes that too (a java.sql.Time, a Time[]'s): t without those
+        typed (fn [x]
+                (let [own (set (map shape/kind (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives)))
+                      strip #(shape/either (remove (fn [a] (and (untyped a) (not (own (shape/kind a))))) (shape/alternatives %)) %)]
+                  (if (shape/maybe? t) [:maybe (strip (shape/non-null t))] (strip t))))
         ;; a typed array's elements are also the values of its element type, where the column
         ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
         element (fn [sent]
-                  (let [t (if (= :unknown sent) t typed)
-                        x (when (string? sent) (types/element sent))
+                  (let [x (when (string? sent) (types/element sent))
+                        t (if (= :unknown sent) t (typed x))
                         ;; an element of no known type (an opaque column's) stays so
                         e (when (and x elem (not= x elem)) (types/entry x))]
                     (if e
@@ -502,16 +509,13 @@
     ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
     (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
-          ;; pgjdbc sends a java.sql.Date or Timestamp (inst?) to a date or timestamp under every :time
-          t (if (#{:time/local-date :time/local-date-time :time/instant} (shape/kind schema))
-              (shape/either (distinct (concat (shape/alternatives t) (shape/alternatives (shape/read-time :inst schema)))) t)
-              t)
+          ;; a java.sql.Date, Time or Timestamp (inst?) goes to a date, time or timestamp under every :time
+          inst (driver-type schema (-> opts (dissoc :read) (assoc :time :inst)) write-type)
+          t (if (= inst t) t (shape/either (distinct (concat (shape/alternatives t) (shape/alternatives inst))) t))
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
           ;; keeps those a class sent goes as (pgmalli.honeysql's labelled-type)
-          sent (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
-                     a (shape/alternatives s)]
-                 a)]
+          sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))]
       (cond (empty? sent) t
             ;; a json column an override or a CHECK shapes: what is sent as its type is held to that shape
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema

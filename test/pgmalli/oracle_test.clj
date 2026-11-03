@@ -55,7 +55,7 @@
 (defn- arg-id [f]
   (if (= :sent (:kind f))
     (str "sent " (:class f) " " (name (:profile f)))
-    (str (name (:kind f)) " " (:table f) "." (:column f) " " (name (:context f)) " " (name (:profile f)))))
+    (str (name (:kind f)) " " (:table f) "." (:column f) " " (name (:context f)) " " (name (:profile f)) (some->> (:time f) name (str " ")))))
 
 (defn- failures
   "[test signature] of each failure of the run, pending or not. A signature: for

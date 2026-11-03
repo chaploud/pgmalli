@@ -144,7 +144,7 @@ keyed as in `sql/format`'s `:params`, here for an application that sends a `Stri
                        :where [:and [:= :group_id :?group] [:in :status :?statuses]]
                        :limit :?n}
              {:send {String :unknown}})
-;; => {:group [:or [:int #:pg{:type "integer"}] :string], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:maybe [:or [:int {:pg/type "bigint", :min 0}] :string]]}
+;; => {:group [:or [:int #:pg{:type "integer"}] :string inst?], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:maybe [:or [:int {:pg/type "bigint", :min 0}] :string inst?]]}
 ```
 
 | where the argument is | its type |
@@ -196,7 +196,7 @@ matches no row.
 
 ```clojure
 (h/arg-types registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
-;; => {:id [:int #:pg{:type "bigint"}], :nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]}
+;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] inst?]], :id [:or [:int #:pg{:type "bigint"}] inst?]}
 ```
 
 A comparison with NULL is never true (it matches no row), so `:?id` above does not take nil.
@@ -206,23 +206,23 @@ PostgreSQL refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]} {:format {:inline true}})
-;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
+;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] inst?]]}
 ```
 
 To take nil everywhere, pass `{:compare :lenient}`:
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= :id :?id]} {:compare :lenient})
-;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
+;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] inst?]]}
 ```
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:= [:cast :id :text] :?id]})
-;; => {:id [:string #:pg{:type "text"}]}
+;; => {:id [:or [:string #:pg{:type "text"}] inst?]}
 
 (h/arg-types registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]}
              {:send {clojure.lang.IPersistentVector "varchar[]"}})
-;; => {:author [:int #:pg{:type "bigint"}], :titles [:or [:pg/array [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]] [:vector [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]}
+;; => {:author [:or [:int #:pg{:type "bigint"}] inst?], :titles [:or [:pg/array [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]] [:vector [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]}
 ```
 
 `h/params-schema` gives the same types as the `[:map ...]` of `sql/format`'s `:params`. Every
@@ -230,7 +230,7 @@ key is required, as `sql/format` refuses a missing one:
 
 ```clojure
 (h/params-schema registry {:update :users :set {:nick :?nick} :where [:= :id :?id]})
-;; => [:map [:id [:int #:pg{:type "bigint"}]] [:nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]]
+;; => [:map [:id [:or [:int #:pg{:type "bigint"}] inst?]] [:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] inst?]]]]
 ```
 
 ### A row written into a table
@@ -296,8 +296,9 @@ row before `sql/format`, `h/arg-types` and `h/query-schema` type it so:
 
 ### What your application sends
 
-An argument takes its column's own values as pgmalli reads them: the `:time` type of a date or
-timestamp (and under every `:time` a `java.sql.Date` or `Timestamp`, `inst?`), an enum's labels, a `varchar(n)`'s strings. What else reaches the column is decided
+An argument takes its column's own values as pgmalli reads them: the `:time` type of a date,
+time or timestamp (and under every `:time` a `java.sql.Date`, `Time` or `Timestamp`, `inst?`, an
+array of them too), an enum's labels, a `varchar(n)`'s strings. What else reaches the column is decided
 by what your application sends, as pgjdbc's `setObject` decides by a value's class: a `Long`
 goes as `bigint`, a `String` as `varchar`, a `LocalDate` as `date`, a keyword nowhere unless a
 `SettableParameter` extension of yours sends it. `:send` says so, a map of classes to the type
@@ -313,11 +314,14 @@ for a value sent untyped), merged over pgjdbc's; `nil` takes a class out:
 
 (h/arg-types registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}
              {:send app-send})
-;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:or [:pg/array [:int #:pg{:type "bigint"}]] [:vector [:or [:int #:pg{:type "bigint"}] :string :keyword]]]}
+;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] inst? :keyword]], :ids [:or [:pg/array [:int #:pg{:type "bigint"}]] [:vector [:or [:int #:pg{:type "bigint"}] :string inst? :keyword]]]}
 ```
 
 pgjdbc's classes are those `pgmalli.impl.accept/class-types` lists: the numbers, `Boolean`,
-`String`, `UUID`, `byte[]`, the java.time dates and times, and the arrays pgjdbc encodes. A
+`String`, `UUID`, `byte[]`, the java.time dates and times, the arrays pgjdbc encodes, and
+`java.sql.Date`, `Time` and `Timestamp`, which it sends untyped (`:unknown`), so that
+PostgreSQL picks `timestamp` or `timestamptz`: one goes to a column of any type, a `text` column
+too, as the text pgjdbc writes of it. A
 value reaches an argument only through its class's entry or one of its superclasses' or
 interfaces'.
 
@@ -523,10 +527,10 @@ what `execute!` returns on a datasource or connection, `:any` when `h/row-schema
 
 ```clojure
 (h/query-schema registry [:id] {:select [:email] :from [:users] :where [:= :id :?id]} {:result :one})
-;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:maybe [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:or [:int #:pg{:type "bigint"}] inst?]] [:maybe [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 
 (h/query-schema registry [:id] {:delete-from :users :where [:= :id :?id]} {:result :one})
-;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:or [:int #:pg{:type "bigint"}] inst?]] [:map [:next.jdbc/update-count :int]]]
 ```
 
 Where the data tells how many rows a statement returns, the return says so
@@ -556,7 +560,7 @@ tables it reads and writes, as `h/tables` gives them:
 
 ```clojure
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
+;; => {:args {:id [:or [:int #:pg{:type "bigint"}] inst?]}, :row [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
 ```
 
 A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns,
@@ -592,7 +596,7 @@ A query schema's properties hold `:pgmalli/problems`, `[]` for none:
 ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]
 
 (m/form (first (m/children broken)))
-;; => [:cat [:int #:pg{:type "bigint"}]]
+;; => [:cat [:or [:int #:pg{:type "bigint"}] inst?]]
 ```
 
 An argument of the query that the argument vector (`[:db :idd]`) lacks is `:missing-arg`,

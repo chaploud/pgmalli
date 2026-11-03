@@ -30,9 +30,6 @@
 (def ^:private left-out
   "Classes setObject sends that class-types leaves out, with why."
   {org.postgresql.util.PGobject "a PGobject names its type itself, value by value"
-   java.sql.Date "goes untyped: a date column takes it as its own value (inst?); to a text column a date is a cast"
-   java.sql.Time "goes untyped: a time column takes it as its own value (inst?); to a text column a time is a cast"
-   java.sql.Timestamp "goes untyped: a timestamp column takes it as its own value (inst?); to a text column a timestamp is a cast"
    clojure.lang.PersistentArrayMap "a map goes as hstore only where that extension is there"
    clojure.lang.PersistentHashMap "a map goes as hstore only where that extension is there"})
 

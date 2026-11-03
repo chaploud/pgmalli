@@ -429,5 +429,5 @@
           (let [theirs (own-described con typnames q)]
             (is (= (mapv pop theirs) (ours q)) (pr-str q))
             (is (every? #{""} (map peek theirs)) (str "of no table: " (pr-str q))))))
-      (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (h/arg-types registry {:select [[[:double_it :?x] :d]] :from [:t]} o))))))
+      (is (= {:x [:maybe [:or [:int {:pg/type "integer"}] 'inst?]]} (h/arg-types registry {:select [[[:double_it :?x] :d]] :from [:t]} o))))))
 

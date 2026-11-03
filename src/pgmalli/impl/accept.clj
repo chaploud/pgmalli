@@ -19,9 +19,10 @@
 (def classes
   "[class type schema]: the type pgjdbc's setObject sends a value of class as, with no extension
    and its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
-   Character with setString, a Java array as an array of its elements' type; nil for a class it
-   sends no type of its own for. schema is the malli schema of a value of class, for the classes
-   pgjdbc sends and those an application's extensions commonly do; nil for a Java array."
+   Character with setString, a Java array as an array of its elements' type, java.sql's Date,
+   Time and Timestamp untyped (:unknown); nil for a class it sends no type of its own for.
+   schema is the malli schema of a value of class, for the classes pgjdbc sends and those an
+   application's extensions commonly do; nil for a Java array."
   (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
    [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
    [Double "double precision" :double] [Float "real" 'float?]
@@ -30,6 +31,10 @@
    [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]
    [java.time.LocalDateTime "timestamp without time zone" :time/local-date-time]
    [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
+   ;; untyped, so that PostgreSQL picks timestamp or timestamptz (babashka has no java.sql.Time)
+   (some-> (named "java.sql.Date") (vector :unknown 'inst?))
+   (some-> (named "java.sql.Time") (vector :unknown 'inst?))
+   (some-> (named "java.sql.Timestamp") (vector :unknown 'inst?))
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
    [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
    [(array Short/TYPE) "smallint[]"] [(array Short) "smallint[]"] [(array Double/TYPE) "double precision[]"]
