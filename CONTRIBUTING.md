@@ -31,6 +31,12 @@ task starts its own PostgreSQL container. On a machine without docker, `bb lint`
 `PGMALLI_SKIP_DB=1 bb test` and `bb test:docs` run. After `bb test:update` or `bb test:docs:update`,
 read the git diff: a rewritten expectation is a changed behaviour.
 
+`bb mutate` runs the bb suite unless told otherwise, which leaves out the tests that pin much
+of a file such as `src/pgmalli/impl/resolve.clj` (those comparing with PostgreSQL). Run such a
+file against the JVM namespaces that test it, with a database:
+`bb mutate --file src/pgmalli/impl/resolve.clj --jvm --db --ns pgmalli.expression-types-test pgmalli.impl.resolve-test pgmalli.honeysql-test`,
+with `--fn <def>` for one def.
+
 `bb test` runs every `*_test` namespace but those that need next.jdbc. One namespace or one test
 on the JVM: `clojure -M:test -n pgmalli.honeysql-test`,
 `clojure -M:test -v pgmalli.honeysql-test/some-test`.
