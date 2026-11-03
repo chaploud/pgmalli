@@ -51,6 +51,13 @@
         pg (filter generated-name? ks)]
     (vec (or (seq pg) ks))))
 
+(defn meant
+  "The names among known probably meant by one a registry lacks: the closest, else those of
+   its name in another namespace (:pg.public/users for :users or :pg.app/users). nil for none."
+  [given known]
+  (or (some-> (error/suggest given known) vector)
+      (when (keyword? given) (seq (filter #(and (keyword? %) (= (name given) (name %))) known)))))
+
 (defn schema-of
   "The schema a registry holds under a name; a name it does not hold is an error naming the
    ones it does."
@@ -58,13 +65,13 @@
   (let [schemas (schemas-of registry)]
     (when-not (contains? schemas name)
       (let [known (generated-names schemas)
-            suggest (error/suggest name known)]
+            suggest (meant name known)]
         (error/fail! :pgmalli.error/unknown-schema
                      (str "the registry has no schema named " (pr-str name)
                           (if suggest
-                            (str "; did you mean " (pr-str suggest) "?")
+                            (error/did-you-mean (str/join " or " (map pr-str suggest)))
                             (str "; it has " (pr-str (vec (take 5 known))) (when (< 5 (count known)) " ..."))))
-                     (cond-> {:given name :known known} suggest (assoc :did-you-mean [suggest])))))
+                     (cond-> {:given name :known known} suggest (assoc :did-you-mean (vec suggest))))))
     (get schemas name)))
 
 (defn row-map

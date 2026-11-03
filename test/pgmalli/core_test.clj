@@ -422,3 +422,12 @@
       (is (= 3 (count (get ds "ol.a"))) "x% and %x generate x")
       (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (concat (data/inserts reg ds) (data/inserts reg rows)))))
       (is true "inserted"))))
+
+(deftest an-unqualified-name-means-the-generated-schema-of-that-name
+  (let [registry (pgmalli/registry "sample")
+        meant (fn [f] (try (f) (catch clojure.lang.ExceptionInfo e [(ex-message e) (:did-you-mean (ex-data e))])))]
+    (is (= ["the registry has no schema named :users; did you mean :pg.sample/users?" [:pg.sample/users]]
+           (meant #(pgmalli/as-read registry :users))))
+    (is (= [:pg.sample/users] (second (meant #(pgmalli/describe registry :users)))))
+    (is (= [:pg.sample/users] (second (meant #(pgmalli/columns registry :pg.public/users))))
+        "a name of another schema means the one of the registry")))

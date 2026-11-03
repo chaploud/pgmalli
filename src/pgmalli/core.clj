@@ -3,7 +3,8 @@
    the classpath as pgmalli/<schema>.edn), read and used. Generation and freshness, which need
    psql, are pgmalli.generate; datasets, pgmalli.data; HoneySQL queries checked and typed,
    pgmalli.honeysql."
-  (:require [malli.core :as m]
+  (:require [clojure.string :as str]
+            [malli.core :as m]
             [pgmalli.impl.describe :as d]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.jdbc :as jdbc]
@@ -81,10 +82,11 @@
        (catch clojure.lang.ExceptionInfo e
          (let [unknown (-> e ex-data :data :schema)]
            (if (= ::m/invalid-schema (:type (ex-data e)))
-             (error/fail! :pgmalli.error/unknown-schema
-                          (str "describe: " (pr-str unknown) " is no type malli or the registry knows"
-                               (when (keyword? unknown) (error/did-you-mean (some-> (error/suggest unknown (filter keyword? (keys (shape/schemas-of registry)))) pr-str))))
-                          {:given unknown})
+             (let [meant (when (keyword? unknown) (shape/meant unknown (filter keyword? (keys (shape/schemas-of registry)))))]
+               (error/fail! :pgmalli.error/unknown-schema
+                            (str "describe: " (pr-str unknown) " is no type malli or the registry knows"
+                                 (error/did-you-mean (some->> meant (map pr-str) (str/join " or "))))
+                            (cond-> {:given unknown} meant (assoc :did-you-mean (vec meant)))))
              (throw e))))))
 
 (defn describe
