@@ -958,7 +958,8 @@
     (boolean (and (nil? a) (some #(and (map? %) (contains? % (folded column))) (chain scope))))))
 
 (defn- near-columns
-  "Up to three columns of the scope's tables spelled close to col's name: what it likely meant."
+  "Up to three columns of the scope's tables spelled close to col's name, qualified as col is:
+   what it likely meant."
   [registry scope col]
   (let [[a c] (split-column col)
         c (folded c)
@@ -969,7 +970,25 @@
                               [alias {:keys [table]}] sc :when (and table (or (nil? a) (= a alias)))
                               n (keys (table-columns registry table)) :when (not (system-columns n))]
                           n))]
-    (some->> (error/suggestions c names 3) (mapv keyword))))
+    (some->> (error/suggestions c names 3) (mapv #(keyword (if a (str a "." %) %))))))
+
+(defn- unknown-qualifier
+  "[qualifier meant] when no table or alias in scope has col's qualifier, nil otherwise. meant
+   is col's column qualified by the aliases in scope whose table has it and whose alias or table
+   name is the qualifier or two edits from it, closest first: an aliased table named by its
+   name, as PostgreSQL's \"Perhaps you meant to reference the table alias\", or a misspelt alias."
+  [registry scope col]
+  (let [[a c] (split-column col)
+        scopes (filter map? (chain scope))]
+    (when (and a (not (some #{:open} (chain scope))) (not-any? #(contains? % a) scopes))
+      (let [c (folded c)
+            meant (for [sc scopes
+                        [alias {:keys [table order]}] sc
+                        :when (or (and table (contains? (table-columns registry table) c)) (some #{c} order))
+                        :let [d (apply min (map #(error/edit-distance a %) (remove nil? [alias (some-> table (str/replace #"^.*\." ""))])))]
+                        :when (<= d 2)]
+                    [(keyword (str alias "." c)) d])]
+        [a (some->> (seq meant) (sort-by second) (map first) distinct (take 3) vec)]))))
 
 (defn- column-problems [registry sc stmt {:keys [schema] :as opts}]
   (let [target (target-scope sc stmt schema)
@@ -996,8 +1015,11 @@
           :let [hits (column-hits registry scope col)]]
       (if (< 1 (count hits))
         {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
-        (let [near (near-columns registry scope col)]
-          (cond-> {:kind :unknown-column :column col} near (assoc :did-you-mean near)))))))
+        (let [[qualifier meant] (unknown-qualifier registry scope col)
+              near (if qualifier meant (near-columns registry scope col))]
+          (cond-> {:kind :unknown-column :column col}
+            qualifier (assoc :qualifier qualifier)
+            near (assoc :did-you-mean near)))))))
 
 (defn- table-props
   "The properties of the row schema of table (\"schema.table\")."
@@ -2305,10 +2327,11 @@
                         (if did-you-mean
                           (str "; did you mean " (str/join " or " did-you-mean) "?")
                           "; check its name, or :schema when it is in another schema")))
-   :unknown-column (fn [{:keys [column did-you-mean]}]
+   :unknown-column (fn [{:keys [column did-you-mean qualifier]}]
                      (str "unknown column " (column-name column)
-                          (if did-you-mean (str "; did you mean " (str/join " or " (map column-name did-you-mean)) "?")
-                              "; no table of the statement has it")))
+                          (when qualifier (str "; no table or alias " qualifier " in the statement"))
+                          (cond did-you-mean (str "; did you mean " (str/join " or " (map column-name did-you-mean)) "?")
+                                (not qualifier) "; no table of the statement has it")))
    :ambiguous-column (fn [{:keys [column candidates]}]
                        (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias"))
    :missing-required-column (fn [{:keys [table column]}]

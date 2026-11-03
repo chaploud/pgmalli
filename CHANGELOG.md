@@ -106,6 +106,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   read as a vector, as HoneySQL reads it, where it was taken for code and left unchecked; a list
   with a symbol in it is still code.
 * `h/row-schema`'s `:pgmalli/untold` property is `:pgmalli/unknown-keys`.
+* `:unknown-column` keeps the qualifier in `:did-you-mean` (`:u.nick` for `:u.nik`). A qualifier
+  that names no table or alias of the statement is under `:qualifier`, with the alias probably
+  meant (`:u.id` for `:users.id` under `[:users :u]`).
 * `:db` in `pgmalli.edn` names the database `:dbname`, as next.jdbc and libpq do, where it was
   `:db`. A `:db` holding next.jdbc's `:dbtype` is an error saying to drop it.
 * What to do:

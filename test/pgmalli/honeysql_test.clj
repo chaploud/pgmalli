@@ -1149,7 +1149,7 @@
       "nor the entries after it")
   (is (= [] (check {:with-recursive [[:t {:union-all [{:select [:id] :from :users} {:select [:id] :from :t}]}]] :select [:id] :from :t}))
       "a :with-recursive one does")
-  (is (= [{:kind :unknown-column :column :groups.id :in [:values 0 0 1]}]
+  (is (= [{:kind :unknown-column :column :groups.id :qualifier "groups" :in [:values 0 0 1]}]
          (check {:insert-into :groups :values [{:id {:select [:id] :from :users :where [:= :users.id :groups.id]} :name "x"}]}))
       "a row of :values does not see the table inserted into"))
 
@@ -1165,7 +1165,7 @@
   (is (= [] (check '{:with [[(nm) {:select [:id] :from :users}]] :select [:id] :from :c}))))
 
 (deftest a-star-names-a-table-of-the-scope
-  (is (= [{:kind :unknown-column :column :x.*}] (check {:select [:x.*] :from :users})))
+  (is (= [{:kind :unknown-column :column :x.* :qualifier "x"}] (check {:select [:x.*] :from :users})))
   (is (= [] (check {:select [:id] :from [[{:select [:id] :from :users}]]})) "[subquery] has no alias"))
 
 (deftest what-postgresql-accepts-checks-clean
@@ -1328,10 +1328,19 @@
 (deftest an-unknown-column-names-the-columns-it-likely-meant
   (is (= [{:kind :unknown-column :column :nik :did-you-mean [:nick]}]
          (check {:select [:nik] :from [:users]})))
-  (is (= [{:kind :unknown-column :column :u.scroe :did-you-mean [:score]}]
+  (is (= [{:kind :unknown-column :column :u.scroe :did-you-mean [:u.score]}]
          (check {:select [:u.scroe] :from [[:users :u]]})))
   (is (= [{:kind :unknown-column :column :zzz}] (check {:select [:zzz] :from [:users]}))
       "nothing close, nothing suggested"))
+
+(deftest a-qualifier-no-table-or-alias-has-is-the-problem-with-the-alias-meant
+  (is (= [{:kind :unknown-column :column :users.id :qualifier "users" :did-you-mean [:u.id]}]
+         (check {:select [:users.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}))
+      "an aliased table named by its name, as PostgreSQL hints")
+  (is (= ["unknown column usr.id; no table or alias usr in the statement; did you mean u.id?"]
+         (h/humanize (check {:select [:usr.id] :from [[:users :u]]}))))
+  (is (= [{:kind :unknown-column :column :x.id :qualifier "x"}] (check {:select [:x.id] :from [:users]}))
+      "no alias close: nothing suggested"))
 
 (deftest each-problem-reads-as-what-to-do
   (is (= ["unknown column nik; did you mean nick?"

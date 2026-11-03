@@ -37,6 +37,14 @@ examples use [example/schema.sql](example/schema.sql).
 ;; => [{:kind :unknown-table, :table "public.accounts"}]
 ```
 
+A qualifier that names no table or alias of the statement is the problem, under `:qualifier`. A
+table under an alias is named by its alias alone, as PostgreSQL says:
+
+```clojure
+(h/check registry {:select [:users.email] :from [[:users :u]]})
+;; => [{:kind :unknown-column, :column :users.email, :qualifier "users", :did-you-mean [:u.email]}]
+```
+
 A problem in a subquery or CTE carries `:in`, its path into the query:
 
 ```clojure

@@ -28,7 +28,7 @@
    (throw (ex-info message (assoc data :pgmalli/error kind :cognitect.anomalies/category (categories kind :cognitect.anomalies/fault))
                    cause))))
 
-(defn- edit-distance
+(defn edit-distance
   "The edits from a to b: insertions, deletions, substitutions and swaps of adjacent letters
    (nmae is one edit from name)."
   [^String a ^String b]

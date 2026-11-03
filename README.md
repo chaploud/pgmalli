@@ -341,7 +341,7 @@ The problems it reports:
 | `:kind` | for |
 |---|---|
 | `:unknown-table` | a table the registry lacks |
-| `:unknown-column` | a column no table in scope has |
+| `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`) |
 | `:ambiguous-column` | an unqualified column of two tables, with `:candidates` |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |
