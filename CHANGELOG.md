@@ -64,14 +64,20 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     whatever type `:send` sends it as, not only `varchar`; a string assigned to a reg* column
     other than `regclass`; a CHECK's list of numbers compared with a value outside it; and a
     column a CTE or a subquery does not give.
-* `generate` checks every `:overrides` key: a constraint name or a type no column of the
-  schemas has, `{:skip reason}` under a type or column key and a value that is no malli schema
-  are errors naming the key meant. Drop the keys of what was dropped from the database.
+* `:overrides` takes two keys: a column, `:schema.table/column`, with its schema, and a
+  constraint name with `{:skip reason}`. The others are `:pgmalli.error/invalid-config` errors
+  saying what to write instead:
+  * A type key (`{:inet s}`) names the columns of the type: give each its schema
+    (`{:public.hosts/ip s}`).
+  * A schema under a constraint name names its column: skip the CHECK and give the column the
+    schema. A CHECK across columns is kept or skipped whole.
+* `generate` checks every `:overrides` key: a constraint name or a column the schemas do not
+  have, `{:skip reason}` under a column key and a value that is no malli schema are errors
+  naming the key meant. Drop the keys of what was dropped from the database.
 * Generate again: every file holds the schema's functions and operators (`:functions`,
   `:operators`), and `pgmalli.main check` reports a file without them stale, in one line; until
   then, a call is typed by `pg_catalog`'s functions alone. A file also changes where its schema
-  has a domain over `timestamp(n) with time zone` or `time(n)`, a column of a type pgmalli does
-  not know overridden by its type, a table other tables inherit, a DEFERRABLE primary key or
+  has a domain over `timestamp(n) with time zone` or `time(n)`, a table other tables inherit, a DEFERRABLE primary key or
   unique constraint, an invalid unique index, or a domain whose CHECK lists its values. A
   function or operator that differs is reported by its name
   (`{:key :functions :name "f" :file ... :db ...}`).
@@ -168,9 +174,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   value, read and written, NULL-ability and CHECKs still the database's
   ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
   read under `{:read {:json :parsed}}`, written for what `:send` sends as its type.
-* An `:overrides` type key may be the type's alias or a HoneySQL cast's spelling
-  (`:timestamptz`, `:timestamp-with-time-zone`); `pgmalli.main` suggests one for an unrendered
-  type, or the column's key for an array type.
+* `pgmalli.main` suggests the column's `:overrides` key for an unrendered type, and
+  `{:skip reason}` for an unrendered CHECK.
 
 ### Changed
 
@@ -230,8 +235,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   operand: named, keyed and typed as it.
 * An argument compared with a literal of no type (`[:= :?w [:inline "1"]]`) takes any value, as
   PostgreSQL reads the literal as the argument's type.
-* An override of a type the driver reads as an object of its own (`:inet` a PGobject, `:hstore` a
-  `java.util.Map`) holds for writes; a read stays the driver's object (`:some` where the column is never NULL)
+* An override of a column of a type the driver reads as an object of its own (an `inet` a
+  PGobject, an `hstore` a `java.util.Map`) holds for writes; a read stays the driver's object (`:some` where the column is never NULL)
   unless `:read` names the type: `{:read {"tstzrange" :string}}` for an extension reading a range as its text.
 * A `:schema` the registry holds no generated file, table or view of is an
   `:pgmalli.error/invalid-options` error naming the ones it holds, in every function of

@@ -362,7 +362,7 @@
     (is (= [{:kind :type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}
             {:kind :type :table "wh.stock" :column "sku" :type "catalog.sku" :type-schema "catalog"}]
            (:unrendered (files/from-database {:db *db*} "wh"))))
-    (let [config {:db *db* :overrides {:sku [:ref :pg.catalog/sku] :kind [:ref :pg.catalog/kind]}}
+    (let [config {:db *db* :overrides {:wh.stock/sku [:ref :pg.catalog/sku] :wh.stock/k [:ref :pg.catalog/kind]}}
           reg (pgmalli/registry (files/from-database config "catalog") (files/from-database config "wh"))]
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "abc" :k nil} {:registry reg})))
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "c"} {:registry reg})))

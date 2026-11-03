@@ -501,20 +501,17 @@ file and lists them all:
 
 ## Overrides
 
-`:overrides` in `pgmalli.edn` replaces what pgmalli generates. A constraint name replaces
-that CHECK, or `{:skip reason}` leaves it out; use it for the CHECKs listed in `:unrendered`.
-A type keyword replaces the schema of every column of that type, such as `:inet`, which is
-otherwise `:any`; it is the type's name, an alias of [docs/types.md](docs/types.md) or a
-HoneySQL cast's spelling (`:timestamptz`, `:timestamp-with-time-zone`). An array type has no
-keyword: override its columns. A keyword `:schema.table/column` replaces the schema of that one column's
-value, its type's schema with it (an enum's, a `varchar(n)`'s length); it comes before an
-override of the type:
+`:overrides` in `pgmalli.edn` replaces what pgmalli generates. A keyword `:schema.table/column`
+replaces the schema of that one column's value, its type's schema with it (an enum's, a
+`varchar(n)`'s length), such as an `inet` column, which is otherwise `:any`. A constraint name
+with `{:skip reason}` leaves that CHECK out; use it for the CHECKs listed in `:unrendered`. To
+give a column's CHECK a schema of your own, skip it and override the column; a CHECK across
+columns is kept or skipped whole:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
 {:overrides {"chk_legacy_flag" {:skip "dropped with the column in 2027"}
-             "chk_scores" [:ref :app/scores-consistent]
-             :inet [:re "^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$"]
+             :public.hosts/ip [:re "^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$"]
              :public.ai_jobs/input [:map [:prompt :string] [:max_tokens {:optional true} :int]]}}
 ```
 
@@ -523,14 +520,15 @@ NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are 
 (`as-read`, `h/row-schema`) and written (`h/arg-types`, `h/values-schema`, `h/set-schema`),
 datasets included, but for a type the driver reads as an object of its own: an `inet`, read as a
 PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read unless `:read`
-names what your extension reads it as (`{:read {"inet" :string}}`); the `:inet` override above
-holds for what is written. A json or jsonb column's driver object is a PGobject, so its shape is
-the parsed value's: it is read under `{:read {:json :parsed}}`, and an argument takes it for the
-classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`). Without
-those, a read or an argument is the driver's object. `generate` checks every key against the
-schemas generated: a constraint name, a type of a column and a column must be theirs,
-`{:skip reason}` goes under a constraint name alone, and a value must be a malli schema (a
-qualified name passes, as your registry's). An error names the key meant.
+names what your extension reads it as (`{:read {"inet" :string}}`); the `:public.hosts/ip`
+override above holds for what is written. A json or jsonb column's driver object is a PGobject,
+so its shape is the parsed value's: it is read under `{:read {:json :parsed}}`, and an argument
+takes it for the classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`).
+Without those, a read or an argument is the driver's object. `generate` checks every key against
+the schemas generated: a column and a constraint name must be theirs, `{:skip reason}` goes
+under a constraint name and nothing else does, and a value must be a malli schema (a qualified
+name passes, as your registry's). An error names the key meant; a type key (`:inet`) names the
+columns of the type to override instead.
 
 A `[:ref ...]` to your own schema needs a registry holding it:
 

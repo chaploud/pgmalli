@@ -20,7 +20,7 @@
    :pg/default :pg/identity :pg/generated :pg/constraints, and malli's :default for literal defaults.
 
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
-   overrides is {constraint-name schema-or-{:skip reason}, :type schema, :schema.table/column schema}."
+   overrides is {:schema.table/column schema, constraint-name {:skip reason}}."
   (:require [clojure.string :as str]
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.expr :as x]
@@ -200,22 +200,21 @@
 (def ^:private fact-order
   {:enum 0 :domain-ref 0 :max-length 1 :numeric 1 :not-null 1 :null 1 :in-set 2 :not-in-set 3 :non-blank 3 :range 3 :length 3 :json-type 3 :when-present 4 :regex 5 :like 5})
 
-(defn- override-for [overrides f]
-  (when-let [c (:constraint f)] (get overrides c)))
+(defn- skipped? [overrides f]
+  (let [ov (get overrides (:constraint f))]
+    (and (map? ov) (contains? ov :skip))))
 
 (defn- fold-facts
   "Reduces facts over a base schema: {:schema :unrendered :skipped :applied}, :applied being the
    names of the constraints that shaped the schema."
   [schema-name base facts overrides]
-  (reduce (fn [{:keys [schema unrendered] :as acc} f]
-            (let [ov (override-for overrides f)]
-              (cond
-                (and (map? ov) (:skip ov)) (update acc :skipped conj f)
-                ov (-> acc (assoc :schema [:and schema ov]) (update :applied conj (:constraint f)))
-                :else (let [{s :schema un :unrendered rb :ref-base} (apply-fact acc f schema-name)]
-                        (cond-> (assoc acc :schema s :unrendered un)
-                          rb (assoc :ref-base rb)
-                          (and (= un unrendered) (:constraint f)) (update :applied conj (:constraint f)))))))
+  (reduce (fn [{:keys [unrendered] :as acc} f]
+            (if (skipped? overrides f)
+              (update acc :skipped conj f)
+              (let [{s :schema un :unrendered rb :ref-base} (apply-fact acc f schema-name)]
+                (cond-> (assoc acc :schema s :unrendered un)
+                  rb (assoc :ref-base rb)
+                  (and (= un unrendered) (:constraint f)) (update :applied conj (:constraint f))))))
           {:schema base :unrendered [] :skipped [] :applied []}
           (sort-by (juxt (comp fact-order :fact) :constraint) facts)))
 
@@ -224,34 +223,6 @@
    it by (\"public.inet\" is inet, \"int4\" integer)."
   [data-type]
   (types/canonical-name (types/bare-name data-type)))
-
-(def ^:private by-keyword (types/by-keyword any?))
-
-(defn key-type-name
-  "The type an :overrides type key names: a name, an alias or a cast's spelling of a type of
-   pgmalli.impl.types (:timestamptz, :timestamp-with-time-zone), else the key's name."
-  [k]
-  (:name (by-keyword k) (name k)))
-
-(defn type-key?
-  "Whether an :overrides key names a type: a keyword without a namespace."
-  [k]
-  (simple-keyword? k))
-
-(defn override-key
-  "The :overrides key of a type, as a keyword EDN reads back (a type's alias where its name has a
-   space, as :timestamptz); nil when it has none (an array type, \"char\")."
-  [data-type]
-  (let [t (type-name data-type)]
-    (some #(let [k (keyword %)] (when (and (re-matches #"[A-Za-z_][A-Za-z0-9_*+!?<>=-]*" %) (= t (key-type-name k))) k))
-          (cons t (:aliases (types/entry t))))))
-
-(defn- type-override
-  "The schema an override gives every column of a type (keyword keys of :overrides name types:
-   {:inet [:re ...]}), nil when there is none."
-  [overrides data-type]
-  (let [t (type-name data-type)]
-    (some (fn [[k v]] (when (and (type-key? k) (= t (key-type-name k))) v)) overrides)))
 
 (defn column-override-key
   "The :overrides key of one column: :schema.table/column."
@@ -262,14 +233,11 @@
 
 (defn- column-base-and-facts
   "[base facts] of a column: an override of the column replaces its type, and the facts that
-   come from the type with it (a type pgmalli does not know too); else an override of its
-   type, or the type, under every fact."
+   come from the type with it (a type pgmalli does not know too); else the type, under every fact."
   [{:keys [schema table column type]} facts overrides]
   (if-let [own (get overrides (column-override-key schema table column))]
     [own (remove (comp (conj type-facts :unknown-type) :fact) facts)]
-    (if-let [of-type (type-override overrides type)]
-      [of-type (remove (comp #{:unknown-type} :fact) facts)]
-      [(base-type type) facts])))
+    [(base-type type) facts]))
 
 (defn- column-schema
   "Schema of one column with provenance properties; nullable columns wrapped in [:maybe ...]."
@@ -418,12 +386,11 @@
 (defn- table-checks
   "{:schemas :unrendered :skipped} of the constraints that span columns."
   [schema-name columns by-column tfacts overrides types]
-  (let [results (for [f (sort-by order (filter #(and (#{:branch-check :or-check :table-check :unparsed} (:fact %)) (nil? (:column %))) tfacts))
-                      :let [ov (override-for overrides f)]]
-                  (cond (and (map? ov) (:skip ov)) {:skipped [f]}
-                        ov {:schema ov}
-                        :else (let [r (table-constraint schema-name columns by-column f overrides types)]
-                                (if (or (:schema r) (seq (:unrendered r))) r (update r :unrendered conj f)))))]
+  (let [results (for [f (sort-by order (filter #(and (#{:branch-check :or-check :table-check :unparsed} (:fact %)) (nil? (:column %))) tfacts))]
+                  (if (skipped? overrides f)
+                    {:skipped [f]}
+                    (let [r (table-constraint schema-name columns by-column f overrides types)]
+                      (if (or (:schema r) (seq (:unrendered r))) r (update r :unrendered conj f)))))]
     {:schemas (keep :schema results)
      :unrendered (mapcat :unrendered results)
      :skipped (mapcat :skipped results)
@@ -517,9 +484,8 @@
         checks (concat checks (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) (:unrendered first-pass))]]
                                 (assoc (select-keys f [:schema :type-name :constraint :sql :expr]) :fact :domain-check)))
         {:keys [schema unrendered skipped]} (if (empty? lost) first-pass (fold-facts schema-name base-schema facts overrides))
-        results (for [c checks :let [ov (override-for overrides c)]]
-                  (cond (and (map? ov) (:skip ov)) {:skipped [c]}
-                        ov {:schema ov}
+        results (for [c checks]
+                  (cond (skipped? overrides c) {:skipped [c]}
                         ;; NOT VALID: enforced for every new value all the same, so enforced, marked
                         (and (= :domain-check (:fact c)) (ev/supported? (:expr c) types))
                         {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (check-message c)}

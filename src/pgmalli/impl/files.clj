@@ -26,7 +26,8 @@
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.pattern :as pattern]
             [pgmalli.impl.registry :as registry]
-            [pgmalli.impl.render :as render]))
+            [pgmalli.impl.render :as render]
+            [pgmalli.impl.types :as types]))
 
 (def default-config {:schemas ["public"] :out-dir "resources/pgmalli" :overrides {} :db {}})
 
@@ -96,28 +97,43 @@
                                 (for [s schemas] (keyword (str s "." (namespace k)) (name k)))))
       (error/suggest k columns)))
 
+(def ^:private by-keyword (types/by-keyword any?))
+
 (defn checked-overrides!
-  "overrides when each key names what it overrides in facts: a constraint name, a type of a
-   column (render/key-type-name) or a column (:schema.table/column); {:skip reason} under a
-   constraint name, a malli schema otherwise. An error names the one meant otherwise."
+  "overrides when each key names what it overrides in facts: a column (:schema.table/column)
+   with a malli schema, or a constraint name with {:skip reason}. An error names what to write
+   instead."
   [overrides facts]
-  (let [columns (for [f facts :when (= :column (:fact f))] (render/column-override-key (:schema f) (:table f) (:column f)))
+  (let [column-facts (filter #(= :column (:fact %)) facts)
+        key-of #(render/column-override-key (:schema %) (:table %) (:column %))
+        columns (map key-of column-facts)
+        of-type (fn [t] (sort (for [f column-facts :when (= t (render/type-name (:type f)))] (key-of f))))
         by-table (group-by namespace columns)
         schemas (distinct (keep :schema facts))
         generated (str "the schemas generated: " (str/join ", " schemas))
-        types (set (for [f facts :when (= :column (:fact f))] (render/type-name (:type f))))
-        type-keys (keep render/override-key types)
         constraints (distinct (keep :constraint facts))
+        listed #(str/join ", " %)
         fail! (fn [message given meant]
                 (error/fail! :pgmalli.error/invalid-config (str ":overrides: " (pr-str given) " " message (error/did-you-mean (some-> meant pr-str)))
                              (cond-> {:given given} meant (assoc :did-you-mean [meant]))))]
     (doseq [[k v] overrides]
       (cond (string? k)
-            (when-not (some #{k} constraints)
-              (fail! (str "names no constraint of " generated) k (error/suggest k constraints)))
-            (render/type-key? k)
-            (when-not (types (render/key-type-name k))
-              (fail! (str "names no type of a column of " generated) k (error/suggest k type-keys)))
+            (cond (not (some #{k} constraints))
+                  (fail! (str "names no constraint of " generated) k (error/suggest k constraints))
+                  (not (and (map? v) (contains? v :skip)))
+                  (let [f (some #(when (= k (:constraint %)) %) facts)
+                        cols (cond (:column f) [(key-of f)]
+                                   (and (:type-name f) (not (:table f))) (of-type (:type-name f)))]
+                    (fail! (str (pr-str v) ": a constraint takes {:skip reason} alone"
+                                (if (seq cols)
+                                  (str "; skip it and give its column a schema (" (listed cols) ")")
+                                  ": a CHECK across columns is kept or skipped whole"))
+                           k nil)))
+            (simple-keyword? k)
+            (let [cols (of-type (:name (by-keyword k) (name k)))]
+              (fail! (str "names a type: give each column a schema, :schema.table/column"
+                          (if (seq cols) (str " (" (listed cols) ")") (str "; no column of " generated " has it")))
+                     k nil))
             (not (some #{k} columns))
             (let [table (namespace k)
                   meant (column-meant k columns schemas)]
@@ -125,12 +141,11 @@
                            (str ":overrides: " k
                                 (if (by-table table) (str " names no column of " table) (str " names no table or view of " generated))
                                 (cond meant (error/did-you-mean meant)
-                                      (by-table table) (str "; it has " (str/join ", " (sort (by-table table))))
+                                      (by-table table) (str "; it has " (listed (sort (by-table table))))
                                       :else ""))
-                           (cond-> {:given k} meant (assoc :did-you-mean [meant])))))
-      (cond (and (map? v) (contains? v :skip))
-            (when-not (string? k)
-              (fail! (str (pr-str v) ": only a constraint is skipped; give the " (if (render/type-key? k) "type" "column") " a malli schema") k nil))
+                           (cond-> {:given k} meant (assoc :did-you-mean [meant]))))
+            (and (map? v) (contains? v :skip))
+            (fail! (str (pr-str v) ": only a constraint is skipped; give the column a malli schema") k nil)
             :else
             (try (m/schema v {:registry override-registry})
                  (catch Exception e

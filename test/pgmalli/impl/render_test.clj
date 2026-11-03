@@ -101,12 +101,12 @@
                                                                  :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (st_area(g) > 0)"}}}}}))]
     (is (= [:unknown-type :table-check] (map :fact unrendered)))))
 
-(deftest overrides
-  (let [{:keys [registry unrendered skipped]} (r/rendered facts {"score_check" [:ref :app/score-within-total]
+(deftest a-constraint-is-skipped-by-its-name
+  (let [{:keys [registry unrendered skipped]} (r/rendered facts {"score_check" {:skip "guaranteed by the application"}
                                                                    "title_check" {:skip "guaranteed by the application"}})]
     (is (empty? unrendered))
-    (is (= ["title_check"] (map :constraint skipped)))
-    (is (some #{[:ref :app/score-within-total]} (:pg.public/users registry)) "the override replaces the :pg/check")))
+    (is (= #{"score_check" "title_check"} (set (map :constraint skipped))))
+    (is (not-any? #(= "score_check" (:pg/constraint (second %))) (filter vector? (:pg.public/users registry))))))
 
 (deftest not-valid-checks-are-enforced-and-marked
   (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
@@ -219,12 +219,12 @@
           "a domain CHECK that loses its fact is evaluated whole too")
       (is (empty? unrendered)))
     (is (= [{:fact :domain-check :type-name "opaque" :constraint "opaque_check"}] (map #(select-keys % [:fact :type-name :constraint]) unrendered)))
-    (is (= [:and [:string {:pg/type "text"}] [:re "x"]]
+    (is (= [:string {:pg/type "text"}]
            (:pg.public/opaque (:registry (r/rendered (p/facts {:name "public" :types {"opaque" {:kind "DOMAIN" :base_type "text" :not_null false
                                                                                                     :constraints [{:name "opaque_check" :definition "CHECK (validate(VALUE))"}]}}
                                                                :tables {}})
-                                                     {"opaque_check" [:re "x"]}))))
-        "overrides apply to domain CHECKs too")))
+                                                     {"opaque_check" {:skip "x"}}))))
+        "a domain CHECK is skipped by its name too")))
 
 (deftest a-domain-over-char-n-or-an-integer-holds-its-checks-as-postgresql-does
   (let [domain (fn [base definition]
@@ -567,35 +567,6 @@
     (is (= [:* :price [:cast 2 :numeric]] (:pg/generated (second (last (last (get-in registry [:pg.public/t 5])))))) "a generated column carries its expression")
     (is (= [{:columns ["email"]} {:columns ["nick"] :index true}] (:pg/unique (second (:pg.public/t registry)))) "a unique index is marked")))
 
-(deftest an-override-keyed-by-type
-  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
-                                                            :tables {"t" {:columns [{:name "ip" :position 1 :data_type "inet" :is_nullable false}
-                                                                                    {:name "ips" :position 2 :data_type "inet[]" :is_nullable true}]
-                                                                          :constraints {}}}})
-                                                  {:inet [:re "^[0-9.]+$"]})]
-    (is (= [:re {:pg/type "inet"} "^[0-9.]+$"] (get-in registry [:pg.public/t 2 1])) "every inet column is what the override says")
-    (is (= [:maybe [:vector {:pg/type "inet[]"} :any]] (get-in registry [:pg.public/t 3 1])) "arrays keep their element type as it is")
-    (is (empty? unrendered))))
-
-(deftest a-type-key-is-a-name-an-alias-or-a-cast-spelling-of-the-type
-  (let [column (fn [type overrides]
-                 (get-in (:registry (r/rendered (p/facts {:name "public" :types {}
-                                                          :tables {"t" {:columns [{:name "c" :position 1 :data_type type :is_nullable false}] :constraints {}}}})
-                                                overrides))
-                         [:pg.public/t 2 1]))]
-    (is (= [:string {:pg/type "timestamp with time zone"}] (column "timestamp with time zone" {:timestamptz :string})))
-    (is (= [:string {:pg/type "timestamp with time zone"}] (column "timestamp with time zone" {:timestamp-with-time-zone :string})))
-    (is (= [:int {:pg/type "character varying"}] (column "character varying" {:varchar :int})))
-    (is (= [:int {:pg/type "integer"}] (column "integer" {:int4 :int})))))
-
-(deftest a-column-of-an-unknown-type-overridden-by-its-type-is-not-left-out
-  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
-                                                            :tables {"t" {:columns [{:name "g" :position 1 :data_type "geometry" :type_schema "public" :is_nullable false}]
-                                                                          :constraints {}}}})
-                                                  {:geometry :string})]
-    (is (= [:string {:pg/type "geometry"}] (get-in registry [:pg.public/t 2 1])))
-    (is (empty? unrendered))))
-
 (deftest a-typmod-inside-a-type-name-is-no-other-type
   (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :tables {}
                                                             :types {"at" {:kind "DOMAIN" :base_type "timestamp(3) with time zone" :not_null false :constraints []}
@@ -619,14 +590,13 @@
                                                    :public.jobs/n [:int {:min 1}]
                                                    :public.jobs/m [:enum "a"]
                                                    :public.jobs/ip :string
-                                                   :public.jobs/g :string
-                                                   :inet [:re "^[0-9.]+$"]})
+                                                   :public.jobs/g :string})
         column (fn [k] (some #(when (= k (first %)) (last %)) (drop 2 (:pg.public/jobs registry))))]
     (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (column :input)) "the override is the column's value, its type kept")
     (is (= [:maybe [:any {:pg/type "jsonb"}]] (column :meta)) "another column of the type is as generated")
     (is (= [:int {:min 1 :max 99 :pg/type "integer" :pg/constraints ["n_check"]}] (column :n)) "the column's CHECKs still hold")
     (is (= [:maybe [:enum {:pg/type "mood"} "a"]] (column :m)) "it replaces the type's schema, an enum's reference too")
-    (is (= [:maybe [:string {:pg/type "inet"}]] (column :ip)) "it comes before an override of the column's type")
+    (is (= [:maybe [:string {:pg/type "inet"}]] (column :ip)) "a type the driver reads as an object of its own too")
     (is (empty? unrendered) "a column of a type pgmalli does not know is no longer left out")))
 
 (deftest an-overridden-column-with-a-default-may-be-left-out-of-an-insert

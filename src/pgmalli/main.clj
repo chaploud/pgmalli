@@ -16,7 +16,6 @@
             [pgmalli.generate :as generate]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.files :as files]
-            [pgmalli.impl.render :as render]
             [pgmalli.impl.shape :as shape]
             [pgmalli.impl.types :as types]))
 
@@ -60,22 +59,14 @@
     (str "tables: " (f :table 0) ", views: " (f :view 0) ", enums: " (f :enum 0) ", domains: " (f :domain 0)
          "; unrendered: " (count (:unrendered data)) ", diagnostics: " (count (:diagnostics data)))))
 
-(defn- override-key
-  "What :overrides takes for an unrendered entry: its constraint's name, its type as a keyword,
-   or the column's key for a type no keyword names (pair[])."
-  [{:keys [constraint type table column]}]
-  (or constraint (render/override-key type) (when (and table column) (keyword table column))))
-
 (defn- print-unrendered [schema facts]
   (when (seq facts)
     (println (str schema ": unrendered (" (count facts) "), left out of the schemas:"))
-    (doseq [{:keys [table domain constraint column sql type kind] :as f} facts
-            :let [k (override-key f)]]
+    (doseq [{:keys [table domain constraint column sql type kind]} facts]
       (println (str "  " (or table domain) " " (or constraint column) ": "
                     (cond sql sql type (str "type " type) :else (name kind))))
-      (when k
-        (println (str "    to keep it, add to pgmalli.edn :overrides {" (pr-str k) " <malli schema>}"
-                      (when (string? k) (str ", or {" (pr-str k) " {:skip \"<why>\"}} to silence it"))))))))
+      (cond constraint (println (str "    to silence it, add to pgmalli.edn :overrides {" (pr-str constraint) " {:skip \"<why>\"}}"))
+            (and table column) (println (str "    to keep it, add to pgmalli.edn :overrides {" (keyword table column) " <malli schema>}"))))))
 
 (defn- print-diagnostics [schema ds]
   (when (seq ds)

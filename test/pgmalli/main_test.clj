@@ -78,17 +78,14 @@
     (is (= ["public :operators: the file has none, as an older pgmalli wrote it; generate writes them"]
            (printed {:key :operators :absent :file})))))
 
-(deftest an-unrendered-type-no-keyword-names-is-overridden-by-its-column
-  (is (= ["public: unrendered (3), left out of the schemas:"
+(deftest an-unrendered-type-is-overridden-by-its-column
+  (is (= ["public: unrendered (2), left out of the schemas:"
           "  public.t ps: type pair[]"
           "    to keep it, add to pgmalli.edn :overrides {:public.t/ps <malli schema>}"
           "  public.t p: type pair"
-          "    to keep it, add to pgmalli.edn :overrides {:pair <malli schema>}"
-          "  public.t z: type timestamp with time zone"
-          "    to keep it, add to pgmalli.edn :overrides {:timestamptz <malli schema>}"]
+          "    to keep it, add to pgmalli.edn :overrides {:public.t/p <malli schema>}"]
          (str/split-lines (with-out-str (#'main/print-unrendered "public" [{:kind :type :table "public.t" :column "ps" :type "pair[]"}
-                                                                           {:kind :type :table "public.t" :column "p" :type "pair"}
-                                                                           {:kind :type :table "public.t" :column "z" :type "timestamp with time zone"}]))))))
+                                                                           {:kind :type :table "public.t" :column "p" :type "pair"}]))))))
 
 (deftest a-server-newer-than-the-catalog-snapshot-is-a-warning
   (is (nil? (#'main/version-warning "PostgreSQL 18")))
@@ -123,7 +120,7 @@
       (is (= "" err))
       (is (= ["public: unrendered (1), left out of the schemas:"
               "  public.tags tags_slug_check: CHECK (is_slug(slug))"
-              "    to keep it, add to pgmalli.edn :overrides {\"tags_slug_check\" <malli schema>}, or {\"tags_slug_check\" {:skip \"<why>\"}} to silence it"
+              "    to silence it, add to pgmalli.edn :overrides {\"tags_slug_check\" {:skip \"<why>\"}}"
               "public: diagnostics (1):"
               "  info public.tags: weight_positive is NOT VALID: rows from before it may violate it, new rows may not"
               "ok: the files of public match the database"]
