@@ -778,12 +778,14 @@
     :respect-nulls :within-group :xtql :default :foreign-key :references :unique
     :primary-key :index :constraint})
 
+(def ^:private registered-op? (delay (honeysql 'honey.sql/registered-op?)))
+
 (defn- operator?
   "Whether HoneySQL writes [h ...] as an operator: a name not an identifier (:->, :@>), one of
    operators, or one the loaded HoneySQL has registered."
   [h]
   (boolean (or (operators h) (not (re-find #"^[A-Za-z_]" (name h)))
-               (some-> (honeysql 'honey.sql/registered-op?) (#(% h))))))
+               (some-> @registered-op? (#(% h))))))
 
 (defn- raw? [x] (and (vector? x) (= :raw (first x))))
 
@@ -1182,11 +1184,11 @@
    statement agrees with the registry."
   [registry stmt scope {:keys [schema] :as opts}]
   (let [registry (reading registry)
-        scopes (chain scope)]
+        scopes (chain scope)
+        known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
+                (str/join "." (shape/schema-and-name k)))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
-                       :let [known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
-                                     (str/join "." (shape/schema-and-name k)))
-                             meant (error/suggestions table known 3)]]
+                       :let [meant (error/suggestions table known 3)]]
                    (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
                  (column-problems registry scopes stmt opts)
                  (insert-problems registry stmt schema)
