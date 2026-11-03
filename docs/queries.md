@@ -58,9 +58,10 @@ A clause pgmalli does not read is reported rather than passed over:
 
 The columns of a CTE or a subquery are typed as its SELECT types them, read as a query of its
 own (a CTE under the ones before it, a LATERAL subquery with the tables before it, a recursive
-CTE as its first member, NULL allowed); a column it does not give is `:unknown-column`. Those of
-a table function, or a `pg_catalog` table the registry lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema`
-leaves untyped, are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
+CTE as its first member, NULL allowed and a CHECK's list read as its base type); a column it
+does not give is `:unknown-column`. The columns of a table function (named by its alias, `WITH
+ORDINALITY` too) or of a `pg_catalog` table the registry lacks exist but have no type.
+Comparisons with them, or with an expression `h/row-schema` leaves untyped, are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
 
@@ -253,10 +254,9 @@ for a value sent untyped), merged over pgjdbc's; `nil` takes a class out:
 ;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:or [:pg/array [:int #:pg{:type "bigint"}]] [:vector [:int #:pg{:type "bigint"}]]]}
 ```
 
-pgjdbc's classes are `Long`, `Integer`, `Short`, `Byte`, `BigDecimal`, `BigInt`, `BigInteger`,
-`Double`, `Float`, `Boolean`, `String`, `UUID`, `byte[]`, `LocalDate`, `LocalTime`,
-`OffsetTime`, `LocalDateTime`, `OffsetDateTime`, and `long[]`, `int[]` and `String[]` as arrays.
-A value reaches an argument only through its class's entry or one of its superclasses' or
+pgjdbc's classes are those `pgmalli.impl.accept/class-types` lists: the numbers, `Boolean`,
+`String`, `UUID`, `byte[]`, the java.time dates and times, and the arrays pgjdbc encodes. A
+value reaches an argument only through its class's entry or one of its superclasses' or
 interfaces'.
 
 A class adds to what a column takes where its type is the column's or one the column takes as
@@ -297,13 +297,18 @@ makes a name of `""`:
 
 An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
 by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
-`:timestamptz`) or to an enum type or domain of the registry, `count`, `sum`, `avg`, `min`,
-`max`, `coalesce`, `greatest`, `least`, `nullif` and `CASE`'s values of one type, or of numbers
-the widest of them (a string or an argument takes the others' type, as PostgreSQL resolves
-them; `CASE` without `:else` may be NULL), a literal `[:inline ...]` writes, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
-`IS`), the clock's values (`now()`, `current_date` ...), `->>`, and the functions that build json or
-jsonb (`jsonb_build_object`, `jsonb_agg` ...: an object or an array under `{:read {:json
-:parsed}}`, the driver's object otherwise; an aggregate is NULL over no row). Any other is nullable `:any`:
+`:timestamptz`), with its length (`[:varchar 10]`), or to an enum type or domain of the
+registry, `count`, `sum`, `avg`, `min`, `max`, `coalesce`, `greatest`, `least` and `CASE` of
+values of one type, or of numbers the widest of them, `nullif` of two of one type, as `=` reads
+it, a literal `[:inline ...]` writes, an operator that makes a boolean (`=`, `IN`, `LIKE`,
+`BETWEEN`, `AND` ..., `EXISTS`, `IS`), the clock's values (`now()`, `current_date` ...), `->>`,
+and the functions that build json or jsonb (`jsonb_build_object`, `jsonb_agg` ...: an object or
+an array under `{:read {:json :parsed}}`, the driver's object otherwise; an aggregate is NULL
+over no row). Among those values a string takes the others' type, as PostgreSQL resolves it; an
+argument leaves the expression untyped unless the type is a string type, as pgjdbc sends a
+number or a date typed. `CASE` without `:else` may be NULL. `min` and `max` read a `varchar`,
+`"char"` or `name` as `text`, a `cidr` as `inet` and a reg* type as `oid`, the types PostgreSQL
+defines them for. Any other expression is nullable `:any`:
 
 ```clojure
 (h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]

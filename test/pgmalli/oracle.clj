@@ -145,7 +145,8 @@
         v (gen s)]
     (if (not= ::none v)
       v
-      (let [inner (if (= :maybe (first (m/form (m/schema s {:registry registry})))) (last (m/form (m/schema s {:registry registry}))) s)
+      (let [f (m/form (m/schema s {:registry registry}))
+            inner (if (= :maybe (first f)) (last f) s)
             alts (if (and (vector? inner) (= :or (first inner))) (remove map? (rest inner)) [inner])]
         ;; none generates (an array of no known element type): NULL, as an :any argument gets
         (some #(let [v (gen %)] (when (not= ::none v) v)) alts)))))
@@ -279,7 +280,7 @@
   "The column names of the oracle schema, which mutants draw from: kinds, the argument matrix's
    table of further types, is left out, so it does not change the mutants a seed draws."
   [db]
-  (let [ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db)) :user (:user db) :password (:password db)})]
+  (let [ds (test-db/datasource db)]
     (mapv :column_name (jdbc/execute! ds ["SELECT DISTINCT column_name FROM information_schema.columns WHERE table_schema = 'public' AND table_name <> 'kinds' ORDER BY 1"]
                                       {:builder-fn rs/as-unqualified-maps}))))
 
@@ -293,8 +294,7 @@
    has none) and :outcome, on db (a pgmalli :db map of a database oracle/schema.sql is loaded
    into), once per formats entry (:format)."
   [db seed per-query]
-  (let [url (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db))
-        ds (jdbc/get-datasource {:jdbcUrl url :user (:user db) :password (:password db)})
+  (let [ds (test-db/datasource db)
         registry (pgmalli/registry (files/from-database {:db db} "public"))]
     (with-open [conn (jdbc/get-connection ds)]
       (let [columns (columns db)
@@ -318,33 +318,43 @@
 
 ;;; the argument matrix
 
-(def ^:private boxed
-  {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Byte/TYPE Byte Double/TYPE Double Float/TYPE Float Boolean/TYPE Boolean})
+(def values
+  "A value of each class that is no array: each accept/class-types lists, and others an
+   application may hand to setObject."
+  {Long 1 Integer (int 1) Short (short 1) Byte (byte 1) java.math.BigDecimal 1M clojure.lang.BigInt 1N
+   java.math.BigInteger (biginteger 1) Double 1.0 Float (float 1) Boolean true String "a" Character \a
+   java.util.UUID (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+   java.time.LocalDate (java.time.LocalDate/of 2026 1 1) java.time.LocalTime (java.time.LocalTime/of 1 0)
+   java.time.OffsetTime (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
+   java.time.LocalDateTime (java.time.LocalDateTime/of 2026 1 1 0 0)
+   java.time.OffsetDateTime (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
+   java.time.ZonedDateTime (java.time.ZonedDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC) java.time.Instant java.time.Instant/EPOCH
+   java.time.Duration (java.time.Duration/ofSeconds 1) java.time.Period (java.time.Period/ofDays 1)
+   java.sql.Date (java.sql.Date/valueOf "2026-01-01") java.sql.Time (java.sql.Time/valueOf "01:00:00")
+   java.sql.Timestamp (java.sql.Timestamp/valueOf "2026-01-01 00:00:00") java.util.Date (java.util.Date. 0)
+   clojure.lang.PersistentArrayMap {"a" "b"} clojure.lang.Keyword :a
+   org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))})
 
-(defn- representative
-  "A value of class c, for each class accept/class-types lists (an array of one element); throws
-   for another, so a class added there gets one here."
+(def boxed
+  "The boxed class of each primitive one."
+  {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Byte/TYPE Byte Double/TYPE Double Float/TYPE Float
+   Boolean/TYPE Boolean Character/TYPE Character})
+
+(defn value
+  "A value of class c: of values, or an array of one element; throws for another class, so a
+   class added to accept/class-types gets one here."
   [^Class c]
   (if (.isArray c)
     (let [e (.getComponentType c)]
-      (doto (java.lang.reflect.Array/newInstance e 1) (java.lang.reflect.Array/set 0 (representative (get boxed e e)))))
-    (condp = c
-      Long 1 Integer (int 1) Short (short 1) Byte (byte 1) java.math.BigDecimal 1M clojure.lang.BigInt 1N
-      java.math.BigInteger (biginteger 1) Double 1.0 Float (float 1) Boolean true String "a" Character \a
-      java.util.UUID (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
-      java.time.LocalDate (java.time.LocalDate/of 2026 1 1) java.time.LocalTime (java.time.LocalTime/of 1 0)
-      java.time.OffsetTime (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
-      java.time.LocalDateTime (java.time.LocalDateTime/of 2026 1 1 0 0)
-      java.time.OffsetDateTime (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
-      java.sql.Date (java.sql.Date/valueOf "2026-01-01") java.sql.Time (java.sql.Time/valueOf "01:00:00")
-      java.sql.Timestamp (java.sql.Timestamp/valueOf "2026-01-01 00:00:00"))))
+      (doto (java.lang.reflect.Array/newInstance e 1) (java.lang.reflect.Array/set 0 (value (get boxed e e)))))
+    (or (values c) (throw (ex-info "no value of the class" {:class c})))))
 
 (defn- matrix-values
   "What each argument is sent: a value of each class pgjdbc sends, nil, numbers at the integer
    types' bounds and a fraction, an empty string, a number as a string, and each label of the
    schema's enums and CHECK lists, alone and in a String[]."
   [labels]
-  (vec (concat (map (comp representative first) accept/class-types)
+  (vec (concat (map (comp value first) accept/class-types)
                [nil 0 1.5 1.5M 2147483648 -2147483649 Long/MAX_VALUE Long/MIN_VALUE 9223372036854775808N "" "1"]
                labels
                (map #(into-array String [%]) labels))))
@@ -464,7 +474,7 @@
    list or with NULL. :rule: holds? (accepts? under a cast) says PostgreSQL takes a value there,
    and PostgreSQL refuses its type (SQLSTATE class 42)."
   [db]
-  (let [ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db)) :user (:user db) :password (:password db)})]
+  (let [ds (test-db/datasource db)]
     (with-open [conn (jdbc/get-connection ds)]
       (matrix-schema! conn)
       (jdbc/execute! conn ["SET statement_timeout = 3000"])
@@ -474,9 +484,11 @@
             labels (distinct (concat (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified))
                                      (filter string? (mapcat :list cols))))
             values (matrix-values labels)
-            places (vals (into (sorted-map) (map (juxt (comp pr-str :query) identity)) (concat (for [col cols [context q] (matrix-queries col)]
-                                       (assoc col :context context :query q))
-                                     [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}])))]
+            ;; one place per query, in the order of its text, so that a run repeats
+            places (->> (concat (for [col cols [context q] (matrix-queries col)] (assoc col :context context :query q))
+                                [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}])
+                        (into (sorted-map) (map (juxt (comp pr-str :query) identity)))
+                        vals)]
         (vec (for [{:keys [context query column list notnull compared-type] t :type :as place} places
                    :let [s (try (some-> (:x (h/arg-types registry query)) (m/schema {:registry registry})) (catch Exception _ nil))]
                    :when s
@@ -491,7 +503,7 @@
                                             (let [assign? (#{:update :insert} context)
                                                   elements? (and assign? (string? t) (accept/element t) (string? sent) (accept/element sent))]
                                               (accept/holds? (cond elements? (accept/element t) (and compared-type (not assign?)) compared-type :else t)
-                                                             (cond (= :any context) (accept/element sent) elements? (accept/element sent) :else sent)
+                                                             (if (or (= :any context) elements?) (accept/element sent) sent)
                                                              (if assign? :assign :compare)))))
                          refused? (not (try (m/validate s arg) (catch Exception _ false)))
                          ;; NULL in a NOT NULL column fails once a row is written; the table may have none

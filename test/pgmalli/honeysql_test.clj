@@ -232,6 +232,12 @@
                                                       [:paths [:maybe [:vector {:pg/type "text[]"} [:string {:pg/type "text"}]]]]
                                                       [:meta [:map {:pg/type "jsonb"} [:a :int]]]]}}))
 
+(deftest min-max-and-nullif-of-a-reg-array-are-not-oid
+  (let [reg (pgmalli/registry {:registry {:pg.public/rels [:map {:pg/table "public.rels"}
+                                                           [:rs [:vector {:pg/type "regclass[]"} [:any {:pg/type "regclass"}]]]]}})
+        row #(h/row-schema reg {:select % :from [:rels]} {:jdbc unqualified})]
+    (is (not (str/includes? (pr-str (row [[[:min :rs] :m] [[:max :rs] :x] [[:nullif :rs :rs] :n]])) "oid")))))
+
 (deftest arrays-and-json-are-the-drivers-objects-unless-read-says-otherwise
   (let [body {:select [:paths :meta] :from [:docs]}]
     (is (= [:map [:paths [:maybe [:any {:pg/type "text[]"}]]] [:meta [:any {:pg/type "jsonb"}]]] (h/row-schema docs body {:jdbc unqualified}))

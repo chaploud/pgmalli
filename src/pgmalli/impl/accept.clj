@@ -17,7 +17,7 @@
   "[class type]: the type pgjdbc's setObject sends a value of class as, with no extension and
    its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
    Character with setString, a Java array as an array of its elements' type."
-  (vec (remove nil? [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
+  (filterv some? [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
    [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
    [Boolean "boolean"] [String "character varying"] [Character "character varying"] [java.util.UUID "uuid"]
    [(Class/forName "[B") "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
@@ -34,7 +34,7 @@
    ;; java.sql's arrays (babashka has not all of these classes)
    (some-> (named "java.sql.Date") array-of (vector "date[]"))
    (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
-   (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))])))
+   (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))]))
 
 (defn class-type
   "The type pgjdbc sends value as by its class; nil for a class class-types does not list."
@@ -90,7 +90,7 @@
   (merge-with into (zipmap numbers (repeat #{"jsonb"})) (zipmap integers (repeat #{"bytea"}))
               {"boolean" #{"integer" "jsonb"} "integer" #{"boolean"} "bytea" integers}))
 
-(defn- oid? [t] (and (string? t) (str/starts-with? t "reg") (not (str/ends-with? t "[]"))))
+(defn oid? "Whether t is a reg* type (an oid), not an array of one." [t] (and (string? t) (str/starts-with? t "reg") (not (str/ends-with? t "[]"))))
 
 (defn element
   "The element type of an array type t (\"bigint[]\" is bigint); nil for another."

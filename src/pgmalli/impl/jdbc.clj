@@ -134,8 +134,7 @@
    [java.time.LocalDateTime :time/local-date-time] [java.time.OffsetDateTime :time/offset-date-time]
    [java.time.Instant :time/instant] [java.util.Date 'inst?] [clojure.lang.Keyword :keyword] [clojure.lang.Symbol :symbol]
    [clojure.lang.IPersistentMap [:map-of :any :any]] [clojure.lang.IPersistentVector [:vector :any]]
-   [clojure.lang.IPersistentSet [:set :any]] [clojure.lang.Sequential [:sequential :any]]
-   ])
+   [clojure.lang.IPersistentSet [:set :any]] [clojure.lang.Sequential [:sequential :any]]])
 
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
@@ -289,7 +288,10 @@
    column; :unnest, unnest(?) assigned): the collections and Java arrays :send sends as an
    array (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
-   element type is one of t's own (accept/holds?), as a column takes a value; :any without one."
+   element type is one of t's own (accept/holds?), as a column takes a value, its elements
+   then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
+   an array of that type alone. ::element-type in opts names t's type where t's schema names
+   none (numeric[]'s decimal?). :any without one."
   [t opts use]
   ;; t may take NULL (a nullable column's elements); its type is the one without
   ;; an array column names its elements' type (a domain's array its base's), which goes first
@@ -431,7 +433,7 @@
    the registry's types; a domain the driver returns (or, f write-type, takes) as the registry
    holds it stays a reference."
   [schemas s opts f]
-  (if-let [d (when (and (vector? s) (= :ref (first s))) (get schemas (last s)))]
+  (if-let [d (shape/ref-target schemas s)]
     (let [base (through-domain schemas (shape/domain-base d) opts f)]
       ;; compared with nothing sent, as sends add values to the base type and do not change how the driver reads it
       (if (= base (f base (assoc opts :send (zipmap (map first accept/class-types) (repeat nil)))))
@@ -445,7 +447,7 @@
   [schemas s {:keys [read] :as opts}]
   (let [;; the driver returns an array's elements of a domain (but an enum's) as PGobjects
         x (when (array-column? s) (last s))
-        target (when (and (vector? x) (= :ref (first x))) (get schemas (last x)))
+        target (shape/ref-target schemas x)
         s (if (and target (not= :enum (shape/head target))) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
     (or (shape/read-as read s) (read-type (through-domain schemas s opts read-type) opts))))
 
@@ -454,18 +456,18 @@
    driver takes its base."
   [schemas s opts]
   (let [;; an array's elements of an enum type are its labels: array-type takes an array of that type alone
-        e (when (array-column? s) (let [x (last s)] (when (and (vector? x) (= :ref (first x))) x)))
-        target (some->> e last (get schemas))
+        e (when (array-column? s) (last s))
+        target (shape/ref-target schemas e)
         s (cond (nil? target) s
                 (= :enum (shape/head target))
                 (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (remove map? (rest target))))
                 ;; a domain's array reads as its base type's, elements and all
-                :else (if-let [base (some #(shape/type-name (shape/column-props %)) [target (shape/domain-base target)])]
+                :else (if-let [base (base-type-name target)]
                         (-> s (assoc-in [1 :pg/type] (str base "[]")) (assoc (dec (count s)) (shape/domain-base target)))
                         s))
         ;; a domain's value is sent as its base type's: the classes sent as that type, held to the
         ;; domain's checks, its definition in place of the reference
-        d (let [x (shape/non-null s)] (when (and (vector? x) (= :ref (first x))) (get schemas (last x))))
+        d (shape/ref-target schemas (shape/non-null s))
         ;; (a number domain's: its checks read the number; another's may hold code only the registry runs)
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
     (write-type (through-domain schemas s opts write-type) opts)))

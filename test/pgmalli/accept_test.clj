@@ -11,42 +11,17 @@
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.jdbc :as pgjdbc]
             [pgmalli.impl.types :as types]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]])
+            [pgmalli.oracle :as oracle]
+            [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]])
   (:import (java.lang.reflect Array)
-           (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime Period ZoneOffset ZonedDateTime)))
+           (java.time Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime)))
 
 (use-fixtures :once with-postgres)
 
-(defn- connection []
-  (let [{:keys [host port db user password]} *db*]
-    (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})))
-
-(def ^:private values
-  "A value of each class that is no array."
-  {Long 1 Integer (int 1) Short (short 1) Byte (byte 1) Double 1.0 Float (float 1) Boolean true Character \a String "a"
-   java.math.BigDecimal 1M java.math.BigInteger (biginteger 1) clojure.lang.BigInt 1N java.util.UUID (java.util.UUID/randomUUID)
-   LocalDate (LocalDate/of 2026 1 1) LocalTime (LocalTime/of 1 0) OffsetTime (OffsetTime/of 1 0 0 0 ZoneOffset/UTC)
-   LocalDateTime (LocalDateTime/of 2026 1 1 0 0) OffsetDateTime (OffsetDateTime/of 2026 1 1 0 0 0 0 ZoneOffset/UTC)
-   ZonedDateTime (ZonedDateTime/of 2026 1 1 0 0 0 0 ZoneOffset/UTC) Instant Instant/EPOCH
-   Duration (Duration/ofSeconds 1) Period (Period/ofDays 1)
-   java.sql.Date (java.sql.Date. 0) java.sql.Time (java.sql.Time. 0) java.sql.Timestamp (java.sql.Timestamp. 0) java.util.Date (java.util.Date. 0)
-   clojure.lang.PersistentArrayMap {"a" "b"} clojure.lang.Keyword :a
-   org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))})
-
-(def ^:private boxed {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Byte/TYPE Byte Double/TYPE Double
-                      Float/TYPE Float Boolean/TYPE Boolean Character/TYPE Character})
-
-(defn- value
-  "A value of class c: an array holds one element."
-  [^Class c]
-  (if (.isArray c)
-    (let [e (.getComponentType c)] (doto (Array/newInstance e 1) (Array/set 0 (value (boxed e e)))))
-    (or (values c) (throw (ex-info "no value of the class" {:class c})))))
-
 (def ^:private candidates
   "Classes besides class-types' an application may hand to setObject."
-  (concat (keys values)
-          (for [e (concat (keys boxed) (vals boxed) [String java.math.BigDecimal java.math.BigInteger java.util.UUID (Class/forName "[B")
+  (concat (keys oracle/values)
+          (for [e (concat (keys oracle/boxed) (vals oracle/boxed) [String java.math.BigDecimal java.math.BigInteger java.util.UUID (Class/forName "[B")
                                                      LocalDate LocalTime OffsetTime LocalDateTime OffsetDateTime Instant
                                                      java.sql.Date java.sql.Time java.sql.Timestamp java.util.Date])]
             (class (Array/newInstance ^Class e 0)))))
@@ -79,9 +54,9 @@
   (when *db*
     ;; pgjdbc sends a java.util.Map as an hstore where the database has one
     (exec-sql! "CREATE EXTENSION IF NOT EXISTS hstore")
-    (with-open [con (connection)]
+    (with-open [con (jdbc/get-connection (datasource))]
       (doseq [c (distinct (concat (map first accept/class-types) candidates))
-              :let [v (value c)]
+              :let [v (oracle/value c)]
               :when (not (left-out c))]
         ;; pgjdbc's setObject itself: next.jdbc.date-time, which another test may load, sends some java.time values otherwise
         (is (= (sent-as con v) (accept/class-type v)) (.getName ^Class c))))))
@@ -118,7 +93,7 @@
                                    :cast (str "SELECT CAST($1 AS " t ")")}]
                 {:t t :accepted-t accepted-t :sent sent :context context
                  :sql (str "PREPARE probe(" (if (= :unknown sent) "unknown" sent) ") AS " sql)})]
-    (with-open [con (connection)]
+    (with-open [con (jdbc/get-connection (datasource))]
       (map #(assoc %1 :taken (:taken %2)) pairs
            (jdbc/execute! con ["SELECT taken(s) AS taken FROM unnest(?::text[]) WITH ORDINALITY AS u(s, n) ORDER BY n"
                                (into-array String (map :sql pairs))]
@@ -149,10 +124,9 @@
 (deftest a-string-goes-untyped-under-stringtype-unspecified
   (when *db*
     (exec-sql! "CREATE TYPE untyped_mood AS ENUM ('ok'); CREATE TABLE untyped_probe (e untyped_mood, t text, i integer)")
-    (let [{:keys [host port db user password]} *db*
-          sent (pgjdbc/sent-type "1" {:send {String :unknown}})]
+    (let [sent (pgjdbc/sent-type "1" {:send {String :unknown}})]
       (is (= :unknown sent))
-      (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db "?stringtype=unspecified") :user user :password password})]
+      (with-open [con (jdbc/get-connection (datasource (update *db* :db str "?stringtype=unspecified")))]
         (doseq [[col t v] [["e" [:enum "untyped_mood"] "ok"] ["t" "text" "1"] ["i" "integer" "1"]]
                 [context sql] {:compare (str "SELECT 1 FROM untyped_probe WHERE " col " = ?")
                                :assign (str "INSERT INTO untyped_probe (" col ") VALUES (?)")}]

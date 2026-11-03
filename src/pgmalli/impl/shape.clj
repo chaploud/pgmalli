@@ -109,6 +109,11 @@
   [d]
   (if (and (vector? d) (= :and (first d))) (first (entries d)) d))
 
+(defn ref-target
+  "The registry schema [:ref ... name] s refers to; nil for another s."
+  [schemas s]
+  (when (and (vector? s) (= :ref (first s))) (get schemas (last s))))
+
 (defn update-base
   "d with f applied to its base: the first schema of [:and base checks...], else d itself."
   [d f]

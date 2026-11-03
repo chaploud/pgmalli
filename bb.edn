@@ -22,7 +22,7 @@
          sweep:report {:doc "bb sweep:report <out-dir>: what a sweep found, grouped"
                        :extra-paths ["dev"]
                        :task (load-file "dev/sweep_report.clj")}
-         mutate {:doc "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--out f.edn]: which mutants of a source file the tests miss"
+         mutate {:doc "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs] [--out f.edn]: which mutants of a source file the tests miss: the bb suite, or the JVM suite under --jvm; database tests only under --db (needs docker)"
                  :extra-paths ["dev"]
                  :task (load-file "dev/mutate.clj")}
          docs:example {:doc "Rewrite docs/example/pgmalli/public.edn from docs/example/schema.sql (needs docker)"

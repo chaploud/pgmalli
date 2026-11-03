@@ -13,7 +13,7 @@
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.types :as types]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
 
 (def ^:private columns
   "{column type}: one column of every type types lists, named after it."
@@ -30,10 +30,6 @@
            (t)))))
 
 (def ^:private opts {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}})
-
-(defn- datasource []
-  (let [{:keys [host port db user password]} *db*]
-    (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})))
 
 (defn- normal
   "A type's name as types keys it: integer for int4, x[] for an array of one."

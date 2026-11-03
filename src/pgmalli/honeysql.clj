@@ -360,8 +360,8 @@
 (defn- cte-statement
   "[statement columns recursive?] of CTE name: its body as read on its own, under the entries of
    its :with before it, and the columns its name lists ([[:c {:columns [:x]}] ...]); of a
-   recursive one (a set operation under :with-recursive), its first member, whose types
-   PostgreSQL gives the columns. nil where the query defines name more than once, or the body is
+   recursive one (a set operation under :with-recursive one of whose members reads the CTE
+   itself), its first member, whose types PostgreSQL gives the columns. nil where the query defines name more than once, or the body is
    no statement."
   [body name]
   (let [found (for [x (tree-seq branch? seq body) :when (map? x)
@@ -369,12 +369,12 @@
                     [i e] (map-indexed vector w) :when (= name (cte-name e))]
                 [(second e) (subvec w 0 i) (when (vector? (first e)) (:columns (second (first e)))) k])]
     (when-let [[[stmt before listed k]] (when (= 1 (count found)) found)]
-      (let [op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
+      (let [set-op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
             ;; recursive when a member reads the CTE itself; otherwise its members resolve together
             self? (some (fn [m] (some #(let [w (nth (table-ref % default-schema) 2)] (and w (= name (folded w))))
                                       (mapcat table-items (statements m))))
-                        (when op (get stmt op)))
-            op (when self? op)
+                        (when set-op (get stmt set-op)))
+            op (when self? set-op)
             stmt (if op (first (get stmt op)) stmt)]
         (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
           [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
@@ -410,7 +410,7 @@
                     types (when ts
                             ;; a CTE's name may list new names for its columns, by position; a recursive
                             ;; one's later rows may hold NULL where its first member's do not
-                            (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) (cond->> t (and t recursive?) (beyond-list registry) (and t recursive?) nullable)])) ts))]
+                            (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) (if (and t recursive?) (nullable (beyond-list registry t)) t)])) ts))]
                 (cond-> sc types (assoc-in [alias :types] types))))
             sc items)))
 
@@ -780,11 +780,11 @@
   (when (and (vector? x) (keyword? (first x))) (function-name (name (first x)))))
 
 (defn- expression-name
-  "The column name PostgreSQL gives a select expression with no alias: a function's name, case,
-   array, a cast column's or function's name, ?column? for a value or an operator (an infix one
-   of HoneySQL's, or any whose name is not an identifier: :->, :@>, an op registered with
-   register-op!). nil when this cannot tell (a cast value or operation is named after its type,
-   a subquery after its column, :raw anything)."
+  "The column name PostgreSQL gives a select expression with no alias: a function's name, case
+   (its ELSE's name where that has one of its own), array, a cast column's or function's name,
+   ?column? for a value or an operator (an infix one of HoneySQL's, or any whose name is not an
+   identifier: :->, :@>, an op registered with register-op!). nil when this cannot tell (a cast
+   value or operation is named after its type, a subquery after its column, :raw anything)."
   [x]
   (cond (or (number? x) (string? x) (boolean? x) (nil? x) (param-key x) (#{:null :true :false} (sql-value x))) "?column?"
         (shorthand-fn x) (function-name (shorthand-fn x))
@@ -793,7 +793,6 @@
         :else (let [[h a] x]
                 (cond (= :. h) (some-> (last x) (#(when (keyword? %) (function-name (name %)))))
                       (operator? h) "?column?"
-                      ;; CASE takes its ELSE's name where that has one of its own (a column's, a function's)
                       (#{:case :case-expr} h) (let [e (some #(when (= :else (first %)) (second %)) (partition-all 2 (if (= :case h) (rest x) (drop 2 x))))
                                                     n (cond (nil? e) "case"
                                                             (column-keyword? e) (second (split-column e))
@@ -835,7 +834,7 @@
     (when (vector? s)
       (case (first s)
         :enum s
-        :ref (labels registry (get (::schemas registry) (last s)))
+        :ref (labels registry (shape/ref-target (::schemas registry) s))
         ;; a domain's CHECKs narrow its base as [:and base ...]
         :and (labels registry (first (shape/entries s)))
         nil))))
@@ -1043,13 +1042,6 @@
              :when p]
          p)))))
 
-(defn- domain-over-enum?
-  "Whether column schema s is of a domain over an enum type."
-  [registry s]
-  (let [inner (shape/non-null s)
-        target (when (and (vector? inner) (= :ref (first inner))) (get (::schemas registry) (last inner)))]
-    (boolean (and target (not= :enum (shape/head target)) (labels registry inner) (not (list-type registry inner))))))
-
 (defn- enum-type
   "The type of an enum type's column, or of a domain over one; not of a domain whose CHECK lists
    its base type's values, whose labels name that type."
@@ -1080,11 +1072,11 @@
    not answer for."
   [registry s]
   (let [p (shape/column-props s)
-        inner (shape/non-null s)
-        d (when (and (vector? inner) (= :ref (first inner))) (get (::schemas registry) (last inner)))
+        d (shape/ref-target (::schemas registry) (shape/non-null s))
         t (if-let [e (types/entry (shape/type-name p))]
             (str (:name e) (when (str/ends-with? (str (:pg/type p)) "[]") "[]"))
-            (when-let [n (enum-type registry s)] (cond-> [:enum n] (domain-over-enum? registry s) (conj {:domain? true}))))]
+            ;; enum-type's d is an enum type, or a domain over one
+            (when-let [n (enum-type registry s)] (cond-> [:enum n] (not= :enum (shape/head d)) (conj {:domain? true}))))]
     (cond (accept/known? t) t
           (and d (not (enum-type registry s))) (slot-type registry (shape/domain-base d)))))
 
@@ -1507,18 +1499,8 @@
 
 (def ^:private resolving-fns
   "Functions whose arguments PostgreSQL resolves to one type, as it resolves UNION and CASE:
-   their result is of it (nullif's, its first argument's)."
+   coalesce, greatest and least return a value of it, nullif its first argument as = reads it."
   #{"coalesce" "greatest" "least" "nullif"})
-
-(declare resolved-type)
-
-(defn- result-type
-  "The type operands resolve to as a value: resolved-type's, but where an argument is among them
-   and the type is no string type, nil: pgjdbc sends a number or a date typed (a Long as bigint),
-   which may widen it beyond the others'."
-  [operands ts]
-  (when-let [r (resolved-type operands ts)]
-    (when (or (not-any? arg-key operands) (accept/strings (canonical-type r))) r)))
 
 (def ^:private number-order
   "The number types in the order PostgreSQL's implicit casts widen them."
@@ -1537,6 +1519,14 @@
       (cond (apply = names) (first resolved)
             (every? number-order names) (let [widest (apply max-key number-order names)]
                                           (some #(when (= widest (canonical-type %)) %) resolved))))))
+
+(defn- result-type
+  "The type operands resolve to as a value: resolved-type's, but where an argument is among them
+   and the type is no string type, nil: pgjdbc sends a number or a date typed (a Long as bigint),
+   which may widen it beyond the others'."
+  [operands ts]
+  (when-let [r (resolved-type operands ts)]
+    (when (or (not-any? arg-key operands) (accept/strings (canonical-type r))) r)))
 
 (defn- unnest-columns
   "{[alias column] arg} of the unnest(?, ...) items of stmt's FROM and joins: the column each
@@ -1744,8 +1734,7 @@
   "The type op (:min-max, :=) reads type n as, as read-as says, a reg* type as oid; n itself for
    another."
   [op n]
-  (cond (and n (str/starts-with? n "reg")) "oid"
-        :else (get-in read-as [op n] n)))
+  (if (accept/oid? n) "oid" (get-in read-as [op n] n)))
 
 (def ^:private aggregate-types
   "The type sum and avg give for their argument's."
@@ -1821,12 +1810,14 @@
       (#{"now" "count"} fname) (typed (word-types fname))
       (json-builders fname) (let [[t shape nullable?] (json-builders fname)]
                               {:schema (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any]) :nullable? nullable?})
-      ;; min and max of a varchar are text: PostgreSQL has them for text alone
+      ;; min and max read a type as read-as says (a varchar as text, a reg* type as oid)
       (#{"min" "max"} fname) (when-let [t (first ts)]
-                               (let [n (canonical-type t)]
-                                 {:schema (loose (if (= n (operator-input :min-max n)) (:schema t) (type-schema (operator-input :min-max n)))) :nullable? true}))
+                               (let [n (canonical-type t)
+                                     input (operator-input :min-max n)]
+                                 {:schema (loose (if (= n input) (:schema t) (type-schema input))) :nullable? true}))
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical-type)]) typed (assoc :nullable? true))
-      ;; a string or an argument takes the others' type, as PostgreSQL resolves a varchar or unknown one
+      ;; a string takes the others' type, as PostgreSQL resolves a varchar or unknown one; result-type
+      ;; leaves an argument's untyped
       ;; [:case c1 v1 c2 v2 ... :else v]: the values resolve as coalesce's arguments; NULL without :else
       (= :case h) (let [parts (partition-all 2 (rest x))
                         values (map second parts)
@@ -1835,17 +1826,17 @@
                     (when-let [r (when (every? #(= 2 (count %)) parts) (result-type values vts))]
                       {:schema (loose (beyond-list registry (:schema r)))
                        :nullable? (or (not else?) (boolean (some #(or (nil? %) (:nullable? %)) vts)))}))
-      ;; nullif returns its first argument as the = operator reads it: of both of one type, that
-      ;; type as = reads it (a varchar's = is text's); otherwise = may promote it to the other's
-      ;; a string literal takes the other's type
+      ;; nullif returns its first argument as = reads it: where both are of one type, that type as
+      ;; = reads it (a varchar's = is text's), a string taking the other's type; otherwise = may
+      ;; promote it to the other's, which this leaves untyped
       (= "nullif" fname) (let [typed (remove :string? ts) base (if (seq typed) typed ts)]
                            (when (and (= 2 (count ts)) (every? some? ts) (apply = (map canonical-type base)))
                              {:schema (loose (type-schema (operator-input := (canonical-type (first base))))) :nullable? true}))
       (resolving-fns fname) (when-let [r (result-type (rest x) ts)]
                               ;; the others' values join a CHECK's list: its base type
                               {:schema (cond-> (:schema r) (next ts) (->> (beyond-list registry) loose))
-                               ;; greatest and least skip NULLs as coalesce does; nullif makes one
-                               :nullable? (or (= "nullif" fname) (not-any? #(and % (not (:nullable? %))) ts))}))))
+                               ;; greatest and least skip NULLs as coalesce does
+                               :nullable? (not-any? #(and % (not (:nullable? %))) ts)}))))
 
 (defn- select-row
   "The row a SELECT returns. Under a qualifying builder, a column through an opaque table, or a cast
@@ -2011,8 +2002,8 @@
    any part may be a function, which may return a set, it tells nothing. One of a SELECT of
    aggregates of columns or constants alone (no GROUP BY, HAVING or OFFSET); at most one of a SELECT,
    UPDATE or DELETE on one table (no CTE of its name, no table inheriting it) whose WHERE holds
-   its primary key's or a (whole) UNIQUE constraint's columns equal to a value (NULL equals
-   none); up to as many as :values has rows of an INSERT returning (a trigger or ON CONFLICT
+   the columns of its primary key or a UNIQUE key, neither partial nor DEFERRABLE, equal to a
+   value (NULL equals none); up to as many as :values has rows of an INSERT returning (a trigger or ON CONFLICT
    may skip one); at most :limit, from none where a parameter or code gives the limit."
   [registry stmt {:keys [schema] :or {schema default-schema}}]
   ;; a clause this does not read (:join-by, :fetch, a set operation ...) may change the count

@@ -90,3 +90,14 @@
   "Runs SQL against the namespace's database through the container's psql."
   [sql]
   (exec-in! *container* (:db *db*) sql))
+
+(defn jdbc-url
+  "The JDBC URL of db, *db* by default."
+  ([] (jdbc-url *db*))
+  ([{:keys [host port db]}] (str "jdbc:postgresql://" host ":" port "/" db)))
+
+(defn datasource
+  "A next.jdbc datasource of db, *db* by default (JVM only: babashka has no next.jdbc)."
+  ([] (datasource *db*))
+  ([{:keys [user password] :as db}]
+   ((requiring-resolve 'next.jdbc/get-datasource) {:jdbcUrl (jdbc-url db) :user user :password password})))

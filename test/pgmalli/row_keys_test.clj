@@ -13,7 +13,7 @@
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.ir :as ir]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*db* datasource exec-sql! jdbc-url with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -71,8 +71,7 @@
                 CREATE TABLE likes (id int PRIMARY KEY, n int);
                 INSERT INTO groups VALUES (1, 'g'); INSERT INTO users VALUES (1, 1, 'a'); INSERT INTO posts VALUES (1, 't'), (2, 'u');
                 INSERT INTO likes VALUES (1, 1), (2, 2);")
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [q (concat queries using-chains), builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
               row (jdbc/execute! ds (sql/format q) {:builder-fn @(requiring-resolve builder)})
@@ -90,8 +89,7 @@
 (deftest a-writes-row-is-what-next-jdbc-returns
   (when *db*
     (exec-sql! "CREATE TABLE tags (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL);")
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [q [{:insert-into :tags :values [{:name "a"} {:name "b"}]}
                  {:insert-into :tags :values [{:name "a"}] :on-conflict [:id] :do-nothing true}
@@ -118,8 +116,7 @@
   (when *db*
     (exec-sql! "CREATE TYPE feel AS ENUM ('ok', 'meh'); CREATE DOMAIN positive AS int CHECK (VALUE > 0);
                 CREATE TABLE notes (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, n int NOT NULL, feel feel, body text);")
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))
           opts {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps}}]
       (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest :?bodies]]]}]}
@@ -139,8 +136,7 @@
 (deftest arguments-typed-as-postgresql-takes-them-run
   (when *db*
     (exec-sql! "CREATE TABLE prices (id bigint PRIMARY KEY, amount numeric NOT NULL, at timestamptz); INSERT INTO prices VALUES (1, 2.5, now());")
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [[q opts values] [[{:select [:id] :from [:prices] :where [:= :id :?x]} {} [1 (int 1)]]
                                [{:select [:id] :from [:prices] :where [:> :amount :?x]} {} [1 2.5M]]
@@ -157,8 +153,7 @@
 
 (deftest pg-array-is-what-the-driver-takes
   (when *db*
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           s (m/schema [:pg/array :int] {:registry (pgmalli/registry {:registry {}})})]
       (with-open [c (jdbc/get-connection ds)]
         (doseq [v [(long-array [1 2]) (into-array Long [1]) (int-array []) (.createArrayOf c "bigint" (object-array [1]))
@@ -169,8 +164,7 @@
 (deftest arrays-and-json-are-what-the-driver-returns-and-takes
   (when *db*
     (exec-sql! "CREATE TABLE docs (id int PRIMARY KEY, paths text[], meta jsonb NOT NULL CHECK (jsonb_typeof(meta) = 'object'));")
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))
           ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
           args (h/arg-types registry ins)
@@ -186,8 +180,7 @@
   (when *db*
     (exec-sql! "CREATE TABLE odd_keys (id int PRIMARY KEY, line_no2 int, \"userId\" int, tags text[], doc jsonb, span interval, born date);
                 INSERT INTO odd_keys VALUES (1, 2, 3, '{a}', '{\"a\": 1}', '1 day', '2026-01-01');")
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
               :let [row (first (jdbc/execute! ds ["SELECT * FROM odd_keys"] {:builder-fn @(requiring-resolve builder)}))
@@ -212,8 +205,7 @@
 (deftest as-read-keys-a-table-of-a-schema-with-a-dot-by-the-table-alone
   (when *db*
     (exec-sql! "CREATE SCHEMA \"My.S\"; CREATE TABLE \"My.S\".\"T.t\" (id int PRIMARY KEY); INSERT INTO \"My.S\".\"T.t\" VALUES (1);")
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "My.S"))
           row (first (jdbc/execute! ds ["SELECT * FROM \"My.S\".\"T.t\""]))]
       (is (= [:T.t/id] (keys row)))
@@ -221,8 +213,8 @@
 
 (deftest jdbc-leaves-a-pooled-connection-as-it-was
   (when *db*
-    (let [{:keys [host port db user password]} *db*
-          c (java.sql.DriverManager/getConnection (str "jdbc:postgresql://" host ":" port "/" db) user password)
+    (let [{:keys [user password]} *db*
+          c (java.sql.DriverManager/getConnection (jdbc-url) user password)
           ;; a pool hands the same connection out again: close is a no-op here
           kept (java.lang.reflect.Proxy/newProxyInstance (.getClassLoader java.sql.Connection) (into-array Class [java.sql.Connection])
                                                          (reify java.lang.reflect.InvocationHandler

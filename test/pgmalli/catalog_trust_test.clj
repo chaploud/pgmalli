@@ -3,7 +3,7 @@
    ir.sql could resolve to instead of pg_catalog's must not run."
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [pgmalli.impl.ir :as ir]
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*db* exec-sql! jdbc-url with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -44,15 +44,15 @@
       (is (= #{"t" "p"} (set (keys (:tables ir)))))
       (is (= #{"mood" "word"} (set (keys (:types ir))))))
     (when-not (System/getProperty "babashka.version")
-      (let [{:keys [host port db user password]} *db*
-            ir (ir/from-db {:jdbc-url (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password :schema "evil"})]
+      (let [{:keys [user password]} *db*
+            ir (ir/from-db {:jdbc-url (jdbc-url) :user user :password password :schema "evil"})]
         (is (= #{"t" "p"} (set (keys (:tables ir)))))))))
 
 (deftest a-schema-name-written-into-the-jdbc-query-stays-one-identifier
   (when (and *db* (not (System/getProperty "babashka.version")))
-    (let [{:keys [host port db user password]} *db*
+    (let [{:keys [user password]} *db*
           schema ":'schema'\"; CREATE TABLE public.injected (); COMMIT; --"]
       (is (= :pgmalli.error/invalid-config
              (:pgmalli/error (ex-data (is (thrown? clojure.lang.ExceptionInfo
-                                                   (ir/from-db {:jdbc-url (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password :schema schema})))))))
+                                                   (ir/from-db {:jdbc-url (jdbc-url) :user user :password password :schema schema})))))))
       (is (not (contains? (:tables (ir/from-db (assoc *db* :schema "public"))) "injected"))))))

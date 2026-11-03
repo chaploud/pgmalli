@@ -16,7 +16,7 @@
             [pgmalli.impl.files :as files]
             [pgmalli.impl.jdbc :as pjdbc]
             [pgmalli.impl.types :as types]
-            [pgmalli.test-db :as test-db :refer [*db*]]))
+            [pgmalli.test-db :as test-db :refer [*db* datasource]]))
 
 (use-fixtures :once test-db/with-postgres)
 
@@ -27,10 +27,6 @@
                  (repeat "the image has no libperl"))
          (zipmap ["plpython3u" "hstore_plpython3u" "jsonb_plpython3u" "ltree_plpython3u"] (repeat "the image has no libpython"))
          (zipmap ["pltcl" "pltclu"] (repeat "the image has no libtcl"))))
-
-(defn- datasource []
-  (let [{:keys [host port db user password]} *db*]
-    (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})))
 
 (defn- column [ds sql] (mapv (comp val first) (jdbc/execute! ds [sql])))
 

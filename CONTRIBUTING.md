@@ -7,7 +7,7 @@ Issues and pull requests are welcome.
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the
 image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`, `bb docs:example`,
-`bb harvest`, `bb sweep` and `bb upstream` need it; `bb lint`, `bb test:docs` and `bb fixture` do not.
+`bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:docs` and `bb fixture` do not.
 
 ## Tests
 
@@ -22,7 +22,7 @@ image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`
 | `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
-| `bb mutate --file src/... [--kind table\|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm]` | each mutant of the file (an element left out of a def's literal collection; and/or, when/when-not, =/not=, true/false swapped) against the tests (`--ns`, the bb suite by default), the file written back after each; prints the survivors with file:line and writes `--out` (target/mutate.edn) |
+| `bb mutate --file src/... [--kind table\|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs]` | each mutant of the file (an element left out of a def's literal collection; and/or, when/when-not, =/not=, true/false swapped) against the tests (`--ns`, or the bb suite, or the JVM suite under `--jvm`; database tests only under `--db`), each run killed after `--timeout` seconds, the file written back after each; prints the survivors with file:line and writes `--out` (target/mutate.edn) |
 
 Before a pull request: `bb lint` → `PGMALLI_SKIP_DB=1 bb test` → `bb test` → `bb test:jvm` →
 `bb test:floor` → `bb oracle` → `bb test:docs`. After `bb test:update` or `bb test:docs:update`,
@@ -72,12 +72,14 @@ schema refuses and the stricter rule of docs/queries.md does not leave out (a cl
 a type `accept/holds?` says the column does not hold, or `accept/accepts?` under a cast; a
 comparison with NULL or with a value outside a CHECK's list; NULL set into a NOT NULL
 column), and where `holds?` says a value goes and PostgreSQL refuses its type. Besides the
-oracle schema's columns, it creates the schema `matrix`, whose table `types` holds, for each
+oracle schema's columns, it generates the schema `matrix`, whose table `types` holds, for every
 type of `pgmalli.impl.types` (an extension's where the server has it) and the typmods
 numeric(10,2), varchar(5), char(3), timestamp(3) and bit(4), a column of the type, of its
-array, of a domain over it and of an array of that domain. A type added to
-`pgmalli.impl.types` without `:literals` needs a value in `pgmalli.oracle/samples`, the
-text of the row the table holds. Mutants draw from neither `matrix` nor the table `kinds`.
+array, of a domain over it (`CHECK (VALUE IS NOT NULL)`) and of an array of that domain. A
+type added to `pgmalli.impl.types` without `:literals` needs a value in
+`pgmalli.oracle/samples`, the text of the row the table holds. The oracle schema's table
+`kinds` adds arrays of domains whose CHECK reads the value (`posint[]`, `money2[]`). Mutants
+draw from neither `matrix` nor `kinds`.
 
 `pgmalli.oracle-test` holds the false positives, the refused returns, the columns described
 otherwise and the argument matrix's failures at none in `bb test:jvm`.
@@ -100,6 +102,7 @@ ran. The tests that catch a change upstream, each naming the list to update:
 |---|---|
 | `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
 | `pgmalli.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops |
+| `pgmalli.accept-test` | a type pgjdbc's `setObject` sends a class as that differs from `accept/class-types`; a type PostgreSQL takes or refuses where `accept/accepts?` says otherwise |
 | `pgmalli.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/row-schema` gives (the typing tables in src/pgmalli/honeysql.clj); a name PostgreSQL gives an unaliased expression that differs from `expression-name`'s |
 
 A type of PostgreSQL's or of an extension is one entry of `types` in

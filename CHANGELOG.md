@@ -7,89 +7,84 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 * `:send` says what an application sends, as pgjdbc's `setObject` decides it by class: a map
   of classes to the type each goes as (a name or alias, an array type `"bigint[]"`, or
-  `:unknown` for a value sent untyped), merged over pgjdbc's; `nil` takes a class out. A class
-  adds to a column's own values where PostgreSQL takes its type as the column's own (a narrower
-  number, another string type, an untyped value to a text or enum column), and in a cast all
-  PostgreSQL casts. A Clojure collection sent as an array type or `:unknown`, and a Java array,
-  is an array argument: compared with `= ANY(?)`, assigned to an array column, or under
-  `unnest`, which takes a typed array alone.
+  `:unknown` for a value sent untyped), merged over pgjdbc's; `nil` takes a class out. pgjdbc's
+  own include its boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and the
+  arrays of java.sql's dates, times and timestamps. A class adds to a column's own values where
+  PostgreSQL takes its type as the column's own (a narrower number, another string type, an
+  untyped value to a text or enum column), and in a cast all PostgreSQL casts, an array too (to
+  text, say). A number is held to a number column's checks whatever its class; a class sent as
+  a text type (a keyword as `varchar`) to none of the column's checks on text, which PostgreSQL
+  runs on the text an application makes of it.
+* An array argument takes a Clojure collection sent as an array type or `:unknown` (or a
+  collection interface `:send` names, `{java.util.List :unknown}`, each collection implementing
+  it) and a Java array, typed by its elements (`[:pg/array element]`): compared with
+  `= ANY(?)`, assigned to an array column, or under `unnest`, which takes a typed array alone.
+  An enum type's array takes a typed array of that type alone; a reg* array no integer. A typed
+  array of a narrower number (`"bigint[]"`) goes to a `numeric[]`, `real[]` or
+  `double precision[]` column, and an integer to a `numeric(p,s)` one, as to a `numeric` one. A
+  domain over an enum takes no untyped value compared: PostgreSQL has no `=` for it.
 * `:jdbc` takes the options an application passes to next.jdbc: `:builder-fn` (one of
   next.jdbc's map builders, as the function, its var, or its qualified symbol where next.jdbc
   does not load) keys rows as next.jdbc does, and under a modified builder `:label-fn` and
   `:qualifier-fn` too; `:return-keys` adds RETURNING to a write.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
   `:set` built at run time, keyed as the `:jdbc` builder keys a row where HoneySQL writes that
-  key back to the column. `h/set-schema` takes a non-empty map.
+  key back to the column; `h/set-schema` takes a non-empty map. They take no keyword but
+  `:default`, nor a vector or a sequence: HoneySQL writes a keyword as a column and a vector as a
+  row of parameters, whatever `:send` sends. Where the format quotes names, HoneySQL writes
+  `:default` as the column `"default"`, so they take `[:default]` alone there. Where a BEFORE row
+  trigger runs for the write, they and an assigned argument take a column left out or NULL, as
+  `h/check` already did.
 * `h/arg-types` types an argument under a cast (`[:cast :?at :timestamptz]`) with what
   PostgreSQL casts to the type: a string too, and an enum type's labels alone. Assigned or cast
   to an integer type, a fraction is held to the range half a unit wider, as PostgreSQL rounds it.
-* An argument in `:limit` or `:offset` takes nil (none). A comparison in a select or ORDER BY
-  expression types its argument, and `h/check` reads it.
+  An argument of `coalesce` and the like takes the type the other arguments resolve to, and a
+  comparison in a select or ORDER BY expression types its argument, which `h/check` reads too.
+* An argument takes nil where any of its uses does, whatever their order; in `:limit` or
+  `:offset` (none); under `{:compare :lenient}` the elements of one in `:in` or `= ANY` too.
+* `h/row-schema` types `coalesce`, `greatest`, `least` and `CASE` of values of one type, or of
+  numbers the widest of them (an `integer` and a `bigint` a `bigint`); `nullif` of two of one
+  type, as `=` reads it. A string among them takes the others' type; an argument leaves the
+  expression untyped unless the type is a string type, as pgjdbc sends numbers and dates typed.
+  `CASE` without `:else` may be NULL. `min` and `max` read a `varchar`, `"char"` or `name` as
+  `text`, a `cidr` as `inet` and a reg* type as `oid`. It also types a literal
+  `[:inline ...]` writes, and the functions that build json and jsonb (`jsonb_build_object`,
+  `jsonb_agg` ...) as a column of the type is read: an object or an array under
+  `{:read {:json :parsed}}`. An unaliased CASE is named after its ELSE where that has a name of
+  its own, as PostgreSQL names it.
+* A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type, in
+  `h/row-schema` and `h/arg-types`.
+* The columns of a CTE or a subquery are typed as its SELECT types them: a LATERAL subquery
+  with the tables before it, a recursive CTE as its first member, NULL allowed and a CHECK's
+  list read as its base type; a column it does not give is `:unknown-column`. A table function
+  (`WITH ORDINALITY` too) is named by its alias. An argument of an `unnest` in `FROM` is an
+  array of the type of where its column goes: compared, assigned by `INSERT ... SELECT` or
+  `UPDATE ... SET`, or cast.
 * `h/check` reports a string sent as any type a column does not take, not only varchar, and a
-  string assigned to a reg* column other than regclass.
-* `pgmalli.core/describe` refuses a type neither malli nor the registry knows.
+  string assigned to a reg* column other than regclass. It reads a literal against a CHECK's
+  list of numbers as PostgreSQL does (an untyped `"1"` is the label `1`, a number outside the
+  list an `:enum-literal`), an alias's column list as renaming the first columns alone
+  (`AS u(a)` keeps the others' names), TRIM's column as `btrim`, and `coalesce` of a column
+  with a CHECK's list as its base type.
 * A domain whose CHECK lists its values (`CREATE DOMAIN lbl AS text CHECK (VALUE IN ('a',
   'b'))`) keeps its base type (`[:enum {:pg/type "text"} "a" "b"]`), and `h/check` no longer
   reads it as an enum type: a string sent as `varchar` to it is no `:uncast-string`.
-* `h/check` reads a literal against a CHECK's list of numbers as PostgreSQL does: an untyped
-  `"1"` is the label `1`, and a number outside the list is an `:enum-literal`.
-* `h/row-schema` types `greatest`, `least`, `nullif` and `CASE` as `coalesce`, numbers of several
-  types as the widest of them (an `integer` and a `bigint` a `bigint`), and a literal
-  `[:inline ...]` writes; `h/arg-types` types an argument of `coalesce` and the like with the
-  type the other arguments resolve to.
 * `h/query-schema`'s return says how many rows the data tells (`[:sequential {:max 1} row]`):
   one of a SELECT of aggregates alone, at most one where the WHERE holds a primary key or a
-  UNIQUE constraint equal to a value, up to as many as an INSERT's `:values` has rows under RETURNING,
-  at most `:limit`; where it is one, `{:result :one}` gives no `[:maybe]`.
+  UNIQUE constraint, neither partial nor DEFERRABLE, equal to a value, up to as many as an
+  INSERT's `:values` has rows under RETURNING, at most `:limit`; where it is one,
+  `{:result :one}` gives no `[:maybe]`.
 * A table's map carries `:pg/inherited true` for a table other tables inherit (not as
   partitions), `:pg/primary-key-deferrable true`, and `:deferrable true` on a DEFERRABLE
   `:pg/unique` entry. An invalid unique index (a failed `CREATE INDEX CONCURRENTLY`) is no
   longer in `:pg/unique`.
-* Where a BEFORE row trigger runs for the write, `h/values-schema`, `h/set-schema` and an
-  assigned argument take a column left out or NULL, as `h/check` already did.
-* A collection interface in `:send` (`{java.util.List :unknown}`) sends each Clojure collection
-  that implements it (a vector, a list) as an array argument.
-* `pgmalli/portable` leaves out a `numeric(p,s)`'s precision, which malli's types cannot say.
-* An integer assigned to a `numeric(p,s)` column is an argument it takes, as to a `numeric` one,
-  and a typed array of a narrower number (`"bigint[]"`) one a `numeric[]`, `real[]` or `double
-  precision[]` column takes.
-* Under `{:compare :lenient}` the elements of an argument in `:in` or `= ANY` take nil too.
-* `h/values-schema` and `h/set-schema` take no keyword but `:default`, nor a vector or a
-  sequence: HoneySQL writes a keyword as a column and a vector as a row of parameters, whatever
-  `:send` sends.
-* A class `:send` sends as a column's text type (a keyword as `varchar`) is held to none of the
-  column's checks on text: PostgreSQL checks the text an application makes of it. A number is
-  held to a number column's checks whatever its class.
-* pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and java.sql's
-  dates, times and timestamps (untyped, their arrays typed) are sent by default, as pgjdbc's
-  `setObject` sends them; any Java array `:send` names is typed by its elements
-  (`[:pg/array element]`). A cast takes an array where PostgreSQL casts it (to text, say).
-* `min` and `max` of a varchar, `"char"` or `name` are text, of a cidr inet and of a reg* type
-  oid; `nullif` is typed only where both arguments are of one type its `=` keeps. A domain over
-  an enum takes no untyped value compared (PostgreSQL has no `=` for it); a reg* array no
-  integer.
-* An argument takes nil where any of its uses does, whatever the order they are written in.
-* An enum type's array takes a typed array of that type alone.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
+* `pgmalli/portable` leaves out a `numeric(p,s)`'s precision, which malli's types cannot say.
+* `pgmalli.core/describe` refuses a type neither malli nor the registry knows.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does
-  not take is an error whose data names it (`:unknown`) and the one meant (`:did-you-mean`).
-* The columns of a CTE or a subquery (LATERAL too, a recursive CTE as its first member) are
-  typed as its SELECT types them; a column it does not
-  give is `:unknown-column`. An argument of an `unnest` in `FROM` is an array of the type of
-  where its column goes: compared, assigned by `INSERT ... SELECT` or `UPDATE ... SET`, or cast.
-* `h/row-schema` types the functions that build json and jsonb (`jsonb_build_object`,
-  `jsonb_agg` ...) as a column of the type is read: an object or an array under `{:read {:json
-  :parsed}}`.
-* An unaliased CASE is named after its ELSE where that has a name of its own, as PostgreSQL
-  names it.
-* `h/check` reads an alias's column list as renaming the first columns alone (`AS u(a)` keeps
-  the others' names), names TRIM's column `btrim` as PostgreSQL does, and reads `coalesce` of a
-  column with a CHECK's list as its base type.
-* A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type.
-* Where the format quotes names, HoneySQL writes `:default` as the column `"default"`:
-  `h/values-schema` and `h/set-schema` take `[:default]` alone there.
-* A name the registry lacks is an error listing its tables, views and types before the schemas
+  not take is an error whose data names it (`:unknown`) and the one meant (`:did-you-mean`). A
+  name the registry lacks is an error listing its tables, views and types before the schemas
   derived from them.
 * What to do:
   * Options: `{:stringtype :unspecified}` is `{:send {String :unknown}}`. `:write {"text" [:or
@@ -113,6 +108,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     a literal outside its labels, that sends a string typed to a column not taking it, compares
     a CHECK's list of numbers with a value outside it, or reads a column a CTE does not give,
     now has problems.
+  * Generate again if a schema has a table other tables inherit, a DEFERRABLE primary key or
+    unique constraint, an invalid unique index, or a domain whose CHECK lists its values: their
+    files change, and `pgmalli.main check` reports them stale.
   * Code reading the row of `h/query-schema`'s return by position (`(second ret)`) reads it with
     `last` or `m/children`: the return may carry properties (`[:sequential {:max 1} row]`).
 

@@ -12,7 +12,7 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.files :as files]
             pgmalli.impl.jdbc
-            [pgmalli.test-db :refer [*db* exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -49,8 +49,7 @@
 (deftest as-read-is-what-next-jdbc-builds
   (when *db*
     (exec-sql! schema-sql)
-    (let [{:keys [host port db user password]} *db*
-          ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
+    (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (try
         (doseq [[time read-as] time-readers
