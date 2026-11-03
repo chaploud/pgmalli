@@ -640,6 +640,8 @@ Write the query so PostgreSQL's reading is explicit instead.
 - An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list
   (`CHECK (state IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`,
   `NOT IN` and `<` match rows and are not reported; nor is `NOT (state = ...)`.
+- A `Character` argument, which pgjdbc sends as `varchar`: taking it would put `char?` on every
+  string argument. `{:send {Character "character varying"}}` takes it.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 

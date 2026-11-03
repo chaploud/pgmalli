@@ -131,10 +131,12 @@
   [n pred]
   [:fn {:pg/class n :error/message (str "should be an " n)} pred])
 
+(defn- row-schema "The schema c's row in accept/classes names." [c] (some (fn [[k _ s]] (when (= k c) s)) accept/classes))
+
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
   (memoize (fn [^Class c]
-             (or (some (fn [[k _ s]] (when (= k c) s)) accept/classes)
+             (or (row-schema c)
                  ;; java.sql's dates, times and timestamps are java.util.Dates
                  (when (.isAssignableFrom java.util.Date c) 'inst?)
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
@@ -469,16 +471,23 @@
                          :else true)))
         untyped (set (sent-as opts :unknown))
         ;; a typed array's elements are its type's, never a scalar sent untyped (a String's, where
-        ;; t takes one) but where its type takes that too (a java.sql.Time, a Time[]'s): t without those
-        typed (fn [x]
-                (let [own (set (map shape/kind (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives)))
-                      strip #(shape/either (remove (fn [a] (and (untyped a) (not (own (shape/kind a))))) (shape/alternatives %)) %)]
+        ;; t takes one): t without those; a Java array's are its component class's (a Time[]'s
+        ;; java.sql.Times, inst?), which t takes too
+        typed (fn [x ^Class c]
+                (let [cs (some-> c .getComponentType row-schema shape/alternatives)
+                      own (set (map shape/kind (or cs (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives))))
+                      strip (fn [s]
+                              (let [as (shape/alternatives s)
+                                    kinds (set (map shape/kind as))]
+                                (shape/either (concat (remove (fn [a] (and (untyped a) (not (own (shape/kind a))))) as)
+                                                      (remove (comp kinds shape/kind) cs))
+                                              s)))]
                   (if (shape/maybe? t) [:maybe (strip (shape/non-null t))] (strip t))))
         ;; a typed array's elements are also the values of its element type, where the column
         ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
-        element (fn [sent]
+        element (fn [sent c]
                   (let [x (when (string? sent) (types/element sent))
-                        t (if (= :unknown sent) t (typed x))
+                        t (if (= :unknown sent) t (typed x c))
                         ;; an element of no known type (an opaque column's) stays so
                         e (when (and x elem (not= x elem)) (types/entry x))]
                     (if e
@@ -488,9 +497,9 @@
                             more (remove #(own (kind %)) (shape/alternatives (write-type (types/type-schema (:name e)) opts)))]
                         (shape/either (distinct (concat (shape/alternatives t) more)) t))
                       t)))
-        alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)
+        alts (distinct (for [[s sent c] (write-rows opts true) :when (takes? sent)
                              a (shape/alternatives s)]
-                         (clojure.walk/postwalk-replace {:pgmalli/element (element sent)} a)))]
+                         (clojure.walk/postwalk-replace {:pgmalli/element (element sent c)} a)))]
     (shape/either (cond-> alts (and (seq alts) (some #{pg-object} (shape/alternatives (shape/non-null t)))) (concat [pg-object])) :any)))
 
 (defn- base-type-name
@@ -513,9 +522,6 @@
     ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
     (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
-          ;; a java.sql.Date, Time or Timestamp (inst?) goes to a date, time or timestamp under every :time
-          inst (driver-type schema (-> opts (dissoc :read) (assoc :time :inst)) write-type)
-          t (if (= inst t) t (shape/either (distinct (concat (shape/alternatives t) (shape/alternatives inst))) t))
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
           ;; keeps those a class sent goes as (pgmalli.honeysql's labelled-type)
@@ -602,8 +608,6 @@
       (shape/not-a-row! registry name "as-read"))
     (shape/row-map s)))
 
-(def ^:private no-sends (zipmap (map first accept/class-types) (repeat nil)))
-
 (defn- through-domain
   "A column of a domain whose type the driver returns as something else (a date as a
    java.sql.Date, a citext as a PGobject) as that type, without the domain's CHECKs, which read
@@ -612,8 +616,9 @@
   [schemas s opts f]
   (if-let [d (shape/ref-target schemas s)]
     (let [base (through-domain schemas (shape/domain-base d) opts f)]
-      ;; compared with nothing sent, as sends add values to the base type and do not change how the driver reads it
-      (if (= base (f base (assoc opts :send no-sends)))
+      ;; compared with what pgjdbc sends (an OffsetDateTime to a timestamptz read as an Instant):
+      ;; :send's own classes go to the base type and leave the domain's CHECKs on its values
+      (if (= base (f base (dissoc opts :send)))
         s
         (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))

@@ -33,7 +33,7 @@
                          CREATE TABLE arr (xs int[], cs citext[]);
                          INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
                          CREATE TABLE typed (id int, i int, b bigint, n numeric, u uuid, d date, ts timestamp, tz timestamptz,
-                           ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[]);
+                           ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[], c1 char(1));
                          INSERT INTO typed (id) VALUES (1);
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
@@ -226,6 +226,18 @@
         (testing (pr-str opts q)
           (is (some? (runs! q params opts)))
           (is (accepted? reg q params opts)))))))
+
+(deftest a-character-is-taken-where-send-says-pgjdbc-sends-it-as-varchar
+  (when *db*
+    (let [reg (registry)]
+      (doseq [q [{:select [:id] :from [:typed] :where [:= :c1 :?x]}
+                 {:select [:id] :from [:accounts] :where [:= :email :?x]}
+                 {:update :typed :set {:c1 :?x} :where [:= :id 1]}
+                 {:update :accounts :set {:email :?x} :where [:= :id 1]}]]
+        (testing (pr-str q)
+          (is (some? (runs! q {:x \a} {})))
+          (is (not (accepted? reg q {:x \a} {})))
+          (is (accepted? reg q {:x \a} {:send {Character "character varying"}})))))))
 
 (deftest a-java-sql-date-time-or-timestamp-goes-untyped-to-a-column-of-any-type
   (when *db*
