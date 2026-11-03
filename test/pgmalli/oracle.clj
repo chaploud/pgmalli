@@ -218,11 +218,13 @@
 (defn refused
   "e, an SQLException of a statement, when PostgreSQL refuses the statement for its data, its
    constraints, its text or the objects it names; throws it where the server or the connection
-   failed it whatever it says (SQLSTATE class 08, 25, 40, 53, 57, 58, XX, or none): a statement
-   timed out (57014), a deadlock or a lost connection says nothing of the statement."
+   failed it whatever it says (SQLSTATE class 08, 25, 40, 53, 57, 58, or none): a statement
+   timed out (57014), a deadlock or a lost connection says nothing of the statement. XX000 is
+   the class of an error PostgreSQL raises without one, for a statement too (a NUMA function
+   where the platform has none)."
   [^java.sql.SQLException e]
   (let [c (some-> (.getSQLState e) (subs 0 2))]
-    (if (and c (not (#{"08" "25" "40" "53" "57" "58" "XX"} c))) e (throw e))))
+    (if (and c (not (#{"08" "25" "40" "53" "57" "58"} c))) e (throw e))))
 
 (defn- pg-kind [state message]
   (case state
