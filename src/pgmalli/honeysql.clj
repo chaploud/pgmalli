@@ -767,9 +767,13 @@
   (boolean (or (operators h) (not (re-find #"^[A-Za-z_]" (name h)))
                (some-> (honeysql 'honey.sql/registered-op?) (#(% h))))))
 
-(defn- cast-of-column? [x]
+(defn- raw? [x] (and (vector? x) (= :raw (first x))))
+
+(defn- cast-of-column?
+  "Whether x is a cast of a column, or of :raw SQL, which may be one."
+  [x]
   (and (vector? x) (= :cast (first x))
-       (or (column-keyword? (second x)) (cast-of-column? (second x)))))
+       (or (column-keyword? (second x)) (raw? (second x)) (cast-of-column? (second x)))))
 
 (defn- function-name
   "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it;
@@ -1897,14 +1901,16 @@
         ;; (and its table) as it is; a cast to another type makes an expression of no table
         kept-column? (fn kept? [x]
                        (or (not (cast-of-column? x))
-                           (let [[a b] (map #(canonical-type (expression-type registry chain % opts)) [x (second x)])]
+                           ;; a type named with its schema (:public.mood) is the type of that name
+                           (let [[a b] (map #(some-> (canonical-type (expression-type registry chain % opts)) (str/replace #"^[^.\"]+\." ""))
+                                            [x (second x)])]
                              (and (or (nil? a) (nil? b) (= a b)) (kept? (second x))))))
         items (for [item (selected-items stmt)
                     :let [[col alias] (select-parts item opts)]]
                 (cond
                   (nil? col) (when-let [n (item-name item opts)]
                                (let [x (if alias (first item) (item-expression item))]
-                                 (if (and qualified? (cast-of-column? x) (kept-column? x))
+                                 (if (and qualified? (or (raw? x) (and (cast-of-column? x) (kept-column? x))))
                                    (untold n)
                                    (let [{s :schema :keys [nullable?]} (expression-type registry chain x opts)]
                                      [(entry nil n s nullable? nil)]))))
@@ -1937,7 +1943,7 @@
                 ;; PostgreSQL resolves each column's type as CASE's: numbers the widest
                 (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts)
                                 (cond (= 1 (count inners)) (first inners)
-                                      :else (or (some-> (resolved-type (repeat nil) (map #(hash-map :schema %) inners)) :schema loose) :any))
+                                      :else (or (some->> (resolved-type (repeat nil) (map #(hash-map :schema %) inners)) :schema (beyond-list registry) loose) :any))
                                 (some maybe? schemas) opts)))))))
 
 (defn- row-schema*
