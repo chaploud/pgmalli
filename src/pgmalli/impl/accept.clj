@@ -57,7 +57,6 @@
 
 (defn integer-type? [t] (contains? integers t))
 
-
 (def ^:private families
   "Types whose comparison operators take each other: implicit casts and cross-type operators."
   [numbers strings #{"date" "timestamp without time zone" "timestamp with time zone"}])

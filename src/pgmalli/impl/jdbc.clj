@@ -347,27 +347,26 @@
 
 ;;; rows as next.jdbc builds them
 
+(defn- qualify
+  "k qualified, when the builder qualifies (row-keys ks), by what its qualifier makes of table;
+   an empty qualifier leaves k unqualified, as next.jdbc's not-empty does."
+  [k {:keys [qualified? qualifier]} table]
+  (if-let [q (when qualified? (not-empty (qualifier table)))] (keyword q (name k)) k))
+
 (defn tableless-key
   "k, a column's key without a table, as next.jdbc keys a column the driver names no table for
    (a set operation's): qualified by what the qualifier makes of \"\" when that is not empty."
   [k opts]
-  (let [{:keys [qualified? qualifier]} (row-keys opts)
-        q (when qualified? (not-empty (qualifier "")))]
-    (if q (keyword q (name k)) k)))
+  (qualify k (row-keys opts) ""))
 
 (defn row-key
   "The key next.jdbc gives a column (row-keys): qualified, when the builder qualifies, by its
    table; a column of none as tableless-key keys it. table is [schema name], or
    \"schema.table\" split at its first dot."
   [table column opts]
-  (let [{:keys [qualified? label qualifier]} (row-keys opts)
+  (let [{:keys [label] :as ks} (row-keys opts)
         k (keyword (label column))]
-    (if (nil? table)
-      (tableless-key k opts)
-      ;; an empty qualifier leaves the key unqualified, as next.jdbc's not-empty does
-      (if-let [q (when qualified? (not-empty (qualifier (if (vector? table) (second table) (last (str/split table #"\." 2))))))]
-        (keyword q (name k))
-        k))))
+    (qualify k ks (cond (nil? table) "" (vector? table) (second table) :else (last (str/split table #"\." 2))))))
 
 (defn row-entry
   "A row map's entry for a column read as inner: NULL a [:maybe], or the key absent under a

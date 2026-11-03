@@ -108,7 +108,6 @@
   [format]
   (if (quoted? format) #{[:default]} #{:default [:default]}))
 
-
 (defn- code-sources?
   "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
    tables, whose columns the data then does not show."
@@ -584,6 +583,11 @@
   [x]
   (cond (vector? x) x (keyword? x) [x]))
 
+(defn- bare
+  "x of an item [x] or [x alias] of a select list, or [x direction ...] of :order-by."
+  [x]
+  (if (vector? x) (first x) x))
+
 (defn- selected-items
   "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
    or :returning."
@@ -703,8 +707,8 @@
                       (concat (mapcat identity (value-rows stmt columns))
                               ;; positional rows under the listed columns
                               (when columns (mapcat #(map vector columns %) (filter vector? values)))))
-                    ;; an item [x] or [x alias] is x; a star or :raw makes columns the data does not count
-                    (let [items (map #(if (vector? %) (first %) %) (selected-items select))]
+                    ;; a star or :raw makes columns the data does not count
+                    (let [items (map bare (selected-items select))]
                       (when (and columns (map? select) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
                         (map vector columns items))))))))
 
@@ -756,6 +760,11 @@
   [s]
   (let [n (folded (last (str/split s #"\.")))]
     (if (= "trim" n) "btrim" n)))
+
+(defn- called
+  "The function name of a call [:f ...]; nil for anything else."
+  [x]
+  (when (and (vector? x) (keyword? (first x))) (function-name (name (first x)))))
 
 (defn- expression-name
   "The column name PostgreSQL gives a select expression with no alias: a function's name, case,
@@ -872,7 +881,7 @@
                   :when (and (column-keyword? c) (not (and (output? stmt c false) (empty? (column-hits registry sc c)))))]
               c)
             (when out
-              (for [o (vectorish (:order-by stmt)) :let [c (if (vector? o) (first o) o)]
+              (for [o (vectorish (:order-by stmt)) :let [c (bare o)]
                     :when (and (column-keyword? c) (not (output? out c (not= out stmt))))]
                 c)))))
 
@@ -923,11 +932,16 @@
         (let [near (near-columns registry scope col)]
           (cond-> {:kind :unknown-column :column col} near (assoc :did-you-mean near)))))))
 
+(defn- table-props
+  "The properties of the row schema of table (\"schema.table\")."
+  [registry table]
+  (shape/row-props (get (::schemas registry) (shape/table-key table))))
+
 (defn- filled-by-trigger?
-  "Whether a BEFORE row trigger runs on the table for event (:insert, :update): it may fill a
-   column before NOT NULL is checked."
-  [registry table event]
-  (boolean (get-in (shape/row-props (get (::schemas registry) (shape/table-key table))) [:pg/before-triggers event])))
+  "Whether a BEFORE row trigger runs, for event (:insert, :update), on the table of row
+   properties props: it may fill a column before NOT NULL is checked."
+  [props event]
+  (boolean (get-in props [:pg/before-triggers event])))
 
 (defn- insert-problems [registry stmt schema]
   (let [{:keys [table columns]} (insert-parts stmt)
@@ -948,7 +962,7 @@
          (when columns
            (for [[i row] (map-indexed vector (filter vector? rows)) :when (not= (count row) (count columns))]
              {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
-         (when (and (seq given) (not (filled-by-trigger? registry table :insert)))
+         (when (and (seq given) (not (filled-by-trigger? (table-props registry table) :insert)))
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column (keyword c)})))))))
 
@@ -1000,7 +1014,7 @@
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
-                           (and (null-value? v format) (not (shape/maybe? s)) (not (filled-by-trigger? registry table how)))
+                           (and (null-value? v format) (not (shape/maybe? s)) (not (filled-by-trigger? (table-props registry table) how)))
                            {:kind :not-null-violation :table table :column col :clause clause})]
              :when p]
          p)))))
@@ -1049,7 +1063,7 @@
   [registry s assigned? types]
   (when-let [t (slot-type registry s)] (boolean (some #(accept/accepts? t % (if assigned? :assign :compare)) types))))
 
-(defn- number-text
+(defn- parse-number
   "The number string v is as PostgreSQL reads a numeric input: spaces around it, PostgreSQL 16's
    underscores between digits or after a base prefix, and 0x, 0o and 0b integers; nil for none."
   [v]
@@ -1066,7 +1080,7 @@
   [l v]
   (or (= l v)
       (and (number? l) (number? v) (== l v))
-      (and (number? l) (string? v) (some-> (number-text v) (== l)))))
+      (and (number? l) (string? v) (some-> (parse-number v) (== l)))))
 
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
@@ -1102,7 +1116,7 @@
                  numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
                  values (cond (or strings? numbers?) (if (vector? value) value [value])
                               (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
-                 allowed (when s (enum-values registry (cond-> s (not assigned?) (#(compared-schema registry % op)))))
+                 allowed (when s (enum-values registry (if assigned? s (compared-schema registry s op))))
                  uncast (when (and s typed? strings? (not (takes-string? registry s assigned? sends)))
                           (uncast-type registry s))]
            :when (seq values)
@@ -1304,10 +1318,11 @@
    where the column takes it, or a BEFORE row trigger for one of them may fill it."
   ([registry sc col opts] (column-type registry sc col false #{} opts))
   ([registry sc col assigned? events opts]
-   (if-let [{s :schema :keys [table opaque?]} (some-> (resolve-column registry sc col) (#(when (:schema %) %)))]
-     (let [inner (accepted-type registry s (if assigned? :assign :compare) opts)]
-       (if (and assigned? (or (maybe? s) (and (not opaque?) (some #(filled-by-trigger? registry table %) events)))) [:maybe inner] inner))
-     :any)))
+   (let [{s :schema :keys [table opaque?]} (resolve-column registry sc col)]
+     (if s
+       (let [inner (accepted-type registry s (if assigned? :assign :compare) opts)]
+         (if (and assigned? (or (maybe? s) (and (not opaque?) (some #(filled-by-trigger? (table-props registry table) %) events)))) [:maybe inner] inner))
+       :any))))
 
 (defn- compared-schema-type
   "The type of an argument op compares with a value of column schema s, as compared-schema
@@ -1579,7 +1594,7 @@
                                  ;; coalesce(?, col) and the like: PostgreSQL resolves an argument to the others' type;
                                  ;; nil is a value there (coalesce and greatest skip it, nullif's first may be NULL)
                                  (for [x (mapcat own-nodes (map val (clause-entries (dissoc stmt :insert-into))))
-                                       :when (and (vector? x) (keyword? (first x)) (resolving-fns (function-name (name (first x)))))
+                                       :when (resolving-fns (called x))
                                        :let [operands (rest x)
                                              r (resolved-type operands (map #(expression-type registry sc % opts) operands))]
                                        :when r
@@ -1685,7 +1700,7 @@
    docs/queries.md#the-row-a-query-returns lists; nil for another."
   [registry chain x opts]
   (let [h (when (vector? x) (first x))
-        fname (if (keyword? h) (function-name (name h)) (shorthand-fn x))
+        fname (or (called x) (shorthand-fn x))
         ts (map #(expression-type registry chain % opts) (when (vector? x) (rest x)))
         typed #(when % {:schema (type-schema %)})]
     (cond
@@ -1836,7 +1851,7 @@
    column (nil for one it cannot tell); nil when its row cannot be told."
   [registry stmt opts]
   (if-let [memo (::derived registry)]
-    (let [k [stmt (select-keys opts [:schema :time :read :send :format :compare])]]
+    (let [k [stmt (dissoc opts :jdbc)]]
       (if (contains? @memo k)
         (@memo k)
         (let [v (derived-types* registry stmt opts ())] (swap! memo assoc k v) v)))
@@ -1909,17 +1924,14 @@
   ;; a clause this does not read (:join-by, :fetch, a set operation ...) may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)) (not (code-sources? stmt)))
     (let [write? (some #(contains? stmt %) write-keys)
-          ;; an item [x] or [x alias] is x
-          items (map #(if (vector? %) (first %) %) (selected-items stmt))
-          ;; an ORDER BY item [x direction ...] is x
-          order (for [o (vectorish (:order-by stmt))] (if (vector? o) (first o) o))
+          items (map bare (selected-items stmt))
+          order (map bare (vectorish (:order-by stmt)))
+          aggregates-only? (every? #(aggregate-fns (called %)) items)
           rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (insert-parts stmt)))) (:values stmt))
           plain? (and (every? plain-value? (concat order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
                       (or (every? plain-value? items)
                           ;; aggregates over plain values
-                          (every? #(and (vector? %) (keyword? (first %)) (aggregate-fns (function-name (name (first %))))
-                                        (every? plain-value? (rest %)))
-                                  items)))
+                          (and aggregates-only? (every? #(every? plain-value? (rest %)) items))))
           targets (if write? (write-targets stmt) (table-items stmt))
           [table alias written] (when (= 1 (count targets)) (table-ref (first targets) schema))
           ;; a CTE of the table's name hides it
@@ -1932,7 +1944,7 @@
                            :let [[q col] (split-column a)]
                            :when (or (nil? q) (= q alias))]
                        (folded col)))
-          props (when table (shape/row-props (get (::schemas registry) (shape/table-key table))))
+          props (when table (table-props registry table))
           ;; a partial UNIQUE index holds over some rows alone; a DEFERRABLE key may be checked only at commit
           key-columns (cond-> (map :columns (remove #(or (:where %) (:deferrable %)) (:pg/unique props)))
                         (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props)))
@@ -1941,7 +1953,7 @@
           ;; a limit only a parameter or code tells may be 0
           unbounded-limit? (and (contains? stmt :limit) (not limit))
           aggregates? (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not-any? #(contains? stmt %) [:group-by :having :offset])
-                           (every? #(and (vector? %) (keyword? (first %)) (aggregate-fns (function-name (name (first %))))) items))
+                           aggregates-only?)
           counted (cond (not plain?) nil
                         aggregates? {:min 1 :max 1}
                         (and rows (:returning stmt)) {:min 0 :max (count rows)}
@@ -2062,8 +2074,7 @@
           default (into [:enum] (sort-by vector? (default-values (:format opts))))
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
-          ;; a BEFORE row trigger runs before NOT NULL is checked: it may fill any column
-          triggered? (get-in (shape/row-props s) [:pg/before-triggers (keyword derived)])
+          triggered? (filled-by-trigger? (shape/row-props s) (keyword derived))
           m (into [:map {:closed true}]
                   (concat
                    ;; one the database may fill takes HoneySQL's :default (DEFAULT) too

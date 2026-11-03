@@ -15,5 +15,5 @@
        (map #(symbol (-> (subs % (count "test/") (- (count %) (count ".clj")))
                          (str/replace "/" ".")
                          (str/replace "_" "-"))))
-       (remove (if jvm? (constantly false) jvm-only))
+       (remove (if jvm? #{} jvm-only))
        sort))
