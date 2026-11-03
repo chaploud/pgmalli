@@ -151,7 +151,7 @@
   "\"varchar[]\" as \"character varying[]\": an array type named by an element type types knows
    (a name or an alias), by that type's name; nil otherwise."
   [t]
-  (when-let [e (accept/element t)]
+  (when-let [e (types/element t)]
     (some-> (types/entry e) :name (str "[]"))))
 
 (defn- type-name
@@ -336,14 +336,14 @@
         takes? (fn [sent]
                  (if (= :unknown sent)
                    (not= :unnest use)
-                   (cond (and elem (accept/known? elem)) (accept/holds? elem (accept/element sent))
+                   (cond (and elem (accept/known? elem)) (accept/holds? elem (types/element sent))
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
-                         (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (accept/element sent))
+                         (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
         ;; a typed array's elements are also the values of its element type, where the column
         ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
         element (fn [sent]
-                  (let [x (when (string? sent) (accept/element sent))
+                  (let [x (when (string? sent) (types/element sent))
                         ;; an element of no known type (an opaque column's) stays so
                         e (when (and x elem (not= x elem)) (types/entry x))]
                     (if-let [s (:schema e)]
@@ -376,7 +376,7 @@
   [schema opts]
   (if (array-column? schema)
     ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
-    (array-type (write-type (last schema) opts) (assoc opts ::element-type (accept/element (pg-type schema))) :assign)
+    (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent

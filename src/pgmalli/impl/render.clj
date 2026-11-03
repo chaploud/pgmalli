@@ -22,7 +22,6 @@
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
    overrides is {constraint-name schema-or-{:skip reason}}."
   (:require [clojure.string :as str]
-            [pgmalli.impl.accept :as accept]
             [pgmalli.impl.eval :as ev]
             [pgmalli.impl.expr :as x]
             [pgmalli.impl.pattern :as pattern]
@@ -34,7 +33,7 @@
 (defn- base-type [data-type]
   ;; without a schema prefix or a typmod: "public.money" and "numeric(12,2)" name numeric
   (let [t (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" "")]
-    (if-let [elem (accept/element t)]
+    (if-let [elem (types/element t)]
       [:vector (base-type elem)]
       (:schema (types/entry t) :any))))
 

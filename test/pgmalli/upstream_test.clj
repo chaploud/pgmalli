@@ -7,10 +7,12 @@
             [clojure.test.check.generators :as tcg]
             [honey.sql :as sql]
             [malli.core :as m]
+            [clojure.data.json :as json]
             [next.jdbc :as jdbc]
             next.jdbc.date-time
             next.jdbc.optional
             next.jdbc.result-set
+            [pgmalli.catalog-source :as source]
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.impl.files :as files]
@@ -103,3 +105,21 @@
       (is (nil? b) (str next-jdbc " has builder " b " that pgmalli does not know: add how it keys a row to builders in src/pgmalli/impl/jdbc.clj")))
     (doseq [b (sort (set/difference ours theirs))]
       (is (nil? b) (str next-jdbc " no longer has builder " b ": remove it from builders in src/pgmalli/impl/jdbc.clj")))))
+
+(deftest the-catalog-snapshot-is-the-servers
+  (when *db*
+    (let [ds (datasource)
+          version (first (str/split (first (column ds "SHOW server_version")) #"\."))
+          server (source/shape (json/read-str (str (first (column ds source/query)))))
+          snapshot @types/catalog
+          ;; the server's overloads of a name, against the ones the snapshot says it has
+          mine (fn [os] (set (for [o os :when (or (nil? (:in o)) (some #{version} (:in o)))] (dissoc o :in))))
+          hint (str "PostgreSQL " version " differs from resources/pgmalli/catalog.edn: run bb catalog")]
+      (is (some #{version} (:versions snapshot)) (str "PostgreSQL " version " is not among the catalog's versions: add it to CI and run bb catalog"))
+      (doseq [k [:types :casts :ranges]]
+        (is (= (get server k) (into (empty (get server k)) (get snapshot k))) (str (name k) ": " hint)))
+      (doseq [k [:functions :operators]
+              n (set (concat (keys (get server k)) (keys (get snapshot k))))
+              :let [theirs (get-in server [k n] #{}) ours (mine (get-in snapshot [k n]))]
+              :when (not= theirs ours)]
+        (is false (str (name k) " " n ": " hint "\n  server only: " (set/difference theirs ours) "\n  snapshot only: " (set/difference ours theirs)))))))

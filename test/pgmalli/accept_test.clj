@@ -38,7 +38,7 @@
 (defn- type-name
   "t by the name types keys it by."
   [t]
-  (if-let [e (accept/element t)] (str (type-name e) "[]") (:name (types/entry t) t)))
+  (if-let [e (types/element t)] (str (type-name e) "[]") (:name (types/entry t) t)))
 
 (defn- sent-as
   "The type PostgreSQL gets v as through setObject: :unknown for a value pgjdbc sends untyped,

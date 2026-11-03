@@ -19,8 +19,14 @@
      :extension  the extension that adds the type, outside pg_catalog
 
    unsupported lists the types pgmalli has no entry for yet, each with why. pgmalli.upstream-test
-   checks every type of pg_catalog and of the extensions PostgreSQL ships is in one of them."
-  (:require [clojure.string :as str]))
+   checks every type of pg_catalog and of the extensions PostgreSQL ships is in one of them.
+
+   catalog is what PostgreSQL's own catalog says of pg_catalog's types (typcategory,
+   typispreferred), implicit casts, ranges, functions and operators, which bb catalog writes to
+   resources/pgmalli/catalog.edn from each PostgreSQL version CI runs."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [clojure.string :as str]))
 
 (def types
   {"smallint" {:aliases ["int2"] :schema :pg/smallint :eval :integer :range [-32768 32767]}
@@ -161,3 +167,40 @@
   "The names by-keyword gives."
   [pred]
   (set (keys (by-keyword pred))))
+
+(def catalog
+  "resources/pgmalli/catalog.edn: {:versions [v ...] :types {name {:category c :preferred true}}
+   :casts #{[source target]} :ranges {range {:subtype t :multirange m}} :functions {name
+   [overload ...]} :operators {name [overload ...]}}, an overload {:args [type ...] :result type}
+   with :set, :kind (:a an aggregate, :w a window function), :variadic, :defaults (how many of
+   the last arguments may be left out), :non-null (an aggregate that is never NULL), :columns
+   ([[name type] ...] of its OUT arguments), :btree (an operator of a btree operator family, or its negator: a comparison, never NULL of
+   values) and
+   :in (the versions that have it, where not every one does)."
+  (delay (edn/read-string (slurp (io/resource "pgmalli/catalog.edn")))))
+
+(defn element
+  "The element type of an array type t (\"bigint[]\" is bigint); nil for another."
+  [t]
+  (when (string? t) (second (re-matches #"(.+)\[\]" t))))
+
+(defn category
+  "PostgreSQL's typcategory of type t (a name as format_type prints it, \"x[]\", or [:enum
+   name]): \"A\" for an array, \"E\" an enum; nil for a type pg_catalog lacks."
+  [t]
+  (cond (vector? t) (when (= :enum (first t)) "E")
+        (element t) "A"
+        :else (get-in @catalog [:types t :category])))
+
+(defn preferred?
+  "Whether t is the preferred type of its category (typispreferred)."
+  [t]
+  (boolean (and (string? t) (get-in @catalog [:types t :preferred]))))
+
+(defn implicit?
+  "Whether PostgreSQL converts a value of type from to type to implicitly (pg_cast's castcontext
+   'i', an array element by element)."
+  [from to]
+  (or (= from to)
+      (contains? (:casts @catalog) [from to])
+      (let [a (element from) b (element to)] (boolean (and a b (implicit? a b))))))

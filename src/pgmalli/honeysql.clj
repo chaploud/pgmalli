@@ -1720,7 +1720,7 @@
              :when t
              :let [element (accepted-type registry s :cast opts)
                    arrays (for [[sch sent] (jdbc/write-rows opts true)
-                                :when (and (string? sent) (accept/accepts? t (accept/element sent) :cast))]
+                                :when (and (string? sent) (accept/accepts? t (types/element sent) :cast))]
                             (walk/postwalk-replace {:pgmalli/element element} sch))]]
          [p (shape/either (distinct arrays) :any)])))))
 
@@ -1913,7 +1913,7 @@
                                      n (canonical-type {:schema s})
                                      input (operator-input :min-max n)]
                                  ;; a type pgmalli does not know may be a composite, whose max PostgreSQL 18 types record
-                                 (if (or (nil? n) (types/entry n) (accept/element n) (= :enum (shape/kind s)) (= :ref (shape/head (shape/non-null s))))
+                                 (if (or (nil? n) (types/entry n) (types/element n) (= :enum (shape/kind s)) (= :ref (shape/head (shape/non-null s))))
                                    {:schema (loose (if (= n input) s (type-schema input))) :nullable? true}
                                    {:schema :any :nullable? true})))
       (#{"bool_and" "bool_or" "every"} fname) (assoc (typed "boolean") :nullable? true)

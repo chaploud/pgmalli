@@ -7,5 +7,6 @@
 result
 target/
 
-# generate run in this checkout writes here; pgmalli ships only ir.sql
+# generate run in this checkout writes here; pgmalli ships ir.sql and catalog.edn (bb catalog)
 resources/pgmalli/*.edn
+!resources/pgmalli/catalog.edn

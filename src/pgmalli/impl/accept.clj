@@ -5,7 +5,8 @@
    pgmalli.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
    a caller passes a domain as its base type. pgmalli.accept-test holds both against pgjdbc
    and PostgreSQL."
-  (:require [clojure.string :as str]))
+  (:require [clojure.string :as str]
+            [pgmalli.impl.types :as types]))
 
 ;;; what pgjdbc sends
 
@@ -89,11 +90,6 @@
 
 (defn oid? "Whether t is a reg* type (an oid), not an array of one." [t] (and (string? t) (str/starts-with? t "reg") (not (str/ends-with? t "[]"))))
 
-(defn element
-  "The element type of an array type t (\"bigint[]\" is bigint); nil for another."
-  [t]
-  (when (string? t) (second (re-matches #"(.+)\[\]" t))))
-
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context
    (:compare, :assign or :cast). sent :unknown is a value sent untyped (:send's :unknown), which PostgreSQL
@@ -119,7 +115,7 @@
                     (contains? (assigned t) sent)
                     ;; text and varchar go to a regclass by assignment
                     (and (= "regclass" t) (#{"character varying" "text"} sent))
-                    (and (element t) (element sent) (accepts? (element t) (element sent) context))))
+                    (and (types/element t) (types/element sent) (accepts? (types/element t) (types/element sent) context))))
            (and (= :cast context)
                 (or (contains? strings sent)
                     (contains? (explicit t) sent))))))))
