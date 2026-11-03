@@ -52,7 +52,7 @@
   (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [:group_id :mood :score] :from [:users]}]}))
       "INSERT INTO table (columns) SELECT")
   (is (= [] (check '{:insert-into :users :values rows})) "rows passed in say nothing about the columns")
-  (is (= {} (args '{:insert-into :users :values rows}))))
+  (is (= {'rows [:sequential {:min 1} (h/values-schema registry :users opts)]} (args '{:insert-into :users :values rows}))))
 
 (deftest a-list-of-plain-items-is-read-as-honeysql-reads-a-vector
   (is (= [{:kind :unknown-column :column :nope}] (check {:select '(:id :nope) :from [:users]})))
@@ -553,7 +553,7 @@
         "a row compares element by element")
     (is (= {:a text :b text} (args [:between [:cast :id :text] :?a :?b])))
     (is (= {:x text} (args [:= [:upper :nick] :?x])) "upper of a varchar is text")
-    (is (= {:x :any} (args [:= [:public.my-fn :nick] :?x])) "an expression of no known type types nothing")
+    (is (= {:x [:any {:pgmalli/untyped :type}]} (args [:= [:public.my-fn :nick] :?x])) "an expression of no known type types nothing")
     (let [check #(h/check registry {:select [:id] :from [:users] :where %} (dissoc opts :send))]
       (is (= [{:kind :uncast-string :column [:cast :nick :mood] :arg :m :type "mood"}] (check [:= [:cast :nick :mood] :?m]))
           "a string compared with an enum-typed expression reaches it as varchar")
@@ -575,7 +575,7 @@
         "in the SELECT, where the argument is")
     (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :send)))
         "an array is not judged: a java.sql.Array of the enum type is taken, a String[] is not")
-    (is (= {:s :any} (args {:insert-into [[:users [:group_id :nick :score]] {:select [:g.* :?s] :from [[:groups :g]]}]}))
+    (is (= {:s [:any {:pgmalli/untyped :position}]} (args {:insert-into [[:users [:group_id :nick :score]] {:select [:g.* :?s] :from [[:groups :g]]}]}))
         "a star stands for columns the data does not count")))
 
 (deftest a-cast-to-an-alias-or-an-enum-has-its-type
@@ -685,7 +685,7 @@
     (is (not (m/validate (at {:send {java.time.LocalDateTime nil}}) local {:registry registry})) "a class mapped to nil is a value not sent"))
   (is (= {:ids [:pg/array bigint]} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} {:schema "sample"}))
       "pgjdbc sends a long[] as a bigint[]")
-  (is (= {:ids :any} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]}
+  (is (= {:ids [:any {:pgmalli/untyped :type}]} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]}
                            {:schema "sample" :send (into {} (for [[c] accept/class-types :when (.isArray ^Class c)] [c nil]))}))
       "with no array sent, nothing an array argument could be"))
 
@@ -846,7 +846,7 @@
     (is (= [] (check {:insert-into :t :values [{:id 1 :p.a 5}]})))
     (is (= [{:kind :unknown-column :column :q :did-you-mean [:p]}] (check {:update :t :set {:q.a 5} :where [:= :id 1]}))
         "the column of the field is looked for")
-    (is (= {:v :any} (h/arg-types reg {:update :t :set {:p.b :?v} :where [:= :id 1]})))))
+    (is (= {:v [:any {:pgmalli/untyped :position}]} (h/arg-types reg {:update :t :set {:p.b :?v} :where [:= :id 1]})))))
 
 (deftest an-array-cast-to-an-array-domain-is-any-array-postgresql-casts
   (let [reg (pgmalli/registry {:registry {:pg.public/ints_d [:vector {:pg/type "integer[]"} :pg/integer]}})
@@ -905,7 +905,7 @@
 
 (deftest a-cast-to-a-type-pgmalli-does-not-answer-for-takes-anything
   (let [reg (pgmalli/registry {:registry {}})]
-    (is (= {:x :any} (h/arg-types reg {:select [[[:cast :?x :ltree] :b]]})) "an extension's casts are not in pg_catalog")
+    (is (= {:x [:any {:pgmalli/untyped :type}]} (h/arg-types reg {:select [[[:cast :?x :ltree] :b]]})) "an extension's casts are not in pg_catalog")
     (is (m/validate (:x (h/arg-types reg {:select [[[:cast :?x :bit] :b]]})) 1 {:registry reg}) "PostgreSQL casts a bigint to bit")))
 
 (deftest a-json-document-cast-to-a-scalar-type-is-not-taken
@@ -926,7 +926,7 @@
     (is (not (m/validate t [1.5M] {:registry registry})) "'{1.5}'::bigint[] is invalid input"))
   (let [t (:xs (args {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
                      {:schema "sample" :send (only {Sequential "numeric[]"})}))]
-    (is (= :any t) "unnest takes a typed array whose elements the column holds as its own, which a numeric is not for an integer")))
+    (is (= [:any {:pgmalli/untyped :type}] t) "unnest takes a typed array whose elements the column holds as its own, which a numeric is not for an integer")))
 
 (deftest a-types-own-values-come-first-however-many-kinds-it-takes
   (is (= text (second (second (:x (args {:select [[[:cast :?x :text] :t]]} {:schema "sample"})))))))
@@ -1492,7 +1492,7 @@
     (is (nullable? {:select [:group_id] :from [:users] :group-by [[:raw "CUBE(group_id)"]]}))))
 
 (deftest an-argument-no-use-types-is-any
-  (is (= {:e :any :n [:maybe [:int {:pg/type "bigint" :min 0}]]} (args {:select [:id] :from [:users] :where [:= [:public.my-fn :nick] :?e] :offset :?n}))))
+  (is (= {:e [:any {:pgmalli/untyped :type}] :n [:maybe [:int {:pg/type "bigint" :min 0}]]} (args {:select [:id] :from [:users] :where [:= [:public.my-fn :nick] :?e] :offset :?n}))))
 
 (deftest params-schema-is-sql-formats-params-map
   (let [body {:update :users :set {:nick :?nick} :where [:= :id :?id]}
@@ -1720,12 +1720,12 @@
   (let [unnest {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
         any {:select [:id] :from [:users] :where [:= :score [:any :?xs]]}
         xs #(:xs (args %1 {:schema "sample" :send (only {Sequential %2})}))]
-    (is (= :any (xs unnest :unknown)) "unnest(unknown) is ambiguous")
-    (is (= :any (xs unnest "text[]")) "a text is no integer, assigned")
-    (is (= :any (xs unnest "bigint[]")) "a bigint is no integer column's own value")
+    (is (= [:any {:pgmalli/untyped :type}] (xs unnest :unknown)) "unnest(unknown) is ambiguous")
+    (is (= [:any {:pgmalli/untyped :type}] (xs unnest "text[]")) "a text is no integer, assigned")
+    (is (= [:any {:pgmalli/untyped :type}] (xs unnest "bigint[]")) "a bigint is no integer column's own value")
     (is (not= :any (xs unnest "smallint[]")) "a smallint is")
     (is (not= :any (xs any :unknown)) "= ANY types an untyped array from the column")
-    (is (= :any (xs any "text[]")) "integer = text has no operator")))
+    (is (= [:any {:pgmalli/untyped :type}] (xs any "text[]")) "integer = text has no operator")))
 
 (deftest a-row-schema-keys-as-each-format-writes-it-back
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line :string]]}})
@@ -1749,7 +1749,7 @@
   (is (= {:x [:maybe bigint]} (args {:select [:id] :from [:users] :where [:> [:greatest :id :?x] 5]})))
   (is (= {:n [:maybe [:string {:pg/type "character varying"}]]} (args {:update :users :set {:nick [:coalesce :?n :nick]} :where [:= :id 1]})))
   (is (= {:x [:maybe bigint]} (args {:select [:id] :from [:users] :where [:= :id [:nullif :?x 0]]})))
-  (is (= {:a :any :b :any} (args {:select [[[:least :?a :?b] :m]]})) "arguments alone resolve to nothing pgmalli tells"))
+  (is (= {:a [:any {:pgmalli/untyped :position}] :b [:any {:pgmalli/untyped :position}]} (args {:select [[[:least :?a :?b] :m]]})) "arguments alone resolve to nothing pgmalli tells"))
 
 (deftest the-return-says-how-many-rows-the-data-tells
   (let [ret #(last (h/query-schema registry [:db] % (merge opts %2)))
@@ -1797,7 +1797,7 @@
         "a column its alias lists")
     (is (= {:ids [:pg/array bigint]} (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]}))
         "pgjdbc's long[] alone by default")
-    (is (= {:ids :any} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o)) "a column that goes nowhere typed")))
+    (is (= {:ids [:any {:pgmalli/untyped :position}]} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o)) "a column that goes nowhere typed")))
 
 (deftest a-json-builder-is-json-as-its-type-is-read
   (let [q {:select [[[:jsonb_build_object "a" :id] :o] [[:jsonb_agg :id] :a] [[:json_build_array :id] :b]] :from [:users]}]
@@ -1884,7 +1884,7 @@
          (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send {java.util.Collection :unknown})))))
 
 (deftest an-argument-assigned-to-an-unknown-table-is-any
-  (is (= :any (:n (args {:update :nosuch :set {:nick :?n} :where [:= :id :?id]})))))
+  (is (= [:any {:pgmalli/untyped :type}] (:n (args {:update :nosuch :set {:nick :?n} :where [:= :id :?id]})))))
 
 (deftest a-numeric-with-a-precision-takes-an-integer-assigned
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 6 :scale 2}]]]]}})]
@@ -2195,7 +2195,7 @@
       (is (m/validate d (java.time.LocalDate/now) malli-opts)))))
 
 (deftest an-argument-compared-with-a-literal-of-no-type-takes-its-own-type
-  (is (= {:w :any} (args {:select [[1 :x]] :where [:= :?w [:inline "1"]]}))
+  (is (= {:w [:any {:pgmalli/untyped :type}]} (args {:select [[1 :x]] :where [:= :?w [:inline "1"]]}))
       "'1' is unknown, which PostgreSQL reads as the argument's type"))
 
 (deftest an-operator-of-one-operand-honeysql-writes-as-the-operand-is-the-operand
@@ -2261,7 +2261,7 @@
   ;; from this part of the query
   (is (= [{:kind :unknown-column :column :score}]
          (check {:insert-into :users :values [{:group_id 1 :score 1 :nick [:case [:= :score 1] "a" :else "b"]}]})))
-  (is (= :any (:s (args {:insert-into :users :values [{:group_id 1 :score 1 :nick [:case [:= :score :?s] "a" :else "b"]}]})))))
+  (is (= [:any {:pgmalli/untyped :type}] (:s (args {:insert-into :users :values [{:group_id 1 :score 1 :nick [:case [:= :score :?s] "a" :else "b"]}]})))))
 
 (deftest an-unnest-tables-column-is-read-as-a-parameter-is
   (let [o (sends opts {IPersistentVector "bigint[]"})
@@ -2403,6 +2403,29 @@
   (let [q {:select [:nick_name] :from [:users] :where [:= :group_id :?g]}]
     (is (= {:args (args q) :row nil :rows nil :problems (check q)} (h/analyze registry q opts))))
   (is (= {:min 1 :max 1} (:rows (h/analyze registry {:select [[[:count :*] :n]] :from [:users]} opts)))))
+
+(deftest an-argument-no-use-types-says-why
+  (is (= {:y [:any {:pgmalli/untyped :position}]} (args {:select [[:?y :y]] :from [:users]})))
+  (is (= [:any {:pgmalli/untyped :code}] (:x (args '{:select [:id] :from [:users] :where [:= :id (inc :?x)]}))))
+  (is (= [:any {:pgmalli/untyped :type}] (:x (args {:update :users :set {:no_such :?x} :where [:= :id 1]}))))
+  (is (= [:=> [:cat :any [:any {:pgmalli/untyped :position}]] [:sequential [:map [:y [:maybe :any]]]]]
+         (h/query-schema registry [:db :y] {:select [[:?y :y]] :from [:users]} opts))
+      "an argument the query lacks stays :any"))
+
+(deftest a-whole-row-argument-is-typed-as-the-row-written
+  (let [values (h/values-schema registry :users opts)]
+    (is (= values (:row (args {:insert-into :users :values [:?row]}))))
+    (is (= values (get (args '{:insert-into :users :values [row]}) 'row)) "a symbol, as code puts it in")
+    (is (= [:sequential {:min 1} values] (:rows (args {:insert-into :users :values :?rows}))))
+    (is (= (h/set-schema registry :users opts) (:row (args {:update [:users :u] :set :?row :where [:= :u.id :?id]}))))
+    (is (= [:=> [:cat :any values] [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]]
+           (h/query-schema registry [:db :row] {:insert-into :users :values [:?row] :returning [:id]} opts))))
+  (is (= (h/values-schema registry :users (built opts (:builder-fn kebab))) (:row (args {:insert-into :users :values [:?row]} (built opts (:builder-fn kebab)))))
+      "keyed as the builder keys a row")
+  (is (= [:any {:pgmalli/untyped :position}] (:row (args {:insert-into [:users [:group_id :mood]] :values [:?row]})))
+      "a row of listed columns is values, not a map")
+  (is (= [:any {:pgmalli/untyped :position}] (get (args '{:insert-into t :values [:?row]}) :row))
+      "a table code names"))
 
 (deftest an-enum-read-as-a-keyword
   (let [o (assoc opts :read {:enum :keyword})

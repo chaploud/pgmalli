@@ -134,7 +134,7 @@ one under `ON CONFLICT DO UPDATE` too is checked before the conflict) or the SEL
 
 ## The types of the arguments
 
-`h/arg-types` gives `{arg schema}` for a query's named parameters (`:?id`, `[:param :id]`),
+`h/arg-types` gives `{arg schema}` for every named parameter of a query (`:?id`, `[:param :id]`),
 keyed as in `sql/format`'s `:params`:
 
 ```clojure
@@ -158,8 +158,19 @@ keyed as in `sql/format`'s `:params`:
 | compared with `ANY`, `SOME` or `ALL` of an array (`[:= :?tag [:any :tags]]`) | as with a column of the array's element type |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
+| where a whole row goes: `:values [:?row]`, `:values :?rows`, `:set :?row` (no `:columns`), which HoneySQL formats once your code puts the row in the argument's place | the row `h/values-schema` or `h/set-schema` gives for the target table ([a row written into a table](#a-row-written-into-a-table)); of `:values :?rows`, a non-empty sequence of them |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
+
+An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one of `:position`
+(no use of it is one the table above types), `:type` (where it is used, pgmalli knows no type:
+a function or a table the registry lacks, a cast to an extension's type) and `:code` (only code
+uses it):
+
+```clojure
+(h/arg-types registry {:select [[:?label :label]] :from [:users]})
+;; => {:label [:any #:pgmalli{:untyped :position}]}
+```
 
 A column's type takes its own values, and what [`:send`](#what-your-application-sends) sends
 that PostgreSQL takes as the column's own: a narrower number, another string type, an untyped
@@ -250,15 +261,13 @@ An UPDATE's `:set` cannot be checked this way: a CHECK applies to the whole upda
 ;; => false
 ```
 
-A function that takes such a row and runs the query declares it in its function schema: the
-row's schema in the row argument's place, and as the return, what `h/query-schema` gives for the
-query without the row:
+Where the query data holds an argument in the row's place, which your code replaces with the
+row before `sql/format`, `h/arg-types` and `h/query-schema` type it so:
 
 ```clojure
-;; the row argument's :any replaced, the problems of the query kept
-(m/schema (mapv #(if (and (vector? %) (= :cat (first %))) (assoc % 2 (h/values-schema registry :users)) %)
-                (h/query-schema registry [:db :row] {:insert-into :users :returning [:id]} {:result :one}))
-          {:registry registry})
+(= (h/values-schema registry :users)
+   (:row (h/arg-types registry {:insert-into :users :values [:?row] :returning [:id]})))
+;; => true
 ```
 
 ### What your application sends

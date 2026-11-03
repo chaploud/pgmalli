@@ -70,8 +70,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems}`: the
   arguments' types, the row, how many rows where the data tells, and the problems of `h/check`
   ([docs/queries.md](docs/queries.md#function-schemas)). `h/query-schema` is built of it.
+* `h/arg-types` (and `h/query-schema`) type an argument where a whole row goes, `:values
+  [:?row]`, `:values :?rows` and `:set :?row`, as `h/values-schema` and `h/set-schema` type the
+  row ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `{:read {:enum :keyword}}`: an extension reading every enum type's value as a keyword
   ([docs/reading-rows.md](docs/reading-rows.md#your-own-extensions)).
+
 * `:send` says what your application sends, as pgjdbc's `setObject` decides it by a value's
   class ([docs/queries.md](docs/queries.md#what-your-application-sends)). pgjdbc's own classes
   include its boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and the arrays
@@ -161,6 +165,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Changed
 
+* `h/arg-types` gives an argument it cannot type as `[:any {:pgmalli/untyped why}]`, `why` saying
+  whether no use of it is typed, the type where it is used is unknown, or only code uses it
+  ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)). It validates as `:any` did.
 * `now()`, the functions that build json and a function call in general are nullable: the
   catalog does not say when a function returns NULL. `current_timestamp` and the like (but
   `current_schema` and `system_user`, which may be NULL), `count`, `pg_catalog`'s `row_number`

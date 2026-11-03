@@ -2022,9 +2022,33 @@
                 :else (into [:and] (sort-by pr-str [a b])))]
     (cond-> t nil? nullable)))
 
+(declare written-row*)
+
+(defn- row-args
+  "An argument where a whole row goes, which HoneySQL formats once the application has put the
+   row in its place: :values [:?row] a row, :values :?rows rows (one at least), :set :?row a row
+   of the statement's target table, as written-row* types it. None where the target is no table
+   of the registry (a view, a table code names) or :columns lists the columns (a row is then values)."
+  [registry stmt scopes opts]
+  (let [target (fn [item derived]
+                 (let [[_ alias] (table-ref item (:schema opts))
+                       {:keys [table opaque?]} (get (first (chain scopes)) alias)]
+                   (when (and table (not opaque?)) (written-row* registry (shape/table-key table) derived opts))))
+        values (:values stmt)
+        {:keys [columns select] :as insert} (insert-parts stmt)
+        rows (cond (arg-key values) [[values true]]
+                   (vector? values) (for [r values :when (arg-key r)] [r false]))]
+    (concat
+     (when (and insert (seq rows) (not columns) (not select))
+       (when-let [t (target (insert-target stmt) "insert")]
+         (for [[k many?] rows] [k (if many? [:sequential {:min 1} t] t)])))
+     (when (arg-key (:set stmt))
+       (some->> (target (:update stmt) "update") (vector (:set stmt)) vector)))))
+
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
-   :params takes them (:id).
+   :params takes them (:id): every one of them, one pgmalli cannot type [:any {:pgmalli/untyped
+   why}].
 
    (arg-types registry {:select [:id] :from [:users] :where [:= :email :?email]})
    ;; => {:email [:string {:pg/type \"character varying\"}]}
@@ -2038,16 +2062,18 @@
          registry (reading registry)
          opts (with-defaults registry opts)
          uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
-         typed (for [[_ _ _ ps] (statement-positions registry body opts)
-                     f uses
-                     use (f registry ps opts)]
+         typed (for [[s scopes _ ps] (statement-positions registry body opts)
+                     use (concat (mapcat #(% registry ps opts) uses) (row-args registry s scopes opts))]
                  use)
-         ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
          types (reduce (fn [acc [x t]] (if-let [k (arg-key x)] (update acc k both-uses t) acc))
                        untyped typed)
+         typed-keys (set (keep (comp arg-key first) typed))
          in-data (data-args body)]
-     (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
+     (into {} (for [[k t] types]
+                [k (if (= :any t)
+                     [:any {:pgmalli/untyped (cond (not (in-data k)) :code (typed-keys k) :type :else :position)}]
+                     (cond-> t (not (in-data k)) nullable))])))))
 
 (defn- using-merges
   "{column {:tables [alias ...] :sides [alias ...] :schema s :nullable? bool}} of a
@@ -2706,39 +2732,17 @@
     :any [:and t [:not [:or :keyword [:sequential :any]]]]
     t))
 
-(defn- written-row
-  "The [:map ...] of the derived schema (\"insert\", \"update\") of the table name names (a
-   registry row name, or a table keyword as HoneySQL names it, in :schema): each column typed as
-   an argument assigned to it, optional as the derived schema has it, keyed as HoneySQL writes it
-   back to the column (written-key); one the database may fill takes :default too, and one it
-   writes :default alone. update takes a non-empty map: HoneySQL writes an empty :set as SET
-   alone, which PostgreSQL refuses."
-  [registry name derived what opts]
-  (jdbc/options! opts)
-  (when-not (keyword? name)
-    (error/fail! :pgmalli.error/invalid-options
-                 (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
-                 {:given name}))
-  (let [r (reading registry)
-        ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
-        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
-        name (if (str/starts-with? (subs (str name) 1) "pg.")
-               name
-               (shape/table-key (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
-                                  (qualified name nil)
-                                  (qualified name (:schema (with-defaults r opts))))))
-        s (shape/schema-of registry name)
-        dn (shape/derived-name name derived)]
-    (cond (shape/row-schema? s) nil
-          (shape/read-row? s) (error/fail! :pgmalli.error/unknown-schema
-                                           (str (pr-str name) " is a view's row schema, and a view has no " derived " schema; " what " takes a table's")
-                                           {:given name})
-          :else (shape/not-a-row! registry name what))
-    (let [written (shape/column-entries
-                   (or (get (::schemas r) dn)
-                       (error/fail! :pgmalli.error/unknown-schema
-                                    (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
-                                    {:given dn})))
+(defn- written-row*
+  "The [:map ...] of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
+   of registry r as reading reads it: each column typed as an argument assigned to it, optional
+   as the derived schema has it, keyed as HoneySQL writes it back to the column (written-key);
+   one the database may fill takes :default too, and one it writes :default alone. update takes
+   a non-empty map: HoneySQL writes an empty :set as SET alone, which PostgreSQL refuses. nil
+   where r has no such schema."
+  [r name derived opts]
+  (when-let [d (get (::schemas r) (shape/derived-name name derived))]
+    (let [s (get (::schemas r) name)
+          written (shape/column-entries d)
           key #(written-key % opts)
           default (into [:enum] (sort-by vector? (default-values (:format opts))))
           ;; the columns the database may fill: optional in what an INSERT may carry
@@ -2755,6 +2759,35 @@
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(key k) {:optional true} default])))]
       (if (= "update" derived) [:and m [:map-of {:min 1} :any :any]] m))))
+
+(defn- written-row
+  "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
+   names it, in :schema); an error naming what was meant for another name."
+  [registry name derived what opts]
+  (jdbc/options! opts)
+  (when-not (keyword? name)
+    (error/fail! :pgmalli.error/invalid-options
+                 (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
+                 {:given name}))
+  (let [r (reading registry)
+        ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
+        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
+        name (if (str/starts-with? (subs (str name) 1) "pg.")
+               name
+               (shape/table-key (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
+                                  (qualified name nil)
+                                  (qualified name (:schema (with-defaults r opts))))))
+        s (shape/schema-of registry name)]
+    (cond (shape/row-schema? s) nil
+          (shape/read-row? s) (error/fail! :pgmalli.error/unknown-schema
+                                           (str (pr-str name) " is a view's row schema, and a view has no " derived " schema; " what " takes a table's")
+                                           {:given name})
+          :else (shape/not-a-row! registry name what))
+    (or (written-row* r name derived opts)
+        (let [dn (shape/derived-name name derived)]
+          (error/fail! :pgmalli.error/unknown-schema
+                       (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
+                       {:given dn})))))
 
 (defn values-schema
   "The [:map ...] of one row an INSERT's :values may carry into a table, named as HoneySQL names
