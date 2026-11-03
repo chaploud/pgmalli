@@ -945,7 +945,7 @@
   "The integer type of an expression whose operand types are known: smallint, integer or
    bigint columns, integer literals, integer casts and arithmetic over them."
   [e types]
-  (let [rank {:smallint 0 :int2 0 :integer 1 :int4 1 :bigint 2 :int8 2}
+  (let [rank (comp second int-ranges)
         widest #(when (and (seq %) (every? rank %)) (apply max-key rank %))]
     (cond (keyword? e) (let [t (get types e)] (when (rank t) t))
           (int? e) (if (<= -2147483648 e 2147483647) :integer :bigint)

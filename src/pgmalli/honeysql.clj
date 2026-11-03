@@ -371,17 +371,22 @@
              (concat (joins stmt)
                      (for [k [:right-join :full-join :outer-join] :when (seq? (get stmt k))] [k nil]))))))
 
+(defn- unnest-of-arguments?
+  "Whether a FROM item is unnest(?, ...) of arguments alone."
+  [item]
+  (boolean (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)) (every? arg-key (rest (first item))))))
+
 (defn- unnest-elements
   "{column argument} of a FROM item unnest(?, ...) of arguments: the column each argument's
    elements become, by position in the columns its alias lists ([:x {:columns [:a]}]), or the
    alias itself of an unnest of one ([[:unnest :?ids] :id])."
   [item]
-  (when (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)))
+  (when (unnest-of-arguments? item)
     (let [ps (rest (first item))
           b (second item)
           cs (cond (and (vector? b) (map? (second b))) (:columns (second b))
                    (and (alias? b) (= 1 (count ps))) [b])]
-      (when (and (seq ps) (every? arg-key ps) (sequential? cs))
+      (when (and (seq ps) (sequential? cs))
         (not-empty (into {} (map (fn [p c] [(folded (name c)) p]) ps cs)))))))
 
 (defn- scope
@@ -428,6 +433,14 @@
 
 (declare row-schema* derived-types derived-types* nullable honeysql beyond-list alias-label)
 
+(defn- with-entries
+  "[entries key index entry] of each entry of every :with and :with-recursive in query body."
+  [body]
+  (for [x (tree-seq branch? seq body) :when (map? x)
+        k with-keys :let [w (get x k)] :when (vector? w)
+        [i e] (map-indexed vector w)]
+    [w k i e]))
+
 (defn- cte-statement
   "[statement columns recursive?] of CTE name: its body as read on its own, under the entries of
    its :with before it, and the columns its name lists ([[:c {:columns [:x]}] ...]); of a
@@ -435,9 +448,7 @@
    itself), its first member, whose types PostgreSQL gives the columns. nil where the query defines name more than once, or the body is
    no statement."
   [body name]
-  (let [found (for [x (tree-seq branch? seq body) :when (map? x)
-                    k with-keys :let [w (get x k)] :when (vector? w)
-                    [i e] (map-indexed vector w) :when (= name (cte-name e))]
+  (let [found (for [[w k i e] (with-entries body) :when (= name (cte-name e))]
                 [(second e) (subvec w 0 i) (when (vector? (first e)) (:columns (second (first e)))) k])]
     (when-let [[[stmt before listed k]] (when (= 1 (count found)) found)]
       (let [set-op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
@@ -486,9 +497,7 @@
                     (folded written)))]
     (if (empty? read)
       inner
-      (let [found (for [x (tree-seq branch? seq body) :when (map? x)
-                        k with-keys :let [w (get x k)] :when (vector? w)
-                        [i e] (map-indexed vector w) :when (read (cte-name e))]
+      (let [found (for [[w k i e] (with-entries body) :when (read (cte-name e))]
                     [w k i])]
         (when (and (= (count read) (count found)) (= read (set (map (fn [[w _ i]] (cte-name (nth w i))) found)))
                    (apply = (map first found)) (apply = (map second found))
@@ -866,11 +875,6 @@
     (select-keys (first (chain scopes)) [alias])))
 
 ;;; the expression positions of a statement
-
-(defn- unnest-of-arguments?
-  "Whether a FROM item is unnest(?, ...) of arguments alone."
-  [item]
-  (boolean (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)) (every? arg-key (rest (first item))))))
 
 (defn- may-drop-rows?
   "Whether SELECT stmt may return no row where its arguments make one: it filters, groups,
@@ -1950,11 +1954,15 @@
         :when k]
     [k (if elements? (jdbc/array-type t opts :unnest) t)]))
 
+(def ^:private common-type-functions
+  "The functions whose arguments PostgreSQL resolves to one type, and that returns it."
+  #{"coalesce" "greatest" "least"})
+
 (defn- resolving-operands
   "The operands x has PostgreSQL resolves to one type: coalesce's, greatest's, least's,
    nullif's, CASE's values."
   [x]
-  (cond (#{"coalesce" "greatest" "least" "nullif"} (called x)) (rest x)
+  (cond (or (common-type-functions (called x)) (= "nullif" (called x))) (rest x)
         (and (vector? x) (= :case (first x)) (even? (count (rest x)))) (map second (partition 2 (rest x)))))
 
 (defn- resolving-args
@@ -1976,7 +1984,7 @@
    the call to take there, as a value of each type sent picks one; nil may go there too."
   [registry ps opts]
   (for [{:keys [x chain]} (expression-nodes ps)
-        :let [[kind n args :as parts] (when-not (or (comparison? x) (type-call registry chain x opts)) (call-parts x))]
+        :let [[kind _ args :as parts] (when-not (or (comparison? x) (type-call registry chain x opts)) (call-parts x))]
         :when (and kind (some arg-key args))
         :let [ins (mapv #(:type (expression-type registry chain % opts)) args)
               os (reached registry opts parts)]
@@ -2074,6 +2082,11 @@
                    (update :before conj right)))
              {:before (vec (join-base stmt schema)) :merges {}}
              (for [[k t c] (joins stmt)] [k (alias t) c])))))
+
+(defn- cast-type-name
+  "The type name a cast's type keyword names: :double-precision is \"double precision\"."
+  [k]
+  (str/lower-case (str/replace (name k) "-" " ")))
 
 (defn- type-schema
   "A column's schema for a value of the PostgreSQL type t (a name or an alias, \"x[]\" an array),
@@ -2229,7 +2242,7 @@
       (= :cast h) (let [[_ v t] x
                         ;; [:varchar 10], a type with its typmod, as HoneySQL writes varchar(10)
                         t (if (and (vector? t) (keyword? (first t))) (first t) t)]
-                    (when-let [s (or (when (keyword? t) (type-schema (str/lower-case (str/replace (name t) "-" " "))))
+                    (when-let [s (or (when (keyword? t) (type-schema (cast-type-name t)))
                                      ;; an enum type or a domain of the registry, read as a column of it is
                                      (when-let [[k] (registry-type registry t opts)] [:ref {:pg/type (name t)} k]))]
                       {:schema s :type (resolver-type registry s)
@@ -2240,7 +2253,7 @@
       (= :array h) (let [[_ es t] x]
                      (when (sequential? es)
                        (if (keyword? t)
-                         (some-> (typed (str (type-name (str/lower-case (str/replace (name t) "-" " "))) "[]")) (assoc :nullable? false))
+                         (some-> (typed (str (type-name (cast-type-name t)) "[]")) (assoc :nullable? false))
                          (when-let [r (when (seq es) (common registry (map sub es)))]
                            (when (and (string? (:type r)) (not (types/element (:type r))))
                              (some-> (typed (str (:type r) "[]")) (assoc :nullable? false)))))))
@@ -2258,7 +2271,7 @@
                     (when-let [r (when (every? #(= 2 (count %)) parts) (common registry (cons (last vts) (butlast vts))))]
                       (assoc r :schema (some-> (:schema r) (->> (beyond-list registry) loose))
                              :nullable? (or (not else?) (boolean (some :nullable? vts))))))
-      (#{"coalesce" "greatest" "least"} (called x))
+      (common-type-functions (called x))
       (some-> (common registry (map sub (rest x)))
               ;; greatest and least skip NULLs as coalesce does
               (assoc :nullable? (not-any? #(and % (not (:nullable? %))) (map sub (rest x)))))
@@ -2524,7 +2537,7 @@
   ;; :%f.a is HoneySQL's f(a)
   (or (and (keyword? x) (not (shorthand-fn x))) (constant? x) (nil? x) (= [:default] x)
       (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? registry opts (second x)))
-      (boolean (when-let [[kind n args :as parts] (call-parts x)]
+      (boolean (when-let [[kind _ args :as parts] (call-parts x)]
                  (and (or (= :operators kind) (not (resolve/set-returning? (reached registry opts parts))))
                       (every? #(plain-value? registry opts %) args))))))
 

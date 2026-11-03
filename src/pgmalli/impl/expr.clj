@@ -11,7 +11,8 @@
    Operators whose symbol is not a readable EDN keyword (~, @>, ...) get a named keyword
    (named-ops)."
   (:require [clojure.string :as str]
-            [clojure.walk :as walk]))
+            [clojure.walk :as walk]
+            [pgmalli.impl.types :as types]))
 
 ;;; tokens
 
@@ -335,7 +336,7 @@
     (parse inner)))
 
 (def ^:private numeric-types
-  #{:smallint :integer :bigint :int2 :int4 :int8 :numeric :decimal :real :double-precision :float4 :float8})
+  (types/keywords #(or (:range %) (#{:exact :float} (:eval %)))))
 
 (defn strip-casts
   "An expression with its casts ([:cast x type]) replaced by what they cast."
