@@ -566,39 +566,38 @@
 
 (defn run-cases
   "run over cs, the cases of cases and generated-corpus's ({:id :query :opts}, :generated? for
-   the latter), on db, connected to with url-params (test-db/jdbc-url)."
-  ([db cs seed] (run-cases db cs seed nil))
-  ([db cs seed url-params]
-   (let [registry (registry db)
-         [doms listed] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
-                         [(domains conn) (listed (relations conn))])]
-     (into []
-           cat
-           (in-parallel
-            (cond-> db url-params (assoc :url-params url-params)) cs
-            (fn [conn {:keys [id base query] :as c}]
-              (let [before (volatile! nil)]
-                (vec (for [[mode fmt] formats
-                           :let [fmt (merge fmt (:format (:opts c)))
-                                 opts (assoc (:opts c) :format fmt)
-                                 ;; a named argument takes a value of the type arg-types gives it; one it
-                                 ;; types not ([:any {:pgmalli/untyped why}]) goes as NULL
-                                 args (into {} (for [[k s] (h/arg-types registry query opts)]
-                                                 [k (when-not (= :any (if (vector? s) (first s) s)) (generated s registry seed))]))
-                                 sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception e e))]]
-                       (cond
-                         (instance? Exception sqlvec) (assoc c :format mode :outcome :unformatted :format-error (ex-message sqlvec))
-                         (= sqlvec (:sqlvec @before)) (assoc (:result @before) :format mode)
-                         :else
-                         (let [{:keys [result] :as v} (cond-> (verdict conn sqlvec) (= :params mode) (uncast-string (:verdict @before)))
-                               problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query opts)))
-                               returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result))
-                               {described :mismatches typed :typed} (when result (column-mismatches registry conn doms query opts sqlvec))
-                               r (merge c (dissoc v :result)
-                                        {:return-rejections returned :column-mismatches described :columns-typed typed :format mode :sql (first sqlvec) :params (vec (rest sqlvec))
-                                         :problems problems :outcome (outcome v problems #(by-design? listed (or base id) query %))})]
-                           (vreset! before {:sqlvec sqlvec :verdict v :result r})
-                           r)))))))))))
+   the latter), on db."
+  [db cs seed]
+  (let [registry (registry db)
+        [doms listed] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
+                        [(domains conn) (listed (relations conn))])]
+    (into []
+          cat
+          (in-parallel
+           db cs
+           (fn [conn {:keys [id base query] :as c}]
+             (let [before (volatile! nil)]
+               (vec (for [[mode fmt] formats
+                          :let [fmt (merge fmt (:format (:opts c)))
+                                opts (assoc (:opts c) :format fmt)
+                                ;; a named argument takes a value of the type arg-types gives it; one it
+                                ;; types not ([:any {:pgmalli/untyped why}]) goes as NULL
+                                args (into {} (for [[k s] (h/arg-types registry query opts)]
+                                                [k (when-not (= :any (if (vector? s) (first s) s)) (generated s registry seed))]))
+                                sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception e e))]]
+                      (cond
+                        (instance? Exception sqlvec) (assoc c :format mode :outcome :unformatted :format-error (ex-message sqlvec))
+                        (= sqlvec (:sqlvec @before)) (assoc (:result @before) :format mode)
+                        :else
+                        (let [{:keys [result] :as v} (cond-> (verdict conn sqlvec) (= :params mode) (uncast-string (:verdict @before)))
+                              problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query opts)))
+                              returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result))
+                              {described :mismatches typed :typed} (when result (column-mismatches registry conn doms query opts sqlvec))
+                              r (merge c (dissoc v :result)
+                                       {:return-rejections returned :column-mismatches described :columns-typed typed :format mode :sql (first sqlvec) :params (vec (rest sqlvec))
+                                        :problems problems :outcome (outcome v problems #(by-design? listed (or base id) query %))})]
+                          (vreset! before {:sqlvec sqlvec :verdict v :result r})
+                          r))))))))))
 
 (defn run
   "Every case's :sql, PostgreSQL's verdict, check's :problems (:unread-clause aside: PostgreSQL
@@ -613,21 +612,6 @@
                      (for [[id q opts] (with-open [conn (jdbc/get-connection (test-db/datasource db))] (generated-corpus conn))]
                        {:id id :query q :opts opts :generated? true}))
              seed))
-
-(def option-profiles
-  "Options an application runs with, each with what its connection does to match: comparisons
-   lenient."
-  {:lenient {:opts {:compare :lenient}}})
-
-(defn run-profiles
-  "run-cases of the corpus' queries (no mutant, none generated) under each of option-profiles,
-   their opts merged under a query's own, each result with its :profile."
-  [db seed]
-  (into []
-        (mapcat (fn [[profile {:keys [opts url-params]}]]
-                  (map #(assoc % :profile profile)
-                       (run-cases db (for [[id q o] corpus] {:id id :query q :opts (merge opts o)}) seed url-params))))
-        option-profiles))
 
 ;;; the argument matrix
 
@@ -951,7 +935,7 @@
     (test-db/with-postgres
       (fn []
         (test-db/exec-sql! schema-sql)
-        (let [results (into (run test-db/*db* seed per-query) (run-profiles test-db/*db* seed))]
+        (let [results (run test-db/*db* seed per-query)]
           (println "seed" seed "per query" per-query "cases" (count results))
           (pp/pprint (frequencies (map :outcome results)))
           (let [rs (filter (comp seq :return-rejections) results)]

@@ -45,6 +45,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     cannot type the parameter then.
   * `:time`, `:read` and `:send` are removed: an error names the one reading or the one sending.
   * `pgmalli.core/transformer` is removed: read rows with the extension instead of decoding them.
+* `:compare` is removed: a comparison is strict, and an argument compared with a column takes
+  no nil, as on 0.3.3 by default. `{:compare :lenient}` (or any `:compare`) is an
+  `:pgmalli.error/invalid-options` error. Compare NULL in the query body (`[:= :x nil]`, which
+  HoneySQL writes as IS NULL, or `IS NOT DISTINCT FROM`).
 * `pgmalli.core/read-options` is removed.
 * `h/row-schema`'s `:pgmalli/untold` property is removed: with unqualified keys, every key is
   told.
@@ -128,7 +132,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   type of where its column goes; one compared with `ANY(array)` as the array's element; an
   element of `[:array [...] :text]`, as cast; one of a function or an operator PostgreSQL may
   resolve several ways, the values of each (`generate_series(1, ?)`, `timezone(zone, ?)`).
-  Under `{:compare :lenient}` the elements of one in `:in` or `= ANY` take nil too.
 * `h/row-schema` types an expression as PostgreSQL resolves it
   ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): `CASE`, `coalesce`, `greatest`,
   `least`, `ARRAY[...]`, `VALUES` and a set operation's columns of their values' common type, and

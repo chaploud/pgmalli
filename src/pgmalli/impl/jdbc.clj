@@ -22,7 +22,6 @@
    [:schema {:optional true} :string]
    [:jdbc {:optional true} [:map
                             [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
-   [:compare {:optional true} [:enum :strict :lenient]]
    [:result {:optional true} [:enum :one]]
    [:format {:optional true} :map]])
 
@@ -119,6 +118,9 @@
       (fail! (str (pr-str old) " is no longer read: " builder-only "; see " error/changelog) old))
     (when-let [old (not-empty (select-keys opts [:time :read]))]
       (fail! (str (pr-str old) " is no longer read: " one-reading "; see " error/changelog) old))
+    (when (contains? opts :compare)
+      (fail! (str ":compare is no longer read: a compared argument takes no nil; compare NULL with [:= :x nil] or IS NULL in the query body; see " error/changelog)
+             (select-keys opts [:compare])))
     (when (contains? opts :return-keys)
       (fail! (str ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}; see " error/changelog)
              (select-keys opts [:return-keys])))

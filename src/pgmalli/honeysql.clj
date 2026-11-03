@@ -1831,15 +1831,12 @@
    (its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond them, matching
    no row), without NULL; :in's a non-empty vector, list or set of it, as
    sql/format expands it (IN () is not SQL); an array's the Java arrays the one sending sends (jdbc/array-type).
-   {:compare :lenient} takes nil too: :in's and an array's elements, and the argument itself
-   but in :in (nil formats as IN ?)."
-  [op t array? {:keys [compare] :as opts}]
-  (let [lenient? (= :lenient compare)
-        element (cond-> t (and lenient? (not (untyped? t))) nullable)]
-    (cond-> (cond array? (jdbc/array-type element opts :compare)
-                  (and (in-ops op) (not (untyped? t))) [:or [:sequential {:min 1} element] [:set {:min 1} element]]
-                  :else t)
-      (or (and lenient? (not (in-ops op))) (distinct-ops op)) nullable)))
+   NULL is compared with IS NULL in the query body."
+  [op t array? opts]
+  (cond-> (cond array? (jdbc/array-type t opts :compare)
+                (and (in-ops op) (not (untyped? t))) [:or [:sequential {:min 1} t] [:set {:min 1} t]]
+                :else t)
+    (distinct-ops op) nullable))
 
 (defn- data-args
   "The arguments the data of a query shows, outside code (a list): code may leave its own out
@@ -1940,8 +1937,7 @@
 (defn- cast-args
   "[:cast :?x :timestamptz]: what PostgreSQL casts to the type, its CHECKs, lengths and ranges
    left out where every use of the cast is compared; nil too unless every use of the
-   cast is compared (not under IS [NOT] DISTINCT FROM, not with NULL, not under {:compare
-   :lenient}) or assigned where NULL may not go (assigned-column). [:cast :x.a :date] of an
+   cast is compared (not under IS [NOT] DISTINCT FROM, not with NULL) or assigned where NULL may not go (assigned-column). [:cast :x.a :date] of an
    unnest's column: an array of that, typed."
   [registry ps opts]
   (let [nodes (expression-nodes ps)
@@ -1955,16 +1951,15 @@
                     :when k]
                 [x chain k elements?])
         refusing (frequencies
-                  (concat (when-not (= :lenient (:compare opts))
-                            ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
-                            (for [{:keys [x]} nodes
-                                  :when (comparison? x)
-                                  :let [[op & operands] x]
-                                  :when (not (or (distinct-ops op)
-                                                 (some #(null-value? % (:format opts)) operands)))
-                                  o operands
-                                  o (if (and (in-ops op) (vector? o) (not (keyword? (first o)))) o [o])]
-                              o))
+                  (concat ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
+                          (for [{:keys [x]} nodes
+                                :when (comparison? x)
+                                :let [[op & operands] x]
+                                :when (not (or (distinct-ops op)
+                                               (some #(null-value? % (:format opts)) operands)))
+                                o operands
+                                o (if (and (in-ops op) (vector? o) (not (keyword? (first o)))) o [o])]
+                            o)
                           (for [a (assignments ps)
                                 :let [{c :schema :keys [nullable?]} (assigned-column registry a)]
                                 :when (and c (not nullable?))]

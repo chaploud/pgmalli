@@ -22,7 +22,7 @@
   (str "\n  re-run: bb oracle " seed " " mutants " (" under "), or PGMALLI_FUZZ_SEED=" seed
        " PGMALLI_ORACLE_MUTANTS=" mutants " clojure -M:test -n pgmalli.oracle-test"))
 
-(def ^:private results (delay (into (oracle/run *db* seed mutants) (oracle/run-profiles *db* seed))))
+(def ^:private results (delay (oracle/run *db* seed mutants)))
 (def ^:private arg-failures (delay (oracle/arg-matrix *db*)))
 
 (def pending
@@ -43,9 +43,9 @@
   (some #(when (and (= test (:test %)) (re-find (:id %) id)) %) pending))
 
 (defn- case-id
-  "A case's run: its id (a mutant's base--n), mutation, format and option profile, as present."
+  "A case's run: its id (a mutant's base--n), mutation and format, as present."
   [r]
-  (str/join " " (map name (keep r [:id :mutation :format :profile]))))
+  (str/join " " (map name (keep r [:id :mutation :format]))))
 
 (defn- false-positive-id [r] (str (case-id r) " " (str/join "," (sort (distinct (map (comp name :kind) (:problems r)))))))
 
@@ -73,10 +73,9 @@
           (for [f @arg-failures] [:arg (arg-id f)])))
 
 (defn- case-text
-  "Case r as a failure names it: its id, mutation, format and option profile."
+  "Case r as a failure names it: its id, mutation and format."
   [r]
-  (str (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r))
-       (some->> (:profile r) oracle/option-profiles :opts pr-str (str " under "))))
+  (str (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r))))
 
 (deftest corpus-queries-are-distinct
   (doseq [[k f] {"id" first "query" second}
@@ -140,7 +139,7 @@
 
 (deftest row-schema-types-about-as-many-columns-as-it-did
   (when *db*
-    (let [n (reduce + (keep :columns-typed (remove :profile @results)))]
+    (let [n (reduce + (keep :columns-typed @results))]
       (is (< 17000 n) (str "row-schema names a :pg/type of " n " columns PostgreSQL returned: fewer typed, or fewer cases")))))
 
 (deftest no-case-runs-out-of-time

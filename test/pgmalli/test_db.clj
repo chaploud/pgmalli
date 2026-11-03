@@ -123,10 +123,9 @@
   (exec-in! *container* "postgres" (apply str (for [d dbs] (str "DROP DATABASE IF EXISTS " (:dbname d) " WITH (FORCE);\n")))))
 
 (defn jdbc-url
-  "The JDBC URL of db, *db* by default, with db's :url-params (\"stringtype=unspecified\"), which
-   a :db map pgmalli reads may not carry."
+  "The JDBC URL of db, *db* by default."
   ([] (jdbc-url *db*))
-  ([{:keys [host port dbname url-params]}] (str "jdbc:postgresql://" host ":" port "/" dbname (some->> url-params (str "?")))))
+  ([{:keys [host port dbname]}] (str "jdbc:postgresql://" host ":" port "/" dbname)))
 
 (defn datasource
   "A next.jdbc datasource of db, *db* by default (JVM only: babashka has no next.jdbc)."

@@ -34,12 +34,18 @@
 
 (deftest as-read-takes-the-options-map-every-function-shares
   (is (= (pgmalli.core/as-read registry :pg.sample/users)
-         (pgmalli.core/as-read registry :pg.sample/users {:compare :lenient})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"compare"
-                        (pgmalli.core/as-read registry :pg.sample/users {:compare :sometimes}))))
+         (pgmalli.core/as-read registry :pg.sample/users {:result :one})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"result"
+                        (pgmalli.core/as-read registry :pg.sample/users {:result :sometimes}))))
 
 (deftest how-a-value-is-read-is-no-option
   (doseq [o [{:time :instant} {:read {:json :parsed}}]]
     (let [e (try (pgmalli/as-read registry :pg.sample/users o) (catch clojure.lang.ExceptionInfo e e))]
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))
       (is (re-find #"no longer read: pgmalli types rows as one reading" (ex-message e))))))
+
+(deftest a-comparison-is-strict-and-no-option
+  (doseq [c [:strict :lenient]]
+    (let [e (try (pgmalli/as-read registry :pg.sample/users {:compare c}) (catch clojure.lang.ExceptionInfo e e))]
+      (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))
+      (is (re-find #":compare is no longer read: a compared argument takes no nil" (ex-message e))))))

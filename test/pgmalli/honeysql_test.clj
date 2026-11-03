@@ -221,25 +221,6 @@
          (args '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when x [:= :group_id :?g])]}))
       "one use in the data is enough"))
 
-(deftest a-lenient-comparison-takes-any-value-of-the-columns-kind
-  (let [body {:select [:id] :from [:users] :where [:and [:= :id :?id] [:in :group_id :?gs] [:> :score :?min] [:= :nick :?nick] [:= :mood :?mood]] :limit :?n}
-        types (args body (assoc opts :compare :lenient))]
-    (is (= [:maybe bigint] (:id types)))
-    (is (= [:maybe integer] (:min types)) "no range")
-    (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]] (:nick types)) "no length")
-    (is (= [:maybe mood-arg] (:mood types))
-        "an enum stays: PostgreSQL refuses a value outside it")
-    (is (= (in-list [:maybe integer]) (:gs types))
-        "nil among :in's elements, not as :in's own: it formats as IN ?")
-    (is (= [:maybe [:int {:pg/type "bigint" :min 0}]] (:n types)))
-    (is (= {:v [:maybe
-                [:or [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] :keyword]]}
-           (args {:update :users :set {:nick :?v} :where [:= :id 1]} (assoc opts :compare :lenient)))
-        "an assigned one keeps the column's bounds")
-    (is (= {:ids [:maybe [:pg/array [:maybe bigint]]]}
-           (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :compare :lenient)))
-        "an array's too")))
-
 (def docs
   (pgmalli/registry {:registry {:pg.public/docs [:map {:pg/table "public.docs"}
                                                       [:id [:int {:pg/type "bigint"}]]
@@ -652,7 +633,6 @@
     (is (nullable? {:select [:id] :from [:users] :where [:= cast nil]} {}) "IS NULL")
     (is (nullable? {:select [:id] :from [:users] :where [:or [:is cast nil] [:= :id cast]]} {}) "an optional filter")
     (is (nullable? {:select [:id] :from [:users] :where [:is-distinct-from :referrer_id cast]} {}))
-    (is (nullable? {:select [:id] :from [:users] :where [:= :id cast]} {:compare :lenient}))
     (is (nullable? {:insert-into :nowhere :values [{:a cast}]} {}) "a column the registry lacks")
     (is (not (nullable? {:select [:id] :from [:users] :where [:in :id {:select [:id] :from [:users] :where [:= :id cast]}]} {}))
         "a subquery's comparison is the cast's use there alone")))
@@ -959,7 +939,7 @@
   (is (= [] (check {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id] :do-update-set {:name :excluded.name}}))))
 
 (deftest a-misspelt-option-is-an-error
-  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:compare :loose} {:result :first} {:jdbc {:return-keys []}} {:jdbc {:return-keys "id"}}]]
+  (doseq [o [{:qualifed? true} {:time :instnat} {:read {:json :parse}} {:result :first} {:jdbc {:return-keys []}} {:jdbc {:return-keys "id"}}]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (args {:select [:id] :from [:users]} (merge opts o))) (pr-str o))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options" (check {:select [:id] :from [:users]} (merge opts o))) (pr-str o))))
 
@@ -1032,18 +1012,6 @@
                                                   [:level [:int {:pg/type "integer" :min 1 :max 10}]]
                                                   [:kind [:enum {:pg/type "kind"} "a" "b"]]]}}))
 
-(deftest a-lenient-comparison-is-a-schema-for-every-kind-of-column
-  (doseq [col [:role_key :nick :mail :level :kind]
-          o [{:compare :lenient} {:compare :lenient}]
-          :let [t (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= col :?x]} o))]]
-    (is (m/schema t {:registry checked}) (pr-str col o t)))
-  (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]]
-         (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} {:compare :lenient})))
-      "a CHECKed column's base type, without the CHECK and the length")
-  (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]]
-         (:x (h/arg-types checked {:select [:role_key] :from [:roles] :where [:= :role_key :?x]} {:compare :lenient})))
-      "and a keyword, sent untyped"))
-
 (deftest nil-options-are-none
   (is (= [] (h/check {:app/x :int} {:select [1]} nil)))
   (is (= (pgmalli/as-read registry :pg.sample/users) (pgmalli/as-read registry :pg.sample/users nil))))
@@ -1087,7 +1055,7 @@
          (m/properties (m/schema (h/query-schema registry [:db :iid] {:select [:id] :from [:users] :where [:= :id :?id]} opts))))))
 
 (deftest a-misspelt-option-names-the-one-meant
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:compre \[\"disallowed key\"\]\}; did you mean: :compare" (check {} {:compre :lenient}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:reslt \[\"disallowed key\"\]\}; did you mean: :result" (check {} {:reslt :one}))))
 
 (deftest a-lifted-value-is-data
   (is (= [] (check {:select [:id] :from [:users] :where [:= :id [:lift {:select true :update true :delete false}]]})))
@@ -1845,11 +1813,6 @@
         o {}]
     (doseq [c [:na :da]]
       (is (m/validate (:v (h/arg-types reg {:update :t :set {c :?v} :where [:= :id 1]} o)) (long-array [1 2]) {:registry reg}) (name c)))))
-
-(deftest a-lenient-comparison-takes-nil-elements
-  (let [o (assoc opts :compare :lenient)]
-    (is (m/validate (:v (args {:select [:id] :from [:users] :where [:in :id :?v]} o)) [1 nil] {:registry registry}))
-    (is (m/validate (:v (args {:select [:id] :from [:users] :where [:= :id [:any :?v]]} o)) (into-array Long [1 nil]) {:registry registry}))))
 
 (deftest a-written-row-takes-no-keyword-honeysql-would-write-as-a-column
   (let [s (h/values-schema registry :users opts)]
