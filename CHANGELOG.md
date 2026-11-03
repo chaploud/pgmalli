@@ -87,7 +87,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   a write. A key spelled close to one pgmalli reads and read by no next.jdbc function
   (`:buildr-fn`) is an error naming the key meant.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
-  `:set` maps built at run time
+  `:set` maps built at run time, keyed by any key HoneySQL writes to a column: the label the
+  `:jdbc` builder reads it as (`:group-id`), so a row read is written back, or its name
+  (`:group_id`), one of them a column
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
 * Array arguments: a Clojure collection whose class `:send` sends as an array type or

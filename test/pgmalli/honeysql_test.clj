@@ -31,6 +31,11 @@
   [m]
   (merge (zipmap (map first accept/class-types) (repeat nil)) m))
 
+(defn- written-keys
+  "The keys of a values-schema or set-schema map, of every column."
+  [s]
+  (map first (drop 2 (if (= :map (first s)) s (some #(when (and (vector? %) (= :map (first %))) %) s)))))
+
 (def malli-opts {:registry (merge (m/default-schemas) (time/schemas))})
 
 (defn- check ([q] (check q opts)) ([q o] (h/check registry q o)))
@@ -982,17 +987,17 @@
     (is (= s (m/form (m/schema s {:registry registry}))) "malli keeps the form as it is")
     (is (every? #(and (seq %) (ok? s %)) (mg/sample s {:registry registry :seed 1})))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes its row schema :pg.sample/users" (h/values-schema registry :pg.sample.users/insert)))
-    (is (= [:born :closed-at :group-id] (take 3 (map first (drop 2 (h/values-schema registry :pg.sample/users {:schema "sample" :jdbc kebab})))))
-        "keyed as HoneySQL writes a column, kebab-cased as next.jdbc reads it back")
+    (is (= [:born :closed-at :closed_at :group-id :group_id] (take 5 (written-keys (h/values-schema registry :pg.sample/users {:schema "sample" :jdbc kebab}))))
+        "keyed as HoneySQL writes a column: kebab-cased as next.jdbc reads it back, and by its name")
     (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line1 :string]]}})]
-      (is (= [:address_line1] (map first (drop 2 (h/values-schema reg :t {:jdbc kebab}))))
+      (is (= [:address_line1] (written-keys (h/values-schema reg :t {:jdbc kebab})))
           "next.jdbc's kebab builder reads address_line1 as :address-line-1, which HoneySQL writes as address_line_1: the column's own name instead")
-      (is (= [:address_line1] (map first (drop 2 (h/values-schema reg :t {:jdbc kebab :format {:quoted true}}))))
+      (is (= [:address_line1] (written-keys (h/values-schema reg :t {:jdbc kebab :format {:quoted true}})))
           "quoted, HoneySQL writes a key as it is")
-      (is (= [:ADDRESS_LINE1] (map first (drop 2 (h/values-schema reg :t {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-modified-maps :label-fn str/upper-case}}))))
+      (is (= [:ADDRESS_LINE1 :address_line1] (written-keys (h/values-schema reg :t {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-modified-maps :label-fn str/upper-case}})))
           "a modified builder's label, which HoneySQL writes unquoted and PostgreSQL folds back to the column"))
     (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} ["a-b" :string]]}})]
-      (is (= ["a-b"] (map first (drop 2 (h/values-schema reg :t {:jdbc kebab}))))
+      (is (= ["a-b"] (written-keys (h/values-schema reg :t {:jdbc kebab})))
           "a column keyed by a string, which HoneySQL quotes as it is"))
     (is (= v (h/values-schema registry :users {:schema "sample"}) (h/values-schema registry :sample.users) (h/values-schema registry :sample/users))
         "a table as HoneySQL names it, in :schema")
@@ -1000,6 +1005,26 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean" (h/values-schema registry :pg.sample.users)))
     (let [reg (pgmalli/registry {:registry {:pg.public/v [:map {:pg/view "public.v"} [:id [:maybe [:int {:pg/type "bigint"}]]]]}})]
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"a view has no insert schema" (h/values-schema reg :pg.public/v))))))
+
+(deftest a-row-keyed-by-the-builder-or-by-the-column-name-is-written
+  (let [o {:schema "sample" :jdbc kebab}
+        v (h/values-schema registry :users o)
+        s (h/set-schema registry :users o)
+        ok? #(m/validate %1 %2 {:registry registry})]
+    (is (every? #(ok? v %) [{:group_id 1 :score 0} {:group-id 1 :score 0} {:group-id 1 :score 0 :updated_at nil :nick-upper :default}])
+        "HoneySQL writes :group-id and :group_id both to group_id")
+    (is (not-any? #(ok? v %) [{:score 0} {:group-id nil :score 0}]) "a required column through either key")
+    (is (not (ok? v {:group-id 1 :group_id 1 :score 0})) "HoneySQL would write the column twice")
+    (is (= ["HoneySQL writes :group-id and :group_id to one column, twice"] (me/humanize (m/explain v {:group-id 1 :group_id 2 :score 0} {:registry registry}))))
+    (is (= {:group-id ["missing required key"] :group_id ["missing required key"]} (me/humanize (m/explain v {:score 0} {:registry registry}))))
+    (is (= {:nope ["disallowed key"]} (me/humanize (m/explain v {:group_id 1 :score 0 :nope 1} {:registry registry}))) "an unknown key")
+    (is (every? #(ok? s %) [{:group_id 2} {:group-id 2} {:nick-upper :default}]))
+    (is (not-any? #(ok? s %) [{} {:group_id 2 :group-id 2} {:nope 1}]))
+    (is (= v (m/form (m/schema v {:registry registry}))) "malli keeps the form as it is")
+    (is (every? #(ok? v %) (mg/sample v {:registry registry :seed 1})))
+    (is (every? #(and (seq %) (ok? s %)) (mg/sample s {:registry registry :seed 1})))
+    (is (= (h/values-schema registry :users {:schema "sample"}) (h/values-schema registry :users (assoc o :jdbc unqualified)))
+        "keys that coincide: one key a column")))
 
 (deftest every-shape-of-do-update-set
   (is (= [] (check {:insert-into :groups :values [{:id 1 :name "g"}] :on-conflict [:id]
@@ -1746,11 +1771,11 @@
 
 (deftest a-row-schema-keys-as-each-format-writes-it-back
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line :string]]}})
-        keys #(map first (drop 2 (h/values-schema reg :t (assoc % :jdbc kebab))))]
-    (is (= [:address-line] (keys {})) "unquoted, HoneySQL writes - as _")
-    (is (= [:address-line] (keys {:format {:quoted true :quoted-snake true}})) ":quoted-snake writes - back as _")
+        keys #(written-keys (h/values-schema reg :t (assoc % :jdbc kebab)))]
+    (is (= [:address-line :address_line] (keys {})) "unquoted, HoneySQL writes - as _")
+    (is (= [:address-line :address_line] (keys {:format {:quoted true :quoted-snake true}})) ":quoted-snake writes - back as _")
     (is (= [:address_line] (keys {:format {:dialect :ansi}})) "a dialect quotes names")
-    (is (= [:address-line] (keys {:format {:quoted-always #"^address_line$"}})) ":quoted-always quotes the name HoneySQL writes, - already _"))
+    (is (= [:address-line :address_line] (keys {:format {:quoted-always #"^address_line$"}})) ":quoted-always quotes the name HoneySQL writes, - already _"))
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:MixedCase :int]]}})
         keys #(map first (drop 2 (h/values-schema reg :t %)))]
     (is (= ["MixedCase"] (keys {})) "unquoted, only a string reaches a column with capitals")

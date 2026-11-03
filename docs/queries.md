@@ -227,11 +227,12 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 `h/values-schema` and `h/set-schema` type it. The table is a keyword, as HoneySQL names it
 (`:users` in `:schema`, `:app.users`) or as the registry does (`:pg.public/users`). Each column
 is typed as an argument assigned to it (what `:send` sends, held to the column's range) and keyed
-as your rows are, so a row read and written back fits: the key the `:jdbc` builder labels the
-column with, unqualified, where HoneySQL writes that key back to the column (`:group-id` under
-a kebab builder); otherwise the column's keyword, or its name as a string for a column with
-capitals where names are unquoted (PostgreSQL folds an unquoted name to lower case, and HoneySQL
-quotes a string key). A column the database may fill is optional and takes HoneySQL's
+by any key HoneySQL writes to the column under `:format`: the key the `:jdbc` builder labels the
+column with, unqualified, so a row read and written back fits (`:group-id` under a kebab
+builder), and the column's keyword (`:group_id`); where neither is written to the column, its
+name as a string (a column with capitals where names are unquoted: PostgreSQL folds an unquoted
+name to lower case, and HoneySQL quotes a string key). A column takes one of its keys: two would
+write it twice. A column the database may fill is optional and takes HoneySQL's
 `:default` too; one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
 BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
 takes nil: the trigger may fill it. In
@@ -254,6 +255,11 @@ An UPDATE's `:set` cannot be checked this way: a CHECK applies to the whole upda
 
 (m/validate (h/values-schema registry :users {:jdbc {:builder-fn rs/as-unqualified-kebab-maps}})
             {:email "ann@example.com" :group-id 1 :created-at :default}
+            {:registry registry})
+;; => true
+
+(m/validate (h/values-schema registry :users {:jdbc {:builder-fn rs/as-unqualified-kebab-maps}})
+            {:email "ann@example.com" :group_id 1}
             {:registry registry})
 ;; => true
 
