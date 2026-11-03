@@ -153,7 +153,7 @@
 
 (deftest an-expression-with-no-alias-has-the-name-postgresql-gives-it
   (is (= [:map [:count bigint] [:?column? [:maybe :any]] [:my_fn [:maybe :any]] [:nick [:maybe text]]
-          [:case [:maybe :any]] [:exists [:boolean {:pg/type "boolean"}]] [:current_timestamp ['inst? {:pg/type "timestamp with time zone"}]]
+          [:case [:maybe bigint]] [:exists [:boolean {:pg/type "boolean"}]] [:current_timestamp ['inst? {:pg/type "timestamp with time zone"}]]
           [:coalesce bigint]]
          (row {:select [[[:count :*]] [[:+ :id 1]] [[:public.my-fn 1]] [[:cast :nick :text]] [[:case [:= :id 1] 2]]
                         [[:exists {:select [1]}]] :current_timestamp [[:coalesce :id 0]]]
@@ -493,8 +493,8 @@
            (row [[[:= :id 1] :b] [[:= :nick "a"] :c]]))
         "a comparison is NULL where an operand may be")
     (is (= [:map [:u [:maybe :any]] [:p [:maybe :any]]] (row [[[:upper :nick] :u] [:?x :p]])) "other forms stay untyped")
-    (is (= [:map [:n [:maybe :any]]] (row [[[:coalesce :score 1.5] :n]]))
-        "a number is a typed parameter, which PostgreSQL resolves with the column's type")
+    (is (= [:map [:n [:double {:pg/type "double precision"}]]] (row [[[:coalesce :score 1.5] :n]]))
+        "a number is a typed parameter, which PostgreSQL resolves with the column's type to the wider")
     (is (= [:map [:i int4] [:f ['float? {:pg/type "real"}]] [:d [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
            (row [[(int 1) :i] [(float 1.5) :f] [1.5M :d]]))
         "pgjdbc types a parameter by its class")
@@ -1587,8 +1587,11 @@
         "a CTE's name may rename its columns, by position")
     (is (= [:map [:x bigint]] (row {:with [[[:c {:columns [:x]}] {:select [[[:cast :id :bigint] :id]] :from [:users]}]] :select [:x] :from [:c]})))
     (is (= [:map [:n bigint]] (row {:select [:s.n] :from [[{:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]} :s]]})))
-    (is (= [:map [:id [:maybe :any]]] (row {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}))
-        "a recursive CTE stays untyped")))
+    (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]] (row {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}))
+        "a recursive CTE has its first member's types, NULL where later rows may hold it")
+    (is (= [:map [:n bigint]] (row {:select [:x.n] :from [:users [[:lateral {:select [[[:cast :id :bigint] :n]] :from [:groups] :where [:= :groups.id :users.group_id]}] :x]]}))
+        "a LATERAL subquery sees the tables before it")
+    (is (= [] (check {:select [:x.n] :from [:users [[:lateral {:select [[:id :n]] :from [:groups] :where [:= :groups.id :users.group_id]}] :x]]})))))
 
 (deftest an-unnest-tables-argument-is-an-array-of-where-its-column-goes
   (let [o (sends opts {clojure.lang.IPersistentVector "bigint[]" clojure.lang.Sequential "varchar[]"})
@@ -1746,3 +1749,16 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/d_int [:pg/integer {:pg/type "integer"}]
                                           :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:di [:maybe [:ref {:pg/type "d_int"} :pg.public/d_int]]]]}})]
     (is (m/validate (:v (h/arg-types reg {:select [:id] :from [:t] :where [:= :di [:any :?v]]})) (int-array [1 2]) {:registry reg}))))
+
+(deftest a-case-resolves-its-values-as-coalesce-does
+  (is (= [:map [:c text]] (row {:select [[[:case [:= :id 1] [:inline "a"] :else [:inline "b"]] :c]] :from [:users]})))
+  (is (= [:map [:c [:maybe text]]] (row {:select [[[:case [:= :id 1] [:inline "a"]] :c]] :from [:users]})) "NULL without :else")
+  (is (= [:map [:n bigint]] (row {:select [[[:coalesce [:max :group_id] 0] :n]] :from [:users]}))
+      "an integer and a bigint resolve to the bigint"))
+
+(deftest a-ctes-columns-are-typed-inside-expressions
+  (is (= [:map [:m [:maybe int4]]]
+         (row {:with [[:s {:update :users :set {:score 1} :returning [:score]}]] :select [[[:max :score] :m]] :from [:s]}))))
+
+(deftest a-key-compared-with-null-matches-at-most-one-row
+  (is (= {:max 1} (second (last (h/query-schema registry [:db] {:select [:nick] :from [:users] :where [:= :id nil]} opts))))))

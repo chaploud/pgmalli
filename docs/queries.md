@@ -57,9 +57,9 @@ A clause pgmalli does not read is reported rather than passed over:
 ```
 
 The columns of a CTE or a subquery are typed as its SELECT types them, read as a query of its
-own (a CTE under the ones before it); a column it does not give is `:unknown-column`. Those of a
-recursive CTE, a LATERAL subquery, a table function, or a `pg_catalog` table the registry
-lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema`
+own (a CTE under the ones before it, a LATERAL subquery with the tables before it, a recursive
+CTE as its first member, NULL allowed); a column it does not give is `:unknown-column`. Those of
+a table function, or a `pg_catalog` table the registry lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema`
 leaves untyped, are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
@@ -298,8 +298,9 @@ makes a name of `""`:
 An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
 by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
 `:timestamptz`) or to an enum type or domain of the registry, `count`, `sum`, `avg`, `min`,
-`max`, `coalesce`, `greatest`, `least` and `nullif` of one type (a string or an argument takes
-the others' type, as PostgreSQL resolves them), an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
+`max`, `coalesce`, `greatest`, `least`, `nullif` and `CASE`'s values of one type, or of numbers
+the widest of them (a string or an argument takes the others' type, as PostgreSQL resolves
+them; `CASE` without `:else` may be NULL), a literal `[:inline ...]` writes, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
 `IS`), the clock's values (`now()`, `current_date` ...), `->>`, and the functions that build json or
 jsonb (`jsonb_build_object`, `jsonb_agg` ...: an object or an array under `{:read {:json
 :parsed}}`, the driver's object otherwise; an aggregate is NULL over no row). Any other is nullable `:any`:

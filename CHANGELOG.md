@@ -33,8 +33,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   reads it as an enum type: a string sent as `varchar` to it is no `:uncast-string`.
 * `h/check` reads a literal against a CHECK's list of numbers as PostgreSQL does: an untyped
   `"1"` is the label `1`, and a number outside the list is an `:enum-literal`.
-* `h/row-schema` types `greatest`, `least` and `nullif` as `coalesce`, and `h/arg-types` types
-  an argument of any of them with the type the other arguments resolve to.
+* `h/row-schema` types `greatest`, `least`, `nullif` and `CASE` as `coalesce`, numbers of several
+  types as the widest of them (an `integer` and a `bigint` a `bigint`), and a literal
+  `[:inline ...]` writes; `h/arg-types` types an argument of `coalesce` and the like with the
+  type the other arguments resolve to.
 * `h/query-schema`'s return says how many rows the data tells (`[:sequential {:max 1} row]`):
   one of a SELECT of aggregates alone, at most one where the WHERE holds a primary key or a
   UNIQUE constraint equal to a value, up to as many as an INSERT's `:values` has rows under RETURNING,
@@ -66,7 +68,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   folds it to (`:users/id`), as the driver returns it.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does
   not take is an error whose data names it (`:unknown`) and the one meant (`:did-you-mean`).
-* The columns of a CTE or a subquery are typed as its SELECT types them; a column it does not
+* The columns of a CTE or a subquery (LATERAL too, a recursive CTE as its first member) are
+  typed as its SELECT types them; a column it does not
   give is `:unknown-column`. An argument of an `unnest` in `FROM` is an array of the type of
   where its column goes.
 * `h/row-schema` types the functions that build json and jsonb (`jsonb_build_object`,

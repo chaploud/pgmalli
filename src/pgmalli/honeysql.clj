@@ -7,8 +7,8 @@
 
    Scope: tables come from :from, :using, :cross-join, the joins (:join-by is not read),
    :insert-into, :update, :delete-from and :truncate, under their aliases. CTEs (:with) and
-   subqueries have the columns their SELECT gives, typed as it types them; a recursive CTE, a
-   LATERAL subquery, a table function, a symbol where a table goes and a pg_catalog or
+   subqueries (LATERAL ones and recursive CTEs too) have the columns their SELECT gives, typed as
+   it types them; a table function, a symbol where a table goes and a pg_catalog or
    information_schema table the registry lacks are opaque tables: their columns exist but have
    no type. Every table has the system columns
    (ctid, xmin, ...). A column is :col (unique in the scope), :alias/col or :alias.col; a
@@ -345,26 +345,30 @@
   [item]
   (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (keyword? (ffirst item))))))
 
-(declare row-schema* derived-types honeysql)
+(declare row-schema* derived-types derived-types* nullable honeysql)
 
 (defn- cte-statement
-  "[statement columns] of CTE name: its body as read on its own, under the entries of its :with
-   before it, and the columns its name lists ([[:c {:columns [:x]}] ...]); nil where the query
-   defines name more than once, or the body is no statement."
+  "[statement columns recursive?] of CTE name: its body as read on its own, under the entries of
+   its :with before it, and the columns its name lists ([[:c {:columns [:x]}] ...]); of a
+   recursive one (a set operation under :with-recursive), its first member, whose types
+   PostgreSQL gives the columns. nil where the query defines name more than once, or the body is
+   no statement."
   [body name]
   (let [found (for [x (tree-seq branch? seq body) :when (map? x)
                     k with-keys :let [w (get x k)] :when (vector? w)
                     [i e] (map-indexed vector w) :when (= name (cte-name e))]
-                [(second e) (subvec w 0 i) (when (vector? (first e)) (:columns (second (first e))))])]
-    (when-let [[[stmt before listed]] (when (= 1 (count found)) found)]
-      (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
-        [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed)]))))
+                [(second e) (subvec w 0 i) (when (vector? (first e)) (:columns (second (first e)))) k])]
+    (when-let [[[stmt before listed k]] (when (= 1 (count found)) found)]
+      (let [op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
+            stmt (if op (first (get stmt op)) stmt)]
+        (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
+          [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- typed-scope
   "sc with :types on the subqueries and CTEs of stmt whose SELECT types its columns
    ({column schema}, a column whose type is not told nil), read as a query of their own; not
    on one that reads a CTE ctes holds (one stmt sees but the query of its own would not)."
-  [registry body stmt sc ctes {:keys [schema] :or {schema default-schema} :as opts}]
+  [registry body stmt sc ctes outer {:keys [schema] :or {schema default-schema} :as opts}]
   (let [items (table-items stmt)
         ;; read on its own, a name a CTE seen here holds would be read as a table
         own? (fn [inner]
@@ -375,14 +379,23 @@
     (reduce (fn [sc item]
               (let [[_ alias written] (table-ref item schema)
                     {:keys [table cte? columns] :as entry} (get sc alias)
-                    [inner listed] (cond (or (nil? entry) columns (lateral? item)) nil
-                                         cte? (cte-statement body written)
-                                         (and (nil? table) (vector? item) (map? (first item))) [(first item)]
-                                         (and (nil? table) (map? item)) [item])
-                    types (when (and inner (own? inner))
-                            (when-let [ts (derived-types registry inner opts)]
-                              ;; a CTE's name may list new names for its columns, by position
-                              (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) t])) ts)))]
+                    lateral (lateral? item)
+                    [inner listed recursive?] (cond (or (nil? entry) columns) nil
+                                                    cte? (cte-statement body written)
+                                                    (and (nil? table) (vector? item) (map? (first item))) [(first item)]
+                                                    ;; [[:lateral subquery] alias]
+                                                    (and (nil? table) (vector? item) (vector? (first item)) (= :lateral (ffirst item)) (map? (second (first item))))
+                                                    [(second (first item))]
+                                                    (and (nil? table) (map? item)) [item])
+                    ts (when (and inner (own? inner))
+                         (if lateral
+                           ;; a LATERAL subquery sees the tables before it
+                           (derived-types* registry inner opts (cons (dissoc sc alias) outer))
+                           (derived-types registry inner opts)))
+                    types (when ts
+                            ;; a CTE's name may list new names for its columns, by position; a recursive
+                            ;; one's later rows may hold NULL where its first member's do not
+                            (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) (cond-> t (and t recursive?) nullable)])) ts))]
                 (cond-> sc types (assoc-in [alias :types] types))))
             sc items)))
 
@@ -406,8 +419,10 @@
    of a code form, not under a statement (a subquery a helper adds to a query built elsewhere,
    or a CTE body bound apart from its :with), has an enclosing statement this data does not
    show: its chain ends in :open, a column it cannot resolve is taken to be the enclosing
-   statement's, and every CTE the query defines anywhere is visible to it."
-  [registry body opts]
+   statement's, and every CTE the query defines anywhere is visible to it. Under outer, body is
+   read inside the chain of scopes outer (a LATERAL subquery's)."
+  ([registry body opts] (statement-chains registry body opts ()))
+  ([registry body opts outer]
   (letfn [(walk [x path outer ctes in-vector? under?]
             (cond (statement? x)
                   (let [open? (and (empty? outer) in-vector? (not under?))
@@ -415,7 +430,7 @@
                         ctes (into base (keep cte-name) (cte-entries x))
                         outer (if open? (list :open) outer)
                         ;; a column of a table code brings in is the enclosing data's, untyped
-                        chain (cons (typed-scope registry body x (scope registry x ctes opts) ctes opts) (cond->> outer (code-sources? x) (cons :open)))
+                        chain (cons (typed-scope registry body x (scope registry x ctes opts) ctes outer opts) (cond->> outer (code-sources? x) (cons :open)))
                         part (fn [k v scopes cs] (walk v (conj path k) scopes cs false true))
                         ;; a LATERAL item sees its statement's tables, but not itself
                         lateral-chain (fn [t] (cons (dissoc (first chain) (second (table-ref t (:schema opts default-schema)))) (rest chain)))
@@ -444,7 +459,7 @@
                            (mapcat (fn [[k v]] (part k v chain ctes))
                                    (clause-entries (apply dissoc x :insert-into :values (concat with-keys from-keys join-keys)))))))
                   (branch? x) (apply concat (map-indexed (fn [i c] (walk c (conj path i) outer ctes (or in-vector? (vector? x)) under?)) (seq x)))))]
-    (walk body [] () (into (free-cte-names body) (code-ctes body)) false false)))
+    (walk body [] outer (into (free-cte-names body) (code-ctes body)) false false))))
 
 (defn- split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table (:schema.a.b too), :b does
@@ -1436,15 +1451,23 @@
    their result is of it (nullif's, its first argument's)."
   #{"coalesce" "greatest" "least" "nullif"})
 
+(def ^:private number-order
+  "The number types in the order PostgreSQL's implicit casts widen them."
+  (zipmap ["smallint" "integer" "bigint" "numeric" "real" "double precision"] (range)))
+
 (defn- resolved-type
-  "The expression type PostgreSQL resolves operands (of types ts) to: that of the typed ones when
-   they agree, a string or an argument taking it as an unknown value does; nil when one has no
-   type pgmalli tells, or they differ."
+  "The expression type PostgreSQL resolves operands (of types ts) to, as it resolves UNION and
+   CASE: that of the typed ones when they agree, or numbers the widest of them (an integer and a
+   bigint a bigint); a string or an argument takes it as an unknown value does; nil when one has
+   no type pgmalli tells, or they differ otherwise."
   [operands ts]
   (let [typed (for [[o t] (map vector operands ts) :when (not (or (arg-key o) (:string? t)))] t)
-        resolved (if (seq typed) typed (remove nil? (map (fn [o t] (when-not (arg-key o) t)) operands ts)))]
-    (when (and (seq resolved) (not-any? nil? resolved) (apply = (map canonical-type resolved)))
-      (first resolved))))
+        resolved (if (seq typed) typed (remove nil? (map (fn [o t] (when-not (arg-key o) t)) operands ts)))
+        names (map canonical-type resolved)]
+    (when (and (seq resolved) (not-any? nil? resolved))
+      (cond (apply = names) (first resolved)
+            (every? number-order names) (let [widest (apply max-key number-order names)]
+                                          (some #(when (= widest (canonical-type %)) %) resolved))))))
 
 (defn- unnest-columns
   "{[alias column] arg} of the unnest(?, ...) items of stmt's FROM and joins: the column each
@@ -1666,9 +1689,17 @@
       (number? x) (let [t (jdbc/sent-type x opts)] (when-not (= :unknown t) (typed t)))
       (keyword? x) (or (typed (word-types (sql-value x)))
                        (when (shorthand-fn x) (typed (word-types fname)))
-                       (when-let [{s :schema :keys [nullable? opaque?]} (when (column-keyword? x) (resolve-column registry chain x))]
-                         (when (and s (not opaque?)) {:schema (shape/non-null s) :nullable? (boolean (or nullable? (maybe? s)))})))
+                       ;; a subquery's or a CTE's column has the type its SELECT gives, an opaque table's none
+                       (when-let [{s :schema :keys [nullable?]} (when (column-keyword? x) (resolve-column registry chain x))]
+                         (when s {:schema (shape/non-null s) :nullable? (boolean (or nullable? (maybe? s)))})))
       (not (keyword? h)) nil
+      ;; [:inline v] writes v into the SQL: a string an unknown literal, a number by its value
+      (= :inline h) (let [v (second x)]
+                      (cond (string? v) (assoc (typed "text") :string? true)
+                            (boolean? v) (typed "boolean")
+                            (int? v) (typed (if (<= Integer/MIN_VALUE v Integer/MAX_VALUE) "integer" "bigint"))
+                            (number? v) (typed "numeric")))
+      (= :lift h) (expression-type registry chain (second x) opts)
       (= :cast h) (let [[_ v t] x
                         ;; [:varchar 10], a type with its typmod, as HoneySQL writes varchar(10)
                         t (if (and (vector? t) (keyword? (first t))) (first t) t)]
@@ -1686,6 +1717,14 @@
       (#{"min" "max"} fname) (when-let [t (first ts)] {:schema (loose (:schema t)) :nullable? true})
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical-type)]) typed (assoc :nullable? true))
       ;; a string or an argument takes the others' type, as PostgreSQL resolves a varchar or unknown one
+      ;; [:case c1 v1 c2 v2 ... :else v]: the values resolve as coalesce's arguments; NULL without :else
+      (= :case h) (let [parts (partition-all 2 (rest x))
+                        values (map second parts)
+                        else? (some #(= :else (first %)) parts)
+                        vts (map #(expression-type registry chain % opts) values)]
+                    (when-let [r (when (every? #(= 2 (count %)) parts) (resolved-type values vts))]
+                      {:schema (loose (:schema r))
+                       :nullable? (or (not else?) (boolean (some #(or (nil? %) (:nullable? %)) vts)))}))
       (resolving-fns fname) (when-let [r (resolved-type (rest x) ts)]
                               {:schema (cond-> (:schema r) (next ts) loose)
                                ;; greatest and least skip NULLs as coalesce does; nullif makes one
@@ -1777,9 +1816,9 @@
     (select-row registry stmt (get chains path) opts)))
 
 (defn- derived-types*
-  [registry stmt opts]
+  [registry stmt opts outer]
   (let [opts (-> opts (dissoc :jdbc) (assoc ::jdbc/member true ::columns true))
-        chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt opts))]
+        chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt opts outer))]
     (when-let [row (row-schema* registry stmt [] chains opts)]
       (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
              [(name k) (when-not (= :any s) s)])))))
@@ -1792,8 +1831,8 @@
     (let [k [stmt (select-keys opts [:schema :time :read :send :format :compare])]]
       (if (contains? @memo k)
         (@memo k)
-        (let [v (derived-types* registry stmt opts)] (swap! memo assoc k v) v)))
-    (derived-types* registry stmt opts)))
+        (let [v (derived-types* registry stmt opts ())] (swap! memo assoc k v) v)))
+    (derived-types* registry stmt opts ())))
 
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc builds it (for a write with no
@@ -1831,9 +1870,9 @@
     "json_agg" "jsonb_agg" "json_object_agg" "jsonb_object_agg"})
 
 (defn- constant?
-  "Whether x is the same value on every row: an argument, a literal, or a cast of one."
+  "Whether x is the same value on every row: an argument, a literal (NULL too), or a cast of one."
   [x]
-  (or (arg-key x) (number? x) (string? x) (boolean? x) (uuid? x)
+  (or (arg-key x) (nil? x) (number? x) (string? x) (boolean? x) (uuid? x)
       (and (vector? x) (= :cast (first x)) (constant? (second x)))))
 
 (def ^:private row-count-keys
