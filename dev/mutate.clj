@@ -1,5 +1,5 @@
 (ns mutate
-  "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn name ...] [--limit N] [--jvm]
+  "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn name ...] [--limit N] [--jvm] [--db]
    [--timeout secs] [--out report.edn]: mutation testing. Each mutant of a source file (an element
    left out of a literal collection in a def; and/or, when/when-not, true/false, =/not= swapped)
    is written over the file, the tests run, and the file is written back. A mutant the tests pass
@@ -86,10 +86,11 @@
                     " (System/exit (if (pos? (+ fail error)) 1 0)))")]))
 
 (defn- run-tests
-  "{:passed? :timeout? :secs :output}; a run past timeout is killed."
-  [cmd timeout]
+  "{:passed? :timeout? :secs :output}; a run past timeout is killed. Without db?, the tests that
+   need a database are skipped (PGMALLI_SKIP_DB=1)."
+  [cmd timeout db?]
   (let [start (System/currentTimeMillis)
-        proc (p/process cmd {:out :string :err :string :extra-env {"PGMALLI_SKIP_DB" "1"}})
+        proc (p/process cmd (cond-> {:out :string :err :string} (not db?) (assoc :extra-env {"PGMALLI_SKIP_DB" "1"})))
         result (deref proc (* 1000 timeout) ::timeout)]
     (when (= ::timeout result) (p/destroy-tree proc))
     {:passed? (and (not= ::timeout result) (zero? (:exit result)))
@@ -101,7 +102,7 @@
   (not-empty (str/trim (:out (p/sh (into ["git" "status" "--porcelain" "--"] files))))))
 
 (defn -main [& args]
-  (let [opts (cli/parse-opts args {:coerce {:file [] :ns [] :fn [] :limit :long :timeout :long :jvm :boolean}
+  (let [opts (cli/parse-opts args {:coerce {:file [] :ns [] :fn [] :limit :long :timeout :long :jvm :boolean :db :boolean}
                                    :alias {:f :file :k :kind :n :ns}})
         {:keys [file kind limit timeout out] :or {kind "table,logic" timeout 600 out "target/mutate.edn"}} opts
         nss (or (seq (:ns opts)) (map str (bb-suite/namespaces (boolean (:jvm opts)))))
@@ -112,7 +113,7 @@
       (binding [*out* *err*] (println "uncommitted changes; commit or stash them first:\n" d))
       (System/exit 2))
     (println (count all) "mutants;" (str/join " " nss))
-    (let [baseline (run-tests cmd timeout)]
+    (let [baseline (run-tests cmd timeout (:db opts))]
       (when-not (:passed? baseline)
         (binding [*out* *err*]
           (println (str/join "\n" (take-last 30 (str/split-lines (str (:output baseline))))))
@@ -124,7 +125,7 @@
           _ (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable restore))
           results (vec (for [[i m] (map-indexed vector all)]
                          (let [r (try (spit (:file m) (:source m))
-                                      (run-tests cmd timeout)
+                                      (run-tests cmd timeout (:db opts))
                                       (finally (restore)))
                                m (-> (dissoc m :source)
                                      (assoc :status (cond (:timeout? r) :timeout (:passed? r) :survived :else :killed)
