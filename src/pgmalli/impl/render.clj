@@ -255,7 +255,8 @@
         lit (some-> default literal)
         schema (with-props schema {:pg/type type
                                    :pg/default (if (some? lit) lit default)
-                                   :default (when (some? lit)
+                                   ;; a column override's schema is the user's: the SQL literal is no value known of it
+                                   :default (when (and (some? lit) (not (get overrides (column-override-key (:schema c) (:table c) (:column c)))))
                                               (default-value (if-let [d (some #(when (= :domain-ref (:fact %)) %) facts)] (base-type (:base d)) schema) lit))
                                    :pg/identity identity
                                    ;; the expression the database computes it from (true when it could not be read)
