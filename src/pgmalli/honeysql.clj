@@ -53,8 +53,7 @@
 (defn- catalog-columns
   "[[column-name schema props] ...] of a table or view of pg_catalog (\"pg_catalog.pg_class\"),
    as the catalog snapshot holds it in versions vs: a column of a type they disagree on, or
-   pgmalli does not type, :any; nullable where one version's is (an :any too: a NULL is a key
-   an optional builder leaves out); optional where one lacks it."
+   pgmalli does not type, :any; nullable where one version's is (an :any too); optional where one lacks it."
   [table vs]
   (when-let [cs (some->> table (re-matches #"pg_catalog\.(.+)") second (get (:relations @types/catalog)))]
     (let [cs (in-versions cs vs)
@@ -491,7 +490,7 @@
           [stmt (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- function-columns
-  "[[column schema origin] ...] of a function of pg_catalog or of a generated schema in FROM
+  "[[column schema] ...] of a function of pg_catalog or of a generated schema in FROM
    ([[:f args] alias], [[:with-ordinality [:f args] alias]]): its OUT columns (a generated
    schema's: its composite type's too), or one of its result type named after
    the alias (the function without one), each nullable and of no table, renamed by the names the
@@ -509,8 +508,7 @@
           (when (and (seq cs) (every? #(or (types/category (second %)) (own (second %))) cs))
             (vec (map-indexed (fn [i [c ct]]
                                 [(if (< i (count listed)) (folded (name (nth listed i))) c)
-                                 (when-let [s (or (when (string? ct) (types/type-schema ct)) (own ct))] (cond->> s (not= "ordinality" c) (vector :maybe)))
-                                 ""])
+                                 (when-let [s (or (when (string? ct) (types/type-schema ct)) (own ct))] (cond->> s (not= "ordinality" c) (vector :maybe)))])
                               cs))))))))
 
 (defn- standalone
@@ -535,9 +533,7 @@
             (assoc inner k (subvec w 0 (inc (apply max (map #(nth % 2) found)))))))))))
 
 (defn- typed-scope
-  "sc with :types ({column schema}, a column whose type is not told nil) and :origins ({column
-   table}, the table PostgreSQL traces the column to, \"\" none; one it does not tell absent) on
-   the subqueries and CTEs of stmt whose SELECT types its columns, read as a query of their own,
+  "sc with :types ({column schema}, a column whose type is not told nil) on the subqueries and CTEs of stmt whose SELECT types its columns, read as a query of their own,
    under the CTEs of ctes it reads (standalone)."
   [registry body stmt sc ctes outer {:keys [schema] :as opts}]
   (let [items (table-items stmt)]
@@ -563,13 +559,11 @@
                              (and entry (nil? inner) (nil? table) (not cte?) (vector? item) (not (map? (first item))))
                              ;; a function sees the tables before it too
                              (function-columns registry item (cons (dissoc sc alias) outer) opts))
-                    named (map-indexed (fn [i [c t o]] [(nth listed i c) t o]) ts)
+                    named (map-indexed (fn [i [c t]] [(nth listed i c) t]) ts)
                     ;; a CTE's name may list new names for its columns, by position; a recursive
                     ;; one's later rows may hold NULL where its first member's do not
-                    types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (beyond-list registry t)) t)])))
-                    ;; a recursive CTE's columns come from a UNION: from no table
-                    origins (into {} (for [[c _ o] named :when (or recursive? o)] [c (if recursive? "" o)]))]
-                (cond-> sc types (update alias assoc :types types :origins origins :order (mapv first named)))))
+                    types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (beyond-list registry t)) t)])))]
+                (cond-> sc types (update alias assoc :types types :order (mapv first named)))))
             sc items)))
 
 (def ^:private clause-rank
@@ -669,16 +663,16 @@
         :else (let [cs (table-columns registry table)] (or (contains? cs column) (contains? cs (folded column))))))
 
 (defn- own-hits
-  "[[alias table opaque? nullable? types origins elements] ...] of the tables of one scope a column may belong to."
+  "[[alias table opaque? nullable? types elements] ...] of the tables of one scope a column may belong to."
   [registry scope col]
   (let [[alias column] (split-column col)]
     (if alias
-      (when-let [{:keys [table opaque? nullable? types origins elements] :as entry} (get scope alias)]
-        (when (has-column? registry entry column) [[alias table opaque? nullable? types origins elements]]))
+      (when-let [{:keys [table opaque? nullable? types elements] :as entry} (get scope alias)]
+        (when (has-column? registry entry column) [[alias table opaque? nullable? types elements]]))
       ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
-      (distinct (for [[a {:keys [table opaque? excluded? nullable? types origins elements] :as entry}] scope
+      (distinct (for [[a {:keys [table opaque? excluded? nullable? types elements] :as entry}] scope
                       :when (and (not excluded?) (has-column? registry entry column))]
-                  [a table opaque? nullable? types origins elements])))))
+                  [a table opaque? nullable? types elements])))))
 
 (defn- chain [scope] (if (map? scope) [scope] scope))
 
@@ -700,10 +694,9 @@
           :else (column-hits registry outer col))))
 
 (defn- resolve-column
-  "{:table :column :schema :nullable? :opaque? :origin} for a column keyword in a scope (or the chain of
+  "{:table :column :schema :nullable? :opaque?} for a column keyword in a scope (or the chain of
    scopes of a nested statement), :table the alias for an opaque table, :schema the type a
-   subquery's or CTE's SELECT gives the column (nil for an opaque table without one), :origin
-   the table its SELECT takes it from as PostgreSQL tells the driver (\"\" none, nil not told),
+   subquery's or CTE's SELECT gives the column (nil for an opaque table without one),
    :nullable? when an outer join may leave the table NULL, :element the argument whose elements
    an unnest's column is; nil when the column resolves to no
    table or to several known ones. A column an opaque table may hold besides one known table is
@@ -713,14 +706,14 @@
         column (second (split-column col))
         [opaque & _] (filter #(nth % 2) hits)]
     (cond (= 1 (count hits))
-          (let [[alias table opaque? nullable? types origins elements] (first hits)
+          (let [[alias table opaque? nullable? types elements] (first hits)
                 ;; a subquery's or a CTE's columns, as its SELECT types them
                 cs (or types (when-not opaque? (table-columns registry table)))
                 ;; the column's own name, as next.jdbc keys the row: :group-id is group_id
                 column (if (or (nil? cs) (contains? cs column)) column (folded column))]
             {:table (or table alias) :column column
              :schema (get cs column)
-             :nullable? (boolean nullable?) :opaque? (boolean opaque?) :origin (get origins column)
+             :nullable? (boolean nullable?) :opaque? (boolean opaque?)
              :element (get elements (folded column))})
           (and opaque (>= 1 (count (remove #(nth % 2) hits))))
           (let [[alias table] opaque] {:table (or table alias) :column column :schema nil :nullable? true :opaque? true}))))
@@ -1025,16 +1018,6 @@
   [h]
   (boolean (or (operators h) (not (re-find #"^[A-Za-z_]" (name h)))
                (some-> @registered-op? (#(% h))))))
-
-(defn- raw? [x] (and (vector? x) (= :raw (first x))))
-
-(defn- cast-of-column?
-  "Whether x is a cast of a column, or of :raw SQL, which may be one, as-cast reading a call
-   as a cast where PostgreSQL does (type-call)."
-  [as-cast x]
-  (let [x (as-cast x)]
-    (and (vector? x) (= :cast (first x))
-         (or (column-keyword? (second x)) (raw? (second x)) (cast-of-column? as-cast (second x))))))
 
 (defn- function-name
   "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it;
@@ -2112,10 +2095,9 @@
                      (cond-> t (not (in-data k)) nullable))])))))
 
 (defn- using-merges
-  "{column {:tables [alias ...] :sides [alias ...] :schema s :nullable? bool}} of a
-   statement's JOIN ... USING, each join merging its left side (a table's column, or what an
-   earlier join merged) with the right table's in turn: :tables every table merged, :sides
-   the tables next.jdbc may key it by (nil: unqualified), :schema nil when the types differ.
+  "{column {:tables [alias ...] :schema s :nullable? bool}} of a statement's JOIN ... USING, each
+   join merging its left side (a table's column, or what an earlier join merged) with the right
+   table's in turn: :tables every table merged, :schema nil when the types differ.
    PostgreSQL takes the left column (INNER JOIN the right one when only the left is cast to
    the merged type), RIGHT JOIN the right one, FULL JOIN neither: a COALESCE; a column cast
    to the merged type keeps no table."
@@ -2126,16 +2108,15 @@
                        (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (folded column)))))))
         ;; the type without what does not change it (a default, constraints)
         type-of #(let [s (shape/non-null %)] (if (and (vector? s) (map? (second s))) (assoc s 1 (select-keys (second s) [:pg/type :pg/max-length :min :max])) s))
-        table-side (fn [a column] (let [s (col-schema a column)] {:sides [a] :schema s :nullable? (boolean (or (nil? s) (shape/maybe? s) (:nullable? (get sc a))))}))
+        table-side (fn [a column] (let [s (col-schema a column)] {:schema s :nullable? (boolean (or (nil? s) (shape/maybe? s) (:nullable? (get sc a))))}))
         merged-with (fn [join l r]
                 ;; ponytail: a timestamp's or time's precision is not in the registry, so (3) and (6) read as one type
                 (let [same? (and (:schema l) (:schema r) (= (type-of (:schema l)) (type-of (:schema r))))
                       side (case join (:join :inner-join :left-join) l :right-join r nil)]
-                  (cond (nil? side) {:sides [nil] :schema (when same? (:schema l)) :nullable? true}
+                  (cond (nil? side) {:schema (when same? (:schema l)) :nullable? true}
                         same? side
                         ;; one side cast to the merged type: which one, the registry does not say
-                        :else {:sides (distinct (concat (if (#{:join :inner-join} join) (concat (:sides l) (:sides r)) (:sides side)) [nil]))
-                               :schema nil :nullable? true})))]
+                        :else {:schema nil :nullable? true})))]
     (:merges
      (reduce (fn [{:keys [before] :as acc} [k right c]]
                (-> (if (and (vector? c) (= :using (first c)))
@@ -2145,7 +2126,7 @@
                                      holders (filter #(when-let [e (get sc %)] (has-column? registry e col)) before)
                                      l (cond earlier earlier
                                              (= 1 (count holders)) (table-side (first holders) col)
-                                             :else {:sides holders :schema nil :nullable? true})]
+                                             :else {:schema nil :nullable? true})]
                                  (assoc-in acc [:merges col] (assoc (merged-with k l (table-side right col))
                                                                     :tables (conj (vec (or (:tables earlier) holders)) right)))))
                              acc (filter keyword? (rest c)))
@@ -2378,13 +2359,9 @@
   (cond (nil? s) :any (::columns opts) (shape/non-null s) :else (driver-schema registry jdbc/column-read-type s opts)))
 
 (defn- select-row
-  "The row a SELECT returns. Under a qualifying builder, a cast column, or a column through an
-   opaque table whose table this cannot trace, has a key this cannot tell: the driver keys it by
-   the table PostgreSQL traces it to, which keeps a column's table under a cast to its own type.
-   The row leaves those out, an open map, and names them under :pgmalli/unknown-keys."
+  "The row a SELECT returns."
   [registry stmt chain {:keys [schema] :as opts}]
-  (let [qualified? (:qualified? (jdbc/row-keys opts))
-        sc (first chain)
+  (let [sc (first chain)
         ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw or code
         ;; there may be one, and a join :join-by builds (read nowhere here) may be outer
         regrouped? (or (contains? stmt :join-by)
@@ -2392,27 +2369,16 @@
                          (or (seq? g)
                              (some #(or (seq? %) (and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))))
                                    (vectorish g)))))
-        ;; table nil: an expression comes from no table, and the driver keys it unqualified
-        entry (fn [table column schema nullable? props]
-                (jdbc/row-entry (jdbc/row-key table column opts) props (output-type registry schema opts)
-                                (or nullable? regrouped? (nil? schema) (shape/maybe? schema)) opts))
-        unknown-key (fn [n] [[::unknown-key n]])
+        entry (fn [column schema nullable? props]
+                (jdbc/row-entry (jdbc/row-key column) props (output-type registry schema opts)
+                                (or nullable? regrouped? (nil? schema) (shape/maybe? schema))))
         merges (using-merges registry stmt sc schema)
-        merged (fn [label m]
-                 (if (and qualified? (some #(:opaque? (get sc %)) (:tables m)))
-                   (unknown-key label)
-                   (let [{:keys [sides nullable?] s :schema} m
-                         by-key (into {} (for [a sides :let [t (some-> a sc :table)]] [(jdbc/row-key t label opts) t]))
-                         ;; keys the driver may give it: each optional
-                         props (when (next by-key) {:optional true})]
-                     (for [[_ t] by-key] (entry t label s nullable? props)))))
-        ;; [[column entry] ...] of a table, or of a typed subquery or CTE, in order; the entry
-        ;; [::unknown-key c] for a column whose key is not told
-        columns (fn [{:keys [table nullable? opaque? order types origins]}]
+        merged (fn [label {:keys [nullable?] s :schema}] [(entry label s nullable? nil)])
+        ;; [[column entry] ...] of a table, or of a typed subquery or CTE, in order
+        columns (fn [{:keys [table nullable? opaque? order types]}]
                   (if opaque?
-                    (for [c order :let [o (get origins c)]]
-                      [c (if (and qualified? (nil? o)) [::unknown-key c] (entry [nil o] c (get types c) nullable? nil))])
-                    (for [[c s props] (column-entries registry table)] [c (entry table c s nullable? props)])))
+                    (for [c order] [c (entry c (get types c) nullable? nil)])
+                    (for [[c s props] (column-entries registry table)] [c (entry c s nullable? props)])))
         star (fn [col]
                (let [[a] (split-column col)
                      tables (if a (some-> (get sc a) vector) (vals sc))]
@@ -2424,16 +2390,6 @@
                              (for [[alias e] sc, [c en] (columns e)
                                    :when (not (some #{alias} (:tables (get merges c))))]
                                en))))))
-        ;; PostgreSQL drops a cast to the type the value has already, which leaves the column
-        ;; (and its table) as it is; a cast to another type makes an expression of no table
-        as-cast #(or (type-call registry chain % opts) %)
-        kept-column? (fn kept? [x]
-                       (let [x (as-cast x)]
-                         (or (not (cast-of-column? as-cast x))
-                             ;; a type named with its schema (:public.mood) is the type of that name
-                             (let [[a b] (map #(some-> (canonical-type (expression-type registry chain % opts)) types/bare-name)
-                                              [x (second x)])]
-                               (and (or (nil? a) (nil? b) (= a b)) (kept? (second x)))))))
         items (for [item (selected-items stmt)
                     :let [[col alias] (select-parts item opts)
                           x (item-expression item)]]
@@ -2442,31 +2398,22 @@
                   (and (nil? col) (nil? alias) (vector? x) (= :over (first x)))
                   (let [cs (for [w (rest x) :let [[e _ a] (when (vector? w) w)
                                                   n (if (alias? a) (alias-label a opts) (expression-name e))]]
-                             (when n (let [{s :schema :keys [nullable?]} (expression-type registry chain e opts)] (entry nil n s nullable? nil))))]
+                             (when n (let [{s :schema :keys [nullable?]} (expression-type registry chain e opts)] (entry n s nullable? nil))))]
                     (when (and (seq cs) (every? some? cs)) cs))
                   (nil? col) (when-let [n (item-name item opts)]
-                               (let [x (if alias (first item) (item-expression item))]
-                                 (if (and qualified? (or (raw? x) (and (cast-of-column? as-cast x) (kept-column? x))))
-                                   (unknown-key n)
-                                   (let [{s :schema :keys [nullable?]} (expression-type registry chain x opts)]
-                                     [(entry nil n s nullable? nil)]))))
+                               (let [{s :schema :keys [nullable?]} (expression-type registry chain (if alias (first item) x) opts)]
+                                 [(entry n s nullable? nil)]))
                   (star? col) (star col)
-                  :else (when-let [{:keys [table column schema nullable? opaque? origin]} (resolve-column registry chain col)]
-                          (let [label (if alias (alias-label alias opts) column)
-                                m (when-not (first (split-column col)) (get merges (folded column)))]
-                            (cond m (merged label m)
-                                  ;; the driver keys a derived table's column by the table PostgreSQL traces it to
-                                  (and qualified? opaque? origin) [(entry [nil origin] label schema nullable? nil)]
-                                  (and qualified? opaque?) (unknown-key label)
-                                  ;; a column under an alias is still keyed by its table: the driver reads the table from the field
-                                  :else [(entry table label schema nullable? nil)])))))]
+                  :else (when-let [{:keys [column schema nullable?]} (resolve-column registry chain col)]
+                          (let [label (if alias (alias-label alias opts) column)]
+                            (if-let [m (when-not (first (split-column col)) (get merges (folded column)))]
+                              (merged label m)
+                              [(entry label schema nullable? nil)])))))]
     (when (and (seq items) (every? some? items) (not-any? :unknown? (vals sc)))
       ;; a name selected twice is one key, the driver keeping the last column's value
       (let [entries (apply concat items)
-            unknown-keys (vec (distinct (keep #(when (= ::unknown-key (first %)) (keyword (second %))) entries)))
-            entries (remove #(= ::unknown-key (first %)) entries)
             last-of (into {} (map (juxt first identity)) entries)]
-        (into (cond-> [:map] (seq unknown-keys) (conj {:pgmalli/unknown-keys unknown-keys})) (map last-of) (distinct (map first entries)))))))
+        (into [:map] (map last-of) (distinct (map first entries)))))))
 
 (defn- unknown-columns
   "{position literal?} of the columns of SELECT stmt that are NULL or a literal of no type
@@ -2483,7 +2430,7 @@
 
 (defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (assoc opts ::jdbc/member true))) members)
+    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains opts)) members)
           unknown (map-indexed (fn [i m] (unknown-columns registry m (get chains (conj path i)) opts)) members)]
       (when (and (every? some? rows) (apply = (map count rows)))
         (into [:map]
@@ -2498,7 +2445,7 @@
                           inners (distinct (map (cond->> shape/non-null literal? (comp (partial computed registry) shape/non-null))
                                                 (or (seq known) schemas)))]]
                 ;; PostgreSQL resolves each column's type as CASE's
-                (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts)
+                (jdbc/row-entry (ffirst entries)
                                 (cond (not united?) :any
                                       ;; with an untyped member, a domain resolves to its base type, as CASE's does
                                       (= 1 (count inners)) (let [[s] inners
@@ -2512,7 +2459,7 @@
                                       ;; the members' schemas are as the driver reads them: one of them, or untold
                                       :else (let [r (:schema (common registry (for [s inners] {:schema s :type (resolver-type registry s)})))]
                                               (if (and r (some #(= r (computed registry %)) inners)) r :any)))
-                                (some shape/maybe? schemas) opts)))))))
+                                (some shape/maybe? schemas))))))))
 
 (defn- values-row
   "The row of a VALUES list of rows (vectors): column1, column2 ... each of its values' common
@@ -2523,9 +2470,9 @@
           (for [[i xs] (map-indexed vector (apply map vector rows))
                 :let [ts (map #(expression-type registry chain % opts) xs)
                       s (:schema (common registry ts))]]
-            (jdbc/row-entry (jdbc/row-key nil (str "column" (inc i)) opts)
+            (jdbc/row-entry (jdbc/row-key (str "column" (inc i)))
                             (output-type registry s opts)
-                            (or (nil? s) (boolean (some :nullable? ts))) opts)))))
+                            (or (nil? s) (boolean (some :nullable? ts))))))))
 
 (defn- row-schema*
   "row-schema of the statement at path in a query, chains its statements' scope chains by path
@@ -2539,22 +2486,16 @@
 
 (defn- derived-types*
   [registry stmt opts outer]
-  (let [opts (-> opts (dissoc :jdbc) (assoc ::jdbc/member true ::columns true))
+  (let [opts (-> opts (dissoc :jdbc) (assoc ::columns true))
         chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt opts outer))]
     (when-let [row (row-schema* registry stmt [] chains opts)]
-      ;; read again as the default builder keys it: by the table each column comes from
-      (let [keyed (row-schema* registry stmt [] chains (dissoc opts ::jdbc/member))
-            unknown-keys (set (map name (:pgmalli/unknown-keys (shape/row-props keyed))))
-            tables (group-by name (map first (some-> keyed shape/entries)))
-            origin (fn [c] (let [ns (distinct (map namespace (get tables c)))]
-                             (when (and (= 1 (count ns)) (not (unknown-keys c))) (or (first ns) ""))))]
-        (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
-               [(name k) (when-not (= :any s) s) (origin (name k))]))))))
+      (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
+             [(name k) (when-not (= :any s) s)])))))
 
 (defn- derived-types
-  "[[column schema origin] ...] of the row stmt, a query of its own read inside the chain of
+  "[[column schema] ...] of the row stmt, a query of its own read inside the chain of
    scopes outer (none by default), returns, as the registry types a column (nil for one it
-   cannot tell), origin the table PostgreSQL traces the column to (\"\" none, nil not told); nil
+   cannot tell); nil
    when its row cannot be told, or is asked for again while it is read (a CTE read inside itself)."
   ([registry stmt opts] (derived-types registry stmt opts ()))
   ([registry stmt opts outer]
@@ -2567,17 +2508,13 @@
      (derived-types* registry stmt opts outer))))
 
 (defn row-schema
-  "The [:map ...] of one row a query returns, as next.jdbc builds it (for a write with no
+  "The [:map ...] of one row a query returns, as next.jdbc's as-unqualified-maps builds it (for a write with no
    RETURNING, its update count); nil when that cannot be told, as
    docs/queries.md#the-row-a-query-returns lists.
 
    Columns an outer join may leave NULL are nullable; an expression has the type PostgreSQL
    resolves it to, nullable :any where pgmalli cannot tell; a set operation's row is keyed by its
-   first member's names. Under qualified keys, a column next.jdbc may key by a table the
-   query data does not show is left out of the map, which is open, and named under the
-   :pgmalli/unknown-keys property: :raw SQL, a column cast to its own type, and a column of a
-   table function neither of pg_catalog nor of a generated schema, or of a table the registry lacks. A subquery's or a CTE's column is keyed by
-   the table PostgreSQL traces it to. Options: docs/queries.md#options."
+   first member's names. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
@@ -2735,17 +2672,17 @@
 
 ;;; what an application writes
 
-(defn- written-keys
-  "The keys of column (a keyword, or a string where the registry keys it so) in a :values or :set
-   map that HoneySQL writes to column under sql/format's opts (the format), the first as reading
-   keys it: the key :jdbc's builder reads column as (unqualified), the column's keyword and its
-   kebab spelling (:group-id), each where HoneySQL writes it as column (unquoted, PostgreSQL folds
-   a name to lower case); else the column's name as a string, which HoneySQL quotes."
-  [column {:keys [format] :as opts}]
+(defn- written-key
+  "The key of column (a keyword, or a string where the registry keys it so) in a :values or
+   :set map: the key a row is read with (jdbc/row-key, :group_id), so a row read is written
+   back, where HoneySQL writes it as column under sql/format's opts (the format; unquoted,
+   PostgreSQL folds a name to lower case, and HoneySQL writes - as _); else the column's name as
+   a string, which HoneySQL quotes."
+  [column {:keys [format]}]
   (let [n (name column)
-        writes? #(= n (first (formatted-name % format false)))]
-    (or (seq (filter writes? (distinct [(jdbc/row-key nil n opts) (keyword n) (keyword (str/replace n "_" "-"))])))
-        [(if (or (string? column) (writes? n)) n (keyword n))])))
+        writes? #(= n (first (formatted-name % format false)))
+        k (jdbc/row-key n)]
+    (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
 (defn- one-value
   "t without what HoneySQL writes in :values or :set as something else than one value: a keyword
@@ -2785,8 +2722,7 @@
 (defn- written-row*
   "The closed map of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
    of registry r as reading reads it: each column typed as an argument assigned to it, optional
-   as the derived schema has it, keyed by any one of the keys HoneySQL writes to the column
-   (written-keys), generated by the first; one the database may fill takes :default too, and one
+   as the derived schema has it, keyed by written-key; one the database may fill takes :default too, and one
    it writes :default alone. update takes a non-empty map: HoneySQL writes an empty :set as SET
    alone, which PostgreSQL refuses. nil where r has no such schema."
   [r name derived opts]
@@ -2808,28 +2744,17 @@
                          :let [a (cond-> (accepted-type r c :assign (assoc opts ::keywords-columns true)) (or (shape/maybe? c) triggered?) nullable)
                                t (one-value a)
                                plain (if (fills k) [:or t default] t)]]
-                     [(written-keys k opts) (not (or (:optional props) triggered?)) [:or plain (expression a words)] (generated-values plain)])
+                     [(written-key k opts) (not (or (:optional props) triggered?)) [:or plain (expression a words)] (generated-values plain)])
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-                     [(written-keys k opts) false default default]))
+                     [(written-key k opts) false default default]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
-          one-key (into [:map {:closed true}] (for [[[k] required? t] columns] (entry k required? t)))
+          row (into [:map {:closed true}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
-          generated (into [:map] (for [[[k] required? t g] columns :when (or g required?)] (entry k required? (or g t))))
+          generated (into [:map] (for [[k required? t g] columns :when (or g required?)] (entry k required? (or g t))))
           nonempty [:not [:= nil {}]]
-          non-empty #(if (= "update" derived) [:and % nonempty] %)
-          gen (non-empty generated)]
-      (if (every? #(= 1 (count (first %))) columns)
-        (shape/merge-props (non-empty one-key) {:gen/schema gen})
-        ;; a column HoneySQL writes from more than one key: any one of them, not two (the column twice)
-        (-> [:and {:gen/schema gen}
-             (into [:map {:closed true}] (for [[ks _ t] columns, k ks] [k {:optional true} t]))]
-            (into (for [[ks required?] columns :when (and required? (next ks))]
-                    (into [:or] (for [k ks] [:map [k :some]]))))
-            (into (for [[ks] columns, [i k] (map-indexed vector ks), k2 (drop (inc i) ks)]
-                    [:not {:error/message (str "HoneySQL writes " (pr-str k) " and " (pr-str k2) " to one column, twice")}
-                     [:map [k [:or :nil :some]] [k2 [:or :nil :some]]]]))
-            (cond-> (= "update" derived) (conj nonempty)))))))
+          non-empty #(if (= "update" derived) [:and % nonempty] %)]
+      (shape/merge-props (non-empty row) {:gen/schema (non-empty generated)}))))
 
 (defn- written-row
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
@@ -2863,8 +2788,8 @@
 (defn values-schema
   "The schema of one row an INSERT's :values may carry into a table, named as HoneySQL names
    it (:users in :schema) or by its row schema (:pg.public/users), typed as arg-types types an
-   argument: each column as an argument assigned to it, keyed by one of the keys HoneySQL writes
-   to the column (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
+   argument: each column as an argument assigned to it, keyed as a row is read
+   (:group_id), so a row read is written back (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
    (generated, identity ALWAYS) taking :default alone. Where a BEFORE row trigger runs for the
    write, every column is optional and takes nil. Options: docs/queries.md#options.

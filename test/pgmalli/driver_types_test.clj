@@ -1,20 +1,18 @@
 (ns pgmalli.driver-types-test
   "as-read and query-schema against the rows next.jdbc builds from PostgreSQL's JDBC driver: the
    rows of matrix.types (pgmalli.oracle/matrix-schema!: every type pgmalli renders, as itself, an
-   array, a domain, an array of the domain), read through every next.jdbc map builder pgmalli
-   knows, under every :time. JVM only (babashka has no java.sql), so bb test does not list it."
+   array, a domain, an array of the domain), read through next.jdbc's as-unqualified-maps, under
+   every :time. JVM only (babashka has no java.sql), so bb test does not list it."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
             next.jdbc.date-time
-            next.jdbc.optional
-            next.jdbc.result-set
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
-            pgmalli.impl.jdbc
             [pgmalli.oracle :as oracle]
             [pgmalli.test-db :refer [*db* datasource exec-sql! jdbc-url with-postgres]]))
 
@@ -52,15 +50,12 @@
       (try
         (doseq [:let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))]
                 [time read-as] time-readers
-                builder (keys @#'pgmalli.impl.jdbc/builders)
                 table [:types :v]
                 :let [_ (read-as)
-                      jdbc-opts (cond-> {:builder-fn @(requiring-resolve builder)}
-                                  (str/includes? (name builder) "modified") (assoc :label-fn str/upper-case :qualifier-fn #(str "t_" %)))
                       q {:select [:*] :from [(keyword (str "matrix." (name table)))] :order-by [:id]}
-                      rows (jdbc/execute! con (sql/format q) jdbc-opts)
-                      opts {:jdbc jdbc-opts :time time :schema "matrix"}]]
-          (testing (str builder " :time " time " " table)
+                      rows (jdbc/execute! con (sql/format q) {:builder-fn rs/as-unqualified-maps})
+                      opts {:time time :schema "matrix"}]]
+          (testing (str ":time " time " " table)
             (is (= [] (vec (distinct (disagreements registry [:sequential (pgmalli/as-read registry (keyword "pg.matrix" (name table)) opts)] rows)))))
             (is (= [] (vec (distinct (disagreements registry (last (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))) rows)))))))
         (finally (next.jdbc.date-time/read-as-default))))))
@@ -69,14 +64,14 @@
   (when *db*
     (let [ds (datasource)
           registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
-          o {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps} :schema "matrix"}
-          row (jdbc/execute-one! ds ["SELECT * FROM matrix.types WHERE id = 1"] (:jdbc o))
+          o {:schema "matrix"}
+          row (jdbc/execute-one! ds ["SELECT * FROM matrix.types WHERE id = 1"] {:builder-fn rs/as-unqualified-maps})
           values (m/schema (h/values-schema registry :types o) {:registry registry})
           set (m/schema (h/set-schema registry :types o) {:registry registry})]
       (with-open [con (jdbc/get-connection ds)]
         (.setAutoCommit con false)
         (let [;; another test may load next.jdbc.date-time, which cannot send a java.sql.Time
-              taken? (fn [k v] (try (jdbc/execute! con [(str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2") v]) true
+              taken? (fn [k v] (try (jdbc/execute! con [(str "UPDATE matrix.types SET " (str/replace (name k) "-" "_") " = ? WHERE id = 2") v]) true
                                     (catch Exception _ false)
                                     (finally (.rollback con))))]
           (is (= [] (vec (for [[k v] (dissoc row :id)

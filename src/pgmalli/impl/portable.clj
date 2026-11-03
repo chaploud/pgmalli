@@ -1,6 +1,6 @@
 (ns pgmalli.impl.portable
   "The same schemas in another shape: as data malli's default registry reads, with pgmalli's
-   types as malli's and references inlined. The row shapes JDBC builders return are
+   types as malli's and references inlined. The row shapes next.jdbc returns are
    pgmalli.impl.jdbc."
   (:require [clojure.walk :as walk]
             [pgmalli.impl.pgtypes :as pgtypes]

@@ -50,7 +50,7 @@
 
 (deftest a-cast-to-a-type-with-its-length-has-the-type
   (is (= [:map [:x [:maybe [:string {:pg/type "character varying"}]]]]
-         (h/row-schema registry {:select [[[:cast :s [:varchar 5]] :x]] :from [:t]} {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}})))
+         (h/row-schema registry {:select [[[:cast :s [:varchar 5]] :x]] :from [:t]} {})))
   (is (= :string (first (second (:x (h/arg-types registry {:select [:id] :from [:t] :where [:= :s [:cast :?x [:varchar 5]]]})))))))
 
 (deftest a-format-that-quotes-names-writes-default-only-as-a-call

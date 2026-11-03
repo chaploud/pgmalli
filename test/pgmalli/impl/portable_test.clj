@@ -22,14 +22,14 @@
       (is (= 'bytes? (get-in (pgmalli/portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
       (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
   (testing "as-read: the map as next.jdbc builds it"
-    (let [r (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.optional/as-maps} :time :instant})]
-      (is (= [:users/group_name {:optional true} [:string {:pg/type "text"}]] (nth r 5)) "NULL columns absent, keys qualified")
-      (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "timestamps as Instants")
-      (is (= [:users/born {:optional true} ['inst? {:pg/type "date"}]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
-      (is (m/validate r {:users/id 1 :users/group_id 1 :users/mood "sad" :users/seq 1 :users/score 1 :users/total 2} opts)))
-    (is (some #{[:nick-upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]] :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-kebab-maps}})))
-    (is (= :order-items/line-no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {:jdbc {:builder-fn 'next.jdbc.result-set/as-kebab-maps}}) 2)))
-        "the table half is kebab-cased too"))
+    (let [r (pgmalli/as-read registry :pg.sample/users {:time :instant})]
+      (is (= [:group_name [:maybe [:string {:pg/type "text"}]]] (nth r 5)))
+      (is (= [:updated_at [:maybe [:time/instant {:pg/type "timestamp"}]]] (last r)) "timestamps as Instants")
+      (is (= [:born [:maybe ['inst? {:pg/type "date"}]]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
+      (is (m/validate r {:id 1 :group_id 1 :mood "sad" :seq 1 :score 1 :total 2 :born nil :closed_at nil :group_name nil :nick nil :referrer_id nil :updated_at nil :nick_upper nil} opts)))
+    (is (some #{[:nick_upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]] :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {})))
+    (is (= :line_no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {}) 2)))
+        "_ read as -"))
   (testing "portable converts what it inlines"
     (let [reg (pgmalli/registry {:registry {:pg.public/code [:and :string [:pg/check-value {:pg/constraint "c"} [:<> :VALUE ""]]]
                                             :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
@@ -54,9 +54,9 @@
     (is (= [:pg.sample.users/insert] (:did-you-mean (ex-data e))))))
 
 (deftest read-names-the-types-an-extension-reads-otherwise
-  (let [r (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.optional/as-maps} :time :instant :read {"date" :time/local-date}})]
-    (is (= [:users/born {:optional true} :time/local-date] (nth r 2)) "over :time, NULL still allowed")
-    (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "the other types as :time reads them")))
+  (let [r (pgmalli/as-read registry :pg.sample/users {:time :instant :read {"date" :time/local-date}})]
+    (is (= [:born [:maybe :time/local-date]] (nth r 2)) "over :time, NULL still allowed")
+    (is (= [:updated_at [:maybe [:time/instant {:pg/type "timestamp"}]]] (last r)) "the other types as :time reads them")))
 
 (deftest as-read-defaults-its-options
   (is (= (pgmalli/as-read registry :pg.sample/users {}) (pgmalli/as-read registry :pg.sample/users))))

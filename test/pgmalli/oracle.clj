@@ -18,9 +18,9 @@
 
    Where PostgreSQL runs a case, the return of query-schema (default and {:result :one}) must
    take what next.jdbc's execute! and execute-one! returned, and the keys of row-schema's map
-   must be those the builder gives the result set's columns, read with the default builder and
-   the case's sample of builders (case-builders): a case it refuses carries
-   :return-rejections; where row-schema, under the unqualified builder, names or types a column
+   must be those the builder gives the result set's columns, read with
+   next.jdbc's as-unqualified-maps: a case it refuses carries
+   :return-rejections; where row-schema names or types a column
    otherwise than the ResultSet's metadata, :column-mismatches (and how many it types,
    :columns-typed). arg-matrix sends fixed values as each argument beside each column of the
    schema and of a column of each type pgmalli.impl.types lists, whatever arg-types says of it.
@@ -38,7 +38,6 @@
             [malli.error :as me]
             [malli.generator :as mg]
             [next.jdbc :as jdbc]
-            next.jdbc.optional
             [next.jdbc.result-set :as rs]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
@@ -259,7 +258,7 @@
   [^java.sql.Connection conn [sql & params :as sqlvec]]
   (try
     (jdbc/execute! conn (into [(str "EXPLAIN " sql)] params))
-    (assoc (try (let [r (jdbc/execute! conn sqlvec)]
+    (assoc (try (let [r (jdbc/execute! conn sqlvec unqualified)]
                   {:pg :ok :rows (or (:next.jdbc/update-count (first r)) (count r)) :result r})
                 (catch PSQLException e
                   (case (.getSQLState e)
@@ -312,63 +311,37 @@
           (empty? ks) :miss
           :else :mismatch)))
 
-(def builders
-  "Every map builder pgmalli knows (pgmalli.impl.jdbc), by name, as the next.jdbc options a row
-   is read with (as :jdbc for query-schema): a modified one with a :label-fn and a :qualifier-fn."
-  (into (sorted-map)
-        (for [sym (keys @#'pjdbc/builders)]
-          [(keyword (str (when (= "next.jdbc.optional" (namespace sym)) "optional/") (name sym)))
-           (cond-> {:builder-fn @(requiring-resolve sym)}
-             (str/includes? (name sym) "modified") (assoc :label-fn str/upper-case :qualifier-fn #(str "q_" %)))])))
-
-(defn- case-builders
-  "The builders a case's rows are read with beside the default one (no :jdbc): none for a
-   mutant; for a corpus query every one under all?, else three, and for a generated one one,
-   drawn by its id (so that the corpus as a whole reads with each)."
-  [{:keys [id mutation generated?]} all?]
-  (cons [:default {}]
-        (cond mutation nil
-              all? builders
-              :else (take (if generated? 1 3) (drop (mod (hash id) (count builders)) (cycle builders))))))
-
 (defn- result-keys
-  "The keys the builder of jdbc-opts gives the columns of sqlvec's result set (as next.jdbc
-   names them from the ResultSet's metadata, the table by getTableName); nil without one."
-  [^java.sql.Connection conn sqlvec jdbc-opts]
-  (let [jdbc-opts (merge {:builder-fn rs/as-maps} jdbc-opts)]
-    (try (with-open [ps (jdbc/prepare conn sqlvec)]
-           (when (.execute ps)
-             (with-open [rs (.getResultSet ps)]
-               (set (:cols ((:builder-fn jdbc-opts) rs jdbc-opts))))))
-         (catch Exception _ nil)
-         (finally (.rollback conn)))))
+  "The keys next.jdbc's as-unqualified-maps gives the columns of sqlvec's result set; nil without one."
+  [^java.sql.Connection conn sqlvec]
+  (try (with-open [ps (jdbc/prepare conn sqlvec)]
+         (when (.execute ps)
+           (with-open [rs (.getResultSet ps)]
+             (set (:cols (rs/as-unqualified-maps rs unqualified))))))
+       (catch Exception _ nil)
+       (finally (.rollback conn))))
 
 (defn- key-mismatch
   "Where the keys of row-schema's map differ from those the builder gives the result set's
-   columns: a column whose key the map neither holds nor names under :pgmalli/unknown-keys
-   (:unexpected), a required key no column has (:missing)."
-  [cols row jdbc-opts]
-  (let [props (when (map? (second row)) (second row))
-        entries (remove map? (rest row))
-        label (:label (pjdbc/row-keys {:jdbc jdbc-opts}))
-        unknown-keys (set (map #(label (name %)) (:pgmalli/unknown-keys props)))
+   columns: a column whose key the map does not hold (:unexpected), a required key no column
+   has (:missing)."
+  [cols row]
+  (let [entries (remove map? (rest row))
         ks (set (map first entries))
-        unexpected (sort-by str (remove #(or (ks %) (unknown-keys (name %))) cols))
+        unexpected (sort-by str (remove ks cols))
         missing (sort-by str (for [[k p] entries :when (not (and (map? p) (:optional p))) :when (not (cols k))] k))]
     (when (or (seq unexpected) (seq missing))
       {:keys (sort-by str cols) :unexpected unexpected :missing missing})))
 
 (defn- return-rejections
-  "Where, under each of the case's builders (case-builders), the return schema of query-schema
-   refuses what next.jdbc returned for sqlvec (execute! and execute-one!, each run and rolled
-   back; rows, what execute! returned with the default builder), or the keys of row-schema's map
-   are not those of the result set's columns (key-mismatch, as :result :keys)."
-  [registry ^java.sql.Connection conn {:keys [query] :as c} opts arg-keys sqlvec rows all-builders?]
-  (vec (for [[builder jdbc-opts] (case-builders c all-builders?)
-             [result run] [[:many #(if (= :default builder) rows (jdbc/execute! conn sqlvec jdbc-opts))]
-                           [:one #(jdbc/execute-one! conn sqlvec jdbc-opts)]
+  "Where the return schema of query-schema refuses what next.jdbc returned for sqlvec (rows,
+   what execute! returned, and execute-one!, run and rolled back), or the keys of row-schema's
+   map are not those of the result set's columns (key-mismatch, as :result :keys)."
+  [registry ^java.sql.Connection conn {:keys [query]} opts arg-keys sqlvec rows]
+  (vec (for [[result run] [[:many (constantly rows)]
+                           [:one #(jdbc/execute-one! conn sqlvec unqualified)]
                            [:keys nil]]
-             :let [opts (cond-> opts (seq jdbc-opts) (assoc :jdbc jdbc-opts) (= :one result) (assoc :result :one))
+             :let [opts (cond-> opts (= :one result) (assoc :result :one))
                    r (try (if run
                             (let [ret (last (m/children (m/schema (h/query-schema registry arg-keys query opts) {:registry registry})))
                                   x (try (run) (finally (.rollback conn)))]
@@ -376,10 +349,10 @@
                                 {:schema (m/form ret) :value x :explain (me/humanize (m/explain ret x))}))
                             (let [row (h/row-schema registry query opts)]
                               (when (and (vector? row) (= :map (first row)))
-                                (some-> (result-keys conn sqlvec jdbc-opts) (key-mismatch row jdbc-opts)))))
+                                (some-> (result-keys conn sqlvec) (key-mismatch row)))))
                           (catch Exception e {:error (ex-message e)}))]
              :when r]
-         (assoc r :builder builder :result result))))
+         (assoc r :result result))))
 
 ;;; the columns PostgreSQL describes
 
@@ -413,12 +386,12 @@
       (when (#{:maybe :or :and} (first f)) (mapcat claimed (rest f))))))
 
 (defn- column-mismatches
-  "{:mismatches :typed}: where row-schema, under the unqualified builder, differs from the
-   columns PostgreSQL returned for sqlvec (the ResultSet's metadata), its keys from their labels
+  "{:mismatches :typed}: where row-schema differs from the columns PostgreSQL returned for sqlvec
+   (the ResultSet's metadata), its keys from their labels
    or an entry's :pg/type from the column's type; and how many columns it names a :pg/type of. A
    write without a result set, or a row-schema that is no map, is left out (nil)."
   [registry ^java.sql.Connection conn domains query opts sqlvec]
-  (let [row (try (m/schema (h/row-schema registry query (assoc opts :jdbc unqualified)) {:registry registry}) (catch Exception _ nil))]
+  (let [row (try (m/schema (h/row-schema registry query opts) {:registry registry}) (catch Exception _ nil))]
     (when (and row (= :map (m/type row)))
       (when-let [cols (try (with-open [ps (jdbc/prepare conn sqlvec)]
                              (when (.execute ps)
@@ -572,7 +545,7 @@
 (defn run-cases
   "run over cs, the cases of cases and generated-corpus's ({:id :query :opts}, :generated? for
    the latter), on db."
-  [db cs seed all-builders?]
+  [db cs seed]
   (let [registry (registry db)
         [doms listed] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
                         [(domains conn) (listed (relations conn))])]
@@ -596,7 +569,7 @@
                         :else
                         (let [{:keys [result] :as v} (cond-> (verdict conn sqlvec) (= :params mode) (uncast-string (:verdict @before)))
                               problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query opts)))
-                              returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result all-builders?))
+                              returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result))
                               {described :mismatches typed :typed} (when result (column-mismatches registry conn doms query opts sqlvec))
                               r (merge c (dissoc v :result)
                                        {:return-rejections returned :column-mismatches described :columns-typed typed :format mode :sql (first sqlvec) :params (vec (rest sqlvec))
@@ -610,14 +583,13 @@
    into), once per formats entry (:format): the corpus' queries with per-query mutants each
    drawn with seed, and generated-corpus. A format that writes the SQL and parameters of the one
    before it repeats its result. A query the HoneySQL on the classpath cannot write is
-   :unformatted. all-builders?: every corpus query's rows read with each of builders."
-  ([db seed per-query] (run db seed per-query false))
-  ([db seed per-query all-builders?]
-   (run-cases db
-              (concat (cases (mutation-names db) seed per-query)
-                      (for [[id q opts] (with-open [conn (jdbc/get-connection (test-db/datasource db))] (generated-corpus conn))]
-                        {:id id :query q :opts opts :generated? true}))
-              seed all-builders?)))
+   :unformatted."
+  [db seed per-query]
+  (run-cases db
+             (concat (cases (mutation-names db) seed per-query)
+                     (for [[id q opts] (with-open [conn (jdbc/get-connection (test-db/datasource db))] (generated-corpus conn))]
+                       {:id id :query q :opts opts :generated? true}))
+             seed))
 
 ;;; the argument matrix
 
@@ -862,7 +834,7 @@
     (test-db/with-postgres
       (fn []
         (test-db/exec-sql! schema-sql)
-        (let [results (run test-db/*db* seed per-query true)]
+        (let [results (run test-db/*db* seed per-query)]
           (println "seed" seed "per query" per-query "cases" (count results))
           (pp/pprint (frequencies (map :outcome results)))
           (let [rs (filter (comp seq :return-rejections) results)]
@@ -871,7 +843,7 @@
               (println "\n" (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
                        "\n  rows:" (:rows r))
               (doseq [x (:return-rejections r)]
-                (println "  " (:builder x) (:result x) (pr-str (dissoc x :builder :result))))))
+                (println "  " (:result x) (pr-str (dissoc x :result))))))
           (let [rs (filter (comp seq :column-mismatches) results)]
             (println "\ncolumns described otherwise" (count rs))
             (doseq [r rs]

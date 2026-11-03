@@ -1,10 +1,9 @@
 (ns pgmalli.impl.jdbc
   "The JDBC side: the transformer decoding driver and string values into the registry's types;
    what PostgreSQL's JDBC driver returns and takes for a column, under the options that say what
-   an application's next.jdbc does differently; and the row shapes its result set builders
-   return. as-read and pgmalli.honeysql both read columns and key rows here."
-  (:require [camel-snake-kebab.core :as csk]
-            [clojure.string :as str]
+   an application's next.jdbc does differently; and the row shapes next.jdbc's
+   as-unqualified-maps returns. as-read and pgmalli.honeysql both read columns and key rows here."
+  (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
             [malli.error :as me]
@@ -30,9 +29,6 @@
                              [:json {:optional true} [:enum :parsed]]
                              [:enum {:optional true} [:enum :keyword]]]]]
    [:jdbc {:optional true} [:map
-                            [:builder-fn {:optional true} [:or ifn? qualified-symbol?]]
-                            [:label-fn {:optional true} [:or fn? [:fn var?]]]
-                            [:qualifier-fn {:optional true} [:or fn? [:fn var?]]]
                             [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
    ;; {class type}, which options! checks
    [:send {:optional true} [:map-of :any :any]]
@@ -67,47 +63,6 @@
 
 ;; compiled once: malli keeps a schema's validator, and these are checked on every call
 (def ^:private options (delay (m/schema options-schema)))
-
-;;; how next.jdbc keys a row
-
-(def ^:private builders
-  "next.jdbc's map builders by their symbols -> how they key a row: qualified by the table or
-   not, a NULL column's key absent (next.jdbc.optional), the function naming a label and a
-   qualifier, or :modified, the :label-fn and :qualifier-fn next.jdbc takes with them."
-  (let [maps {"as-maps" {:qualified? true} "as-unqualified-maps" {:qualified? false}
-              "as-lower-maps" {:qualified? true :fn str/lower-case} "as-unqualified-lower-maps" {:qualified? false :fn str/lower-case}
-              "as-modified-maps" {:qualified? true :fn :modified} "as-unqualified-modified-maps" {:qualified? false :fn :modified}}]
-    (merge (update-keys (merge maps {"as-kebab-maps" {:qualified? true :fn csk/->kebab-case-string}
-                                     "as-unqualified-kebab-maps" {:qualified? false :fn csk/->kebab-case-string}})
-                        #(symbol "next.jdbc.result-set" %))
-           (update-keys (update-vals maps #(assoc % :absent? true)) #(symbol "next.jdbc.optional" %)))))
-
-(def ^:private builder-fns
-  "{function how} of the builders that load here."
-  (delay (into {} (for [[sym how] builders
-                        :let [f (some-> (try (requiring-resolve sym) (catch Exception _ nil)) deref)]
-                        :when f]
-                    [f how]))))
-
-(defn- builder
-  "How the next.jdbc builder f keys a row (builders): the function, its var, or its qualified
-   symbol, which names it where next.jdbc does not load (babashka); nil for another."
-  [f]
-  (if (symbol? f) (get builders f) (get @builder-fns (if (var? f) @f f))))
-
-(defn row-keys
-  "How a row is keyed under opts: {:qualified? :absent? :label :qualifier}, as :jdbc's
-   :builder-fn (next.jdbc's as-maps by default) keys it, a modified builder by :jdbc's
-   :label-fn and :qualifier-fn. A set operation's member (::member in opts) is read unqualified
-   and with every column, as next.jdbc keys the whole row by the first member's labels."
-  [{:keys [jdbc] :as opts}]
-  (let [{:keys [builder-fn label-fn qualifier-fn]} jdbc
-        how (if builder-fn (builder builder-fn) {:qualified? true})
-        f (:fn how)]
-    {:qualified? (and (not (::member opts)) (:qualified? how))
-     :absent? (and (not (::member opts)) (:absent? how))
-     :label (cond (= :modified f) label-fn f f :else identity)
-     :qualifier (cond (= :modified f) (or qualifier-fn identity) f f :else identity)}))
 
 ;;; what an application sends
 
@@ -154,22 +109,9 @@
   [{:keys [send]}]
   (into {} (remove (comp nil? val)) (merge (dissoc (into {} accept/class-types) Character) send)))
 
-(defn- old-options-jdbc
-  "The :jdbc that does what pgmalli 0.3's :qualified?, :kebab?, :lower?, :nil-columns and
-   :return-keys did: the builder keying rows so (next.jdbc.optional has no kebab one), and
-   :return-keys."
-  [{:keys [qualified? kebab? lower? nil-columns] :as old}]
-  (let [optional? (and (= :absent nil-columns) (not kebab?))]
-    (cond-> {}
-      (some #(contains? old %) [:qualified? :kebab? :lower? :nil-columns])
-      (assoc :builder-fn (symbol (if optional? "next.jdbc.optional" "next.jdbc.result-set")
-                                 (str "as-" (when (false? qualified?) "unqualified-")
-                                      (cond kebab? "kebab-" lower? "lower-") "maps")))
-      (contains? old :return-keys) (assoc :return-keys (:return-keys old)))))
-
 (def ^:private jdbc-read
   "The keys of :jdbc pgmalli reads."
-  [:builder-fn :label-fn :qualifier-fn :return-keys])
+  [:return-keys])
 
 (def ^:private next-jdbc-options
   "The options next.jdbc reads (its own and its PreparedStatement's): a :jdbc key among them,
@@ -179,10 +121,21 @@
     :result-type :return-generated-keys :return-keys :rollback-only :schema :schema-opts :suffix :table-fn
     :timeout :top})
 
+(def ^:private builder-only
+  (str "pgmalli types rows as next.jdbc.result-set/as-unqualified-maps builds them, keyed by the columns' names;"
+       " pass it to next.jdbc as {:builder-fn next.jdbc.result-set/as-unqualified-maps}"))
+
+(defn- the-builder?
+  "Whether f is next.jdbc.result-set/as-unqualified-maps: the function, its var or its symbol,
+   which names it where next.jdbc does not load (babashka)."
+  [f]
+  (let [sym 'next.jdbc.result-set/as-unqualified-maps
+        v (try (requiring-resolve sym) (catch Exception _ nil))]
+    (or (= sym f) (and v (or (= v f) (= @v f))))))
+
 (defn options!
   "opts when pgmalli takes them: their keys and values; :send a map of classes to a type types
-   knows (a name or an alias), an array of one (\"bigint[]\"), :unknown or nil; :jdbc's
-   :builder-fn one of next.jdbc's map builders, a modified one with :label-fn. An error names
+   knows (a name or an alias), an array of one (\"bigint[]\"), :unknown or nil. An error names
    what it does not take, with the one meant; :write and :stringtype of pgmalli 0.3 name :send."
   [opts]
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
@@ -191,10 +144,11 @@
                   " each goes as ({String :unknown} for stringtype=unspecified); see https://github.com/chaploud/pgmalli/blob/main/docs/queries.md#what-your-application-sends"
                   " and " error/changelog)
              old))
-    (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns :return-keys]))]
-      (fail! (str (pr-str old) " is no longer read: pass the options you pass to next.jdbc as :jdbc, "
-                  (pr-str {:jdbc (old-options-jdbc old)}) "; see " error/changelog)
-             old))
+    (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns]))]
+      (fail! (str (pr-str old) " is no longer read: " builder-only "; see " error/changelog) old))
+    (when (contains? opts :return-keys)
+      (fail! (str ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}; see " error/changelog)
+             (select-keys opts [:return-keys])))
     (when (contains? opts :send)
       (when-not (map? (:send opts))
         (fail! (str ":send is a map of classes to types, {clojure.lang.Keyword :unknown}; got " (pr-str (:send opts))) (:send opts)))
@@ -206,25 +160,17 @@
                           " or :unknown for a value sent untyped (an enum's or a domain's value too)"
                           (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
                      e))))
-    (let [{:keys [builder-fn label-fn] :as jdbc} (:jdbc opts)]
+    (let [jdbc (:jdbc opts)]
       (doseq [k (when (map? jdbc) (keys jdbc))
               :let [meant (when-not (next-jdbc-options k) (error/suggest k jdbc-read))]
               :when meant]
         (error/fail! :pgmalli.error/invalid-options
                      (str "pgmalli options: :jdbc's " (pr-str k) " is no next.jdbc option" (error/did-you-mean meant))
                      {:given [k] :did-you-mean [meant]}))
-      (doseq [k [:label-fn :qualifier-fn] :let [f (get jdbc k)] :when (symbol? f)]
-        (fail! (str ":jdbc's " k " is the function next.jdbc takes, not its symbol: " (pr-str f)
-                    " (a symbol is the builder-fn's alone, for babashka)")
-               (select-keys jdbc [k])))
-      (when builder-fn
-        (let [how (builder builder-fn)]
-          (cond (nil? how)
-                (fail! (str ":jdbc's :builder-fn is none of next.jdbc.result-set's or next.jdbc.optional's map builders ("
-                            (str/join ", " (distinct (sort (map name (keys builders))))) "), whose keys pgmalli knows")
-                       (select-keys jdbc [:builder-fn]))
-                (and (= :modified (:fn how)) (not label-fn))
-                (fail! ":jdbc's modified builder takes :label-fn, as next.jdbc's does" (select-keys jdbc [:builder-fn]))))))
+      (when-let [given (not-empty (select-keys (when (map? jdbc) jdbc) [:builder-fn :label-fn :qualifier-fn]))]
+        (when-not (and (= [:builder-fn] (keys given)) (the-builder? (:builder-fn given)))
+          (fail! (str ":jdbc's " (str/join ", " (keys given)) " is no longer read: " builder-only "; see " error/changelog)
+                 given))))
     (checked! @options opts)
     opts))
 
@@ -392,35 +338,16 @@
 
 ;;; rows as next.jdbc builds them
 
-(defn- qualify
-  "k qualified, when the builder qualifies (row-keys ks), by what its qualifier makes of table;
-   an empty qualifier leaves k unqualified, as next.jdbc's not-empty does."
-  [k {:keys [qualified? qualifier]} table]
-  (if-let [q (when qualified? (not-empty (qualifier table)))] (keyword q (name k)) k))
-
-(defn tableless-key
-  "k, a column's key without a table, as next.jdbc keys a column the driver names no table for
-   (a set operation's): qualified by what the qualifier makes of \"\" when that is not empty."
-  [k opts]
-  (qualify k (row-keys opts) ""))
-
 (defn row-key
-  "The key next.jdbc gives a column (row-keys): qualified, when the builder qualifies, by its
-   table; a column of none as tableless-key keys it. table is [schema name], or
-   \"schema.table\" split at its first dot."
-  [table column opts]
-  (let [{:keys [label] :as ks} (row-keys opts)
-        k (keyword (label column))]
-    (qualify k ks (cond (nil? table) "" (vector? table) (second table) :else (last (str/split table #"\." 2))))))
+  "The key next.jdbc's as-unqualified-maps gives a column labelled column: its name."
+  [column]
+  (keyword column))
 
 (defn row-entry
-  "A row map's entry for a column read as inner: NULL a [:maybe], or the key absent under a
-   next.jdbc.optional builder."
-  ([k inner nullable? opts] (row-entry k nil inner nullable? opts))
-  ([k props inner nullable? opts]
-   (let [absent? (and nullable? (:absent? (row-keys opts)))
-         props (cond-> props absent? (assoc :optional true))
-         s (if (and nullable? (not absent?)) [:maybe inner] inner)]
+  "A row map's entry for a column read as inner, NULL a [:maybe]."
+  ([k inner nullable?] (row-entry k nil inner nullable?))
+  ([k props inner nullable?]
+   (let [s (if nullable? [:maybe inner] inner)]
      (if (empty? props) [k s] [k props s]))))
 
 (defn transformer
@@ -537,15 +464,14 @@
       w)))
 
 (defn as-read
-  "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
+  "The [:map ...] of a row as next.jdbc's as-unqualified-maps builds it; the options are documented on
    pgmalli.core/as-read."
   [registry name opts]
   (options! opts)
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
-        table (when (or (:pg/table props) (:pg/view props)) (shape/schema-and-name name))
         schemas (shape/schemas-of registry)
         entry (fn [[k p s]]
-                (row-entry (row-key table (clojure.core/name k) opts) p (column-read-type schemas (shape/non-null s) opts)
-                           (shape/maybe? s) opts))]
+                (row-entry (row-key (clojure.core/name k)) p (column-read-type schemas (shape/non-null s) opts)
+                           (shape/maybe? s)))]
     (into (if props [:map props] [:map]) (map entry (shape/column-entries m)))))

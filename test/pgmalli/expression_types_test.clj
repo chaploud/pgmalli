@@ -12,7 +12,7 @@
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
-            next.jdbc.result-set
+            [next.jdbc.result-set :as rs]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.accept :as accept]
@@ -51,7 +51,7 @@
                                "INSERT INTO u (" cs ") SELECT " cs " FROM matrix.types;"))))
            (t)))))
 
-(def ^:private opts {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}})
+(def ^:private opts {})
 
 (defn- normal
   "A type's name as types keys it: integer for int4, x[] for an array of one."
@@ -85,7 +85,7 @@
   [ds kind items]
   (try (update-keys (jdbc/execute-one! ds (sql/format {:select (for [[a] items] [[:cast [:pg_typeof a] :text] a])
                                                        :from [[(query kind items) :s]]})
-                                       {:builder-fn next.jdbc.result-set/as-unqualified-maps})
+                                       {:builder-fn rs/as-unqualified-maps})
                     keyword)
        (catch Exception _
          (when (next items)
@@ -289,10 +289,10 @@
           ds (datasource)
           version (server-version ds)
           typnames (into {} (map (juxt :typname :t)) (jdbc/execute! ds ["SELECT typname, format_type(oid, NULL) AS t FROM pg_type"]
-                                                                   {:builder-fn next.jdbc.result-set/as-unqualified-maps}))
+                                                                   {:builder-fn rs/as-unqualified-maps}))
           ;; RowDescription describes a domain's value as of its base type
           base (into {} (map (juxt :d :b)) (jdbc/execute! ds ["SELECT format_type(oid, NULL) AS d, format_type(typbasetype, NULL) AS b FROM pg_type WHERE typtype = 'd'"]
-                                                         {:builder-fn next.jdbc.result-set/as-unqualified-maps}))
+                                                         {:builder-fn rs/as-unqualified-maps}))
           _ (register-operators!)
           cs (with-open [con (jdbc/get-connection ds)]
                (doall
@@ -412,7 +412,7 @@
     (let [registry (pgmalli/registry (files/from-database {:db *db*} "fx"))
           o (assoc opts :schema "fx")
           typnames (into {} (map (juxt :typname :t)) (jdbc/execute! (datasource) ["SELECT typname, format_type(oid, NULL) AS t FROM pg_type"]
-                                                                   {:builder-fn next.jdbc.result-set/as-unqualified-maps}))
+                                                                   {:builder-fn rs/as-unqualified-maps}))
           exprs [[:double_it :n] [:round :n] [:pg_catalog.round :n] [:lower :s] [:fx.lower :s] [:upper :m] [:upper :s]
                  [:concat :s :s] [:pick] [:vsum :n :n :n] [:+ :m [:inline 1]]]
           froms [{:select [:*] :from [[[:labels] :r]]}

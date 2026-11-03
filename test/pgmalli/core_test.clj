@@ -276,7 +276,7 @@
                                    CREATE TABLE dr.t (id int PRIMARY KEY, e dr.email, j dr.doc);")]
       (is (= [:map {:pg/primary-key ["id"] :pg/table "dr.t"}
               [:e [:maybe [:any {:pg/type "public.citext"}]]] [:id [:pg/integer {:pg/type "integer"}]] [:j [:maybe [:any {:pg/type "jsonb"}]]]]
-             (pgmalli/as-read reg :pg.dr/t {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}))
+             (pgmalli/as-read reg :pg.dr/t {}))
           "a PGobject, as pgjdbc returns citext and jsonb"))))
 
 (deftest an-exclude-constraint-is-on-the-table-and-datasets-keep-its-equal-columns-apart
@@ -378,7 +378,7 @@
     (exec-sql! "CREATE SCHEMA ov; CREATE TABLE ov.jobs (id int PRIMARY KEY, input jsonb NOT NULL, meta jsonb, n int NOT NULL CHECK (n < 100));")
     (let [config {:db *db* :schemas ["ov"] :overrides {:ov.jobs/input [:map [:prompt :string]] :ov.jobs/n [:int {:min 1}]}}
           reg (pgmalli/registry (get-in (files/generated-all config) ["ov" :data]))
-          o {:schema "ov" :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}
+          o {:schema "ov"}
           sends (assoc o :send {clojure.lang.IPersistentMap "jsonb"})
           row {:id 1 :input {:prompt "x"} :meta nil :n 5}
           read (fn [k opts] (last (second (h/row-schema reg {:select [k] :from [:jobs]} opts))))]

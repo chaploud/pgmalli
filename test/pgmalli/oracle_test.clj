@@ -101,11 +101,11 @@
                        "row-schema's keys are not the result set's for "
                        "query-schema's return refuses what ")
                      (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r)) " returned"
-                     " with the " (name (:builder x)) " builder under " (case (:result x) :one "{:result :one}" :many "the default result" :keys "its keys")
+                     " under " (case (:result x) :one "{:result :one}" :many "the default result" :keys "its keys")
                      "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
                      "\n  rows:   " (:rows r)
                      (cond (:error x) (str "\n  error:  " (:error x))
-                           (= :keys (:result x)) (str "\n  " (pr-str (dissoc x :builder :result)))
+                           (= :keys (:result x)) (str "\n  " (pr-str (dissoc x :result)))
                            :else (str "\n  schema: " (pr-str (:schema x)) "\n  value:  " (pr-str (:value x)) "\n  explain: " (pr-str (:explain x))))
                      (re-run "the case is under return rejected"))))))
 
@@ -114,7 +114,7 @@
     (doseq [r @results
             :when (not (held :column (case-id r)))
             x (:column-mismatches r)]
-      (is false (str "row-schema, under the unqualified builder, describes the columns of " (:id r) (some->> (:mutation r) (str " mutated by "))
+      (is false (str "row-schema describes the columns of " (:id r) (some->> (:mutation r) (str " mutated by "))
                      " sent " (name (:format r)) " otherwise than PostgreSQL's ResultSet metadata"
                      "\n  SQL:      " (:sql r) (when (seq (:params r)) (str "\n  params:   " (pr-str (:params r))))
                      "\n  mismatch: " (pr-str x)
@@ -140,7 +140,7 @@
 (deftest cases-over-several-workers-come-back-as-over-one
   (when *db*
     (let [cs (take 24 (oracle/cases (oracle/mutation-names *db*) seed 1))
-          over #(binding [oracle/*workers* %] (oracle/run-cases *db* cs seed false))]
+          over #(binding [oracle/*workers* %] (oracle/run-cases *db* cs seed))]
       (is (= (over 1) (over 3))))))
 
 (def ^:private wrappers

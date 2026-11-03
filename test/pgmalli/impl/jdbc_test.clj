@@ -1,7 +1,6 @@
 (ns pgmalli.impl.jdbc-test
-  "The transformer that decodes what a JDBC driver returns, and the builder table."
-  (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+  "The transformer that decodes what a JDBC driver returns, and the keys of a row."
+  (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [pgmalli.core :as pgmalli]
             [pgmalli.impl.jdbc :as jdbc]
@@ -63,33 +62,10 @@
     (is (= {:a 5 :b 7 :c 1.25M :d 9} (m/decode :pg.public/t {:a "5" :b "7" :c "1.25" :d "9"} {:registry reg} (pgmalli/transformer))))
     (is (= {:a "x" :b 7 :c "y" :d 9} (m/decode :pg.public/t {:a "x" :b 7 :c "y" :d "9"} {:registry reg} (pgmalli/transformer))) "what does not parse stays as it was")))
 
-(deftest a-builder-fn-keys-the-row-as-that-builder-does
-  (let [keys #(map first (drop 2 (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn %}})))]
-    (is (= (pgmalli/as-read registry :pg.sample/users) (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.result-set/as-maps}}))
-        "next.jdbc's as-maps by default")
-    (is (= [:users/born :users/closed_at] (take 2 (keys 'next.jdbc.result-set/as-maps))))
-    (is (= [:born :closed_at] (take 2 (keys 'next.jdbc.result-set/as-unqualified-maps))))
-    (is (= [:users/born :users/closed-at] (take 2 (keys 'next.jdbc.result-set/as-kebab-maps))))
-    (is (= [:born :closed-at] (take 2 (keys 'next.jdbc.result-set/as-unqualified-kebab-maps))))
-    (is (= [:born :closed_at] (take 2 (keys 'next.jdbc.optional/as-unqualified-lower-maps)))))
-  (is (= [:born {:optional true} ['inst? {:pg/type "date"}]]
-         (nth (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.optional/as-unqualified-maps}}) 2))
-      "next.jdbc.optional leaves a NULL column's key out"))
-
-(deftest a-modified-builder-keys-the-row-by-its-label-fn-and-qualifier-fn
-  (let [read #(pgmalli/as-read registry :pg.sample/users {:jdbc (merge {:builder-fn %1 :label-fn str/upper-case} %2)})]
-    (is (= :t_users/BORN (first (nth (read 'next.jdbc.result-set/as-modified-maps {:qualifier-fn #(str "t_" %)}) 2))))
-    (is (= :users/BORN (first (nth (read 'next.jdbc.result-set/as-modified-maps {}) 2))) "the table as it is without :qualifier-fn")
-    (is (= :BORN (first (nth (read 'next.jdbc.result-set/as-unqualified-modified-maps {}) 2))))))
-
-(deftest a-builder-fn-pgmalli-cannot-key-is-an-error
-  (doseq [b ['next.jdbc.result-set/as-arrays 'next.jdbc.optional/as-kebab-maps 'my.ns/as-maps]]
-    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #":builder-fn is none of next.jdbc.result-set's or next.jdbc.optional's map builders"
-                                  (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn b}}))
-                (str b))]
-      (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (str b))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"modified builder takes :label-fn"
-                        (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.result-set/as-modified-maps}}))))
+(deftest a-row-is-keyed-by-the-columns-names
+  (is (= [:born :closed_at] (take 2 (map first (drop 2 (pgmalli/as-read registry :pg.sample/users))))))
+  (is (= [:born [:maybe ['inst? {:pg/type "date"}]]] (nth (pgmalli/as-read registry :pg.sample/users) 2))
+      "a NULL column keeps its key"))
 
 (deftest as-read-takes-the-options-map-every-function-shares
   (is (= (pgmalli.core/as-read registry :pg.sample/users)

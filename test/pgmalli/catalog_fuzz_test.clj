@@ -18,9 +18,9 @@
             [malli.error :as me]
             [malli.generator :as mg]
             [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
             next.jdbc.date-time
             [next.jdbc.prepare :as prep]
-            [next.jdbc.result-set :as rs]
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.impl.files :as files]
@@ -350,7 +350,7 @@
                  {:kind :false-positive :table (:name t) :row value :message (pr-str (me/humanize (m/explain ins value opts)))})
                (for [t (:tables model)
                      [n k] (cond-> [[(:name t) (table-key schema t)]] (:view t) (conj [(str (:name t) "_v") (shape/schema-key schema (str (:name t) "_v"))]))
-                     :let [read (pgmalli/as-read reg k {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}})]
+                     :let [read (pgmalli/as-read reg k {})]
                      row (jdbc/execute! tx [(str "SELECT * FROM " (q schema) "." (q n))] {:builder-fn rs/as-unqualified-maps})
                      :when (not (m/validate read row opts))]
                  {:kind :read-back :table n :row row :message (pr-str (me/humanize (m/explain read row opts)))}))))

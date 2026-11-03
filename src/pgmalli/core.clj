@@ -52,15 +52,13 @@
   (portable/portable registry name))
 
 (defn as-read
-  "The [:map ...] of a table's or view's row as next.jdbc builds it from what PostgreSQL's
-   JDBC driver returns. Validate with {:registry registry}.
+  "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it from
+   what PostgreSQL's JDBC driver returns: keyed by the columns' names (:group_id), the types
+   docs/reading-rows.md lists. Validate with {:registry registry}.
 
-   (as-read registry :pg.public/users {:jdbc {:builder-fn rs/as-unqualified-maps}})
+   (as-read registry :pg.public/users)
 
-   By default, as next.jdbc's default builder (as-maps) builds rows with no extension: keys
-   :table/column, the types docs/reading-rows.md lists. :jdbc takes the options passed to
-   next.jdbc (its :builder-fn, :label-fn and :qualifier-fn key the row). Options:
-   docs/reading-rows.md#options.
+   Options: docs/reading-rows.md#options.
 
    Throws when an option is unknown, or name is no table's or view's row schema."
   ([registry name] (as-read registry name {}))

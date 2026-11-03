@@ -1,5 +1,5 @@
 (ns pgmalli.upstream-test
-  "Lists pgmalli keeps of PostgreSQL's types and next.jdbc's builders, against the ones running.
+  "Lists pgmalli keeps of PostgreSQL's types, against the ones running.
    JVM only (next.jdbc), so bb test does not list it."
   (:require [clojure.set :as set]
             [clojure.string :as str]
@@ -9,14 +9,12 @@
             [malli.core :as m]
             [clojure.data.json :as json]
             [next.jdbc :as jdbc]
+            [next.jdbc.result-set :as rs]
             next.jdbc.date-time
-            next.jdbc.optional
-            next.jdbc.result-set
             [pgmalli.catalog-source :as source]
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.impl.files :as files]
-            [pgmalli.impl.jdbc :as pjdbc]
             [pgmalli.impl.types :as types]
             [pgmalli.test-db :as test-db :refer [*db* datasource]]))
 
@@ -50,7 +48,7 @@
                                      WHERE t.typtype IN ('b', 'r', 'm') AND NOT (t.typelem <> 0 AND t.typlen = -1)
                                        AND (t.typnamespace = 'pg_catalog'::regnamespace OR x.oid IS NOT NULL)
                                      ORDER BY 1, 2"]
-                                   {:builder-fn next.jdbc.result-set/as-unqualified-maps})]
+                                   {:builder-fn rs/as-unqualified-maps})]
         (is (< 50 (count rows)))
         (doseq [{:keys [ext type]} rows
                 :let [e (types/entry type)]]
@@ -80,8 +78,7 @@
         (jdbc/execute! ds [(str "CREATE EXTENSION IF NOT EXISTS \"" e "\"")]))
       (jdbc/execute! ds [(str/join ";\n" (for [[table t] tables] (str "CREATE TABLE " table " (id integer PRIMARY KEY, c " t " NOT NULL)")))])
       (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))
-            dataset (tcg/generate (data/dataset-generator registry {:rows 3}) 30 42)
-            builder 'next.jdbc.result-set/as-unqualified-maps]
+            dataset (tcg/generate (data/dataset-generator registry {:rows 3}) 30 42)]
         (is (nil? (data/short-tables dataset)))
         (doseq [stmt (data/inserts registry dataset)
                 :let [table (name (:insert-into stmt))
@@ -89,22 +86,10 @@
           (testing t
             (is (nil? (try (jdbc/execute! ds (sql/format stmt)) nil (catch Exception x (ex-message x))))
                 (str "PostgreSQL refuses a generated " t ": fix its entry in src/pgmalli/impl/types.clj/types"))
-            (let [rows (jdbc/execute! ds [(str "SELECT * FROM " table)] {:builder-fn @(requiring-resolve builder)})
-                  schema (pgmalli/as-read registry (keyword "pg.public" (str/replace table #"^public\." "")) {:jdbc {:builder-fn builder}})]
+            (let [rows (jdbc/execute! ds [(str "SELECT * FROM " table)] {:builder-fn rs/as-unqualified-maps})
+                  schema (pgmalli/as-read registry (keyword "pg.public" (str/replace table #"^public\." "")))]
               (is (m/validate [:sequential schema] rows {:registry registry})
                   (str "pgjdbc returns a " t " as " (some-> (:c (first rows)) class .getName) ": fix its :read in src/pgmalli/impl/types.clj/types")))))))))
-
-(deftest every-nextjdbc-map-builder-is-known
-  (let [next-jdbc (str "next.jdbc " (test-db/version "next.jdbc"))
-        theirs (set (for [n ['next.jdbc.result-set 'next.jdbc.optional]
-                          s (keys (ns-publics n))
-                          :when (re-matches #"as-.*maps" (name s))]
-                      (symbol (name n) (name s))))
-        ours (set (keys @#'pjdbc/builders))]
-    (doseq [b (sort (set/difference theirs ours))]
-      (is (nil? b) (str next-jdbc " has builder " b " that pgmalli does not know: add how it keys a row to builders in src/pgmalli/impl/jdbc.clj")))
-    (doseq [b (sort (set/difference ours theirs))]
-      (is (nil? b) (str next-jdbc " no longer has builder " b ": remove it from builders in src/pgmalli/impl/jdbc.clj")))))
 
 (deftest the-catalog-snapshot-is-the-servers
   (when *db*
