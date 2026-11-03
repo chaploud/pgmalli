@@ -384,6 +384,8 @@
                      a (shape/alternatives s)]
                  a)]
       (cond (empty? sent) t
+            ;; a json column an override or a CHECK shapes: what is sent as its type is held to that shape
+            (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema
             (= :any (shape/head t)) (shape/either sent t)
             :else
             (let [base (shape/domain-base t)

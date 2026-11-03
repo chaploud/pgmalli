@@ -2,7 +2,8 @@
   "The config and the text of a generated file; no database."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
-            [pgmalli.impl.files :as files]))
+            [pgmalli.impl.files :as files]
+            [pgmalli.impl.pattern :as p]))
 
 (deftest generated-data-must-be-edn
   (is (thrown? clojure.lang.ExceptionInfo (files/edn-string {:registry {:x [:fn (fn [_] true)]}})))
@@ -21,3 +22,22 @@
 (deftest a-config-error-leaves-the-db-map-out
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:db {:password "s3cret"} :schemas "public"})))]
     (is (not (str/includes? (pr-str (ex-data e)) "s3cret")))))
+
+(deftest a-column-override-names-a-column-of-a-schema-generated
+  (let [facts (p/facts {:name "public" :types {}
+                        :tables {"jobs" {:columns [{:name "input" :position 1 :data_type "jsonb" :is_nullable false}
+                                                   {:name "n" :position 2 :data_type "integer" :is_nullable false}]
+                                         :constraints {}}}})
+        checked #(files/checked-overrides! % facts)
+        ok {:public.jobs/input :map "jobs_check" :int :inet :string}]
+    (is (= ok (checked ok)))
+    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                                  #"^:overrides: :public.jobs/inptu names no column of public.jobs; did you mean: :public.jobs/input$"
+                                  (checked {:public.jobs/inptu :map})))]
+      (is (= :pgmalli.error/invalid-config (:pgmalli/error (ex-data e))))
+      (is (= {:given :public.jobs/inptu :did-you-mean [:public.jobs/input]} (select-keys (ex-data e) [:given :did-you-mean]))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:overrides: :public.jobs/nope names no column of public.jobs; it has :public.jobs/input, :public.jobs/n$"
+                          (checked {:public.jobs/nope :map})))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:overrides: :other.jobs/input names no table or view of the schemas generated: public$"
+                          (checked {:other.jobs/input :map}))
+        "a column of a schema not generated is none")))

@@ -110,6 +110,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `pgmalli.main`: `--help` prints the usage to stdout and exits 0; an unknown option is named
   before the usage, exit 2. The usage shows the command to run, the exit codes and
   `PGMALLI_DEBUG`.
+* `:overrides` takes one column, `:schema.table/column`: its schema replaces that column's
+  value, read and written, NULL-ability and CHECKs still the database's
+  ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
+  read under `{:read {:json :parsed}}`, written for what `:send` sends as its type. A key that
+  names no column is an error.
 
 ### Changed
 
@@ -119,7 +124,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `coalesce`, `CASE` and the like resolve as PostgreSQL's `select_common_type`: `CASE` takes its
   `ELSE` value first, and a `varchar` before a `text` stays `varchar`. A typed string among
   numbers is no longer typed as the numbers (PostgreSQL refuses it).
-
+* A json or jsonb column a CHECK or an override shapes takes that shape as an argument for what
+  `:send` sends as its type, not any value of the class.
 * A domain whose CHECK lists its values
   (`CREATE DOMAIN lbl AS text CHECK (VALUE IN ('a', 'b'))`) keeps its base type
   (`[:enum {:pg/type "text"} "a" "b"]`). `h/check` no longer reads it as an enum type, so a

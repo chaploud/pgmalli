@@ -98,7 +98,8 @@ spelling.
 An enum or domain of another schema (`wh.stock.sku` of type `catalog.sku`) is `[:any]`
 (`[:some]` when NOT NULL): each schema's file stands alone. Its `:unrendered` entry names the
 schema (`:type-schema "catalog"`). With both loaded (`(pgmalli/registry "catalog" "wh")`),
-override it: `{:overrides {:sku [:ref :pg.catalog/sku]}}`.
+override it: `{:overrides {:sku [:ref :pg.catalog/sku]}}`, or one column of it:
+`{:overrides {:wh.stock/sku [:ref :pg.catalog/sku]}}`.
 
 `:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
 do; malli's own `:string`, in `portable` output, counts UTF-16 units. `:pg/max-length n` is the

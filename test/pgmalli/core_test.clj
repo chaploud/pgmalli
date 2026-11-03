@@ -8,6 +8,7 @@
             [pgmalli.core :as pgmalli]
             [pgmalli.data :as data]
             [pgmalli.generate :as generate]
+            [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.registry :as registry]
@@ -356,6 +357,34 @@
         (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 1)]
           (is (= 3 (count (get ds "wh.stock"))) (pr-str (data/short-tables ds)))
           (exec-sql! (str "DELETE FROM wh.stock;" (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))))))))))
+
+(deftest a-column-override-shapes-reads-and-writes-of-that-column
+  (when *db*
+    (exec-sql! "CREATE SCHEMA ov; CREATE TABLE ov.jobs (id int PRIMARY KEY, input jsonb NOT NULL, meta jsonb, n int NOT NULL CHECK (n < 100));")
+    (let [config {:db *db* :schemas ["ov"] :overrides {:ov.jobs/input [:map [:prompt :string]] :ov.jobs/n [:int {:min 1}]}}
+          reg (pgmalli/registry (get-in (files/generated-all config) ["ov" :data]))
+          o {:schema "ov" :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}
+          sends (assoc o :send {clojure.lang.IPersistentMap "jsonb"})
+          row {:id 1 :input {:prompt "x"} :meta nil :n 5}
+          read (fn [k opts] (last (second (h/row-schema reg {:select [k] :from [:jobs]} opts))))]
+      (is (m/validate :pg.ov/jobs row {:registry reg}))
+      (doseq [bad [{:input {:prompt 1}} {:input nil} {:n 0} {:n 100}]]
+        (is (not (m/validate :pg.ov/jobs (merge row bad) {:registry reg})) (pr-str bad)))
+      (testing "read: the declared shape under {:read {:json :parsed}}, the driver's object without it"
+        (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (read :input (assoc o :read {:json :parsed}))))
+        (is (= [:any {:pg/type "jsonb"}] (read :input o)))
+        (is (= [:int {:min 1 :max 99 :pg/type "integer" :pg/constraints ["jobs_n_check"]}] (read :n o))))
+      (testing "write: the declared shape for what :send sends as jsonb"
+        (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (:i (h/arg-types reg {:update :jobs :set {:input :?i}} sends))))
+        (is (m/validate (h/values-schema reg :jobs sends) row {:registry reg}))
+        (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg}))))
+      (testing "the rows the schema makes are rows PostgreSQL takes"
+        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
+          (is (= 5 (count (get ds "ov.jobs"))))
+          (is (every? #(string? (get-in % [:input :prompt])) (get ds "ov.jobs")))
+          (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":overrides: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"
+                          (files/generated-all {:db *db* :schemas ["ov"] :overrides {:ov.jobs/inptu :map}})))))
 
 (deftest like-with-an-escape-takes-and-generates-what-postgresql-takes
   (when *db*

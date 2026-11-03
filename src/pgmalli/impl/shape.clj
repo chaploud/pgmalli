@@ -238,11 +238,17 @@
   [t]
   (if (and (vector? t) (= :or (first t))) (remove map? (rest t)) [t]))
 
+(def ^:private collection-kinds #{:map :map-of :vector :sequential :set :tuple})
+
 (defn distinct-kinds
   "Alternatives ts, the first of each kind, in their order (an argument's own values come
-   first, with their :pg/type and bounds)."
+   first, with their :pg/type and bounds); collections of different contents (two shapes of a
+   json column) are each kept."
   [ts]
-  (first (reduce (fn [[out seen] t] (let [k (kind t)] (if (seen k) [out seen] [(conj out t) (conj seen k)])))
+  (first (reduce (fn [[out seen] t]
+                   (let [k (kind t)
+                         k (if (and (collection-kinds k) (vector? t)) [k (vec (entries t))] k)]
+                     (if (seen k) [out seen] [(conj out t) (conj seen k)])))
                  [[] #{}] ts)))
 
 (defn non-null

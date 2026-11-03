@@ -719,8 +719,12 @@
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [[[:case [:= :nope 1] 1 :else 0] :c]] :from [:users]}))))
 
 (deftest send-is-all-an-application-sends
-  (is (= {:m [:map-of :any :any]}
+  (is (= {:m [:map {:pg/type "jsonb"} [:a :int]]}
          (h/arg-types docs {:update :docs :set {:meta :?m} :where [:= :id 1]} {:send {IPersistentMap "jsonb"}}))
+      "what goes as a shaped json column's type takes its shape")
+  (is (= {:m [:map-of :any :any]}
+         (h/arg-types (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
+                      {:update :t :set {:j :?m}} {:send {IPersistentMap "jsonb"}}))
       "what goes as a type pgmalli has the driver's object for is all its argument takes")
   (is (= {:id bigint} (args {:select [:id] :from [:users] :where [:= :id :?id]} {:schema "sample" :send (only {})}))
       "a column's own values, as pgmalli reads them, whatever :send says"))
@@ -2057,3 +2061,16 @@
                             [:= :nick [:repeat "a" :?n]]]})))
   (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (args {:select [[[:case [:= :id 1] :?x :else :score] :c]] :from [:users]}))
       "CASE's values resolve as coalesce's arguments"))
+
+(deftest a-json-column-of-several-shapes-keeps-each-shape
+  (let [shapes [:or [:map {:closed true} [:a :string]] [:map {:closed true} [:b :int]]]
+        reg (pgmalli/registry {:registry {:app/input shapes
+                                          :pg.public/jobs [:map {:pg/table "public.jobs"}
+                                                           [:input [:ref {:pg/type "jsonb"} :app/input]]]}})
+        o {:send {clojure.lang.IPersistentMap "jsonb"} :read {:json :parsed}}
+        ok? #(m/validate %1 %2 {:registry reg})
+        arg (:input (h/arg-types reg {:insert-into :jobs :values [{:input :?input}]} o))
+        row (h/row-schema reg {:select [:input] :from [:jobs]} (assoc o :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}))]
+    (is (ok? arg {:a "x"}))
+    (is (ok? arg {:b 1}) "the second shape too")
+    (is (ok? row {:input {:b 1}}))))

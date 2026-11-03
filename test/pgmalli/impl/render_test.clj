@@ -576,6 +576,29 @@
     (is (= [:maybe [:vector {:pg/type "inet[]"} :any]] (get-in registry [:pg.public/t 3 1])) "arrays keep their element type as it is")
     (is (empty? unrendered))))
 
+(deftest an-override-keyed-by-column
+  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["a" "b"]}}
+                                                            :tables {"jobs" {:columns [{:name "input" :position 1 :data_type "jsonb" :is_nullable false}
+                                                                                       {:name "meta" :position 2 :data_type "jsonb" :is_nullable true}
+                                                                                       {:name "n" :position 3 :data_type "integer" :is_nullable false}
+                                                                                       {:name "m" :position 4 :data_type "mood" :type_schema "public" :is_nullable true}
+                                                                                       {:name "ip" :position 5 :data_type "inet" :is_nullable true}
+                                                                                       {:name "g" :position 6 :data_type "geometry" :type_schema "public" :is_nullable true}]
+                                                                             :constraints {"n_check" {:name "n_check" :type "CHECK" :check_clause "CHECK (n < 100)"}}}}})
+                                                  {:public.jobs/input [:map [:prompt :string]]
+                                                   :public.jobs/n [:int {:min 1}]
+                                                   :public.jobs/m [:enum "a"]
+                                                   :public.jobs/ip :string
+                                                   :public.jobs/g :string
+                                                   :inet [:re "^[0-9.]+$"]})
+        column (fn [k] (some #(when (= k (first %)) (last %)) (drop 2 (:pg.public/jobs registry))))]
+    (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (column :input)) "the override is the column's value, its type kept")
+    (is (= [:maybe [:any {:pg/type "jsonb"}]] (column :meta)) "another column of the type is as generated")
+    (is (= [:int {:min 1 :max 99 :pg/type "integer" :pg/constraints ["n_check"]}] (column :n)) "the column's CHECKs still hold")
+    (is (= [:maybe [:enum {:pg/type "mood"} "a"]] (column :m)) "it replaces the type's schema, an enum's reference too")
+    (is (= [:maybe [:string {:pg/type "inet"}]] (column :ip)) "it comes before an override of the column's type")
+    (is (empty? unrendered) "a column of a type pgmalli does not know is no longer left out")))
+
 (deftest a-null-leaves-an-alternative-null-and-the-check-not-false
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable true}
