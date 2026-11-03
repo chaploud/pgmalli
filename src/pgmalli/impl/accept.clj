@@ -9,6 +9,8 @@
 
 ;;; what pgjdbc sends
 
+(defn- array "The class of an array of c." [c] (class (make-array c 0)))
+
 (def class-types
   "[class type]: the type pgjdbc's setObject sends a value of class as, with no extension and
    its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
@@ -19,7 +21,12 @@
    [(Class/forName "[B") "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
    [java.time.OffsetTime "time with time zone"] [java.time.LocalDateTime "timestamp without time zone"]
    [java.time.OffsetDateTime "timestamp with time zone"]
-   [(Class/forName "[J") "bigint[]"] [(Class/forName "[I") "integer[]"] [(Class/forName "[Ljava.lang.String;") "character varying[]"]])
+   ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
+   [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
+   [(array Short/TYPE) "smallint[]"] [(array Short) "smallint[]"] [(array Double/TYPE) "double precision[]"]
+   [(array Double) "double precision[]"] [(array Float/TYPE) "real[]"] [(array Float) "real[]"]
+   [(array Boolean/TYPE) "boolean[]"] [(array Boolean) "boolean[]"] [(array String) "character varying[]"]
+   [(class (make-array Byte/TYPE 0 0)) "bytea[]"]])
 
 (defn class-type
   "The type pgjdbc sends value as by its class; nil for a class class-types does not list."

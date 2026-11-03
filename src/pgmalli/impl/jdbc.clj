@@ -135,14 +135,15 @@
    [java.time.Instant :time/instant] [java.util.Date 'inst?] [clojure.lang.Keyword :keyword] [clojure.lang.Symbol :symbol]
    [clojure.lang.IPersistentMap [:map-of :any :any]] [clojure.lang.IPersistentVector [:vector :any]]
    [clojure.lang.IPersistentSet [:set :any]] [clojure.lang.Sequential [:sequential :any]]
-   ;; :pg/array reads its elements by value, as the column's (array-type puts its type in)
-   [(Class/forName "[J") [:pg/array :pgmalli/element]] [(Class/forName "[I") [:pg/array :pgmalli/element]]
-   [(Class/forName "[Ljava.lang.String;") [:pg/array :pgmalli/element]]])
+   ])
 
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
   (memoize (fn [^Class c]
              (or (some (fn [[k s]] (when (= k c) s)) class-schemas)
+                 ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
+                 ;; column's, which array-type puts in
+                 (when (and (.isArray c) (not= c (Class/forName "[B"))) [:pg/array :pgmalli/element])
                  [:fn {:pg/class (.getName c)} (fn [x] (instance? c x))]))))
 
 (defn- array-type-name
@@ -295,8 +296,8 @@
                  (if (= :unknown sent)
                    (not= :unnest use)
                    (cond (and elem (accept/known? elem)) (accept/holds? elem (accept/element sent))
-                         ;; an enum type's (or a domain's) array takes an array of that type alone
-                         (and p (not elem)) (= p (accept/element sent))
+                         ;; an enum type's array takes an array of that type alone; a domain reads as its base
+                         (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (accept/element sent))
                          :else true)))
         ;; a typed array's elements are also the values of its element type, where the column
         ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
@@ -315,6 +316,10 @@
                          (clojure.walk/postwalk-replace {:pgmalli/element (element sent)} a)))]
     (shape/either alts :any)))
 
+(def ^:private numbers
+  "The kinds of the number classes a CHECK on a number column reads."
+  #{:int :double 'decimal? 'integer? 'float? :pg/integer :pg/smallint})
+
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's
    argument is an array of its elements' (array-type); otherwise the types read-type shares
@@ -331,11 +336,14 @@
                  a)]
       (cond (empty? sent) t
             (= :any (shape/head t)) (shape/either sent t)
-            ;; a CHECK holds over every value sent as the type: the alternatives go in its base
-            :else (shape/update-base t (fn [base]
-                                         ;; a kind the base has already takes its bounds (a varchar(n)'s length)
-                                         (let [more (remove #(= (shape/kind %) (shape/kind base)) sent)]
-                                           (shape/either (distinct (cons base more)) base))))))))
+            :else
+            (let [base (shape/domain-base t)
+                  ;; a kind the base has already takes its bounds (a varchar(n)'s length)
+                  more (remove #(= (shape/kind %) (shape/kind base)) sent)
+                  ;; a CHECK reads a number as the number it is (a BigInt's > 0); another class goes
+                  ;; as the text an application makes of it (a keyword's), which no check here reads
+                  [held free] ((juxt filter remove) #(and (numbers (shape/kind base)) (numbers (shape/kind %))) more)]
+              (shape/either (concat (shape/alternatives (shape/update-base t #(shape/either (distinct (cons % held)) %))) free) t))))))
 
 ;;; rows as next.jdbc builds them
 
@@ -431,7 +439,12 @@
   "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the
    driver takes its base."
   [schemas s opts]
-  (write-type (through-domain schemas s opts write-type) opts))
+  (let [;; an array's elements of an enum type are its labels: array-type takes an array of that type alone
+        s (if-let [e (when (array-column? s)
+                       (let [x (last s)] (when (and (vector? x) (= :ref (first x)) (= :enum (shape/head (get schemas (last x))))) x)))]
+            (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (remove map? (rest (get schemas (last e))))))
+            s)]
+    (write-type (through-domain schemas s opts write-type) opts)))
 
 (defn as-read
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on

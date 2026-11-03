@@ -39,7 +39,8 @@
   "The schema named in the registry as data malli's default registry reads (with
    malli.experimental.time for the time types): references to the schema's own types inlined,
    :pg/smallint and :pg/integer as bounded :int, :pg/bytes as bytes?, generation hints dropped.
-   The CHECKs only pgmalli evaluates (:pg/check, :pg/check-value) are left out, so this is
-   weaker than the registry's schema; use it where the registry cannot follow."
+   The CHECKs only pgmalli evaluates (:pg/check, :pg/check-value) and numeric(p,s)'s precision
+   (:pg/numeric) are left out, so this is weaker than the registry's schema; use it where the
+   registry cannot follow."
   [registry name]
   (portable-data registry (shape/schema-of registry name)))

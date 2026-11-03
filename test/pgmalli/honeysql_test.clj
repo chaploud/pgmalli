@@ -627,7 +627,7 @@
   (is (= {:ids [:pg/array bigint]} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} {:schema "sample"}))
       "pgjdbc sends a long[] as a bigint[]")
   (is (= {:ids :any} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]}
-                           {:schema "sample" :send {(Class/forName "[J") nil (Class/forName "[I") nil}}))
+                           {:schema "sample" :send (into {} (for [[c] accept/class-types :when (.isArray ^Class c)] [c nil]))}))
       "with no array sent, nothing an array argument could be"))
 
 (deftest a-cast-arguments-nil-follows-every-use-of-the-cast
@@ -1726,3 +1726,23 @@
         s (h/values-schema reg :t {:send {clojure.lang.IPersistentVector :unknown}})]
     (is (not (m/validate s {:id 1 :tags ["a"]} {:registry reg})))
     (is (m/validate s {:id 1 :tags (into-array String ["a"])} {:registry reg}))))
+
+(deftest a-class-sent-as-text-is-held-to-no-check-on-text
+  (let [reg (pgmalli/registry {:registry {:pg.public/roles [:map {:pg/table "public.roles"}
+                                                            [:k [:and {:pg/constraints ["f"] :pg/type "character varying"} [:string {:max 255 :pg/type "character varying"}] [:re "^[a-z0-9-]+$"]]]
+                                                            [:n [:and {:pg/type "numeric"} 'decimal? [:> 0]]]]}})
+        a (h/arg-types reg {:insert-into :roles :values [{:k :?k :n :?n}]} {:send {clojure.lang.Keyword "character varying"}})]
+    (is (m/validate (:k a) :store-manager {:registry reg}) "the text an application makes of a keyword is its own")
+    (is (not (m/validate (:k a) "Bad!" {:registry reg})) "a string is held to the CHECK")
+    (is (not (m/validate (:n a) -3 {:registry reg})) "a number to a number column's CHECK, whatever its class")))
+
+(deftest a-boxed-or-other-java-array-is-typed-by-its-elements
+  (is (= {:ids [:pg/array bigint]}
+         (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} (assoc opts :send (only {(class (make-array Long 0)) "bigint[]"})))))
+  (is (m/validate (:ids (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]})) (into-array Long [1 2]) {:registry registry})
+      "pgjdbc sends a Long[] as a bigint[]"))
+
+(deftest a-domains-array-argument-takes-its-base-types-typed-array
+  (let [reg (pgmalli/registry {:registry {:pg.public/d_int [:pg/integer {:pg/type "integer"}]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:di [:maybe [:ref {:pg/type "d_int"} :pg.public/d_int]]]]}})]
+    (is (m/validate (:v (h/arg-types reg {:select [:id] :from [:t] :where [:= :di [:any :?v]]})) (int-array [1 2]) {:registry reg}))))

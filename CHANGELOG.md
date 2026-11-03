@@ -47,6 +47,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   assigned argument take a column left out or NULL, as `h/check` already did.
 * A collection interface in `:send` (`{java.util.List :unknown}`) sends each Clojure collection
   that implements it (a vector, a list) as an array argument.
+* `pgmalli/portable` leaves out a `numeric(p,s)`'s precision, which malli's types cannot say.
 * An integer assigned to a `numeric(p,s)` column is an argument it takes, as to a `numeric` one,
   and a typed array of a narrower number (`"bigint[]"`) one a `numeric[]`, `real[]` or `double
   precision[]` column takes.
@@ -54,6 +55,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/values-schema` and `h/set-schema` take no keyword but `:default`, nor a vector or a
   sequence: HoneySQL writes a keyword as a column and a vector as a row of parameters, whatever
   `:send` sends.
+* A class `:send` sends as a column's text type (a keyword as `varchar`) is held to none of the
+  column's checks on text: PostgreSQL checks the text an application makes of it. A number is
+  held to a number column's checks whatever its class.
+* pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...) are sent by default, and any Java array
+  `:send` names is typed by its elements (`[:pg/array element]`).
 * An argument takes nil where any of its uses does, whatever the order they are written in.
 * An enum type's array takes a typed array of that type alone.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL

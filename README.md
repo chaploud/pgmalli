@@ -418,7 +418,7 @@ property instead of an exception, so a namespace with a broken query still loads
 
 `pgmalli/portable` gives a named schema as data that malli's default registry and
 `malli.experimental.time` read: pgmalli's own schema types become malli's, and the CHECKs only
-pgmalli can evaluate are left out. Use it where a schema cannot carry the registry, such as
+pgmalli can evaluate, and a `numeric(p,s)`'s precision, are left out. Use it where a schema cannot carry the registry, such as
 `:malli/schema` written as data:
 
 ```clojure

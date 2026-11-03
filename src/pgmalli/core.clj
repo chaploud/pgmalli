@@ -43,7 +43,7 @@
 (defn portable
   "The named schema as data malli's default registry reads (plus malli.experimental.time):
    the schema's own types inlined, pgmalli's types as their malli counterparts, generation
-   hints dropped, the CHECKs only pgmalli evaluates left out. For :malli/schema metadata and
+   hints dropped, the CHECKs only pgmalli evaluates and numeric(p,s)'s precision left out. For :malli/schema metadata and
    other places the registry cannot follow. A name the registry does not hold is an error."
   [registry name]
   (portable/portable registry name))
