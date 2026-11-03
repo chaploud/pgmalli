@@ -2576,6 +2576,15 @@
     (is (= [[:mood [:= :x]] [:c [:maybe [:= :x]]]] (read-mood "mood") (read-mood "sample.mood"))
         "an enum type of the registry by its name and qualified")))
 
+(deftest a-column-of-another-schemas-enum-type-is-of-that-type-and-of-its-row-type-the-drivers-object
+  (let [reg (pgmalli/registry {:schema "a" :registry {:pg.a/mood [:enum "x" "y"]
+                                                      :pg.a/v [:map {:pg/view "a.v"} [:id :int]]
+                                                      :pg.a/t [:map {:pg/table "a.t"} [:id :int]]}}
+                              {:schema "b" :registry {:pg.b/t [:map {:pg/table "b.t"} [:m [:any {:pg/type "a.mood"}]] [:ms [:vector {:pg/type "a.mood[]"} :any]]
+                                                               [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]}})]
+    (is (= [:map [:m [:enum {:pg/type "a.mood"} "x" "y"]] [:ms [:any {:pg/type "a.mood[]"}]] [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]
+           (h/row-schema reg {:select [:m :ms :v :t] :from [:t]} {:schema "b" :jdbc unqualified})))))
+
 (deftest read-names-each-type-once
   (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
     (is (= [:pgmalli.error/invalid-options "pgmalli options: :read names type integer twice, as \"integer\" and \"int4\"; name it once"]

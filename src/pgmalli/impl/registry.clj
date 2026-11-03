@@ -369,13 +369,14 @@
   [schemas]
   (let [own (fn [t] (when-let [[_ s n] (and (string? t) (re-matches #"([a-z_][a-z0-9_$]*)\.([a-z_][a-z0-9_$]*)" t))]
                       (let [k (shape/schema-key s n)]
-                        (when (some-> (get schemas k) (-> shape/row-props :pg/table not)) k))))
+                        ;; a table's, a view's or a composite type's row is a PGobject
+                        (when (some-> (get schemas k) shape/column-entries empty?) k))))
         typed (fn [f]
                 (let [p (when (vector? f) (second f))
                       t (:pg/type p)]
                   (cond (and (= :any (first f)) (= 2 (count f)) (own t)) [:ref p (own t)]
-                        (and (= :vector (first f)) (= 3 (count f)) (= :any (last f)) (string? t) (str/ends-with? t "[]") (own (subs t 0 (- (count t) 2))))
-                        [:vector p [:ref (own (subs t 0 (- (count t) 2)))]]
+                        (and (= :vector (first f)) (= 3 (count f)) (= :any (last f)) (own (types/element t)))
+                        [:vector p [:ref (own (types/element t))]]
                         :else f)))]
     (update-vals schemas #(if (shape/row-schema? %) (walk/postwalk (fn [f] (if (and (vector? f) (map? (second f))) (typed f) f)) %) %))))
 
