@@ -34,7 +34,7 @@ converts dates and timestamps alone:
 
 | option | for |
 |---|---|
-| `:jdbc {...}` | the options you pass to next.jdbc: its `:builder-fn` keys the row (`as-maps` by default), with `:label-fn` and `:qualifier-fn` under a modified builder |
+| `:jdbc {...}` | the options you pass to next.jdbc; its `:builder-fn` keys the row (`as-maps` by default): [keys from a next.jdbc builder](#keys-from-a-nextjdbc-builder) |
 | `:time :inst` | the default: dates and timestamps as `java.sql.Date` and `Timestamp` (`inst?`) |
 | `:time :instant` | `next.jdbc.date-time/read-as-instant` |
 | `:time :local` | `next.jdbc.date-time/read-as-local` |
@@ -76,8 +76,10 @@ keys:
 ;; => #:users{:closed_at "timestamptz (optional)", :created_at "timestamptz", :email "varchar(120)", :group_id "integer", :id "bigint", :nick "varchar(40) (optional)", :status "user_status: active | closed"}
 ```
 
-Where next.jdbc does not load (babashka), name the builder by its qualified symbol:
-`{:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}`.
+`:builder-fn` takes the function, its var, or its qualified symbol. Where next.jdbc does not
+load (babashka), name it by the symbol:
+`{:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}`. `:label-fn` and
+`:qualifier-fn` are functions; a symbol is an error.
 
 pgmalli passes over the other keys of `:jdbc`, but one spelled close to a key it reads and read
 by no next.jdbc function (`:buildr-fn`) is an error naming the key meant.

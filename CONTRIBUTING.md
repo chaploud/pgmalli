@@ -5,9 +5,10 @@ Issues and pull requests are welcome.
 ## Setup
 
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
-need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the
-image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`, `bb docs:example`,
-`bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:docs` and `bb fixture` do not.
+need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the image).
+`bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`, `bb docs:example`,
+`bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:docs`
+and `bb fixture` do not.
 
 ## Tests
 
@@ -28,9 +29,9 @@ Before a pull request: `bb lint` → `PGMALLI_SKIP_DB=1 bb test` → `bb test` �
 `bb test:floor` → `bb oracle` → `bb test:docs`. After `bb test:update` or `bb test:docs:update`,
 read the git diff: a rewritten expectation is a changed behaviour.
 
-`bb test` runs every `*_test` namespace but those that need next.jdbc. One namespace or one
-test on the JVM: `clojure -M:test -n pgmalli.honeysql-test`, `clojure -M:test -v
-pgmalli.honeysql-test/some-test`.
+`bb test` runs every `*_test` namespace but those that need next.jdbc. One namespace or one test
+on the JVM: `clojure -M:test -n pgmalli.honeysql-test`,
+`clojure -M:test -v pgmalli.honeysql-test/some-test`.
 
 ## Documentation
 
@@ -43,60 +44,64 @@ When a change touches what a type or CHECK becomes, update [docs/types.md](docs/
 
 ## Randomized tests
 
-`fuzz-test`, `catalog-fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a seed, 42 in CI.
-`PGMALLI_FUZZ_SEED=<n> bb test:jvm` runs other seeds. A failure prints its seed, the case
-(shrunk where test.check shrinks it), where it failed and the command that runs it again, with
-`PGMALLI_FUZZ_SEED`, `PGMALLI_FUZZ_CASE` or `PGMALLI_FUZZ_SCHEMAS` set.
+`fuzz-test`, `catalog-fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a
+seed, 42 in CI. `PGMALLI_FUZZ_SEED=<n> bb test:jvm` runs other seeds. A failure prints its seed,
+the case (shrunk where test.check shrinks it), where it failed and the command that runs it
+again, with `PGMALLI_FUZZ_SEED`, `PGMALLI_FUZZ_CASE` or `PGMALLI_FUZZ_SCHEMAS` set.
 
 ## The PostgreSQL oracle
 
-`bb oracle [seed] [mutants]` (seed `PGMALLI_FUZZ_SEED` or 42, mutants per query
-`PGMALLI_ORACLE_MUTANTS` or 8) runs on PostgreSQL the queries of
-`test/resources/pgmalli/oracle/corpus.edn` (`[id query opts?]`, opts merged into each call's
-options), seeded mutants of them, and the queries `pgmalli.oracle/generated-corpus` builds
-from the catalog of `schema.sql`: one column of each kind (type with its typmod, CHECKs, NOT
-NULL, kind of type and relation, quoting, schema) through casts, subqueries, joins,
-aggregates, CTEs, set operations and RETURNING, and each pair of kinds whose union PostgreSQL
-plans through UNION, CASE, coalesce, greatest and EXCEPT. A column of a new kind in
-`schema.sql` is covered without a corpus entry. Each query is sent twice: its values inlined,
-and as parameters the way HoneySQL and pgjdbc send them. It prints where `check` disagrees: a
-false positive (PostgreSQL takes the query, `check` faults it) or a miss (PostgreSQL refuses
-it, `check` lets it pass). A comparison with a literal outside a list counts as reported by
-design only for a column with that enum or CHECK list. Where PostgreSQL runs a query, the
-return of `query-schema`, by default and under `{:result :one}`, must take what `execute!`
-and `execute-one!` returned, and the keys of `row-schema`'s map (with those it names under
-`:pgmalli/unknown-keys`) must be the keys the builder gives the result set's columns: with the
-default builder and every builder of `pgmalli.impl.jdbc` under `bb oracle`, a sample of them
-per query in the test. Under the unqualified builder, each `:pg/type` of `row-schema` must be
-the type PostgreSQL describes (a domain as its base type); an untyped column is let pass.
+`bb oracle [seed] [mutants]` compares `pgmalli.honeysql` with PostgreSQL itself, on the
+database of `test/resources/pgmalli/oracle/schema.sql`. The seed is `PGMALLI_FUZZ_SEED` or 42,
+the number of mutants per query `PGMALLI_ORACLE_MUTANTS` or 8. The queries are:
 
-`pgmalli.oracle/arg-matrix` breaks the circle of arguments generated from `arg-types`: an
-argument goes with each column of the oracle schema (compared with `=`, `<>`, `IN` and
-`= ANY`, set by UPDATE and INSERT, beside it in coalesce, CASE and greatest, cast to its
-type, and as LIMIT), sent a fixed list of values: one of each class of
-`pgmalli.impl.accept/class-types`, NULL, numbers at the integer bounds, a fraction, `""`,
-`"1"` and the schema's labels. It fails where PostgreSQL takes a value that the argument's
-schema refuses and the stricter rule of docs/queries.md does not leave out (a class sent as
-a type `accept/holds?` says the column does not hold, or `accept/accepts?` under a cast; a
-comparison with NULL or with a value outside a CHECK's list; NULL set into a NOT NULL
-column), and where `holds?` says a value goes and PostgreSQL refuses its type. Besides the
-oracle schema's columns, it generates the schema `matrix`, whose table `types` holds, for every
-type of `pgmalli.impl.types` (an extension's where the server has it) and the typmods
-numeric(10,2), varchar(5), char(3), timestamp(3) and bit(4), a column of the type, of its
-array, of a domain over it (`CHECK (VALUE IS NOT NULL)`) and of an array of that domain. A
-type added to `pgmalli.impl.types` without `:literals` needs a value in
-`pgmalli.oracle/samples`, the text of the row the table holds. The oracle schema's table
-`kinds` adds arrays of domains whose CHECK reads the value (`posint[]`, `money2[]`). Mutants
-draw their tables and columns from the catalog, but `matrix`, `kinds` and names that need
-quoting.
+- the corpus, `test/resources/pgmalli/oracle/corpus.edn` (`[id query opts?]`, opts merged into
+  each call's options);
+- seeded mutants of them (a column, an alias or a table swapped, a qualifier dropped or added),
+  drawn from the catalog but `matrix`, `kinds` and names that need quoting;
+- the queries `pgmalli.oracle/generated-corpus` builds from the catalog: each kind of column
+  (type with its typmod, CHECKs, NOT NULL, kind of type and relation, quoting, schema) through
+  casts, subqueries, joins, aggregates, CTEs, set operations and RETURNING, and each pair of
+  kinds PostgreSQL unites through UNION, CASE, coalesce, greatest and EXCEPT. A column of a new
+  kind in `schema.sql` is covered without a corpus entry.
 
-`pgmalli.oracle-test` (seed `PGMALLI_FUZZ_SEED`, 3 mutants per query or
-`PGMALLI_ORACLE_MUTANTS`) holds the false positives, the refused returns, the columns
-described otherwise and the argument matrix's failures at none in `bb test:jvm`, but those of
-`pgmalli.oracle-test/pending`: false rejections found in `src` and not fixed yet, each with
-its reason and a reproduction. An entry that no longer fails fails the test, so a fix removes
-it. The test also fails on a corpus id or query listed twice, and on a corpus query that did
-not run in both formats (one the pinned HoneySQL cannot write).
+Each query is sent twice: its values inlined, and as parameters as HoneySQL and pgjdbc send
+them. The oracle prints:
+
+- a false positive (PostgreSQL takes the query, `check` reports a problem) and a miss
+  (PostgreSQL refuses it, `check` passes it). A comparison with a literal outside an enum's or a
+  CHECK's list is reported by design.
+- where PostgreSQL runs the query, a return `query-schema` refuses: by default it must take what
+  `execute!` returned, under `{:result :one}` what `execute-one!` returned.
+- the same queries' keys: those of `row-schema`'s map, with the ones under
+  `:pgmalli/unknown-keys`, must equal the keys the builder gives the result set's columns,
+  under the default builder and every map builder of `pgmalli.impl.jdbc`.
+- under the unqualified builder, a `:pg/type` other than the type PostgreSQL describes (a
+  domain as its base type); an untyped column passes.
+
+`pgmalli.oracle/arg-matrix` tests `arg-types` with values that do not come from `arg-types`.
+An argument goes beside each column of the oracle schema (compared with `=`, `<>`, `IN` and
+`= ANY`, set by UPDATE and INSERT, beside it in coalesce, CASE and greatest, cast to its type,
+and as LIMIT) and is sent a fixed list of values: one of each class of
+`pgmalli.impl.accept/class-types`, NULL, numbers at the integer bounds, a fraction, `""`, `"1"`
+and the schema's labels. It fails where PostgreSQL takes a value the argument's schema refuses
+and the rules of docs/queries.md#stricter-than-postgresql do not leave out, and where
+`accept/holds?` says a value goes and PostgreSQL refuses its type. Besides the oracle schema's
+columns, it creates the schema `matrix`, whose table `types` holds, for every type of
+`pgmalli.impl.types` (an extension's where the server has it) and the typmods numeric(10,2),
+varchar(5), char(3), timestamp(3) and bit(4), a column of the type, of its array, of a domain
+over it (`CHECK (VALUE IS NOT NULL)`) and of an array of that domain. A type added to
+`pgmalli.impl.types` without `:literals` needs a value in `pgmalli.oracle/samples`. The oracle
+schema's table `kinds` adds arrays of domains whose CHECK reads the value (`posint[]`,
+`money2[]`).
+
+`pgmalli.oracle-test` runs the same under the seed `PGMALLI_FUZZ_SEED`, with 3 mutants per
+query (or `PGMALLI_ORACLE_MUTANTS`) and a sample of the builders per query. It fails `bb test:jvm` on any false positive, refused return,
+column described otherwise or argument-matrix failure, except those listed in
+`pgmalli.oracle-test/pending`: false rejections in `src` not fixed yet, each with its reason
+and a reproduction. `pending-entries-still-fail` fails on an entry that no longer fails, so a
+fix removes it. The test also fails on a corpus id or query listed twice, and on a corpus query
+that did not run in both formats (one the pinned HoneySQL cannot write).
 
 `a-query-wrapped-keeps-its-problems` asks no database: each case wrapped in a FROM subquery,
 a CTE or EXISTS must have the problems it had alone.

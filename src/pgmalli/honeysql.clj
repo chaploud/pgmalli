@@ -1,24 +1,13 @@
 (ns pgmalli.honeysql
-  "HoneySQL query data checked against a registry, without a database: the tables must
-   exist, the columns a query selects, returns, inserts, sets or compares must exist, an
-   INSERT must carry the required columns, an enum literal must be one of the enum's values;
-   and from the same data, the types of the query's parameters and of the rows it returns,
-   and of a row written into a table, as malli schemas.
+  "HoneySQL query data checked against a registry, without a database (check): the tables and
+   columns a query names must exist, an INSERT must carry the required columns, and NULL, enum
+   literals and strings must be ones the column takes. From the same data, the types of the
+   query's arguments, of the rows it returns and of a row written into a table, as malli
+   schemas.
 
-   Scope: tables come from :from, :using, :cross-join, the joins (:join-by is not read),
-   :insert-into, :update, :delete-from and :truncate, under their aliases. CTEs (:with) and
-   subqueries (LATERAL ones and recursive CTEs too) have the columns their SELECT gives, typed as
-   it types them; a table function, a symbol where a table goes and a pg_catalog or
-   information_schema table the registry lacks are opaque tables: their columns exist but have
-   no type. Every table has the system columns
-   (ctid, xmin, ...). A column is :col (unique in the scope), :alias/col or :alias.col; a
-   column a subquery cannot resolve is looked for in the enclosing statements, as PostgreSQL
-   does. An unqualified table is in :schema (default \"public\"). What code in the query
-   builds (a list) is not in the data and is not judged.
-
-   Types are what next.jdbc and PostgreSQL's JDBC driver return, and what :send says the
-   application sends (pgjdbc's by default). The functions take
-   the options of docs/queries.md#options; a key or value not among them is an error."
+   Names resolve as PostgreSQL resolves them (docs/queries.md#what-a-name-refers-to). Types are
+   what next.jdbc and pgjdbc return, and what :send says the application sends. The functions
+   take the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
             malli.core
@@ -2088,10 +2077,11 @@
 
    Columns an outer join may leave NULL are nullable; an expression is typed for the forms
    docs/queries.md#the-row-a-query-returns lists, nullable :any otherwise; a set operation's row
-   is its first member's names. Under qualified keys, a column next.jdbc keys
-   by a table the data does not show (one through a subquery or a CTE, a cast column) is left
-   out of the map, which is open, and named under the :pgmalli/unknown-keys property. Options:
-   docs/queries.md#options."
+   is its first member's names. Under qualified keys, a column next.jdbc may key by a table the
+   query data does not show is left out of the map, which is open, and named under the
+   :pgmalli/unknown-keys property: :raw SQL, a column cast to its own type, and a column of a
+   table function or of a table the registry lacks. A subquery's or a CTE's column is keyed by
+   the table PostgreSQL traces it to. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
    (jdbc/options! opts)

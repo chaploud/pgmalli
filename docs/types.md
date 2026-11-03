@@ -139,9 +139,9 @@ yet are listed under `unsupported` there, each with why
 
 ## jsonb columns
 
-PostgreSQL holds a jsonb column's shape in CHECKs at most (`jsonb_typeof(payload) =
-'object'` becomes `:map`); its keys and their types are the application's. Write them as
-malli and join them to the generated schema, with no copy of either:
+PostgreSQL holds a jsonb column's shape in CHECKs at most (`jsonb_typeof(payload) = 'object'`
+becomes `:map`); its keys and their types are the application's. Write them as malli and join
+them to the generated schema, with no copy of either:
 
 ```clojure
 (require '[pgmalli.core :as pgmalli]
@@ -341,8 +341,8 @@ A diagnostic is `{:table :kind :severity :message}`, with `:constraint`, `:colum
 | `:exclude` | `:info` | an EXCLUDE constraint, which the schemas do not check |
 | `:redundant-unique` | `:info` | a UNIQUE on the columns of the primary key or of another UNIQUE |
 
-An `:unrendered` or `:skipped` entry is `{:kind :table :column :constraint :sql :type
-:type-schema}`, the keys that apply; a domain's has `:domain` in place of `:table`. `:kind` is
-`:check` (a constraint pgmalli reads but cannot express), `:unparsed` (one it cannot read, or
-cannot turn into data with PostgreSQL's meaning, as a `citext` comparison) or
-`:type` (a column type it has no schema for).
+An `:unrendered` or `:skipped` entry is
+`{:kind :table :column :constraint :sql :type :type-schema}`, the keys that apply; a domain's
+has `:domain` in place of `:table`. `:kind` is `:check` (a constraint pgmalli reads but cannot
+express), `:unparsed` (one it cannot read, or cannot turn into data with PostgreSQL's meaning,
+as a `citext` comparison) or `:type` (a column type it has no schema for).

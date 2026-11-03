@@ -18,7 +18,10 @@ examples use [example/schema.sql](example/schema.sql).
 
 `h/check` resolves names the way PostgreSQL does:
 
-- `:email` is a column of a table in `:from` or `:join`; `:u.email` a column of the alias `u`.
+- The tables of a statement are those of `:from`, `:using`, `:cross-join`, the joins (not
+  `:join-by`), `:insert-into`, `:update`, `:delete-from` and `:truncate`, under their aliases.
+- `:email` is a column of one of those tables; `:u.email` and `:u/email` a column of the alias
+  `u`. A column a subquery does not find is looked for in the enclosing statements.
 - A table is looked up in the `:schema` option (`"public"` by default); `:other.t` names its schema.
 - A `:with` entry is a table its later entries and the main statement see.
 - A subquery in `:from` or `:join` sees the outer query's tables, not its siblings; a LATERAL
@@ -70,9 +73,11 @@ A clause pgmalli does not read is reported rather than passed over:
 The columns of a CTE or a subquery are typed as its SELECT types them, read as a query of its
 own (a CTE under the ones before it, a LATERAL subquery with the tables before it, a recursive
 CTE as its first member, NULL allowed and a CHECK's list read as its base type); a column it
-does not give is `:unknown-column`. The columns of a table function (named by its alias, `WITH
-ORDINALITY` too) or of a `pg_catalog` table the registry lacks exist but have no type.
-Comparisons with them, or with an expression `h/row-schema` leaves untyped, are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
+does not give is `:unknown-column`. The columns of a table function (named by its alias,
+`WITH ORDINALITY` too), of a table written as a symbol (`'events_2026`, a table chosen at run
+time) and of a `pg_catalog` or `information_schema` table the registry lacks exist but have no
+type. Comparisons with them, or with an expression `h/row-schema` leaves untyped, are not
+checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
 
@@ -311,20 +316,21 @@ makes a name of `""`; each column is of the type PostgreSQL resolves its members
 ;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
 ```
 
-An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
-by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
+An expression has its type and nullability for these forms: a literal (as HoneySQL sends it, by
+its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
 `:timestamptz`), with its length (`[:varchar 10]`), or to an enum type or domain of the
-registry, `count`, `sum`, `avg`, `min`, `max`, `bool_and`, `bool_or`, `every`, `coalesce`, `greatest`, `least` and `CASE` of
-values of one type, or of numbers the widest of them, `nullif` of two of one type, as `=` reads
-it, a literal `[:inline ...]` writes, an operator that makes a boolean (`=`, `IN`, `LIKE`,
-`BETWEEN`, `AND` ..., `EXISTS`, `IS`), the clock's values (`now()`, `current_date` ...), `->>`,
-and the functions that build json or jsonb (`jsonb_build_object`, `jsonb_agg` ...: an object or
-an array under `{:read {:json :parsed}}`, the driver's object otherwise; an aggregate is NULL
-over no row). Among those values a string takes the others' type, as PostgreSQL resolves it; an
-argument leaves the expression untyped unless the type is a string type, as pgjdbc sends a
-number or a date typed. `CASE` without `:else` may be NULL. `min` and `max` read a domain as
-its base type, and a `varchar`, `"char"` or `name` as `text`, a `cidr` as `inet` and a reg*
-type as `oid`, the types PostgreSQL defines them for. Any other expression is nullable `:any`:
+registry, `count`, `sum`, `avg`, `min`, `max`, `bool_and`, `bool_or`, `every`, `coalesce`,
+`greatest`, `least` and `CASE` of values of one type, or of numbers the widest of them, `nullif`
+of two of one type, as `=` reads it, a literal `[:inline ...]` writes, an operator that makes a
+boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`, `IS`), the clock's values (`now()`,
+`current_date` ...), `->>`, and the functions that build json or jsonb (`jsonb_build_object`,
+`jsonb_agg` ...: an object or an array under `{:read {:json :parsed}}`, the driver's object
+otherwise; an aggregate is NULL over no row). Among those values a string takes the others'
+type, as PostgreSQL resolves it; an argument leaves the expression untyped unless the type is a
+string type, as pgjdbc sends a number or a date typed. `CASE` without `:else` may be NULL. `min`
+and `max` read a domain as its base type, and a `varchar`, `"char"` or `name` as `text`, a
+`cidr` as `inet` and a reg* type as `oid`, the types PostgreSQL defines them for. Any other
+expression is nullable `:any`:
 
 ```clojure
 (h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]
@@ -353,11 +359,12 @@ next.jdbc's `:return-keys` (in `:jdbc`), pgjdbc adds RETURNING to an INSERT, UPD
 ;; => [:map [:posts/id [:int #:pg{:identity :always, :type "bigint"}]]]
 ```
 
-Under qualified keys (next.jdbc's default), the driver qualifies some columns by a table the
+Under qualified keys (next.jdbc's default), the driver may qualify some columns by a table the
 query data does not show: a column cast to its own type, which PostgreSQL drops; `:raw` SQL,
-which may be a column; a subquery's or a CTE's column that is one of these; or a column of a
-table the registry lacks. `h/row-schema` leaves those keys out of the map, which is open, and
-lists their unqualified names under the `:pgmalli/unknown-keys` property:
+which may be a column; a column of a table function or of a table the registry lacks; or a
+subquery's or a CTE's column that is one of these. `h/row-schema` leaves those keys out of the
+map, which is open, and lists their unqualified names under the `:pgmalli/unknown-keys`
+property:
 
 ```clojure
 (h/row-schema registry {:select [:id [[:cast :email :varchar] :e]] :from [:users]})
@@ -402,8 +409,7 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
-| `:jdbc {...}` | the options you pass to next.jdbc: `:builder-fn` (the function, its var, or its qualified symbol where next.jdbc does not load) keys the rows, `:label-fn` and `:qualifier-fn` under a modified builder ([reading-rows.md](reading-rows.md#keys-from-a-nextjdbc-builder)); `:return-keys true` or `["col" ...]` adds RETURNING to a write |
-| `:time`, `:read` | how the driver reads values ([reading-rows.md](reading-rows.md#options)) |
+| `:jdbc`, `:time`, `:read` | how next.jdbc keys the rows and the driver reads values ([reading-rows.md](reading-rows.md#options)); `:jdbc`'s `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
 | `:send {Class type}` | what your application sends, and the type each class goes as: [what your application sends](#what-your-application-sends); pgjdbc's by default |
 | `:compare :lenient` | arguments compared with a column take nil too, and so do the elements of one in `:in` or `= ANY` (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read |
@@ -411,10 +417,10 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 
 ## Function schemas
 
-`h/query-schema` combines `arg-types` and `row-schema` into `[:=> [:cat arg ...] [:sequential
-row]]`, the arguments in the function's order. The return is what `execute!` returns on a
-datasource or connection, `:any` when `h/row-schema` gives nil. `{:result :one}` makes it what
-`execute-one!` returns:
+`h/query-schema` combines `arg-types` and `row-schema` into
+`[:=> [:cat arg ...] [:sequential row]]`, the arguments in the function's order. The return is
+what `execute!` returns on a datasource or connection, `:any` when `h/row-schema` gives nil.
+`{:result :one}` makes it what `execute-one!` returns:
 
 ```clojure
 (h/query-schema registry [:id] {:select [:email] :from [:users] :where [:= :id :?id]} {:result :one})
@@ -424,15 +430,15 @@ datasource or connection, `:any` when `h/row-schema` gives nil. `{:result :one}`
 ;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
 ```
 
-Where the data tells how many rows a statement returns, the return says so (`[:sequential {:max
-1} row]`; read the row with `last` or `m/children`, not by position): one row of a SELECT of
-aggregates of columns or constants alone (no GROUP BY, HAVING, OFFSET or a limit a parameter
-gives); at most one of a statement on one table (no CTE of its name, no table inheriting it)
-whose WHERE holds the columns of its primary key or of a UNIQUE constraint or index (neither
-partial nor DEFERRABLE) equal to a value; up to one for each row of an INSERT's `:values` with
-RETURNING; at most `:limit`. Any other function in the select list, or any function in ORDER BY
-or `:values`, may return a set, so there it says nothing. Where it is one row, `{:result :one}`
-drops the `[:maybe]`:
+Where the data tells how many rows a statement returns, the return says so
+(`[:sequential {:max 1} row]`; read the row with `last` or `m/children`, not by position): one
+row of a SELECT of aggregates of columns or constants alone (no GROUP BY, HAVING, OFFSET or a
+limit a parameter gives); at most one of a statement on one table (no CTE of its name, no table
+inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
+index (neither partial nor DEFERRABLE) equal to a value; up to one for each row of an INSERT's
+`:values` with RETURNING; at most `:limit`. Any other function in the select list, or any
+function in ORDER BY or `:values`, may return a set, so there it says nothing. Where it is one
+row, `{:result :one}` drops the `[:maybe]`:
 
 ```clojure
 (h/query-schema registry [:db] {:select [[[:count :*] :n]] :from [:users]} {:result :one})
@@ -442,9 +448,9 @@ drops the `[:maybe]`:
 ;; => [:sequential {:max 1} [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]
 ```
 
-A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement
-returns, or a value made of the rows, needs a return schema of its own. [README.md](../README.md#function-schemas-for-queries) puts
-it on a function and instruments it.
+A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns,
+or a value made of the rows, needs a return schema of its own.
+[README.md](../README.md#function-schemas-for-queries) puts it on a function and instruments it.
 
 The schema may use types malli's default registry lacks (`:time/instant`). That is why
 `m/schema` takes the registry: the schema object then needs none. Read its parts with
@@ -509,9 +515,9 @@ Write the query so PostgreSQL's reading is explicit instead.
   query (`[:cast :?n :numeric]`) where the conversion is meant.
 - A comparison with NULL is never true, so an argument compared with a column does not take nil;
   pass `{:compare :lenient}` where it may be nil on purpose.
-- An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list (`CHECK (state
-  IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`, `NOT IN` and `<`
-  match rows and are not reported; nor is `NOT (state = ...)`.
+- An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list
+  (`CHECK (state IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`,
+  `NOT IN` and `<` match rows and are not reported; nor is `NOT (state = ...)`.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 

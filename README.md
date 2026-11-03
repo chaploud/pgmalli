@@ -27,12 +27,15 @@ CHECKs. Add pgmalli to your dependencies ([Installation](#installation)), and ad
 `"resources"` to `:paths` in `deps.edn` (and in `bb.edn` for babashka): the generated files go
 in `resources/pgmalli`, and the default `:paths` is `["src"]` alone.
 
-pgmalli reads the database with `psql`, so psql's own settings apply (`PGHOST`, `PGDATABASE`,
-`PGUSER` ...), or `:db` in `pgmalli.edn` ([Installation](#installation)). Load the example
-schema (from a pgmalli checkout) to try it, then generate:
+To try it, create an empty database, load `docs/example/schema.sql` into it from a clone of
+this repository, then run `generate` in your project. pgmalli reads the database with `psql`,
+so psql's own settings apply (`PGHOST`, `PGDATABASE`, `PGUSER` ...), or `:db` in `pgmalli.edn`
+([Installation](#installation)):
 
 ```shell
-$ psql -f docs/example/schema.sql
+$ createdb pgmalli_example
+$ psql -d pgmalli_example -f path/to/pgmalli/docs/example/schema.sql
+$ export PGDATABASE=pgmalli_example
 $ clojure -M -m pgmalli.main generate
 pgmalli: no pgmalli.edn here; using the defaults (schema public, files in resources/pgmalli)
 wrote resources/pgmalli/public.edn (schema public; tables: 4, views: 0, enums: 1, domains: 0; unrendered: 0, diagnostics: 0)
@@ -104,10 +107,10 @@ command (`generate ci.edn`):
 ```
 
 It reads the database with `psql`. Without `:db`, psql's own settings apply (`PGHOST`,
-`PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). `:db` takes `:host`, `:port`, `:dbname`, `:user`,
-`:password`, `:sslmode` and `:psql`, the psql binary to run; a next.jdbc db-spec is one without
-its `:dbtype`. On the JVM, a `:db` with `:jdbc-url`
-reads through pgjdbc (PostgreSQL's JDBC driver) instead, no psql needed:
+`PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). `:db` takes `:host`, `:port`, `:dbname`,
+`:user`, `:password`, `:sslmode` and `:psql`, the psql binary to run; a next.jdbc db-spec is one
+without its `:dbtype`. On the JVM, a `:db` with `:jdbc-url` reads through pgjdbc (PostgreSQL's
+JDBC driver) instead, no psql needed:
 
 ```clojure
 {:db {:jdbc-url "jdbc:postgresql://localhost/app_dev" :user "app" :password "secret"}}
@@ -347,7 +350,7 @@ The problems it reports:
 | `:not-null-violation` | NULL written into a NOT NULL column |
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
-| `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list where written or under `=`, `IN` and `IS NOT DISTINCT FROM`, with `:allowed` |
+| `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list when written into the column or compared with `=`, `IN` or `IS NOT DISTINCT FROM`; with `:allowed` |
 | `:uncast-string` | a string sent typed (`varchar` under pgjdbc's default, or the type `:send` sends it as) where the column's type takes none (an enum, a number, a date ...); not where `:send` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}` |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
@@ -412,15 +415,15 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
 (mi/unstrument!)
 ```
 
-`:db` is not in the query, so its schema is `:any`. A problem `h/check` finds goes into the schema's `:pgmalli/problems`
-property instead of an exception, so a namespace with a broken query still loads.
-`h/schema-problems` gathers them for one test
+`:db` is not in the query, so its schema is `:any`. A problem `h/check` finds goes into the
+schema's `:pgmalli/problems` property instead of an exception, so a namespace with a broken
+query still loads. `h/schema-problems` gathers them for one test
 ([docs/queries.md](docs/queries.md#problems-in-function-schemas)).
 
 `pgmalli/portable` gives a named schema as data that malli's default registry and
-`malli.experimental.time` read: pgmalli's own schema types become malli's, and the CHECKs only
-pgmalli can evaluate, and a `numeric(p,s)`'s precision, are left out. Use it where a schema cannot carry the registry, such as
-`:malli/schema` written as data:
+`malli.experimental.time` read. pgmalli's own schema types become malli's; the CHECKs only
+pgmalli can evaluate and a `numeric(p,s)`'s precision are left out. Use it where a schema
+cannot carry the registry, such as `:malli/schema` written as data:
 
 ```clojure
 (m/validate (pgmalli/portable registry :pg.public/user_status) "closed")
@@ -474,9 +477,9 @@ stale: public (differences: 1); run `clojure -M -m pgmalli.main generate` and co
 | 3 | the database or psql is unavailable |
 
 Findings go to stdout; warnings and errors go to stderr, one line each (`PGMALLI_DEBUG=1` adds
-the stack trace), followed by the usage for a usage error. `--help` prints the usage to stdout. `check --edn` prints `generate/check`'s map instead.
-A config path that does not exist is an error; only with no path does a missing `pgmalli.edn`
-mean the defaults.
+the stack trace), followed by the usage for a usage error. `--help` prints the usage to stdout.
+`check --edn` prints `generate/check`'s map instead of the differences. A config path that
+does not exist is an error; only with no path does a missing `pgmalli.edn` mean the defaults.
 
 `generate/diff` gives the same differences between two generated files, the effect of a
 migration:

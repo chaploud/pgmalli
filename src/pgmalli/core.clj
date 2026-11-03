@@ -44,8 +44,9 @@
 (defn portable
   "The named schema as data malli's default registry reads (plus malli.experimental.time):
    the schema's own types inlined, pgmalli's types as their malli counterparts, generation
-   hints dropped, the CHECKs only pgmalli evaluates and numeric(p,s)'s precision left out. For :malli/schema metadata and
-   other places the registry cannot follow. A name the registry does not hold is an error."
+   hints dropped, the CHECKs only pgmalli evaluates and a numeric(p,s)'s precision left out.
+   For :malli/schema metadata and other places the registry cannot follow. A name the registry
+   does not hold is an error."
   [registry name]
   (portable/portable registry name))
 
@@ -92,9 +93,9 @@
 (defn describe
   "A schema as short data for people and tools to read: a column as its PostgreSQL type
    (\"varchar(40)\", \"timestamptz\"), ? when it takes NULL, (optional) when its key may be
-   absent, an enum with its labels (\"status: draft | published\"); a map as {key description}
-   in column order, a sequence as [description], a function schema as {:args [...] :returns
-   ...}. A name, or a reference inside the schema, is read through the registry.
+   absent, an enum with its type and labels (\"user_status: active | closed\"); a map as
+   {key description} in column order, a sequence as [description], a function schema as
+   {:args [...] :returns ...}. A name, or a reference inside the schema, is read through the registry.
 
    (describe (h/query-schema registry [:id] q))
    (describe registry :pg.public/users)"
