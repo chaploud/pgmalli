@@ -23,6 +23,8 @@ examples use [example/schema.sql](example/schema.sql).
 - `:email` is a column of one of those tables; `:u.email` and `:u/email` a column of the alias
   `u`. A column a subquery does not find is looked for in the enclosing statements.
 - A table is looked up in the `:schema` option (`"public"` by default); `:other.t` names its schema.
+  A `:schema` the registry holds no generated file, table or view of is an error naming the ones
+  it holds.
 - A `:with` entry is a table its later entries and the main statement see.
 - A subquery in `:from` or `:join` sees the outer query's tables, not its siblings; a LATERAL
   one sees the tables before it.

@@ -96,7 +96,7 @@
    (\"varchar(40)\", \"timestamptz\"), ? when it takes NULL, (optional) when its key may be
    absent, an enum with its type and labels (\"user_status: active | closed\"); a map as
    {key description} in column order, a sequence as [description], a function schema as
-   {:args [...] :returns ...}. A name, or a reference inside the schema, is read through the registry.
+   {:args [...] :returns ...} (and :pgmalli/problems, a query schema's). A name, or a reference inside the schema, is read through the registry.
 
    (describe (h/query-schema registry [:id] q))
    (describe registry :pg.public/users)"

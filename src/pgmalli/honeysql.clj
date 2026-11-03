@@ -113,7 +113,29 @@
   (into #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top}
         (concat write-keys set-operation-keys)))
 (def ^:private default-schema "public")
-(defn- with-defaults [opts] (merge {:schema default-schema} opts))
+(defn- held-schemas
+  "The schemas a registry holds generated files, tables or views of, sorted."
+  [registry]
+  (sort (set (keep (fn [[k v]] (cond (and (keyword? k) (= (namespace (shape/routines-key "")) (namespace k))) (name k)
+                                      (shape/read-row? v) (first (shape/schema-and-name k))))
+                    (::schemas registry)))))
+
+(defn- with-defaults
+  "opts with :schema defaulted; one the registry (as reading reads it) holds nothing of is an
+   error, unless it holds no schema at all."
+  [registry opts]
+  (let [opts (merge {:schema default-schema} opts)
+        s (:schema opts)
+        held (held-schemas registry)]
+    (when (and (seq held) (not (some #{s} held)) (not= "pg_catalog" s))
+      (let [meant (error/suggest s held)]
+        (error/fail! :pgmalli.error/invalid-options
+                     (str "the registry holds no schema " (pr-str s) "; "
+                          (if (next held)
+                            (str "it holds " (str/join ", " (map pr-str held)) (error/did-you-mean (some-> meant pr-str)))
+                            (str "pass {:schema " (pr-str (first held)) "}")))
+                     (cond-> {:given s :known (vec held)} meant (assoc :did-you-mean [meant])))))
+    opts))
 (def ^:private from-keys [:from :using :cross-join])
 (def ^:private join-keys
   "In the order sql/format writes them, which decides the tables a RIGHT JOIN may leave NULL."
@@ -1532,8 +1554,8 @@
   ([registry body opts]
    (jdbc/options! opts)
    (let [body (query! body)
-         opts (with-defaults opts)
          registry (reading registry)
+         opts (with-defaults registry opts)
          sent-body (or (sent body opts) body)
          chains (statement-positions registry sent-body opts)
          found (mapcat (fn [[stmt scopes path ps]]
@@ -1555,8 +1577,8 @@
   ([registry body opts]
    (jdbc/options! opts)
    (let [body (query! body)
-         {:keys [schema] :as opts} (with-defaults opts)
          registry (reading registry)
+         {:keys [schema] :as opts} (with-defaults registry opts)
          found (for [[stmt scopes] (statement-chains registry body opts)
                      :let [own (first scopes)
                            targets (set (keep #(some-> % (table-ref schema) second) (write-targets stmt)))]
@@ -1983,8 +2005,8 @@
   ([registry body opts]
    (jdbc/options! opts)
    (let [body (query! body)
-         opts (with-defaults opts)
          registry (reading registry)
+         opts (with-defaults registry opts)
          uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
          typed (for [[_ _ _ ps] (statement-positions registry body opts)
                      f uses
@@ -2458,9 +2480,10 @@
    (jdbc/options! opts)
    (let [body (query! body)]
      (when (map? body)
-       (let [opts (with-defaults opts)]
+       (let [registry (reading registry)
+             opts (with-defaults registry opts)]
          (if-let [body (sent body opts)]
-           (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts)
+           (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry body opts)) opts)
            update-count))))))
 
 (defn params-schema
@@ -2572,8 +2595,8 @@
                   (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
                   {:given args}))
    (let [body (query! body)
-         opts (with-defaults opts)
          registry (reading registry)
+         opts (with-defaults registry opts)
          types (arg-types registry body opts)
          problems (into (check registry body opts)
                           (for [k (sort-by str (data-args body)) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))
@@ -2640,7 +2663,9 @@
         ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
         name (if (str/starts-with? (subs (str name) 1) "pg.")
                name
-               (shape/table-key (qualified name (:schema (with-defaults opts)))))
+               (shape/table-key (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
+                                  (qualified name nil)
+                                  (qualified name (:schema (with-defaults r opts))))))
         s (shape/schema-of registry name)
         dn (shape/derived-name name derived)]
     (cond (shape/row-schema? s) nil

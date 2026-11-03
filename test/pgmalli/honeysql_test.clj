@@ -625,12 +625,12 @@
     (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number")))
 
 (deftest a-misspelt-type-in-send-is-an-error
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: \"timestamp\"" (args {:select [:id] :from [:users]} {:send {java.time.Instant "timestampz"}})))
-  (is (= (args {:select [:id] :from [:users] :where [:= :id :?x]} {:send {Symbol "bigint"}})
-         (args {:select [:id] :from [:users] :where [:= :id :?x]} {:send {Symbol "int8"}}))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: \"timestamp\"" (args {:select [:id] :from [:users]} {:schema "sample" :send {java.time.Instant "timestampz"}})))
+  (is (= (args {:select [:id] :from [:users] :where [:= :id :?x]} {:schema "sample" :send {Symbol "bigint"}})
+         (args {:select [:id] :from [:users] :where [:= :id :?x]} {:schema "sample" :send {Symbol "int8"}}))
       "an alias is a name")
-  (is (= (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]} {:send {IPersistentVector "bigint[]"}})
-         (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]} {:send {IPersistentVector "int8[]"}}))
+  (is (= (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]} {:schema "sample" :send {IPersistentVector "bigint[]"}})
+         (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]} {:schema "sample" :send {IPersistentVector "int8[]"}}))
       "an array type, by an alias of its element too"))
 
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
@@ -1075,7 +1075,7 @@
       "and what :send sends untyped"))
 
 (deftest nil-options-are-none
-  (is (= [] (check {:select [:id] :from [:sample.users]} nil)))
+  (is (= [] (h/check {:app/x :int} {:select [1]} nil)))
   (is (= (pgmalli/as-read registry :pg.sample/users) (pgmalli/as-read registry :pg.sample/users nil))))
 
 (deftest a-like-pattern-is-no-value-of-the-column
@@ -1134,7 +1134,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reads HoneySQL query data" (check body)) (pr-str body))))
 
 (deftest a-row-of-a-table-the-registry-lacks-is-nil
-  (is (nil? (h/row-schema registry {:select [:id] :from [:users]})) ":schema left out: no sample here"))
+  (is (nil? (h/row-schema (pgmalli/registry "sample" "other") {:select [:id] :from [:users]} {:schema "other"}))))
 
 (deftest a-cte-code-builds-may-be-any-unqualified-table
   (is (= [:map [:id [:maybe :any]]] (row '{:with ctes :select [:id] :from :recent})))
@@ -1358,10 +1358,26 @@
   (is (= [{:kind :unknown-column :column :zzz}] (check {:select [:zzz] :from [:users]}))
       "nothing close, nothing suggested"))
 
+(deftest describe-shows-the-problems-a-query-schema-carries
+  (is (= [{:kind :unknown-column :column :nope}]
+         (:pgmalli/problems (pgmalli/describe registry (h/query-schema registry [] {:select [:nope] :from [:users]} opts))))))
+
 (deftest a-table-of-another-schema-is-the-one-meant-when-schema-is-left-out
-  (let [ps (h/check registry {:select [:id] :from [:users]})]
-    (is (= [{:kind :unknown-table :table "public.users" :did-you-mean ["sample.users"]}] ps))
-    (is (= ["unknown table public.users; sample.users exists; pass {:schema \"sample\"}, or name it :sample.users"] (h/humanize ps)))))
+  (let [ps (h/check (pgmalli/registry "sample" "other") {:select [:id] :from [:users]} {:schema "other"})]
+    (is (= [{:kind :unknown-table :table "other.users" :did-you-mean ["sample.users"]}] ps))
+    (is (= ["unknown table other.users; sample.users exists; pass {:schema \"sample\"}, or name it :sample.users"] (h/humanize ps)))))
+
+(deftest a-schema-the-registry-holds-nothing-of-is-an-error-naming-the-one-it-holds
+  (let [q {:select [:id] :from [:users]}]
+    (doseq [f [#(h/check registry q %) #(h/arg-types registry q %) #(h/row-schema registry q %) #(h/tables registry q %)
+               #(h/params-schema registry q %) #(h/query-schema registry [] q %) #(h/values-schema registry :users %) #(h/set-schema registry :users %)]]
+      (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^the registry holds no schema \"public\"; pass \{:schema \"sample\"\}$" (f {})))]
+        (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e)))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^the registry holds no schema \"other\"; it holds \"a\", \"b\"$"
+                            (h/check (pgmalli/registry {:registry {:pg.a/t [:map {:pg/table "a.t"} [:id :int]] :pg.b/t [:map {:pg/table "b.t"} [:id :int]]}}) q {:schema "other"})))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"; did you mean: \"sample\"$"
+                            (h/check (pgmalli/registry "sample" "other") q {:schema "smaple"}))))
+    (is (= [] (h/check {:app/x :int} {:select [1]})) "a registry of no generated schema names none")))
 
 (deftest a-qualifier-no-table-or-alias-has-is-the-problem-with-the-alias-meant
   (is (= [{:kind :unknown-column :column :users.id :qualifier "users" :did-you-mean [:u.id]}]
