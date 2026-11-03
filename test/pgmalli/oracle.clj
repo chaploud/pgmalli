@@ -681,7 +681,7 @@
   "[context query] for each place an argument :?x goes with column c: compared (=, <>, IN, =
    ANY, in RETURNING, an element of unnest(?) joined), assigned (UPDATE SET, INSERT VALUES,
    INSERT ... SELECT of a row it keeps or one it drops), beside it (coalesce, CASE, greatest),
-   cast to its type; and LIMIT."
+   cast to its type, compared and cast at once; and LIMIT."
   [{:keys [table column declared writable]}]
   (let [t (keyword table) c (keyword column) where #(hash-map :select [:*] :from [t] :where %)]
     (concat [[:= (where [:= c :?x])] [:<> (where [:<> c :?x])] [:in (where [:in c :?x])] [:any (where [:= c [:any :?x]])]
@@ -693,7 +693,9 @@
             [[:coalesce {:select [[[:coalesce c :?x] :v]] :from [t]}]
              [:case {:select [[[:case [:= c nil] :?x :else c] :v]] :from [t]}]
              [:greatest {:select [[[:greatest c :?x] :v]] :from [t]}]
-             [:cast {:select [[[:cast :?x (keyword (str/replace declared " " "-"))] :v]]}]])))
+             [:cast {:select [[[:cast :?x (keyword (str/replace declared " " "-"))] :v]]}]
+             ;; one argument of two uses, which it goes through both
+             [:compared-and-cast (where [:and [:= c :?x] [:= c [:cast :?x (keyword (str/replace declared " " "-"))]]])]])))
 
 (defn- refusal
   "PostgreSQL's refusal of sqlvec, run and rolled back, {:state :message}; nil where it takes the
@@ -708,7 +710,7 @@
              {:state state :message (first (str/split-lines (.getMessage e)))})))
        (finally (.rollback conn))))
 
-(def ^:private compared-contexts #{:= :<> :in :any :returning :unnest})
+(def ^:private compared-contexts #{:= :<> :in :any :returning :unnest :compared-and-cast})
 
 (defn- outside?
   "Whether v (an array's every element) is outside a CHECK's list."

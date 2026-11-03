@@ -2232,3 +2232,15 @@
 
 (deftest an-array-cast-casts-each-element
   (is (= (args {:select [[[:cast :?k :text] :a]]}) (args {:select [[[:array [:?k] :text] :a]]}))))
+
+(deftest an-argument-of-several-uses-takes-what-each-takes
+  (let [native (dissoc opts :send)]
+    (is (= {:id [:maybe integer]}
+           (args {:select [[[:cast :?id :bigint] :a]] :from [:groups] :where [:= :id :?id]} native))
+        "a cast takes what converts to a bigint, a comparison an integer column's values; the selected cast nil")
+    (is (= (args {:select [:id] :from [:groups] :where [:and [:= :id :?id] [:= :id [:cast :?id :bigint]]]} native)
+           (args {:select [:id] :from [:groups] :where [:and [:= :id [:cast :?id :bigint]] [:= :id :?id]]} native))
+        "whatever the order")
+    (is (= {:id [:maybe integer]}
+           (args {:select [:id] :from [:groups] :where [:and [:= :id :?id] [:is-distinct-from :name [:cast :?id :text]]]} native))
+        "nil where any use takes it")))

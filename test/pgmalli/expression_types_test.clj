@@ -8,12 +8,17 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is use-fixtures]]
             [honey.sql :as sql]
+            [malli.core :as m]
             [next.jdbc :as jdbc]
             next.jdbc.result-set
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
+            [pgmalli.impl.accept :as accept]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.jdbc :as pjdbc]
+            [pgmalli.impl.resolve :as resolve]
             [pgmalli.impl.types :as types]
+            [pgmalli.oracle :as oracle]
             [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
 
 (def ^:private columns
@@ -239,6 +244,48 @@
                   [e o t])))]
       (is (< 3000 (count cs)) (str "pgmalli and PostgreSQL type " (count cs) " of the calls"))
       (report "functions and operators" cs))))
+
+(defn- refused?
+  "Whether PostgreSQL refuses q, :params params, as pgjdbc sends them: run on the one row of u,
+   rolled back."
+  [^java.sql.Connection con q params]
+  (try (jdbc/execute! con (sql/format q {:params params})) false
+       (catch java.sql.SQLException _ true)
+       (finally (.rollback con))))
+
+(deftest a-parameter-a-call-may-resolve-several-ways-takes-what-postgresql-takes
+  (when *db*
+    (let [registry (registry)
+          ds (datasource)
+          version (first (str/split (:server_version (jdbc/execute-one! ds ["SHOW server_version"])) #"\."))
+          by-type (into {} (map (fn [[c t]] [t c])) columns)
+          ;; [call types] of each overload with columns of its argument types, an argument in one
+          ;; position where the candidates PostgreSQL may resolve it to take more than one type
+          places (distinct
+                  (for [[n os] (:functions @types/catalog)
+                        {:keys [args] :as o} os
+                        :when (and (or (nil? (:in o)) (some #{version} (:in o))) (not= :w (:kind o)) (<= 1 (count args) 3))
+                        :let [cs (map by-type args)]
+                        :when (every? some? cs)
+                        i (range (count cs))
+                        :let [ts (resolve/argument-types :functions n (assoc (vec args) i :free) i)]
+                        :when (next ts)]
+                    [(into [(keyword n)] (assoc (vec cs) i :?x)) ts]))
+          fails (with-open [con (jdbc/get-connection ds)]
+                  (jdbc/execute! con ["SET statement_timeout = 2000"])
+                  (.setAutoCommit con false)
+                  (doall
+                   (for [[e ts] places
+                         :let [q {:select [[e :e]] :from [:u]}
+                               s (m/schema (:x (h/arg-types registry q opts)) {:registry registry})]
+                         v (vals oracle/values)
+                         :let [sent (pjdbc/sent-type v {})]
+                         ;; a value no candidate holds as its own is refused by design, as compared
+                         :when (and sent (some #(accept/holds? % sent :compare) ts)
+                                    (not (m/validate s v)) (not (refused? con q {:x v})))]
+                     [e (class v)])))]
+      (is (< 20 (count places)) (str (count places) " calls"))
+      (is (empty? fails) (str "PostgreSQL takes these, arg-types does not (call, class)\n  " (str/join "\n  " (map pr-str fails)))))))
 
 (def ^:private own-schema
   "A schema's own functions and operators: overloads of pg_catalog's names of other argument

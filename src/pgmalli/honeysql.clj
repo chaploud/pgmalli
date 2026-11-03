@@ -1880,6 +1880,22 @@
                    (shape/either (shape/distinct-kinds (mapcat #(map unlabel (shape/alternatives (accepted-type registry % :compare opts))) ss)) :any)
                    (accepted-type registry (first ss) :compare opts)))]))
 
+(defn- both-uses
+  "The type of an argument two of its uses type a and b: PostgreSQL types a parameter once, so
+   a value goes where each use takes it; a use that types nothing takes any. nil where either
+   takes it (an IS DISTINCT FROM, a nullable column it is assigned to)."
+  [a b]
+  (let [nil? (or (shape/maybe? a) (shape/maybe? b))
+        [a b] (map shape/non-null [a b])
+        ;; every alternative of x is one of y's, but for the :pg/type it names
+        within? (fn [x y] (every? (set (map unlabel (shape/alternatives y))) (map unlabel (shape/alternatives x))))
+        t (cond (untyped? a) b
+                (untyped? b) a
+                (within? b a) b
+                (within? a b) a
+                :else (into [:and] (sort-by pr-str [a b])))]
+    (cond-> t nil? nullable)))
+
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
    :params takes them (:id).
@@ -1902,14 +1918,7 @@
                  use)
          ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
-         ;; the first use types an argument; nil where any use takes it (a later IS DISTINCT FROM,
-         ;; or a nullable column it is assigned to), which then holds whatever the order
-         types (reduce (fn [acc [x t]]
-                         (let [k (arg-key x)]
-                           (cond (nil? k) acc
-                                 (untyped? (acc k)) (assoc acc k t)
-                                 (shape/maybe? t) (update acc k nullable)
-                                 :else acc)))
+         types (reduce (fn [acc [x t]] (if-let [k (arg-key x)] (update acc k both-uses t) acc))
                        untyped typed)
          in-data (data-args body)]
      (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
