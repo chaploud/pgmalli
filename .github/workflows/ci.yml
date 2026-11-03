@@ -9,22 +9,47 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 jobs:
+  # what does not need a database: lint, the docs and the jar
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0   # the jar version comes from the latest release tag
+          persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: checks-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: checks-${{ runner.os }}-
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
+        with:
+          cli: latest
+          bb: latest
+          clj-kondo: latest
+      - run: bb lint
+      - run: bb test:docs
+      - run: clojure -T:build jar
   test:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
         pg: ["16", "17", "18"]
-        # lint, the docs and the jar do not depend on the server: run them once, on the newest
-        include:
-          - pg: "18"
-            once: true
+        # pgmalli.oracle-test takes as long as the rest: a job of its own (bb.edn's suite)
+        suite: [main, oracle]
     env:
       PGMALLI_PG_IMAGE: postgres:${{ matrix.pg }}-alpine
+      SUITE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0   # the jar version comes from the latest release tag
           persist-credentials: false
       - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
         with:
@@ -41,20 +66,11 @@ jobs:
         with:
           cli: latest
           bb: latest
-          clj-kondo: latest
-      # ir reads the test database with the host's psql
-      - name: install psql
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: pull postgres image
         run: docker pull "$PGMALLI_PG_IMAGE"
-      - run: bb lint
-        if: matrix.once
       - run: bb test
-      - run: bb test:jvm
-      - run: bb test:docs
-        if: matrix.once
-      - run: clojure -T:build jar
-        if: matrix.once
+        if: matrix.suite == 'main'
+      - run: bb test:jvm "$SUITE"
   workflows:
     name: audit the workflows
     runs-on: ubuntu-latest
@@ -66,12 +82,24 @@ jobs:
   floor:
     # the oldest versions README supports (bb.edn's test:floor)
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [main, oracle]
     env:
       PGMALLI_PG_IMAGE: postgres:16-alpine
+      SUITE: ${{ matrix.suite }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           persist-credentials: false
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6
+        with:
+          path: |
+            ~/.m2/repository
+            ~/.gitlibs
+          key: floor-${{ runner.os }}-${{ hashFiles('deps.edn', 'bb.edn') }}
+          restore-keys: floor-${{ runner.os }}-
       - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6
         with:
           distribution: temurin
@@ -82,4 +110,4 @@ jobs:
           bb: latest
       - name: pull postgres image
         run: docker pull "$PGMALLI_PG_IMAGE"
-      - run: bb test:floor
+      - run: bb test:floor "$SUITE"
