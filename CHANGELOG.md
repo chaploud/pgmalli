@@ -112,8 +112,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
   `:set` maps built at run time, keyed as a row is read (`:group_id`), so a row read is written
   back as it is (the name as a string where HoneySQL would not write the keyword to the column);
-  a column takes a HoneySQL expression too (`[:now]`,
-  `[:+ :n 1]`, `:current_timestamp`, a column in `:set`, `[:lift v]` with `v` of the column's type), and generates values alone
+  a column takes its values, `:default` where the database may fill it, and `[:lift v]` with
+  `v` of the column's type, not an expression, which belongs in the query body; it generates
+  values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
 * Array arguments: a Java array, typed by its elements (`[:pg/array element]`), where it is

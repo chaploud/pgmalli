@@ -1876,23 +1876,24 @@
     (is (not (m/validate s {:id 1 :tags ["a"]} {:registry reg})))
     (is (m/validate s {:id 1 :tags (into-array String ["a"])} {:registry reg}))))
 
-(deftest a-written-row-takes-a-honeysql-expression-as-a-columns-value
+(deftest a-written-row-takes-values-and-lift-alone-no-expression
   (let [v (h/values-schema registry :users opts)
         s (h/set-schema registry :users opts)
         ok? #(m/validate %1 %2 {:registry registry})
         row {:group_id 1 :score 1}]
-    (is (every? #(ok? v (merge row %)) [{:mood [:cast "sad" :mood]} {:closed_at [:now]} {:score [:raw "1"]} {:score '(:abs -1)} {:score [:lift 1]} {:nick [:lift nil]}]))
-    (is (every? #(ok? s %) [{:score [:+ :score 1]} {:mood [:cast "sad" :mood]}]))
-    (is (ok? v (assoc row :closed_at :current_timestamp)) "a keyword HoneySQL writes as an SQL word, CURRENT_TIMESTAMP")
-    (is (ok? s {:score :seq}) "in SET, a column: SET score = seq")
-    (is (not (ok? v (assoc row :score :seq))) "a column in VALUES, which PostgreSQL refuses")
+    (is (every? #(ok? v (merge row %)) [{:score [:lift 1]} {:nick [:lift nil]} {:mood [:lift :sad]} {:mood :default}])
+        "[:lift v] is v as one parameter, an enum label as a keyword")
+    (is (not-any? #(ok? v (merge row %)) [{:mood [:cast "sad" :mood]} {:closed_at [:now]} {:score [:raw "1"]} {:score '(:abs -1)}
+                                           {:closed_at :current_timestamp} {:score :seq}])
+        "an expression, an SQL word or a column belongs in the query body")
+    (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
-        "[:lift v] is v as one parameter; a vector not headed by a keyword a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be either :default or [:default]" "should be a HoneySQL expression, a vector headed by a keyword" "should be a word HoneySQL writes as one, such as :current_timestamp"]}
+        "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
+    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be either :default or [:default]" "should be [:lift v], v as the column takes it"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
-    (is (not-any? (fn [r] (some #(and (sequential? %) (keyword? (first %)) (not= [:default] %)) (vals r)))
+    (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %)) (vals r)))
                   (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))
-        "generated as the values a column takes, no expression")))
+        "generated as the values a column takes")))
 
 (deftest an-enum-column-takes-its-labels-as-keywords-not-as-strings
   (let [o opts

@@ -236,13 +236,12 @@ takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
-A column takes a value, or a HoneySQL expression: a vector or list headed by a keyword
-(`[:cast "closed" :user_status]`, `[:now]`, `[:+ :n 1]`) or an SQL word
-(`:current_timestamp`, `:current_user`). An expression is not checked, except `[:lift v]`, which
-HoneySQL sends as one parameter: `v` must be of the column's type. Another keyword is a column,
-which `:set` takes (`SET score = seq`) and `:values` does not (PostgreSQL refuses a column
-there); a vector or list not headed by a keyword is a row of parameters, which no column takes. `mg/generate` gives values alone, no
-expression, and leaves out a column of whose values malli generates none (a `PGobject`).
+A column takes a value, not an expression: write `[:now]`, `[:+ :n 1]` or `:current_timestamp`
+in the query body, not in a row. `[:lift v]` is a value too, which HoneySQL sends as one
+parameter, `v` of the column's type: an enum label goes as `[:lift :active]`, as HoneySQL
+writes a bare keyword as a column. A vector or list not headed by `:lift` is a row of
+parameters, which no column takes. `mg/generate` gives values alone, and leaves out a column
+of whose values malli generates none (a `PGobject`).
 Validate a row under the registry (`{:registry registry}`). The table's CHECKs across columns
 are not in it; where they matter, validate an inserted row with `:pg.public.users/insert` too.
 An UPDATE's `:set` cannot be checked this way: a CHECK applies to the whole updated row, and
