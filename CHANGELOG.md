@@ -26,6 +26,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     `{:nil-columns :absent}` is `next.jdbc.optional/as-maps`. Two of them together are the
     builder that does both (`rs/as-unqualified-kebab-maps`).
   * `:return-keys` moves into `:jdbc`: `{:jdbc {:return-keys true}}`.
+* A `:read` key that names no type pgmalli knows, none of the registry and no `:pg/type` its
+  columns carry, is an `:invalid-options` error, and so are two keys of one type
+  (`"integer"` and `"int4"`) and a value that is no malli schema. Such a key read nothing:
+  remove it.
 * `pgmalli.core/read-options` is removed: pass the builder as `{:jdbc {:builder-fn ...}}`.
 * `h/explain` is renamed `h/humanize`.
 * An error's ex-data lists the names probably meant under `:did-you-mean`, a vector, as
@@ -279,8 +283,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   only where its plan reaches it, for a row the other conditions keep or once ahead of the scan.
 * `coalesce`, `greatest`, `least`, `CASE` and a set operation of columns all of one domain are of
   that domain, as PostgreSQL resolves them.
-* `:read` names a type by its alias too (`"int4"`, `"timestamptz"`); a type neither pgmalli nor
-  the registry knows, or a value that is no malli schema, is an `:invalid-options` error.
+* `:read` names a type by any of its spellings: an alias (`"int4"`, `"timestamptz"`), an enum
+  type or a domain of the registry with its schema or without (`"app.mood"` reads a column
+  of type `mood` too).
 * A table of a query read against a registry holding no schema pgmalli generates is a
   `:pgmalli.error/not-a-registry` error, not `:unknown-table`; `(pgmalli.core/registry)` of no
   schema is an `:invalid-options` error.

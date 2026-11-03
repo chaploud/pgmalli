@@ -180,43 +180,87 @@
     :result-type :return-generated-keys :return-keys :rollback-only :schema :schema-opts :suffix :table-fn
     :timeout :top})
 
-(defn- read-types!
-  "Fails on a type :read names that is neither one types knows (a name or an alias) nor one of
-   registry's (an enum type, a domain, an array of one), or on a value that is no malli schema
-   in registry."
-  [registry read]
-  (let [schemas (shape/schemas-of registry)
-        own (set (for [k (keys schemas) :when (shape/generated-name? k)
-                       :let [[sch n] (shape/schema-and-name k)]
-                       t [n (str sch "." n)], t [t (types/array-of t)]]
-                   t))
-        known? #(or (own %) (types/entry (or (types/element %) %)))]
-    (doseq [[t v] read :when (string? t)]
-      (when-not (known? t)
+(def ^:private last-read-types (atom nil))
+
+(defn- read-types
+  "{spelling type} of the types :read may name in schemas: a type of types by its name or an
+   alias, as its name; a generated type (an enum, a domain, a row) as \"schema.name\", by its
+   name alone too where one schema holds it; an array of one as the array of that; and any other
+   :pg/type the schemas' columns carry (an extension's type), as it is. Read once for the schemas the last call read."
+  [schemas]
+  (let [[read m] @last-read-types]
+    (if (identical? read schemas)
+      m
+      (let [own (for [[k v] schemas :when (and (shape/generated-name? k) (not (:closed (shape/row-props v))))]
+                  (shape/schema-and-name k))
+            by-n (group-by second own)
+            own-names (into {} (for [[sch n] own :let [t (str sch "." n)]
+                                     [spelling t] (cond-> [[t t]] (= 1 (count (by-n n))) (conj [n t]))]
+                                 [spelling t]))
+            spelled (set (for [[_ v] schemas, x (tree-seq coll? seq v) :when (map? x), :let [t (:pg/type x)] :when (string? t)] t))
+            m (as-> (zipmap spelled spelled) m
+                (merge m own-names)
+                (merge m (into {} (for [n types/spellings] [n (types/canonical-name n)])))
+                (merge m (into {} (for [[n t] m] [(types/array-of n) (types/array-of t)]))))]
+        (reset! last-read-types [schemas m])
+        m))))
+
+(defn- read-type-of
+  "The type a :read key t names (read-types), or one types knows with a schema or a typmod
+   (\"pg_catalog.int4\", \"varchar(10)\"); nil for another."
+  [names t]
+  (or (get names t)
+      (when (types/entry (or (types/element t) t)) (types/canonical-name t))))
+
+(defn- read-option
+  ":read with each type under every spelling a :pg/type carries it by (read-types). Fails on
+   a type it does not know, two keys of one type, or a value that is no malli schema in the
+   registry."
+  [registry schemas read]
+  (let [names (read-types schemas)
+        spellings (group-by val names)
+        keyed (for [[k v] read :when (string? k)] [k (read-type-of names k) v])]
+    (doseq [[k t v] keyed]
+      (when-not t
         (error/fail! :pgmalli.error/invalid-options
-                     (str "pgmalli options: :read names type " (pr-str t) ", which is no type of docs/types.md nor of the registry"
-                          (error/did-you-mean (some-> (error/suggest t (concat (mapcat (fn [[n e]] (cons n (:aliases e))) types/types) own)) pr-str)))
-                     {:given t}))
+                     (str "pgmalli options: :read names type " (pr-str k) ", which is no type of docs/types.md nor of the registry"
+                          (error/did-you-mean (some-> (error/suggest k (keys names)) pr-str)))
+                     {:given k}))
       (when-not (try (m/schema v {:registry registry}) (catch Exception _ nil))
         (error/fail! :pgmalli.error/invalid-options
-                     (str "pgmalli options: :read reads " (pr-str t) " as " (pr-str v) ", which is no malli schema of the registry")
-                     {:given {t v}})))))
+                     (str "pgmalli options: :read reads " (pr-str k) " as " (pr-str v) ", which is no malli schema of the registry")
+                     {:given {k v}})))
+    (when-let [[t ks] (first (filter (comp next val) (group-by second keyed)))]
+      (error/fail! :pgmalli.error/invalid-options
+                   (str "pgmalli options: :read names type " t " twice, as " (str/join " and " (map (comp pr-str first) ks)) "; name it once")
+                   {:given (into {} (map (juxt first last)) ks)}))
+    (into (into {} (remove (comp string? key)) read)
+          (for [[_ t v] keyed, s (cons t (map key (spellings t)))] [s v]))))
 
-(def ^:private canonical-read
-  "A :read with each type by its name (types/canonical-name) too, as a column's :pg/type names it."
-  (memoize (fn [read] (merge read (update-keys read #(if (string? %) (types/canonical-name %) %))))))
+(defn- read-as
+  "A column schema under a :read options! gave: the schema its type is read as where a driver
+   extension (next.jdbc's ReadableColumn) reads it otherwise, NULL still allowed where it was;
+   nil when :read does not name its :pg/type."
+  [read schema]
+  (let [inner (shape/non-null schema)
+        t (:pg/type (shape/props inner))]
+    (when-let [s (and (string? t) (get read t (get read (types/canonical-name t))))]
+      (if (identical? inner schema) s [:maybe s]))))
+
+(defn read-options
+  "opts, which options! takes, with :read as read-as reads it (read-option)."
+  [registry opts]
+  (cond-> opts (map? (:read opts)) (update :read #(read-option registry (shape/schemas-of registry) %))))
 
 (defn options!
   "opts when pgmalli takes them: their keys and values; :send a map of classes to a type types
    knows (a name or an alias), an array of one (\"bigint[]\"), :unknown or nil; :jdbc's
    :builder-fn one of next.jdbc's map builders, a modified one with :label-fn; given the
-   registry, :read's types those types or the registry knows, each read as a malli schema. An
+   registry, :read's types those types or the registry knows, each read as a malli schema, and
+   opts returned as read-options gives them. An
    error names what it does not take, with the one meant; :write and :stringtype of pgmalli 0.3
    name :send."
-  ([registry opts]
-   (options! opts)
-   (when (map? (:read opts)) (read-types! registry (:read opts)))
-   opts)
+  ([registry opts] (read-options registry (options! opts)))
   ([opts]
    (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
      (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
@@ -237,7 +281,7 @@
                (and (some? t) (not (sent-name t)))
                (fail! (str ":send's " (pr-str c) " goes as " (pr-str t) ", which is no type of docs/types.md, an array of one (\"bigint[]\")"
                            " or :unknown for a value sent untyped (an enum's or a domain's value too)"
-                           (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
+                           (when (string? t) (error/did-you-mean (some-> (error/suggest t types/spellings) pr-str))))
                       e))))
      (let [{:keys [builder-fn label-fn] :as jdbc} (:jdbc opts)]
        (doseq [k (when (map? jdbc) (keys jdbc))
@@ -336,7 +380,7 @@
         head (if (vector? schema) (first schema) schema)
         ;; a domain's base comes with its typmod: "bit(4)"
         driver-read (when-not (array-column? schema) (:read (types/entry (shape/type-name {:pg/type t}))))]
-    (or (shape/read-as (canonical-read read) schema)
+    (or (read-as read schema)
         (cond (= :bit driver-read) (if (or (= 1 (:max (second schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
               (= :or-double driver-read) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
               driver-read [driver-read {:pg/type t}]
@@ -534,7 +578,7 @@
         x (when (array-column? s) (last s))
         target (shape/ref-target schemas x)
         s (if (and target (not= :enum (shape/head target))) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
-    (or (shape/read-as (canonical-read read) s)
+    (or (read-as read s)
         ;; PostgreSQL describes a domain's column as its base type's, which a ReadableColumn sees
         (when (= :keyword (:enum read)) (keyword-enum schemas s))
         (read-type (through-domain schemas s opts read-type) opts))))
@@ -576,8 +620,8 @@
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
    pgmalli.core/as-read."
   [registry name opts]
-  (options! registry opts)
-  (let [m (shape/without-gen (data-columns registry name))
+  (let [opts (options! registry opts)
+        m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         table (when (or (:pg/table props) (:pg/view props)) (shape/schema-and-name name))
         schemas (shape/schemas-of registry)

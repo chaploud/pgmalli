@@ -138,6 +138,10 @@
 (def ^:private by-name
   (into {} (for [[t e] types, n (cons t (:aliases e))] [n (assoc e :name t)])))
 
+(def spellings
+  "Every name and alias of types, for a misspelt one to suggest."
+  (keys by-name))
+
 (defn bare-name
   "A type's name without the schema it is qualified with (a type outside the search path:
    \"ext.citext\") or its typmod, wherever format_type prints it: \"timestamp(3) with time

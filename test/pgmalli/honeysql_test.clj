@@ -2565,6 +2565,23 @@
     (is (= [:map {:pg/table "public.t"} [:t/m [:enum {:pg/type "dmood"} :a :b]]] (pgmalli/as-read r :pg.public/t {:read {:enum :keyword}}))
         "a domain's column is described as its base type's")))
 
+(deftest read-names-a-type-by-any-spelling-a-column-or-an-expression-of-the-registry-carries
+  (let [reg (pgmalli/registry {:schema "public"
+                               :registry {:pg.public/t [:map {:pg/table "public.t"} [:g [:any {:pg/type "geometry"}]] [:v [:any {:pg/type "vector"}]]]}})
+        o {:jdbc unqualified}]
+    (is (= [:map [:g :string] [:v [:vector :double]]]
+           (h/row-schema reg {:select [:g :v] :from [:t]} (assoc o :read {"geometry" :string "vector" [:vector :double]})))
+        "an extension's type, as 0.3.3 read it"))
+  (let [read-mood #(-> (row {:select [:mood [[:cast :nick :sample.mood] :c]] :from [:users]} (assoc opts :read {% [:= :x]})) rest)]
+    (is (= [[:mood [:= :x]] [:c [:maybe [:= :x]]]] (read-mood "mood") (read-mood "sample.mood"))
+        "an enum type of the registry by its name and qualified")))
+
+(deftest read-names-each-type-once
+  (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
+    (is (= [:pgmalli.error/invalid-options "pgmalli options: :read names type integer twice, as \"integer\" and \"int4\"; name it once"]
+           (fails #(row {:select [:id] :from [:users]} (assoc opts :read {"integer" :string "int4" :double})))))
+    (is (= :pgmalli.error/invalid-options (first (fails #(row {:select [:id] :from [:users]} (assoc opts :read {"mood" :string "sample.mood" :keyword}))))))))
+
 (deftest a-wrong-input-fails-saying-what-to-do
   (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
     (is (= :int (-> (pgmalli/as-read registry :pg.sample/users {:read {"int4" :int}}) (nth 4) last))

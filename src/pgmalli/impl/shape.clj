@@ -277,15 +277,6 @@
   [schema]
   (if (maybe? schema) (last schema) schema))
 
-(defn read-as
-  "A column schema under :read, {pg-type schema}: the schema a type is read as when a driver
-   extension (next.jdbc's ReadableColumn) reads it otherwise, NULL still allowed where it was.
-   nil when the column's :pg/type is not among them."
-  [read schema]
-  (let [inner (non-null schema)]
-    (when-let [s (get read (:pg/type (props inner)))]
-      (if (identical? inner schema) s [:maybe s]))))
-
 (defn merge-props
   "Schema data with properties merged in (plainly; render's with-props narrows bounds)."
   [s p]

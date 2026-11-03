@@ -115,11 +115,6 @@
                 r))]
       (assoc r ::derived (atom {}) ::calls (atom {})))))
 
-(defn- registry-schemas
-  "registry's schemas: one reading made gives its own, which the public functions it calls pass on."
-  [registry]
-  (or (::schemas registry) registry))
-
 (defn- once
   "(f registry & args), once per call of a public function (reading's ::calls): the functions a
    call makes of one another read the same statements."
@@ -1594,6 +1589,23 @@
                  {:given body}))
   (as-vectors body))
 
+(defn- prepared
+  "[registry body opts] as a public function reads them: the registry as reading reads it, body
+   as query! reads it, opts checked (jdbc/options!) and with-defaults'. Without a body, opts
+   without with-defaults: a table named with its schema needs none. A public function another
+   one calls with what it read (a registry reading made) reads them as they are."
+  ([registry opts]
+   (if (::schemas registry)
+     [registry opts]
+     (let [_ (jdbc/options! opts)
+           r (reading registry)]
+       [r (jdbc/read-options (::schemas r) opts)])))
+  ([registry body opts]
+   (if (::schemas registry)
+     [registry body opts]
+     (let [[r opts] (prepared registry opts)]
+       [r (query! body) (with-defaults r opts)]))))
+
 (defn- code-ctes?
   "Whether code (not data) gives a statement some of its CTEs, which may then be any table."
   [stmt]
@@ -1638,10 +1650,7 @@
    docs/queries.md#options. Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (jdbc/options! (registry-schemas registry) opts)
-   (let [body (query! body)
-         registry (reading registry)
-         opts (with-defaults registry opts)
+   (let [[registry body opts] (prepared registry body opts)
          sent-body (or (sent body opts) body)
          chains (once registry statement-positions sent-body opts)
          found (mapcat (fn [[stmt scopes path ps]]
@@ -1661,10 +1670,7 @@
    ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
   ([registry body] (tables registry body {}))
   ([registry body opts]
-   (jdbc/options! (registry-schemas registry) opts)
-   (let [body (query! body)
-         registry (reading registry)
-         {:keys [schema] :as opts} (with-defaults registry opts)
+   (let [[registry body {:keys [schema] :as opts}] (prepared registry body opts)
          found (for [[stmt scopes] (once registry statement-chains body opts)
                      :let [own (first scopes)
                            targets (set (keep #(some-> % (table-ref schema) second) (write-targets stmt)))]
@@ -2132,10 +2138,7 @@
    docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body opts]
-   (jdbc/options! (registry-schemas registry) opts)
-   (let [body (query! body)
-         registry (reading registry)
-         opts (with-defaults registry opts)
+   (let [[registry body opts] (prepared registry body opts)
          uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
          typed (for [[s scopes _ ps] (once registry statement-positions body opts)
                      use (concat (mapcat #(% registry ps opts) uses) (row-args registry s scopes opts))]
@@ -2618,14 +2621,11 @@
    the table PostgreSQL traces it to. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
-   (jdbc/options! (registry-schemas registry) opts)
-   (let [body (query! body)]
+   (let [[registry body opts] (prepared registry body opts)]
      (when (map? body)
-       (let [registry (reading registry)
-             opts (with-defaults registry opts)]
-         (if-let [body (sent body opts)]
-           (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts)
-           update-count))))))
+       (if-let [body (sent body opts)]
+         (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts)
+         update-count)))))
 
 (defn params-schema
   "The [:map ...] of sql/format's :params for a query: every named argument, typed as arg-types
@@ -2735,10 +2735,7 @@
    ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:users/email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}}"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
-   (jdbc/options! (registry-schemas registry) opts)
-   (let [body (query! body)
-         registry (reading registry)
-         opts (with-defaults registry opts)]
+   (let [[registry body opts] (prepared registry body opts)]
      {:args (arg-types registry body opts)
       :row (row-schema registry body opts)
       :rows (row-count registry body opts)
@@ -2759,15 +2756,15 @@
    {:result :one} what execute-one! returns. Options: docs/queries.md#options. Throws when args are
    not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
-  ([registry args body {:keys [result] :as opts}]
-   (jdbc/options! (registry-schemas registry) opts)
+  ([registry args body opts]
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
                   {:given args}))
-   (let [{types :args :keys [row rows problems]} (analyze registry body opts)
+   (let [[registry body {:keys [result] :as opts}] (prepared registry body opts)
+         {types :args :keys [row rows problems]} (analyze registry body opts)
          problems (into problems
-                        (for [k (sort-by str (data-args (query! body))) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))]
+                        (for [k (sort-by str (data-args body)) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))]
      (into [:=> {:pgmalli/problems problems}]
            [(into [:cat] (map #(get types % :any)) args)
             (let [{:keys [min max]} rows]
@@ -2887,12 +2884,12 @@
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
    names it, in :schema); an error naming what was meant for another name."
   [registry name derived what opts]
-  (jdbc/options! (registry-schemas registry) opts)
   (when-not (keyword? name)
     (error/fail! :pgmalli.error/invalid-options
                  (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
                  {:given name}))
-  (let [r (reading registry)
+  (let [[r opts] (prepared registry opts)
+        registry (::schemas r)
         ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
         ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
         name (if (str/starts-with? (subs (str name) 1) "pg.")
