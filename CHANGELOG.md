@@ -208,6 +208,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   of a name ending in one (`:db?`). A misspelt option or config key reads
   `{:shcema ["disallowed key"]}; did you mean: :schema`.
 * A `:db` holding next.jdbc's `:dbtype` is an error saying to drop it.
+* A schema of `:schemas` the database lacks is an error naming the schema meant.
 * `pgmalli.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`, and warns of
   a PostgreSQL newer than 18: its new functions and types are not typed. A PostgreSQL older
   than 16 is an error.

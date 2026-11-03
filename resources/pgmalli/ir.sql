@@ -207,6 +207,9 @@ operators AS (
 SELECT pg_catalog.json_build_object(
   'name', :'schema',
   'exists', EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = :'schema'),
+  -- the schema names, for the one meant when it does not exist
+  'schemas', (SELECT pg_catalog.json_agg(nspname ORDER BY nspname) FROM pg_catalog.pg_namespace
+              WHERE NOT EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = :'schema')),
   'database_version', 'PostgreSQL ' || pg_catalog.current_setting('server_version'),
   'tables', (SELECT COALESCE(pg_catalog.json_object_agg(relname, tbl), '{}'::json) FROM tables),
   'types', (SELECT COALESCE(pg_catalog.json_object_agg(typname, typ), '{}'::json) FROM types),

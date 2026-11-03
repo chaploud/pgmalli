@@ -72,7 +72,10 @@
 
 (deftest unknown-schema
   (when *db*
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema \"nope\" does not exist in the database; check :schemas" (ir/from-db (assoc *db* :schema "nope"))))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema \"nope\" does not exist in the database; check :schemas" (ir/from-db (assoc *db* :schema "nope"))))
+    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^schema \"pubic\" does not exist in the database; check :schemas in pgmalli.edn; did you mean: \"public\"$"
+                                  (ir/from-db (assoc *db* :schema "pubic"))))]
+      (is (= ["public"] (:did-you-mean (ex-data e)))))))
 
 (deftest missing-psql
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"cannot run psql \(/nonexistent/psql\).*install the PostgreSQL client" (ir/from-db {:psql "/nonexistent/psql"})))]
