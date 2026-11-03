@@ -1762,3 +1762,10 @@
 
 (deftest a-key-compared-with-null-matches-at-most-one-row
   (is (= {:max 1} (second (last (h/query-schema registry [:db] {:select [:nick] :from [:users] :where [:= :id nil]} opts))))))
+
+(deftest trim-names-its-column-btrim
+  (is (= [] (check {:select [:s.btrim] :from [[{:select [[[:trim :nick]]] :from [:users]} :s]]}))))
+
+(deftest an-alias-list-renames-the-first-columns-alone
+  (is (= [] (check {:select [:u.nick :u.a] :from [[:users [:u {:columns [:a]}]]]})))
+  (is (= [] (check {:select [:s.nick] :from [[{:select [:id :nick] :from [:users]} [:s {:columns [:a]}]]]}))))

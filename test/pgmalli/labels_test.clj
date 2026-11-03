@@ -63,3 +63,6 @@
 (deftest an-unknown-schema-names-tables-before-what-derives-from-them
   (is (= [:pg.public/lbl :pg.public/lvl :pg.public/t]
          (take 3 (:known (ex-data (try (pgmalli/as-read registry :pg.public/zz) (catch clojure.lang.ExceptionInfo e e))))))))
+
+(deftest a-coalesce-of-a-check-list-takes-the-others-values-too
+  (is (= [] (h/check registry {:select [:s.id] :from [[{:select [:id [[:coalesce :n 3] :cc]] :from [:t]} :s]] :where [:= :s.cc 3]}))))

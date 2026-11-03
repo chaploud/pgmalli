@@ -75,6 +75,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/row-schema` types the functions that build json and jsonb (`jsonb_build_object`,
   `jsonb_agg` ...) as a column of the type is read: an object or an array under `{:read {:json
   :parsed}}`.
+* `h/check` reads an alias's column list as renaming the first columns alone (`AS u(a)` keeps
+  the others' names), names TRIM's column `btrim` as PostgreSQL does, and reads `coalesce` of a
+  column with a CHECK's list as its base type.
 * A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type.
 * Where the format quotes names, HoneySQL writes `:default` as the column `"default"`:
   `h/values-schema` and `h/set-schema` take `[:default]` alone there.

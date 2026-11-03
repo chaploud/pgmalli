@@ -331,8 +331,11 @@
                                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))
                                    ;; named, but the registry lacks it (pg_catalog's aside): no row can be told of it
                                    :unknown? (boolean (and table (not cte?) (not (catalog? table)) (nil? (table-columns registry table))))}
-                            ;; the columns an alias lists are the ones it has, typeless
-                            listed (assoc :columns listed)
+                            ;; the columns an alias lists rename the first ones, typeless; of a VALUES as
+                            ;; wide as the list, they are all it has
+                            listed (assoc :columns listed
+                                          :all-listed? (let [v (when (and (vector? r) (map? (first r))) (:values (first r)))]
+                                                         (boolean (and (vector? v) (seq v) (every? vector? v) (<= (count (first v)) (count listed))))))
                             (nullable alias) (assoc :nullable? true))]))]
     ;; ON CONFLICT: EXCLUDED is the row proposed for insertion, with the target's columns
     (if-let [[_ alias] (when (contains? stmt :on-conflict) (some-> (insert-target stmt) (table-ref schema)))]
@@ -475,9 +478,11 @@
 
 (defn- has-column?
   "Whether a scope entry may hold a column: one it lists, one its SELECT gives (a typed
-   subquery or CTE), one of its table's, or anything for an opaque table."
-  [registry {:keys [table opaque? columns types]} column]
-  (cond columns (boolean (some #(or (= column %) (= (folded column) %)) columns))
+   subquery or CTE), one of its table's, or anything for an opaque table. A list renames the
+   first columns alone: the others keep their names."
+  [registry {:keys [table opaque? columns types all-listed?] :as entry} column]
+  (cond columns (or (boolean (some #(or (= column %) (= (folded column) %)) columns))
+                    (and (not all-listed?) (has-column? registry (dissoc entry :columns) column)))
         types (or (contains? types column) (contains? types (folded column)))
         opaque? true
         :else (let [cs (table-columns registry table)] (or (contains? cs column) (contains? cs (folded column))))))
@@ -746,9 +751,11 @@
        (or (column-keyword? (second x)) (cast-of-column? (second x)))))
 
 (defn- function-name
-  "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it."
+  "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it;
+   TRIM is btrim, which PostgreSQL's grammar calls it."
   [s]
-  (folded (last (str/split s #"\."))))
+  (let [n (folded (last (str/split s #"\.")))]
+    (if (= "trim" n) "btrim" n)))
 
 (defn- expression-name
   "The column name PostgreSQL gives a select expression with no alias: a function's name, case,
@@ -1723,10 +1730,11 @@
                         else? (some #(= :else (first %)) parts)
                         vts (map #(expression-type registry chain % opts) values)]
                     (when-let [r (when (every? #(= 2 (count %)) parts) (resolved-type values vts))]
-                      {:schema (loose (:schema r))
+                      {:schema (loose (if-let [t (list-type registry (:schema r))] (type-schema t) (:schema r)))
                        :nullable? (or (not else?) (boolean (some #(or (nil? %) (:nullable? %)) vts)))}))
       (resolving-fns fname) (when-let [r (resolved-type (rest x) ts)]
-                              {:schema (cond-> (:schema r) (next ts) loose)
+                              ;; the others' values join a CHECK's list: its base type
+                              {:schema (cond-> (:schema r) (next ts) (-> (#(if-let [t (list-type registry %)] (type-schema t) %)) loose))
                                ;; greatest and least skip NULLs as coalesce does; nullif makes one
                                :nullable? (or (= "nullif" fname) (not-any? #(and % (not (:nullable? %))) ts))}))))
 
