@@ -28,7 +28,7 @@
     (doseq [r @results
             x (:return-rejections r)]
       (is false (str "query-schema's return refuses what " (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r)) " returned"
-                     " under " (if (= :one (:result x)) "{:result :one}" "the default")
+                     " with the " (name (:builder x)) " builder under " (if (= :one (:result x)) "{:result :one}" "the default result")
                      "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
                      "\n  rows:   " (:rows r)
                      (if (:error x)

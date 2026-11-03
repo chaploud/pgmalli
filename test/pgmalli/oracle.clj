@@ -14,7 +14,8 @@
    UPDATE sets into a NOT NULL column, which fails once a row conflicts).
 
    Where PostgreSQL runs a case, the return of query-schema (default and {:result :one}) must
-   take what next.jdbc's execute! and execute-one! returned: a case it refuses carries
+   take what next.jdbc's execute! and execute-one! returned, read with the default builder and,
+   for a corpus query (not a mutant), with each of builders: a case it refuses carries
    :return-rejections.
 
    bb oracle [seed] [mutants-per-query] prints the counts and every case but the agreeing ones;
@@ -28,7 +29,8 @@
             [malli.error :as me]
             [malli.generator :as mg]
             [next.jdbc :as jdbc]
-            next.jdbc.result-set
+            next.jdbc.optional
+            [next.jdbc.result-set :as rs]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
@@ -162,28 +164,37 @@
           (empty? ks) :miss
           :else :mismatch)))
 
+(def builders
+  "The next.jdbc options a corpus query's rows are read with beside the default builder's, for
+   query-schema's return (as :jdbc) and for execute! and execute-one!."
+  {:unqualified {:builder-fn rs/as-unqualified-maps}
+   :unqualified-kebab {:builder-fn rs/as-unqualified-kebab-maps}
+   :modified {:builder-fn rs/as-modified-maps :label-fn str/upper-case :qualifier-fn #(str "q_" %)}
+   :optional {:builder-fn next.jdbc.optional/as-maps}})
+
 (defn- return-rejections
-  "Where the return schema of query-schema refuses what next.jdbc returned for sqlvec (rows, as
-   execute! returned them; execute-one! is run, rolled back, for {:result :one})."
-  [registry ^java.sql.Connection conn query fmt arg-keys sqlvec rows]
-  (vec (for [[result value] [[:many (constantly rows)]
-                             [:one #(try (jdbc/execute-one! conn sqlvec) (finally (.rollback conn)))]]
-             :let [r (try (let [s (m/schema (h/query-schema registry arg-keys query (cond-> {:format fmt} (= :one result) (assoc :result :one)))
-                                            {:registry registry})
-                                ret (last (m/children s))
-                                x (value)]
+  "Where the return schema of query-schema refuses what next.jdbc returned for sqlvec: rows (as
+   execute! returned them with the default builder), then, unless the case is a mutant, every
+   builders entry; each execute! and execute-one! is run and rolled back."
+  [registry ^java.sql.Connection conn {:keys [query mutation]} fmt arg-keys sqlvec rows]
+  (vec (for [[builder jdbc-opts] (cons [:default {}] (when-not mutation builders))
+             [result run] [[:many #(if (= :default builder) rows (jdbc/execute! conn sqlvec jdbc-opts))]
+                           [:one #(jdbc/execute-one! conn sqlvec jdbc-opts)]]
+             :let [opts (cond-> {:format fmt} (seq jdbc-opts) (assoc :jdbc jdbc-opts) (= :one result) (assoc :result :one))
+                   r (try (let [ret (last (m/children (m/schema (h/query-schema registry arg-keys query opts) {:registry registry})))
+                                x (try (run) (finally (.rollback conn)))]
                             (when-not (m/validate ret x)
                               {:schema (m/form ret) :value x :explain (me/humanize (m/explain ret x))}))
                           (catch Exception e {:error (ex-message e)}))]
              :when r]
-         (assoc r :result result))))
+         (assoc r :builder builder :result result))))
 
 (defn columns
   "The column names of the oracle schema, which mutants draw from."
   [db]
   (let [ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" (:host db) ":" (:port db) "/" (:db db)) :user (:user db) :password (:password db)})]
     (mapv :column_name (jdbc/execute! ds ["SELECT DISTINCT column_name FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1"]
-                                      {:builder-fn next.jdbc.result-set/as-unqualified-maps}))))
+                                      {:builder-fn rs/as-unqualified-maps}))))
 
 (def formats
   "How a case is sent: its values inlined, and as HoneySQL sends them by default, parameters,
@@ -212,7 +223,7 @@
                    :when sqlvec
                    :let [{:keys [result] :as v} (verdict conn sqlvec)
                          problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query {:format fmt})))
-                         returned (when result (return-rejections registry conn query fmt (vec (keys args)) sqlvec result))]]
+                         returned (when result (return-rejections registry conn c fmt (vec (keys args)) sqlvec result))]]
                (merge c (dissoc v :result)
                       {:return-rejections returned :format mode :sql (first sqlvec) :params (vec (rest sqlvec)) :problems problems :outcome (outcome v problems)})))))))
 
@@ -234,7 +245,7 @@
               (println "\n" (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
                        "\n  rows:" (:rows r))
               (doseq [x (:return-rejections r)]
-                (println "  " (:result x) (or (:error x) (str (pr-str (:schema x)) "\n    value: " (pr-str (:value x)) "\n    explain: " (pr-str (:explain x))))))))
+                (println "  " (:builder x) (:result x) (or (:error x) (str (pr-str (:schema x)) "\n    value: " (pr-str (:value x)) "\n    explain: " (pr-str (:explain x))))))))
           (doseq [o [:false-positive :mismatch :miss :other-flagged]
                   :let [rs (filter #(= o (:outcome %)) results)]
                   :when (seq rs)]

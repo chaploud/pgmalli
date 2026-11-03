@@ -1748,7 +1748,7 @@
               (for [entries (apply map vector (map rest rows))
                     :let [schemas (map last entries)
                           inners (distinct (map shape/non-null schemas))]]
-                (jdbc/row-entry (ffirst entries) (if (= 1 (count inners)) (first inners) :any) (some maybe? schemas) opts)))))))
+                (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts) (if (= 1 (count inners)) (first inners) :any) (some maybe? schemas) opts)))))))
 
 (defn- row-schema*
   "row-schema of the statement at path in a query, chains its statements' scope chains by path
