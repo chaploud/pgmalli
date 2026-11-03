@@ -160,7 +160,8 @@ fails on a type in neither list, and generates, inserts and reads back a NOT NUL
 every entry.
 
 A new PostgreSQL version: add it to the `pg` matrix of `.github/workflows/ci.yml` (a test holds
-the snapshot's versions to it), run `bb catalog`, and read the diff of
+the snapshot's versions to it) with its image by digest under `include` (Renovate updates the
+digests, not the versions), run `bb catalog`, and read the diff of
 `resources/pgmalli/impl/catalog.edn`: what is `:in` the new version alone is what it adds.
 `bb catalog` stops on a type or range whose facts differ between versions, which
 `pgmalli.impl.types` reads one of.
