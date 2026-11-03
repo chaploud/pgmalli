@@ -1912,7 +1912,10 @@
                                (let [s (domain-base-type registry (:schema t))
                                      n (canonical-type {:schema s})
                                      input (operator-input :min-max n)]
-                                 {:schema (loose (if (= n input) s (type-schema input))) :nullable? true}))
+                                 ;; a type pgmalli does not know may be a composite, whose max PostgreSQL 18 types record
+                                 (if (or (nil? n) (types/entry n) (accept/element n) (= :enum (shape/kind s)) (= :ref (shape/head (shape/non-null s))))
+                                   {:schema (loose (if (= n input) s (type-schema input))) :nullable? true}
+                                   {:schema :any :nullable? true})))
       (#{"bool_and" "bool_or" "every"} fname) (assoc (typed "boolean") :nullable? true)
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical-type)]) typed (assoc :nullable? true))
       ;; a string takes the others' type, as PostgreSQL resolves a varchar or unknown one; result-type
