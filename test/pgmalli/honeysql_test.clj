@@ -54,6 +54,14 @@
   (is (= [] (check '{:insert-into :users :values rows})) "rows passed in say nothing about the columns")
   (is (= {} (args '{:insert-into :users :values rows}))))
 
+(deftest a-list-of-plain-items-is-read-as-honeysql-reads-a-vector
+  (is (= [{:kind :unknown-column :column :nope}] (check {:select '(:id :nope) :from [:users]})))
+  (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from '(:users) :where [:= :nope 1]})))
+  (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from [:users] :where '(:= :nope 1)})))
+  (is (= (row {:select [[:id :x]] :from [:users]}) (row {:select (list [:id :x]) :from (list :users)})))
+  (is (= (row {:select [:id] :from [:users]}) (row {:select (map keyword ["id"]) :from [:users]})) "a seq built at run time")
+  (is (= {} (args '{:select [:id] :from [:users] :where (:= :id ids)})) "a list holding a symbol is code"))
+
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))

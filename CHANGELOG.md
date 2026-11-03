@@ -102,6 +102,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An argument compared with or assigned to a column the driver reads as a PGobject (`citext`,
   `bit(n)` for n > 1, `bit varying`, a domain over them), and `h/values-schema` and
   `h/set-schema`, take a PGobject too, so a value read is written back.
+* A list or seq of keywords, vectors, maps and values alone (a `:select` built with `map`) is
+  read as a vector, as HoneySQL reads it, where it was taken for code and left unchecked; a list
+  with a symbol in it is still code.
 * What to do:
   * Options: `{:stringtype :unspecified}` is `{:send {String :unknown}}`. `:write {"text" [:or
     :string :keyword]}` and `:write {:enum [:string :keyword]}` are `{:send

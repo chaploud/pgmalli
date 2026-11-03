@@ -1248,16 +1248,28 @@
                      :when (and (symbol? k) (or (read-clauses (keyword k)) (some-> clauses (contains? (keyword k)))))]
                  {:kind :unread-clause :clause k})))))
 
+(defn- as-vectors
+  "x with each list (or other seq) of no symbol and no list in it a vector: HoneySQL reads a
+   sequential as it reads a vector, and code is a list with a symbol in it ((vec cols),
+   (:cols opts))."
+  [x]
+  (cond (seq? x) (if (and (seq x) (not-any? #(or (symbol? %) (seq? %)) x))
+                   (mapv as-vectors x)
+                   (apply list (map as-vectors x)))
+        (map? x) (into (empty x) (map (fn [[k v]] [k (as-vectors v)])) x)
+        (branch? x) (into (empty x) (map as-vectors) x)
+        :else x))
+
 (defn- query!
-  "body when it is HoneySQL query data (a map, or code holding maps); an error saying so for SQL
-   already formatted or for nothing, which would otherwise check clean."
+  "body as HoneySQL query data (as-vectors), when it is that (a map, or code holding maps); an
+   error saying so for SQL already formatted or for nothing, which would otherwise check clean."
   [body]
   (when (or (nil? body) (string? body) (and (vector? body) (string? (first body))))
     (error/fail! :pgmalli.error/not-query-data
                  (str "pgmalli.honeysql reads HoneySQL query data (a map such as {:select ...}), not "
                       (if (nil? body) "nil" "SQL already formatted") "; pass the map you give sql/format")
                  {:given body}))
-  body)
+  (as-vectors body))
 
 (defn- code-ctes?
   "Whether code (not data) gives a statement some of its CTEs, which may then be any table."
@@ -1304,8 +1316,8 @@
   ([registry body] (check registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
-   (query! body)
-   (let [opts (with-defaults opts)
+   (let [body (query! body)
+         opts (with-defaults opts)
          registry (reading registry)
          sent-body (or (sent body opts) body)
          chains (statement-chains registry sent-body opts)
@@ -1327,8 +1339,8 @@
   ([registry body] (tables registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
-   (query! body)
-   (let [{:keys [schema] :as opts} (with-defaults opts)
+   (let [body (query! body)
+         {:keys [schema] :as opts} (with-defaults opts)
          registry (reading registry)
          found (for [[stmt scopes] (statement-chains registry body opts)
                      :let [own (first scopes)
@@ -1713,8 +1725,8 @@
   ([registry body] (arg-types registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
-   (query! body)
-   (let [opts (with-defaults opts)
+   (let [body (query! body)
+         opts (with-defaults opts)
          registry (reading registry)
          sources (set (keep #(:select (insert-parts %)) (statements body)))
          uses [comparison-args limit-args (partial cast-args sources) assignment-args unnest-args resolving-args]
@@ -2048,12 +2060,12 @@
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
-   (query! body)
-   (when (map? body)
-     (let [opts (with-defaults opts)]
-       (if-let [body (sent body opts)]
-         (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts)
-         update-count)))))
+   (let [body (query! body)]
+     (when (map? body)
+       (let [opts (with-defaults opts)]
+         (if-let [body (sent body opts)]
+           (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (statement-chains (reading registry) body opts)) opts)
+           update-count))))))
 
 (defn params-schema
   "The [:map ...] of sql/format's :params for a query: every named argument, typed as arg-types
@@ -2159,12 +2171,12 @@
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
    (jdbc/options! opts)
-   (query! body)
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
                   {:given args}))
-   (let [opts (with-defaults opts)
+   (let [body (query! body)
+         opts (with-defaults opts)
          registry (reading registry)
          types (arg-types registry body opts)
          problems (into (check registry body opts)

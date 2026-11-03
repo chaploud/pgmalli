@@ -492,8 +492,10 @@ Write the query so PostgreSQL's reading is explicit instead.
 
 ## Not checked
 
-- What code in the query (a list) builds at run time: the vectors written inside it are
-  checked, but a column it computes (`(keyword c)`) is not.
+- What code in the query (a list with a symbol in it) builds at run time: the vectors written
+  inside it are checked, but a column it computes (`(keyword c)`) is not. A list or seq of
+  keywords, vectors, maps and values alone (`(map keyword cols)` run) is read as a vector, as
+  HoneySQL reads it.
 - The tables of `:join-by`.
 - A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
   reported as `:unread-clause`.
