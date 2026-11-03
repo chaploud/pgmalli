@@ -73,9 +73,9 @@ A clause pgmalli does not read is reported rather than passed over:
 The columns of a CTE or a subquery are typed as its SELECT types them, read as a query of its
 own (a CTE under the ones before it, a LATERAL subquery with the tables before it, a recursive
 CTE as its first member, NULL allowed and a CHECK's list read as its base type); a column it
-does not give is `:unknown-column`. A function of `pg_catalog` in FROM has the columns it
-returns ([The row a query returns](#the-row-a-query-returns)). The columns of another table
-function (named by its alias, `WITH ORDINALITY` too), of a table written as a symbol
+does not give is `:unknown-column`. A function of `pg_catalog` or of a generated schema in FROM
+has the columns it returns ([The row a query returns](#the-row-a-query-returns)). The columns of
+another table function (named by its alias, `WITH ORDINALITY` too), of a table written as a symbol
 (`'events_2026`, a table chosen at run time) and of a `pg_catalog` or `information_schema` table
 the registry lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema` leaves untyped, are not
 checked. Every table has the system columns (`ctid`, `xmin`, ...).
@@ -146,7 +146,7 @@ keyed as in `sql/format`'s `:params`:
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | an array, typed as `:send` sends one, of where its column goes: compared with a column, assigned by `INSERT ... SELECT` or `UPDATE ... SET`, or cast (an array of what PostgreSQL casts to the type) |
 | an argument of `coalesce`, `greatest`, `least` or `nullif`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
-| an argument of a function or an operator of `pg_catalog` (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the one type every function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil; `:any` where they take more than one |
+| an argument of a function or an operator of `pg_catalog` or of a generated schema (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the one type every function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil; `:any` where they take more than one |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
 | used only inside code (`(when x ...)`) | its type or nil |
@@ -343,6 +343,18 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   from a snapshot of `pg_catalog` (`resources/pgmalli/catalog.edn`) of the PostgreSQL versions it
   supports; a call one of them resolves otherwise is untyped. A function of `json` or `jsonb` that
   builds an object or an array is one under `{:read {:json :parsed}}`.
+- A call of a function or an operator of a generated schema, from its file's `:functions` and
+  `:operators` ([types.md](types.md#the-generated-file)). pgmalli takes the search path to be
+  `pg_catalog`, then `:schema`, as PostgreSQL puts `pg_catalog` first when the path does not
+  name it ([5.9.6](https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-CATALOG)):
+  a schema's overload taking the argument types one of `pg_catalog`'s takes gives way to it, and
+  one taking others competes with them ([10.3](https://www.postgresql.org/docs/current/typeconv-func.html)
+  step 1), so `round(integer)` of the schema is called for an integer and `lower(text)` is not. A
+  call qualified with a schema (`[:app.f x]`) resolves among that schema's alone. An overload
+  taking a type the catalog has no category of (a composite type, an extension's) leaves a call
+  it does not match exactly untyped, as a cast pgmalli does not read may convert to it. In FROM,
+  such a function's columns are its OUT or `TABLE` arguments, its composite type's columns
+  (`RETURNS SETOF users`), or one named after the alias, of no table.
 
 An argument among the values of `CASE` and the like leaves the expression untyped unless the
 type is a string type, as pgjdbc sends a number or a date typed; in a call, it leaves it untyped
@@ -351,7 +363,7 @@ is of its base type, a CHECK's list of the base type, where values are computed 
 catalog does not say when a function returns NULL, so a call is nullable, but `count`, a window
 function of no argument (`row_number`) and a comparison (an operator of a btree operator family,
 or its negator) of values that are not NULL. An argument of the application's own type
-(an extension's, a composite), the application's own function, and anything else is nullable
+(an extension's, a composite), a function of a schema the registry has no file of, and anything else is nullable
 `:any`:
 
 ```clojure
@@ -383,8 +395,8 @@ next.jdbc's `:return-keys` (in `:jdbc`), pgjdbc adds RETURNING to an INSERT, UPD
 
 Under qualified keys (next.jdbc's default), the driver may qualify some columns by a table the
 query data does not show: a column cast to its own type, which PostgreSQL drops; `:raw` SQL,
-which may be a column; a column of a table function not of `pg_catalog` or of a table the
-registry lacks; or a
+which may be a column; a column of a table function neither of `pg_catalog` nor of a
+generated schema, or of a table the registry lacks; or a
 subquery's or a CTE's column that is one of these. `h/row-schema` leaves those keys out of the
 map, which is open, and lists their unqualified names under the `:pgmalli/unknown-keys`
 property:
@@ -459,8 +471,8 @@ row of a SELECT of aggregates of columns or constants alone (no GROUP BY, HAVING
 limit a parameter gives); at most one of a statement on one table (no CTE of its name, no table
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
 index (neither partial nor DEFERRABLE) equal to a value; up to one for each row of an INSERT's
-`:values` with RETURNING; at most `:limit`. A function that may return a set (one of
-`pg_catalog` that does, as `generate_series`, or the application's own) in the select list, ORDER
+`:values` with RETURNING; at most `:limit`. A function that may return a set (one that does, of
+`pg_catalog` as `generate_series` or of a generated schema, or one the registry has none of) in the select list, ORDER
 BY or `:values` makes it say nothing. Where it is one
 row, `{:result :one}` drops the `[:maybe]`:
 
@@ -547,10 +559,10 @@ Write the query so PostgreSQL's reading is explicit instead.
 
 ## Not checked
 
-- A function or an operator the schema defines with the name of one of `pg_catalog`'s (an
-  extension's `||` of `ltree` and `text`): `h/row-schema` types a call by `pg_catalog`'s alone,
-  which PostgreSQL may resolve to the schema's instead. A call whose argument is of an
-  extension's type is untyped.
+- A search path other than `pg_catalog` and then `:schema` (one naming `pg_catalog` later, or
+  several schemas): a call resolves as under that one. A cast the application defines
+  (`CREATE CAST`), and an extension's type's category, are not read: a call whose argument is of
+  an extension's type is untyped unless an overload takes the type exactly.
 
 - What code in the query (a list with a symbol in it) builds at run time: the vectors written
   inside it are checked, but a column it computes (`(keyword c)`) is not. A list or seq of

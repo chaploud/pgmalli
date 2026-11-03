@@ -10,5 +10,7 @@
     :pg/table "other.notes"}
    [:id [:pg/integer {:pg/type "integer"}]]
    [:user_id [:int {:pg/type "bigint"}]]]},
+ :functions {"note_count" [{:args [], :result "bigint"}]},
+ :operators {},
  :unrendered [],
  :skipped []}

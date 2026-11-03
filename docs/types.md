@@ -323,6 +323,7 @@ For `pgmalli.core/columns`, see the [README](../README.md#validating-rows-and-wr
 | `:database-version` | the major version it was read from, `"PostgreSQL 17"` |
 | `:diagnostics` | what deserves a look in the database |
 | `:registry` | `{name schema}`: the rows, enums and domains; the insert and update schemas are derived when it is loaded |
+| `:functions`, `:operators` | `{name [overload ...]}`: the schema's own functions (no procedure or trigger function) and operators, which [`pgmalli.honeysql`](queries.md#the-row-a-query-returns) resolves a call to beside `pg_catalog`'s. An overload is `{:args [type ...] :result type}`, types named as `:pg/type` names them, with `:set true` for a set-returning function, `:kind` (`:a` an aggregate, `:w` a window function), `:variadic true`, `:defaults` (how many of the last arguments may be left out), `:columns` (`[[name type] ...]` it returns in FROM: its OUT or `TABLE` arguments, or its composite type's columns), `:btree true` for a comparison operator |
 | `:unrendered` | what pgmalli cannot express, left out of the schemas |
 | `:skipped` | what `:overrides` skips |
 

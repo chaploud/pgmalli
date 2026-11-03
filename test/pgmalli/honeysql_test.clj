@@ -2052,6 +2052,32 @@
           [:column1 [:double {:pg/type "double precision"}]]
           [:column2 [:maybe [:string {:pg/type "text"}]]]] (h/row-schema registry {:select [:*] :from [[{:values [[1 [:inline "a"]] [2.5 nil]]} :v]]} opts))))
 
+(deftest a-schemas-own-functions-and-operators-resolve-with-pg-catalogs
+  (let [row #(h/row-schema registry {:select (vec (for [[k e] %] [e k])) :from [:users]} opts)
+        both (pgmalli/registry "sample" "other")]
+    (is (= [:map [:d [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row {:d [:double_it :score]})))
+    (is (= [:map [:r [:maybe [:string {:pg/type "text"}]]]] (row {:r [:round :score]}))
+        "an exact match of the schema's beats pg_catalog's round(double precision), which an integer converts to")
+    (is (= [:map [:l [:maybe [:string {:pg/type "text"}]]]] (row {:l [:lower :nick]}))
+        "pg_catalog comes first on the search path: the schema's lower(text) gives way to its")
+    (is (= [:map [:u [:maybe [:string {:pg/type "text"}]]]] (row {:u [:upper :mood]})) "an overload taking the schema's enum type")
+    (is (= [:map [:m [:maybe [:enum {:pg/type "mood"} "happy" "sad"]]]] (row {:m [:pick_mood]})) "a result of the schema's enum type")
+    (is (= [:map [:o [:maybe [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"]]]] (row {:o [:+ :mood [:inline 1]]}))
+        "an operator of the schema's, of its enum type as its operand's")
+    (is (= [:map
+            [:uid [:maybe [:int {:pg/type "bigint"}]]]
+            [:feel [:maybe [:enum {:pg/type "mood"} "happy" "sad"]]]] (h/row-schema registry {:select [:*] :from [[[:user_rows] :r]]} opts))
+        "RETURNS TABLE: its columns, the last argument left to its default")
+    (is (= [:map [:n [:maybe [:int {:pg/type "bigint"}]]]] (h/row-schema both {:select [[[:other.note_count] :n]]} opts))
+        "a function qualified with its schema")
+    (is (= [:map [:n [:maybe :any]]] (h/row-schema both {:select [[[:note_count] :n]]} opts))
+        "a schema off the search path (:schema) is not searched")
+    (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (args {:select [[[:double_it :?x] :d]] :from [:users]})))
+    (is (map? (second (last (h/query-schema registry [:db] {:select [[[:double_it :score] :d]] :from [:users] :where [:= :id 1]} opts))))
+        "a function of the schema's that returns no set keeps the row count")
+    (is (not (map? (second (last (h/query-schema registry [:db] {:select [[[:user_rows] :d]] :from [:users] :where [:= :id 1]} opts)))))
+        "one that returns a set does not")))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

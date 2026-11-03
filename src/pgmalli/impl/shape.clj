@@ -176,6 +176,12 @@
     (keyword (str "pg." schema-name) s)
     (str "pg." schema-name "/" s)))
 
+(defn routines-key
+  "The registry key of a schema's functions and operators, the generated file's :functions and
+   :operators as the properties of an :any (a malli registry holds schemas alone)."
+  [schema-name]
+  (keyword "pgmalli.routines" schema-name))
+
 (defn schema-and-name
   "[schema name] of a registry key: :pg.ins/mood and \"pg.a.b/m\" are [\"ins\" \"mood\"] and [\"a.b\" \"m\"]."
   [k]

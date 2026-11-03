@@ -31,7 +31,16 @@
                                    "closed_check" {:name "closed_check" :type "CHECK"
                                                    :check_clause "CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}
                                    "score_check" {:name "score_check" :type "CHECK" :check_clause "CHECK (score >= 0 AND score <= total)"}
-                                   "referrer_check" {:name "referrer_check" :type "CHECK" :check_clause "CHECK (referrer_id <> id)"}}}}})
+                                   "referrer_check" {:name "referrer_check" :type "CHECK" :check_clause "CHECK (referrer_id <> id)"}}}}
+   ;; round(integer) beats pg_catalog's round(double precision); lower(text) is pg_catalog's
+   :functions [{:name "double_it" :args ["integer"] :result "integer" :kind "f" :defaults 0}
+               {:name "round" :args ["integer"] :result "text" :kind "f" :defaults 0}
+               {:name "lower" :args ["text"] :result "integer" :kind "f" :defaults 0}
+               {:name "upper" :args ["mood"] :result "text" :kind "f" :defaults 0}
+               {:name "pick_mood" :args [] :result "mood" :kind "f" :defaults 0}
+               {:name "user_rows" :args ["integer"] :result "record" :set true :kind "f" :defaults 1
+                :columns [["uid" "bigint"] ["feel" "mood"]]}]
+   :operators [{:name "+" :args ["mood" "integer"] :result "mood"}]})
 (def other
   {:name "other"
    :types {}
@@ -39,7 +48,8 @@
                                {:name "user_id" :position 2 :data_type "bigint" :is_nullable false}]
                      :constraints {"notes_pkey" {:name "notes_pkey" :type "PRIMARY KEY" :columns ["id"]}
                                    "notes_user_id_fkey" {:name "notes_user_id_fkey" :type "FOREIGN KEY" :columns ["user_id"]
-                                                         :references {:schema "sample" :table "users" :columns ["id"]}}}}}})
+                                                         :references {:schema "sample" :table "users" :columns ["id"]}}}}}
+   :functions [{:name "note_count" :args [] :result "bigint" :kind "f" :defaults 0}]})
 (doseq [schema [sample other]]
   (let [path (str "test/resources/pgmalli/" (:name schema) ".edn")]
     (spit path (files/edn-string (files/assemble (:name schema) "none" (p/facts schema) {})))

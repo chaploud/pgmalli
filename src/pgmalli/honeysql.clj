@@ -45,16 +45,20 @@
    "cmin" [:some {:pg/type "cid"}] "cmax" [:some {:pg/type "cid"}] "tableoid" [:int {:pg/type "oid"}]})
 
 
+(declare own-routines)
+
 (defn- reading
   "The registry as this namespace reads it: its schemas taken once (a composite registry merges
-   them on every lookup) and the columns of a table memoized, since a column is looked for in
-   every table in scope. The public functions take a registry and make one of it; one passed on
-   again is left as it is."
+   them on every lookup), the columns of a table memoized, since a column is looked for in
+   every table in scope, and the schemas' own functions and operators read once. The public
+   functions take a registry and make one of it; one passed on again is left as it is."
   [registry]
   (if (::schemas registry)
     registry
     (let [r {::schemas (shape/schemas-of registry) ::derived (atom {})}]
-      (assoc r ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (into system-columns)))))))
+      (assoc r
+             ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (into system-columns)))
+             ::routines (delay (own-routines r))))))
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
 
@@ -96,7 +100,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? expression-type type-schema accepted-type driver-type quoted? call-parts)
+(declare insert-parts star? expression-type type-schema accepted-type driver-type quoted? call-parts reached own-type-schema)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -380,23 +384,25 @@
           [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- function-columns
-  "[[column schema origin] ...] of a function of pg_catalog in FROM ([[:f args] alias],
-   [[:with-ordinality [:f args] alias]]): its OUT columns, or one of its result type named after
+  "[[column schema origin] ...] of a function of pg_catalog or of a generated schema in FROM
+   ([[:f args] alias], [[:with-ordinality [:f args] alias]]): its OUT columns (a generated
+   schema's: its composite type's too), or one of its result type named after
    the alias (the function without one), each nullable and of no table, renamed by the names the
    alias lists; WITH ORDINALITY adds ordinality, a bigint. nil where that is not told."
   [registry item chain opts]
   (let [[a b] (if (vector? item) item [item])
         [f ordinality? al] (if (and (vector? a) (= :with-ordinality (first a))) [(second a) true (get a 2)] [a false b])
         [al listed] (if (and (vector? al) (map? (second al))) [(first al) (:columns (second al))] [al nil])
-        [kind n args] (when (vector? f) (call-parts f))]
-    (when (and (= :functions kind) (or (nil? listed) (sequential? listed)))
-      (when-let [{t :result o :overload} (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) args))]
+        [kind n args :as parts] (when (vector? f) (call-parts f))]
+    (when (and (= :functions kind) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
+      (when-let [{t :result o :overload} (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) args) (reached registry opts parts))]
         (let [cs (or (seq (:columns o)) (when-not (= "record" t) [[(if (alias? al) (alias-label al opts) n) t]]))
-              cs (cond-> (vec cs) ordinality? (conj ["ordinality" "bigint"]))]
-          (when (and (seq cs) (every? (comp types/category second) cs))
+              cs (cond-> (vec cs) ordinality? (conj ["ordinality" "bigint"]))
+              own #(own-type-schema registry % (:schema o))]
+          (when (and (seq cs) (every? #(or (types/category (second %)) (own (second %))) cs))
             (vec (map-indexed (fn [i [c ct]]
                                 [(if (< i (count listed)) (folded (name (nth listed i))) c)
-                                 (when-let [s (type-schema ct)] (cond-> s (not= "ordinality" c) nullable))
+                                 (when-let [s (or (when (string? ct) (type-schema ct)) (own ct))] (cond-> s (not= "ordinality" c) nullable))
                                  ""])
                               cs))))))))
 
@@ -1797,12 +1803,13 @@
    resolve the call to takes there, as an untyped value is resolved; nil may go there too."
   [registry stmt sc opts]
   (for [x (mapcat own-nodes (map val (clause-entries (dissoc stmt :insert-into))))
-        :let [[kind n args] (when-not (comparison? x) (call-parts x))]
+        :let [[kind n args :as parts] (when-not (comparison? x) (call-parts x))]
         :when (and kind (some arg-key args))
-        :let [ins (mapv #(:type (expression-type registry sc % opts)) args)]
+        :let [ins (mapv #(:type (expression-type registry sc % opts)) args)
+              os (reached registry opts parts)]
         [i a] (map-indexed vector args)
         :when (arg-key a)
-        :let [t (resolve/argument-type kind n ins i)
+        :let [t (resolve/argument-type kind n ins i os)
               s (some-> t type-schema)]
         :when s]
     [a (nullable (accepted-type registry s :compare opts))]))
@@ -1921,9 +1928,10 @@
     (or (grammar-operators sql) (when (and sql (re-matches #"[+\-*/<>=~!@#%^&|`?]+" sql)) sql))))
 
 (defn- call-parts
-  "[kind name args] of x as pgmalli.impl.resolve/call takes it: a function of pg_catalog
-   (:functions), count(*) of no argument, AT TIME ZONE as timezone(zone, value), or an
-   operator (:operators), a prefix one of one operand; nil for anything else."
+  "[kind name args schema] of x as pgmalli.impl.resolve/call takes it: a function (:functions),
+   count(*) of no argument, AT TIME ZONE as timezone(zone, value), or an operator (:operators),
+   a prefix one of one operand; schema the one a function's name is qualified with; nil for
+   anything else."
   [x]
   (let [h (when (vector? x) (first x))
         fname (or (called x) (shorthand-fn x))
@@ -1933,11 +1941,38 @@
           (= :at-time-zone h) (let [[_ v z] x] [:functions "timezone" [z v]])
           (and (keyword? h) (operator? h) (#{1 2} (count args)))
           (when-let [n (operator-name h (count args))] [:operators n (vec args)])
-          (and fname (not (special-syntax h))
-               ;; a function of another schema than pg_catalog is the application's
-               (let [q (some-> (if (keyword? x) (shorthand-fn x) (name h)) (str/split #"\.") butlast last)]
-                 (or (nil? q) (= "pg_catalog" q))))
-          [:functions fname (vec (remove #{:*} args))])))
+          (and fname (not (special-syntax h)))
+          [:functions fname (vec (remove #{:*} args)) (some-> (if (keyword? x) (shorthand-fn x) (name h)) (str/split #"\.") butlast last folded)])))
+
+(defn- reached
+  "The overloads a call (call-parts) reaches: those of the schema it names, else pg_catalog's and
+   :schema's, pg_catalog first on the search path as PostgreSQL puts it when the path does not
+   name it (docs 5.9.6). A schema the registry has no :functions of (a file generated before
+   them, a schema not generated) has none."
+  [registry {:keys [schema]} [kind n _ q]]
+  (resolve/overloads kind n (some-> (::routines registry) deref) (if q [q] ["pg_catalog" schema])))
+
+(defn- own-type-schema
+  "The column schema of a value of an enum type or a domain of the registry, t named as a
+   generated file of schema s names it, or as pgmalli.impl.resolve takes an enum type ([:enum
+   name]); nil for another type."
+  [registry t s]
+  (let [n (if (vector? t) (second t) t)]
+    (when-let [[k] (when (string? n) (registry-type registry (keyword n) {:schema s}))]
+      [:ref {:pg/type n} k])))
+
+(defn- own-routines
+  "{schema {:functions {name [overload ...]} :operators {...}}} of the registry's generated files,
+   the argument and result types as pgmalli.impl.resolve takes them (an enum type [:enum name], a
+   domain its base type)."
+  [registry]
+  (into {} (for [[k s] (::schemas registry)
+                 :when (and (keyword? k) (= (namespace (shape/routines-key "")) (namespace k)))
+                 :let [schema (name k)
+                       {fs :pg/functions ops :pg/operators} (second s)
+                       resolved #(if-let [r (own-type-schema registry % schema)] (resolver-type registry r) %)
+                       each (fn [m] (update-vals m (fn [os] (mapv #(-> % (update :args (partial mapv resolved)) (update :result resolved)) os))))]]
+             [schema {:functions (each fs) :operators (each ops)}])))
 
 (def ^:private json-shapes
   "The shape of the json or jsonb value a function builds, as a column of the type is read under
@@ -1948,11 +1983,11 @@
 
 (defn- call-type
   "The expression type of a call (call-parts), its arguments of expression types ts."
-  [registry [kind n args] ts]
-  (when-let [{t :result o :overload} (resolve/call kind n (mapv :type ts))]
+  [registry [kind n args :as parts] ts opts]
+  (when-let [{t :result o :overload} (resolve/call kind n (mapv :type ts) (reached registry opts parts))]
     (let [schema (if-let [shape (and (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
-                   (result-schema registry t ts))]
+                   (or (result-schema registry t ts) (own-type-schema registry t (:schema o))))]
       (when schema
         {:type t :schema schema
          ;; the catalog does not say when a function returns NULL: an aggregate that starts from
@@ -2041,7 +2076,7 @@
       ;; a + b + c is (a + b) + c
       (and (keyword? h) (operator? h) (< 2 (count (rest x))) (operator-name h 2)) (sub (into [h [h (nth x 1) (nth x 2)]] (drop 3 x)))
       :else (when-let [[_ _ args :as parts] (call-parts x)]
-              (call-type registry parts (map sub args))))))
+              (call-type registry parts (map sub args) opts)))))
 
 (defn- select-row
   "The row a SELECT returns. Under a qualifying builder, a cast column, or a column through an
@@ -2211,7 +2246,7 @@
    is its first member's names. Under qualified keys, a column next.jdbc may key by a table the
    query data does not show is left out of the map, which is open, and named under the
    :pgmalli/unknown-keys property: :raw SQL, a column cast to its own type, and a column of a
-   table function not of pg_catalog or of a table the registry lacks. A subquery's or a CTE's column is keyed by
+   table function neither of pg_catalog nor of a generated schema, or of a table the registry lacks. A subquery's or a CTE's column is keyed by
    the table PostgreSQL traces it to. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
@@ -2248,14 +2283,15 @@
 
 (defn- plain-value?
   "Whether x yields one value per row: a column, a constant, DEFAULT, a cast of one, or a call of
-   them to an operator or a function of pg_catalog that returns no set (generate_series and
-   unnest return more rows; the application's own functions may)."
-  [x]
+   them to an operator or a function that returns no set, of pg_catalog or a generated schema
+   (generate_series and unnest return more rows; a function the registry has none of may)."
+  [registry opts x]
   ;; :%f.a is HoneySQL's f(a)
   (or (and (keyword? x) (not (shorthand-fn x))) (constant? x) (nil? x) (= [:default] x)
-      (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? (second x)))
-      (boolean (when-let [[kind n args] (call-parts x)]
-                 (and (or (= :operators kind) (not (resolve/set-returning? n))) (every? plain-value? args))))))
+      (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? registry opts (second x)))
+      (boolean (when-let [[kind n args :as parts] (call-parts x)]
+                 (and (or (= :operators kind) (not (resolve/set-returning? n (reached registry opts parts))))
+                      (every? #(plain-value? registry opts %) args))))))
 
 (defn- row-count
   "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
@@ -2265,18 +2301,18 @@
    the columns of its primary key or a UNIQUE key, neither partial nor DEFERRABLE, equal to a
    value (NULL equals none); up to as many as :values has rows of an INSERT returning (a trigger or ON CONFLICT
    may skip one); at most :limit, from none where a parameter or code gives the limit."
-  [registry stmt {:keys [schema]}]
+  [registry stmt {:keys [schema] :as opts}]
   ;; a clause this does not read (:join-by, :fetch, a set operation ...) may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)) (not (code-sources? stmt)))
     (let [write? (some #(contains? stmt %) write-keys)
           items (map bare (selected-items stmt))
           order (map bare (vectorish (:order-by stmt)))
-          aggregates-only? (every? #(some-> (or (called %) (shorthand-fn %)) resolve/aggregate?) items)
+          aggregates-only? (every? #(when-let [[_ n :as parts] (call-parts %)] (resolve/aggregate? n (reached registry opts parts))) items)
           rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (insert-parts stmt)))) (:values stmt))
-          plain? (and (every? plain-value? (concat order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
-                      (or (every? plain-value? items)
+          plain? (and (every? #(plain-value? registry opts %) (concat order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
+                      (or (every? #(plain-value? registry opts %) items)
                           ;; aggregates over plain values
-                          (and aggregates-only? (every? #(every? plain-value? (nth (call-parts %) 2)) items))))
+                          (and aggregates-only? (every? (fn [i] (every? #(plain-value? registry opts %) (nth (call-parts i) 2))) items))))
           targets (if write? (write-targets stmt) (table-items stmt))
           [table alias written] (when (= 1 (count targets)) (table-ref (first targets) schema))
           ;; a CTE of the table's name hides it
@@ -2302,7 +2338,7 @@
           counted (cond (not plain?) nil
                         aggregates? {:min 1 :max 1}
                         (and rows (:returning stmt)) {:min 0 :max (count rows)}
-                        (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? plain-value? items)) {:min 0 :max 1})
+                        (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items)) {:min 0 :max 1})
           m (cond-> counted
               limit (update :max #(min (or % limit) limit))
               (and limit (not counted)) (assoc :min 0)

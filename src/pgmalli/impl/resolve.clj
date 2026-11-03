@@ -104,14 +104,24 @@
           (<= (- k (or defaults 0)) n k) [(subvec args 0 n)])))
 
 (defn- candidates
-  "{:decls [type ...] :overload o} of overloads for n arguments; of two with one argument list, a
-   variadic one gives way to another, and two others are ambiguous (:ambiguous)."
+  "{:decls [type ...] :overload o} of overloads (in search path order) for n arguments; of two
+   with one argument list, the one of the schema earlier on the path (docs 10.3 step 1), of one
+   schema a variadic one gives way to another, and two others are ambiguous (:ambiguous)."
   [overloads n]
   (for [[decls os] (group-by first (for [o overloads, f (forms o n)] [f o]))
         :let [os (map second os)
+              os (filter #(= (:schema (first os)) (:schema %)) os)
               plain (remove :variadic os)
               o (cond (= 1 (count os)) (first os) (= 1 (count plain)) (first plain))]]
     (if o {:decls decls :overload o} {:decls decls :overload (first os) :ambiguous true})))
+
+(defn- doubtful?
+  "Whether pgmalli cannot tell if candidate c, of a schema's own, takes ins: it declares a type
+   the catalog has no category of (a composite type, an extension's) where an argument is of
+   another type, which a cast the catalog does not hold may convert."
+  [{:keys [decls overload]} ins]
+  (boolean (and (not (contains? #{nil "pg_catalog"} (:schema overload)))
+                (some (fn [[d in]] (and (string? d) (nil? (types/category d)) (not (unbound? in)) (not= d in))) (map vector decls ins)))))
 
 (defn- viable? [{:keys [decls]} ins]
   (and (every? true? (map coerces? ins decls)) (some? (bind decls ins))))
@@ -172,8 +182,9 @@
                     ins)
         exact (when (not-any? unbound? exact-ins) (some #(when (= exact-ins (:decls %)) %) cs))]
     (or exact
-        (let [vs (filter #(viable? % ins) cs)]
-          (if (next vs) (select vs ins) (first vs))))))
+        (when-not (some #(doubtful? % ins) cs)
+          (let [vs (filter #(viable? % ins) cs)]
+            (if (next vs) (select vs ins) (first vs)))))))
 
 (defn- outcome
   "{:result type :overload o} of candidate c for ins; nil where it is ambiguous or its result
@@ -192,55 +203,62 @@
       (when (apply = rs) (first rs)))))
 
 (defn overloads
-  "The overloads pg_catalog has of a function (kind :functions) or operator (:operators)."
-  [kind n]
-  (get-in @types/catalog [kind n]))
+  "The overloads of a function (kind :functions) or operator (:operators) n: pg_catalog's; or
+   those a call reaches along path, schema names in search path order, pg_catalog's where it
+   holds \"pg_catalog\" and another schema's from own ({schema {kind {n [overload ...]}}}, the
+   generated files' :functions and :operators), each with the :schema it is in."
+  ([kind n] (get-in @types/catalog [kind n]))
+  ([kind n own path]
+   (for [s path, o (if (= "pg_catalog" s) (overloads kind n) (get-in own [s kind n]))]
+     (assoc o :schema s))))
 
 (defn- type-name? [n] (boolean (or (types/entry n) (get-in @types/catalog [:types n]))))
 
 (defn call
   "{:result type :overload o} of calling function or operator n (kind :functions or :operators)
-   with arguments of types ins; nil where PostgreSQL refuses it, finds it ambiguous, or one of
-   the versions resolves it otherwise. With a :free argument, the result every candidate it may
-   resolve to agrees on."
-  [kind n ins]
-  (let [os (overloads kind n)
-        operator? (= :operators kind)]
-    (when (and (seq os) (every? some? ins))
-      (in-every-version
-       os
-       (fn [os]
-         (if (some #{:free} ins)
-           (let [rs (distinct (for [c (candidates os (count ins)) :when (viable? c ins)] (outcome c ins)))]
-             (when (= 1 (count rs)) (first rs)))
-           (let [c (chosen os ins operator?)]
-             ;; f(x) of a type's name f, no f taking x as it is, is a cast to the type
-             (when-not (and (not operator?) (= 1 (count ins)) (type-name? n) (not= ins (:decls c)))
-               (outcome c ins)))))))))
+   with arguments of types ins, among the overloads os it reaches (pg_catalog's by default); nil
+   where PostgreSQL refuses it, finds it ambiguous, or one of the versions resolves it otherwise.
+   With a :free argument, the result every candidate it may resolve to agrees on."
+  ([kind n ins] (call kind n ins (overloads kind n)))
+  ([kind n ins os]
+   (let [operator? (= :operators kind)]
+     (when (and (seq os) (every? some? ins))
+       (in-every-version
+        os
+        (fn [os]
+          (if (some #{:free} ins)
+            (let [cs (candidates os (count ins))
+                  rs (distinct (for [c cs :when (viable? c ins)] (outcome c ins)))]
+              (when (and (= 1 (count rs)) (not-any? #(doubtful? % ins) cs)) (first rs)))
+            (let [c (chosen os ins operator?)]
+              ;; f(x) of a type's name f, no f taking x as it is, is a cast to the type
+              (when-not (and (not operator?) (= 1 (count ins)) (type-name? n) (not= ins (:decls c)))
+                (outcome c ins))))))))))
 
 (defn argument-type
   "The type PostgreSQL resolves a parameter at position i of a call (as call takes it, :free
-   there) to: the one type every candidate it may resolve to takes there; nil for none or more."
-  [kind n ins i]
-  (let [os (overloads kind n)]
-    (when (and (seq os) (every? some? ins))
-      (in-every-version
-       os
-       (fn [os]
-         (let [ts (distinct (for [c (candidates os (count ins)) :when (viable? c ins)]
-                              (when-not (:ambiguous c) (bound (nth (:decls c) i) (bind (:decls c) ins)))))]
-           (when (and (= 1 (count ts)) (string? (first ts)) (not (polymorphic (first ts))) (not= "\"any\"" (first ts)))
-             (first ts))))))))
+   there, os too) to: the one type every candidate it may resolve to takes there; nil for none or
+   more."
+  ([kind n ins i] (argument-type kind n ins i (overloads kind n)))
+  ([_ _ ins i os]
+   (when (and (seq os) (every? some? ins))
+     (in-every-version
+      os
+      (fn [os]
+        (let [cs (candidates os (count ins))
+              ts (distinct (for [c cs :when (viable? c ins)]
+                             (when-not (:ambiguous c) (bound (nth (:decls c) i) (bind (:decls c) ins)))))]
+          (when (and (= 1 (count ts)) (string? (first ts)) (not (polymorphic (first ts))) (not= "\"any\"" (first ts))
+                     (not-any? #(doubtful? % ins) cs))
+            (first ts))))))))
 
 (defn set-returning?
-  "Whether a function of name n may return a set: one of its overloads does, or pg_catalog has
-   none of the name."
-  [n]
-  (let [os (overloads :functions n)]
-    (or (empty? os) (boolean (some :set os)))))
+  "Whether a function of name n may return a set: one of its overloads (pg_catalog's, or os) does,
+   or there is none."
+  ([n] (set-returning? n (overloads :functions n)))
+  ([_ os] (or (empty? os) (boolean (some :set os)))))
 
 (defn aggregate?
-  "Whether every function of name n is an aggregate."
-  [n]
-  (let [os (overloads :functions n)]
-    (boolean (and (seq os) (every? #(= :a (:kind %)) os)))))
+  "Whether every function of name n (pg_catalog's, or os) is an aggregate."
+  ([n] (aggregate? n (overloads :functions n)))
+  ([_ os] (boolean (and (seq os) (every? #(= :a (:kind %)) os)))))

@@ -527,4 +527,10 @@
  [:catalog-one-row {:select [[[:upper :nick] :u]] :from [:users] :where [:= :id :?id]}]
  [:values-typed {:select [:*] :from [[{:values [[1 [:inline "a"]] [2.5 nil]]} :v]]}]
  [:catalog-case-arg {:select [[[:case [:= :id 1] :?x :else :score] :v]] :from [:users]}]
+ ;; the schema's own functions beside pg_catalog's: round(integer) an exact match, lower(text) shadowed by pg_catalog's
+ [:own-scalar {:select [[[:user_score :id] :s] [[:round :score] :r] [[:lower :nick] :l] [[:user_mood :id] :m]] :from [:users]}]
+ [:own-from {:select [:*] :from [[[:user_names] :n]]}]
+ [:own-from-ordinality {:select [:n.uid :n.label :n.ordinality] :from [[[:with-ordinality [:user_names 1] :n]]]}]
+ [:own-from-setof {:select [:g.id :g.name] :from [[[:all_groups] :g]]}]
+ [:own-arg {:select [:id] :from [:users] :where [:= [:user_score :?id] 1]}]
 ]

@@ -63,3 +63,9 @@ CREATE TABLE "Mixed"."Things" ("Id" serial PRIMARY KEY, "Name" text NOT NULL, lo
 CREATE TABLE "UpperT" ("ID" serial PRIMARY KEY, "Val" text, val2 int);
 INSERT INTO "Mixed"."Things" ("Name", lower_col) VALUES ('T1', 1);
 INSERT INTO "UpperT" ("Val", val2) VALUES ('v', 1);
+CREATE FUNCTION public.user_score(uid int) RETURNS int LANGUAGE sql STABLE AS 'SELECT score FROM public.users WHERE id = uid';
+CREATE FUNCTION public.user_mood(uid int) RETURNS public.mood LANGUAGE sql STABLE AS 'SELECT mood FROM public.users WHERE id = uid';
+CREATE FUNCTION public.round(x int) RETURNS text LANGUAGE sql IMMUTABLE AS 'SELECT x::text';
+CREATE FUNCTION public.lower(x text) RETURNS int LANGUAGE sql IMMUTABLE AS 'SELECT 0';
+CREATE FUNCTION public.user_names(lim int DEFAULT 10) RETURNS TABLE (uid int, label text) LANGUAGE sql STABLE AS 'SELECT id, name FROM public.users ORDER BY id LIMIT lim';
+CREATE FUNCTION public.all_groups() RETURNS SETOF public.groups LANGUAGE sql STABLE AS 'SELECT * FROM public.groups';

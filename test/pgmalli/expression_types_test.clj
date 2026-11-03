@@ -234,3 +234,62 @@
                   [e o t])))]
       (is (< 3000 (count cs)) (str "pgmalli and PostgreSQL type " (count cs) " of the calls"))
       (report "functions and operators" cs))))
+
+(def ^:private own-schema
+  "A schema's own functions and operators: overloads of pg_catalog's names of other argument
+   types (round, upper, concat), one of the same (lower, which pg_catalog's shadows), table
+   functions."
+  "CREATE SCHEMA fx;
+   CREATE TYPE fx.mood AS ENUM ('happy', 'sad');
+   CREATE TABLE fx.t (id int PRIMARY KEY, n int NOT NULL, s text NOT NULL, m fx.mood NOT NULL);
+   INSERT INTO fx.t VALUES (1, 2, 'a', 'happy');
+   CREATE FUNCTION fx.double_it(x int) RETURNS int LANGUAGE sql AS 'SELECT x * 2';
+   CREATE FUNCTION fx.round(x int) RETURNS text LANGUAGE sql AS 'SELECT x::text';
+   CREATE FUNCTION fx.lower(x text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+   CREATE FUNCTION fx.upper(x fx.mood) RETURNS text LANGUAGE sql AS 'SELECT x::text';
+   CREATE FUNCTION fx.concat(a text, b text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+   CREATE FUNCTION fx.pick() RETURNS fx.mood LANGUAGE sql AS 'SELECT ''sad''::fx.mood';
+   CREATE FUNCTION fx.vsum(VARIADIC xs int[]) RETURNS bigint LANGUAGE sql AS 'SELECT sum(x) FROM unnest(xs) x';
+   CREATE FUNCTION fx.mood_plus(m fx.mood, i int) RETURNS fx.mood LANGUAGE sql AS 'SELECT m';
+   CREATE OPERATOR fx.+ (LEFTARG = fx.mood, RIGHTARG = int, FUNCTION = fx.mood_plus);
+   CREATE FUNCTION fx.labels(lim int DEFAULT 10) RETURNS TABLE (uid int, label text) LANGUAGE sql AS 'SELECT id, s FROM fx.t LIMIT lim';
+   CREATE FUNCTION fx.all_t() RETURNS SETOF fx.t LANGUAGE sql AS 'SELECT * FROM fx.t';
+   CREATE FUNCTION fx.one_out(OUT v bigint) LANGUAGE sql AS 'SELECT 1::bigint';")
+
+(defn- own-described
+  "[[label type table] ...] of the columns PostgreSQL describes q as, the schema fx on the search
+   path (its types named as its generated file names them, unqualified); nil where it refuses it."
+  [con typnames q]
+  (jdbc/execute! con ["SET search_path TO fx"])
+  (try (with-open [ps (jdbc/prepare con (sql/format q))]
+         (let [md (.getMetaData ps)]
+           (vec (for [i (range 1 (inc (.getColumnCount md)))]
+                  [(.getColumnLabel md i) (normal (str/replace (typnames (.getColumnTypeName md i)) #"^fx\." "")) (.getTableName md i)]))))
+       (catch Exception _ nil)))
+
+(deftest a-schemas-own-functions-and-operators-are-typed-as-postgresql-types-them
+  (when *db*
+    (exec-sql! own-schema)
+    (let [registry (pgmalli/registry (files/from-database {:db *db*} "fx"))
+          o (assoc opts :schema "fx")
+          typnames (into {} (map (juxt :typname :t)) (jdbc/execute! (datasource) ["SELECT typname, format_type(oid, NULL) AS t FROM pg_type"]
+                                                                   {:builder-fn next.jdbc.result-set/as-unqualified-maps}))
+          exprs [[:double_it :n] [:round :n] [:pg_catalog.round :n] [:lower :s] [:fx.lower :s] [:upper :m] [:upper :s]
+                 [:concat :s :s] [:pick] [:vsum :n :n :n] [:+ :m [:inline 1]]]
+          froms [{:select [:*] :from [[[:labels] :r]]}
+                 {:select [:*] :from [[[:labels 1] :r]]}
+                 {:select [:*] :from [[[:all_t] :a]]}
+                 {:select [:*] :from [[[:one_out] :x]]}
+                 {:select [:*] :from [[[:double_it 1] :d]]}
+                 {:select [:*] :from [[[:pick] :p]]}
+                 {:select [:*] :from [[[:with-ordinality [:labels] :r]]]}]
+          ours (fn [q] (vec (for [[k & more] (rest (h/row-schema registry q o))] [(name k) (normal (pg-type (last more)))])))]
+      (with-open [con (jdbc/get-connection (datasource))]
+        (doseq [e exprs
+                :let [q {:select [[e :e]] :from [:t]}]]
+          (is (= (mapv pop (own-described con typnames q)) (ours q)) (pr-str e)))
+        (doseq [q froms]
+          (let [theirs (own-described con typnames q)]
+            (is (= (mapv pop theirs) (ours q)) (pr-str q))
+            (is (every? #{""} (map peek theirs)) (str "of no table: " (pr-str q))))))
+      (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (h/arg-types registry {:select [[[:double_it :?x] :d]] :from [:t]} o))))))

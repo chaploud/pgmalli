@@ -68,5 +68,18 @@
     {:error/message "violates check constraint score_check: CHECK (score >= 0 AND score <= total)",
      :pg/constraint "score_check"}
     [:and [:>= :score 0] [:<= :score :total]]]]},
+ :functions
+ {"double_it" [{:args ["integer"], :result "integer"}],
+  "lower" [{:args ["text"], :result "integer"}],
+  "pick_mood" [{:args [], :result "mood"}],
+  "round" [{:args ["integer"], :result "text"}],
+  "upper" [{:args ["mood"], :result "text"}],
+  "user_rows"
+  [{:args ["integer"],
+    :columns [["uid" "bigint"] ["feel" "mood"]],
+    :defaults 1,
+    :result "record",
+    :set true}]},
+ :operators {"+" [{:args ["mood" "integer"], :result "mood"}]},
  :unrendered [],
  :skipped []}

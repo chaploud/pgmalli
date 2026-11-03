@@ -89,5 +89,7 @@
        [:nil
         {:error/message
          "violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"}]]]]]]},
+ :functions {},
+ :operators {},
  :unrendered [],
  :skipped []}

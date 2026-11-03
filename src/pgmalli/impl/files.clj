@@ -3,7 +3,11 @@
 
    File contents, in this order:
      {:schema \"public\" :database-version \"PostgreSQL 17\" :diagnostics [...]
-      :registry {name schema} :unrendered [entry ...] :skipped [entry ...]}
+      :registry {name schema} :functions {name [overload ...]} :operators {name [overload ...]}
+      :unrendered [entry ...] :skipped [entry ...]}
+
+   :functions and :operators are the schema's own, which pgmalli.honeysql resolves a call to
+   besides pg_catalog's: an overload as pgmalli.impl.types/catalog holds one.
 
    An :unrendered or :skipped entry is {:kind :table or :domain :column :constraint :sql :type},
    the keys that apply.
@@ -73,6 +77,7 @@
   (let [r (sort-maps (render/rendered facts (or overrides {})))]
     (array-map :schema schema :database-version database-version
                :diagnostics (:diagnostics r) :registry (:registry r)
+               :functions (:functions r) :operators (:operators r)
                :unrendered (mapv left-out (:unrendered r)) :skipped (mapv left-out (:skipped r)))))
 
 (defn checked-overrides!

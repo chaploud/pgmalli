@@ -14,8 +14,9 @@
 
 (defn generated
   "The generated file of a schema, read from the classpath, as data:
-   {:schema :database-version :registry {name schema} :unrendered [entry ...]
-    :skipped [entry ...] :diagnostics [{:table :kind :severity :message ...} ...]},
+   {:schema :database-version :registry {name schema} :functions {name [overload ...]}
+    :operators {name [overload ...]} :unrendered [entry ...] :skipped [entry ...]
+    :diagnostics [{:table :kind :severity :message ...} ...]},
    its entries and diagnostics as docs/types.md#the-generated-file lists them.
 
    :unrendered lists the constraints pgmalli cannot express in malli; :diagnostics what

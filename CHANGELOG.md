@@ -51,6 +51,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * Generate again if a schema has a table other tables inherit, a DEFERRABLE primary key or
   unique constraint, an invalid unique index, or a domain whose CHECK lists its values: their
   files change, and `pgmalli.main check` reports them stale.
+* Generate again: every file has the schema's functions and operators (`:functions`,
+  `:operators`), and `pgmalli.main check` reports a file without them stale. Until then, a call
+  is typed by `pg_catalog`'s functions alone.
 
 ### Added
 
@@ -92,6 +95,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   its SELECT types them, and keyed by the table PostgreSQL traces them to; a set operation's
   column is of the type PostgreSQL resolves its members' to; `SELECT *` of a CTE or a subquery
   lists its columns; a table function (`WITH ORDINALITY` too) is named by its alias.
+* A schema's own functions and operators are typed as `pg_catalog`'s
+  ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): the generated file holds them,
+  and a call resolves among `pg_catalog`'s and `:schema`'s as PostgreSQL's search path does,
+  `pg_catalog` first: an overload of a `pg_catalog` function's argument types gives way to it,
+  one of others competes (`round(integer)` of the schema is called for an integer column, which
+  pgmalli typed `double precision` before). A call qualified with a schema resolves among that
+  schema's. In FROM, such a function has its columns (`RETURNS TABLE`, OUT arguments,
+  `RETURNS SETOF users`), of no table; one that returns no set keeps the row count.
 * `h/query-schema`'s return states how many rows the query data shows it returns
   (`[:sequential {:max 1} row]`), and where that is exactly one, `{:result :one}` drops the
   `[:maybe]` ([docs/queries.md](docs/queries.md#function-schemas)). A function of `pg_catalog`

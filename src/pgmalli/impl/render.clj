@@ -514,8 +514,13 @@
 
 ;;; api
 
+(defn- overloads
+  "{name [overload ...]} of the facts of kind (:function or :operator)."
+  [facts kind]
+  (into (sorted-map) (update-vals (group-by :name (filter #(= kind (:fact %)) facts)) #(vec (sort-by pr-str (map :overload %))))))
+
 (defn rendered
-  "facts -> {:registry :unrendered :skipped :diagnostics}, :registry being the file's :registry
+  "facts -> {:registry :functions :operators :unrendered :skipped :diagnostics}, :registry being the file's :registry
    map (names to schemas) rather than a malli registry; a diagnostic is a state the database
    stores but no row can satisfy (or that deserves a look): {:table :kind :severity
    :message ...}."
@@ -532,6 +537,8 @@
      {:registry (into (sorted-map-by #(compare (str %1) (str %2)))
                       (concat (for [f facts :when (= :enum-type (:fact f))] [(shape/schema-key schema-name (:type-name f)) (into [:enum] (:values f))])
                               (map :entry parts)))
+      :functions (overloads facts :function)
+      :operators (overloads facts :operator)
       :unrendered (vec (sort-by order (mapcat :unrendered parts)))
       :skipped (vec (sort-by order (mapcat :skipped parts)))
       :diagnostics (vec (sort-by (juxt :table :constraint :kind) (mapcat :diagnostics parts)))})))

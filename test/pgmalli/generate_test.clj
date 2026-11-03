@@ -13,6 +13,11 @@
            (generate/diff before after)))
     (is (= [] (generate/diff before before)))))
 
+(deftest a-file-generated-before-functions-were-read-is-stale
+  (let [now (pgmalli/generated "other")]
+    (is (= [{:key :functions :file nil :db {"note_count" [{:args [] :result "bigint"}]}} {:key :operators :file nil :db {}}]
+           (generate/diff (dissoc now :functions :operators) now)))))
+
 (deftest check-without-a-database-reports-a-missing-file
   (let [out-dir (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete))]
     (is (= ["sample"] (:missing (generate/check {:out-dir out-dir :schemas ["sample"]} {:db? false}))))))

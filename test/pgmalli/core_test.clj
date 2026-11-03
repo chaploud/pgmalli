@@ -172,7 +172,7 @@
       (is (not (contains? (generate/check config {:db? false}) :stale)) "without the database, only the files")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (generate/check config {:db false})) "a misspelt option is an error")
       (let [data (files/read-edn (files/path-for config "chk"))]
-        (is (= [:schema :database-version :diagnostics :registry :unrendered :skipped] (keys data)) "read from the top: what it is, what deserves a look, the schemas")))))
+        (is (= [:schema :database-version :diagnostics :registry :functions :operators :unrendered :skipped] (keys data)) "read from the top: what it is, what deserves a look, the schemas")))))
 
 (defn- registry-of [schema ddl]
   (exec-sql! ddl)

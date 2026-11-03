@@ -362,11 +362,16 @@
 (defn registry
   "The registry pgmalli.core/registry documents."
   [& schemas]
-  (let [base (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas)
+  (let [data (map #(if (map? %) % (read-generated %)) schemas)
+        base (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas)
         generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints (with-domain-hints s) false (str k))))]))
-                        (apply merge (map #(:registry (if (map? %) % (read-generated %))) schemas)))]
-    (merge base (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
-                             #(walk/postwalk dispatch-by-key %)))))
+                        (apply merge (map :registry data)))]
+    (merge base
+           (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
+                        #(walk/postwalk dispatch-by-key %))
+           ;; a file generated before them lacks them: its schema's calls resolve by pg_catalog alone
+           (into {} (for [d data :when (and (:schema d) (contains? d :functions))]
+                      [(shape/routines-key (:schema d)) [:any {:pg/functions (:functions d) :pg/operators (:operators d)}]])))))
 
 (defn columns
   "The [:map ...] of a row or insert schema, without the table-level constraints."

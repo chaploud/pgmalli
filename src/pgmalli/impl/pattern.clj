@@ -46,6 +46,10 @@
      :not-enforced a NOT ENFORCED CHECK or FOREIGN KEY   {:constraint :input} (nothing to render)
      :trigger      a row-level trigger left enabled       {:name :before :insert :update :delete} (nothing to render)
      :unparsed     expression that could not be read     {:input :error}
+     :function     a function a query may call            {:name :overload}
+     :operator     an operator                            {:name :overload}
+                   :overload as pgmalli.impl.types/catalog holds pg_catalog's, its types named as a
+                   column's :type is
 
    One CHECK can yield several facts (column patterns joined by AND); every fact from a CHECK
    carries the whole expression as :expr. NOT VALID constraints are never matched, since
@@ -508,6 +512,16 @@
     (vec
      (concat
       (for [[n vs] enums] {:fact :enum-type :schema schema-name :type-name n :values vs})
+      (for [{:keys [name args result set kind variadic defaults columns]} (:functions schema)]
+        {:fact :function :schema schema-name :name name
+         :overload (cond-> {:args args :result result}
+                     set (assoc :set true)
+                     (not= "f" kind) (assoc :kind (keyword kind))
+                     variadic (assoc :variadic true)
+                     (pos? defaults) (assoc :defaults defaults)
+                     columns (assoc :columns columns))})
+      (for [{:keys [name args result btree]} (:operators schema)]
+        {:fact :operator :schema schema-name :name name :overload (cond-> {:args args :result result} btree (assoc :btree true))})
       domain-facts*
       (for [[tname t] (sort-by key (:tables schema))
             :let [base {:schema schema-name :table tname}

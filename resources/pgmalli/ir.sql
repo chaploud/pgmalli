@@ -1,6 +1,7 @@
 -- One schema as a single JSON document. Run with: psql -At -v schema=NAME -f ir.sql
 -- Reads tables (regular and partition parents), views and materialized views, columns,
--- CHECK / PRIMARY KEY / UNIQUE / FOREIGN KEY constraints, enum and domain types. Expressions
+-- CHECK / PRIMARY KEY / UNIQUE / FOREIGN KEY constraints, enum and domain types, functions and
+-- operators. Expressions
 -- are kept as PostgreSQL's deparser prints them.
 -- search_path is pinned so type qualification does not depend on the connecting user, with
 -- pg_catalog first so that the schema's own functions and operators never stand in for its: every
@@ -156,11 +157,52 @@ types AS (
   FROM pg_catalog.pg_type t
   JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
   WHERE n.nspname = :'schema' AND t.typtype IN ('e', 'd')
+),
+-- what a query calls: no procedure, no trigger function (no query calls one)
+functions AS (
+  SELECT pg_catalog.json_build_object(
+           'name', p.proname,
+           'args', ARRAY(SELECT pg_catalog.format_type(u.t, NULL) FROM pg_catalog.unnest(p.proargtypes::pg_catalog.oid[]) WITH ORDINALITY u(t, n) ORDER BY u.n),
+           'result', pg_catalog.format_type(p.prorettype, NULL),
+           'set', p.proretset,
+           'kind', p.prokind,
+           'variadic', p.provariadic <> 0::oid,
+           'defaults', p.pronargdefaults,
+           -- the columns it returns in FROM: its OUT (and TABLE) arguments, else its composite type's
+           'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(u.n, pg_catalog.format_type(u.t, NULL)) ORDER BY u.i)
+                                FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
+                                WHERE u.m IN ('o', 'b', 't')),
+                               (SELECT pg_catalog.json_agg(pg_catalog.json_build_array(a.attname, pg_catalog.format_type(a.atttypid, NULL)) ORDER BY a.attnum)
+                                FROM pg_catalog.pg_type rt JOIN pg_catalog.pg_attribute a ON a.attrelid = rt.typrelid
+                                WHERE rt.oid = p.prorettype AND a.attnum > 0 AND NOT a.attisdropped))
+         ) AS fn,
+         p.proname, p.oid
+  FROM pg_catalog.pg_proc p
+  JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
+  WHERE n.nspname = :'schema' AND p.prokind <> 'p'
+    AND p.prorettype NOT IN ('trigger'::pg_catalog.regtype::pg_catalog.oid, 'event_trigger'::pg_catalog.regtype::pg_catalog.oid)
+),
+operators AS (
+  SELECT pg_catalog.json_build_object(
+           'name', o.oprname,
+           'args', CASE WHEN o.oprleft = 0::oid THEN pg_catalog.json_build_array(pg_catalog.format_type(o.oprright, NULL))
+                        ELSE pg_catalog.json_build_array(pg_catalog.format_type(o.oprleft, NULL), pg_catalog.format_type(o.oprright, NULL)) END,
+           'result', pg_catalog.format_type(o.oprresult, NULL),
+           -- a comparison: an operator of a btree operator family, or its negator
+           'btree', EXISTS (SELECT 1 FROM pg_catalog.pg_amop a JOIN pg_catalog.pg_am am ON am.oid = a.amopmethod
+                            WHERE a.amopopr IN (o.oid, o.oprnegate) AND am.amname = 'btree')
+         ) AS op,
+         o.oprname, o.oid
+  FROM pg_catalog.pg_operator o
+  JOIN pg_catalog.pg_namespace n ON n.oid = o.oprnamespace
+  WHERE n.nspname = :'schema'
 )
 SELECT pg_catalog.json_build_object(
   'name', :'schema',
   'exists', EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = :'schema'),
   'database_version', 'PostgreSQL ' || pg_catalog.current_setting('server_version'),
   'tables', (SELECT COALESCE(pg_catalog.json_object_agg(relname, tbl), '{}'::json) FROM tables),
-  'types', (SELECT COALESCE(pg_catalog.json_object_agg(typname, typ), '{}'::json) FROM types)
+  'types', (SELECT COALESCE(pg_catalog.json_object_agg(typname, typ), '{}'::json) FROM types),
+  'functions', (SELECT COALESCE(pg_catalog.json_agg(fn ORDER BY proname, oid), '[]'::json) FROM functions),
+  'operators', (SELECT COALESCE(pg_catalog.json_agg(op ORDER BY oprname, oid), '[]'::json) FROM operators)
 );
