@@ -1,9 +1,11 @@
 (ns pgmalli.driver-types-test
-  "as-read against the rows next.jdbc builds from PostgreSQL's JDBC driver: one row of every
-   type pgmalli renders, read through every next.jdbc map builder pgmalli knows, under every :time.
-   JVM only (babashka has no java.sql), so bb test does not list it."
+  "as-read and query-schema against the rows next.jdbc builds from PostgreSQL's JDBC driver: the
+   rows of matrix.types (pgmalli.oracle/matrix-schema!: every type pgmalli renders, as itself, an
+   array, a domain, an array of the domain), read through every next.jdbc map builder pgmalli
+   knows, under every :time. JVM only (babashka has no java.sql), so bb test does not list it."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
+            [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
             next.jdbc.date-time
@@ -13,27 +15,22 @@
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             pgmalli.impl.jdbc
+            [pgmalli.oracle :as oracle]
             [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
 
-
-(def ^:private schema-sql
-  "CREATE EXTENSION citext;
-   CREATE TYPE mood AS ENUM ('a', 'b');
-   CREATE DOMAIN posint AS int CHECK (VALUE > 0);
-   CREATE DOMAIN email AS citext CHECK (VALUE ~ '@');
-   CREATE TABLE t (id int PRIMARY KEY, i2 smallint, i8 bigint, num numeric(10,2), nn numeric, r real, d double precision,
-     b1 bit(1), b8 bit(8), vb varbit, ct citext, bp char(3), vc varchar(5), tx text, u uuid,
-     dt date, tm time, ttz timetz, ts timestamp, tstz timestamptz, iv interval, js json, jb jsonb,
-     arr int[], tarr text[], e mood, dom posint, by bytea, o oid, bo boolean, em email);
-   CREATE VIEW v AS SELECT id, ct, r FROM t;
-   INSERT INTO t VALUES
-     (1, 1, 2, 3.45, 1.5, 1.5, 2.5, B'1', B'10101010', B'101', 'Ab', 'ab', 'abc', 'x', gen_random_uuid(),
-      '2026-01-01', '12:00', '12:00+09', '2026-01-01 00:00', '2026-01-01 00:00+00', '1 day', '{\"a\":1}', '{\"a\":1}',
-      '{1,2}', '{a}', 'a', 5, '\\x00', 26, true, 'a@b'),
-     (2, NULL, NULL, NULL, 'NaN', 'NaN', 'Infinity', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
-      NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL);")
-
-(use-fixtures :once with-postgres (fn [f] (when *db* (exec-sql! schema-sql)) (f)))
+(use-fixtures :once with-postgres
+  (fn [f]
+    (when *db*
+      (with-open [con (jdbc/get-connection (datasource))] (oracle/matrix-schema! con))
+      ;; beside the row of samples, one of NULLs (a domain's default where it refuses NULL) and
+      ;; one of NaN and Infinity
+      (exec-sql! "CREATE TYPE matrix.mood AS ENUM ('a', 'b');
+                  ALTER TABLE matrix.types ADD e matrix.mood;
+                  UPDATE matrix.types SET e = 'a';
+                  INSERT INTO matrix.types DEFAULT VALUES;
+                  INSERT INTO matrix.types (c_numeric, c_real, c_double_precision) VALUES ('NaN', 'NaN', 'Infinity');
+                  CREATE VIEW matrix.v AS SELECT * FROM matrix.types;"))
+    (f)))
 
 (def ^:private time-readers
   {:inst next.jdbc.date-time/read-as-default
@@ -41,46 +38,48 @@
    :local next.jdbc.date-time/read-as-local})
 
 (defn- disagreements
-  "[column class value] of each column of rows the schema refuses."
+  "[column class value] of each column of rows schema, of a sequence of rows, refuses."
   [registry schema rows]
   (for [row rows
-        e (:errors (m/explain [:sequential schema] rows {:registry registry}))
+        e (:errors (m/explain schema rows {:registry registry}))
         :let [[_ col] (:in e) v (get-in rows (:in e))]
         :when (= row (nth rows (first (:in e))))]
     [col (some-> v class .getName) v]))
 
 (deftest as-read-is-what-next-jdbc-builds
   (when *db*
-    (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+    (with-open [con (jdbc/get-connection (datasource))]
       (try
-        (doseq [[time read-as] time-readers
+        (doseq [:let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))]
+                [time read-as] time-readers
                 builder (keys @#'pgmalli.impl.jdbc/builders)
-                table [:pg.public/t :pg.public/v]
+                table [:types :v]
                 :let [_ (read-as)
                       jdbc-opts (cond-> {:builder-fn @(requiring-resolve builder)}
                                   (str/includes? (name builder) "modified") (assoc :label-fn str/upper-case :qualifier-fn #(str "t_" %)))
-                      rows (jdbc/execute! ds [(str "SELECT * FROM " (name table) " ORDER BY id")] jdbc-opts)
-                      schema (pgmalli/as-read registry table {:jdbc jdbc-opts :time time})]]
+                      q {:select [:*] :from [(keyword (str "matrix." (name table)))] :order-by [:id]}
+                      rows (jdbc/execute! con (sql/format q) jdbc-opts)
+                      opts {:jdbc jdbc-opts :time time :schema "matrix"}]]
           (testing (str builder " :time " time " " table)
-            (is (= [] (vec (distinct (disagreements registry schema rows)))))))
+            (is (= [] (vec (distinct (disagreements registry [:sequential (pgmalli/as-read registry (keyword "pg.matrix" (name table)) opts)] rows)))))
+            (is (= [] (vec (distinct (disagreements registry (last (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))) rows)))))))
         (finally (next.jdbc.date-time/read-as-default))))))
 
 (deftest a-value-read-is-written-back-where-postgresql-takes-it
   (when *db*
     (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "public"))
-          o {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps}}
-          row (jdbc/execute-one! ds ["SELECT * FROM t WHERE id = 1"] (:jdbc o))
-          values (m/schema (h/values-schema registry :t o) {:registry registry})
-          set (m/schema (h/set-schema registry :t o) {:registry registry})
-          ;; another test may load next.jdbc.date-time, which cannot send a java.sql.Time
-          taken? (fn [k v] (with-open [con (jdbc/get-connection ds)]
-                             (.setAutoCommit con false)
-                             (try (jdbc/execute! con [(str "UPDATE t SET " (name k) " = ? WHERE id = 2") v]) true
-                                  (catch Exception _ false)
-                                  (finally (.rollback con)))))]
-      (is (= [] (vec (for [[k v] (dissoc row :id)
-                           :when (and (taken? k v)
-                                      (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v)))))]
-                       [k (some-> v class .getName)])))))))
+          registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
+          o {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps} :schema "matrix"}
+          row (jdbc/execute-one! ds ["SELECT * FROM matrix.types WHERE id = 1"] (:jdbc o))
+          values (m/schema (h/values-schema registry :types o) {:registry registry})
+          set (m/schema (h/set-schema registry :types o) {:registry registry})]
+      (with-open [con (jdbc/get-connection ds)]
+        (.setAutoCommit con false)
+        (let [;; another test may load next.jdbc.date-time, which cannot send a java.sql.Time
+              taken? (fn [k v] (try (jdbc/execute! con [(str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2") v]) true
+                                    (catch Exception _ false)
+                                    (finally (.rollback con))))]
+          (is (= [] (vec (for [[k v] (dissoc row :id)
+                               :when (and (taken? k v)
+                                          (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v)))))]
+                           [k (some-> v class .getName)])))))))))
