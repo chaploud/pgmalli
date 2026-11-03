@@ -451,13 +451,39 @@
   [x]
   (sort-by (fn [[k]] [(get @clause-rank k Long/MAX_VALUE) (str k)]) x))
 
+(defn- clause-parts
+  "[path part sees] for the clauses of statement x but :with, in the order sql/format writes
+   them, path where part sits in x: what each part sees, decided here alone. :own, the
+   statement's tables and the enclosing ones (its conditions, select, assignments); :outer, only
+   the enclosing ones (INSERT ... SELECT, the rows of :values and a table item of :from or a
+   join: none sees the statement's own tables); :lateral, those and the tables before it (a
+   LATERAL item, a function)."
+  [x]
+  (for [[k v] (clause-entries x) :when (not (some #{k} with-keys))
+        part (cond (#{:insert-into :values} k) [[[k] v :outer]]
+                   (and (vector? v) (some #{k} from-keys))
+                   (map-indexed (fn [i t] [[k i] t (if (lateral? t) :lateral :outer)]) v)
+                   (and (vector? v) (some #{k} join-keys))
+                   (map-indexed (fn [i t] [[k i] t (cond (odd? i) :own (lateral? t) :lateral :else :outer)]) v)
+                   (some #{k} (concat from-keys join-keys)) [[[k] v :outer]]
+                   :else [[[k] v :own]])]
+    part))
+
+(defn- part-chain
+  "The chain of scopes a part (clause-parts) of a statement of chain sees, outer the chain of the
+   statements enclosing it. A LATERAL item sees its statement's tables, but not itself."
+  [sees part chain outer schema]
+  (case sees
+    :own chain
+    :outer outer
+    :lateral (cons (dissoc (first chain) (second (table-ref part schema))) (rest chain))))
+
 (defn- statement-chains
-  "[[statement scopes path] ...] for the statements of a query, scopes the statement's own scope
-   followed by those of the statements enclosing it, path where it sits in the query. What a
-   part of a statement sees is decided here alone: its conditions, select and assignments its
-   own tables and the enclosing ones; a table item of :from or a join (a subquery), the body of
-   a CTE and the rows of :values only the enclosing ones (LATERAL its own too); a :with entry
-   the entries before it, a :with-recursive one all of them. A statement found inside a vector
+  "[[statement scopes path outer] ...] for the statements of a query, scopes the statement's own
+   scope followed by those of the statements enclosing it (outer), path where it sits in the
+   query. What a part of a statement sees is clause-parts'; the body of a CTE sees the
+   enclosing statements, a :with entry the entries before it, a :with-recursive one all of
+   them. A statement found inside a vector
    of a code form, not under a statement (a subquery a helper adds to a query built elsewhere,
    or a CTE body bound apart from its :with), has an enclosing statement this data does not
    show: its chain ends in :open, a column it cannot resolve is taken to be the enclosing
@@ -472,34 +498,17 @@
                         ctes (into base (keep cte-name) (cte-entries x))
                         outer (if open? (list :open) outer)
                         ;; a column of a table code brings in is the enclosing data's, untyped
-                        chain (cons (typed-scope registry body x (scope registry x ctes opts) ctes outer opts) (cond->> outer (code-sources? x) (cons :open)))
-                        part (fn [k v scopes cs] (walk v (conj path k) scopes cs false true))
-                        ;; a LATERAL item sees its statement's tables, but not itself
-                        lateral-chain (fn [t] (cons (dissoc (first chain) (second (table-ref t (:schema opts)))) (rest chain)))
-                        items (fn [k v]
-                                (if (vector? v)
-                                  (apply concat (map-indexed (fn [i t] (walk t (conj path k i) (if (lateral? t) (lateral-chain t) outer) ctes false true)) v))
-                                  (part k v outer ctes)))]
-                    (cons [x chain path]
+                        chain (cons (typed-scope registry body x (scope registry x ctes opts) ctes outer opts) (cond->> outer (code-sources? x) (cons :open)))]
+                    (cons [x chain path outer]
                           (concat
                            (for [k with-keys :let [w (get x k)] :when (some? w)
                                  found (if (vector? w)
                                          (apply concat (map-indexed (fn [i e] (walk e (conj path k i) outer (into base (keep cte-name) (if (= :with-recursive k) w (take i w))) false true)) w))
-                                         (part k w outer ctes))]
+                                         (walk w (conj path k) outer ctes false true))]
                              found)
-                           ;; INSERT ... SELECT, and the rows of :values, do not see the table inserted into
-                           (mapcat #(part % (get x %) outer ctes) (filter #(contains? x %) [:insert-into :values]))
-                           (mapcat #(items % (get x %)) (filter #(contains? x %) from-keys))
-                           (for [k join-keys :let [j (get x k)] :when (some? j)
-                                 found (if (vector? j)
-                                         (apply concat (map-indexed (fn [i t] (if (even? i)
-                                                                                (walk t (conj path k i) (if (lateral? t) (lateral-chain t) outer) ctes false true)
-                                                                                (walk t (conj path k i) chain ctes false true)))
-                                                                    j))
-                                         (part k j outer ctes))]
-                             found)
-                           (mapcat (fn [[k v]] (part k v chain ctes))
-                                   (clause-entries (apply dissoc x :insert-into :values (concat with-keys from-keys join-keys)))))))
+                           (for [[ks v sees] (clause-parts x)
+                                 found (walk v (into path ks) (part-chain sees v chain outer (:schema opts)) ctes false true)]
+                             found))))
                   (branch? x) (apply concat (map-indexed (fn [i c] (walk c (conj path i) outer ctes (or in-vector? (vector? x)) under?)) (seq x)))))]
     (walk body [] outer (into (free-cte-names body) (code-ctes body)) false false))))
 
