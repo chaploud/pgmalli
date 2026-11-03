@@ -1668,6 +1668,48 @@
   ([registry body opts]
    (into [:map] (sort-by (comp str key) (arg-types registry body opts)))))
 
+(def ^:private aggregate-fns
+  #{"count" "sum" "avg" "min" "max" "bool_and" "bool_or" "every" "string_agg" "array_agg"
+    "json_agg" "jsonb_agg" "json_object_agg" "jsonb_object_agg"})
+
+(defn- constant?
+  "Whether x is the same value on every row: an argument, a literal, or a cast of one."
+  [x]
+  (or (param-key x) (symbol? x) (number? x) (string? x) (boolean? x) (uuid? x)
+      (and (vector? x) (= :cast (first x)) (constant? (second x)))))
+
+(defn- row-count
+  "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise: one of
+   a SELECT of aggregates alone (no GROUP BY, HAVING or OFFSET); at most one of a statement on
+   one table whose WHERE holds its primary key's or a UNIQUE constraint's columns equal to a
+   value (NULL equals none); as many as :values has rows of an INSERT returning (at least none
+   under ON CONFLICT); at most :limit."
+  [registry stmt {:keys [schema] :or {schema default-schema}}]
+  (when (and (map? stmt) (not-any? #(contains? stmt %) set-operation-keys))
+    (let [write? (some #(contains? stmt %) write-keys)
+          items (selected-items stmt)
+          targets (if write? (write-targets stmt) (concat (from-items stmt from-keys) (map second (join-items stmt))))
+          [table alias] (when (= 1 (count targets)) (table-ref (first targets) schema))
+          where (:where stmt)
+          equal (set (for [c (if (and (vector? where) (= :and (first where))) (rest where) [where])
+                           :when (and (vector? c) (= := (first c)) (= 3 (count c)))
+                           [a b] [[(second c) (nth c 2)] [(nth c 2) (second c)]]
+                           :when (and (column-keyword? a) (constant? b))
+                           :let [[q col] (split-column a)]
+                           :when (or (nil? q) (= q alias))]
+                       (folded col)))
+          props (when table (shape/row-props (get (::schemas registry) (shape/table-key table))))
+          unique? (some #(every? equal %) (cond-> (map :columns (:pg/unique props)) (:pg/primary-key props) (conj (:pg/primary-key props))))
+          rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (insert-parts stmt)))) (count (:values stmt)))
+          limit (let [n (:limit stmt)] (when (and (integer? n) (<= 0 n)) n))
+          counted (cond (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not-any? #(contains? stmt %) [:group-by :having :offset])
+                             (every? #(let [e (when (vector? %) (first %))] (and (vector? e) (keyword? (first e)) (aggregate-fns (folded (name (first e)))))) items))
+                        {:min 1 :max 1}
+                        (and rows (:returning stmt)) {:min (if (contains? stmt :on-conflict) 0 rows) :max rows}
+                        (and unique? (or (not write?) (:returning stmt)) (not (:insert-into stmt))) {:min 0 :max 1})
+          m (cond-> counted limit (update :max #(min (or % limit) limit)) (and limit (not counted)) (assoc :min 0))]
+      (when (:max m) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
+
 (defn query-schema
   "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
    and running body: the args' types from arg-types (:any for a key the query lacks), the
@@ -1695,9 +1737,11 @@
          row (row-schema registry body opts)]
      (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
            [(into [:cat] (map #(get types % :any)) args)
-            (cond (nil? row) :any
-                  (= :one result) (if (= update-count row) row [:maybe row])
-                  :else [:sequential row])]))))
+            (let [{:keys [min max]} (row-count registry body opts)]
+              (cond (nil? row) :any
+                    (= :one result) (if (or (= update-count row) (= 1 min)) row [:maybe row])
+                    max [:sequential (cond-> {:max max} (pos? min) (assoc :min min)) row]
+                    :else [:sequential row]))]))))
 
 ;;; what an application writes
 

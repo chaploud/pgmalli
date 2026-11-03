@@ -35,6 +35,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `"1"` is the label `1`, and a number outside the list is an `:enum-literal`.
 * `h/row-schema` types `greatest`, `least` and `nullif` as `coalesce`, and `h/arg-types` types
   an argument of any of them with the type the other arguments resolve to.
+* `h/query-schema`'s return says how many rows the data tells: one of a SELECT of aggregates
+  alone (under `{:result :one}`, no `[:maybe]`), at most one where the WHERE holds a primary key
+  or a UNIQUE constraint equal to a value, one for each row an INSERT returns, at most
+  `:limit` (`[:sequential {:max 1} row]`).
 * A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type.
 * Where the format quotes names, HoneySQL writes `:default` as the column `"default"`:
   `h/values-schema` and `h/set-schema` take `[:default]` alone there.

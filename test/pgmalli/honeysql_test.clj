@@ -296,10 +296,10 @@
     (let [row (h/row-schema registry body (built opts 'next.jdbc.optional/as-unqualified-maps))]
       (is (= [:closed_at {:optional true} ['inst? {:pg/type "timestamptz"}]] (nth row 3)) "by default time columns are inst?, which the default registry has")
       (is (m/validate row {:id 1 :g 2 :closed_at (java.util.Date.)}) "and no registry is needed"))
-    (is (= [:=> [:cat bigint :any] [:sequential [:map [:n bigint]]]]
+    (is (= [:=> [:cat bigint :any] [:sequential {:max 1 :min 1} [:map [:n bigint]]]]
            (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
         "a symbol used nowhere is :any")
-    (is (= [:sequential [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
+    (is (= [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
            (last (h/query-schema registry '[id] '{:select [:id] :from [:users] :where [:= :id id]} opts))))))
 
 (deftest scope-follows-the-statement
@@ -1554,3 +1554,21 @@
   (is (= {:n [:maybe [:string {:pg/type "character varying"}]]} (args {:update :users :set {:nick [:coalesce :?n :nick]} :where [:= :id 1]})))
   (is (= {:x [:maybe bigint]} (args {:select [:id] :from [:users] :where [:= :id [:nullif :?x 0]]})))
   (is (= {:a :any :b :any} (args {:select [[[:least :?a :?b] :m]]})) "arguments alone resolve to nothing pgmalli tells"))
+
+(deftest the-return-says-how-many-rows-the-data-tells
+  (let [ret #(last (h/query-schema registry [:db] % (merge opts %2)))
+        n [:map [:n bigint]]]
+    (is (= [:sequential {:max 1 :min 1} n] (ret {:select [[[:count :*] :n]] :from [:users]} {})) "aggregates alone: one row")
+    (is (= n (ret {:select [[[:count :*] :n]] :from [:users]} {:result :one})) "so execute-one! returns it")
+    (is (= [:sequential n] (ret {:select [[[:count :*] :n]] :from [:users] :group-by [:mood]} {})) "a row per group")
+    (is (= 1 (:max (second (ret {:select [:nick] :from [[:users :u]] :where [:and [:= :u.id :?id] [:> :score 1]]} {}))))
+        "the primary key equal to a value: at most one")
+    (is (not (map? (second (ret {:select [:nick] :from [:users] :where [:= :id [:+ :score 1]]} {}))))
+        "a key equal to an expression of the row matches many")
+    (is (= 5 (:max (second (ret {:select [:nick] :from [:users] :limit 5} {})))))
+    (is (not (map? (second (ret {:select [:u.nick] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :where [:= :u.id :?id]} {}))))
+        "a join may repeat a row")
+    (is (= :map (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :returning [:id]} {:result :one})))
+        "an INSERT returns a row for each of its rows")
+    (is (= :maybe (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :on-conflict [] :do-nothing true :returning [:id]} {:result :one})))
+        "unless ON CONFLICT skips it")))

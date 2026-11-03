@@ -374,6 +374,20 @@ datasource or connection, `:any` when `h/row-schema` gives nil. `{:result :one}`
 ;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
 ```
 
+Where the data tells how many rows a statement returns, the return says so: one row of a SELECT
+of aggregates alone (no GROUP BY, HAVING or OFFSET), so `{:result :one}` drops the `[:maybe]`;
+at most one of a statement on one table whose WHERE holds its primary key's or a UNIQUE
+constraint's columns equal to a value; one for each row of an INSERT's `:values` with RETURNING
+(at least none under ON CONFLICT); at most `:limit`:
+
+```clojure
+(h/query-schema registry [:db] {:select [[[:count :*] :n]] :from [:users]} {:result :one})
+;; => [:=> [:cat :any] [:map [:n [:int #:pg{:type "bigint"}]]]]
+
+(last (h/query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]}))
+;; => [:sequential {:max 1} [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]
+```
+
 A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement
 returns, or a value made of the rows, needs a return schema of its own. [README.md](../README.md#function-schemas-for-queries) puts
 it on a function and instruments it.
