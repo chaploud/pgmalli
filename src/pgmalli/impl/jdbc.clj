@@ -30,8 +30,8 @@
                              [:json {:optional true} [:enum :parsed]]]]]
    [:jdbc {:optional true} [:map
                             [:builder-fn {:optional true} [:or ifn? qualified-symbol?]]
-                            [:label-fn {:optional true} ifn?]
-                            [:qualifier-fn {:optional true} ifn?]
+                            [:label-fn {:optional true} [:or fn? [:fn var?]]]
+                            [:qualifier-fn {:optional true} [:or fn? [:fn var?]]]
                             [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
    ;; {class type}, which options! checks
    [:send {:optional true} [:map-of :any :any]]
@@ -196,6 +196,10 @@
                           (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
                      e))))
     (let [{:keys [builder-fn label-fn] :as jdbc} (:jdbc opts)]
+      (doseq [k [:label-fn :qualifier-fn] :let [f (get jdbc k)] :when (symbol? f)]
+        (fail! (str ":jdbc's " k " is the function next.jdbc takes, not its symbol: " (pr-str f)
+                    " (a symbol is the builder-fn's alone, for babashka)")
+               (select-keys jdbc [k])))
       (when builder-fn
         (let [how (builder builder-fn)]
           (cond (nil? how)

@@ -414,7 +414,7 @@
                     types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (beyond-list registry t)) t)])))
                     ;; a recursive CTE's columns come from a UNION: from no table
                     origins (into {} (for [[c _ o] named :when (or recursive? o)] [c (if recursive? "" o)]))]
-                (cond-> sc types (update alias assoc :types types :origins origins))))
+                (cond-> sc types (update alias assoc :types types :origins origins :order (mapv first named)))))
             sc items)))
 
 (def ^:private clause-rank
@@ -1819,6 +1819,7 @@
                                (let [n (canonical-type t)
                                      input (operator-input :min-max n)]
                                  {:schema (loose (if (= n input) (:schema t) (type-schema input))) :nullable? true}))
+      (#{"bool_and" "bool_or" "every"} fname) (assoc (typed "boolean") :nullable? true)
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical-type)]) typed (assoc :nullable? true))
       ;; a string takes the others' type, as PostgreSQL resolves a varchar or unknown one; result-type
       ;; leaves an argument's untyped
@@ -1874,23 +1875,36 @@
                          ;; keys the driver may give it: each optional
                          props (when (next by-key) {:optional true})]
                      (for [[_ t] by-key] (entry t label s nullable? props)))))
+        ;; [[column entry] ...] of a table, or of a typed subquery or CTE, in order; the entry
+        ;; [::untold c] for a column whose key is not told
+        columns (fn [{:keys [table nullable? opaque? order types origins]}]
+                  (if opaque?
+                    (for [c order :let [o (get origins c)]]
+                      [c (if (and qualified? (nil? o)) [::untold c] (entry [nil o] c (get types c) nullable? nil))])
+                    (for [[c s] (column-entries registry table)] [c (entry table c s nullable? nil)])))
         star (fn [col]
                (let [[a] (split-column col)
                      tables (if a (some-> (get sc a) vector) (vals sc))]
-                 (when (and (seq tables) (every? #(and % (not (:opaque? %))) tables))
+                 (when (and (seq tables) (every? #(and % (or (not (:opaque? %)) (:order %))) tables))
                    (if a
-                     (for [{:keys [table nullable?]} tables, [c s] (column-entries registry table)] (entry table c s nullable? nil))
+                     (map second (mapcat columns tables))
                      ;; SELECT * lists a column USING merges once
                      (concat (mapcat (fn [[c m]] (merged c m)) merges)
-                             (for [[alias {:keys [table nullable?]}] sc, [c s] (column-entries registry table)
+                             (for [[alias e] sc, [c en] (columns e)
                                    :when (not (some #{alias} (:tables (get merges c))))]
-                               (entry table c s nullable? nil)))))))
+                               en))))))
+        ;; PostgreSQL drops a cast to the type the value has already, which leaves the column
+        ;; (and its table) as it is; a cast to another type makes an expression of no table
+        kept-column? (fn kept? [x]
+                       (or (not (cast-of-column? x))
+                           (let [[a b] (map #(canonical-type (expression-type registry chain % opts)) [x (second x)])]
+                             (and (or (nil? a) (nil? b) (= a b)) (kept? (second x))))))
         items (for [item (selected-items stmt)
                     :let [[col alias] (select-parts item opts)]]
                 (cond
                   (nil? col) (when-let [n (item-name item opts)]
                                (let [x (if alias (first item) (item-expression item))]
-                                 (if (and qualified? (cast-of-column? x))
+                                 (if (and qualified? (cast-of-column? x) (kept-column? x))
                                    (untold n)
                                    (let [{s :schema :keys [nullable?]} (expression-type registry chain x opts)]
                                      [(entry nil n s nullable? nil)]))))
@@ -1920,7 +1934,11 @@
               (for [entries (apply map vector (map rest rows))
                     :let [schemas (map last entries)
                           inners (distinct (map shape/non-null schemas))]]
-                (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts) (if (= 1 (count inners)) (first inners) :any) (some maybe? schemas) opts)))))))
+                ;; PostgreSQL resolves each column's type as CASE's: numbers the widest
+                (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts)
+                                (cond (= 1 (count inners)) (first inners)
+                                      :else (or (some-> (resolved-type (repeat nil) (map #(hash-map :schema %) inners)) :schema loose) :any))
+                                (some maybe? schemas) opts)))))))
 
 (defn- row-schema*
   "row-schema of the statement at path in a query, chains its statements' scope chains by path

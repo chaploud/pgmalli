@@ -283,7 +283,8 @@ its labels as strings, though PostgreSQL takes no varchar for an enum: `h/check`
 `h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
 join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
 names, keyed as next.jdbc keys a column of no table: unqualified, unless a `:qualifier-fn`
-makes a name of `""`:
+makes a name of `""`; each column is of the type PostgreSQL resolves its members' to, as for
+`CASE`. `SELECT *` of a subquery or a CTE lists the columns its SELECT gives:
 
 ```clojure
 (h/row-schema registry {:select [:u.email :p.title]
@@ -298,7 +299,7 @@ makes a name of `""`:
 An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
 by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
 `:timestamptz`), with its length (`[:varchar 10]`), or to an enum type or domain of the
-registry, `count`, `sum`, `avg`, `min`, `max`, `coalesce`, `greatest`, `least` and `CASE` of
+registry, `count`, `sum`, `avg`, `min`, `max`, `bool_and`, `bool_or`, `every`, `coalesce`, `greatest`, `least` and `CASE` of
 values of one type, or of numbers the widest of them, `nullif` of two of one type, as `=` reads
 it, a literal `[:inline ...]` writes, an operator that makes a boolean (`=`, `IN`, `LIKE`,
 `BETWEEN`, `AND` ..., `EXISTS`, `IS`), the clock's values (`now()`, `current_date` ...), `->>`,

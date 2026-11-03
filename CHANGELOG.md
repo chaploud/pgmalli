@@ -26,7 +26,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `:jdbc` takes the options an application passes to next.jdbc: `:builder-fn` (one of
   next.jdbc's map builders, as the function, its var, or its qualified symbol where next.jdbc
   does not load) keys rows as next.jdbc does, and under a modified builder `:label-fn` and
-  `:qualifier-fn` too; `:return-keys` adds RETURNING to a write.
+  `:qualifier-fn` too (functions: a symbol is an error); `:return-keys` adds RETURNING to a write.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
   `:set` built at run time, keyed as the `:jdbc` builder keys a row where HoneySQL writes that
   key back to the column; `h/set-schema` takes a non-empty map. They take no keyword but
@@ -47,7 +47,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   type, as `=` reads it. A string among them takes the others' type; an argument leaves the
   expression untyped unless the type is a string type, as pgjdbc sends numbers and dates typed.
   `CASE` without `:else` may be NULL. `min` and `max` read a `varchar`, `"char"` or `name` as
-  `text`, a `cidr` as `inet` and a reg* type as `oid`. It also types a literal
+  `text`, a `cidr` as `inet` and a reg* type as `oid`. `bool_and`, `bool_or` and `every` are
+  `boolean`. A column cast to another type is keyed by no table, as an expression; one cast to
+  its own type, which PostgreSQL drops, is untold under qualified keys. It also types a literal
   `[:inline ...]` writes, and the functions that build json and jsonb (`jsonb_build_object`,
   `jsonb_agg` ...) as a column of the type is read: an object or an array under
   `{:read {:json :parsed}}`. An unaliased CASE is named after its ELSE where that has a name of
@@ -58,7 +60,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   with the tables before it, a recursive CTE as its first member, NULL allowed and a CHECK's
   list read as its base type; a column it does not give is `:unknown-column`. Under qualified
   keys, a CTE's or a subquery's column is keyed by the table PostgreSQL traces it to (an expression's, a set
-  operation's and a recursive CTE's by none), where it was left untold. A table function
+  operation's and a recursive CTE's by none), where it was left untold. `SELECT *` of one lists
+  its columns. A set operation's column is of the type PostgreSQL resolves its members' to (an
+  integer and a bigint a bigint), where it was `:any` unless they agreed. A table function
   (`WITH ORDINALITY` too) is named by its alias. An argument of an `unnest` in `FROM` is an
   array of the type of where its column goes: compared, assigned by `INSERT ... SELECT` or
   `UPDATE ... SET`, or cast.

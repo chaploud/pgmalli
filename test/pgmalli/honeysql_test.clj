@@ -163,10 +163,12 @@
   (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]] [:top-id [:maybe bigint]]]
          (row {:select [:id [[:max :id] :top_id]] :from [:users]} (built opts 'next.jdbc.result-set/as-kebab-maps)))
       "an expression has no table: its key is unqualified, kebab-cased as the builder does")
-  (is (= [:map {:pgmalli/untold [:nick]}] (row {:select [[[:cast :nick :text]]] :from [:users]} (dissoc opts :jdbc)))
+  (is (= [:map {:pgmalli/untold [:name]}] (row {:select [[[:cast :name :text]]] :from [:groups]} (dissoc opts :jdbc)))
       "a cast to the column's own type is dropped and the key keeps the table: not told without the types")
-  (is (= [:map {:pgmalli/untold [:n]}] (row {:select [[[:cast :nick :text] :n]] :from [:users]} (dissoc opts :jdbc)))
-      "an alias keeps the table all the same"))
+  (is (= [:map {:pgmalli/untold [:n]}] (row {:select [[[:cast :name :text] :n]] :from [:groups]} (dissoc opts :jdbc)))
+      "an alias keeps the table all the same")
+  (is (= [:map [:nick [:maybe text]]] (row {:select [[[:cast :nick :text]]] :from [:users]} (dissoc opts :jdbc)))
+      "a varchar cast to text is an expression of no table"))
 
 (deftest a-set-operations-row-is-named-by-its-first-member
   (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]
@@ -349,7 +351,9 @@
   (is (= [] (check {:select [:users/* [[:count :g.id] :n]] :from [:users] :left-join [[:groups :g] [:= :g.id :users.group_id]] :group-by [:users/id]})))
   (is (= [:map [:id int4] [:name text]]
          (row {:select [:groups/*] :from [:groups]})) ":t/* is the table's columns")
-  (is (nil? (row {:select [:*] :from [[{:select [:id] :from [:users]} :r]]})) "an opaque table's * is unknown")
+  (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row {:select [:*] :from [[{:select [:id] :from [:users]} :r]]}))
+      "a subquery's * is the columns its SELECT gives")
+  (is (nil? (row {:select [:*] :from [[[:generate_series 1 3] :r]]})) "an opaque table's * is unknown")
   (is (= [] (check {:select [:cp.id] :from [[:users :cp]] :join [[:groups :c] [:= :c.id :cp.group_id]]
                     :left-join [[{:select-distinct-on [[:group_id] :group_id :score] :from [:users] :where [:= :group_id 'g] :order-by [[:group_id :asc] [:id :desc]]} :latest]
                                 [:= :latest.group_id :cp.group_id]]}))
@@ -621,6 +625,30 @@
     (let [e (try (args {:select [:id] :from [:users]} o) nil (catch clojure.lang.ExceptionInfo e e))]
       (is (re-find says (str (ex-message e))) (pr-str o))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o)))))
+
+(deftest a-label-fn-is-a-function-not-its-symbol
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #":label-fn is the function next.jdbc takes, not its symbol"
+                        (row {:select [:id] :from [:users]} (assoc opts :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-modified-maps
+                                                                                 :label-fn 'clojure.string/lower-case})))))
+
+(deftest a-derived-tables-and-a-set-operations-columns-are-typed
+  (let [lower (assoc opts :jdbc {:builder-fn 'next.jdbc.optional/as-lower-maps})]
+    (is (= [:map [:pending [:boolean {:pg/type "boolean"}]] [:all [:maybe [:boolean {:pg/type "boolean"}]]]]
+           (row {:select [[[:coalesce [:bool_or [:= :id 1]] false] :pending] [[:bool_and [:> :score 0]] :all]] :from [:users]}))
+        "bool_or, bool_and and every are boolean, NULL over no row")
+    (is (= [:map [:token [:string {:pg/type "text"}]]] (row {:select [[[:cast :id :text] :token]] :from [:users]} lower))
+        "a cast to another type is an expression: no table keys it")
+    (is (= [:map {:pgmalli/untold [:n]}] (row {:select [[[:cast :nick :varchar] :n]] :from [:users]} lower))
+        "a cast to the column's own type is dropped: its table keys it")
+    (is (= [:map [:uid [:int {:pg/identity :always :pg/type "bigint"}]] [:one int4]]
+           (row {:select [:*] :from [[{:select [[:id :uid] [[:inline 1] :one]] :from [:users]} :m]]}))
+        "SELECT * of a subquery lists its columns in order")
+    (is (= [:map {:pgmalli/untold [:n]} [:users/uid [:int {:pg/identity :always :pg/type "bigint"}]] [:one int4]]
+           (row {:select [:m/*] :from [[{:select [[:id :uid] [[:cast :nick :varchar] :n] [[:inline 1] :one]] :from [:users]} :m]]}
+                (dissoc opts :jdbc)))
+        "under SELECT * a column is keyed by the table PostgreSQL traces it to, or untold")
+    (is (= [:map [:x bigint]] (row {:select [:x] :from [[{:union [{:select [[:id :x]] :from [:users]} {:select [[:score :x]] :from [:users]}]} :s]]}))
+        "a set operation's column is of the type PostgreSQL resolves its members' to: numbers the widest")))
 
 (deftest a-misshapen-send-names-what-is-wrong
   (doseq [[o says] [[{:send [[String :unknown]]} #":send is a map of classes to types"]
@@ -1050,7 +1078,8 @@
 
 (deftest rows-read-each-statement-where-it-sits
   (let [q {:select [:id] :from :groups}]
-    (is (= [:map [:id :any]] (row {:union [q {:with [[:groups {:select [:id] :from :users}]] :select [:id] :from :users :where [:in :id q]}]}))
+    ;; read in the CTE's scope, the first member would be a varchar, which a bigint does not resolve with
+    (is (= [:map [:id [:int {:pg/type "bigint"}]]] (row {:union [q {:with [[:groups {:select [[:nick :id]] :from :users}]] :select [:id] :from :users :where [:in :id q]}]}))
         "the same statement twice, each in its own scope")))
 
 (deftest code-anywhere-leaves-its-part-unjudged
