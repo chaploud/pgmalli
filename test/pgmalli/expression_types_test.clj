@@ -115,7 +115,7 @@
                         (for [c cols, f [:sum :avg :min :max :count]] [f c])))))
 
 (def ^:private values
-  "SQL words, json builders, literals, parameters, scalar subqueries and a parenthesized call."
+  "SQL words, json builders, literals, parameters, scalar subqueries, a parenthesized call, aggregates with ORDER BY."
   [:current_timestamp :current_date :current_time :localtimestamp :localtime :true :false
    :current_user :session_user [:now] :%now [:count :*] :%count.*
    [:jsonb_build_object "a" (col "integer")] [:json_build_object "a" (col "integer")] [:jsonb_build_array (col "integer")] [:json_build_array (col "integer")]
@@ -126,6 +126,7 @@
    1 10000000000 1.5M 1.5 "s" true
    [:lift 1] [:lift (int 1)] [:lift (short 1)] [:lift 10000000000] [:lift 1.5M] [:lift 1.5] [:lift (float 1.5)]
    {:select [[[:max (col "integer")]]] :from [:u]} {:select [(col "text")] :from [:u]} [[:count (col "integer")]]
+   [:array_agg [:order-by (col "integer") (col "text")]] [:string_agg (col "text") [:order-by [:inline ","] (col "integer")]]
    [:lift 1N] [:lift "s"] [:lift true] [:lift (java.util.UUID/randomUUID)] [:lift (java.time.LocalDate/of 2026 1 1)]])
 
 (deftest words-json-builders-literals-and-parameters-are-typed-as-postgresql-types-them

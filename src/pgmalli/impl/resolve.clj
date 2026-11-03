@@ -250,11 +250,11 @@
          (when (and (= 1 (count rs)) (string? (first rs)) (not (polymorphic (first rs))) (not= "record" (first rs)))
            {:result (first rs) :non-null (every? (comp :non-null :overload) cs)}))))))
 
-(defn argument-type
-  "The type PostgreSQL resolves a parameter at position i of a call (as call takes it, :free
-   there, os too) to: the one type every candidate it may resolve to takes there; nil for none or
-   more."
-  ([kind n ins i] (argument-type kind n ins i (overloads kind n)))
+(defn argument-types
+  "The types a parameter at position i of a call (as call takes it, :free there, os too) may be
+   resolved to: the one each candidate it may resolve to takes there, as a value of a type of
+   its own picks one; nil where one is polymorphic, \"any\" or not told."
+  ([kind n ins i] (argument-types kind n ins i (overloads kind n)))
   ([_ _ ins i os]
    (when (and (seq os) (every? some? ins))
      (in-every-version
@@ -263,9 +263,9 @@
         (let [cs (candidates os (count ins))
               ts (distinct (for [c cs :when (viable? c ins)]
                              (when-not (:ambiguous c) (bound (nth (:decls c) i) (bind (:decls c) ins)))))]
-          (when (and (= 1 (count ts)) (string? (first ts)) (not (polymorphic (first ts))) (not= "\"any\"" (first ts))
+          (when (and (seq ts) (every? #(and (string? %) (not (polymorphic %)) (not= "\"any\"" %)) ts)
                      (not-any? #(doubtful? % ins) cs))
-            (first ts))))))))
+            (set ts))))))))
 
 (defn set-returning?
   "Whether a function of name n may return a set: one of its overloads (pg_catalog's, or os) does,

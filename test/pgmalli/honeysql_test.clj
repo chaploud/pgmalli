@@ -2213,3 +2213,22 @@
     (is (= [:n bigint] (nth r 1)) "count is a bigint, never NULL")
     (is (= [:j [:maybe [:any {:pg/type "jsonb"}]]] (nth r 2)))
     (is (= [:u [:maybe :any]] (nth r 3)) "upper of a range is a range")))
+
+(deftest an-aggregates-order-by-leaves-its-type
+  (is (= [:map [:ids [:maybe [:any {:pg/type "bigint[]"}]]] [:s [:maybe text]]]
+         (row {:select [[[:array_agg [:order-by :id [:id :desc]]] :ids] [[:string_agg [:cast :id :text] [:order-by [:inline ","] :id]] :s]]
+               :from [:users]}))))
+
+(deftest an-operator-over-any-or-all-is-boolean-and-compares-the-elements
+  (is (= [:map [:hit [:maybe [:boolean {:pg/type "boolean"}]]]] (row {:select [[[:= :id [:any [:array [1 2]]]] :hit]] :from [:users]})))
+  (is (= {:x text} (args {:select [:id] :from [:users] :where [:= :?x [:any [:array [[:cast :nick :text]]]]]}))
+      "x = ANY(a) takes a's element type"))
+
+(deftest a-parameter-a-call-may-resolve-several-ways-takes-the-values-of-each
+  (is (= {:n [:maybe [:or 'decimal? 'integer? :int]]} (args {:select [:*] :from [[[:generate_series 1 :?n] :g]]}))
+      "an int, an int8 or a numeric each picks its overload")
+  (is (= {:at [:maybe [:or 'inst? :time/local-date-time :time/offset-time :time/offset-date-time]]}
+         (args {:select [[[:timezone :nick :?at] :t]] :from [:users]}))))
+
+(deftest an-array-cast-casts-each-element
+  (is (= (args {:select [[[:cast :?k :text] :a]]}) (args {:select [[[:array [:?k] :text] :a]]}))))

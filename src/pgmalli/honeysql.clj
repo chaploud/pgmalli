@@ -1269,11 +1269,18 @@
       (and (number? l) (number? v) (== l v))
       (and (number? l) (string? v) (some-> (parse-number v) (== l)))))
 
+(defn- array-of-elements?
+  "Whether x is ANY(a), SOME(a) or ALL(a), the right operand of an operator over a's elements."
+  [x]
+  (and (vector? x) (= 2 (count x)) (#{:any :some :all} (first x))))
+
 (defn- side-schema
   "The column schema of one side of a comparison: a column's, or an expression's where
    expression-type tells it; nil otherwise."
   [registry sc side opts]
   (cond (column-keyword? side) (:schema (resolve-column registry sc side))
+        ;; x op ANY(array) compares x with the array's elements (docs 9.24.3)
+        (array-of-elements? side) (some-> (expression-type registry sc (second side) opts) :type types/element type-schema)
         (vector? side) (:schema (expression-type registry sc side opts))))
 
 (defn- string-problems
@@ -1793,7 +1800,10 @@
   [registry ps opts]
   (let [nodes (expression-nodes ps)
         casts (for [{:keys [x chain]} nodes
-                    :when (and (vector? x) (= :cast (first x)) (= 3 (count x)))
+                    ;; ARRAY[...]::t[] casts each element to t (transformArrayExpr)
+                    x (cond (and (vector? x) (= :cast (first x)) (= 3 (count x))) [x]
+                            (and (vector? x) (= :array (first x)) (= 3 (count x)) (sequential? (second x)) (keyword? (nth x 2)))
+                            (for [e (second x)] [:cast e (nth x 2)]))
                     :let [[k elements?] (value-arg registry chain (second x))]
                     :when k]
                 [x chain k elements?])
@@ -1853,8 +1863,8 @@
     [o (nullable (accepted-type registry (beyond-list registry (:schema r)) :compare opts))]))
 
 (defn- call-args
-  "An argument of a function or an operator: of the one type every candidate PostgreSQL may
-   resolve the call to takes there, as an untyped value is resolved; nil may go there too."
+  "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve
+   the call to take there, as a value of each type sent picks one; nil may go there too."
   [registry ps opts]
   (for [{:keys [x chain]} (expression-nodes ps)
         :let [[kind n args :as parts] (when-not (comparison? x) (call-parts x))]
@@ -1863,10 +1873,12 @@
               os (reached registry opts parts)]
         [i a] (map-indexed vector args)
         :when (arg-key a)
-        :let [t (resolve/argument-type kind n ins i os)
-              s (some-> t type-schema)]
-        :when s]
-    [a (nullable (accepted-type registry s :compare opts))]))
+        :let [ss (map type-schema (resolve/argument-types kind n ins i os))]
+        :when (and (seq ss) (every? some? ss))]
+    [a (nullable (if (next ss)
+                   ;; a value of each type, which a :pg/type of one would misname
+                   (shape/either (shape/distinct-kinds (mapcat #(map unlabel (shape/alternatives (accepted-type registry % :compare opts))) ss)) :any)
+                   (accepted-type registry (first ss) :compare opts)))]))
 
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
@@ -2126,8 +2138,9 @@
                              (some-> (typed (str (:type r) "[]")) (assoc :nullable? false)))))))
       (or (#{:exists :not-exists :is :is-not} h) (distinct-ops h)) (typed "boolean")
       (#{:and :or :not :xor :between :not-between :in :not-in :similar-to :not-similar-to} h) (typed-with-nulls "boolean" (rest x))
-      ;; an aggregate's FILTER, an argument's DISTINCT
-      (#{:filter :distinct} h) (sub (second x))
+      ;; an aggregate's FILTER, an argument's DISTINCT, the ORDER BY after an aggregate's last
+      ;; argument (docs 4.2.7)
+      (#{:filter :distinct :order-by} h) (sub (second x))
       ;; [:case c1 v1 c2 v2 ... :else v]: the values resolve as coalesce's arguments; NULL without :else
       (= :case h) (let [parts (partition-all 2 (rest x))
                         values (map second parts)
@@ -2148,6 +2161,8 @@
                                     (when (= "boolean" (:result r))
                                       (let [t (if (#{"anyelement" "anyenum" "anyarray" "anyrange" "anymultirange"} l) (:type (first ts)) l)]
                                         (when-let [s (result-schema registry t ts)] {:type t :schema s :nullable? true}))))))
+      ;; x op ANY(array) is boolean (docs 9.24.3), NULL where an element is
+      (and (vector? x) (= 3 (count x)) (keyword? h) (operator? h) (array-of-elements? (nth x 2))) (assoc (typed "boolean") :nullable? true)
       ;; a + b + c is (a + b) + c
       (and (keyword? h) (operator? h) (< 2 (count (rest x))) (operator-name h 2)) (sub (into [h [h (nth x 1) (nth x 2)]] (drop 3 x)))
       :else (when-let [[_ _ args :as parts] (call-parts x)]
