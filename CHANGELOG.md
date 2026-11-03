@@ -96,7 +96,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   only a typed array ([docs/queries.md](docs/queries.md#what-your-application-sends)).
 * `h/arg-types` types more arguments
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)): under a cast, with what
-  PostgreSQL casts to the type; an argument of `coalesce`, `greatest`, `least` or `nullif`; one
+  PostgreSQL casts to the type (a collection sent untyped not to a number or boolean type, whose
+  input refuses an array literal); an argument of `coalesce`, `greatest`, `least` or `nullif`; one
   compared in a select or ORDER BY expression; one of an `unnest` in FROM, as an array of the
   type of where its column goes; one compared with `ANY(array)` as the array's element; an
   element of `[:array [...] :text]`, as cast; one of a function or an operator PostgreSQL may
@@ -121,8 +122,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `x = ANY(array)` (boolean), a function returning `void` (`[:any {:pg/type "void"}]`), a call
   whose overloads all return one type that is not polymorphic (`count`, `jsonb_build_object`)
   even of arguments it cannot type, and a set operation's column of a NULL member. A recursive
-  CTE keeps its types through a CTE or a subquery reading it, and a subquery reading a CTE is
-  read under it. A table or view of `pg_catalog` has its columns, from the snapshot.
+  CTE keeps its types through a CTE or a subquery reading it, a subquery reading a CTE is
+  read under it, and a CTE whose body has a `:with` of its own is read under the CTEs before it. A table or view of `pg_catalog` has its columns, from the snapshot.
 * The snapshot is read as of the PostgreSQL versions the registry's files were generated on
   (`:database-version`): a function of PostgreSQL 18 alone (`uuidv7`, `casefold`) is typed for a
   registry generated on 18, and a column of `pg_catalog`'s tables one supported version lacks
@@ -221,7 +222,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An argument compared with a literal of no type (`[:= :?w [:inline "1"]]`) takes any value, as
   PostgreSQL reads the literal as the argument's type.
 * An override of a type the driver reads as an object of its own (`:inet` a PGobject, `:hstore` a
-  `java.util.Map`) holds for writes; a read stays the driver's object unless `:read` names the type.
+  `java.util.Map`) holds for writes; a read stays the driver's object (`:some` where the column is never NULL)
+  unless `:read` names the type: `{:read {"tstzrange" :string}}` for an extension reading a range as its text.
 * A `:schema` the registry holds no generated file, table or view of is an
   `:pgmalli.error/invalid-options` error naming the ones it holds, in every function of
   `pgmalli.honeysql`; before, each did something of its own (an unknown table, `:any`, nil).

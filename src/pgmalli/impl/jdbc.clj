@@ -321,7 +321,7 @@
               (= :or-double driver-read) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
               driver-read [driver-read {:pg/type t}]
               ;; the driver's own object, whatever an override says the value is
-              (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [:any {:pg/type t}]
+              (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
               (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
               :else (driver-type schema opts read-type)))))
 

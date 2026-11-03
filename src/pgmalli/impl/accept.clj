@@ -73,11 +73,15 @@
                  (and (= :cast context) (string-type? from))))))
 
 (defn scalar-cast?
-  "Whether a cast of a value sent as type sent to type t takes a JSON scalar alone: PostgreSQL
-   casts a jsonb number or boolean to a number or boolean type and errors at run time on an
-   object or an array; to json, jsonb or a string type any document goes."
+  "Whether a cast of a value sent as type sent to type t takes no collection: PostgreSQL casts a
+   jsonb number or boolean to a number or boolean type and errors at run time on an object or an
+   array (to json, jsonb or a string type any document goes); a number or boolean type's input
+   refuses an untyped array literal ({1}), which the date, time and uuid types read past its
+   braces."
   [t sent]
-  (boolean (and (string? t) (string? sent) (types/json? sent) (not (types/json? t)) (not (string-type? t)))))
+  (boolean (and (string? t) (not (types/json? t)) (not (string-type? t))
+                (or (and (string? sent) (types/json? sent))
+                    (and (= :unknown sent) (#{"N" "B"} (types/category t)))))))
 
 (def ^:private compares?
   "Whether PostgreSQL resolves operator = for a value of type t and one of type sent, in some

@@ -457,9 +457,15 @@
                                       (mapcat table-items (statements m))))
                         (when set-op (get stmt set-op)))
             op (when self? set-op)
-            stmt (if op (first (get stmt op)) stmt)]
-        (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
-          [(cond-> stmt (seq before) (assoc k before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
+            stmt (if op (first (get stmt op)) stmt)
+            ;; a body's own :with comes after the entries before it, which it sees; one of
+            ;; :with-recursive under a :with, or naming one of them again, is not read here
+            own (when (map? stmt) (some #(when (contains? stmt %) %) with-keys))
+            stmt (cond (or (empty? before) (nil? own)) (cond-> stmt (seq before) (assoc k before))
+                       (and (= k own) (vector? (get stmt own)) (not-any? (set (keep cte-name before)) (keep cte-name (get stmt own))))
+                       (assoc stmt k (into before (get stmt own))))]
+        (when (and (map? stmt) (or (nil? listed) (sequential? listed)))
+          [stmt (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- function-columns
   "[[column schema origin] ...] of a function of pg_catalog or of a generated schema in FROM
@@ -1762,7 +1768,7 @@
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
         ;; cast, an array as PostgreSQL casts it (to text, say), its elements any
         cast-arrays (when (= :cast context)
-                      (for [[schema q] (jdbc/write-rows opts true) :when (takes? q)
+                      (for [[schema q] (jdbc/write-rows opts true) :when (and (takes? q) (not (accept/scalar-cast? t q)))
                             a (shape/alternatives (walk/postwalk-replace {:pgmalli/element :any} schema))]
                         [q a]))
         alts (concat
@@ -2758,7 +2764,7 @@
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(key k) {:optional true} default])))]
-      (if (= "update" derived) [:and m [:map-of {:min 1} :any :any]] m))))
+      (if (= "update" derived) [:and m [:not [:= nil {}]]] m))))
 
 (defn- written-row
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL

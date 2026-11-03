@@ -4,6 +4,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
+            [malli.error :as me]
+            [malli.generator :as mg]
             [malli.experimental.time :as time]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
@@ -919,6 +921,17 @@
       (is (m/validate (x t) {:a 1} {:registry reg}) (str "a jsonb object casts to " t))
       (is (m/validate (x t) [1] {:registry reg}) (str "a jsonb array casts to " t)))))
 
+(deftest an-untyped-collection-cast-to-a-number-or-boolean-is-not-taken
+  (let [reg (pgmalli/registry {:registry {}})
+        o {:send {Sequential :unknown IPersistentSet :unknown}}
+        x (fn [t] (:x (h/arg-types reg {:select [[[:cast :?x t] :b]]} o)))]
+    (doseq [t [:int :bigint :numeric :boolean :double-precision]]
+      (is (m/validate (x t) "1" {:registry reg}))
+      (is (not (m/validate (x t) [1] {:registry reg})) (str "an array literal cast to " t " errors"))
+      (is (not (m/validate (x t) #{1} {:registry reg})) (str "an array literal cast to " t " errors")))
+    (doseq [t [:text :timestamptz :date :interval :uuid]]
+      (is (m/validate (x t) ["2020-01-01"] {:registry reg}) (str "PostgreSQL reads a one-element array literal as " t)))))
+
 (deftest an-arrays-elements-are-read-as-the-columns-type
   (let [t (:xs (args {:select [:id] :from [:users] :where [:= :id [:any :?xs]]}
                      (sends {:schema "sample"} {Sequential :unknown})))]
@@ -964,6 +977,10 @@
     (is (not-any? #(ok? s %) [{:mood :sad} {:nick :abc}]) "HoneySQL writes a keyword in :set as a column, whatever :send sends")
     (is (not-any? #(ok? s %) [{:score nil} {:id 1} {:mood :glad}]))
     (is (not (ok? s {})) "HoneySQL writes an empty :set as SET alone, which PostgreSQL refuses")
+    (is (= ["should not be {}"] (me/humanize (m/explain s {} {:registry registry}))))
+    (is (not-any? #{:any} (flatten s)) "at least one column is said without :any, which reads as an untyped part")
+    (is (= s (m/form (m/schema s {:registry registry}))) "malli keeps the form as it is")
+    (is (every? #(and (seq %) (ok? s %)) (mg/sample s {:registry registry :seed 1})))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes its row schema :pg.sample/users" (h/values-schema registry :pg.sample.users/insert)))
     (is (= [:born :closed-at :group-id] (take 3 (map first (drop 2 (h/values-schema registry :pg.sample/users {:schema "sample" :jdbc kebab})))))
         "keyed as HoneySQL writes a column, kebab-cased as next.jdbc reads it back")
@@ -1778,6 +1795,10 @@
         "a column its SELECT does not give is none")
     (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}] [:b {:select [:id] :from [:a]}]] :select [:id] :from [:b]}))
         "a CTE reads the ones before it")
+    (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}]
+                                            [:b {:with [[:c {:select [:id] :from [:a]} :materialized]] :select-distinct [:id] :from [:c]} :materialized]]
+                                     :select [:id] :from [:b]}))
+        "a CTE's body with a :with of its own sees the ones before it too")
     (is (= [] (check {:with [[[:c {:columns [:x]}] {:select [:id :nick] :from [:users]}]] :select [:x :nick] :from [:c]}))
         "a CTE's name may rename its columns, by position")
     (is (= [:map [:x bigint]] (row {:with [[[:c {:columns [:x]}] {:select [[[:cast :id :bigint] :id]] :from [:users]}]] :select [:x] :from [:c]})))
@@ -2214,6 +2235,9 @@
         "pgjdbc reads inet as a PGobject, hstore as a java.util.Map")
     (is (= [:map {:pg/table "public.t"} [:ip [:any {:pg/type "inet"}]] [:h [:any {:pg/type "hstore"}]]] (pgmalli/as-read reg :pg.public/t o)))
     (is (= [:map [:ip :string]] (h/row-schema reg {:select [:ip] :from [:t]} (assoc o :read {"inet" :string}))) ":read names what an extension reads")
+    (let [reg (pgmalli/registry {:registry {:pg.public/r [:map {:pg/table "public.r"} [:v [:some {:pg/type "tstzrange"}]]]}})]
+      (is (= [:map [:v [:some {:pg/type "tstzrange"}]]] (h/row-schema reg {:select [:v] :from [:r]} o)) "a column never NULL stays so")
+      (is (= [:map [:v :string]] (h/row-schema reg {:select [:v] :from [:r]} (assoc o :read {"tstzrange" :string})))))
     (is (= {:ip ip :h hs} (h/arg-types reg {:update :t :set {:ip :?ip :h :?h}} o)))))
 
 (deftest a-value-of-the-wrong-class-for-a-driver-object-says-the-class-it-should-be
