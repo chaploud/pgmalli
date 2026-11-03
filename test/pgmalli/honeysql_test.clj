@@ -2113,6 +2113,17 @@
     (is (not (map? (second (last (h/query-schema registry [:db] {:select [[[:user_rows] :d]] :from [:users] :where [:= :id 1]} opts)))))
         "one that returns a set does not")))
 
+(deftest a-schemas-own-function-is-nullable-and-of-its-declared-type-alone
+  (let [reg (pgmalli/registry (update (pgmalli/generated "sample") :functions assoc
+                                      "my_rank" [{:args [] :result "bigint" :kind :w}]
+                                      "jsonb_object" [{:args ["integer"] :result "jsonb"}]))]
+    (is (= [:map [:r [:maybe [:int {:pg/type "bigint"}]]]]
+           (h/row-schema reg {:select [[[:over [[:my_rank] {} :r]]]] :from [:users]} opts))
+        "a window function of no argument of the schema's may return NULL; row_number never does")
+    (is (= [:map [:o [:maybe [:any {:pg/type "jsonb"}]]]]
+           (h/row-schema reg {:select [[[:jsonb_object :score] :o]] :from [:users]} (assoc opts :read {:json :parsed})))
+        "a json builder's name of the schema's says nothing of the shape it returns")))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

@@ -2106,9 +2106,10 @@
                                        (if (every? some? ins)
                                          (resolve/call kind n ins os)
                                          ;; of arguments not told, a result no argument decides (count, jsonb_build_object)
-                                         (when-let [{:keys [result non-null]} (resolve/fixed-result (count ins) os)]
-                                           {:result result :overload {:non-null non-null}})))]
-    (let [schema (if-let [shape (and (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
+                                         (when-let [r (resolve/fixed-result (count ins) os)]
+                                           {:result (:result r) :overload (dissoc r :result)})))]
+    (let [catalog? (= "pg_catalog" (:schema o))
+          schema (if-let [shape (and catalog? (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
                    (or (result-schema registry t ts) (some->> (:schema o) (own-type-schema registry t))))]
       (when schema
@@ -2117,7 +2118,7 @@
          ;; a value (count), a window function of no argument (row_number) and a btree operator
          ;; (a comparison) of values do not
          :nullable? (not (or (:non-null o)
-                             (and (= :w (:kind o)) (empty? args))
+                             (and catalog? (= :w (:kind o)) (empty? args))
                              (and (:btree o) (not-any? :nullable? ts))))}))))
 
 (defn- subquery-type
