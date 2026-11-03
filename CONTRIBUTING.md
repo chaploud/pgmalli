@@ -50,17 +50,25 @@ When a change touches what a type or CHECK becomes, update [docs/types.md](docs/
 
 ## The PostgreSQL oracle
 
-`bb oracle` (default seed 42, 8 mutants per query, about 2000 queries) runs the queries of
-`test/resources/pgmalli/oracle/corpus.edn`, and seeded mutants of them, on PostgreSQL, each
-sent twice: its values inlined, and as parameters the way HoneySQL and pgjdbc send them. It
-prints where `check` disagrees: a false positive (PostgreSQL takes the query, `check` faults
-it) or a miss (PostgreSQL refuses it, `check` lets it pass). Where PostgreSQL runs a query,
-the return of `query-schema`, by default and under `{:result :one}`, must take what
-`execute!` and `execute-one!` returned, with the default builder and, for the corpus queries
-(not their mutants), with the builders of `pgmalli.oracle/builders`; it prints each return it
-refuses. Under the unqualified builder, the keys of `row-schema` must be the column labels of
-the ResultSet's metadata, and each `:pg/type` it gives the type PostgreSQL describes (a
-domain as its base type); an untyped column is let pass.
+`bb oracle [seed] [mutants]` (seed `PGMALLI_FUZZ_SEED` or 42, mutants per query
+`PGMALLI_ORACLE_MUTANTS` or 8) runs on PostgreSQL the queries of
+`test/resources/pgmalli/oracle/corpus.edn` (`[id query opts?]`, opts merged into each call's
+options), seeded mutants of them, and the queries `pgmalli.oracle/generated-corpus` builds
+from the catalog of `schema.sql`: one column of each kind (type with its typmod, CHECKs, NOT
+NULL, kind of type and relation, quoting, schema) through casts, subqueries, joins,
+aggregates, CTEs, set operations and RETURNING, and each pair of kinds whose union PostgreSQL
+plans through UNION, CASE, coalesce, greatest and EXCEPT. A column of a new kind in
+`schema.sql` is covered without a corpus entry. Each query is sent twice: its values inlined,
+and as parameters the way HoneySQL and pgjdbc send them. It prints where `check` disagrees: a
+false positive (PostgreSQL takes the query, `check` faults it) or a miss (PostgreSQL refuses
+it, `check` lets it pass). A comparison with a literal outside a list counts as reported by
+design only for a column with that enum or CHECK list. Where PostgreSQL runs a query, the
+return of `query-schema`, by default and under `{:result :one}`, must take what `execute!`
+and `execute-one!` returned, and the keys of `row-schema`'s map (with those it names under
+`:pgmalli/untold`) must be the keys the builder gives the result set's columns: with the
+default builder and every builder of `pgmalli.impl.jdbc` under `bb oracle`, a sample of them
+per query in the test. Under the unqualified builder, each `:pg/type` of `row-schema` must be
+the type PostgreSQL describes (a domain as its base type); an untyped column is let pass.
 
 `pgmalli.oracle/arg-matrix` breaks the circle of arguments generated from `arg-types`: an
 argument goes with each column of the oracle schema (compared with `=`, `<>`, `IN` and
@@ -79,10 +87,16 @@ array, of a domain over it (`CHECK (VALUE IS NOT NULL)`) and of an array of that
 type added to `pgmalli.impl.types` without `:literals` needs a value in
 `pgmalli.oracle/samples`, the text of the row the table holds. The oracle schema's table
 `kinds` adds arrays of domains whose CHECK reads the value (`posint[]`, `money2[]`). Mutants
-draw from neither `matrix` nor `kinds`.
+draw their tables and columns from the catalog, but `matrix`, `kinds` and names that need
+quoting.
 
-`pgmalli.oracle-test` holds the false positives, the refused returns, the columns described
-otherwise and the argument matrix's failures at none in `bb test:jvm`.
+`pgmalli.oracle-test` (seed `PGMALLI_FUZZ_SEED`, 3 mutants per query or
+`PGMALLI_ORACLE_MUTANTS`) holds the false positives, the refused returns, the columns
+described otherwise and the argument matrix's failures at none in `bb test:jvm`, but those of
+`pgmalli.oracle-test/pending`: false rejections found in `src` and not fixed yet, each with
+its reason and a reproduction. An entry that no longer fails fails the test, so a fix removes
+it. The test also fails on a corpus id or query listed twice, and on a corpus query that did
+not run in both formats (one the pinned HoneySQL cannot write).
 
 `a-query-wrapped-keeps-its-problems` asks no database: each case wrapped in a FROM subquery,
 a CTE or EXISTS must have the problems it had alone.

@@ -1,4 +1,4 @@
-;; [id honeysql-query]: hand-written queries over schema.sql, which pgmalli.oracle mutates and runs on PostgreSQL beside check
+;; [id honeysql-query opts?]: hand-written queries over schema.sql, which pgmalli.oracle mutates and runs on PostgreSQL beside check; opts are merged into the options of each call (:format into sql/format's)
 [
  ;; basics, aliases, views
  [:basic {:select [:id :nick] :from [:users]}]
@@ -427,7 +427,7 @@
  [:rows-delete-none {:delete-from :posts :where [:= :id 0] :returning [:id :title]}]
  [:rows-cte-dml {:with [[:ins {:insert-into :tags :values [{:name "r1"} {:name "r2"}] :returning [:id]}]] :select [[[:count :*] :n]] :from [:ins]}]
  [:rows-union {:union [{:select [:id] :from [:users] :where [:= :id 1]} {:select [:id] :from [:users] :where [:= :id 2]}]}]
- [:rows-distinct {:select-distinct [:group_id] :from [:users]}]
+ [:rows-distinct {:select-distinct [:mood] :from [:users]}]
  [:rows-time {:select [:created_at] :from [:posts] :where [:= :id 1]}]
  [:rows-view {:select [:*] :from [:active_users] :where [:= :id 1]}]
  [:rows-domain {:select [:*] :from [:profiles] :where [:= :id 1]}]
@@ -495,4 +495,17 @@
  [:enum-array-select {:select [:moods [[:array_length :moods [:inline 1]] :l]] :from [:nums]}]
  [:any-arg {:select [:id] :from [:nums] :where [:= :i [:any :?ids]]}]
  [:unnest-insert-arg {:insert-into [[:nums [:i]] {:select [[[:unnest :?ids]]]}]}]
+ ;; CHECK lists: of a domain, of an enum's subset (outside: by design); an OR'd list and a NOT VALID one, which rows outside them pass
+ [:list-domain-outside {:select [:id] :from [:lists] :where [:= :l 3]}]
+ [:list-enum-subset-outside {:select [:id] :from [:lists] :where [:= :tier "high"]}]
+ [:list-char {:select [:id :c] :from [:lists] :where [:and [:= :cc "ab"] [:= :c "USD"]]}]
+ [:list-or-outside {:select [:id :code] :from [:lists] :where [:= :code "zz"]}]
+ [:list-not-valid-outside {:select [:id :old] :from [:lists] :where [:= :old "zzz"]}]
+ [:list-array-null-element {:select [:ls] :from [:lists]}]
+ ;; a composite column's field, assigned
+ [:composite-field-set {:update :shapes :set {:p.a 5} :where [:= :id 1]}]
+ [:composite-field-insert {:insert-into :shapes :columns [:p.a] :values [[5]]}]
+ ;; names PostgreSQL holds only quoted, a table of another schema (a third element: the case's options)
+ [:quoted-names {:select [:t.Name :u.Val] :from [[:Mixed.Things :t]] :join [[:UpperT :u] [:= :u.ID :t.Id]]} {:format {:quoted true}}]
+ [:other-schema {:select [:o.prio :u.nick] :from [[:app.orders :o]] :join [[:users :u] [:= :u.id :o.user_id]] :where [:= :o.prio "high"]}]
 ]
