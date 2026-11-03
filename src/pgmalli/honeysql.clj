@@ -1861,7 +1861,7 @@
         alts (concat
               (for [p sent
                     a (if (= :unknown p)
-                        (jdbc/sent-as opts :unknown)
+                        (jdbc/sent-as opts :unknown t)
                         (shape/alternatives (unlabel (loose (driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
                     :when (and (not (untyped? a))
                                (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a)))))]

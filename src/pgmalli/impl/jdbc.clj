@@ -352,10 +352,10 @@
                         :let [coll (collection-schema c)
                               array (or (.isArray ^Class c) (and coll (or (= :unknown t) (types/element t))))]
                         :when (= array? (boolean (and array (not= c accept/bytes-class))))]
-                    [(if (and array coll) coll (class-schema c)) t])))))
+                    [(if (and array coll) coll (class-schema c)) t c])))))
 
 (defn write-rows
-  "[schema type] for each class send-map sends, in pgjdbc's order (accept/class-types) and then
+  "[schema type class] for each class send-map sends, in pgjdbc's order (accept/class-types) and then
    by name, by array? an array argument's (a Clojure
    collection or a Java array sent as an array type or untyped, the collection's elements
    :pgmalli/element) or another's."
@@ -363,9 +363,13 @@
   (write-rows* (:send opts) array?))
 
 (defn sent-as
-  "The alternatives of the schemas of the classes, no array, :send sends as type t."
-  [opts t]
-  (distinct (for [[s q] (write-rows opts false) :when (= t q) a (shape/alternatives s)] a)))
+  "The alternatives of the schemas of the classes, no array, :send sends as type t; with to, of
+   those whose text type to's input reads (accept/reads?)."
+  ([opts t] (sent-as opts t nil))
+  ([opts t to]
+   (distinct (for [[s q c] (write-rows opts false) :when (and (= t q) (or (nil? to) (accept/reads? to c)))
+                   a (shape/alternatives s)]
+               a))))
 
 (defn sent-type
   "The type a literal value goes to PostgreSQL as: :unknown under sql/format's :inline, which

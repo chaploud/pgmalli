@@ -394,7 +394,7 @@ HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
 
 (h/query-schema registry [:id] find-user-q)
-;; => [:=> #:pgmalli{:problems []} [:cat [:or [:int #:pg{:type "bigint"}] inst?]] [:sequential {:max 1} [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 ```
 
 Put it on the function as a schema object over the registry. `malli.instrument` and
@@ -445,7 +445,7 @@ returns:
 
 ```clojure
 (pgmalli/describe (h/query-schema registry [:id] find-user-q {:result :one}))
-;; => {:args ["bigint | inst?"], :returns [:maybe #:users{:id "bigint", :email "varchar(120)"}]}
+;; => {:args ["bigint"], :returns [:maybe #:users{:id "bigint", :email "varchar(120)"}]}
 ```
 
 The options of `pgmalli.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).

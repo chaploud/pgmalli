@@ -17,12 +17,13 @@
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
 
 (def classes
-  "[class type schema]: the type pgjdbc's setObject sends a value of class as, with no extension
-   and its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
-   Character with setString, a Java array as an array of its elements' type, java.sql's Date,
-   Time and Timestamp untyped (:unknown); nil for a class it sends no type of its own for.
+  "[class type schema category]: the type pgjdbc's setObject sends a value of class as, with no
+   extension and its default stringtype (varchar): BigInt and BigInteger as setNumber sends a
+   Number, a Character with setString, a Java array as an array of its elements' type, java.sql's
+   Date, Time and Timestamp untyped (:unknown); nil for a class it sends no type of its own for.
    schema is the malli schema of a value of class, for the classes pgjdbc sends and those an
-   application's extensions commonly do; nil for a Java array."
+   application's extensions commonly do; nil for a Java array. category, of a class sent
+   untyped, is the typcategory of the text pgjdbc writes of it (reads?)."
   (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
    [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
    [Double "double precision" :double] [Float "real" 'float?]
@@ -32,9 +33,9 @@
    [java.time.LocalDateTime "timestamp without time zone" :time/local-date-time]
    [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
    ;; untyped, so that PostgreSQL picks timestamp or timestamptz (babashka has no java.sql.Time)
-   (some-> (named "java.sql.Date") (vector :unknown 'inst?))
-   (some-> (named "java.sql.Time") (vector :unknown 'inst?))
-   (some-> (named "java.sql.Timestamp") (vector :unknown 'inst?))
+   (some-> (named "java.sql.Date") (vector :unknown 'inst? "D"))
+   (some-> (named "java.sql.Time") (vector :unknown 'inst? "D"))
+   (some-> (named "java.sql.Timestamp") (vector :unknown 'inst? "D"))
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
    [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
    [(array Short/TYPE) "smallint[]"] [(array Short) "smallint[]"] [(array Double/TYPE) "double precision[]"]
@@ -125,6 +126,20 @@
   (cond (not (or (= :unknown sent) (answers? sent))) true
         (= :compare context) (or (and (string-type? t) (string-type? sent)) (compares? t sent))
         :else (or (= :unknown sent) (converts? t sent context))))
+
+(def ^:private any-text
+  "The types outside the string category whose input takes any text: bytea's escape format,
+   \"char\"'s first byte."
+  #{"bytea" "\"char\""})
+
+(defn reads?
+  "Whether type t's input reads the text of a value of class c sent untyped: any text, where c's
+   row in classes names no category; text of category k (a java.sql.Date's, \"D\") where t is a
+   string type, of category k, one whose input takes any text (any-text), or one answers? does
+   not answer for (an extension's)."
+  [t c]
+  (let [k (some (fn [[x _ _ k]] (when (= x c) k)) classes)]
+    (or (nil? k) (string-type? t) (= k (types/category t)) (contains? any-text t) (not (answers? t)))))
 
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type, a number of a type

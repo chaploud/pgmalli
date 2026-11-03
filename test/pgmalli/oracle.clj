@@ -823,7 +823,7 @@
                :set (fn [ps i v] (prep/set-parameter v ps i))
                :classes [java.time.Instant java.time.LocalDate java.time.LocalDateTime]}})
 
-(defn- send!
+(defn send!
   "Runs [sql & params] on conn, each parameter set as profile sets it."
   [^java.sql.Connection conn [sql & params] {set-param :set}]
   (with-open [ps (.prepareStatement conn sql)]

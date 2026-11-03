@@ -307,10 +307,10 @@
       (report "functions and operators" 16000 cs))))
 
 (defn- refused?
-  "Whether PostgreSQL refuses q, :params params, as pgjdbc sends them: run on the one row of u,
-   rolled back."
+  "Whether PostgreSQL refuses q, :params params, as pgjdbc's setObject sends them (not an
+   extension another test may load): run on the one row of u, rolled back."
   [^java.sql.Connection con q params]
-  (try (jdbc/execute! con (sql/format q {:params params})) false
+  (try (oracle/send! con (sql/format q {:params params}) (:plain oracle/send-profiles)) false
        (catch java.sql.SQLException e (some? (oracle/refused e)))
        (finally (.rollback con))))
 
@@ -429,5 +429,5 @@
           (let [theirs (own-described con typnames q)]
             (is (= (mapv pop theirs) (ours q)) (pr-str q))
             (is (every? #{""} (map peek theirs)) (str "of no table: " (pr-str q))))))
-      (is (= {:x [:maybe [:or [:int {:pg/type "integer"}] 'inst?]]} (h/arg-types registry {:select [[[:double_it :?x] :d]] :from [:t]} o))))))
+      (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (h/arg-types registry {:select [[[:double_it :?x] :d]] :from [:t]} o))))))
 

@@ -193,8 +193,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   column under `{:time :local}` and `{:time :instant}` too, as pgjdbc sends it under every
   `:time`, and an array of them to an array column of their type.
 * pgjdbc sends a `java.sql.Date`, `java.sql.Time` or `java.sql.Timestamp` untyped, so one goes
-  where any value sent untyped does: to a column of any type (a `text` column takes the text
-  pgjdbc writes of it), and an argument's type takes `inst?` beside the column's own values.
+  where a type's input reads the text pgjdbc writes of it: to a column of a string type (`text`
+  too), a date or time type, `bytea`, `"char"` or a type pgmalli does not type.
 * `h/arg-types` gives an argument it cannot type as `[:any {:pgmalli/untyped why}]`, `why` saying
   whether no use of it is typed, the type where it is used is unknown, or only code uses it
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)). It validates as `:any` did.
