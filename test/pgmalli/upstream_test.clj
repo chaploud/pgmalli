@@ -117,7 +117,7 @@
           mine (fn [os] (set (for [o os :when (here? o)] (dissoc o :in))))
           ours {:types (into {} (for [[n t] (:types snapshot) :when (here? t)] [n (dissoc t :in)]))
                 :ranges (into {} (for [[n r] (:ranges snapshot) :when (here? r)] [n (dissoc r :in)]))
-                :casts (set (for [[s t in] (:casts snapshot) :when (here? in)] [s t]))}
+                :casts (set (for [[s t c in] (:casts snapshot) :when (here? in)] [s t c]))}
           hint (str "PostgreSQL " version " differs from resources/pgmalli/impl/catalog.edn (run bb catalog): ")
           differs (fn [what theirs ours]
                     (str hint what "\n  server only: " (set/difference (set theirs) (set ours)) "\n  snapshot only: " (set/difference (set ours) (set theirs))))]

@@ -19,7 +19,7 @@
 
 (defn- merged
   "The catalogs of versions as one: every type, range, cast and overload of a function or
-   operator, :in the versions that have it where not all do (a cast [source target {:in [v ...]}])."
+   operator, :in the versions that have it where not all do (a cast [source target context {:in [v ...]}])."
   [versions cs]
   (let [in (fn [has?] (vec (for [[v c] (map vector versions cs) :when (has? c)] v)))
         named (fn [k] (into (sorted-map)
@@ -58,7 +58,7 @@
                                                     "bb" "catalog:dump"))))))
         c (merged versions cs)]
     (spit "resources/pgmalli/impl/catalog.edn"
-          (str ";; pg_catalog's types, implicit casts, functions, operators and relations of PostgreSQL " (str/join ", " versions)
+          (str ";; pg_catalog's types, casts, functions, operators and relations of PostgreSQL " (str/join ", " versions)
                ": bb catalog writes it\n"
                ;; a line a name: a regenerated file's diff is the names that changed
                "{" (str/join "\n " (for [[k v] c]

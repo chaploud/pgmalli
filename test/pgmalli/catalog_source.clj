@@ -6,16 +6,16 @@
   (:require [pgmalli.impl.pattern :as pattern]))
 
 (def query
-  "One JSON object of pg_catalog's types (an array's facts are its element's: x[]), implicit
-   casts, ranges, functions (no procedure), operators and the columns of its tables and views,
+  "One JSON object of pg_catalog's types (an array's facts are its element's: x[]), casts (with
+   castcontext: i implicit, a assignment, e explicit), ranges, functions (no procedure), operators and the columns of its tables and views,
    as format_type names them; no extension's."
   "SELECT json_build_object(
      'types', (SELECT json_agg(json_build_array(format_type(oid, NULL), typcategory, typispreferred) ORDER BY 1)
                FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace AND typtype <> 'c'
                  AND NOT (typelem <> 0 AND typsubscript = 'array_subscript_handler'::regproc)),
-     'casts', (SELECT json_agg(json_build_array(format_type(castsource, NULL), format_type(casttarget, NULL)) ORDER BY 1)
-               FROM pg_cast c WHERE castcontext = 'i'
-                 AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_cast'::regclass AND d.objid = c.oid AND d.deptype = 'e')),
+     'casts', (SELECT json_agg(json_build_array(format_type(castsource, NULL), format_type(casttarget, NULL), castcontext) ORDER BY 1)
+               FROM pg_cast c
+               WHERE NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_cast'::regclass AND d.objid = c.oid AND d.deptype = 'e')),
      'functions', (SELECT json_agg(json_build_object('name', p.proname,
                                                      'args', ARRAY(SELECT format_type(t, NULL) FROM unnest(p.proargtypes::oid[]) WITH ORDINALITY u(t, n) ORDER BY n),
                                                      'result', format_type(p.prorettype, NULL), 'set', p.proretset, 'kind', p.prokind,
@@ -41,7 +41,7 @@
 
 (defn shape
   "A version's catalog as catalog.edn holds it: {:types {name [category preferred?]} :casts
-   #{[source target]} :functions {name #{overload}} :operators {name #{overload}} :relations
+   #{[source target context]} :functions {name #{overload}} :operators {name #{overload}} :relations
    {name [column ...]}}, an overload {:args [type ...] :result type ...}, a column {:name :type
    :not-null}."
   [{:strs [types casts ranges functions operators relations]}]

@@ -22,7 +22,7 @@
    checks every type of pg_catalog and of the extensions PostgreSQL ships is in one of them.
 
    catalog is what PostgreSQL's own catalog says of pg_catalog's types (typcategory,
-   typispreferred), implicit casts, ranges, functions and operators, which bb catalog writes to
+   typispreferred), casts, ranges, functions and operators, which bb catalog writes to
    resources/pgmalli/impl/catalog.edn from each PostgreSQL version CI runs."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
@@ -176,7 +176,7 @@
 
 (def catalog
   "resources/pgmalli/impl/catalog.edn: {:versions [v ...] :types {name {:category c :preferred true}}
-   :casts #{[source target]} :ranges {range {:subtype t :multirange m}} :functions {name
+   :casts #{[source target context]} (castcontext: \"i\" implicit, \"a\" assignment, \"e\" explicit) :ranges {range {:subtype t :multirange m}} :functions {name
    [overload ...]} :operators {name [overload ...]}}, an overload {:args [type ...] :result type}
    with :set, :kind (:a an aggregate, :w a window function), :variadic, :defaults (how many of
    the last arguments may be left out), :non-null (an aggregate that is never NULL), :columns
@@ -209,5 +209,14 @@
    'i', an array element by element)."
   [from to]
   (or (= from to)
-      (contains? (:casts @catalog) [from to])
+      (contains? (:casts @catalog) [from to "i"])
       (let [a (element from) b (element to)] (boolean (and a b (implicit? a b))))))
+
+(def ^:private contexts
+  (delay (reduce (fn [m [from to c]] (update m [from to] (fnil conj #{}) c)) {} (:casts @catalog))))
+
+(defn cast-contexts
+  "The castcontexts of pg_cast's casts from type from to type to, in any version the catalog
+   holds: a set of \"i\", \"a\" and \"e\"."
+  [from to]
+  (get @contexts [from to] #{}))
