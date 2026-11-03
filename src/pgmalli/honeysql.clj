@@ -380,8 +380,9 @@
           [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- typed-scope
-  "sc with :types on the subqueries and CTEs of stmt whose SELECT types its columns
-   ({column schema}, a column whose type is not told nil), read as a query of their own; not
+  "sc with :types ({column schema}, a column whose type is not told nil) and :origins ({column
+   table}, the table PostgreSQL traces the column to, \"\" none; one it does not tell absent) on
+   the subqueries and CTEs of stmt whose SELECT types its columns, read as a query of their own; not
    on one that reads a CTE ctes holds (one stmt sees but the query of its own would not)."
   [registry body stmt sc ctes outer {:keys [schema] :or {schema default-schema} :as opts}]
   (let [items (table-items stmt)
@@ -407,12 +408,12 @@
                            ;; a LATERAL subquery sees the tables before it
                            (derived-types* registry inner opts (cons (dissoc sc alias) outer))
                            (derived-types registry inner opts)))
-                    named (map-indexed (fn [i [c t o]] [(nth (vec listed) i c) t o]) ts)
+                    named (map-indexed (fn [i [c t o]] [(nth listed i c) t o]) ts)
                     ;; a CTE's name may list new names for its columns, by position; a recursive
                     ;; one's later rows may hold NULL where its first member's do not
                     types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (beyond-list registry t)) t)])))
                     ;; a recursive CTE's columns come from a UNION: from no table
-                    origins (into {} (for [[c _ o] named :when o] [c (if recursive? "" o)]))]
+                    origins (into {} (for [[c _ o] named :when (or recursive? o)] [c (if recursive? "" o)]))]
                 (cond-> sc types (update alias assoc :types types :origins origins))))
             sc items)))
 
@@ -1842,10 +1843,10 @@
                                :nullable? (not-any? #(and % (not (:nullable? %))) ts)}))))
 
 (defn- select-row
-  "The row a SELECT returns. Under a qualifying builder, a column through an opaque table, or a cast
-   column, has a key this cannot tell: the driver keys it by the table it comes from at the
-   bottom (a subquery's, a CTE's), or keeps it when PostgreSQL drops a cast to the column's own
-   type. The row leaves those out, an open map, and names them under :pgmalli/untold."
+  "The row a SELECT returns. Under a qualifying builder, a cast column, or a column through an
+   opaque table whose table this cannot trace, has a key this cannot tell: the driver keys it by
+   the table PostgreSQL traces it to, which keeps a column's table under a cast to its own type.
+   The row leaves those out, an open map, and names them under :pgmalli/untold."
   [registry stmt chain {:keys [schema] :or {schema default-schema} :as opts}]
   (let [registry (reading registry)
         qualified? (:qualified? (jdbc/row-keys opts))
@@ -1899,7 +1900,7 @@
                                 m (when-not (first (split-column col)) (get merges (folded column)))]
                             (cond m (merged label m)
                                   ;; the driver keys a derived table's column by the table PostgreSQL traces it to
-                                  (and qualified? opaque? origin) [(entry (when (seq origin) [nil origin]) label schema nullable? nil)]
+                                  (and qualified? opaque? origin) [(entry [nil origin] label schema nullable? nil)]
                                   (and qualified? opaque?) (untold label)
                                   ;; a column under an alias is still keyed by its table: the driver reads the table from the field
                                   :else [(entry table label schema nullable? nil)])))))]
@@ -1936,16 +1937,17 @@
     (when-let [row (row-schema* registry stmt [] chains opts)]
       ;; read again as the default builder keys it: by the table each column comes from
       (let [keyed (row-schema* registry stmt [] chains (dissoc opts ::jdbc/member))
-            untold (set (map name (:pgmalli/untold (when (map? (second keyed)) (second keyed)))))
+            untold (set (map name (:pgmalli/untold (shape/row-props keyed))))
             tables (group-by name (map first (some-> keyed shape/entries)))
             origin (fn [c] (let [ns (distinct (map namespace (get tables c)))]
-                             (when (and keyed (= 1 (count ns)) (not (untold c))) (or (first ns) ""))))]
+                             (when (and (= 1 (count ns)) (not (untold c))) (or (first ns) ""))))]
         (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
                [(name k) (when-not (= :any s) s) (origin (name k))]))))))
 
 (defn- derived-types
-  "[[column schema] ...] of the row stmt, a query of its own, returns, as the registry types a
-   column (nil for one it cannot tell); nil when its row cannot be told."
+  "[[column schema origin] ...] of the row stmt, a query of its own, returns, as the registry types a
+   column (nil for one it cannot tell), origin the table PostgreSQL traces the column to (\"\"
+   none, nil not told); nil when its row cannot be told."
   [registry stmt opts]
   (if-let [memo (::derived registry)]
     (let [k [stmt (dissoc opts :jdbc)]]

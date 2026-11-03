@@ -509,8 +509,9 @@ Write the query so PostgreSQL's reading is explicit instead.
 - Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
   PostgreSQL folds it to lower case, and check takes it as written.
 - Under qualified keys, the key of a column next.jdbc qualifies by a table the data does not
-  show (a cast column, which PostgreSQL drops when the type is the column's own; one read
-  through a subquery or a CTE that takes it so, or from a table the registry lacks):
+  show (a cast column, whose cast PostgreSQL drops when the type is the column's own; a
+  subquery's or a CTE's column that is itself one of these; or one from a table the registry
+  lacks):
   `h/row-schema` leaves it out of the map, which is open, and names it under the
   `:pgmalli/untold` property. A subquery's or a CTE's column is otherwise keyed by the table
   PostgreSQL traces it to, as the driver keys it; an expression's, a set operation's and a
