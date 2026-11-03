@@ -7,7 +7,8 @@
             [pgmalli.impl.pattern :as p]
             [pgmalli.impl.render :as r]
             [pgmalli.impl.pgtypes :as pgtypes]
-            [pgmalli.impl.registry :as reg]))
+            [pgmalli.impl.registry :as reg]
+            [pgmalli.impl.shape :as shape]))
 
 (def ^:private schema
   {:name "public"
@@ -598,6 +599,16 @@
     (is (= [:maybe [:enum {:pg/type "mood"} "a"]] (column :m)) "it replaces the type's schema, an enum's reference too")
     (is (= [:maybe [:string {:pg/type "inet"}]] (column :ip)) "it comes before an override of the column's type")
     (is (empty? unrendered) "a column of a type pgmalli does not know is no longer left out")))
+
+(deftest an-overridden-column-with-a-default-may-be-left-out-of-an-insert
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"images" {:columns [{:name "variants" :position 1 :data_type "jsonb" :is_nullable false
+                                                                               :default_value "'{}'::jsonb"}]}}})
+                                       {:public.images/variants [:ref :app/variants]})
+        [_ _ s] (shape/entry-parts (first (drop 2 (:pg.public/images registry))))]
+    (is (contains? (shape/column-props s) :pg/default))
+    (is (not (contains? (shape/column-props s) :default))
+        "the SQL literal is no value of the declared schema: no malli :default, which would keep the column required")))
 
 (deftest a-null-leaves-an-alternative-null-and-the-check-not-false
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}

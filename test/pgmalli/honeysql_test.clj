@@ -570,8 +570,9 @@
            (args q (assoc opts :send (only {Sequential "integer[]"}))))
         "by position: an argument takes its column's type, an unnest one an array of it")
     (is (= [] (check q (dissoc opts :send))))
-    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood"}]
-           (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m] [:?s]]}]} (dissoc opts :send))))
+    (is (= [{:kind :uncast-string :column :mood :arg :m :type "mood" :in [:insert-into 1]}]
+           (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m] [:?s]]}]} (dissoc opts :send)))
+        "in the SELECT, where the argument is")
     (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} (dissoc opts :send)))
         "an array is not judged: a java.sql.Array of the enum type is taken, a String[] is not")
     (is (= {:s :any} (args {:insert-into [[:users [:group_id :nick :score]] {:select [:g.* :?s] :from [[:groups :g]]}]}))
@@ -2100,3 +2101,72 @@
     (is (ok? arg {:a "x"}))
     (is (ok? arg {:b 1}) "the second shape too")
     (is (ok? row {:input {:b 1}}))))
+
+(deftest a-comparison-is-read-in-every-clause-as-in-where
+  (let [where (:s (args {:select [:id] :from [:users] :where [:= :score :?s]}))]
+    (doseq [q [{:update :users :set {:nick [:case [:= :score :?s] "a" :else "b"]} :where [:= :id 1]}
+               {:update :users :set {:nick "a"} :returning [[[:= :score :?s] :hit]]}
+               {:delete-from :users :returning [[[:= :score :?s] :hit]]}]]
+      (is (= where (:s (args q))) (pr-str q))))
+  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
+         (check {:update :users :set {:nick "a"} :returning [[[:= :mood "angry"] :m]]})))
+  (is (= [{:kind :unknown-column :column :nope}]
+         (check {:update :users :set {:nick [:case [:= :nope 1] "a" :else "b"]}}))))
+
+(deftest the-rows-of-values-do-not-see-the-table-inserted-into
+  ;; PostgreSQL: column "score" does not exist, there is one in users, but it cannot be referenced
+  ;; from this part of the query
+  (is (= [{:kind :unknown-column :column :score}]
+         (check {:insert-into :users :values [{:group_id 1 :score 1 :nick [:case [:= :score 1] "a" :else "b"]}]})))
+  (is (= :any (:s (args {:insert-into :users :values [{:group_id 1 :score 1 :nick [:case [:= :score :?s] "a" :else "b"]}]})))))
+
+(deftest an-unnest-tables-column-is-read-as-a-parameter-is
+  (let [o (sends opts {IPersistentVector "bigint[]"})
+        ids #(:ids (args % o))
+        q (fn [op] {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [op :users.id :i]]})]
+    (is (m/validate (ids (q :is-not-distinct-from)) [1 nil] {:registry registry}) "IS NOT DISTINCT FROM takes NULL")
+    (is (not (m/validate (ids (q :=)) [1 nil] {:registry registry})) "= matches no NULL")
+    (is (= (ids {:select [:id] :from [:users] :where [:= :users.group_id [:cast :x.i :integer]] :join [[[:unnest :?ids] [:x {:columns [:i]}]] true]})
+           (ids {:select [:id] :from [:users] :join [[[:unnest :?ids] [:x {:columns [:i]}]] true]
+                 :where [:exists {:select [1] :from [:groups] :where [:= :groups.id [:cast :x.i :integer]]}]}))
+        "a subquery reads it in the scope it sees")))
+
+(deftest an-insert-selects-argument-takes-nil-where-the-select-may-drop-its-row
+  (let [q (fn [select] {:insert-into [[:users [:group_id :score]] select]})
+        g #(:g (args (q %)))
+        ss #(:ss (args (q %) (sends opts {IPersistentVector "integer[]"})))
+        plain (g {:select [:?g :?s]})
+        elements (ss {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})]
+    (is (= plain (:g (args {:insert-into :users :values [{:group_id :?g :score :?s}]}))) "a row of arguments reaches the column, as one of :values does")
+    (is (not (m/validate elements [1 nil] {:registry registry})) "unnest of arguments drops no element")
+    (is (= plain (g {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})))
+    (doseq [more [{:where [:is-not :?g nil]} {:having true} {:limit 1} {:offset 1} {:group-by [:?s]}
+                  {:from [[[:unnest :?ss] [:x {:columns [:s]}]] :groups]}
+                  {:from [[[:unnest :?ss] [:x {:columns [:s]}]]] :join [:groups [:= :groups.id 1]]}]]
+      (is (= [:maybe integer] (g (merge {:select [:?g :?s]} more))) (str (pr-str more) ": nil, and no bounds"))
+      (is (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) [1 nil] {:registry registry}) (pr-str more)))
+    (is (= [:maybe integer] (g {:select-distinct [:?g :?s]})))
+    (is (m/validate (:n (args {:insert-into [[:users [:nick]] {:select [:?n] :where false}]})) (apply str (repeat 41 "x")))
+        "PostgreSQL checks a length, a range or a CHECK only on a row it writes")))
+
+(deftest an-inserted-value-takes-nil-only-from-a-before-insert-trigger
+  ;; PostgreSQL checks NOT NULL on the row proposed for insertion before it looks for a conflict
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:update ["touch"]}}
+                                                        [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]]]}})
+        a #(h/arg-types reg %)
+        conflict {:on-conflict [:id] :do-update-set {:fields [:g] :where [:is-distinct-from [:composite :t.g] [:composite :excluded.g]]}}]
+    (doseq [q [{:insert-into :t :values [{:id :?id :g :?g}]}
+               {:insert-into [[:t [:id :g]] {:select [:?id :?g]}]}
+               {:insert-into [[:t [:id :g]] {:select [:x.i :?g] :from [[[:unnest :?id] [:x {:columns [:i]}]]]}]}]]
+      (is (= (a q) (a (merge q conflict))) (pr-str q)))
+    (is (= :maybe (first (:g (a {:insert-into :t :values [{:id 1 :g 1}] :on-conflict [:id] :do-update-set {:g :?g}}))))
+        "the BEFORE UPDATE trigger may fill what DO UPDATE sets"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
+                                                        [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]]]}})]
+    (is (= :maybe (first (:g (h/arg-types reg {:insert-into :t :values [{:id 1 :g [:cast :?g :integer]}]}))))
+        "nor a cast's argument: the trigger may fill the NULL it makes")))
+
+(deftest limit-types-its-own-argument-not-one-inside-an-expression
+  (is (not= (:o (args {:select [:id] :from [:users] :offset :?o}))
+            (:a (args {:select [:id] :from [:users] :offset [:+ :?a 1]})))
+      "a + 1 is at least 0, a need not be"))
