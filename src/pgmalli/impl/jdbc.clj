@@ -83,16 +83,18 @@
                         #(symbol "next.jdbc.result-set" %))
            (update-keys (update-vals maps #(assoc % :absent? true)) #(symbol "next.jdbc.optional" %)))))
 
-(def ^:private builder
+(def ^:private builder-fns
+  "{function how} of the builders that load here."
+  (delay (into {} (for [[sym how] builders
+                        :let [f (some-> (try (requiring-resolve sym) (catch Exception _ nil)) deref)]
+                        :when f]
+                    [f how]))))
+
+(defn- builder
   "How the next.jdbc builder f keys a row (builders): the function, its var, or its qualified
-   symbol, which names it where next.jdbc does not load (babashka); nil for another. Memoized:
-   every column's key asks."
-  (memoize
-   (fn [f]
-     (if (symbol? f)
-       (get builders f)
-       (let [f (if (var? f) @f f)]
-         (some (fn [[sym how]] (when (= f (some-> (try (requiring-resolve sym) (catch Exception _ nil)) deref)) how)) builders))))))
+   symbol, which names it where next.jdbc does not load (babashka); nil for another."
+  [f]
+  (if (symbol? f) (get builders f) (get @builder-fns (if (var? f) @f f))))
 
 (defn row-keys
   "How a row is keyed under opts: {:qualified? :absent? :label :qualifier}, as :jdbc's
