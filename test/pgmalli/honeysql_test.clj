@@ -2072,7 +2072,7 @@
             [:prev [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (h/row-schema registry {:select [:id [[:over [[:row_number] {:partition-by [:group_id]} :rn] [[:lag :score] {} :prev]]]] :from [:users]} opts))
         "a window function: row_number is a bigint")
     (is (= [:map
-            [:value [:any {:pg/type "jsonb"}]]
+            [:value [:maybe [:any {:pg/type "jsonb"}]]]
             [:ordinality [:int {:pg/type "bigint"}]]
             [:g [:maybe [:int {:pg/type "bigint"}]]]] (h/row-schema registry {:select [:e.value :e.ordinality :g]
                                        :from [[[:with-ordinality [:jsonb_array_elements [:cast :nick :jsonb]] :e]]
@@ -2133,6 +2133,12 @@
   (is (= [:map [:a [:maybe :any]]] (row {:union [{:select [[nil :a]]} {:select [[nil :a]]} {:select [[[:inline 1] :a]]}]}))
       "NULL UNION NULL is text, which PostgreSQL does not unite with an integer")
   (is (= [:map [:a [:maybe int4]]] (row {:union [{:select [[nil :a]]} {:select [[[:inline 1] :a]]} {:select [[nil :a]]}]}))))
+
+(deftest an-untyped-column-of-pg-catalog-or-of-a-function-may-be-null
+  (let [o (built opts 'next.jdbc.optional/as-unqualified-maps)]
+    (is (= [:map [:relacl {:optional true} :any]] (row {:select [:relacl] :from [:pg_class]} o)))
+    (is (= [:map [:client_addr {:optional true} [:any {:pg/type "inet"}]]]
+           (row {:select [:client_addr] :from [[[:pg_stat_get_activity nil] :k]]} o)))))
 
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]

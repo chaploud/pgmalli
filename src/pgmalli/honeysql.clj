@@ -55,7 +55,8 @@
 (defn- catalog-columns
   "[[column-name schema props] ...] of a table or view of pg_catalog (\"pg_catalog.pg_class\"),
    as the catalog snapshot holds it in versions vs: a column of a type they disagree on, or
-   pgmalli does not type, :any; nullable where one version's is; optional where one lacks it."
+   pgmalli does not type, :any; nullable where one version's is (an :any too: a NULL is a key
+   an optional builder leaves out); optional where one lacks it."
   [table vs]
   (when-let [cs (some->> table (re-matches #"pg_catalog\.(.+)") second (get (:relations @types/catalog)))]
     (let [cs (in-versions cs vs)
@@ -64,7 +65,7 @@
             :let [es (by-name c)
                   ts (distinct (map :type es))
                   s (when-not (next ts) (type-schema (first ts)))]]
-        [c (cond (nil? s) :any (every? :not-null es) s :else [:maybe s])
+        [c (if (every? :not-null es) (or s :any) [:maybe (or s :any)])
          (when (and (every? :in es) (not= (count vs) (count (distinct (mapcat :in es))))) {:optional true})]))))
 
 (defn- column-entries
@@ -447,7 +448,7 @@
           (when (and (seq cs) (every? #(or (types/category (second %)) (own (second %))) cs))
             (vec (map-indexed (fn [i [c ct]]
                                 [(if (< i (count listed)) (folded (name (nth listed i))) c)
-                                 (when-let [s (or (when (string? ct) (type-schema ct)) (own ct))] (cond-> s (not= "ordinality" c) nullable))
+                                 (when-let [s (or (when (string? ct) (type-schema ct)) (own ct))] (cond->> s (not= "ordinality" c) (vector :maybe)))
                                  ""])
                               cs))))))))
 
