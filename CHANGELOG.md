@@ -75,6 +75,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/row-schema` types the functions that build json and jsonb (`jsonb_build_object`,
   `jsonb_agg` ...) as a column of the type is read: an object or an array under `{:read {:json
   :parsed}}`.
+* An unaliased CASE is named after its ELSE where that has a name of its own, as PostgreSQL
+  names it.
 * `h/check` reads an alias's column list as renaming the first columns alone (`AS u(a)` keeps
   the others' names), names TRIM's column `btrim` as PostgreSQL does, and reads `coalesce` of a
   column with a CHECK's list as its base type.

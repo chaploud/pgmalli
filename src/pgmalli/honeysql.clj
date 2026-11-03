@@ -347,7 +347,7 @@
   [item]
   (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (keyword? (ffirst item))))))
 
-(declare row-schema* derived-types derived-types* nullable honeysql)
+(declare row-schema* derived-types derived-types* nullable honeysql beyond-list)
 
 (defn- cte-statement
   "[statement columns recursive?] of CTE name: its body as read on its own, under the entries of
@@ -362,6 +362,11 @@
                 [(second e) (subvec w 0 i) (when (vector? (first e)) (:columns (second (first e)))) k])]
     (when-let [[[stmt before listed k]] (when (= 1 (count found)) found)]
       (let [op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
+            ;; recursive when a member reads the CTE itself; otherwise its members resolve together
+            self? (some (fn [m] (some #(let [w (nth (table-ref % default-schema) 2)] (and w (= name (folded w))))
+                                      (mapcat table-items (statements m))))
+                        (when op (get stmt op)))
+            op (when self? op)
             stmt (if op (first (get stmt op)) stmt)]
         (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
           [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
@@ -397,7 +402,7 @@
                     types (when ts
                             ;; a CTE's name may list new names for its columns, by position; a recursive
                             ;; one's later rows may hold NULL where its first member's do not
-                            (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) (cond-> t (and t recursive?) nullable)])) ts))]
+                            (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) (cond->> t (and t recursive?) (beyond-list registry) (and t recursive?) nullable)])) ts))]
                 (cond-> sc types (assoc-in [alias :types] types))))
             sc items)))
 
@@ -780,7 +785,12 @@
         :else (let [[h a] x]
                 (cond (= :. h) (some-> (last x) (#(when (keyword? %) (function-name (name %)))))
                       (operator? h) "?column?"
-                      (#{:case :case-expr} h) "case"
+                      ;; CASE takes its ELSE's name where that has one of its own (a column's, a function's)
+                      (#{:case :case-expr} h) (let [e (some #(when (= :else (first %)) (second %)) (partition-all 2 (if (= :case h) (rest x) (drop 2 x))))
+                                                    n (cond (nil? e) "case"
+                                                            (column-keyword? e) (second (split-column e))
+                                                            :else (expression-name e))]
+                                                (if (= "?column?" n) "case" n))
                       (= :array h) "array"
                       (= :cast h) (cond (column-keyword? a) (second (split-column a))
                                         (vector? a) (let [n (expression-name a)] (when-not (#{"?column?" "case"} n) n)))
@@ -832,6 +842,12 @@
    the :pg/type they keep; nil for an enum type's labels, which name none."
   [registry s]
   (some-> (labels registry s) shape/column-props :pg/type))
+
+(defn- beyond-list
+  "s, or the base type of a CHECK's list it is: the type of a value computed from it and others
+   (coalesce, CASE, a recursive CTE's later rows), which the list does not hold."
+  [registry s]
+  (if-let [t (list-type registry s)] (type-schema t) s))
 
 (defn- compared-schema
   "The schema a value op compares with a column of schema s must fit: under equality-ops, or
@@ -1473,6 +1489,16 @@
    their result is of it (nullif's, its first argument's)."
   #{"coalesce" "greatest" "least" "nullif"})
 
+(declare resolved-type)
+
+(defn- result-type
+  "The type operands resolve to as a value: resolved-type's, but where an argument is among them
+   and the type is no string type, nil: pgjdbc sends a number or a date typed (a Long as bigint),
+   which may widen it beyond the others'."
+  [operands ts]
+  (when-let [r (resolved-type operands ts)]
+    (when (or (not-any? arg-key operands) (accept/strings (canonical-type r))) r)))
+
 (def ^:private number-order
   "The number types in the order PostgreSQL's implicit casts widen them."
   (zipmap ["smallint" "integer" "bigint" "numeric" "real" "double precision"] (range)))
@@ -1719,9 +1745,14 @@
       (= :inline h) (let [v (second x)]
                       (cond (string? v) (assoc (typed "text") :string? true)
                             (boolean? v) (typed "boolean")
-                            (int? v) (typed (if (<= Integer/MIN_VALUE v Integer/MAX_VALUE) "integer" "bigint"))
+                            ;; HoneySQL writes 1M and 1N as 1, an integer literal to PostgreSQL
+                            ;; and a ratio as a division of integers
+                            (ratio? v) (typed "integer")
+                            (and (number? v) (re-matches #"-?\d+" (str v)))
+                            (typed (let [n (bigint v)] (cond (<= Integer/MIN_VALUE n Integer/MAX_VALUE) "integer" (<= Long/MIN_VALUE n Long/MAX_VALUE) "bigint" :else "numeric")))
                             (number? v) (typed "numeric")))
-      (= :lift h) (expression-type registry chain (second x) opts)
+      ;; [:lift v] sends v as a parameter as it is, a keyword or a vector too
+      (= :lift h) (let [v (second x)] (when-not (or (keyword? v) (coll? v)) (expression-type registry chain v opts)))
       (= :cast h) (let [[_ v t] x
                         ;; [:varchar 10], a type with its typmod, as HoneySQL writes varchar(10)
                         t (if (and (vector? t) (keyword? (first t))) (first t) t)]
@@ -1744,12 +1775,12 @@
                         values (map second parts)
                         else? (some #(= :else (first %)) parts)
                         vts (map #(expression-type registry chain % opts) values)]
-                    (when-let [r (when (every? #(= 2 (count %)) parts) (resolved-type values vts))]
-                      {:schema (loose (if-let [t (list-type registry (:schema r))] (type-schema t) (:schema r)))
+                    (when-let [r (when (every? #(= 2 (count %)) parts) (result-type values vts))]
+                      {:schema (loose (beyond-list registry (:schema r)))
                        :nullable? (or (not else?) (boolean (some #(or (nil? %) (:nullable? %)) vts)))}))
-      (resolving-fns fname) (when-let [r (resolved-type (rest x) ts)]
+      (resolving-fns fname) (when-let [r (result-type (rest x) ts)]
                               ;; the others' values join a CHECK's list: its base type
-                              {:schema (cond-> (:schema r) (next ts) (-> (#(if-let [t (list-type registry %)] (type-schema t) %)) loose))
+                              {:schema (cond-> (:schema r) (next ts) (->> (beyond-list registry) loose))
                                ;; greatest and least skip NULLs as coalesce does; nullif makes one
                                :nullable? (or (= "nullif" fname) (not-any? #(and % (not (:nullable? %))) ts))}))))
 

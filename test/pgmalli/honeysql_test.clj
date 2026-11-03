@@ -486,8 +486,8 @@
     (is (= [:map [:n nick]] (row [[[:coalesce :nick "x"] :n]]))
         "a value that is not NULL makes it NOT NULL; a literal's length is not the column's")
     (is (= [:map [:n [:maybe :any]]] (row [[[:coalesce :nick :id] :n]])) "columns of different types are not resolved here")
-    (is (= [:map [:g bigint] [:l bigint]] (row [[[:greatest :id 3] :g] [[:least :id :?x] :l]]))
-        "greatest and least resolve as coalesce, NULL only where every operand is")
+    (is (= [:map [:g bigint] [:l [:maybe :any]]] (row [[[:greatest :id 3] :g] [[:least :id :?x] :l]]))
+        "greatest and least resolve as coalesce, NULL only where every operand is; an argument may widen a number")
     (is (= [:map [:n [:maybe nick]]] (row [[[:nullif :nick "x"] :n]])) "nullif makes NULL")
     (is (= [:map [:b [:boolean {:pg/type "boolean"}]] [:c [:maybe [:boolean {:pg/type "boolean"}]]]]
            (row [[[:= :id 1] :b] [[:= :nick "a"] :c]]))
@@ -1769,3 +1769,21 @@
 (deftest an-alias-list-renames-the-first-columns-alone
   (is (= [] (check {:select [:u.nick :u.a] :from [[:users [:u {:columns [:a]}]]]})))
   (is (= [] (check {:select [:s.nick] :from [[{:select [:id :nick] :from [:users]} [:s {:columns [:a]}]]]}))))
+
+(deftest a-set-operation-under-with-recursive-reading-no-cte-resolves-its-members
+  (is (not= [:map [:m [:maybe int4]]]
+            (row {:with-recursive [[:c {:union-all [{:select [[[:cast :id :integer] :n]] :from [:users]} {:select [[[:cast :id :numeric] :n]] :from [:users]}]}]]
+                  :select [[[:max :n] :m]] :from [:c]}))))
+
+(deftest an-inline-or-lifted-value-is-typed-as-honeysql-writes-it
+  (is (= [:map [:i int4] [:b int4]] (row {:select [[[:inline 1M] :i] [[:inline 1N] :b]]})))
+  (is (= [:map [:l [:maybe :any]]] (row {:select [[[:lift :nick] :l]] :from [:users]})) "a keyword lifted is a parameter, no column"))
+
+(deftest a-resolved-value-with-a-typed-argument-is-not-held-to-the-others-type
+  (is (= [:map [:c [:maybe :any]]] (row {:select [[[:case [:= :id 1] :group_id :else :?p] :c]] :from [:users]}))
+      "pgjdbc sends a Long as bigint and a Double as double precision, which widen it")
+  (is (= [:map [:c [:maybe :any]]] (row {:select [[[:greatest :group_id :?p] :c]] :from [:users]}))))
+
+(deftest a-case-is-named-after-its-else
+  (is (= [:nick] (map first (rest (row {:select [[[:case [:= :id 1] "a" :else :nick]]] :from [:users]})))))
+  (is (= [:case] (map first (rest (row {:select [[[:case [:= :id 1] "a" :else "b"]]] :from [:users]}))))))

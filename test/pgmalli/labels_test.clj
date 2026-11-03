@@ -66,3 +66,7 @@
 
 (deftest a-coalesce-of-a-check-list-takes-the-others-values-too
   (is (= [] (h/check registry {:select [:s.id] :from [[{:select [:id [[:coalesce :n 3] :cc]] :from [:t]} :s]] :where [:= :s.cc 3]}))))
+
+(deftest a-recursive-ctes-later-rows-hold-values-beyond-its-first-members-list
+  (is (= [] (h/check registry {:with-recursive [[:c {:union-all [{:select [:n] :from [:t]} {:select [[[:+ :n 1] :n]] :from [:c]}]}]]
+                               :select [:n] :from [:c] :where [:= :c.n 3]}))))

@@ -51,7 +51,7 @@
 
 (def ^:private integers #{"smallint" "integer" "bigint"})
 (def ^:private numbers (into integers ["real" "double precision" "numeric"]))
-(def ^:private strings #{"character varying" "text" "character" "name" "citext"})
+(def strings "The string types." #{"character varying" "text" "character" "name" "citext"})
 
 (defn number-type? [t] (contains? numbers t))
 
