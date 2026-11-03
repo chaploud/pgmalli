@@ -60,7 +60,10 @@
                                       (and (map? opts) known) (select-keys known)
                                       (map? opts) (dissoc :db))
                              :errors errors}
-                      known (assoc :known (vec known))))))))
+                      known (assoc :known (vec known))
+                      ;; the names of the keys it does not take, not their values
+                      (seq stray) (assoc :unknown (vec stray))
+                      suggest (assoc :did-you-mean [suggest])))))))
 
 ;; compiled once: malli keeps a schema's validator, and these are checked on every call
 (def ^:private options (delay (m/schema options-schema)))
@@ -79,14 +82,16 @@
                         #(symbol "next.jdbc.result-set" %))
            (update-keys (update-vals maps #(assoc % :absent? true)) #(symbol "next.jdbc.optional" %)))))
 
-(defn- builder
+(def ^:private builder
   "How the next.jdbc builder f keys a row (builders): the function, its var, or its qualified
-   symbol, which names it where next.jdbc does not load (babashka); nil for another."
-  [f]
-  (if (symbol? f)
-    (get builders f)
-    (let [f (if (var? f) @f f)]
-      (some (fn [[sym how]] (when (= f (some-> (try (requiring-resolve sym) (catch Exception _ nil)) deref)) how)) builders))))
+   symbol, which names it where next.jdbc does not load (babashka); nil for another. Memoized:
+   every column's key asks."
+  (memoize
+   (fn [f]
+     (if (symbol? f)
+       (get builders f)
+       (let [f (if (var? f) @f f)]
+         (some (fn [[sym how]] (when (= f (some-> (try (requiring-resolve sym) (catch Exception _ nil)) deref)) how)) builders))))))
 
 (defn row-keys
   "How a row is keyed under opts: {:qualified? :absent? :label :qualifier}, as :jdbc's
@@ -191,14 +196,20 @@
     (checked! @options opts)
     opts))
 
+(def ^:private class-order (zipmap (map first accept/class-types) (range)))
+
+(defn- sorted-sends
+  "The entries of a send-map in pgjdbc's order (accept/class-types), then by class name."
+  [m]
+  (sort-by (fn [[c]] [(class-order c Long/MAX_VALUE) (str c)]) m))
+
 (defn write-rows
   "[schema type] for each class send-map sends, in pgjdbc's order (accept/class-types) and then
    by name, by array? an array argument's (a Clojure
    collection or a Java array sent as an array type or untyped, the collection's elements
    :pgmalli/element) or another's."
   [opts array?]
-  (for [[c t] (sort-by (fn [[c]] [(or (first (keep-indexed #(when (= c (first %2)) %1) accept/class-types)) Long/MAX_VALUE) (str c)])
-                       (send-map opts))
+  (for [[c t] (sorted-sends (send-map opts))
         :let [t (type-name t)
               coll (some (fn [[k s]] (when (.isAssignableFrom ^Class k c) s)) collections)
               array (or (.isArray ^Class c) (and coll (or (= :unknown t) (array-type-name t))))]
@@ -213,7 +224,9 @@
   (if (:inline format)
     :unknown
     (let [m (send-map opts)]
-      (some (fn [c] (some-> (get m c) type-name)) (cons (class value) (supers (class value)))))))
+      ;; its class's entry, else its superclasses' and interfaces' in pgjdbc's order (write-rows's)
+      (or (some-> (get m (class value)) type-name)
+          (some (fn [[c t]] (when (instance? c value) (type-name t))) (sorted-sends m))))))
 
 (defn string-sends
   "The types a String is sent as: send-map's for String and Character."
@@ -264,13 +277,14 @@
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
    element type is one of t's own (accept/holds?), as a column takes a value; :any without one."
   [t opts use]
-  (let [p (some #(when (and (vector? %) (map? (second %))) (:pg/type (second %))) (shape/alternatives t))
+  ;; t may take NULL (a nullable column's elements); its type is the one without
+  (let [p (some pg-type (shape/alternatives (shape/non-null t)))
         elem (some-> p types/entry :name)
         takes? (fn [sent]
                  (if (= :unknown sent)
                    (not= :unnest use)
                    (or (not (and elem (accept/known? elem)))
-                       (accept/holds? elem (subs sent 0 (- (count sent) 2))))))
+                       (accept/holds? elem (accept/element sent)))))
         alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)] (clojure.walk/postwalk-replace {:pgmalli/element t} s)))]
     (shape/either alts :any)))
 

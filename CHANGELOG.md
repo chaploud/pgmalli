@@ -15,8 +15,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `unnest`, which takes a typed array alone.
 * `:jdbc` takes the options an application passes to next.jdbc: `:builder-fn` (one of
   next.jdbc's map builders, as the function, its var, or its qualified symbol where next.jdbc
-  does not load), `:label-fn` and `:qualifier-fn` key rows as next.jdbc does, the modified
-  builders too; `:return-keys` adds RETURNING to a write.
+  does not load) keys rows as next.jdbc does, and under a modified builder `:label-fn` and
+  `:qualifier-fn` too; `:return-keys` adds RETURNING to a write.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
   `:set` built at run time, keyed as the `:jdbc` builder keys a row where HoneySQL writes that
   key back to the column. `h/set-schema` takes a non-empty map.
@@ -35,10 +35,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `"1"` is the label `1`, and a number outside the list is an `:enum-literal`.
 * `h/row-schema` types `greatest`, `least` and `nullif` as `coalesce`, and `h/arg-types` types
   an argument of any of them with the type the other arguments resolve to.
-* `h/query-schema`'s return says how many rows the data tells: one of a SELECT of aggregates
-  alone (under `{:result :one}`, no `[:maybe]`), at most one where the WHERE holds a primary key
-  or a UNIQUE constraint equal to a value, one for each row an INSERT returns, at most
-  `:limit` (`[:sequential {:max 1} row]`).
+* `h/query-schema`'s return says how many rows the data tells (`[:sequential {:max 1} row]`):
+  one of a SELECT of aggregates alone, at most one where the WHERE holds a primary key or a
+  UNIQUE constraint equal to a value, as many as an INSERT's `:values` has rows under RETURNING,
+  at most `:limit`; where it is one, `{:result :one}` gives no `[:maybe]`.
+* `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does
+  not take is an error whose data names it (`:unknown`) and the one meant (`:did-you-mean`).
 * The columns of a CTE or a subquery are typed as its SELECT types them; a column it does not
   give is `:unknown-column`. An argument of an `unnest` in `FROM` is an array of the type of
   where its column goes.
@@ -66,8 +68,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   * The old options are an error saying what each is now, when the schema is built (a
     namespace whose `:malli/schema` passes one fails to load).
   * An instrumented function whose argument was `:any` under a cast or in a select or ORDER BY
-    comparison now has its type checked; a query whose select or ORDER BY compares an unknown
-    column or an enum with a literal outside its labels now has problems.
+    comparison, inside `coalesce` and the like or an `unnest` in FROM, or that reads a CTE's or
+    a subquery's column, now has its type checked, and one whose return now says a row count
+    has it checked; a query whose select or ORDER BY compares an unknown column or an enum with
+    a literal outside its labels, that sends a string typed to a column not taking it, compares
+    a CHECK's list of numbers with a value outside it, or reads a column a CTE does not give,
+    now has problems.
+  * Code reading the row of `h/query-schema`'s return by position (`(second ret)`) reads it with
+    `last` or `m/children`: the return may carry properties (`[:sequential {:max 1} row]`).
 
 ## 0.3.3 (2026-11-03)
 

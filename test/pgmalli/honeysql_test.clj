@@ -1607,3 +1607,41 @@
     (is (= [:map [:o [:map {:pg/type "jsonb"}]] [:a [:maybe [:sequential {:pg/type "jsonb"} :any]]] [:b [:sequential {:pg/type "json"} :any]]]
            (row q (assoc opts :read {:json :parsed})))
         "parsed, an object or an array")))
+
+(deftest a-row-count-is-told-only-where-nothing-may-change-it
+  (let [ret #(last (h/query-schema registry [:db] % (merge opts %2)))
+        counted? #(map? (second (ret % {})))]
+    (is (not (counted? {:select [[[:generate_series 1 3] :x]] :from [:users] :where [:= :id 1]}))
+        "a set-returning function in the select list repeats a keyed row")
+    (is (not (counted? {:select [:users.nick] :from [:users] :join-by [:join [[:users :u2] [:= :u2.group_id :users.group_id]]] :where [:= :users.id 1]})))
+    (is (not (counted? '{:select [:groups.name] :from [:groups] :join (joins) :where [:= :groups.id 1]})) "code may join")
+    (is (not (counted? {:with [[:users {:select [[:group_id :id]] :from [:sample.users]}]] :select [:id] :from [:users] :where [:= :id 1]}))
+        "a CTE named as a table has none of its keys")
+    (doseq [q [{:limit :?n} {:limit [:inline 0]} {:fetch 0}]]
+      (is (= :maybe (first (ret (merge {:select [[[:count :*] :n]] :from [:users]} q) {:result :one}))) (pr-str q)))))
+
+(deftest an-unnest-into-a-nullable-column-takes-nil-elements
+  (let [t (:n (args {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [:?s] [[:unnest :?n]]]}]}
+                    (sends opts {clojure.lang.IPersistentVector "varchar[]"})))]
+    (is (m/validate t ["a" nil] {:registry registry}))))
+
+(deftest a-subquery-reading-a-cte-it-is-not-read-without-stays-untyped
+  (is (= {:n :any} (args {:with [[:users {:select [[[:cast 1 :integer] :nick]]}]] :select [:s.nick] :from [[{:select [:nick] :from [:users]} :s]] :where [:= :s.nick :?n]}))
+      "users there is the CTE, which the subquery on its own would read as the table"))
+
+(deftest an-insert-selects-arguments-are-typed-in-its-selects-scope
+  (is (= {:x [:maybe integer]} (args {:insert-into [[:users [:score]] {:select [[[:coalesce :?x :id]]] :from [:groups]}]}))))
+
+(deftest the-same-query-in-another-key-order-has-the-same-types
+  (let [q1 (array-map :where [:= :id {:select [:id] :from [:users] :where [:= :id :?x]}] :select [[{:select [:nick] :from [:users] :where [:= :nick :?x]} :n]] :from [:users])
+        q2 (array-map :select (:select q1) :where (:where q1) :from [:users])]
+    (is (= (args q1) (args q2)) "the first use is the first in the SQL")))
+
+(deftest an-unknown-table-names-the-one-meant
+  (is (= [{:kind :unknown-table :table "sample.usres" :did-you-mean ["sample.users"]}] (check {:select [:id] :from [:usres]})))
+  (is (= ["unknown table sample.usres; did you mean sample.users?"] (h/humanize (check {:select [:id] :from [:usres]})))))
+
+(deftest a-misspelt-option-names-the-one-meant-in-its-data
+  (let [d (ex-data (try (h/check registry {:select [:id] :from [:users]} {:tmie :instant}) (catch clojure.lang.ExceptionInfo e e)))]
+    (is (= [:time] (:did-you-mean d)))
+    (is (= [:tmie] (:unknown d)))))

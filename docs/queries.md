@@ -123,7 +123,7 @@ keyed as in `sql/format`'s `:params`:
 | cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | an array, typed as `:send` sends one, of where its column goes: compared with a column, or assigned by `INSERT ... SELECT` |
-| an argument of `coalesce`, `greatest`, `least` or `nullif` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as compared, or nil |
+| an argument of `coalesce`, `greatest`, `least` or `nullif` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
 | used only inside code (`(when x ...)`) | its type or nil |
@@ -142,8 +142,9 @@ it; a value at exactly half a unit past may round out of range):
 ```
 
 Where its uses type an argument differently, the first statement wins (an enclosing one before
-its subqueries), and within it a comparison (the first), then `:limit` / `:offset`, a cast, an
-assignment.
+its subqueries; the first in the SQL HoneySQL writes), and within it a comparison (the first),
+then `:limit` / `:offset`, a cast, an assignment, an `unnest`'s array, an argument of
+`coalesce`, `greatest`, `least` or `nullif`.
 
 A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
 matches no row.
@@ -219,8 +220,9 @@ row's schema in the row argument's place, and as the return, what `h/query-schem
 query without the row:
 
 ```clojure
-(m/schema [:=> [:cat :any (h/values-schema registry :users)]
-               (last (h/query-schema registry [:db] {:insert-into :users :returning [:id]} {:result :one}))]
+;; the row argument's :any replaced, the problems of the query kept
+(m/schema (mapv #(if (and (vector? %) (= :cat (first %))) (assoc % 2 (h/values-schema registry :users)) %)
+                (h/query-schema registry [:db :row] {:insert-into :users :returning [:id]} {:result :one}))
           {:registry registry})
 ```
 
@@ -247,9 +249,10 @@ for a value sent untyped), merged over pgjdbc's; `nil` takes a class out:
 ```
 
 pgjdbc's classes are `Long`, `Integer`, `Short`, `Byte`, `BigDecimal`, `BigInt`, `BigInteger`,
-`Double`, `Float`, `Boolean`, `String`, `UUID`, `byte[]`, the java.time classes, and `long[]`,
-`int[]` and `String[]` as arrays. A class `:send` does not list, nor one of its superclasses or
-interfaces, reaches no argument.
+`Double`, `Float`, `Boolean`, `String`, `UUID`, `byte[]`, `LocalDate`, `LocalTime`,
+`OffsetTime`, `LocalDateTime`, `OffsetDateTime`, and `long[]`, `int[]` and `String[]` as arrays.
+A value reaches an argument only through its class's entry or one of its superclasses' or
+interfaces'.
 
 A class adds to what a column takes where its type is the column's or one the column takes as
 its own (a narrower number, another string type, an untyped value to a text or enum column), and
@@ -357,7 +360,7 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
-| `:jdbc {...}` | the options you pass to next.jdbc: `:builder-fn`, `:label-fn` and `:qualifier-fn` key the rows ([reading-rows.md](reading-rows.md#keys-from-a-nextjdbc-builder)); `:return-keys true` or `["col" ...]` adds RETURNING to a write |
+| `:jdbc {...}` | the options you pass to next.jdbc: `:builder-fn` (the function, its var, or its qualified symbol where next.jdbc does not load) keys the rows, `:label-fn` and `:qualifier-fn` under a modified builder ([reading-rows.md](reading-rows.md#keys-from-a-nextjdbc-builder)); `:return-keys true` or `["col" ...]` adds RETURNING to a write |
 | `:time`, `:read` | how the driver reads values ([reading-rows.md](reading-rows.md#options)) |
 | `:send {Class type}` | what your application sends, and the type each class goes as: [what your application sends](#what-your-application-sends); pgjdbc's by default |
 | `:compare :lenient` | arguments compared with a column take nil too (`:strict` by default) |
@@ -379,11 +382,13 @@ datasource or connection, `:any` when `h/row-schema` gives nil. `{:result :one}`
 ;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
 ```
 
-Where the data tells how many rows a statement returns, the return says so: one row of a SELECT
-of aggregates alone (no GROUP BY, HAVING or OFFSET), so `{:result :one}` drops the `[:maybe]`;
-at most one of a statement on one table whose WHERE holds its primary key's or a UNIQUE
-constraint's columns equal to a value; one for each row of an INSERT's `:values` with RETURNING
-(at least none under ON CONFLICT); at most `:limit`:
+Where the data tells how many rows a statement returns, the return says so (`[:sequential {:max
+1} row]`; read the row with `last` or `m/children`, not by position): one row of a SELECT of
+aggregates alone (no GROUP BY, HAVING, OFFSET or a limit a parameter gives); at most one of a
+statement on one table (no CTE of its name) selecting columns, whose WHERE holds its primary
+key's or a UNIQUE constraint's columns equal to a value; one for each row of an INSERT's
+`:values` with RETURNING (from none to that many under ON CONFLICT or a BEFORE INSERT trigger);
+at most `:limit`. Where it is one row, `{:result :one}` drops the `[:maybe]`:
 
 ```clojure
 (h/query-schema registry [:db] {:select [[[:count :*] :n]] :from [:users]} {:result :one})

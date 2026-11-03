@@ -11,8 +11,8 @@
 
 (def class-types
   "[class type]: the type pgjdbc's setObject sends a value of class as, with no extension and
-   its default stringtype (varchar): any other Number with setNumber, a Character with
-   setString, a Java array as an array of its elements' type."
+   its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
+   Character with setString, a Java array as an array of its elements' type."
   [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
    [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
    [Boolean "boolean"] [String "character varying"] [Character "character varying"] [java.util.UUID "uuid"]
@@ -50,7 +50,6 @@
 
 (defn integer-type? [t] (contains? integers t))
 
-(defn string-type? [t] (contains? strings t))
 
 (def ^:private families
   "Types whose comparison operators take each other: implicit casts and cross-type operators."
@@ -79,7 +78,10 @@
 
 (defn- oid? [t] (and (string? t) (str/starts-with? t "reg")))
 
-(defn- element [t] (when (string? t) (second (re-matches #"(.+)\[\]" t))))
+(defn element
+  "The element type of an array type t (\"bigint[]\" is bigint); nil for another."
+  [t]
+  (when (string? t) (second (re-matches #"(.+)\[\]" t))))
 
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context

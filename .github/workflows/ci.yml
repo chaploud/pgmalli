@@ -64,7 +64,7 @@ jobs:
           persist-credentials: false
       - run: pipx run zizmor==1.31.1 .github/workflows
   floor:
-    # the oldest versions README supports; here, not in deps.edn, where Renovate would raise them
+    # the oldest versions README supports (bb.edn's test:floor)
     runs-on: ubuntu-latest
     env:
       PGMALLI_PG_IMAGE: postgres:16-alpine
@@ -79,10 +79,7 @@ jobs:
       - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
         with:
           cli: latest
+          bb: latest
       - name: pull postgres image
         run: docker pull "$PGMALLI_PG_IMAGE"
-      # fuzz-test builds its CHECKs with HoneySQL, which 2.4.1066 writes IS DISTINCT FROM in wrong
-      - run: >-
-          clojure -Sdeps '{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version "2.4.1066"}
-          org.clojure/clojure {:mvn/version "1.11.4"} metosin/malli {:mvn/version "0.20.0"} com.github.seancorfield/next.jdbc {:mvn/version "1.3.1048"}
-          org.postgresql/postgresql {:mvn/version "42.7.7"}}}}}' -M:test:floor -r 'pgmalli\.(?!fuzz-test).*'
+      - run: bb test:floor

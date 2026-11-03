@@ -6,7 +6,7 @@ Issues and pull requests are welcome.
 
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the
-image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb oracle`, `bb docs:example`,
+image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`, `bb docs:example`,
 `bb harvest`, `bb sweep` and `bb upstream` need it; `bb lint`, `bb test:docs` and `bb fixture` do not.
 
 ## Tests
@@ -18,7 +18,14 @@ image). `bb test`, `bb test:jvm`, `bb test:matrix`, `bb oracle`, `bb docs:exampl
 | `bb test:jvm` | the suite on the JVM |
 | `bb test:matrix` | the suite on every PostgreSQL version CI covers |
 | `bb test:docs` | the code blocks of README.md and docs/, each `;; =>` asserted |
+| `bb test:floor` | the suite on the JVM with the oldest versions README supports |
 | `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
+| `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
+| `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
+
+Before a pull request: `bb lint` → `PGMALLI_SKIP_DB=1 bb test` → `bb test` → `bb test:jvm` →
+`bb test:floor` → `bb oracle` → `bb test:docs`. After `bb test:update` or `bb test:docs:update`,
+read the git diff: a rewritten expectation is a changed behaviour.
 
 `bb test` runs every `*_test` namespace but those that need next.jdbc. One namespace or one
 test on the JVM: `clojure -M:test -n pgmalli.honeysql-test`, `clojure -M:test -v

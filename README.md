@@ -303,7 +303,7 @@ file, `:except`, short tables and how foreign keys are filled.
 
 `h/check` reads HoneySQL query data against the registry, with no database. It returns the
 problems PostgreSQL would report. It also reports a few queries that PostgreSQL runs but that
-can match no row ([docs/queries.md](docs/queries.md#reported-though-postgresql-runs-them)):
+can match no row ([docs/queries.md](docs/queries.md#stricter-than-postgresql)):
 
 ```clojure
 (require '[pgmalli.honeysql :as h])

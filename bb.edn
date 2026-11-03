@@ -29,15 +29,9 @@
                   :extra-paths ["dev"]
                   :task (load-file "dev/fixture.clj")}
          test {:doc "Run the test suite with babashka (every test/**/*_test.clj but the ones that need next.jdbc)"
-               :requires ([clojure.test :as t] [clojure.string :as str] [babashka.fs :as fs])
-               :task (let [skip #{"pgmalli.accept-test" "pgmalli.catalog-fuzz-test" "pgmalli.driver-types-test" "pgmalli.oracle-test" "pgmalli.row-keys-test" "pgmalli.upstream-test"}
-                           nss (->> (fs/glob "test" "**/*_test.clj")
-                                    (map (fn [f] (-> (str (fs/strip-ext (fs/relativize "test" f)))
-                                                    (str/replace "/" ".")
-                                                    (str/replace "_" "-"))))
-                                    (remove skip)
-                                    sort
-                                    (map symbol))
+               :extra-paths ["dev"]
+               :requires ([clojure.test :as t] [bb-suite])
+               :task (let [nss (bb-suite/namespaces false)
                            _ (apply require nss)
                            {:keys [fail error]} (apply t/run-tests nss)]
                        (when (pos? (+ fail error)) (System/exit 1)))}
@@ -48,8 +42,18 @@
                               (shell "clojure -M:test:docs -d target/test-doc-blocks/test"))}
          test:update {:doc "bb test:update [ns ...]: run the bb suite and write each failing (is (= literal form)) back with what it got; read the git diff"
                       :extra-paths ["dev"]
-                      :task (load-file "dev/update_expected.clj")}
+                      :requires ([update-expected])
+                      :task (apply update-expected/-main *command-line-args*)}
+         test:update:jvm {:doc "bb test:update:jvm [ns ...]: bb test:update on the JVM, for the namespaces that need next.jdbc too"
+                          :task (apply shell "clojure -M:test:test-update" *command-line-args*)}
          test:docs:update {:doc "bb test:docs:update [file.md ...]: rewrite each ;; => of the docs with what its form gives (JVM); read the git diff"
                            :task (apply shell "clojure -M:test:docs-update" *command-line-args*)}
          test:jvm {:doc "Run the test suite on the JVM"
-                   :task (shell "clojure -M:test")}}}
+                   :task (shell "clojure -M:test")}
+         ;; the oldest versions README supports, in a string: as deps (in deps.edn or as EDN here)
+         ;; Renovate would raise them. fuzz-test builds its CHECKs with HoneySQL, which 2.4.1066
+         ;; writes IS DISTINCT FROM in wrong
+         test:floor {:doc "Run the JVM suite on the oldest Clojure, HoneySQL, malli, next.jdbc and pgjdbc README supports"
+                     :task (shell "clojure" "-Sdeps"
+                                  "{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version \"2.4.1066\"} org.clojure/clojure {:mvn/version \"1.11.4\"} metosin/malli {:mvn/version \"0.20.0\"} com.github.seancorfield/next.jdbc {:mvn/version \"1.3.1048\"} org.postgresql/postgresql {:mvn/version \"42.7.7\"}}}}}"
+                                  "-M:test:floor" "-r" "pgmalli\\.(?!fuzz-test).*")}}}

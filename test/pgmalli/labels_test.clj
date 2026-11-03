@@ -31,13 +31,17 @@
   (is (= [] (h/check registry {:select [:id] :from [:t] :where [:and [:= :l :?x] [:= :v :?y]]})))
   (is (= [{:kind :enum-literal :column :l :value "c" :allowed ["a" "b"]}]
          (h/check registry {:select [:id] :from [:t] :where [:= :l "c"]}))
-      "a value outside the list still matches no row"))
+      "a value outside the list still matches no row")
+  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:or [:<> :l "c"] [:< :l "c"] [:not-in :l ["c"]]]}))
+      "other comparisons compare it as its base type"))
 
 (deftest a-literal-is-a-number-label-as-postgresql-reads-it
   (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :n "1"]} {:send {String :unknown}}))
       "an untyped '1' is 1")
   (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :v "2"]} {:send {String :unknown}})))
   (is (= [] (h/check registry {:select [:id] :from [:t] :where [:= :n 1.0]})))
+  (is (= [] (h/check registry {:select [:id] :from [:t] :where [:in :n ["0x1" "2" " 1 " "0b10"]]} {:send {String :unknown}}))
+      "PostgreSQL 16 reads 0x, 0o and 0b integers")
   (is (= [{:kind :enum-literal :column :n :value 3 :allowed [1 2]}]
          (h/check registry {:select [:id] :from [:t] :where [:= :n 3]}))
       "a number outside the list matches no row")
