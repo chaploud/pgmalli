@@ -72,8 +72,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Added
 
-* `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems}`: the
-  arguments' types, the row, how many rows where the data tells, and the problems of `h/check`
+* `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems :tables}`:
+  the arguments' types, the row, how many rows where the data tells, the problems of `h/check`
+  and the tables of `h/tables`
   ([docs/queries.md](docs/queries.md#function-schemas)). `h/query-schema` is built of it.
 * `h/arg-types` (and `h/query-schema`) type an argument where a whole row goes, `:values
   [:?row]`, `:values :?rows` and `:set :?row`, as `h/values-schema` and `h/set-schema` type the

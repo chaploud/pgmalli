@@ -2485,11 +2485,12 @@
   (is (= [{:kind :unknown-column :column :c.nope}] (check {:select [:c.nope] :from [[:pg_class :c]]})))
   (is (= [] (check {:select [:attstattarget] :from [:pg_attribute]})) "a column one version has"))
 
-(deftest analyze-gives-what-check-arg-types-and-row-schema-give-in-one-map
+(deftest analyze-gives-what-check-arg-types-row-schema-and-tables-give-in-one-map
   (let [q {:select [:nick] :from [:users] :where [:= :id :?id]}]
-    (is (= {:args (args q) :row (row q) :rows {:min 0 :max 1} :problems []} (h/analyze registry q opts))))
+    (is (= {:args (args q) :row (row q) :rows {:min 0 :max 1} :problems [] :tables (h/tables registry q opts)} (h/analyze registry q opts)))
+    (is (= {:reads #{"sample.users"} :writes #{}} (:tables (h/analyze registry q opts)))))
   (let [q {:select [:nick_name] :from [:users] :where [:= :group_id :?g]}]
-    (is (= {:args (args q) :row nil :rows nil :problems (check q)} (h/analyze registry q opts))))
+    (is (= {:args (args q) :row nil :rows nil :problems (check q) :tables (h/tables registry q opts)} (h/analyze registry q opts))))
   (is (= {:min 1 :max 1} (:rows (h/analyze registry {:select [[[:count :*] :n]] :from [:users]} opts)))))
 
 (deftest an-argument-no-use-types-says-why

@@ -2681,14 +2681,14 @@
       (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
 
 (defn analyze
-  "{:args :row :rows :problems} of a query, what one reading of it tells: :args as arg-types
-   gives them, :row as row-schema (nil when it cannot be told), :rows {:min n :max m} of the rows
-   a statement returns where the data tells (docs/queries.md#function-schemas), nil otherwise,
-   :problems as check finds them. query-schema builds a function schema of it. Options:
-   docs/queries.md#options.
+  "{:args :row :rows :problems :tables} of a query, what one reading of it tells: :args as
+   arg-types gives them, :row as row-schema (nil when it cannot be told), :rows {:min n :max m} of
+   the rows a statement returns where the data tells (docs/queries.md#function-schemas), nil
+   otherwise, :problems as check finds them, :tables as tables gives them. query-schema builds a
+   function schema of it. Options: docs/queries.md#options.
 
    (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-   ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:users/email ...]], :rows {:min 0, :max 1}, :problems []}"
+   ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:users/email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}}"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
@@ -2698,7 +2698,8 @@
      {:args (arg-types registry body opts)
       :row (row-schema registry body opts)
       :rows (row-count registry body opts)
-      :problems (check registry body opts)})))
+      :problems (check registry body opts)
+      :tables (tables registry body opts)})))
 
 (defn query-schema
   "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args

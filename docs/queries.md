@@ -528,11 +528,12 @@ row, `{:result :one}` drops the `[:maybe]`:
 
 `h/analyze` gives what `h/query-schema` is built of, for code that builds a schema of its own:
 the arguments as `h/arg-types` types them, the row as `h/row-schema` (nil where it cannot be
-told), how many rows where the data tells (nil otherwise), and the problems of `h/check`:
+told), how many rows where the data tells (nil otherwise), the problems of `h/check`, and the
+tables it reads and writes, as `h/tables` gives them:
 
 ```clojure
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems []}
+;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
 ```
 
 A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns,

@@ -421,7 +421,7 @@ query still loads. `h/schema-problems` gathers them for one test
 ([docs/queries.md](docs/queries.md#problems-in-function-schemas)).
 
 `h/analyze` gives the parts `h/query-schema` is built of, for a schema of your own: the
-arguments, the row, how many rows and the problems
+arguments, the row, how many rows, the problems and the tables it reads and writes
 ([docs/queries.md](docs/queries.md#function-schemas)).
 
 `pgmalli/portable` gives a named schema as data that malli's default registry and
