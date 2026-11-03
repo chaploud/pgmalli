@@ -35,7 +35,7 @@ schema (from a pgmalli checkout) to try it, then generate:
 $ psql -f docs/example/schema.sql
 $ clojure -M -m pgmalli.main generate
 pgmalli: no pgmalli.edn here; using the defaults (schema public, files in resources/pgmalli)
-wrote resources/pgmalli/public.edn (public: 4 tables, 0 views, 1 enums, 0 domains; 0 unrendered, 0 diagnostics)
+wrote resources/pgmalli/public.edn (schema public; tables: 4, views: 0, enums: 1, domains: 0; unrendered: 0, diagnostics: 0)
 done: files written: 1; commit them, and run `clojure -M -m pgmalli.main check` in CI
 ```
 
@@ -468,13 +468,13 @@ stale: public (differences: 1); run `clojure -M -m pgmalli.main generate` and co
 
 | exit | when |
 |---|---|
-| 0 | the files match the database |
+| 0 | success; for `check`, the files match the database |
 | 1 | a file differs or is missing: run `generate` |
 | 2 | a usage, config or other error |
 | 3 | the database or psql is unavailable |
 
-Findings go to stdout; usage, warnings and errors go to stderr, one line each
-(`PGMALLI_DEBUG=1` adds the stack trace). `check --edn` prints `generate/check`'s map instead.
+Findings go to stdout; warnings and errors go to stderr, one line each (`PGMALLI_DEBUG=1` adds
+the stack trace), followed by the usage for a usage error. `--help` prints the usage to stdout. `check --edn` prints `generate/check`'s map instead.
 A config path that does not exist is an error; only with no path does a missing `pgmalli.edn`
 mean the defaults.
 

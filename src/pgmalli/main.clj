@@ -6,9 +6,10 @@
      clojure -M -m pgmalli.main check [--edn] [pgmalli.edn]
      bb -m pgmalli.main ...
 
-   Exit codes: 0 the files are current; 1 a file is stale or missing (run generate);
-   2 a usage, config or other error; 3 the database or psql is unavailable. Findings go to
-   stdout, usage, warnings and errors to stderr (PGMALLI_DEBUG=1 adds the stack trace)."
+   Exit codes: 0 success (for check, the files match the database); 1 a file is stale or
+   missing (run generate); 2 a usage, config or other error; 3 the database or psql is
+   unavailable. Findings, and the usage --help asks for, go to stdout; warnings, errors and
+   the usage after a usage error to stderr (PGMALLI_DEBUG=1 adds the stack trace)."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -18,13 +19,18 @@
             [pgmalli.impl.render :as render]
             [pgmalli.impl.shape :as shape]))
 
-(def ^:private usage "usage: pgmalli.main generate [pgmalli.edn] | check [--edn] [pgmalli.edn]")
-
 (defn- warn [& xs] (binding [*out* *err*] (apply println "pgmalli:" xs)))
 
 (defn- command [& args]
   (str/join " " (concat [(if (System/getProperty "babashka.version") "bb -m pgmalli.main" "clojure -M -m pgmalli.main")]
                         (remove nil? args))))
+
+(defn- usage []
+  (str/join "\n" [(str "usage: " (command "generate [pgmalli.edn]"))
+                  (str "       " (command "check [--edn] [pgmalli.edn]"))
+                  "exit codes: 0 success (for check, the files match the database); 1 a file is stale or missing (run generate);"
+                  "            2 a usage, config or other error; 3 the database or psql is unavailable"
+                  "PGMALLI_DEBUG=1 prints an error's stack trace"]))
 
 (defn- read-config [path]
   (let [file (io/file (or path "pgmalli.edn"))]
@@ -50,8 +56,8 @@
                            (and (vector? s) (= :enum (first s))) :enum
                            :else :domain))
         f (frequencies (map kind entries))]
-    (str (f :table 0) " tables, " (f :view 0) " views, " (f :enum 0) " enums, " (f :domain 0) " domains; "
-         (count (:unrendered data)) " unrendered, " (count (:diagnostics data)) " diagnostics")))
+    (str "tables: " (f :table 0) ", views: " (f :view 0) ", enums: " (f :enum 0) ", domains: " (f :domain 0)
+         "; unrendered: " (count (:unrendered data)) ", diagnostics: " (count (:diagnostics data)))))
 
 (defn- override-key
   "What :overrides takes for an unrendered entry: its constraint's name, or its type as a keyword."
@@ -86,7 +92,7 @@
       (warn (str ":out-dir " out-dir " does not end in pgmalli: pgmalli.core/registry reads pgmalli/<schema>.edn from the classpath")))
     (doseq [[schema out] written
             :let [data (files/read-edn out)]]
-      (println "wrote" out (str "(" schema ": " (counts data) ")"))
+      (println "wrote" out (str "(schema " schema "; " (counts data) ")"))
       (print-diagnostics schema (:diagnostics data))
       (print-unrendered schema (:unrendered data)))
     (println (str "done: files written: " (count written) "; commit them, and run `" (command "check" path) "` in CI"))
@@ -113,14 +119,19 @@
 (defn- run* [args]
   (let [[cmd & more] args
         flags (filter #(str/starts-with? % "-") more)
-        [path & extra] (remove (set flags) more)]
-    (cond (#{"help" "-h" "--help"} cmd) (do (println usage) 0)
-          (or (not (#{"generate" "check"} cmd)) (seq extra)
-              (seq (remove (if (= "check" cmd) #{"--edn"} #{}) flags)))
+        [path & extra] (remove (set flags) more)
+        command? (#{"generate" "check"} cmd)
+        unknown (first (remove (if (= "check" cmd) #{"--edn"} #{}) flags))]
+    (cond (or (#{"help" "-h" "--help"} cmd) (and command? (some #{"-h" "--help"} flags)))
+          (do (println (usage)) 0)
+          (or (not command?) unknown (seq extra))
           (do (binding [*out* *err*]
-                (when (and cmd (not (#{"generate" "check"} cmd)) (not (str/starts-with? cmd "-")))
-                  (println (str "pgmalli: unknown command " cmd (error/did-you-mean (error/suggest cmd ["generate" "check"])))))
-                (println usage))
+                (cond (and cmd (not command?) (not (str/starts-with? cmd "-")))
+                      (println (str "pgmalli: unknown command " cmd (error/did-you-mean (error/suggest cmd ["generate" "check"]))))
+                      (and cmd (not command?)) (println (str "pgmalli: unknown option " cmd))
+                      unknown (println (str "pgmalli: unknown option " unknown))
+                      (seq extra) (println (str "pgmalli: more than one config path: " (pr-str (vec (cons path extra))))))
+                (println (usage)))
               2)
           :else (let [config (read-config path)]
                   (if (= "check" cmd)

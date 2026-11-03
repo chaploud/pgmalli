@@ -23,6 +23,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   array of a narrower number (`"bigint[]"`) goes to a `numeric[]`, `real[]` or
   `double precision[]` column, and an integer to a `numeric(p,s)` one, as to a `numeric` one. A
   domain over an enum takes no untyped value compared: PostgreSQL has no `=` for it.
+* `pgmalli.main`: `generate --help` and `check --help` print the usage to stdout and exit 0; an
+  unknown option is named (`pgmalli: unknown option --foo`) before the usage, exit 2. The usage
+  shows the command to run, the exit codes and `PGMALLI_DEBUG`. `generate` prints its counts as
+  `tables: 4, views: 0, enums: 1 ...`.
 * `:unread-clause` names the clause probably meant as `:did-you-mean` for a clause neither
   HoneySQL nor pgmalli knows (`:selec`), and `h/humanize` says so.
 * A `:jdbc` key spelled close to one pgmalli reads and read by no next.jdbc function

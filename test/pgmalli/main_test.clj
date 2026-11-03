@@ -26,6 +26,19 @@
   (is (str/starts-with? (:err (cli "genrate")) "pgmalli: unknown command genrate; did you mean: generate"))
   (is (= 2 (:code (cli "generate" "--edn"))) "--edn is check's"))
 
+(deftest help-of-a-command-prints-usage-on-stdout-and-exits-0
+  (doseq [args [["generate" "--help"] ["check" "-h"] ["--help"]]]
+    (let [{:keys [code out err]} (apply cli args)]
+      (is (= [0 ""] [code err]) (pr-str args))
+      (is (str/starts-with? out "usage: ") (pr-str args))
+      (is (str/includes? out "exit codes: 0 success") (pr-str args))
+      (is (str/includes? out "PGMALLI_DEBUG=1") (pr-str args)))))
+
+(deftest an-unknown-option-is-named-before-usage-and-exits-2
+  (let [{:keys [code out err]} (cli "check" "--foo")]
+    (is (= [2 ""] [code out]))
+    (is (str/starts-with? err "pgmalli: unknown option --foo\nusage: "))))
+
 (deftest a-config-path-that-does-not-exist-exits-2
   (let [{:keys [code out err]} (cli "generate" "/nonexistent/pgmalli.edn")]
     (is (= 2 code))
@@ -80,7 +93,7 @@
           generated (cli "generate" f)
           {:keys [code out err]} (cli "check" f)]
       (is (= 0 (:code generated)))
-      (is (str/starts-with? (:out generated) (str "wrote " out-dir "/public.edn (public: 1 tables")))
+      (is (str/starts-with? (:out generated) (str "wrote " out-dir "/public.edn (schema public; tables: 1, views: 0")))
       (is (str/ends-with? (:out generated) (str "; commit them, and run `" (#'main/command "check" f) "` in CI\n")))
       (is (= 0 code))
       (is (= "" err))
