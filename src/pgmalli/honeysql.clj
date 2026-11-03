@@ -2012,24 +2012,20 @@
                     :let [[k elements?] (value-arg registry chain (second x))]
                     :when k]
                 [x chain k elements?])
+        ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
+        operands (fn [x] (for [o (rest x) o (if (and (in-ops (first x)) (vector? o) (not (keyword? (first o)))) o [o])] o))
         refusing (frequencies
                   (concat (when-not (= :lenient (:compare opts))
-                            ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
                             (for [{:keys [x]} nodes
-                                  :when (comparison? x)
-                                  :let [[op & operands] x]
-                                  :when (not (or (distinct-ops op)
-                                                 (some #(null-value? % (:format opts)) operands)))
-                                  o operands
-                                  o (if (and (in-ops op) (vector? o) (not (keyword? (first o)))) o [o])]
+                                  :when (and (comparison? x)
+                                             (not (or (distinct-ops (first x)) (some #(null-value? % (:format opts)) (rest x)))))
+                                  o (operands x)]
                               o))
                           (for [a (assignments ps)
                                 :let [{c :schema :keys [nullable?]} (assigned-column registry a)]
                                 :when (and c (not nullable?))]
                             (:x a))))
-        compared (frequencies (for [{:keys [x]} nodes :when (comparison? x) o (rest x)
-                                    o (if (and (in-ops (first x)) (vector? o) (not (keyword? (first o)))) o [o])]
-                                o))
+        compared (frequencies (for [{:keys [x]} nodes :when (comparison? x) o (operands x)] o))
         uses (frequencies (map first casts))]
     (for [[x chain k elements?] (distinct casts)
           :let [s (:schema (expression-type registry chain x opts))]
