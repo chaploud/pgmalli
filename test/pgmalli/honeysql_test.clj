@@ -1786,8 +1786,8 @@
                     (sends opts {clojure.lang.IPersistentVector "varchar[]"})))]
     (is (m/validate t ["a" nil] {:registry registry}))))
 
-(deftest a-subquery-reading-a-cte-it-is-not-read-without-stays-untyped
-  (is (= {:n :any} (args {:with [[:users {:select [[[:cast 1 :integer] :nick]]}]] :select [:s.nick] :from [[{:select [:nick] :from [:users]} :s]] :where [:= :s.nick :?n]}))
+(deftest a-subquery-reading-a-cte-is-read-under-it
+  (is (= {:n integer} (args {:with [[:users {:select [[[:cast 1 :integer] :nick]]}]] :select [:s.nick] :from [[{:select [:nick] :from [:users]} :s]] :where [:= :s.nick :?n]}))
       "users there is the CTE, which the subquery on its own would read as the table"))
 
 (deftest an-insert-selects-arguments-are-typed-in-its-selects-scope
@@ -2178,9 +2178,9 @@
                         [{:select [:id :nick] :from [:users]} :two]]
                :from [[:users :u]]}))
       "no row is NULL; a subquery of two columns is no value")
-  (is (= [:map [:n [:maybe :any]]]
+  (is (= [:map [:n [:maybe bigint]]]
          (row {:with [[:c {:select [:id] :from [:users]}]] :select [[{:select [[[:max :id]]] :from [:c]} :n]] :from [:groups]}))
-      "one reading a CTE of the query is not read on its own")
+      "one reading a CTE of the query is read under it")
   (is (= [:map [:n bigint]] (row {:select [[[:coalesce [[:count :id]] 0] :n]] :from [:users]}))
       "[[f x]] is (f(x)), of f's type"))
 
@@ -2195,3 +2195,21 @@
 
 (deftest a-void-function-is-of-type-void-which-the-driver-reads-as-an-object
   (is (= [:map [:l [:maybe [:any {:pg/type "void"}]]]] (row {:select [[[:pg_advisory_xact_lock :id] :l]] :from [:users]}))))
+
+(deftest a-recursive-cte-keeps-its-first-members-types-through-what-reads-it
+  (let [r [:r {:union-all [{:select [:id :nick] :from [:users] :where [:= :id 1]}
+                           {:select [:u.id :u.nick] :from [[:users :u]] :join [:r [:= :r.id :u.referrer_id]]}]}]
+        id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]
+    (is (= [:map [:id id]] (row {:with-recursive [r [:x {:select [:r.id] :from [:r]}]] :select [:id] :from [:x]}))
+        "another CTE")
+    (is (= [:map [:id id]] (row {:with-recursive [r] :select [:d.id] :from [[{:select [:id] :from [:r]} :d]]}))
+        "a derived table")
+    (is (= [:map [:id id]] (row {:with-recursive [r] :select [:d.id] :from [[{:select [:id] :from [:r]} :d]]} (dissoc opts :jdbc)))
+        "of no table: a UNION's")))
+
+(deftest a-function-whose-result-no-argument-decides-has-it-of-arguments-not-told
+  (let [r (row {:select [[[:count [:distinct :x.v]] :n] [[:jsonb_build_object "k" :x.v] :j] [[:upper :x.v] :u]]
+                :from [[{:select [[[:raw "1"] :v]]} :x]]})]
+    (is (= [:n bigint] (nth r 1)) "count is a bigint, never NULL")
+    (is (= [:j [:maybe [:any {:pg/type "jsonb"}]]] (nth r 2)))
+    (is (= [:u [:maybe :any]] (nth r 3)) "upper of a range is a range")))

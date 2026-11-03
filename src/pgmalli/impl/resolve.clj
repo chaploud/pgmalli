@@ -235,6 +235,21 @@
               (when-not (and (not operator?) (= 1 (count ins)) (type-name? n) (not= ins (:decls c)))
                 (outcome c ins))))))))))
 
+(defn fixed-result
+  "{:result type :non-null bool} of calling function or operator n with k arguments of types not
+   told, among the overloads os it reaches: the result type every overload taking k arguments
+   gives, where that is no polymorphic type (docs 38.2.5) and every version agrees; nil
+   otherwise. :non-null where each of them is never NULL."
+  [k os]
+  (when (seq os)
+    (in-every-version
+     os
+     (fn [os]
+       (let [cs (candidates os k)
+             rs (distinct (map (comp :result :overload) cs))]
+         (when (and (= 1 (count rs)) (string? (first rs)) (not (polymorphic (first rs))) (not= "record" (first rs)))
+           {:result (first rs) :non-null (every? (comp :non-null :overload) cs)}))))))
+
 (defn argument-type
   "The type PostgreSQL resolves a parameter at position i of a call (as call takes it, :free
    there, os too) to: the one type every candidate it may resolve to takes there; nil for none or

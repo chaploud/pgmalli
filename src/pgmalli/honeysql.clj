@@ -390,7 +390,7 @@
             op (when self? set-op)
             stmt (if op (first (get stmt op)) stmt)]
         (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
-          [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
+          [(cond-> stmt (seq before) (assoc k before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- function-columns
   "[[column schema origin] ...] of a function of pg_catalog or of a generated schema in FROM
@@ -415,23 +415,36 @@
                                  ""])
                               cs))))))))
 
-(defn- own-statement?
-  "Whether statement inner reads alike on its own: it reads no CTE of ctes (those its place in
-   the query sees), whose name, read on its own, would be a table's."
-  [inner ctes schema]
-  (let [defined (cte-names inner)]
-    (not-any? #(let [[_ _ written] (table-ref % schema)]
-                 (and written (not (defined (folded written))) (or (contains? ctes (folded written)) (contains? ctes ::code-ctes))))
-              (mapcat table-items (statements inner)))))
+(defn- standalone
+  "Statement inner as a query of its own: itself where it reads no CTE of ctes (those its place
+   in query body sees), else under the entries of the one :with of body that define them, up to
+   the last; nil where they are not there, or inner has a :with of its own."
+  [body inner ctes schema]
+  (let [defined (cte-names inner)
+        read (set (for [i (mapcat table-items (statements inner))
+                        :let [[_ _ written] (table-ref i schema)]
+                        :when (and written (not (defined (folded written)))
+                                   (or (contains? ctes (folded written)) (contains? ctes ::code-ctes)))]
+                    (folded written)))]
+    (if (empty? read)
+      inner
+      (let [found (for [x (tree-seq branch? seq body) :when (map? x)
+                        k with-keys :let [w (get x k)] :when (vector? w)
+                        [i e] (map-indexed vector w) :when (read (cte-name e))]
+                    [w k i])]
+        (when (and (= (count read) (count found)) (= read (set (map (fn [[w _ i]] (cte-name (nth w i))) found)))
+                   (apply = (map first found)) (apply = (map second found))
+                   (not-any? #(contains? inner %) with-keys))
+          (let [[w k] (first found)]
+            (assoc inner k (subvec w 0 (inc (apply max (map #(nth % 2) found)))))))))))
 
 (defn- typed-scope
   "sc with :types ({column schema}, a column whose type is not told nil) and :origins ({column
    table}, the table PostgreSQL traces the column to, \"\" none; one it does not tell absent) on
-   the subqueries and CTEs of stmt whose SELECT types its columns, read as a query of their own; not
-   on one that reads a CTE ctes holds (one stmt sees but the query of its own would not)."
+   the subqueries and CTEs of stmt whose SELECT types its columns, read as a query of their own,
+   under the CTEs of ctes it reads (standalone)."
   [registry body stmt sc ctes outer {:keys [schema] :as opts}]
-  (let [items (table-items stmt)
-        own? #(own-statement? % ctes schema)]
+  (let [items (table-items stmt)]
     (reduce (fn [sc item]
               (let [[_ alias written] (table-ref item schema)
                     {:keys [table cte? columns] :as entry} (get sc alias)
@@ -443,11 +456,14 @@
                                                     (and (nil? table) (vector? item) (vector? (first item)) (= :lateral (ffirst item)) (map? (second (first item))))
                                                     [(second (first item))]
                                                     (and (nil? table) (map? item)) [item])
-                    ts (cond (and inner (own? inner))
-                             (if lateral
-                               ;; a LATERAL subquery sees the tables before it
-                               (derived-types* registry inner opts (cons (dissoc sc alias) outer))
-                               (derived-types registry inner opts))
+                    ;; a CTE's body comes under the entries before it already: the CTEs it reads beyond them are outer ones
+                    own (when inner (let [o (standalone body inner ctes schema)] (when (or (not cte?) (identical? o inner)) o)))
+                    ts (cond inner
+                             (when own
+                               (if lateral
+                                 ;; a LATERAL subquery sees the tables before it
+                                 (derived-types registry own opts (cons (dissoc sc alias) outer))
+                                 (derived-types registry own opts)))
                              (and entry (nil? inner) (nil? table) (not cte?) (vector? item) (not (map? (first item))))
                              ;; a function sees the tables before it too
                              (function-columns registry item (cons (dissoc sc alias) outer) opts))
@@ -518,7 +534,7 @@
                         ctes (into base (keep cte-name) (cte-entries x))
                         outer (if open? (list :open) outer)
                         ;; a column of a table code brings in is the enclosing data's, untyped
-                        chain (cons (vary-meta (typed-scope registry body x (scope registry x ctes opts) ctes outer opts) assoc ::ctes ctes)
+                        chain (cons (vary-meta (typed-scope registry body x (scope registry x ctes opts) ctes outer opts) assoc ::ctes ctes ::query body)
                                      (cond->> outer (code-sources? x) (cons :open)))]
                     (cons [x chain path outer]
                           (concat
@@ -2025,10 +2041,15 @@
 (defn- call-type
   "The expression type of a call (call-parts), its arguments of expression types ts."
   [registry [kind n args :as parts] ts opts]
-  (when-let [{t :result o :overload} (resolve/call kind n (mapv :type ts) (reached registry opts parts))]
+  (when-let [{t :result o :overload} (let [ins (mapv :type ts) os (reached registry opts parts)]
+                                       (if (every? some? ins)
+                                         (resolve/call kind n ins os)
+                                         ;; of arguments not told, a result no argument decides (count, jsonb_build_object)
+                                         (when-let [{:keys [result non-null]} (resolve/fixed-result (count ins) os)]
+                                           {:result result :overload {:non-null non-null}})))]
     (let [schema (if-let [shape (and (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
-                   (or (result-schema registry t ts) (own-type-schema registry t (:schema o))))]
+                   (or (result-schema registry t ts) (some->> (:schema o) (own-type-schema registry t))))]
       (when schema
         {:type t :schema schema
          ;; the catalog does not say when a function returns NULL: an aggregate that starts from
@@ -2040,17 +2061,11 @@
 
 (defn- subquery-type
   "The expression type of scalar subquery stmt in the chain of scopes c (docs 4.2.11): its one
-   column's, NULL where it returns no row; nil where that is not told, or it reads a CTE of the
-   query, which read on its own would be a table."
+   column's, NULL where it returns no row; nil where that is not told."
   [registry c stmt opts]
   (let [c (chain c)]
-    (when (own-statement? stmt (::ctes (meta (first c))) (:schema opts))
-      (let [memo (::derived registry)
-            k [::scalar stmt (dissoc opts :jdbc) c]
-            ts (if (and memo (contains? @memo k))
-                 (@memo k)
-                 (let [v (derived-types* registry stmt opts c)] (some-> memo (swap! assoc k v)) v))
-            [[_ s] more] ts]
+    (when-let [stmt (let [{q ::query cs ::ctes} (meta (first c))] (standalone q stmt cs (:schema opts)))]
+      (let [[[_ s] more] (derived-types registry stmt opts c)]
         (when (and s (nil? more))
           (let [s (shape/non-null s)] {:schema s :type (resolver-type registry s) :nullable? true}))))))
 
@@ -2303,16 +2318,19 @@
                [(name k) (when-not (= :any s) s) (origin (name k))]))))))
 
 (defn- derived-types
-  "[[column schema origin] ...] of the row stmt, a query of its own, returns, as the registry types a
-   column (nil for one it cannot tell), origin the table PostgreSQL traces the column to (\"\"
-   none, nil not told); nil when its row cannot be told."
-  [registry stmt opts]
-  (if-let [memo (::derived registry)]
-    (let [k [stmt (dissoc opts :jdbc)]]
-      (if (contains? @memo k)
-        (@memo k)
-        (let [v (derived-types* registry stmt opts ())] (swap! memo assoc k v) v)))
-    (derived-types* registry stmt opts ())))
+  "[[column schema origin] ...] of the row stmt, a query of its own read inside the chain of
+   scopes outer (none by default), returns, as the registry types a column (nil for one it
+   cannot tell), origin the table PostgreSQL traces the column to (\"\" none, nil not told); nil
+   when its row cannot be told, or is asked for again while it is read (a CTE read inside itself)."
+  ([registry stmt opts] (derived-types registry stmt opts ()))
+  ([registry stmt opts outer]
+   (if-let [memo (::derived registry)]
+     (let [k [stmt (dissoc opts :jdbc) outer]]
+       (if (contains? @memo k)
+         (@memo k)
+         (do (swap! memo assoc k nil)
+             (let [v (derived-types* registry stmt opts outer)] (swap! memo assoc k v) v))))
+     (derived-types* registry stmt opts outer))))
 
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc builds it (for a write with no

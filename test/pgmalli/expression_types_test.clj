@@ -192,8 +192,8 @@
 
 (defn- calls
   "[kind expressions] of the overloads of the catalog the server's version has, each called with
-   columns of its argument types (stand-ins for a polymorphic one), and with NULL, an unknown, in
-   one argument: aggregates apart, as an aggregate beside a column wants a GROUP BY."
+   columns of its argument types (stand-ins for a polymorphic one), with NULL, an unknown, in
+   one argument, and with one argument as :raw, which pgmalli does not type: aggregates apart, as an aggregate beside a column wants a GROUP BY."
   [version]
   (let [by-type (into {} (map (fn [[c t]] [t c])) columns)
         arg (fn [d] (if-let [c (by-type d)] [c] (map keyword (stand-ins d))))
@@ -203,7 +203,9 @@
                   (when (every? seq cols)
                     (concat [(call (map first cols))]
                             (when (every? next cols) [(call (map second cols))])
-                            (for [i (range (count args))] (call (assoc (vec (map first cols)) i nil)))))))]
+                            (for [i (range (count args))] (call (assoc (vec (map first cols)) i nil)))
+                            ;; an argument pgmalli does not type: :raw
+                            (for [i (range (count args))] (call (update (vec (map first cols)) i #(vector :raw (name %)))))))))]
     (group-by first
               (for [kind [:functions :operators]
                     [n os] (kind @types/catalog)
