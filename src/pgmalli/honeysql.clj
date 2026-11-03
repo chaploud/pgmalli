@@ -115,6 +115,11 @@
                 r))]
       (assoc r ::derived (atom {}) ::calls (atom {})))))
 
+(defn- registry-schemas
+  "registry's schemas: one reading made gives its own, which the public functions it calls pass on."
+  [registry]
+  (or (::schemas registry) registry))
+
 (defn- once
   "(f registry & args), once per call of a public function (reading's ::calls): the functions a
    call makes of one another read the same statements."
@@ -1633,7 +1638,7 @@
    docs/queries.md#options. Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (jdbc/options! registry opts)
+   (jdbc/options! (registry-schemas registry) opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)
@@ -1656,7 +1661,7 @@
    ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
   ([registry body] (tables registry body {}))
   ([registry body opts]
-   (jdbc/options! registry opts)
+   (jdbc/options! (registry-schemas registry) opts)
    (let [body (query! body)
          registry (reading registry)
          {:keys [schema] :as opts} (with-defaults registry opts)
@@ -2127,7 +2132,7 @@
    docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body opts]
-   (jdbc/options! registry opts)
+   (jdbc/options! (registry-schemas registry) opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)
@@ -2613,7 +2618,7 @@
    the table PostgreSQL traces it to. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
-   (jdbc/options! registry opts)
+   (jdbc/options! (registry-schemas registry) opts)
    (let [body (query! body)]
      (when (map? body)
        (let [registry (reading registry)
@@ -2730,7 +2735,7 @@
    ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:users/email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}}"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
-   (jdbc/options! registry opts)
+   (jdbc/options! (registry-schemas registry) opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)]
@@ -2755,7 +2760,7 @@
    not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
-   (jdbc/options! registry opts)
+   (jdbc/options! (registry-schemas registry) opts)
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
@@ -2882,7 +2887,7 @@
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
    names it, in :schema); an error naming what was meant for another name."
   [registry name derived what opts]
-  (jdbc/options! registry opts)
+  (jdbc/options! (registry-schemas registry) opts)
   (when-not (keyword? name)
     (error/fail! :pgmalli.error/invalid-options
                  (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))

@@ -2513,6 +2513,13 @@
   (is (= [{:kind :unknown-column :column :c.nope}] (check {:select [:c.nope] :from [[:pg_class :c]]})))
   (is (= [] (check {:select [:attstattarget] :from [:pg_attribute]})) "a column one version has"))
 
+(deftest a-function-calling-another-with-read-options-reads-the-registry-once
+  (let [o (assoc opts :read {"integer" :string})
+        q {:select [:id :score] :from [:users] :where [:= :id :?id]}]
+    (is (= (:row (h/analyze registry q o)) (h/row-schema registry q o)))
+    (is (vector? (h/query-schema registry [:id] q o)))
+    (is (vector? (h/values-schema registry :users o)))))
+
 (deftest analyze-gives-what-check-arg-types-row-schema-and-tables-give-in-one-map
   (let [q {:select [:nick] :from [:users] :where [:= :id :?id]}]
     (is (= {:args (args q) :row (row q) :rows {:min 0 :max 1} :problems [] :tables (h/tables registry q opts)} (h/analyze registry q opts)))
