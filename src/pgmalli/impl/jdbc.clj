@@ -303,7 +303,8 @@
         ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
         element (fn [sent]
                   (let [x (when (string? sent) (accept/element sent))
-                        e (when (and x (not= x elem)) (types/entry x))]
+                        ;; an element of no known type (an opaque column's) stays so
+                        e (when (and x elem (not= x elem)) (types/entry x))]
                     (if-let [s (:schema e)]
                       (let [;; pgmalli's integer types are integers, as :int is
                             kind #(let [k (shape/kind %)] (if (pgtypes/int-ranges k) :int k))

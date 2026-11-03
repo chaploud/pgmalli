@@ -119,6 +119,29 @@
           (and (#{"42883" "42804"} state) (str/includes? message "character varying")) :uncast-string
           :else :other)))
 
+(defn- generated
+  "A value of schema s; of an alternative that generates where one does not (an array of a
+   driver's own, :pg/array); nil where none does."
+  [s registry seed]
+  (let [array (fn [elem]
+                ;; the typed Java array pgjdbc sends of the elements' class
+                (let [vs (remove nil? (mg/generate [:vector {:min 1 :max 3} elem] {:registry registry :seed seed :size 3}))]
+                  (cond (every? int? vs) (long-array vs)
+                        (every? string? vs) (into-array String vs)
+                        (every? double? vs) (double-array vs)
+                        (every? boolean? vs) (boolean-array vs)
+                        :else ::none)))
+        gen #(try (let [f (m/form (m/schema % {:registry registry}))]
+                    (if (and (vector? f) (= :pg/array (first f))) (array (last f)) (mg/generate % {:registry registry :seed seed :size 3})))
+                  (catch Exception _ ::none))
+        v (gen s)]
+    (if (not= ::none v)
+      v
+      (let [inner (if (= :maybe (first (m/form (m/schema s {:registry registry})))) (last (m/form (m/schema s {:registry registry}))) s)
+            alts (if (and (vector? inner) (= :or (first inner))) (remove map? (rest inner)) [inner])]
+        ;; none generates (an array of no known element type): NULL, as an :any argument gets
+        (some #(let [v (gen %)] (when (not= ::none v) v)) alts)))))
+
 (defn- verdict
   "PostgreSQL's verdict on [sql & params]: :ok with the :rows it matched (selected or
    written) and the :result execute! returned, or the kind of problem check would report for it, or :other."
@@ -145,16 +168,16 @@
         (#{:missing-required-column :not-null-violation} k) :not-null-violation
         :else k))
 
-(defn- outcome [{:keys [pg rows]} problems]
+(defn- outcome [{:keys [pg]} problems]
   (let [pg (name-class pg)
         ks (set (map (comp name-class :kind) problems))]
     (cond (and (= :ok pg) (empty? ks)) :agree-ok
-          ;; a literal outside a CHECK's list matches no row (so only where PostgreSQL matched
-          ;; none), and NULL set into a NOT NULL column by ON CONFLICT DO UPDATE fails once a row
-          ;; conflicts, which check reports by design (docs/queries.md "Reported though PostgreSQL
-          ;; runs them")
+          ;; a comparison with a literal outside a CHECK's list is false on every row, which the
+          ;; CHECK guarantees (the statement may still return rows through OR or CASE), and NULL
+          ;; set into a NOT NULL column by ON CONFLICT DO UPDATE fails once a row conflicts: check
+          ;; reports them by design (docs/queries.md "Stricter than PostgreSQL")
           (and (= :ok pg) (seq problems)
-               (every? #(or (and (= :enum-literal (:kind %)) (= 0 rows))
+               (every? #(or (= :enum-literal (:kind %))
                             (= [:not-null-violation :do-update-set] ((juxt :kind :clause) %)))
                        problems))
           :reported-by-design
@@ -217,7 +240,7 @@
                    [mode fmt] formats
                    :let [;; a named argument takes a value of the type arg-types gives it
                          args (into {} (for [[k s] (h/arg-types registry query {:format fmt})]
-                                         [k (when-not (= :any s) (mg/generate s {:registry registry :seed seed :size 3}))]))
+                                         [k (when-not (= :any s) (generated s registry seed))]))
                          ;; a query the HoneySQL on the classpath cannot write (an older one) is left out
                          sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception _ nil))]
                    :when sqlvec
