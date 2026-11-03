@@ -18,7 +18,8 @@ CREATE TABLE nums (id serial PRIMARY KEY, s smallint NOT NULL DEFAULT 1, i int, 
 CREATE TABLE codes (id serial PRIMARY KEY, code text NOT NULL, CONSTRAINT codes_code_key UNIQUE (code) DEFERRABLE INITIALLY DEFERRED);
 CREATE TABLE events (id serial PRIMARY KEY, title text NOT NULL);
 CREATE TABLE special_events (extra text) INHERITS (events);
-CREATE TABLE kinds (id serial PRIMARY KEY, flag boolean, uid uuid, day date, at time, att timetz, ts timestamp, raw bytea, span interval, js json, ch char(2), ints int[], texts text[], bigs bigint[], nums numeric[], dbls double precision[], posints posint[]);
+CREATE DOMAIN money2 AS numeric(10,2) CHECK (VALUE > 0);
+CREATE TABLE kinds (id serial PRIMARY KEY, flag boolean, uid uuid, day date, at time, att timetz, ts timestamp, raw bytea, span interval, js json, ch char(2), ints int[], texts text[], bigs bigint[], nums numeric[], dbls double precision[], posints posint[], money2s money2[], short_texts varchar(5)[]);
 CREATE VIEW active_users AS SELECT id, nick, group_id, mood FROM users WHERE score > 0;
 INSERT INTO groups (name) VALUES ('g1'), ('g2');
 INSERT INTO users (group_id, nick, name, mood, score) VALUES (1, 'a', 'A', 'happy', 1), (2, 'b', 'B', 'sad', 0);
@@ -33,4 +34,4 @@ INSERT INTO nums (s, i, b, n, d, r, vc, lvl, moods) VALUES (2, 3, 4, 1.25, 2.5, 
 INSERT INTO codes (code) VALUES ('c1');
 INSERT INTO events (title) VALUES ('e1');
 INSERT INTO special_events (id, title, extra) VALUES (1, 'se1', 'x');
-INSERT INTO kinds (flag, uid, day, at, att, ts, raw, span, js, ch, ints, texts, bigs, nums, dbls, posints) VALUES (true, gen_random_uuid(), '2026-01-01', '01:00', '01:00+00', '2026-01-01 00:00', '\x01', '1 day', '{}', 'ab', '{1}', '{a}', '{1}', '{1.5}', '{1.5}', '{1}');
+INSERT INTO kinds (flag, uid, day, at, att, ts, raw, span, js, ch, ints, texts, bigs, nums, dbls, posints, money2s, short_texts) VALUES (true, gen_random_uuid(), '2026-01-01', '01:00', '01:00+00', '2026-01-01 00:00', '\x01', '1 day', '{}', 'ab', '{1}', '{a}', '{1}', '{1.5}', '{1.5}', '{1}', '{1.5}', '{ab}');

@@ -450,7 +450,7 @@
                 (= :enum (shape/head target))
                 (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (remove map? (rest target))))
                 ;; a domain's array reads as its base type's
-                :else (if-let [base (some #(:pg/type (shape/column-props %)) [target (shape/domain-base target)])]
+                :else (if-let [base (some #(shape/type-name (shape/column-props %)) [target (shape/domain-base target)])]
                         (assoc-in s [1 :pg/type] (str base "[]"))
                         s))]
     (write-type (through-domain schemas s opts write-type) opts)))

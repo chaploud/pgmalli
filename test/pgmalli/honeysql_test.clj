@@ -1796,9 +1796,14 @@
       "an array of what casts to the type"))
 
 (deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
-  (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric"} 'decimal? [:> 0]]
+  (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric(10,2)"} 'decimal? [:> 0]]
                                           :pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
                                                         [:nn [:maybe [:vector {:pg/type "numeric[]"} 'decimal?]]]
                                                         [:dn [:maybe [:vector {:pg/type "dnum[]"} [:ref {:pg/type "dnum"} :pg.public/dnum]]]]]}})]
     (doseq [c [:nn :dn]]
       (is (m/validate (:p (h/arg-types reg {:update :z :set {c :?p} :where [:= :id 1]})) (long-array [1]) {:registry reg}) (name c)))))
+
+(deftest an-array-compared-takes-elements-beyond-the-columns-length
+  (let [reg (pgmalli/registry {:registry {:pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
+                                                        [:vs [:maybe [:vector {:pg/type "character varying[]"} [:string {:max 5 :pg/max-length 5 :pg/type "character varying"}]]]]]}})]
+    (is (m/validate (:p (h/arg-types reg {:select [:id] :from [:z] :where [:= :vs :?p]})) (into-array String ["abcdefg"]) {:registry reg}))))
