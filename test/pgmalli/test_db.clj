@@ -6,7 +6,7 @@
             [clojure.test :as t]
             [honey.sql :as sql]
             [pgmalli.impl.types :as types])
-  (:import (java.net ServerSocket)))
+  (:import (java.lang ProcessHandle) (java.net ServerSocket)))
 
 ;; HoneySQL writes an operator it has not registered as a function call. Registered here, on
 ;; load, since the registry is global: a namespace that registered them in a test would change
@@ -22,12 +22,26 @@
 (defn- free-port []
   (with-open [s (ServerSocket. 0)] (.getLocalPort s)))
 
+(def ^:private pid-label "pgmalli.test.pid")
+
+(defn- remove-orphans!
+  "Removes the containers of test runs whose process is gone: a run killed (SIGKILL) runs no
+   shutdown hook."
+  []
+  (let [{:keys [out]} (p/sh ["docker" "ps" "-a" "--filter" (str "label=" pid-label) "--format" (str "{{.ID}} {{.Label \"" pid-label "\"}}")])]
+    (doseq [[id pid] (map #(str/split % #" ") (str/split-lines (str/trim out)))
+            :let [h (some-> pid parse-long ProcessHandle/of)]
+            :when (and h (not (and (.isPresent h) (.isAlive ^ProcessHandle (.get h)))))]
+      (p/sh ["docker" "rm" "-f" "-v" id]))))
+
 (defn- start-container! []
+  (remove-orphans!)
   ;; the port can be taken between free-port and docker run, so retry with a new one
   (loop [attempt 1]
     (let [port (free-port)
           name (str "pgmalli-test-" port)
           {:keys [exit]} (p/sh ["docker" "run" "-d" "--rm" "--name" name
+                                "--label" (str pid-label "=" (.pid (ProcessHandle/current)))
                                 "-e" "POSTGRES_PASSWORD=pw" "-e" "POSTGRES_DB=t"
                                 ;; PGDATA off the image's VOLUME (/var/lib/postgresql/data up to 17),
                                 ;; which is on disk; 18 refuses a mount there
