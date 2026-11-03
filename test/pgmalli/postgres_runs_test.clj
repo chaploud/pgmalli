@@ -134,7 +134,10 @@
                  {:select [[[:array_agg :nick] :x]] :from [:accounts]}
                  {:select [[[:array_agg :n] :x]] :from [:dd]}
                  {:select [[[:array_agg :a] :x]] :from [:dd]}
-                 {:select [[[:array [:n]] :x]] :from [:dd]}]]
+                 {:select [[[:array [:n]] :x]] :from [:dd]}
+                 ;; array_agg of an array adds a dimension: {{1,NULL}}
+                 {:select [[[:array_agg :xs] :x]] :from [:arr]}
+                 {:select [[[:array_agg :cs] :x]] :from [:arr]}]]
         (testing (pr-str q)
           (is (some? (runs! q {} {})))
           (is (returned? reg q {} o))))

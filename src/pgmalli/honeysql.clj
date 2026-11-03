@@ -2308,6 +2308,9 @@
                    (or (when (= "anyarray" (:result o))
                          (some (fn [[d m]] (when (#{"anyelement" "anynonarray"} d) (domain-array registry (:schema m))))
                                (map vector (:args o) ts)))
+                       ;; array_agg of arrays adds a dimension, which an array type does not name
+                       (when (and catalog? (= "array_agg" (name n)) (= ["anyarray"] (:args o)))
+                         [:any {:pg/type t}])
                        (result-schema registry t ts)
                        (some->> (:schema o) (own-type-schema registry t))))]
       (when schema
