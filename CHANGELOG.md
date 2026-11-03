@@ -56,7 +56,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `h/row-schema` and `h/arg-types`.
 * The columns of a CTE or a subquery are typed as its SELECT types them: a LATERAL subquery
   with the tables before it, a recursive CTE as its first member, NULL allowed and a CHECK's
-  list read as its base type; a column it does not give is `:unknown-column`. A table function
+  list read as its base type; a column it does not give is `:unknown-column`. Under qualified
+  keys, such a column is keyed by the table PostgreSQL traces it to (an expression's, a set
+  operation's and a recursive CTE's by none), where it was left untold. A table function
   (`WITH ORDINALITY` too) is named by its alias. An argument of an `unnest` in `FROM` is an
   array of the type of where its column goes: compared, assigned by `INSERT ... SELECT` or
   `UPDATE ... SET`, or cast.

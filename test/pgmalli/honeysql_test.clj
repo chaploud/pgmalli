@@ -164,7 +164,9 @@
          (row {:select [:id [[:max :id] :top_id]] :from [:users]} (built opts 'next.jdbc.result-set/as-kebab-maps)))
       "an expression has no table: its key is unqualified, kebab-cased as the builder does")
   (is (= [:map {:pgmalli/untold [:nick]}] (row {:select [[[:cast :nick :text]]] :from [:users]} (dissoc opts :jdbc)))
-      "a cast to the column's own type is dropped and the key keeps the table: not told without the types"))
+      "a cast to the column's own type is dropped and the key keeps the table: not told without the types")
+  (is (= [:map {:pgmalli/untold [:n]}] (row {:select [[[:cast :nick :text] :n]] :from [:users]} (dissoc opts :jdbc)))
+      "an alias keeps the table all the same"))
 
 (deftest a-set-operations-row-is-named-by-its-first-member
   (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]
@@ -293,8 +295,12 @@
           "a column under an alias keeps its table in the key, as the driver does")
       (is (m/validate row {:users/id 1 :users/g 2} malli-opts) "as malli's default registry reads it"))
     (is (= (row {:select [:users/*] :from [:users]}) (row {:select [:*] :from [:users]})))
-    (is (= [:map {:pgmalli/untold [:id]}] (row '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} (dissoc opts :jdbc)))
-        "the driver keys a column through a subquery by its table at the bottom, which an opaque one hides")
+    (is (= [:map [:users/id [:int {:pg/identity :always :pg/type "bigint"}]]] (row '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} (dissoc opts :jdbc)))
+        "the driver keys a column through a subquery by its table at the bottom")
+    (is (= [:map [:depth [:maybe int4]]]
+           (row {:with-recursive [[:t {:union-all [{:select [[[:inline 0] :depth]]} {:select [[[:+ :t/depth [:inline 1]] :depth]] :from [:t]}]}]]
+                 :select [:t/depth] :from [:t]} (dissoc opts :jdbc)))
+        "an expression's column, or a set operation's (a recursive CTE's), comes from no table")
     (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]})))
     (is (= [:map [:users/group-id int4]] (row '{:select [:group_id] :from [:users]} (built opts 'next.jdbc.result-set/as-kebab-maps))))
     (is (= {'x bigint} (args '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]}))

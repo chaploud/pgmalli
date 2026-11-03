@@ -407,11 +407,13 @@
                            ;; a LATERAL subquery sees the tables before it
                            (derived-types* registry inner opts (cons (dissoc sc alias) outer))
                            (derived-types registry inner opts)))
-                    types (when ts
-                            ;; a CTE's name may list new names for its columns, by position; a recursive
-                            ;; one's later rows may hold NULL where its first member's do not
-                            (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) (if (and t recursive?) (nullable (beyond-list registry t)) t)])) ts))]
-                (cond-> sc types (assoc-in [alias :types] types))))
+                    named (map-indexed (fn [i [c t o]] [(nth (vec listed) i c) t o]) ts)
+                    ;; a CTE's name may list new names for its columns, by position; a recursive
+                    ;; one's later rows may hold NULL where its first member's do not
+                    types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (beyond-list registry t)) t)])))
+                    ;; a recursive CTE's columns come from a UNION: from no table
+                    origins (into {} (for [[c _ o] named :when o] [c (if recursive? "" o)]))]
+                (cond-> sc types (update alias assoc :types types :origins origins))))
             sc items)))
 
 (def ^:private clause-rank
@@ -500,16 +502,16 @@
         :else (let [cs (table-columns registry table)] (or (contains? cs column) (contains? cs (folded column))))))
 
 (defn- own-hits
-  "[[alias table opaque? nullable? types] ...] of the tables of one scope a column may belong to."
+  "[[alias table opaque? nullable? types origins] ...] of the tables of one scope a column may belong to."
   [registry scope col]
   (let [[alias column] (split-column col)]
     (if alias
-      (when-let [{:keys [table opaque? nullable? types] :as entry} (get scope alias)]
-        (when (has-column? registry entry column) [[alias table opaque? nullable? types]]))
+      (when-let [{:keys [table opaque? nullable? types origins] :as entry} (get scope alias)]
+        (when (has-column? registry entry column) [[alias table opaque? nullable? types origins]]))
       ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
-      (distinct (for [[a {:keys [table opaque? excluded? nullable? types] :as entry}] scope
+      (distinct (for [[a {:keys [table opaque? excluded? nullable? types origins] :as entry}] scope
                       :when (and (not excluded?) (has-column? registry entry column))]
-                  [a table opaque? nullable? types])))))
+                  [a table opaque? nullable? types origins])))))
 
 (defn- chain [scope] (if (map? scope) [scope] scope))
 
@@ -531,9 +533,10 @@
           :else (column-hits registry outer col))))
 
 (defn- resolve-column
-  "{:table :column :schema :nullable? :opaque?} for a column keyword in a scope (or the chain of
+  "{:table :column :schema :nullable? :opaque? :origin} for a column keyword in a scope (or the chain of
    scopes of a nested statement), :table the alias for an opaque table, :schema the type a
-   subquery's or CTE's SELECT gives the column (nil for an opaque table without one),
+   subquery's or CTE's SELECT gives the column (nil for an opaque table without one), :origin
+   the table its SELECT takes it from as PostgreSQL tells the driver (\"\" none, nil not told),
    :nullable? when an outer join may leave the table NULL; nil when the column resolves to no
    table or to several known ones. A column an opaque table may hold besides one known table is
    the opaque one's, untyped: which of them PostgreSQL takes is not in the data."
@@ -543,14 +546,14 @@
         column (second (split-column col))
         [opaque & _] (filter #(nth % 2) hits)]
     (cond (= 1 (count hits))
-          (let [[alias table opaque? nullable? types] (first hits)
+          (let [[alias table opaque? nullable? types origins] (first hits)
                 ;; a subquery's or a CTE's columns, as its SELECT types them
                 cs (or types (when-not opaque? (table-columns registry table)))
                 ;; the column's own name, as next.jdbc keys the row: :group-id is group_id
                 column (if (or (nil? cs) (contains? cs column)) column (folded column))]
             {:table (or table alias) :column column
              :schema (get cs column)
-             :nullable? (boolean nullable?) :opaque? (boolean opaque?)})
+             :nullable? (boolean nullable?) :opaque? (boolean opaque?) :origin (get origins column)})
           (and opaque (>= 1 (count (remove #(nth % 2) hits))))
           (let [[alias table] opaque] {:table (or table alias) :column column :schema nil :nullable? true :opaque? true}))))
 
@@ -1885,15 +1888,18 @@
                     :let [[col alias] (select-parts item opts)]]
                 (cond
                   (nil? col) (when-let [n (item-name item opts)]
-                               (if (and qualified? (nil? alias) (cast-of-column? (item-expression item)))
-                                 (untold n)
-                                 (let [{s :schema :keys [nullable?]} (expression-type registry chain (if alias (first item) (item-expression item)) opts)]
-                                   [(entry nil n s nullable? nil)])))
+                               (let [x (if alias (first item) (item-expression item))]
+                                 (if (and qualified? (cast-of-column? x))
+                                   (untold n)
+                                   (let [{s :schema :keys [nullable?]} (expression-type registry chain x opts)]
+                                     [(entry nil n s nullable? nil)]))))
                   (star? col) (star col)
-                  :else (when-let [{:keys [table column schema nullable? opaque?]} (resolve-column registry chain col)]
+                  :else (when-let [{:keys [table column schema nullable? opaque? origin]} (resolve-column registry chain col)]
                           (let [label (if alias (alias-label alias opts) column)
                                 m (when-not (first (split-column col)) (get merges (folded column)))]
                             (cond m (merged label m)
+                                  ;; the driver keys a derived table's column by the table PostgreSQL traces it to
+                                  (and qualified? opaque? origin) [(entry (when (seq origin) [nil origin]) label schema nullable? nil)]
                                   (and qualified? opaque?) (untold label)
                                   ;; a column under an alias is still keyed by its table: the driver reads the table from the field
                                   :else [(entry table label schema nullable? nil)])))))]
@@ -1928,8 +1934,14 @@
   (let [opts (-> opts (dissoc :jdbc) (assoc ::jdbc/member true ::columns true))
         chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt opts outer))]
     (when-let [row (row-schema* registry stmt [] chains opts)]
-      (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
-             [(name k) (when-not (= :any s) s)])))))
+      ;; read again as the default builder keys it: by the table each column comes from
+      (let [keyed (row-schema* registry stmt [] chains (dissoc opts ::jdbc/member))
+            untold (set (map name (:pgmalli/untold (when (map? (second keyed)) (second keyed)))))
+            tables (group-by name (map first (some-> keyed shape/entries)))
+            origin (fn [c] (let [ns (distinct (map namespace (get tables c)))]
+                             (when (and keyed (= 1 (count ns)) (not (untold c))) (or (first ns) ""))))]
+        (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
+               [(name k) (when-not (= :any s) s) (origin (name k))]))))))
 
 (defn- derived-types
   "[[column schema] ...] of the row stmt, a query of its own, returns, as the registry types a
