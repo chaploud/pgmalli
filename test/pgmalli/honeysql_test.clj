@@ -2140,6 +2140,22 @@
     (is (= [:map [:client_addr {:optional true} [:any {:pg/type "inet"}]]]
            (row {:select [:client_addr] :from [[[:pg_stat_get_activity nil] :k]]} o)))))
 
+(deftest a-call-of-a-types-name-no-function-takes-the-argument-of-is-a-cast
+  (let [qualified (dissoc opts :jdbc)]
+    (doseq [f [:int4 :pg_catalog.int4]]
+      (is (= (row {:select [[[:cast :score :integer] :x]] :from [:users]} qualified)
+             (row {:select [[[f :score] :x]] :from [:users]} qualified))
+          (str f "(score) is score cast to its own type, which keeps its table"))
+      (is (= [:map [:x int4]] (row {:select [[[f :score] :x]] :from [:users]}))))
+    (is (= [:map [:x [:enum {:pg/type "mood"} "happy" "sad"]]] (row {:select [[[:mood [:inline "sad"]] :x]]}))
+        "a type of the registry's")
+    (is (= [:map [:x [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row {:select [[[:int4 :?n] :x]]})))
+    (is (= [:map [:x [:maybe ['inst? {:pg/type "date"}]]]] (row {:select [[[:date :closed_at] :x]] :from [:users]}))
+        "date(timestamptz) is a function: no cast")
+    (let [{:keys [v d]} (args {:select [[[:timestamptz :?v] :x] [[:date :?d] :y]]})]
+      (is (m/validate v (java.time.OffsetDateTime/now) malli-opts) "timestamptz($1) is a cast, which takes a timestamptz")
+      (is (m/validate d (java.time.LocalDate/now) malli-opts)))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

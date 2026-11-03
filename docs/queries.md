@@ -327,11 +327,13 @@ makes a name of `""`; each column is of the type PostgreSQL resolves its members
 An expression has the type PostgreSQL resolves it to, from the types of what it is made of:
 
 - a literal, as HoneySQL sends it (by its class), or as `[:inline ...]` writes it; an SQL word
-  (`current_date`, `current_user` ...) as PostgreSQL's grammar types it
-  ([9.9.5](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT),
+  (`current_date`, `current_user` ...) as PostgreSQL's grammar types it, `current_schema` and
+  `system_user` nullable ([9.9.5](https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT),
   [9.27](https://www.postgresql.org/docs/current/functions-info.html)); a cast, to a type named
   as PostgreSQL prints it or by its alias (`:bigint`, `:timestamptz`, `:double-precision`,
-  `(keyword "text[]")`), with its length (`[:varchar 10]`), or to an enum type or domain of the registry;
+  `(keyword "text[]")`), with its length (`[:varchar 10]`), or to an enum type or domain of the registry,
+  and a call of a type's name no function takes the argument of (`[:int4 :x]`, `[:timestamptz :?at]`),
+  which PostgreSQL reads as a cast;
   `[:interval "1 day"]` and `[:array [...] :text]`.
 - `CASE`, `coalesce`, `greatest`, `least`, `ARRAY[...]` and a set operation's columns, of the
   common type of their values

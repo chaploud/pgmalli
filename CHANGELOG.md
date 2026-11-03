@@ -188,6 +188,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `"1"` is the label `1`), an alias's column list as renaming only the first columns
   (`AS u(a)` keeps the others' names), TRIM's column as `btrim`, and `coalesce` of a column with
   a CHECK's list as its base type.
+* A call of a type's name no function takes the argument of (`[:int4 :x]`, `[:timestamptz :?at]`)
+  is a cast, as PostgreSQL reads it: its argument takes what the cast takes, and a column cast so
+  to its own type keeps its table.
 * An argument under `SOME` (`[:= :id [:some :?ids]]`) is typed as one under `ANY`.
 * `h/check` reads an assignment target `:a.b` as the field `b` of the composite column `a`,
   where it reported `:unknown-column`; the value is not checked.

@@ -214,7 +214,10 @@
    (for [s path, o (if (= "pg_catalog" s) (overloads kind n) (get-in own [s kind n]))]
      (assoc o :schema s))))
 
-(defn- type-name? [n] (boolean (or (types/entry n) (get-in @types/catalog [:types n]))))
+(defn type-name?
+  "Whether n names a type of pg_catalog."
+  [n]
+  (boolean (or (types/entry n) (get-in @types/catalog [:types n]))))
 
 (defn call
   "{:result type :args [type ...] :overload o} (outcome) of calling function or operator n (kind

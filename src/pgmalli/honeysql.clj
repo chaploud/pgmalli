@@ -137,7 +137,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? arg-key loose expression-type accepted-type driver-type quoted? call-parts reached own-type-schema)
+(declare insert-parts star? arg-key loose expression-type accepted-type driver-type quoted? call-parts reached own-type-schema type-call registry-type)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -953,10 +953,12 @@
 (defn- raw? [x] (and (vector? x) (= :raw (first x))))
 
 (defn- cast-of-column?
-  "Whether x is a cast of a column, or of :raw SQL, which may be one."
-  [x]
-  (and (vector? x) (= :cast (first x))
-       (or (column-keyword? (second x)) (raw? (second x)) (cast-of-column? (second x)))))
+  "Whether x is a cast of a column, or of :raw SQL, which may be one, as-cast reading a call
+   as a cast where PostgreSQL does (type-call)."
+  [as-cast x]
+  (let [x (as-cast x)]
+    (and (vector? x) (= :cast (first x))
+         (or (column-keyword? (second x)) (raw? (second x)) (cast-of-column? as-cast (second x))))))
 
 (defn- function-name
   "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it;
@@ -1854,7 +1856,8 @@
                     ;; ARRAY[...]::t[] casts each element to t (transformArrayExpr)
                     x (cond (and (vector? x) (= :cast (first x)) (= 3 (count x))) [x]
                             (and (vector? x) (= :array (first x)) (= 3 (count x)) (sequential? (second x)) (keyword? (nth x 2)))
-                            (for [e (second x)] [:cast e (nth x 2)]))
+                            (for [e (second x)] [:cast e (nth x 2)])
+                            :else (some-> (type-call registry chain x opts) vector))
                     :let [[k elements?] (value-arg registry chain (second x))]
                     :when k]
                 [x chain k elements?])
@@ -1918,7 +1921,7 @@
    the call to take there, as a value of each type sent picks one; nil may go there too."
   [registry ps opts]
   (for [{:keys [x chain]} (expression-nodes ps)
-        :let [[kind n args :as parts] (when-not (comparison? x) (call-parts x))]
+        :let [[kind n args :as parts] (when-not (or (comparison? x) (type-call registry chain x opts)) (call-parts x))]
         :when (and kind (some arg-key args))
         :let [ins (mapv #(:type (expression-type registry chain % opts)) args)
               os (reached registry opts parts)]
@@ -2219,8 +2222,20 @@
       (and (vector? x) (= 3 (count x)) (keyword? h) (operator? h) (array-of-elements? (nth x 2))) (assoc (typed "boolean") :nullable? true)
       ;; a + b + c is (a + b) + c
       (and (keyword? h) (operator? h) (< 2 (count (rest x))) (operator-name h 2)) (sub (into [h [h (nth x 1) (nth x 2)]] (drop 3 x)))
-      :else (when-let [[_ _ args :as parts] (call-parts x)]
-              (call-type registry parts (map sub args) opts)))))
+      :else (if-let [c (type-call registry chain x opts)]
+              (sub c)
+              (when-let [[_ _ args :as parts] (call-parts x)]
+                (call-type registry parts (map sub args) opts))))))
+
+(defn- type-call
+  "[:cast a f] of a call [:f a] PostgreSQL reads as a cast (func_get_detail): f names a type, of
+   pg_catalog or of the registry, and no function f takes a's type as it is; nil for another x."
+  [registry chain x opts]
+  (when-let [[kind n [a] :as parts] (when (and (vector? x) (= 2 (count x))) (call-parts x))]
+    (when (and (= :functions kind) (or (resolve/type-name? n) (registry-type registry (first x) opts)))
+      (let [in (:type (expression-type registry chain a opts))]
+        (when (not-any? #(= [in] (:args %)) (reached registry opts parts))
+          [:cast a (first x)])))))
 
 (defn- select-row
   "The row a SELECT returns. Under a qualifying builder, a cast column, or a column through an
@@ -2274,12 +2289,14 @@
                                en))))))
         ;; PostgreSQL drops a cast to the type the value has already, which leaves the column
         ;; (and its table) as it is; a cast to another type makes an expression of no table
+        as-cast #(or (type-call registry chain % opts) %)
         kept-column? (fn kept? [x]
-                       (or (not (cast-of-column? x))
-                           ;; a type named with its schema (:public.mood) is the type of that name
-                           (let [[a b] (map #(some-> (canonical-type (expression-type registry chain % opts)) types/bare-name)
-                                            [x (second x)])]
-                             (and (or (nil? a) (nil? b) (= a b)) (kept? (second x))))))
+                       (let [x (as-cast x)]
+                         (or (not (cast-of-column? as-cast x))
+                             ;; a type named with its schema (:public.mood) is the type of that name
+                             (let [[a b] (map #(some-> (canonical-type (expression-type registry chain % opts)) types/bare-name)
+                                              [x (second x)])]
+                               (and (or (nil? a) (nil? b) (= a b)) (kept? (second x)))))))
         items (for [item (selected-items stmt)
                     :let [[col alias] (select-parts item opts)
                           x (item-expression item)]]
@@ -2292,7 +2309,7 @@
                     (when (and (seq cs) (every? some? cs)) cs))
                   (nil? col) (when-let [n (item-name item opts)]
                                (let [x (if alias (first item) (item-expression item))]
-                                 (if (and qualified? (or (raw? x) (and (cast-of-column? x) (kept-column? x))))
+                                 (if (and qualified? (or (raw? x) (and (cast-of-column? as-cast x) (kept-column? x))))
                                    (unknown-key n)
                                    (let [{s :schema :keys [nullable?]} (expression-type registry chain x opts)]
                                      [(entry nil n s nullable? nil)]))))
