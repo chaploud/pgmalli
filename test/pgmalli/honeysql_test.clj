@@ -486,6 +486,9 @@
     (is (= [:map [:n nick]] (row [[[:coalesce :nick "x"] :n]]))
         "a value that is not NULL makes it NOT NULL; a literal's length is not the column's")
     (is (= [:map [:n [:maybe :any]]] (row [[[:coalesce :nick :id] :n]])) "columns of different types are not resolved here")
+    (is (= [:map [:g bigint] [:l bigint]] (row [[[:greatest :id 3] :g] [[:least :id :?x] :l]]))
+        "greatest and least resolve as coalesce, NULL only where every operand is")
+    (is (= [:map [:n [:maybe nick]]] (row [[[:nullif :nick "x"] :n]])) "nullif makes NULL")
     (is (= [:map [:b [:boolean {:pg/type "boolean"}]] [:c [:maybe [:boolean {:pg/type "boolean"}]]]]
            (row [[[:= :id 1] :b] [[:= :nick "a"] :c]]))
         "a comparison is NULL where an operand may be")
@@ -1545,3 +1548,9 @@
         o (sends opts {java.net.URI :unknown})]
     (is (= (args q o) (args q o)) "a class pgmalli has no schema for is one [:fn] per class")
     (is (= "java.net.URI" (-> (args q o) :n last last (pgmalli/describe) (#(re-find #"java.net.URI" %)))))))
+
+(deftest an-argument-of-a-resolving-function-takes-the-others-type
+  (is (= {:x [:maybe bigint]} (args {:select [:id] :from [:users] :where [:> [:greatest :id :?x] 5]})))
+  (is (= {:n [:maybe [:string {:pg/type "character varying"}]]} (args {:update :users :set {:nick [:coalesce :?n :nick]} :where [:= :id 1]})))
+  (is (= {:x [:maybe bigint]} (args {:select [:id] :from [:users] :where [:= :id [:nullif :?x 0]]})))
+  (is (= {:a :any :b :any} (args {:select [[[:least :?a :?b] :m]]})) "arguments alone resolve to nothing pgmalli tells"))

@@ -33,6 +33,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   reads it as an enum type: a string sent as `varchar` to it is no `:uncast-string`.
 * `h/check` reads a literal against a CHECK's list of numbers as PostgreSQL does: an untyped
   `"1"` is the label `1`, and a number outside the list is an `:enum-literal`.
+* `h/row-schema` types `greatest`, `least` and `nullif` as `coalesce`, and `h/arg-types` types
+  an argument of any of them with the type the other arguments resolve to.
 * A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type.
 * Where the format quotes names, HoneySQL writes `:default` as the column `"default"`:
   `h/values-schema` and `h/set-schema` take `[:default]` alone there.

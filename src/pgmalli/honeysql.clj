@@ -1346,6 +1346,23 @@
   [body]
   (set (keep arg-key (tree-seq #(and (branch? %) (not (seq? %))) seq body))))
 
+(defn- canonical-type [{s :schema}] (some-> s shape/column-props :pg/type (#(:name (types/entry %) %))))
+
+(def ^:private resolving-fns
+  "Functions whose arguments PostgreSQL resolves to one type, as it resolves UNION and CASE:
+   their result is of it (nullif's, its first argument's)."
+  #{"coalesce" "greatest" "least" "nullif"})
+
+(defn- resolved-type
+  "The expression type PostgreSQL resolves operands (of types ts) to: that of the typed ones when
+   they agree, a string or an argument taking it as an unknown value does; nil when one has no
+   type pgmalli tells, or they differ."
+  [operands ts]
+  (let [typed (for [[o t] (map vector operands ts) :when (not (or (arg-key o) (:string? t)))] t)
+        resolved (if (seq typed) typed (remove nil? (map (fn [o t] (when-not (arg-key o) t)) operands ts)))]
+    (when (and (seq resolved) (not-any? nil? resolved) (apply = (map canonical-type resolved)))
+      (first resolved))))
+
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
    :params takes them (:id).
@@ -1403,7 +1420,17 @@
                                  (for [[col v] (assignments stmt)
                                        :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
                                    ;; unnest(?), of a typed array (unnest(unknown) is ambiguous): each element assigned to the column
-                                   (if-let [x (array-arg v #{:unnest})] [x (jdbc/array-type (shape/non-null t) opts :unnest)] [v t]))))
+                                   (if-let [x (array-arg v #{:unnest})] [x (jdbc/array-type (shape/non-null t) opts :unnest)] [v t]))
+                                 ;; coalesce(?, col) and the like: PostgreSQL resolves an argument to the others' type;
+                                 ;; nil is a value there (coalesce and greatest skip it, nullif's first may be NULL)
+                                 (for [x (mapcat own-nodes (cons (selected-items (:select (insert-parts stmt))) (vals stmt)))
+                                       :when (and (vector? x) (keyword? (first x)) (resolving-fns (folded (name (first x)))))
+                                       :let [operands (rest x)
+                                             r (resolved-type operands (map #(expression-type registry sc % opts) operands))]
+                                       :when r
+                                       o operands
+                                       :when (param-key o)]
+                                   [o (nullable (accepted-type registry (:schema r) :compare opts))])))
                        (statement-chains registry body opts))
          ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
@@ -1488,7 +1515,7 @@
   "{:schema column-schema :nullable? bool} of a select expression of a form
    docs/queries.md#the-row-a-query-returns lists; nil for another."
   [registry chain x opts]
-  (let [canonical (fn [{s :schema}] (some-> s shape/column-props :pg/type (#(:name (types/entry %) %))))
+  (let [canonical canonical-type
         h (when (vector? x) (first x))
         fname (if (keyword? h) (folded (name h)) (shorthand-fn x))
         ts (map #(expression-type registry chain % opts) (when (vector? x) (rest x)))
@@ -1518,12 +1545,11 @@
       (#{"now" "count"} fname) (typed (word-types fname))
       (#{"min" "max"} fname) (when-let [t (first ts)] {:schema (loose (:schema t)) :nullable? true})
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical)]) typed (assoc :nullable? true))
-      ;; a string takes the other arguments' type, as PostgreSQL resolves a varchar or unknown one
-      (= "coalesce" fname) (let [others (remove :string? ts)
-                                 resolved (if (seq others) others ts)]
-                             (when (and (seq resolved) (not-any? nil? resolved) (apply = (map canonical resolved)))
-                               {:schema (cond-> (:schema (first resolved)) (next ts) loose)
-                                :nullable? (not-any? #(and % (not (:nullable? %))) ts)})))))
+      ;; a string or an argument takes the others' type, as PostgreSQL resolves a varchar or unknown one
+      (resolving-fns fname) (when-let [r (resolved-type (rest x) ts)]
+                              {:schema (cond-> (:schema r) (next ts) loose)
+                               ;; greatest and least skip NULLs as coalesce does; nullif makes one
+                               :nullable? (or (= "nullif" fname) (not-any? #(and % (not (:nullable? %))) ts))}))))
 
 (defn- select-row
   "The row a SELECT returns. Under a qualifying builder, a column through an opaque table, or a cast

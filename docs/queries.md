@@ -120,6 +120,7 @@ keyed as in `sql/format`'s `:params`:
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
+| an argument of `coalesce`, `greatest`, `least` or `nullif` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as compared, or nil |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
 | used only inside code (`(when x ...)`) | its type or nil |
@@ -285,7 +286,8 @@ names, as unqualified keys:
 An expression has its type and nullability for these forms: a literal (as HoneySQL sends it,
 by its class), a cast to a type named as PostgreSQL prints it or by its alias (`:bigint`,
 `:timestamptz`) or to an enum type or domain of the registry, `count`, `sum`, `avg`, `min`,
-`max`, `coalesce` of one type, an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
+`max`, `coalesce`, `greatest`, `least` and `nullif` of one type (a string or an argument takes
+the others' type, as PostgreSQL resolves them), an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
 `IS`), the clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
 
 ```clojure
