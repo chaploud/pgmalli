@@ -3,6 +3,7 @@
   (:refer-clojure :exclude [bigint])
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
+            [honey.sql.pg-ops]
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
@@ -465,7 +466,10 @@
                        {:with [[:f filtered-query :materialized] [:p paged]]
                         :select [:total/n]
                         :from [[{:select [[[:count :*] :n]] :from [:f]} :total]]})))
-      "a CTE body bound in a let sees its sibling CTEs"))
+      "a CTE body bound in a let sees its sibling CTEs")
+  (is (= [:map [:id [:maybe :any]]]
+         (h/row-schema registry '{:with [[:f (helper group-id) :materialized] [:p paged]] :select [:id] :from [:p]} opts))
+      "a body that is code, after another CTE, is a table whose columns are not known"))
 
 (deftest one-row-results
   (is (= [:=> [:cat bigint] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]

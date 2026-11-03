@@ -461,10 +461,11 @@
             ;; a body's own :with comes after the entries before it, which it sees; one of
             ;; :with-recursive under a :with, or naming one of them again, is not read here
             own (when (map? stmt) (some #(when (contains? stmt %) %) with-keys))
-            stmt (cond (or (empty? before) (nil? own)) (cond-> stmt (seq before) (assoc k before))
+            stmt (cond (not (map? stmt)) nil
+                       (or (empty? before) (nil? own)) (cond-> stmt (seq before) (assoc k before))
                        (and (= k own) (vector? (get stmt own)) (not-any? (set (keep cte-name before)) (keep cte-name (get stmt own))))
                        (assoc stmt k (into before (get stmt own))))]
-        (when (and (map? stmt) (or (nil? listed) (sequential? listed)))
+        (when (and stmt (or (nil? listed) (sequential? listed)))
           [stmt (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- function-columns
