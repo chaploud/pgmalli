@@ -187,12 +187,14 @@
             (if (next vs) (select vs ins) (first vs)))))))
 
 (defn- outcome
-  "{:result type :overload o} of candidate c for ins; nil where it is ambiguous or its result
-   type is left open."
+  "{:result type :args [type ...] :overload o} of candidate c for ins, :args the types its
+   arguments are taken as, polymorphic ones bound; nil where it is ambiguous or its result type
+   is left open."
   [c ins]
   (when (and c (not (:ambiguous c)))
-    (when-let [r (bound (:result (:overload c)) (bind (:decls c) ins))]
-      {:result r :overload (dissoc (:overload c) :in)})))
+    (let [b (bind (:decls c) ins)]
+      (when-let [r (bound (:result (:overload c)) b)]
+        {:result r :args (mapv #(bound % b) (:decls c)) :overload (dissoc (:overload c) :in)}))))
 
 (defn- in-every-version
   "(f overloads) of each version's overloads, where all agree; nil otherwise."
@@ -215,8 +217,8 @@
 (defn- type-name? [n] (boolean (or (types/entry n) (get-in @types/catalog [:types n]))))
 
 (defn call
-  "{:result type :overload o} of calling function or operator n (kind :functions or :operators)
-   with arguments of types ins, among the overloads os it reaches (pg_catalog's by default); nil
+  "{:result type :args [type ...] :overload o} (outcome) of calling function or operator n (kind
+   :functions or :operators) with arguments of types ins, among the overloads os it reaches (pg_catalog's by default); nil
    where PostgreSQL refuses it, finds it ambiguous, or one of the versions resolves it otherwise.
    With a :free argument, the result every candidate it may resolve to agrees on."
   ([kind n ins] (call kind n ins (overloads kind n)))

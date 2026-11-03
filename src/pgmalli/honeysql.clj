@@ -2211,10 +2211,9 @@
       ;; nullif returns its first argument as = reads it
       (= "nullif" (called x)) (let [ts (map sub (rest x))]
                                 (when (= 2 (count ts))
-                                  (when-let [{{[l] :args} :overload :as r} (resolve/call :operators "=" (mapv :type ts))]
+                                  (when-let [{[t] :args :as r} (resolve/call :operators "=" (mapv :type ts))]
                                     (when (= "boolean" (:result r))
-                                      (let [t (if (#{"anyelement" "anyenum" "anyarray" "anyrange" "anymultirange"} l) (:type (first ts)) l)]
-                                        (when-let [s (result-schema registry t ts)] {:type t :schema s :nullable? true}))))))
+                                      (when-let [s (result-schema registry t ts)] {:type t :schema s :nullable? true})))))
       ;; x op ANY(array) is boolean (docs 9.24.3), NULL where an element is
       (and (vector? x) (= 3 (count x)) (keyword? h) (operator? h) (array-of-elements? (nth x 2))) (assoc (typed "boolean") :nullable? true)
       ;; a + b + c is (a + b) + c
