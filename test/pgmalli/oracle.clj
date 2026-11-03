@@ -212,6 +212,13 @@
 
 ;;; PostgreSQL's verdict and check's
 
+(defn refused
+  "e, an SQLException of a statement, when PostgreSQL refuses the statement for its data, its
+   constraints or its text (SQLSTATE class 22, 23, 42); throws it otherwise: a statement timed
+   out (57014) or a lost connection says nothing of the statement."
+  [^java.sql.SQLException e]
+  (if (#{"22" "23" "42"} (some-> (.getSQLState e) (subs 0 2))) e (throw e)))
+
 (defn- pg-kind [state message]
   (case state
     "42P01" :unknown-table

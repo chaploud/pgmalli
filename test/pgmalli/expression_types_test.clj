@@ -305,7 +305,7 @@
    rolled back."
   [^java.sql.Connection con q params]
   (try (jdbc/execute! con (sql/format q {:params params})) false
-       (catch java.sql.SQLException _ true)
+       (catch java.sql.SQLException e (some? (oracle/refused e)))
        (finally (.rollback con))))
 
 (defn- argument-failures
