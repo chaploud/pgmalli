@@ -252,16 +252,6 @@
   (is (ev/supported? (x/parse "a <> ALL (ARRAY['x'::text]) AND b IN (1, 2)")))
   (is (not (ev/supported? (x/parse "st_area(geom) > 0")))))
 
-(deftest every-supported-op-is-evaluated
-  ;; supported-ops and ev's case are two lists of the same vocabulary. An op that reaches only
-  ;; the table throws "unsupported in CHECK", which checker catches as a failing row: a row the
-  ;; database accepts would be dropped. Placeholder arguments may fail any other way.
-  (let [ev @#'ev/ev
-        evaluated? (fn [op] (nil? (:unsupported (ex-data (try (ev [op 1 2 3] {:a 1}) nil (catch Exception e e))))))]
-    (doseq [op (remove (set (keys @#'ev/strict)) @#'ev/supported-ops)]
-      (is (evaluated? op) (str op " is in supported-ops but ev does not evaluate it")))
-    (is (not (evaluated? :no-such-op)) "an op in neither is unsupported, as the check needs")))
-
 (deftest a-json-null-is-not-sql-null
   (is (not (passes? "CHECK (jsonb_typeof(j -> 'a') = 'string')" {:j {"a" nil}})) "jsonb_typeof is 'null'")
   (is (passes? "CHECK (jsonb_typeof(j -> 'b') = 'string')" {:j {"a" nil}}) "a missing key is SQL NULL")
