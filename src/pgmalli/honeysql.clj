@@ -1267,8 +1267,10 @@
                      ;; the query itself is clauses, however unknown ({:selct [:id]})
                      :when (and (map? m) (seq m) (not (rows m)) (or (identical? m body) (statement? m) (and clauses (every? clauses (keys m)))))
                      k (keys m)
-                     :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))]
-                 {:kind :unread-clause :clause k})
+                     :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))
+                     :let [meant (when-not (some-> clauses (contains? k))
+                                   (error/suggest k (concat read-clauses ignored-clauses clauses)))]]
+                 (cond-> {:kind :unread-clause :clause k} meant (assoc :did-you-mean [meant])))
                ;; HoneySQL takes {select [...]} for {:select [...]}; here a symbol is a value, so
                ;; such a statement is not read, and said so
                (for [m maps :when (and (map? m) (not (rows m)))
@@ -2360,7 +2362,10 @@
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write :default"))
-   :unread-clause (fn [{:keys [clause]}] (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand"))
+   :unread-clause (fn [{:keys [clause did-you-mean]}]
+                    (if did-you-mean
+                      (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))
+                      (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand")))
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))})
 
 (defn humanize

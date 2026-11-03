@@ -62,6 +62,9 @@ A clause pgmalli does not read is reported rather than passed over:
 ```clojure
 (h/check registry {:select [:id] :from [:users] :frobnicate [:x]})
 ;; => [{:kind :unread-clause, :clause :frobnicate}]
+
+(h/check registry {:selec [:id] :from [:users]})
+;; => [{:kind :unread-clause, :clause :selec, :did-you-mean [:select]}]
 ```
 
 The columns of a CTE or a subquery are typed as its SELECT types them, read as a query of its

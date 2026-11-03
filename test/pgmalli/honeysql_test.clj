@@ -1159,7 +1159,7 @@
         "the same statement twice, each in its own scope")))
 
 (deftest code-anywhere-leaves-its-part-unjudged
-  (is (= [{:kind :unread-clause :clause :frob}] (check '(cond-> {:select [:id] :from [:users] :frob 1} x (assoc :limit 1)))))
+  (is (= [{:kind :unread-clause :clause :frob :did-you-mean [:from]}] (check '(cond-> {:select [:id] :from [:users] :frob 1} x (assoc :limit 1)))))
   (is (= [] (check '{:insert-into [(tbl) [:a]] :values [[1]] :returning [:a]})))
   (is (= [] (check '{:with [[(nm) {:select [:id] :from :users}]] :select [:id] :from :c}))))
 
@@ -1497,7 +1497,7 @@
          (check {:select [:id] :from [:users] :where [:= :mood [:inline "zz"]]}))))
 
 (deftest an-unknown-clause-of-the-query-is-unread
-  (is (= [{:kind :unread-clause :clause :selct}] (check {:selct [:id]}))))
+  (is (= [{:kind :unread-clause :clause :selct :did-you-mean [:select]}] (check {:selct [:id]}))))
 
 (deftest explain-says-what-to-do-for-arity-and-unread-clauses
   (is (= [":values row 0 has 2 values for 3 :columns; give each row as many values as :columns"
@@ -1964,3 +1964,10 @@
     (is (= [:builder-fn] (:did-you-mean (ex-data e)))))
   (is (some? (row {:select [:id] :from [:users]} (assoc opts :jdbc {:fetch-size 10 :timeout 5 :my-own 1})))
       "next.jdbc's other options and an application's own pass"))
+
+(deftest a-misspelt-clause-names-the-clause-meant
+  (let [ps (check {:selec [:id] :from [:users]})]
+    (is (= [{:kind :unread-clause :clause :selec :did-you-mean [:select]}] ps))
+    (is (= ["clause :selec is no clause HoneySQL or pgmalli knows; did you mean: :select"] (h/humanize ps))))
+  (is (= [{:kind :unread-clause :clause :frobnicate}] (check {:select [:id] :from [:users] :frobnicate [:x]}))
+      "nothing close, nothing suggested"))

@@ -349,7 +349,7 @@ The problems it reports:
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list where written or under `=`, `IN` and `IS NOT DISTINCT FROM`, with `:allowed` |
 | `:uncast-string` | a string sent typed (`varchar` under pgjdbc's default, or the type `:send` sends it as) where the column's type takes none (an enum, a number, a date ...); not where `:send` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}` |
-| `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
+| `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
 `h/humanize` says each problem as what is wrong and what to do:
