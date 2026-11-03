@@ -2244,3 +2244,12 @@
     (is (= {:id [:maybe integer]}
            (args {:select [:id] :from [:groups] :where [:and [:= :id :?id] [:is-distinct-from :name [:cast :?id :text]]]} native))
         "nil where any use takes it")))
+
+(deftest a-pg-catalog-relation-has-the-columns-of-the-catalog-snapshot
+  (is (= {:names [:pg/array [:string {:pg/type "name"}]]}
+         (args {:select [:c.oid] :from [[:pg_class :c]] :where [:= :c.relname [:any :?names]]})))
+  (is (= [:map [:pg_class/relname [:string {:pg/type "name"}]]]
+         (row {:select [:c.relname] :from [[:pg_class :c]]} (dissoc opts :jdbc)))
+      "keyed by its table, as the driver keys it")
+  (is (= [{:kind :unknown-column :column :c.nope}] (check {:select [:c.nope] :from [[:pg_class :c]]})))
+  (is (= [] (check {:select [:attstattarget] :from [:pg_attribute]})) "a column one version has"))

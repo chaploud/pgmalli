@@ -176,7 +176,8 @@
    the last arguments may be left out), :non-null (an aggregate that is never NULL), :columns
    ([[name type] ...] of its OUT arguments), :btree (an operator of a btree operator family, or its negator: a comparison, never NULL of
    values) and
-   :in (the versions that have it, where not every one does)."
+   :in (the versions that have it, where not every one does); :relations {name [column ...]} of
+   pg_catalog's tables and views, a column {:name :type :not-null} with :in too."
   (delay (edn/read-string (slurp (io/resource "pgmalli/catalog.edn")))))
 
 (defn element

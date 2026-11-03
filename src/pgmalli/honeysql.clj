@@ -33,11 +33,26 @@
   [x]
   (folded (last (str/split (name x) #"\."))))
 
+(declare type-schema)
+
+(defn- catalog-columns
+  "[[column-name schema] ...] of a table or view of pg_catalog (\"pg_catalog.pg_class\"), as
+   the catalog snapshot holds it: a column of a type the versions disagree on, or pgmalli does
+   not type, :any; nullable where one version's is."
+  [table]
+  (when-let [cs (some->> table (re-matches #"pg_catalog\.(.+)") second (get (:relations @types/catalog)))]
+    (let [by-name (group-by :name cs)]
+      (for [c (distinct (map :name cs))
+            :let [ts (distinct (map :type (by-name c)))
+                  s (when-not (next ts) (type-schema (first ts)))]]
+        [c (cond (nil? s) :any (every? :not-null (by-name c)) s :else [:maybe s])]))))
+
 (defn- column-entries
-  "[[column-name schema] ...] of a table (or view) in the registry, in its order; nil when it
-   is not there."
+  "[[column-name schema] ...] of a table (or view) in the registry, in its order, or of
+   pg_catalog's; nil when it is not there."
   [registry table]
-  (some->> (get (::schemas registry) (shape/table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s]))))
+  (or (some->> (get (::schemas registry) (shape/table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s])))
+      (catalog-columns table)))
 
 (def ^:private system-columns
   "The columns every table has besides its own."
@@ -100,7 +115,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? arg-key loose expression-type type-schema accepted-type driver-type quoted? call-parts reached own-type-schema)
+(declare insert-parts star? arg-key loose expression-type accepted-type driver-type quoted? call-parts reached own-type-schema)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:

@@ -122,4 +122,8 @@
               n (set (concat (keys (get server k)) (keys (get snapshot k))))
               :let [theirs (get-in server [k n] #{}) ours (mine (get-in snapshot [k n]))]
               :when (not= theirs ours)]
-        (is false (str (name k) " " n ": " hint "\n  server only: " (set/difference theirs ours) "\n  snapshot only: " (set/difference ours theirs)))))))
+        (is false (str (name k) " " n ": " hint "\n  server only: " (set/difference theirs ours) "\n  snapshot only: " (set/difference ours theirs))))
+      (doseq [n (set (concat (keys (:relations server)) (keys (:relations snapshot))))
+              :let [theirs (get-in server [:relations n] []) ours (vec (mine (get-in snapshot [:relations n])))]
+              :when (not= (set theirs) (set ours))]
+        (is false (str "relation " n ": " hint "\n  server only: " (set/difference (set theirs) (set ours)) "\n  snapshot only: " (set/difference (set ours) (set theirs))))))))

@@ -5,8 +5,8 @@
 
 (def query
   "One JSON object of pg_catalog's types (an array's facts are its element's: x[]), implicit
-   casts, ranges, functions (no procedure) and operators, as format_type names them; no
-   extension's."
+   casts, ranges, functions (no procedure), operators and the columns of its tables and views,
+   as format_type names them; no extension's."
   "SELECT json_build_object(
      'types', (SELECT json_agg(json_build_array(format_type(oid, NULL), typcategory, typispreferred) ORDER BY 1)
                FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace AND typtype <> 'c'
@@ -26,6 +26,10 @@
                    WHERE p.pronamespace = 'pg_catalog'::regnamespace AND p.prokind <> 'p'),
      'ranges', (SELECT json_agg(json_build_array(format_type(rngtypid, NULL), format_type(rngsubtype, NULL), format_type(rngmultitypid, NULL)) ORDER BY 1)
                 FROM pg_range r JOIN pg_type t ON t.oid = r.rngtypid WHERE t.typnamespace = 'pg_catalog'::regnamespace),
+     'relations', (SELECT json_agg(json_build_array(c.relname,
+                                                    (SELECT json_agg(json_build_array(a.attname, format_type(a.atttypid, NULL), a.attnotnull) ORDER BY a.attnum)
+                                                     FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped)) ORDER BY 1)
+                   FROM pg_class c WHERE c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind IN ('r', 'v')),
      'operators', (SELECT json_agg(json_build_array(o.oprname,
                                                     CASE WHEN o.oprleft = 0 THEN NULL ELSE format_type(o.oprleft, NULL) END,
                                                     format_type(o.oprright, NULL), format_type(o.oprresult, NULL),
@@ -34,9 +38,10 @@
 
 (defn shape
   "A version's catalog as catalog.edn holds it: {:types {name [category preferred?]} :casts
-   #{[source target]} :functions {name #{overload}} :operators {name #{overload}}}, an overload
-   {:args [type ...] :result type ...}."
-  [{:strs [types casts ranges functions operators]}]
+   #{[source target]} :functions {name #{overload}} :operators {name #{overload}} :relations
+   {name [column ...]}}, an overload {:args [type ...] :result type ...}, a column {:name :type
+   :not-null}."
+  [{:strs [types casts ranges functions operators relations]}]
   {:types (into {} (for [[n c pref] types] [n (cond-> {:category c} pref (assoc :preferred true))]))
    :casts (set casts)
    :ranges (into {} (for [[r sub m] ranges] [r {:subtype sub :multirange m}]))
@@ -49,6 +54,8 @@
                                      (pos? defaults) (assoc :defaults defaults)
                                      non-null? (assoc :non-null true)
                                      columns (assoc :columns columns)))))
+   :relations (into {} (for [[n cs] relations]
+                         [n (vec (for [[c t not-null?] cs] (cond-> {:name c :type t} not-null? (assoc :not-null true))))]))
    :operators (update-vals (group-by first operators)
                            #(set (for [[_ l r ret btree?] %]
                                    (cond-> {:args (if l [l r] [r]) :result ret} btree? (assoc :btree true)))))})

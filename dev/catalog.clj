@@ -30,6 +30,13 @@
                                                                 :let [in (vec (for [[v c] (map vector versions cs) :when (contains? (get-in c [k n]) o)] v))]]
                                                             (cond-> o (not= in versions) (assoc :in in)))))])))]
     {:versions (vec versions)
+     ;; a relation's columns in the last version's order, those of others after, :in the
+     ;; versions that have them where not all do
+     :relations (into (sorted-map)
+                      (for [n (distinct (mapcat (comp keys :relations) cs))]
+                        [n (vec (for [col (distinct (mapcat #(get-in % [:relations n]) (reverse cs)))
+                                      :let [in (vec (for [[v c] (map vector versions cs) :when (some #{col} (get-in c [:relations n]))] v))]]
+                                  (cond-> col (not= in versions) (assoc :in in))))]))
      :types (into (sorted-map) (:types (first cs)))
      :casts (into (sorted-set) (:casts (first cs)))
      :ranges (into (sorted-map) (:ranges (first cs)))
@@ -44,7 +51,7 @@
                                                     "bb" "catalog:dump"))))))
         c (merged versions cs)]
     (spit "resources/pgmalli/catalog.edn"
-          (str ";; pg_catalog's types, implicit casts, functions and operators of PostgreSQL " (str/join ", " versions)
+          (str ";; pg_catalog's types, implicit casts, functions, operators and relations of PostgreSQL " (str/join ", " versions)
                ": bb catalog writes it\n"
                ;; a line a name: a regenerated file's diff is the names that changed
                "{" (str/join "\n " (for [[k v] c]
