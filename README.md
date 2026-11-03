@@ -523,8 +523,11 @@ override of the type:
 pgmalli still adds what the database says of the column: `[:maybe ...]` unless it is NOT
 NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are read
 (`as-read`, `h/row-schema`) and written (`h/arg-types`, `h/values-schema`, `h/set-schema`),
-datasets included. A json or jsonb column's driver object is a PGobject, so its shape is the
-parsed value's: it is read under `{:read {:json :parsed}}`, and an argument takes it for the
+datasets included, but for a type the driver reads as an object of its own: an `inet`, read as a
+PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read unless `:read`
+names what your extension reads it as (`{:read {"inet" :string}}`); the `:inet` override above
+holds for what is written. A json or jsonb column's driver object is a PGobject, so its shape is
+the parsed value's: it is read under `{:read {:json :parsed}}`, and an argument takes it for the
 classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`). Without
 those, a read or an argument is the driver's object. A key that names no column of the
 schemas generated is an error that names the column meant.

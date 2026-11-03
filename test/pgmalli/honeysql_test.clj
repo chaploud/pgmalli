@@ -2167,6 +2167,17 @@
     (is (= (row {:select [[:score :x]] :from [:users]}) (row {:select [[[:|| :score] :x]] :from [:users]})))
     (is (= [:map [:x [:maybe int4]]] (row {:select [[[:- [:inline 1]] :x]]})) "- x is an operator")))
 
+(deftest an-override-of-a-type-the-driver-returns-as-an-object-holds-for-writes-alone
+  (let [ip [:re {:pg/type "inet"} "^x$"]
+        hs [:map-of {:pg/type "hstore"} :string :string]
+        reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ip ip] [:h hs]]}})
+        o {:jdbc unqualified}]
+    (is (= [:map [:ip [:any {:pg/type "inet"}]] [:h [:any {:pg/type "hstore"}]]] (h/row-schema reg {:select [:ip :h] :from [:t]} o))
+        "pgjdbc reads inet as a PGobject, hstore as a java.util.Map")
+    (is (= [:map {:pg/table "public.t"} [:ip [:any {:pg/type "inet"}]] [:h [:any {:pg/type "hstore"}]]] (pgmalli/as-read reg :pg.public/t o)))
+    (is (= [:map [:ip :string]] (h/row-schema reg {:select [:ip] :from [:t]} (assoc o :read {"inet" :string}))) ":read names what an extension reads")
+    (is (= {:ip ip :h hs} (h/arg-types reg {:update :t :set {:ip :?ip :h :?h}} o)))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

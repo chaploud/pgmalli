@@ -314,6 +314,8 @@
         (cond (= :bit driver-read) (if (or (= 1 (:max (second schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
               (= :or-double driver-read) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
               driver-read [driver-read {:pg/type t}]
+              ;; the driver's own object, whatever an override says the value is
+              (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [:any {:pg/type t}]
               (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
               :else (driver-type schema opts read-type)))))
 

@@ -195,6 +195,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   operand: named, keyed and typed as it.
 * An argument compared with a literal of no type (`[:= :?w [:inline "1"]]`) takes any value, as
   PostgreSQL reads the literal as the argument's type.
+* An override of a type the driver reads as an object of its own (`:inet` a PGobject, `:hstore` a
+  `java.util.Map`) holds for writes; a read stays the driver's object unless `:read` names the type.
 * An argument under `SOME` (`[:= :id [:some :?ids]]`) is typed as one under `ANY`.
 * `h/check` reads an assignment target `:a.b` as the field `b` of the composite column `a`,
   where it reported `:unknown-column`; the value is not checked.
