@@ -390,8 +390,7 @@
    ctes are the query's CTE names, which shadow a table only when the reference is written
    without a schema. :nullable? marks a table an outer join may leave NULL."
   [registry stmt ctes {:keys [schema]}]
-  (let [registry (reading registry)
-        refs (concat (from-items stmt from-keys)
+  (let [refs (concat (from-items stmt from-keys)
                      (map second (joins stmt))
                      (write-targets stmt))
         nullable (outer-aliases stmt schema)
@@ -672,8 +671,7 @@
    table or to several known ones. A column an opaque table may hold besides one known table is
    the opaque one's, untyped: which of them PostgreSQL takes is not in the data."
   [registry scope col]
-  (let [registry (reading registry)
-        hits (column-hits registry scope col)
+  (let [hits (column-hits registry scope col)
         column (second (split-column col))
         [opaque & _] (filter #(nth % 2) hits)]
     (cond (= 1 (count hits))
@@ -1449,8 +1447,7 @@
    or, for a nested statement, the chain of its own and the enclosing ones. Empty when the
    statement agrees with the registry."
   [registry stmt scope ps {:keys [schema] :as opts}]
-  (let [registry (reading registry)
-        scopes (chain scope)
+  (let [scopes (chain scope)
         known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
                 (str/join "." (shape/schema-and-name k)))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
@@ -2296,8 +2293,7 @@
    the table PostgreSQL traces it to, which keeps a column's table under a cast to its own type.
    The row leaves those out, an open map, and names them under :pgmalli/unknown-keys."
   [registry stmt chain {:keys [schema] :as opts}]
-  (let [registry (reading registry)
-        qualified? (:qualified? (jdbc/row-keys opts))
+  (let [qualified? (:qualified? (jdbc/row-keys opts))
         sc (first chain)
         ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw or code
         ;; there may be one, and a join :join-by builds (read nowhere here) may be outer
@@ -2427,14 +2423,13 @@
    type, as PostgreSQL resolves a VALUES column."
   [registry rows chain opts]
   (when (and (seq rows) (every? vector? rows) (apply = (map count rows)))
-    (let [registry (reading registry)]
-      (into [:map]
-            (for [[i xs] (map-indexed vector (apply map vector rows))
-                  :let [ts (map #(expression-type registry chain % opts) xs)
-                        s (:schema (common registry ts))]]
-              (jdbc/row-entry (jdbc/row-key nil (str "column" (inc i)) opts)
-                              (cond (nil? s) :any (::columns opts) s :else (driver-type registry jdbc/read-type s opts))
-                              (or (nil? s) (boolean (some :nullable? ts))) opts))))))
+    (into [:map]
+          (for [[i xs] (map-indexed vector (apply map vector rows))
+                :let [ts (map #(expression-type registry chain % opts) xs)
+                      s (:schema (common registry ts))]]
+            (jdbc/row-entry (jdbc/row-key nil (str "column" (inc i)) opts)
+                            (cond (nil? s) :any (::columns opts) s :else (driver-type registry jdbc/read-type s opts))
+                            (or (nil? s) (boolean (some :nullable? ts))) opts)))))
 
 (defn- row-schema*
   "row-schema of the statement at path in a query, chains its statements' scope chains by path
