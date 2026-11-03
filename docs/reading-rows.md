@@ -3,7 +3,7 @@
 Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md) · [datasets](datasets.md)
 
 `pgmalli.core/as-read` gives the `[:map ...]` of a row as next.jdbc builds it from what
-PostgreSQL's JDBC driver returns. The examples use [example/schema.sql](example/schema.sql).
+PostgreSQL's JDBC driver returns, read with next.jdbc's `as-unqualified-maps`. The examples use [example/schema.sql](example/schema.sql).
 
 ```clojure
 (require '[pgmalli.core :as pgmalli]
@@ -13,10 +13,24 @@ PostgreSQL's JDBC driver returns. The examples use [example/schema.sql](example/
 (def registry (pgmalli/registry "public"))
 ```
 
-## The default
+## The builder
 
-With no options, the row is what next.jdbc's default builder, `as-maps`, builds with no
-extension: keys are `:table/column`, dates and timestamps are `java.sql.Date` and
+pgmalli types rows as one builder builds them: next.jdbc's `as-unqualified-maps`. Pass it to
+next.jdbc wherever your application reads rows:
+
+```clojure
+(require '[next.jdbc.result-set :as rs])
+
+(def jdbc-opts {:builder-fn rs/as-unqualified-maps})
+```
+
+A row's keys are its columns' names as PostgreSQL labels them, unqualified (`:group_id`), and a
+NULL column keeps its key. A query's row has the keys of its labels likewise
+([queries](queries.md#the-row-a-query-returns)), and a row read is written back as it is
+([a row written into a table](queries.md#a-row-written-into-a-table)). Another spelling, such
+as kebab-case keys, is your application's to convert where it takes the row.
+
+With no extension, dates and timestamps are `java.sql.Date` and
 `java.sql.Timestamp` (`inst?`), and arrays, json, intervals, `citext` and `bit varying` are the
 driver's own objects (`:any`). `real` is a `Float`, `bit(1)` a `Boolean`, and a numeric `NaN` a
 `Double`. `time` and `timetz` are a `java.sql.Time` under every `:time`: `next.jdbc.date-time`
@@ -24,8 +38,8 @@ converts dates and timestamps alone:
 
 ```clojure
 (m/validate (pgmalli/as-read registry :pg.public/users)
-            #:users{:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
-                    :closed_at nil :created_at (java.sql.Timestamp. 0)}
+            {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
+             :closed_at nil :created_at (java.sql.Timestamp. 0)}
             {:registry registry})
 ;; => true
 ```
@@ -34,7 +48,7 @@ converts dates and timestamps alone:
 
 | option | for |
 |---|---|
-| `:jdbc {...}` | the options you pass to next.jdbc; its `:builder-fn` keys the row (`as-maps` by default): [keys from a next.jdbc builder](#keys-from-a-nextjdbc-builder) |
+| `:jdbc {...}` | the options you pass to next.jdbc: pgmalli reads `:return-keys` ([queries](queries.md#options)) |
 | `:time :inst` | the default: dates and timestamps as `java.sql.Date` and `Timestamp` (`inst?`) |
 | `:time :instant` | `next.jdbc.date-time/read-as-instant` |
 | `:time :local` | `next.jdbc.date-time/read-as-local` |
@@ -51,39 +65,14 @@ An option pgmalli does not know is an error that suggests the intended name:
 ;; => "pgmalli options: {:tmie [\"disallowed key\"]}; did you mean: :time"
 ```
 
-## Keys from a next.jdbc builder
+## The options of next.jdbc
 
-Pass the options you pass to next.jdbc as `:jdbc`. Its `:builder-fn` is one of next.jdbc's map
-builders (`next.jdbc.result-set`'s and `next.jdbc.optional`'s), which keys the row as next.jdbc
-does: unqualified, kebab-case or lower-case keys, a NULL column left out under
-`next.jdbc.optional`, keys named by your `:label-fn` and `:qualifier-fn` under a modified
-builder. Another builder (an array builder, your own) is an error, as pgmalli cannot tell its
-keys:
-
-```clojure
-(require '[next.jdbc.result-set :as rs]
-         '[next.jdbc.optional :as opt]
-         '[clojure.string :as str])
-
-(pgmalli/describe registry (pgmalli/as-read registry :pg.public/posts {:jdbc {:builder-fn rs/as-unqualified-kebab-maps}}))
-;; => {:author-id "bigint", :id "bigint", :likes "integer", :title "varchar(200)", :title-upper "text?", :views "integer"}
-
-(pgmalli/describe registry (pgmalli/as-read registry :pg.public/posts {:jdbc {:builder-fn rs/as-modified-maps
-                                                                              :label-fn str/upper-case
-                                                                              :qualifier-fn #(str "app." %)}}))
-;; => #:app.posts{:AUTHOR_ID "bigint", :ID "bigint", :LIKES "integer", :TITLE "varchar(200)", :TITLE_UPPER "text?", :VIEWS "integer"}
-
-(pgmalli/describe registry (pgmalli/as-read registry :pg.public/users {:jdbc {:builder-fn opt/as-maps}}))
-;; => #:users{:closed_at "timestamptz (optional)", :created_at "timestamptz", :email "varchar(120)", :group_id "integer", :id "bigint", :nick "varchar(40) (optional)", :status "user_status: active | closed"}
-```
-
-`:builder-fn` takes the function, its var, or its qualified symbol. Where next.jdbc does not
-load (babashka), name it by the symbol:
-`{:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}`. `:label-fn` and
-`:qualifier-fn` are functions; a symbol is an error.
-
-pgmalli passes over the other keys of `:jdbc`, but one spelled close to a key it reads and read
-by no next.jdbc function (`:buildr-fn`) is an error naming the key meant.
+pgmalli passes over the keys of `:jdbc` it does not read, so the map your application passes
+to next.jdbc goes as it is. `:builder-fn` there is `as-unqualified-maps` (the function, its
+var, or its symbol, which names it where next.jdbc does not load, as in babashka); another
+builder, `:label-fn` or `:qualifier-fn` is an error naming the one builder. A key spelled close
+to one pgmalli reads and read by no next.jdbc function (`:return-key`) is an error naming the
+key meant.
 
 ## Your own extensions
 
@@ -93,7 +82,7 @@ A `ReadableColumn` extension changes what a column type comes back as. Key it by
 ```clojure
 (-> (pgmalli/as-read registry :pg.public/users {:read {"timestamp with time zone" :time/instant}})
     (m/schema {:registry registry})
-    (mu/get :users/created_at)
+    (mu/get :created_at)
     (m/form))
 ;; => :time/instant
 ```
@@ -104,7 +93,7 @@ An extension that reads every enum type's value as a keyword, as `(keyword s)` m
 ```clojure
 (-> (pgmalli/as-read registry :pg.public/users {:read {:enum :keyword}})
     (m/schema {:registry registry})
-    (mu/get :users/status)
+    (mu/get :status)
     (m/form))
 ;; => [:enum {:default :active, :pg/default "active", :pg/type "user_status"} :active :closed]
 ```
@@ -112,9 +101,8 @@ An extension that reads every enum type's value as a keyword, as `(keyword s)` m
 ## Decoding instead
 
 `transformer` turns JDBC values into the registry's types, for an application that works
-with `java.time`. It converts rows with unqualified keys, as `as-unqualified-maps` builds them:
-the registry's row schemas have unqualified keys, so next.jdbc's default `#:users{...}` rows
-are left as they are:
+with `java.time`. It converts rows as `as-unqualified-maps` builds them, keyed as the
+registry's row schemas are:
 
 ```clojure
 (def user

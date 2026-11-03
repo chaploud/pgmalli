@@ -236,25 +236,17 @@ builds it, to validate results as they come back:
 (def user-row (pgmalli/as-read registry :pg.public/users))
 
 (m/validate user-row
-            #:users{:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
-                    :closed_at nil :created_at (java.sql.Timestamp. 0)}
+            {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
+             :closed_at nil :created_at (java.sql.Timestamp. 0)}
             {:registry registry})
 ;; => true
 ```
 
-By default the keys are those of next.jdbc's default builder, `as-maps`. Pass the options you
-pass to next.jdbc as `:jdbc`, and the row is keyed as its builder keys it:
-
-```clojure
-(require '[next.jdbc.result-set :as rs])
-
-(mu/keys (m/schema (pgmalli/as-read registry :pg.public/users {:jdbc {:builder-fn rs/as-unqualified-maps}})
-                   {:registry registry}))
-;; => (:closed_at :created_at :email :group_id :id :nick :status)
-```
-
-When every key of a row is reported missing, the row came from another builder: pass the
-options you pass to next.jdbc.
+pgmalli types rows as next.jdbc's `as-unqualified-maps` builds them: keyed by the columns'
+names (`:group_id`), a NULL column's key kept. Read rows with it:
+`(jdbc/execute! ds sqlvec {:builder-fn next.jdbc.result-set/as-unqualified-maps})`. Another
+spelling of the keys is your application's to convert where it takes the row
+([docs/reading-rows.md](docs/reading-rows.md#the-builder)).
 
 There are three ways to check a row read from the database:
 
@@ -388,7 +380,7 @@ HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
 
 (h/query-schema registry [:id] find-user-q)
-;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 ```
 
 Put it on the function as a schema object over the registry. `malli.instrument` and
@@ -401,13 +393,13 @@ Put it on the function as a schema object over the registry. `malli.instrument` 
   {:malli/schema (m/schema (h/query-schema registry [:db :id] find-user-q {:result :one})
                            {:registry registry})}
   [db id]
-  #:users{:id id :email "ann@example.com"})
+  {:id id :email "ann@example.com"})
 
 (mi/collect! {:ns (all-ns)})
 (mi/instrument!)
 
 (find-user nil 1)
-;; => #:users{:id 1, :email "ann@example.com"}
+;; => {:id 1, :email "ann@example.com"}
 
 (try (find-user nil "1") (catch clojure.lang.ExceptionInfo e (:type (ex-data e))))
 ;; => :malli.core/invalid-input
@@ -439,7 +431,7 @@ returns:
 
 ```clojure
 (pgmalli/describe (h/query-schema registry [:id] find-user-q {:result :one}))
-;; => {:args ["bigint"], :returns [:maybe #:users{:id "bigint", :email "varchar(120)"}]}
+;; => {:args ["bigint"], :returns [:maybe {:id "bigint", :email "varchar(120)"}]}
 ```
 
 The options of `pgmalli.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
@@ -569,7 +561,7 @@ A `[:ref ...]` to your own schema needs a registry holding it:
 
 CI tests the oldest versions listed here.
 
-pgmalli depends on malli, test.check, camel-snake-kebab and data.json. HoneySQL, next.jdbc
+pgmalli depends on malli, test.check and data.json. HoneySQL, next.jdbc
 and pgjdbc are yours to add.
 
 ## Limits

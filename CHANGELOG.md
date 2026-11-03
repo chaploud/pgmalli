@@ -20,13 +20,20 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
       (`"bigint[]"`); `unnest` needs a typed one.
     * `:write {"T" s}` is the class of `s`'s values mapped to `"T"`. Leave out a class pgjdbc
       already sends as `"T"`.
-  * `:qualified?`, `:kebab?`, `:lower?` and `:nil-columns` are the builder you pass next.jdbc,
-    under `:jdbc`. `{:qualified? false}` is `{:jdbc {:builder-fn rs/as-unqualified-maps}}`;
-    `{:kebab? true}` is `rs/as-kebab-maps`, `{:lower? true}` is `rs/as-lower-maps`, and
-    `{:nil-columns :absent}` is `next.jdbc.optional/as-maps`. Two of them together are the
-    builder that does both (`rs/as-unqualified-kebab-maps`).
+  * `:qualified?`, `:kebab?`, `:lower?` and `:nil-columns` are removed: pass
+    `{:builder-fn next.jdbc.result-set/as-unqualified-maps}` to next.jdbc
+    ([docs/reading-rows.md](docs/reading-rows.md#the-builder)).
   * `:return-keys` moves into `:jdbc`: `{:jdbc {:return-keys true}}`.
-* `pgmalli.core/read-options` is removed: pass the builder as `{:jdbc {:builder-fn ...}}`.
+* **Rows are read with one builder,** next.jdbc's `as-unqualified-maps`: `as-read`,
+  `h/row-schema` and `h/query-schema`'s return key a row by its columns' names (`:group_id`), not
+  `:users/group_id`, and a NULL column keeps its key. Read rows with
+  `{:builder-fn next.jdbc.result-set/as-unqualified-maps}`; convert keys to another spelling in
+  your application. A query selecting one name twice (`:u.id :g.id`) is one key, the last
+  column's, as the builder keeps it: alias one of them.
+* `pgmalli.core/read-options` is removed.
+* `h/row-schema`'s `:pgmalli/untold` property is removed: with unqualified keys, every key is
+  told.
+* pgmalli no longer depends on camel-snake-kebab.
 * `h/explain` is renamed `h/humanize`.
 * An error's ex-data lists the names probably meant under `:did-you-mean`, a vector, as
   `h/check`'s problems do, instead of `:suggest`.
@@ -35,7 +42,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   code that reads the row by position (`(second ret)`) reads it with `last` or `m/children`.
 * In `pgmalli.edn`, the database name under `:db` is `:dbname`, as in next.jdbc and libpq:
   `:db {:db "app"}` is `:db {:dbname "app"}`. The old key is an error naming the new one.
-* `h/row-schema`'s `:pgmalli/untold` property is renamed `:pgmalli/unknown-keys`.
 * Checks and argument types are stricter, so a test that passed on 0.3.3 may fail; each
   failure is a real mismatch with the schema.
   * An argument that was `:any` now has a type, and an instrumented function checks it: one
@@ -87,15 +93,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   include its boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`, `UUID[]` and the arrays
   of java.sql dates, times and timestamps.
 * `:jdbc` takes the options your application passes to next.jdbc
-  ([docs/reading-rows.md](docs/reading-rows.md#keys-from-a-nextjdbc-builder)): `:builder-fn`,
-  one of next.jdbc's map builders, keys rows as next.jdbc does; under a modified builder,
-  `:label-fn` and `:qualifier-fn` too (functions, not symbols); `:return-keys` adds RETURNING to
-  a write. A key spelled close to one pgmalli reads and read by no next.jdbc function
-  (`:buildr-fn`) is an error naming the key meant.
+  ([docs/reading-rows.md](docs/reading-rows.md#the-options-of-nextjdbc)): `:return-keys` adds
+  RETURNING to a write; `:builder-fn` is `as-unqualified-maps`, and another builder,
+  `:label-fn` or `:qualifier-fn` is an error naming it. A key spelled close to one pgmalli reads
+  and read by no next.jdbc function (`:return-key`) is an error naming the key meant.
 * `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
-  `:set` maps built at run time, keyed by any key HoneySQL writes to a column: the label the
-  `:jdbc` builder reads it as, so a row read is written back, its name (`:group_id`) or its
-  kebab spelling (`:group-id`), one of them a column; a column takes a HoneySQL expression too (`[:now]`,
+  `:set` maps built at run time, keyed as a row is read (`:group_id`), so a row read is written
+  back as it is (the name as a string where HoneySQL would not write the keyword to the column);
+  a column takes a HoneySQL expression too (`[:now]`,
   `[:+ :n 1]`, `:current_timestamp`, a column in `:set`, `[:lift v]` with `v` of the column's type), and generates values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
@@ -119,9 +124,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   under `:over`, polymorphic ones) of the type it resolves to, from a snapshot of `pg_catalog`
   of PostgreSQL 16, 17 and 18; a literal `[:inline ...]` writes; `INTERVAL '1 day'`; a cast to a type with its length
   (`[:varchar 10]`) or to an array type; `current_user` and the like as `name`. A function of
-  `pg_catalog` in FROM has its columns, of no table, so a qualified builder keys them
-  unqualified. The columns of a CTE or a subquery are typed as
-  its SELECT types them, and keyed by the table PostgreSQL traces them to; a set operation's
+  `pg_catalog` in FROM has its columns. The columns of a CTE or a subquery are typed as
+  its SELECT types them; a set operation's
   column is of the type PostgreSQL resolves its members' to; `SELECT *` of a CTE or a subquery
   lists its columns; a table function (`WITH ORDINALITY` too) is named by its alias. Also a
   scalar subquery (its column's type, nullable), `[[f x]]`, an aggregate with `ORDER BY`,

@@ -227,12 +227,11 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 `h/values-schema` and `h/set-schema` type it. The table is a keyword, as HoneySQL names it
 (`:users` in `:schema`, `:app.users`) or as the registry does (`:pg.public/users`). Each column
 is typed as an argument assigned to it (what `:send` sends, held to the column's range) and keyed
-by any key HoneySQL writes to the column under `:format`: the key the `:jdbc` builder labels the
-column with, unqualified, so a row read and written back fits (`:group-id` under a kebab
-builder), the column's keyword (`:group_id`) and its kebab spelling (`:group-id`); where none is written to the column, its
-name as a string (a column with capitals where names are unquoted: PostgreSQL folds an unquoted
-name to lower case, and HoneySQL quotes a string key). A column takes one of its keys: two would
-write it twice. A column the database may fill is optional and takes HoneySQL's
+as a row is read ([the builder](reading-rows.md#the-builder)), by the column's name
+(`:group_id`), so a row read is written back as it is. Where HoneySQL would not write that
+keyword to the column under `:format`, the key is the name as a string (a column with capitals
+where names are unquoted: PostgreSQL folds an unquoted name to lower case, and HoneySQL quotes a
+string key). A column the database may fill is optional and takes HoneySQL's
 `:default` too; one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
 BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
 takes nil: the trigger may fill it. In
@@ -255,15 +254,11 @@ An UPDATE's `:set` cannot be checked this way: a CHECK applies to the whole upda
 (m/validate (h/values-schema registry :users) {:email "ann@example.com" :group_id 1} {:registry registry})
 ;; => true
 
-(m/validate (h/values-schema registry :users {:jdbc {:builder-fn rs/as-unqualified-kebab-maps}})
-            {:email "ann@example.com" :group-id 1 :created-at :default}
-            {:registry registry})
+(m/validate (h/values-schema registry :users) {:email "ann@example.com" :group_id 1 :created_at :default} {:registry registry})
 ;; => true
 
-(m/validate (h/values-schema registry :users {:jdbc {:builder-fn rs/as-unqualified-kebab-maps}})
-            {:email "ann@example.com" :group_id 1}
-            {:registry registry})
-;; => true
+(m/validate (h/values-schema registry :users) {:email "ann@example.com" :group-id 1} {:registry registry})
+;; => false
 
 (m/validate (h/set-schema registry :users) {} {:registry registry})
 ;; => false
@@ -329,20 +324,21 @@ pgjdbc sends as the type it names; `h/check` reports the string as `:uncast-stri
 
 ## The row a query returns
 
-`h/row-schema` gives the `[:map ...]` of one row, as next.jdbc builds it. A column an outer
+`h/row-schema` gives the `[:map ...]` of one row, as next.jdbc's `as-unqualified-maps` builds
+it ([the builder](reading-rows.md#the-builder)): keyed by the labels of its columns, a name
+selected twice one key, the last column's. A column an outer
 join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
-names, keyed as next.jdbc keys a column of no table: unqualified, unless a `:qualifier-fn`
-makes a name of `""`; each column is of the type PostgreSQL resolves its members' to, as for
+names; each column is of the type PostgreSQL resolves its members' to, as for
 `CASE`. `SELECT *` of a subquery or a CTE lists the columns its SELECT gives:
 
 ```clojure
 (h/row-schema registry {:select [:u.email :p.title]
                         :from [[:users :u]]
                         :left-join [[:posts :p] [:= :p.author_id :u.id]]})
-;; => [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:posts/title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
+;; => [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]] [:title [:maybe [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]]]
 
 (h/row-schema registry {:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]})
-;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
+;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:n [:int #:pg{:type "bigint"}]]]
 ```
 
 An expression has the type PostgreSQL resolves it to, from the types of what it is made of:
@@ -419,9 +415,8 @@ or its negator) of values that are not NULL. An argument of the application's ow
 It takes the options of `pgmalli.core/as-read` ([reading-rows.md](reading-rows.md)):
 
 ```clojure
-(h/row-schema registry {:select [:id :created_at] :from [:users]}
-              {:time :instant :jdbc {:builder-fn rs/as-kebab-maps}})
-;; => [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/created-at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
+(h/row-schema registry {:select [:id :created_at] :from [:users]} {:time :instant})
+;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:created_at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
 ```
 
 A write with no RETURNING returns the map next.jdbc builds of the driver's update count. Under
@@ -432,24 +427,8 @@ next.jdbc's `:return-keys` (in `:jdbc`), pgjdbc adds RETURNING to an INSERT, UPD
 ;; => [:map [:next.jdbc/update-count :int]]
 
 (h/row-schema registry {:delete-from :posts :where [:= :author_id 1]} {:jdbc {:return-keys ["id"]}})
-;; => [:map [:posts/id [:int #:pg{:identity :always, :type "bigint"}]]]
+;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]]]
 ```
-
-Under qualified keys (next.jdbc's default), the driver may qualify some columns by a table the
-query data does not show: a column cast to its own type, which PostgreSQL drops; `:raw` SQL,
-which may be a column; a column of a table function neither of `pg_catalog` nor of a
-generated schema, or of a table the registry lacks; or a
-subquery's or a CTE's column that is one of these. `h/row-schema` leaves those keys out of the
-map, which is open, and lists their unqualified names under the `:pgmalli/unknown-keys`
-property:
-
-```clojure
-(h/row-schema registry {:select [:id [[:cast :email :varchar] :e]] :from [:users]})
-;; => [:map #:pgmalli{:unknown-keys [:e]} [:users/id [:int #:pg{:identity :always, :type "bigint"}]]]
-```
-
-A subquery's or a CTE's column is otherwise keyed by the table PostgreSQL traces it to, as the
-driver keys it; an expression's, a set operation's and a recursive CTE's by none.
 
 `h/row-schema` returns nil when a selected column cannot be resolved (`h/check` says which),
 when a whole row is selected, when code builds the RETURNING, and for a TRUNCATE under
@@ -486,7 +465,7 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
-| `:jdbc`, `:time`, `:read` | how next.jdbc keys the rows and the driver reads values ([reading-rows.md](reading-rows.md#options)); `:jdbc`'s `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
+| `:jdbc`, `:time`, `:read` | the options you pass to next.jdbc and how the driver reads values ([reading-rows.md](reading-rows.md#options)); `:jdbc`'s `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
 | `:send {Class type}` | what your application sends, and the type each class goes as: [what your application sends](#what-your-application-sends); pgjdbc's by default |
 | `:compare :lenient` | arguments compared with a column take nil too, and so do the elements of one in `:in` or `= ANY` (`:strict` by default) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them and the dialect `sql/set-dialect!` set |
@@ -501,7 +480,7 @@ what `execute!` returns on a datasource or connection, `:any` when `h/row-schema
 
 ```clojure
 (h/query-schema registry [:id] {:select [:email] :from [:users] :where [:= :id :?id]} {:result :one})
-;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:maybe [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:maybe [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 
 (h/query-schema registry [:id] {:delete-from :users :where [:= :id :?id]} {:result :one})
 ;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
@@ -523,7 +502,7 @@ row, `{:result :one}` drops the `[:maybe]`:
 ;; => [:=> [:cat :any] [:map [:n [:int #:pg{:type "bigint"}]]]]
 
 (last (h/query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]}))
-;; => [:sequential {:max 1} [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]
+;; => [:sequential {:max 1} [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]
 ```
 
 `h/analyze` gives what `h/query-schema` is built of, for code that builds a schema of its own:
@@ -533,7 +512,7 @@ tables it reads and writes, as `h/tables` gives them:
 
 ```clojure
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
+;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
 ```
 
 A function returning what `plan`, `execute-batch!`, `:multi-rs` or a prepared statement returns,
@@ -644,6 +623,3 @@ Write the query so PostgreSQL's reading is explicit instead.
   leaves `:any` (an `inet` column's), which may be an object of the type.
 - Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
   PostgreSQL folds it to lower case, and check takes it as written.
-- Under qualified keys, the key of a column next.jdbc qualifies by a table the query data does
-  not show: `h/row-schema` lists it under `:pgmalli/unknown-keys`
-  ([The row a query returns](#the-row-a-query-returns)).
