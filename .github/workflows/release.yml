@@ -31,9 +31,6 @@ jobs:
         with:
           cli: 1.12.5.1664
           bb: 1.13.219
-      # ir reads the test database with the host's psql
-      - name: install psql
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
       # what is published is what the suite passed on
       - run: bb test:jvm
       - run: echo "PGMALLI_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
