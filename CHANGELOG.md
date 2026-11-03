@@ -39,6 +39,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   alone (under `{:result :one}`, no `[:maybe]`), at most one where the WHERE holds a primary key
   or a UNIQUE constraint equal to a value, one for each row an INSERT returns, at most
   `:limit` (`[:sequential {:max 1} row]`).
+* The columns of a CTE or a subquery are typed as its SELECT types them; a column it does not
+  give is `:unknown-column`. An argument of an `unnest` in `FROM` is an array of the type of
+  where its column goes.
+* `h/row-schema` types the functions that build json and jsonb (`jsonb_build_object`,
+  `jsonb_agg` ...) as a column of the type is read: an object or an array under `{:read {:json
+  :parsed}}`.
 * A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type.
 * Where the format quotes names, HoneySQL writes `:default` as the column `"default"`:
   `h/values-schema` and `h/set-schema` take `[:default]` alone there.

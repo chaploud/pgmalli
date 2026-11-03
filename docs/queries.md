@@ -56,7 +56,9 @@ A clause pgmalli does not read is reported rather than passed over:
 ;; => [{:kind :unread-clause, :clause :frobnicate}]
 ```
 
-The columns of a CTE, a subquery, a table function, or a `pg_catalog` table the registry
+The columns of a CTE or a subquery are typed as its SELECT types them, read as a query of its
+own (a CTE under the ones before it); a column it does not give is `:unknown-column`. Those of a
+recursive CTE, a LATERAL subquery, a table function, or a `pg_catalog` table the registry
 lacks exist but have no type. Comparisons with them, or with an expression `h/row-schema`
 leaves untyped, are not checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
@@ -120,6 +122,7 @@ keyed as in `sql/format`'s `:params`:
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it, NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
+| an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | an array, typed as `:send` sends one, of where its column goes: compared with a column, or assigned by `INSERT ... SELECT` |
 | an argument of `coalesce`, `greatest`, `least` or `nullif` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as compared, or nil |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
@@ -288,7 +291,9 @@ by its class), a cast to a type named as PostgreSQL prints it or by its alias (`
 `:timestamptz`) or to an enum type or domain of the registry, `count`, `sum`, `avg`, `min`,
 `max`, `coalesce`, `greatest`, `least` and `nullif` of one type (a string or an argument takes
 the others' type, as PostgreSQL resolves them), an operator that makes a boolean (`=`, `IN`, `LIKE`, `BETWEEN`, `AND` ..., `EXISTS`,
-`IS`), the clock's values (`now()`, `current_date` ...) and `->>`. Any other is nullable `:any`:
+`IS`), the clock's values (`now()`, `current_date` ...), `->>`, and the functions that build json or
+jsonb (`jsonb_build_object`, `jsonb_agg` ...: an object or an array under `{:read {:json
+:parsed}}`, the driver's object otherwise; an aggregate is NULL over no row). Any other is nullable `:any`:
 
 ```clojure
 (h/row-schema registry {:select [[[:coalesce :nick :email] :name] [[:max :created_at] :last]

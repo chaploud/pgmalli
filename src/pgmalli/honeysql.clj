@@ -337,6 +337,40 @@
   [item]
   (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (keyword? (ffirst item))))))
 
+(declare row-schema* derived-types)
+
+(defn- cte-statement
+  "[statement columns] of CTE name: its body as read on its own, under the entries of its :with
+   before it, and the columns its name lists ([[:c {:columns [:x]}] ...]); nil where the query
+   defines name more than once, or the body is no statement."
+  [body name]
+  (let [found (for [x (tree-seq branch? seq body) :when (map? x)
+                    k with-keys :let [w (get x k)] :when (vector? w)
+                    [i e] (map-indexed vector w) :when (= name (cte-name e))]
+                [(second e) (subvec w 0 i) (when (vector? (first e)) (:columns (second (first e))))])]
+    (when-let [[[stmt before listed]] (when (= 1 (count found)) found)]
+      (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
+        [(cond-> stmt (seq before) (assoc :with before)) (map #(folded (clojure.core/name %)) listed)]))))
+
+(defn- typed-scope
+  "sc with :types on the subqueries and CTEs of stmt whose SELECT types its columns
+   ({column schema}, a column whose type is not told nil), read as a query of their own."
+  [registry body stmt sc {:keys [schema] :or {schema default-schema} :as opts}]
+  (let [items (concat (from-items stmt from-keys) (map second (join-items stmt)))]
+    (reduce (fn [sc item]
+              (let [[_ alias written] (table-ref item schema)
+                    {:keys [table cte? columns] :as entry} (get sc alias)
+                    [inner listed] (cond (or (nil? entry) columns (lateral? item)) nil
+                                         cte? (cte-statement body written)
+                                         (and (nil? table) (vector? item) (map? (first item))) [(first item)]
+                                         (and (nil? table) (map? item)) [item])
+                    types (when inner
+                            (when-let [ts (derived-types registry inner opts)]
+                              ;; a CTE's name may list new names for its columns, by position
+                              (into {} (map-indexed (fn [i [c t]] [(nth (vec listed) i c) t])) ts)))]
+                (cond-> sc types (assoc-in [alias :types] types))))
+            sc items)))
+
 (defn- statement-chains
   "[[statement scopes path] ...] for the statements of a query, scopes the statement's own scope
    followed by those of the statements enclosing it, path where it sits in the query. What a
@@ -356,7 +390,7 @@
                         ctes (into base (keep cte-name) (cte-entries x))
                         outer (if open? (list :open) outer)
                         ;; a column of a table code brings in is the enclosing data's, untyped
-                        chain (cons (scope registry x ctes opts) (cond->> outer (code-sources? x) (cons :open)))
+                        chain (cons (typed-scope registry body x (scope registry x ctes opts) opts) (cond->> outer (code-sources? x) (cons :open)))
                         part (fn [k v scopes cs] (walk v (conj path k) scopes cs false true))
                         ;; a LATERAL item sees its statement's tables, but not itself
                         lateral-chain (fn [t] (cons (dissoc (first chain) (second (table-ref t (:schema opts default-schema)))) (rest chain)))
@@ -402,8 +436,9 @@
 (defn- has-column?
   "Whether a scope entry may hold a column: one it lists, one of its table's, or anything for
    an opaque table."
-  [registry {:keys [table opaque? columns]} column]
+  [registry {:keys [table opaque? columns types]} column]
   (cond columns (boolean (some #(or (= column %) (= (folded column) %)) columns))
+        types (or (contains? types column) (contains? types (folded column)))
         opaque? true
         :else (let [cs (table-columns registry table)] (or (contains? cs column) (contains? cs (folded column))))))
 
@@ -412,12 +447,12 @@
   [registry scope col]
   (let [[alias column] (split-column col)]
     (if alias
-      (when-let [{:keys [table opaque? nullable?] :as entry} (get scope alias)]
-        (when (has-column? registry entry column) [[alias table opaque? nullable?]]))
+      (when-let [{:keys [table opaque? nullable? types] :as entry} (get scope alias)]
+        (when (has-column? registry entry column) [[alias table opaque? nullable? types]]))
       ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
-      (distinct (for [[a {:keys [table opaque? excluded? nullable?] :as entry}] scope
+      (distinct (for [[a {:keys [table opaque? excluded? nullable? types] :as entry}] scope
                       :when (and (not excluded?) (has-column? registry entry column))]
-                  [a table opaque? nullable?])))))
+                  [a table opaque? nullable? types])))))
 
 (defn- chain [scope] (if (map? scope) [scope] scope))
 
@@ -450,8 +485,9 @@
         column (second (split-column col))
         [opaque & _] (filter #(nth % 2) hits)]
     (cond (= 1 (count hits))
-          (let [[alias table opaque? nullable?] (first hits)
-                cs (when-not opaque? (table-columns registry table))
+          (let [[alias table opaque? nullable? types] (first hits)
+                ;; a subquery's or a CTE's columns, as its SELECT types them
+                cs (or types (when-not opaque? (table-columns registry table)))
                 ;; the column's own name, as next.jdbc keys the row: :group-id is group_id
                 column (if (or (nil? cs) (contains? cs column)) column (folded column))]
             {:table (or table alias) :column column
@@ -1363,6 +1399,28 @@
     (when (and (seq resolved) (not-any? nil? resolved) (apply = (map canonical-type resolved)))
       (first resolved))))
 
+(defn- unnest-columns
+  "{[alias column] arg} of the unnest(?, ...) items of stmt's FROM and joins: the column each
+   argument's elements become, by position in the columns its alias lists ([:x {:columns [:a]}]),
+   or the alias itself of an unnest of one ([[:unnest :?ids] :id])."
+  [stmt]
+  (into {} (for [item (concat (from-items stmt from-keys) (map second (join-items stmt)))
+                 :when (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)))
+                 :let [ps (rest (first item))
+                       b (second item)
+                       [alias cs] (cond (and (vector? b) (map? (second b))) [(first b) (:columns (second b))]
+                                        (and (keyword? b) (= 1 (count ps))) [b [b]])]
+                 :when (and alias (every? param-key ps) (sequential? cs))
+                 [p c] (map vector ps cs)]
+             [[(folded (name alias)) (folded (name c))] p])))
+
+(defn- unnest-arg
+  "The argument whose elements column x is, of unnest-columns m: x named with its alias or alone."
+  [m x]
+  (when (column-keyword? x)
+    (let [[q c] (split-column x)]
+      (some (fn [[[a col] p]] (when (and (= col (folded c)) (or (nil? q) (= q a))) p)) m))))
+
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
    :params takes them (:id).
@@ -1421,6 +1479,23 @@
                                        :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
                                    ;; unnest(?), of a typed array (unnest(unknown) is ambiguous): each element assigned to the column
                                    (if-let [x (array-arg v #{:unnest})] [x (jdbc/array-type (shape/non-null t) opts :unnest)] [v t]))
+                                 ;; unnest(?) AS x(a): the elements of ? are a, typed where a goes, as a typed array
+                                 (let [m (unnest-columns stmt)]
+                                   (when (seq m)
+                                     (for [[op side value] (comparison-sides stmt)
+                                           :let [p (unnest-arg m value)]
+                                           :when (and p (column-keyword? side) (not (unnest-arg m side)))
+                                           :let [t (compared-column-type registry sc side op opts)]
+                                           :when (not (untyped? t))]
+                                       [p (jdbc/array-type t opts :unnest)])))
+                                 (let [{:keys [select]} (insert-parts stmt)
+                                       m (when (map? select) (unnest-columns select))]
+                                   (when (seq m)
+                                     (for [[col v] (assignments stmt)
+                                           :let [p (unnest-arg m v)]
+                                           :when p
+                                           :let [t (column-type registry (target-scope sc stmt schema) col true opts)]]
+                                       [p (jdbc/array-type (shape/non-null t) opts :unnest)])))
                                  ;; coalesce(?, col) and the like: PostgreSQL resolves an argument to the others' type;
                                  ;; nil is a value there (coalesce and greatest skip it, nullif's first may be NULL)
                                  (for [x (mapcat own-nodes (cons (selected-items (:select (insert-parts stmt))) (vals stmt)))
@@ -1511,6 +1586,15 @@
         ["=" "<>" "not=" "!=" "<" ">" "<=" ">=" "and" "or" "not" "in" "not-in" "like" "not-like" "ilike"
          "not-ilike" "between" "not-between" "similar-to" "not-similar-to" "regexp" "regex" "~" "~*" "!~" "!~*"]))
 
+(def ^:private json-builders
+  "The functions that build a json or jsonb value: [type shape nullable?], shape the value's as a
+   column of the type is read under {:read {:json :parsed}} (an object, an array); an aggregate
+   is NULL over no row."
+  (into {} (for [[t p] [["jsonb" "jsonb"] ["json" "json"]]
+                 [f shape nullable?] [["_build_object" :map false] ["_build_array" :sequential false]
+                                      ["_agg" :sequential true] ["_object_agg" :map true] ["_object" :map false]]]
+             [(str p f) [t shape nullable?]])))
+
 (defn- expression-type
   "{:schema column-schema :nullable? bool} of a select expression of a form
    docs/queries.md#the-row-a-query-returns lists; nil for another."
@@ -1543,6 +1627,8 @@
       (and (predicates h) (or (= :not h) (next ts))) (assoc (typed "boolean") :nullable? (not-every? #(and % (not (:nullable? %))) ts))
       (= :->> h) (assoc (typed "text") :nullable? true)
       (#{"now" "count"} fname) (typed (word-types fname))
+      (json-builders fname) (let [[t shape nullable?] (json-builders fname)]
+                              {:schema (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any]) :nullable? nullable?})
       (#{"min" "max"} fname) (when-let [t (first ts)] {:schema (loose (:schema t)) :nullable? true})
       (aggregate-types fname) (some-> (get-in aggregate-types [fname (some-> (first ts) canonical)]) typed (assoc :nullable? true))
       ;; a string or an argument takes the others' type, as PostgreSQL resolves a varchar or unknown one
@@ -1570,7 +1656,8 @@
         ;; table nil: an expression comes from no table, and the driver keys it unqualified
         entry (fn [table column schema nullable? props]
                 (jdbc/row-entry (jdbc/row-key table column opts) props
-                                (if schema (driver-type registry jdbc/read-type schema opts) :any)
+                                ;; ::columns: a derived table's columns, as the registry's are, for its outer statement
+                                (cond (nil? schema) :any (::columns opts) (shape/non-null schema) :else (driver-type registry jdbc/read-type schema opts))
                                 (or nullable? regrouped? (nil? schema) (maybe? schema)) opts))
         untold (fn [n] [[::untold n]])
         merges (using-merges registry stmt sc schema)
@@ -1617,8 +1704,6 @@
             last-of (into {} (map (juxt first identity)) entries)]
         (into (cond-> [:map] (seq untold) (conj {:pgmalli/untold untold})) (map last-of) (distinct (map first entries)))))))
 
-(declare row-schema*)
-
 (defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
     (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (assoc opts ::jdbc/member true))) members)]
@@ -1636,6 +1721,16 @@
   (if-let [k (some #(when (contains? stmt %) %) set-operation-keys)]
     (set-operation-row registry (get stmt k) (conj path k) chains opts)
     (select-row registry stmt (get chains path) opts)))
+
+(defn- derived-types
+  "[[column schema] ...] of the row stmt, a query of its own, returns, as the registry types a
+   column (nil for one it cannot tell); nil when its row cannot be told."
+  [registry stmt opts]
+  (let [opts (-> opts (dissoc :jdbc) (assoc ::jdbc/member true ::columns true))
+        chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt opts))]
+    (when-let [row (row-schema* registry stmt [] chains opts)]
+      (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
+             [(name k) (when-not (= :any s) s)])))))
 
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc builds it (for a write with no

@@ -289,7 +289,7 @@
     (is (= (row {:select [:users/*] :from [:users]}) (row {:select [:*] :from [:users]})))
     (is (= [:map {:pgmalli/untold [:id]}] (row '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]} (dissoc opts :jdbc)))
         "the driver keys a column through a subquery by its table at the bottom, which an opaque one hides")
-    (is (= [:map [:id [:maybe :any]]] (row '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]})))
+    (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]})))
     (is (= [:map [:users/group-id int4]] (row '{:select [:group_id] :from [:users]} (built opts 'next.jdbc.result-set/as-kebab-maps))))
     (is (= {'x bigint} (args '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]}))
         "an untyped use never hides a typed one")
@@ -1572,3 +1572,38 @@
         "an INSERT returns a row for each of its rows")
     (is (= :maybe (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :on-conflict [] :do-nothing true :returning [:id]} {:result :one})))
         "unless ON CONFLICT skips it")))
+
+(deftest a-subquerys-or-ctes-columns-are-typed-by-its-select
+  (let [recent {:with [[:recent {:select [:id :nick] :from [:users]}]]}]
+    (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
+           (row (merge recent {:select [:id :nick] :from [:recent]}))))
+    (is (= {:n [:string {:pg/type "character varying"}]} (args (merge recent {:select [:id] :from [:recent] :where [:= :nick :?n]}))))
+    (is (= [{:kind :unknown-column :column :mail}] (check (merge recent {:select [:mail] :from [:recent]})))
+        "a column its SELECT does not give is none")
+    (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}] [:b {:select [:id] :from [:a]}]] :select [:id] :from [:b]}))
+        "a CTE reads the ones before it")
+    (is (= [] (check {:with [[[:c {:columns [:x]}] {:select [:id :nick] :from [:users]}]] :select [:x :nick] :from [:c]}))
+        "a CTE's name may rename its columns, by position")
+    (is (= [:map [:x bigint]] (row {:with [[[:c {:columns [:x]}] {:select [[[:cast :id :bigint] :id]] :from [:users]}]] :select [:x] :from [:c]})))
+    (is (= [:map [:n bigint]] (row {:select [:s.n] :from [[{:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]} :s]]})))
+    (is (= [:map [:id [:maybe :any]]] (row {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}))
+        "a recursive CTE stays untyped")))
+
+(deftest an-unnest-tables-argument-is-an-array-of-where-its-column-goes
+  (let [o (sends opts {clojure.lang.IPersistentVector "bigint[]" clojure.lang.Sequential "varchar[]"})
+        ids [:or [:pg/array bigint] [:vector bigint]]]
+    (is (= {:ids ids} (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]} o))
+        "an unnest of one, named by its alias")
+    (is (= {:ids ids} (args {:update :users :set {:nick "x"} :from [[[:unnest :?ids] [:x {:columns [:i]}]]] :where [:= :users.id :x.i]} o))
+        "a column its alias lists")
+    (is (= {:ids [:pg/array bigint]} (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]}))
+        "pgjdbc's long[] alone by default")
+    (is (= {:ids :any} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o)) "a column that goes nowhere typed")))
+
+(deftest a-json-builder-is-json-as-its-type-is-read
+  (let [q {:select [[[:jsonb_build_object "a" :id] :o] [[:jsonb_agg :id] :a] [[:json_build_array :id] :b]] :from [:users]}]
+    (is (= [:map [:o [:any {:pg/type "jsonb"}]] [:a [:maybe [:any {:pg/type "jsonb"}]]] [:b [:any {:pg/type "json"}]]] (row q))
+        "the driver's object; an aggregate is NULL over no row")
+    (is (= [:map [:o [:map {:pg/type "jsonb"}]] [:a [:maybe [:sequential {:pg/type "jsonb"} :any]]] [:b [:sequential {:pg/type "json"} :any]]]
+           (row q (assoc opts :read {:json :parsed})))
+        "parsed, an object or an array")))
