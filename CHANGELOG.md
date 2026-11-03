@@ -144,7 +144,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     `:return-keys` moves into `:jdbc`. `read-options` is gone: pass the builder.
   * `h/explain` is `h/humanize`. An error's ex-data names the one probably meant as
     `:did-you-mean`, a vector, as `h/check`'s problems do, instead of `:suggest`.
-  * The old options are an error saying what each is now, when the schema is built (a
+  * The old options are an error saying what each is now (the builder matching
+    `:qualified?`, `:kebab?`, `:lower?` and `:nil-columns`), when the schema is built (a
     namespace whose `:malli/schema` passes one fails to load).
   * An instrumented function whose argument was `:any` under a cast or in a select or ORDER BY
     comparison, inside `coalesce` and the like or an `unnest` in FROM, or that reads a CTE's or

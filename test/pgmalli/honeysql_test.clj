@@ -631,11 +631,11 @@
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
   (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: .* is :send"]
                     [{:stringtype :unspecified} #":stringtype.* is no longer read: .*\{String :unknown\} for stringtype=unspecified"]
-                    [{:qualified? false} #":qualified\? false.* is no longer read: pass the options you pass to next.jdbc as :jdbc"]
-                    [{:kebab? true} #":kebab\? true.* is no longer read: .* as :jdbc"]
-                    [{:lower? true} #":lower\? true.* is no longer read: .* as :jdbc"]
-                    [{:nil-columns :absent} #":nil-columns :absent.* is no longer read: .* as :jdbc"]
-                    [{:return-keys true} #":return-keys true.* is no longer read: .* as :jdbc"]]]
+                    [{:qualified? false} #":qualified\? false.* is no longer read: pass the options you pass to next.jdbc as :jdbc, \{:jdbc \{:builder-fn next.jdbc.result-set/as-unqualified-maps\}\}"]
+                    [{:kebab? true :qualified? false} #"\{:jdbc \{:builder-fn next.jdbc.result-set/as-unqualified-kebab-maps\}\}"]
+                    [{:lower? true} #"\{:jdbc \{:builder-fn next.jdbc.result-set/as-lower-maps\}\}"]
+                    [{:nil-columns :absent} #"\{:jdbc \{:builder-fn next.jdbc.optional/as-maps\}\}"]
+                    [{:return-keys true} #"\{:jdbc \{:return-keys true\}\}; see https://github.com/chaploud/pgmalli/blob/main/CHANGELOG.md$"]]]
     (let [e (try (args {:select [:id] :from [:users]} o) nil (catch clojure.lang.ExceptionInfo e e))]
       (is (re-find says (str (ex-message e))) (pr-str o))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o)))))

@@ -168,6 +168,19 @@
   [{:keys [send]}]
   (into {} (remove (comp nil? val)) (merge (dissoc (into {} accept/class-types) Character) send)))
 
+(defn- old-options-jdbc
+  "The :jdbc that does what pgmalli 0.3's :qualified?, :kebab?, :lower?, :nil-columns and
+   :return-keys did: the builder keying rows so (next.jdbc.optional has no kebab one), and
+   :return-keys."
+  [{:keys [qualified? kebab? lower? nil-columns] :as old}]
+  (let [optional? (and (= :absent nil-columns) (not kebab?))]
+    (cond-> {}
+      (some #(contains? old %) [:qualified? :kebab? :lower? :nil-columns])
+      (assoc :builder-fn (symbol (if optional? "next.jdbc.optional" "next.jdbc.result-set")
+                                 (str "as-" (when (false? qualified?) "unqualified-")
+                                      (cond kebab? "kebab-" lower? "lower-") "maps")))
+      (contains? old :return-keys) (assoc :return-keys (:return-keys old)))))
+
 (def ^:private jdbc-read
   "The keys of :jdbc pgmalli reads."
   [:builder-fn :label-fn :qualifier-fn :return-keys])
@@ -189,12 +202,12 @@
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
     (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
       (fail! (str (pr-str old) " is no longer read: what an application sends is :send, a map of classes to the type"
-                  " each goes as ({String :unknown} for stringtype=unspecified); see CHANGELOG.md and"
-                  " docs/queries.md#what-your-application-sends")
+                  " each goes as ({String :unknown} for stringtype=unspecified); see https://github.com/chaploud/pgmalli/blob/main/docs/queries.md#what-your-application-sends"
+                  " and " error/changelog)
              old))
     (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns :return-keys]))]
-      (fail! (str (pr-str old) " is no longer read: pass the options you pass to next.jdbc as :jdbc"
-                  " ({:jdbc {:builder-fn rs/as-unqualified-kebab-maps :return-keys true}}); see CHANGELOG.md")
+      (fail! (str (pr-str old) " is no longer read: pass the options you pass to next.jdbc as :jdbc, "
+                  (pr-str {:jdbc (old-options-jdbc old)}) "; see " error/changelog)
              old))
     (when (contains? opts :send)
       (when-not (map? (:send opts))
