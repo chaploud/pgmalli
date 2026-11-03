@@ -2758,7 +2758,7 @@
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(key k) {:optional true} default])))]
-      (if (= "update" derived) [:and m [:map-of {:min 1} :any :any]] m))))
+      (if (= "update" derived) [:and m [:not [:= nil {}]]] m))))
 
 (defn- written-row
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL

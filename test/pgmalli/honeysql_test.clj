@@ -4,6 +4,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
+            [malli.error :as me]
+            [malli.generator :as mg]
             [malli.experimental.time :as time]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
@@ -975,6 +977,10 @@
     (is (not-any? #(ok? s %) [{:mood :sad} {:nick :abc}]) "HoneySQL writes a keyword in :set as a column, whatever :send sends")
     (is (not-any? #(ok? s %) [{:score nil} {:id 1} {:mood :glad}]))
     (is (not (ok? s {})) "HoneySQL writes an empty :set as SET alone, which PostgreSQL refuses")
+    (is (= ["should not be {}"] (me/humanize (m/explain s {} {:registry registry}))))
+    (is (not-any? #{:any} (flatten s)) "at least one column is said without :any, which reads as an untyped part")
+    (is (= s (m/form (m/schema s {:registry registry}))) "malli keeps the form as it is")
+    (is (every? #(and (seq %) (ok? s %)) (mg/sample s {:registry registry :seed 1})))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes its row schema :pg.sample/users" (h/values-schema registry :pg.sample.users/insert)))
     (is (= [:born :closed-at :group-id] (take 3 (map first (drop 2 (h/values-schema registry :pg.sample/users {:schema "sample" :jdbc kebab})))))
         "keyed as HoneySQL writes a column, kebab-cased as next.jdbc reads it back")
