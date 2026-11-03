@@ -47,6 +47,15 @@
     (is (= {"a" [1 2]} (:params decoded)) "JSON text in a jsonb column is parsed")
     (is (= "{\"b\": 1}" (:note decoded)) "text stays text")))
 
+(deftest a-shaped-json-column-takes-its-shape-from-what-send-sends-as-its-type
+  (let [shaped [:map {:pg/type "jsonb"} [:prompt :string]]
+        sends {:send {clojure.lang.IPersistentMap "jsonb" clojure.lang.IPersistentVector "jsonb"}}]
+    (is (= shaped (jdbc/write-type shaped sends)))
+    (is (= [:any {:pg/type "jsonb"}] (jdbc/write-type shaped {})) "nothing sent as jsonb: the driver's object")
+    (is (= [:or [:map-of :any :any] [:vector :any]] (jdbc/write-type [:any {:pg/type "jsonb"}] sends)) "an unshaped one takes what is sent")
+    (is (= shaped (jdbc/read-type shaped {:read {:json :parsed}})))
+    (is (= [:any {:pg/type "jsonb"}] (jdbc/read-type shaped {})) "read as the driver's object without an extension")))
+
 (deftest text-decodes-into-the-bounded-numbers
   (let [reg (pgmalli/registry {:database-version "x"
                                :registry {:pg.public/t [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]] [:b [:pg/smallint {:pg/type "smallint"}]]

@@ -20,7 +20,7 @@
    :pg/default :pg/identity :pg/generated :pg/constraints, and malli's :default for literal defaults.
 
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
-   overrides is {constraint-name schema-or-{:skip reason}}."
+   overrides is {constraint-name schema-or-{:skip reason}, :type schema, :schema.table/column schema}."
   (:require [clojure.string :as str]
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.eval :as ev]
@@ -232,10 +232,27 @@
   [overrides data-type]
   (get overrides (override-key data-type)))
 
+(defn column-override-key
+  "The :overrides key of one column: :schema.table/column."
+  [schema table column]
+  (keyword (str schema "." table) column))
+
+(def ^:private type-facts #{:enum :domain-ref :max-length :numeric})
+
+(defn- column-base-and-facts
+  "[base facts] of a column: an override of the column replaces its type, and the facts that
+   come from the type with it (a type pgmalli does not know too); else an override of its
+   type, or the type, under every fact."
+  [{:keys [schema table column type]} facts overrides]
+  (if-let [own (get overrides (column-override-key schema table column))]
+    [own (remove (comp (conj type-facts :unknown-type) :fact) facts)]
+    [(or (type-override overrides type) (base-type type)) facts]))
+
 (defn- column-schema
   "Schema of one column with provenance properties; nullable columns wrapped in [:maybe ...]."
-  [schema-name {:keys [type nullable? default identity generated]} facts overrides]
-  (let [{:keys [schema unrendered skipped applied]} (fold-facts schema-name (or (type-override overrides type) (base-type type)) facts overrides)
+  [schema-name {:keys [type nullable? default identity generated] :as c} facts overrides]
+  (let [[base facts] (column-base-and-facts c facts overrides)
+        {:keys [schema unrendered skipped applied]} (fold-facts schema-name base facts overrides)
         lit (some-> default literal)
         schema (with-props schema {:pg/type type
                                    :pg/default (if (some? lit) lit default)
@@ -249,14 +266,12 @@
     {:schema (if (and nullable? (not not-null-check?)) [:maybe schema] (rejecting-nil schema))
      :unrendered unrendered :skipped skipped}))
 
-(def ^:private type-facts #{:enum :domain-ref :max-length :numeric})
-
 (defn- column-base
-  "Base schema of a column: its type (or what an override makes of the type), shaped by the
-   facts that come from the type itself."
+  "Base schema of a column: its type (or what an override makes of it), shaped by the facts
+   that come from the type itself."
   [schema-name column by-column overrides]
-  (:schema (fold-facts schema-name (or (type-override overrides (:type column)) (base-type (:type column)))
-                       (filter (comp type-facts :fact) (by-column (:column column))) {})))
+  (let [[base facts] (column-base-and-facts column (filter (comp type-facts :fact) (by-column (:column column))) overrides)]
+    (:schema (fold-facts schema-name base facts {}))))
 
 ;;; table constraints
 

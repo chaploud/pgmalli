@@ -285,7 +285,8 @@ in a cast wherever PostgreSQL casts it. `:unknown` is a value whose text Postgre
 value of the type where it goes: a text or varchar column takes it as a string, an enum or a
 text column's CHECK list as its labels (a keyword as a label's name). A json, jsonb or interval
 column, where pgmalli knows only the driver's object, takes the classes sent as exactly its type
-(`{clojure.lang.IPersistentMap "jsonb"}`); `:any` without one.
+(`{clojure.lang.IPersistentMap "jsonb"}`); `:any` without one. A json or jsonb column a CHECK
+(`jsonb_typeof`) or an [override](../README.md#overrides) shapes takes that shape for them.
 
 An array argument takes a Clojure collection (a vector, a set, a list or other sequential) sent
 as an array type or `:unknown`, and a Java array, the column's element type in its elements'

@@ -75,12 +75,36 @@
                :diagnostics (:diagnostics r) :registry (:registry r)
                :unrendered (mapv left-out (:unrendered r)) :skipped (mapv left-out (:skipped r)))))
 
+(defn checked-overrides!
+  "overrides when each column key (:schema.table/column) names a column of facts; an error
+   naming the column meant, or the columns of the table, otherwise."
+  [overrides facts]
+  (let [columns (for [f facts :when (= :column (:fact f))] (render/column-override-key (:schema f) (:table f) (:column f)))
+        by-table (group-by namespace columns)]
+    (doseq [k (keys overrides) :when (and (keyword? k) (namespace k)) :when (not (some #{k} columns))]
+      (let [table (namespace k)
+            meant (error/suggest k columns)]
+        (error/fail! :pgmalli.error/invalid-config
+                     (str ":overrides: " k
+                          (if (by-table table) (str " names no column of " table) (str " names no table or view of the schemas generated: " (str/join ", " (distinct (keep :schema facts)))))
+                          (cond meant (error/did-you-mean meant)
+                                (by-table table) (str "; it has " (str/join ", " (sort (by-table table))))
+                                :else ""))
+                     (cond-> {:given k} meant (assoc :did-you-mean [meant])))))
+    overrides))
+
+(defn- read-schema
+  "[database-version facts] of one schema, read from the database."
+  [db schema]
+  (let [ir (ir/from-db (assoc db :schema schema))]
+    ;; the major version alone: a minor upgrade changes no schema
+    [(str/replace (:database_version ir) #"^(PostgreSQL \d+)\.\d+$" "$1") (pattern/facts ir)]))
+
 (defn from-database
   "Generated data for one schema, read from the database."
   [{:keys [db overrides]} schema]
-  (let [ir (ir/from-db (assoc db :schema schema))]
-    ;; the major version alone: a minor upgrade changes no schema
-    (assemble schema (str/replace (:database_version ir) #"^(PostgreSQL \d+)\.\d+$" "$1") (pattern/facts ir) overrides)))
+  (let [[version facts] (read-schema db schema)]
+    (assemble schema version facts overrides)))
 
 (defn path-for
   "Where a schema's file goes: <out-dir>/<schema>.edn; the config as given or with its
@@ -91,8 +115,10 @@
 (defn generated-all
   "{schema {:path :data}} for every schema in the config."
   [c]
-  (let [c (config c)]
-    (into {} (for [s (:schemas c)] [s {:path (path-for c s) :data (from-database c s)}]))))
+  (let [c (config c)
+        read (into {} (for [s (:schemas c)] [s (read-schema (:db c) s)]))]
+    (checked-overrides! (:overrides c) (mapcat second (vals read)))
+    (into {} (for [[s [version facts]] read] [s {:path (path-for c s) :data (assemble s version facts (:overrides c))}]))))
 
 (defn edn-string
   "The file's text: a deterministic pprint of the data behind the do-not-edit header. Data that

@@ -40,7 +40,7 @@ converts dates and timestamps alone:
 | `:time :local` | `next.jdbc.date-time/read-as-local` |
 | `:read {pg-type schema}` | what your own `ReadableColumn` extension returns for a column type |
 | `:read {:array :vector}` | an extension returning arrays as vectors (`:sequential` for any sequence) |
-| `:read {:json :parsed}` | an extension returning json parsed |
+| `:read {:json :parsed}` | an extension returning json parsed: a json column's schema, as a CHECK or an [override](../README.md#overrides) shapes it |
 
 An option pgmalli does not know is an error that suggests the intended name:
 

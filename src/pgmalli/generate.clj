@@ -5,7 +5,7 @@
    Config:
      {:schemas [\"public\"]           ; default [\"public\"]
       :out-dir \"resources/pgmalli\"  ; default; files are <out-dir>/<schema>.edn
-      :overrides {constraint-name-or-type-keyword schema-or-{:skip reason}}
+      :overrides {constraint-name schema-or-{:skip reason}, :type schema, :schema.table/column schema}
       :db {:host :port :dbname :user :password :sslmode :psql}}  ; optional; psql's environment otherwise
    or, with a PostgreSQL JDBC driver on the classpath and no psql needed,
       :db {:jdbc-url \"jdbc:postgresql://host/db\" :user :password} or {:datasource ds}"

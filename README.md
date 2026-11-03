@@ -508,14 +508,26 @@ file and lists them all:
 `:overrides` in `pgmalli.edn` replaces what pgmalli generates. A constraint name replaces
 that CHECK, or `{:skip reason}` leaves it out; use it for the CHECKs listed in `:unrendered`.
 A type keyword replaces the schema of every column of that type, such as `:inet`, which is
-otherwise `:any`:
+otherwise `:any`. A keyword `:schema.table/column` replaces the schema of that one column's
+value, its type's schema with it (an enum's, a `varchar(n)`'s length); it comes before an
+override of the type:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
 {:overrides {"chk_legacy_flag" {:skip "dropped with the column in 2027"}
              "chk_scores" [:ref :app/scores-consistent]
-             :inet [:re "^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$"]}}
+             :inet [:re "^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$"]
+             :public.ai_jobs/input [:map [:prompt :string] [:max_tokens {:optional true} :int]]}}
 ```
+
+pgmalli still adds what the database says of the column: `[:maybe ...]` unless it is NOT
+NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are read
+(`as-read`, `h/row-schema`) and written (`h/arg-types`, `h/values-schema`, `h/set-schema`),
+datasets included. A json or jsonb column's driver object is a PGobject, so its shape is the
+parsed value's: it is read under `{:read {:json :parsed}}`, and an argument takes it for the
+classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`). Without
+those, a read or an argument is the driver's object. A key that names no column of the
+schemas generated is an error that names the column meant.
 
 A `[:ref ...]` to your own schema needs a registry holding it:
 
