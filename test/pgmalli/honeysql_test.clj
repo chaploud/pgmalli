@@ -2156,6 +2156,10 @@
       (is (m/validate v (java.time.OffsetDateTime/now) malli-opts) "timestamptz($1) is a cast, which takes a timestamptz")
       (is (m/validate d (java.time.LocalDate/now) malli-opts)))))
 
+(deftest an-argument-compared-with-a-literal-of-no-type-takes-its-own-type
+  (is (= {:w :any} (args {:select [[1 :x]] :where [:= :?w [:inline "1"]]}))
+      "'1' is unknown, which PostgreSQL reads as the argument's type"))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or ['inst? {:pg/type "timestamptz"}] :time/offset-date-time]
           :d [:any {:pg/type "interval"}]

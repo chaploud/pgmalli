@@ -1335,7 +1335,8 @@
   (cond (column-keyword? side) (:schema (resolve-column registry sc side))
         ;; x op ANY(array) compares x with the array's elements (docs 9.24.3)
         (array-of-elements? side) (some-> (expression-type registry sc (second side) opts) :type types/element type-schema)
-        (vector? side) (:schema (expression-type registry sc side opts))))
+        ;; a literal of no type takes the other side's
+        (vector? side) (let [m (expression-type registry sc side opts)] (when-not (= :unknown (:type m)) (:schema m)))))
 
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
