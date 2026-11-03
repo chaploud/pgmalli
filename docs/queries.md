@@ -76,10 +76,11 @@ The columns of a CTE or a subquery are typed as its SELECT types them, read as a
 own (a CTE under the ones before it, a subquery under the CTEs of the query it reads, a LATERAL
 subquery with the tables before it, a recursive CTE as its first member, NULL allowed and a
 CHECK's list read as its base type); a column it does not give is `:unknown-column`. A table or
-view of `pg_catalog` (`pg_class`) the registry lacks has the columns of the catalog snapshot in
-the PostgreSQL versions the registry's files were generated on (each file's `:database-version`;
-every version pgmalli supports where a file names none of them): `SELECT *` gives a column one
-of them lacks as an optional key. A function of `pg_catalog` or of a generated schema in FROM
+view of `pg_catalog` (`pg_class`) the registry lacks has the columns of the catalog snapshot as
+of the PostgreSQL versions the registry's files were generated on (each file's
+`:database-version`; every version the snapshot holds where a file's is not one of them): a
+column whose type the versions disagree on is `:any`, and one a version lacks is an optional key
+of `SELECT *`. A function of `pg_catalog` or of a generated schema in FROM
 has the columns it returns ([The row a query returns](#the-row-a-query-returns)). The columns of
 another table function (named by its alias, `WITH ORDINALITY` too), of a table written as a symbol
 (`'events_2026`, a table chosen at run time) and of an `information_schema` view the registry
@@ -127,10 +128,8 @@ A target `:a.b` (`{:set {:p.x 1}}`, `INSERT INTO t (p.x)`) is the field `b` of t
 column `a`, as PostgreSQL reads it: `a` must be a column of the table, and what goes into the
 field is not checked.
 
-`h/check` does not see what an argument holds; `h/arg-types` types one assigned to a NOT NULL
-column without nil, unless such a trigger may fill it (for the write of the value: an inserted
-one under `ON CONFLICT DO UPDATE` too is checked before the conflict) or the SELECT of
-`INSERT ... SELECT` may drop the row.
+`h/check` does not see what an argument holds; [`h/arg-types`](#the-types-of-the-arguments)
+types it.
 
 ## The types of the arguments
 
@@ -151,7 +150,7 @@ keyed as in `sql/format`'s `:params`:
 | compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`), or an element of an array cast (`[:array [:?k] :text]`, `ARRAY[?]::text[]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, to an array type (or a domain over one) any array, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); no map or collection sent as `json` or `jsonb` to a type other than those and the string types (PostgreSQL casts a `jsonb` number or boolean, and errors at run time on an object or array); no collection sent untyped (`:unknown`) to a number or boolean type, whose input refuses an array literal (`{1}`; a date, time or `uuid` type reads `{2020-01-01}` past its braces); `:any` for a type whose values pgmalli does not type (json, inet) or an extension's type, whose casts `pg_catalog` does not hold; nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned where nil may not go (as assigned below) |
-| assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it, or the SELECT of `INSERT ... SELECT` may drop the row (`WHERE`, `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, a `FROM` item other than `unnest` of arguments; then without the CHECKs, lengths and ranges, which PostgreSQL checks only on a row it writes): a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
+| assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it (under `ON CONFLICT DO UPDATE`, an inserted value only for a BEFORE INSERT trigger, as PostgreSQL checks NOT NULL before the conflict), or the SELECT of `INSERT ... SELECT` may drop the row (`WHERE`, `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, a `FROM` item other than `unnest` of arguments; then without the CHECKs, lengths and ranges, which PostgreSQL checks only on a row it writes): a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | an array, typed as `:send` sends one, of where its column goes, as an argument there: compared, assigned, or cast (an array of what PostgreSQL casts to the type), in a subquery too |
 | an argument of `coalesce`, `greatest`, `least` or `nullif`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
 | an argument of a function or an operator of `pg_catalog` or of a generated schema (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the type each function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil: a value of each type picks its own (`generate_series(1, ?)` takes an integer, a bigint or a numeric); `:any` where one of them takes any type (a polymorphic one) |
@@ -173,11 +172,10 @@ uses it):
 ```
 
 A column's type takes its own values, and what [`:send`](#what-your-application-sends) sends
-that PostgreSQL takes as the column's own: a narrower number, another string type, an untyped
-value to a text or enum column. PostgreSQL takes more ([stricter than
+that PostgreSQL takes as the column's own. PostgreSQL takes more ([stricter than
 PostgreSQL](#stricter-than-postgresql)). Assigned or cast, a number is held to a number column's
-range (a fraction going to an integer type to the range half a unit wider, as PostgreSQL rounds
-it; a value at exactly half a unit past may round out of range):
+range; cast to an integer type, a fraction is held to the range half a unit wider, as PostgreSQL
+rounds it (a value at exactly half a unit past may round out of range):
 
 ```clojure
 (h/arg-types registry {:select [:id] :from [:users] :where [:> :created_at [:cast :?since :timestamptz]]})
@@ -378,8 +376,9 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   tables above): a call one of them resolves otherwise is untyped, and a function of PostgreSQL
   18 alone (`uuidv7`) is typed for a registry generated on 18. Of an argument whose type is not
   told, a call is typed where every overload of its number of arguments returns one type that is
-  not polymorphic (`count`, `jsonb_build_object`). A function of `json` or `jsonb` that
-  builds an object or an array is one under `{:read {:json :parsed}}`.
+  not polymorphic (`count`, `jsonb_build_object`). Under `{:read {:json :parsed}}`, a function of
+  `pg_catalog` that builds a `json` or `jsonb` object is a map, one that builds an array
+  (`jsonb_agg`) a sequential.
 - A call of a function or an operator of a generated schema, from its file's `:functions` and
   `:operators` ([types.md](types.md#the-generated-file)). pgmalli takes the search path to be
   `pg_catalog`, then `:schema`, as PostgreSQL puts `pg_catalog` first when the path does not
@@ -600,8 +599,8 @@ Write the query so PostgreSQL's reading is explicit instead.
   and the operator `=` resolved for the two types, in any version pgmalli covers), so a
   `BigDecimal` sent to a `double precision` column passes `h/check` but not the argument's type
   `h/arg-types` gives.
-- A comparison with NULL is never true, so an argument compared with a column does not take nil;
-  pass `{:compare :lenient}` where it may be nil on purpose.
+- An argument compared with a column does not take nil
+  ([`{:compare :lenient}`](#the-types-of-the-arguments) lets it).
 - An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list
   (`CHECK (state IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`,
   `NOT IN` and `<` match rows and are not reported; nor is `NOT (state = ...)`.

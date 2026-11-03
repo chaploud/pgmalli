@@ -1575,8 +1575,8 @@
    A problem in a nested statement (a subquery, a CTE) carries :in, where the statement sits:
    (get-in q (:in p)) for data, the position in the form for code. humanize says each problem
    as a sentence. Names resolve as PostgreSQL resolves them. A clause pgmalli does not read is an
-   :unread-clause problem. Code in the query (a list) is not read. Options: docs/queries.md#options.
-   Throws when body is no HoneySQL data."
+   :unread-clause problem. Code in the query (a list with a symbol in it) is not read. Options:
+   docs/queries.md#options. Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
    (jdbc/options! opts)
@@ -2548,9 +2548,9 @@
    RETURNING, its update count); nil when that cannot be told, as
    docs/queries.md#the-row-a-query-returns lists.
 
-   Columns an outer join may leave NULL are nullable; an expression is typed for the forms
-   docs/queries.md#the-row-a-query-returns lists, nullable :any otherwise; a set operation's row
-   is its first member's names. Under qualified keys, a column next.jdbc may key by a table the
+   Columns an outer join may leave NULL are nullable; an expression has the type PostgreSQL
+   resolves it to, nullable :any where pgmalli cannot tell; a set operation's row is keyed by its
+   first member's names. Under qualified keys, a column next.jdbc may key by a table the
    query data does not show is left out of the map, which is open, and named under the
    :pgmalli/unknown-keys property: :raw SQL, a column cast to its own type, and a column of a
    table function neither of pg_catalog nor of a generated schema, or of a table the registry lacks. A subquery's or a CTE's column is keyed by
@@ -2815,7 +2815,8 @@
    argument: each column as an argument assigned to it, keyed by one of the keys HoneySQL writes
    to the column (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
-   (generated, identity ALWAYS) taking :default alone. Options: docs/queries.md#options.
+   (generated, identity ALWAYS) taking :default alone. Where a BEFORE row trigger runs for the
+   write, every column is optional and takes nil. Options: docs/queries.md#options.
 
    (values-schema registry :users)"
   ([registry name] (values-schema registry name {}))

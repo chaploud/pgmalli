@@ -30,8 +30,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/explain` is renamed `h/humanize`.
 * An error's ex-data lists the names probably meant under `:did-you-mean`, a vector, as
   `h/check`'s problems do, instead of `:suggest`.
-* `h/query-schema`'s return may carry properties (`[:sequential {:max 1} row]`). Code that reads
-  the row by position (`(second ret)`) reads it with `last` or `m/children`.
+* `h/query-schema`'s return states the row count where the data tells it
+  (`[:sequential {:max 1} row]`): an instrumented function's return is checked against it, and
+  code that reads the row by position (`(second ret)`) reads it with `last` or `m/children`.
 * In `pgmalli.edn`, the database name under `:db` is `:dbname`, as in next.jdbc and libpq:
   `:db {:db "app"}` is `:db {:dbname "app"}`. The old key is an error naming the new one.
 * `h/row-schema`'s `:pgmalli/untold` property is renamed `:pgmalli/unknown-keys`.
@@ -39,14 +40,16 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   failure is a real mismatch with the schema.
   * An argument that was `:any` now has a type, and an instrumented function checks it: one
     under a cast, compared in a select or ORDER BY expression, inside `coalesce`, `CASE` and the
-    like, an argument of a function or an operator of `pg_catalog` that takes one type there,
-    in an `unnest` in FROM, or compared with a CTE's or subquery's column. What PostgreSQL
-    takes where a column's value goes is read from its catalog (`pg_cast`, and `=` resolved for
-    the two types) for every type of `pg_catalog` and an array of each, not 23 types and 4
-    arrays: an argument where a `bit`, `bit varying`, `oid` or `"char"` value goes, or an array
-    of any of them, is typed too.
-  * An instrumented function whose return schema now states a row count (`{:max 1}`) is
-    checked against it.
+    like, an argument of a function or an operator, in an `unnest` in FROM, or compared with a
+    CTE's or subquery's column. What PostgreSQL takes where a column's value goes is read from
+    its catalog (`pg_cast`, and `=` resolved for the two types) for every type of `pg_catalog`
+    and its arrays: an argument where a `bit`, `bit varying`, `oid` or `"char"` value goes, or
+    an array of one, is typed too.
+  * An argument of several uses takes what each of them takes, whatever their order, and nil
+    where any of them does; on 0.3.3 its first use typed it.
+  * An instrumented function's return is checked against more: `h/row-schema` types what was
+    nullable `:any`, such as a call of a function or an operator or a CTE's or a subquery's
+    column.
   * `h/check` now reports a select or ORDER BY expression comparing an unknown column, or an
     enum with a literal outside its labels; a string sent as a type the column does not take,
     whatever type `:send` sends it as, not only `varchar`; a string assigned to a reg* column
@@ -55,15 +58,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `generate` checks every `:overrides` key: a constraint name or a type no column of the
   schemas has, `{:skip reason}` under a type or column key and a value that is no malli schema
   are errors naming the key meant. Drop the keys of what was dropped from the database.
-* Generate again if a schema has a domain over `timestamp(n) with time zone` or `time(n)`, or
-  a column of a type pgmalli does not know overridden by its type: their files change.
-* Generate again if a schema has a table other tables inherit, a DEFERRABLE primary key or
-  unique constraint, an invalid unique index, or a domain whose CHECK lists its values: their
-  files change, and `pgmalli.main check` reports them stale.
-* Generate again: every file has the schema's functions and operators (`:functions`,
-  `:operators`), and `pgmalli.main check` reports a file without them stale, in one line. Until
-  then, a call is typed by `pg_catalog`'s functions alone. A function or operator that differs
-  is reported by its name (`{:key :functions :name "f" :file ... :db ...}`).
+* Generate again: every file holds the schema's functions and operators (`:functions`,
+  `:operators`), and `pgmalli.main check` reports a file without them stale, in one line; until
+  then, a call is typed by `pg_catalog`'s functions alone. A file also changes where its schema
+  has a domain over `timestamp(n) with time zone` or `time(n)`, a column of a type pgmalli does
+  not know overridden by its type, a table other tables inherit, a DEFERRABLE primary key or
+  unique constraint, an invalid unique index, or a domain whose CHECK lists its values. A
+  function or operator that differs is reported by its name
+  (`{:key :functions :name "f" :file ... :db ...}`).
 
 ### Added
 
@@ -103,17 +105,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   compared in a select or ORDER BY expression; one of an `unnest` in FROM, as an array of the
   type of where its column goes; one compared with `ANY(array)` as the array's element; an
   element of `[:array [...] :text]`, as cast; one of a function or an operator PostgreSQL may
-  resolve several ways, the values of each (`generate_series(1, ?)`, `timezone(zone, ?)`). An
-  argument of several uses takes what each of them takes, whatever their order, and nil where
-  any of them does, and in `:limit` or `:offset` (no limit); under `{:compare :lenient}` the
-  elements of one in `:in` or `= ANY` take nil too.
+  resolve several ways, the values of each (`generate_series(1, ?)`, `timezone(zone, ?)`).
+  Under `{:compare :lenient}` the elements of one in `:in` or `= ANY` take nil too.
 * `h/row-schema` types an expression as PostgreSQL resolves it
   ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): `CASE`, `coalesce`, `greatest`,
   `least`, `ARRAY[...]`, `VALUES` and a set operation's columns of their values' common type, and
   every function and operator of `pg_catalog` (aggregates, with `FILTER` too, window functions
   under `:over`, polymorphic ones) of the type it resolves to, from a snapshot of `pg_catalog`
-  of PostgreSQL 16, 17 and 18 (`resources/pgmalli/impl/catalog.edn`, which `bb catalog` rewrites);
-  a literal `[:inline ...]` writes; `INTERVAL '1 day'`; a cast to a type with its length
+  of PostgreSQL 16, 17 and 18; a literal `[:inline ...]` writes; `INTERVAL '1 day'`; a cast to a type with its length
   (`[:varchar 10]`) or to an array type; `current_user` and the like as `name`. A function of
   `pg_catalog` in FROM has its columns, of no table, so a qualified builder keys them
   unqualified. The columns of a CTE or a subquery are typed as
@@ -135,14 +134,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): the generated file holds them,
   and a call resolves among `pg_catalog`'s and `:schema`'s as PostgreSQL's search path does,
   `pg_catalog` first: an overload of a `pg_catalog` function's argument types gives way to it,
-  one of others competes (`round(integer)` of the schema is called for an integer column, which
-  pgmalli typed `double precision` before). A call qualified with a schema resolves among that
-  schema's. In FROM, such a function has its columns (`RETURNS TABLE`, OUT arguments,
-  `RETURNS SETOF users`), of no table; one that returns no set keeps the row count.
-* `h/query-schema`'s return states how many rows the query data shows it returns
-  (`[:sequential {:max 1} row]`), and where that is exactly one, `{:result :one}` drops the
-  `[:maybe]` ([docs/queries.md](docs/queries.md#function-schemas)). A function of `pg_catalog`
-  that returns no set keeps the count (`SELECT lower(email) ... WHERE id = ?` is `{:max 1}`).
+  one of others competes (`round(integer)` of the schema is called for an integer column). A
+  call qualified with a schema resolves among that schema's. In FROM, such a function has its
+  columns (`RETURNS TABLE`, OUT arguments, `RETURNS SETOF users`), of no table.
+* Where `h/query-schema`'s row count (see Breaking changes) is exactly one, `{:result :one}`
+  drops the `[:maybe]` ([docs/queries.md](docs/queries.md#function-schemas)). A function that
+  returns no set, of `pg_catalog` or of a generated schema, keeps the count
+  (`SELECT lower(email) ... WHERE id = ?` is `{:max 1}`).
 * A table's map carries `:pg/inherited true` for a table other tables inherit (not as
   partitions), `:pg/primary-key-deferrable true`, and `:deferrable true` on a DEFERRABLE
   `:pg/unique` entry ([docs/types.md](docs/types.md#properties)).
@@ -160,8 +158,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `:overrides` takes one column, `:schema.table/column`: its schema replaces that column's
   value, read and written, NULL-ability and CHECKs still the database's
   ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
-  read under `{:read {:json :parsed}}`, written for what `:send` sends as its type. A key that
-  names no column is an error.
+  read under `{:read {:json :parsed}}`, written for what `:send` sends as its type.
 * An `:overrides` type key may be the type's alias or a HoneySQL cast's spelling
   (`:timestamptz`, `:timestamp-with-time-zone`); `pgmalli.main` suggests one for an unrendered
   type, or the column's key for an array type.
@@ -187,8 +184,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A number is checked against a number column's CHECKs whatever its class. A value sent as a
   text type (a keyword sent as `varchar`) is not checked against the column's CHECKs on text:
   PostgreSQL checks the text your extension makes of it.
-* Assigned or cast to an integer type, a fraction is held to the range half a unit wider, as
-  PostgreSQL rounds it. An argument cast to a number domain with a CHECK list takes another
+* An argument in `:limit` or `:offset` takes nil (no limit).
+* Cast to an integer type, a fraction is held to the range half a unit wider, as PostgreSQL
+  rounds it. An argument cast to a number domain with a CHECK list takes another
   number class or a boolean, which PostgreSQL converts (1.5 to 2) before the CHECK.
 * Where a BEFORE row trigger runs for the write, an argument assigned to a NOT NULL column takes
   nil, as `h/check` already allowed: the trigger may fill it. The write is the value's own: a

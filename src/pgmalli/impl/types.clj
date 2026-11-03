@@ -175,15 +175,23 @@
   (set (keys (by-keyword pred))))
 
 (def catalog
-  "resources/pgmalli/impl/catalog.edn: {:versions [v ...] :types {name {:category c :preferred true}}
-   :casts #{[source target context]} (castcontext: \"i\" implicit, \"a\" assignment, \"e\" explicit) :ranges {range {:subtype t :multirange m}} :functions {name
-   [overload ...]} :operators {name [overload ...]}}, an overload {:args [type ...] :result type}
-   with :set, :kind (:a an aggregate, :w a window function), :variadic, :defaults (how many of
-   the last arguments may be left out), :non-null (an aggregate that is never NULL), :columns
-   ([[name type] ...] of its OUT arguments), :btree (an operator of a btree operator family, or its negator: a comparison, never NULL of
-   values) and
-   :in (the versions that have it, where not every one does); :relations {name [column ...]} of
-   pg_catalog's tables and views, a column {:name :type :not-null} with :in too."
+  "pg_catalog of the PostgreSQL versions pgmalli supports, from
+   resources/pgmalli/impl/catalog.edn (bb catalog writes it):
+
+   :versions   [v ...]
+   :types      {name {:category c :preferred true}}
+   :casts      #{[source target context]}, context pg_cast's castcontext: \"i\" implicit,
+               \"a\" assignment, \"e\" explicit
+   :ranges     {range {:subtype t :multirange m}}
+   :functions  {name [overload ...]}
+   :operators  {name [overload ...]}
+   :relations  {name [{:name :type :not-null} ...]}, pg_catalog's tables and views
+
+   An overload is {:args [type ...] :result type} with :set, :kind (:a an aggregate, :w a window
+   function), :variadic, :defaults (how many of the last arguments may be left out), :non-null
+   (never NULL: count, row_number ...), :columns ([[name type] ...] it returns in FROM) and :btree (an
+   operator of a btree operator family, or its negator). A type, range, cast ({:in ...} its
+   fourth element), overload or column not every version has carries :in, the versions that do."
   (delay (edn/read-string (slurp (io/resource "pgmalli/impl/catalog.edn")))))
 
 (defn element
