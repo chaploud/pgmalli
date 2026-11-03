@@ -50,7 +50,7 @@
       (is (some #{:pg.sample/users} (:known (ex-data e))) (str what)))))
 
 (deftest a-misspelt-name-suggests-the-one-meant
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean :pg.sample.users/insert\?" (pgmalli/columns registry :pg.sample/users_insert)))]
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :pg.sample.users/insert" (pgmalli/columns registry :pg.sample/users_insert)))]
     (is (= [:pg.sample.users/insert] (:did-you-mean (ex-data e))))))
 
 (deftest read-names-the-types-an-extension-reads-otherwise
@@ -80,7 +80,7 @@
   (is (= ["any" "int" "string?"] (map #(pgmalli/describe registry %) [:any [:int {:min 0}] [:maybe :string]])) "malli's own types by their names")
   (is (= ["numeric" "numeric"] [(pgmalli/describe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]) (pgmalli/describe 'decimal?)]))
   (is (= "numeric(14,2)?" (pgmalli/describe [:maybe [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 14 :scale 2}]]])))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean :pg.sample/users" (pgmalli/describe registry :pg.sample/usres)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :pg.sample/users" (pgmalli/describe registry :pg.sample/usres)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"through a registry" (pgmalli/describe :pg.sample/users)))
   (is (= ["text[]" "posint[]"] (map #(pgmalli/describe %) [[:vector {:pg/type "text[]"} :string] [:vector {:pg/type "posint[]"} :int]]))
       "an array by its PostgreSQL type")

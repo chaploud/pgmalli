@@ -44,3 +44,7 @@
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:dbb {:password "s3cret"}})))]
     (is (not (re-find #"s3cret" (pr-str (ex-data e)))))
     (is (not (re-find #"s3cret" (str e))))))
+
+(deftest a-name-ending-in-a-question-mark-is-suggested-as-it-is
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :db\?$"
+                        (generate/check {:schemas ["sample"] :out-dir "test/resources/pgmalli"} {:db false}))))

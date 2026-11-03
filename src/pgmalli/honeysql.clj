@@ -2333,12 +2333,12 @@
                      (str "unknown table " table
                           (cond elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
                                                ", or name it :" elsewhere)
-                                did-you-mean (str "; did you mean " (str/join " or " did-you-mean) "?")
+                                did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
                                 :else "; check its name, or :schema when it is in another schema"))))
    :unknown-column (fn [{:keys [column did-you-mean qualifier]}]
                      (str "unknown column " (column-name column)
                           (when qualifier (str "; no table or alias " qualifier " in the statement"))
-                          (cond did-you-mean (str "; did you mean " (str/join " or " (map column-name did-you-mean)) "?")
+                          (cond did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean)))
                                 (not qualifier) "; no table of the statement has it")))
    :ambiguous-column (fn [{:keys [column candidates]}]
                        (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias"))

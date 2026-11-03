@@ -65,6 +65,7 @@
   (first (suggestions given known 1)))
 
 (defn did-you-mean
-  "\"; did you mean x?\" for the name x printed as it should appear, \"\" for none."
+  "\"; did you mean: x\" for the name x printed as it should appear, \"\" for none. No ? follows:
+   a name may end in one (:db?)."
   [x]
-  (if x (str "; did you mean " x "?") ""))
+  (if x (str "; did you mean: " x) ""))

@@ -47,7 +47,7 @@ An option pgmalli does not know is an error that suggests the intended name:
 ```clojure
 (try (pgmalli/as-read registry :pg.public/users {:tmie :instant})
      (catch clojure.lang.ExceptionInfo e (ex-message e)))
-;; => "pgmalli options: {:tmie [\"disallowed key\"]}; did you mean :time?"
+;; => "pgmalli options: {:tmie [\"disallowed key\"]}; did you mean: :time"
 ```
 
 ## Keys from a next.jdbc builder

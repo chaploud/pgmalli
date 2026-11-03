@@ -620,7 +620,7 @@
     (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number")))
 
 (deftest a-misspelt-type-in-send-is-an-error
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean \"timestamp\"" (args {:select [:id] :from [:users]} {:send {java.time.Instant "timestampz"}})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: \"timestamp\"" (args {:select [:id] :from [:users]} {:send {java.time.Instant "timestampz"}})))
   (is (= (args {:select [:id] :from [:users] :where [:= :id :?x]} {:send {Symbol "bigint"}})
          (args {:select [:id] :from [:users] :where [:= :id :?x]} {:send {Symbol "int8"}}))
       "an alias is a name")
@@ -670,7 +670,7 @@
                     [{:send {"java.lang.String" :unknown}} #":send's key \"java.lang.String\" is no class"]
                     [{:send {String :untyped}} #"java.lang.String goes as :untyped, which is no type"]
                     [{:send {Keyword "user_status"}} #"clojure.lang.Keyword goes as \"user_status\", which is no type .* or :unknown for a value sent untyped \(an enum's or a domain's value too\)"]
-                    [{:send {Long "bigit"}} #"did you mean \"bigint\""]]]
+                    [{:send {Long "bigit"}} #"did you mean: \"bigint\""]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (args {:select [:id] :from [:users]} o)) (pr-str o))))
 
 (deftest send-nil-removes-a-class-pgjdbc-sends
@@ -1341,13 +1341,13 @@
   (is (= [{:kind :unknown-column :column :users.id :qualifier "users" :did-you-mean [:u.id]}]
          (check {:select [:users.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}))
       "an aliased table named by its name, as PostgreSQL hints")
-  (is (= ["unknown column usr.id; no table or alias usr in the statement; did you mean u.id?"]
+  (is (= ["unknown column usr.id; no table or alias usr in the statement; did you mean: u.id"]
          (h/humanize (check {:select [:usr.id] :from [[:users :u]]}))))
   (is (= [{:kind :unknown-column :column :x.id :qualifier "x"}] (check {:select [:x.id] :from [:users]}))
       "no alias close: nothing suggested"))
 
 (deftest each-problem-reads-as-what-to-do
-  (is (= ["unknown column nik; did you mean nick?"
+  (is (= ["unknown column nik; did you mean: nick"
           "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, typed as :send sends it: varchar under pgjdbc's default); write [:cast \"sad\" :mood], or pass {:send {String :unknown}} when the connection sets stringtype=unspecified"]
          (h/humanize (check {:select [:nik] :from [:users] :where [:= :mood "sad"]} (dissoc opts :send)))))
   (is (every? string? (h/humanize [{:kind :something-new}])) "a kind with no sentence still prints"))
@@ -1792,7 +1792,7 @@
 
 (deftest an-unknown-table-names-the-one-meant
   (is (= [{:kind :unknown-table :table "sample.usres" :did-you-mean ["sample.users"]}] (check {:select [:id] :from [:usres]})))
-  (is (= ["unknown table sample.usres; did you mean sample.users?"] (h/humanize (check {:select [:id] :from [:usres]})))))
+  (is (= ["unknown table sample.usres; did you mean: sample.users"] (h/humanize (check {:select [:id] :from [:usres]})))))
 
 (deftest a-misspelt-option-names-the-one-meant-in-its-data
   (let [d (ex-data (try (h/check registry {:select [:id] :from [:users]} {:tmie :instant}) (catch clojure.lang.ExceptionInfo e e)))]

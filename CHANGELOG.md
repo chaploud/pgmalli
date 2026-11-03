@@ -106,6 +106,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   read as a vector, as HoneySQL reads it, where it was taken for code and left unchecked; a list
   with a symbol in it is still code.
 * `h/row-schema`'s `:pgmalli/untold` property is `:pgmalli/unknown-keys`.
+* An error or a problem names the one probably meant as `; did you mean: x`, where it said
+  `; did you mean x?`, which doubled the `?` of a name ending in one (`:db?`).
 * A schema name the registry lacks given unqualified (`:users`) or of another schema
   (`:pg.public/users`) is an error naming the registry's schema of that name
   (`:pg.sample/users`).

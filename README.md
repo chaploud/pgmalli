@@ -356,7 +356,7 @@ The problems it reports:
 
 ```clojure
 (h/humanize (h/check registry {:select [:nik] :from [:users]}))
-;; => ["unknown column nik; did you mean nick?"]
+;; => ["unknown column nik; did you mean: nick"]
 ```
 
 Check every query of a project in one test:

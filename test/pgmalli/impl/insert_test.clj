@@ -84,14 +84,14 @@
   (is (= ["INSERT INTO public.e (id) VALUES (DEFAULT), (DEFAULT)"] (honey.sql/format (first (data/inserts typed {"public.e" [{} {}]}))))))
 
 (deftest a-misspelt-column-or-table-in-a-dataset-names-the-one-meant
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[:nmae\]; did you mean :name\?"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[:nmae\]; did you mean: :name"
                         (data/inserts registry {"sample.groups" [{:id 1 :nmae "x"}]})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean sample.groups\?"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: sample.groups"
                         (data/inserts registry {"sample.group" [{:id 1}]})))
   (let [weird (pgmalli/registry {:registry {"pg.public/Weird T" [:map {:pg/table "public.Weird T"} [:Id :int] ["a b" :string]]}})]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\[:zz\]; it has \[:Id \"a b\"\]"
                           (data/inserts weird {"public.Weird T" [{:Id 1 "a b" "x" :zz 1}]})))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean \"a b\"\?"
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: \"a b\""
                           (data/inserts weird {"public.Weird T" [{:Id 1 "a c" "x"}]})))))
 
 (deftest a-column-with-a-dollar-sign-is-quoted-in-the-column-list
