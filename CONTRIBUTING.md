@@ -65,7 +65,7 @@ it, `check` lets it pass). A comparison with a literal outside a list counts as 
 design only for a column with that enum or CHECK list. Where PostgreSQL runs a query, the
 return of `query-schema`, by default and under `{:result :one}`, must take what `execute!`
 and `execute-one!` returned, and the keys of `row-schema`'s map (with those it names under
-`:pgmalli/untold`) must be the keys the builder gives the result set's columns: with the
+`:pgmalli/unknown-keys`) must be the keys the builder gives the result set's columns: with the
 default builder and every builder of `pgmalli.impl.jdbc` under `bb oracle`, a sample of them
 per query in the test. Under the unqualified builder, each `:pg/type` of `row-schema` must be
 the type PostgreSQL describes (a domain as its base type); an untyped column is let pass.

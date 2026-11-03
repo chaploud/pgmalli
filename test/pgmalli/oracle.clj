@@ -345,15 +345,15 @@
 
 (defn- key-mismatch
   "Where the keys of row-schema's map differ from those the builder gives the result set's
-   columns: a column whose key the map neither holds nor names under :pgmalli/untold
+   columns: a column whose key the map neither holds nor names under :pgmalli/unknown-keys
    (:unexpected), a required key no column has (:missing)."
   [cols row jdbc-opts]
   (let [props (when (map? (second row)) (second row))
         entries (remove map? (rest row))
         label (:label (pjdbc/row-keys {:jdbc jdbc-opts}))
-        untold (set (map #(label (name %)) (:pgmalli/untold props)))
+        unknown-keys (set (map #(label (name %)) (:pgmalli/unknown-keys props)))
         ks (set (map first entries))
-        unexpected (sort-by str (remove #(or (ks %) (untold (name %))) cols))
+        unexpected (sort-by str (remove #(or (ks %) (unknown-keys (name %))) cols))
         missing (sort-by str (for [[k p] entries :when (not (and (map? p) (:optional p))) :when (not (cols k))] k))]
     (when (or (seq unexpected) (seq missing))
       {:keys (sort-by str cols) :unexpected unexpected :missing missing})))
