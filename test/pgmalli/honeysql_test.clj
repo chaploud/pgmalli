@@ -2604,8 +2604,13 @@
     (is (re-find #"should be true, false or a vector of column names" (second (fails #(check {:select [:id] :from [:users]} {:jdbc {:return-keys "id"}})))))
     (is (= :pgmalli.error/invalid-options (first (fails #(h/schema-problems {:ns 'no.such.ns})))))
     (is (= :pgmalli.error/invalid-options (first (fails #(pgmalli/registry)))))
-    (is (= :pgmalli.error/not-a-registry (first (fails #(h/check (m/default-schemas) {:select [:id] :from [:users]}))))
-        "a table no registry pgmalli generates can hold"))
+    (let [q {:select [:id] :from [:users] :where [:= :id :?id]}]
+      (is (= (repeat 6 :pgmalli.error/not-a-registry)
+             (map #(first (fails (fn [] (% (m/default-schemas))))) [#(h/check % q) #(h/row-schema % q) #(h/arg-types % q) #(h/tables % q)
+                                                                    #(h/values-schema % :users) #(h/set-schema % :users)]))
+          "a table no registry pgmalli generates can hold")
+      (is (= [:map [:pg_class/relname [:string {:pg/type "name"}]]] (h/row-schema (m/default-schemas) {:select [:relname] :from [:pg_class]}))
+          "pg_catalog's")))
   (is (= ["clojure.core/map: the query takes argument :y, which the function's args lack; a typo in args?"]
          (h/humanize [{:kind :missing-arg :arg :y :var #'map}]))
       "schema-problems' :var first")

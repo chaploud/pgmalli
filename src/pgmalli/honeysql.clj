@@ -109,6 +109,7 @@
               (let [r {::schemas schemas ::versions (versions schemas)}
                     r (assoc r
                              ::held (held-schemas schemas)
+                             ::generated? (boolean (some shape/generated-name? (keys schemas)))
                              ::table-columns (memoize #(some->> (or (column-entries r %) (column-entries r (folded %))) (map (fn [[c s]] [c s])) (into system-columns)))
                              ::routines (memoize #(own-routines r %1 %2 %3)))]
                 (reset! last-read [schemas r])
@@ -127,6 +128,16 @@
     (apply f registry args)))
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
+
+(defn- unknown-table!
+  "The error for table, which a registry holding no schema pgmalli generates cannot know: it
+   is no registry of pgmalli.core/registry."
+  [registry table]
+  (when-not (::generated? registry)
+    (error/fail! :pgmalli.error/not-a-registry
+                 (str "the registry holds no schema pgmalli generates, so table " table
+                      " is unknown; pass (pgmalli.core/registry \"<schema>\")")
+                 {:given table})))
 
 (defn- table-name
   "The table's name of \"schema.table\"."
@@ -443,11 +454,13 @@
                        :let [cte? (boolean (and written (not (targets r)) (or (ctes written) (ctes ::code-ctes))))
                              table (when table (catalog-table registry table written))
                              ;; an unquoted :USERS is PostgreSQL's users: the registry's name, which the driver returns
-                             table (if (and table (nil? (column-entries registry table)) (column-entries registry (folded table))) (folded table) table)]]
+                             table (if (and table (nil? (column-entries registry table)) (column-entries registry (folded table))) (folded table) table)
+                             unknown? (boolean (and table (not cte?) (not (catalog? table)) (nil? (table-columns registry table))))
+                             _ (when unknown? (unknown-table! registry table))]]
                    [alias (cond-> {:table table :cte? cte?
                                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))
                                    ;; named, but the registry lacks it (pg_catalog's aside): no row can be told of it
-                                   :unknown? (boolean (and table (not cte?) (not (catalog? table)) (nil? (table-columns registry table))))}
+                                   :unknown? unknown?}
                             ;; the columns an alias lists rename the first ones, typeless; of a VALUES as
                             ;; wide as the list, they are all it has
                             listed (assoc :columns listed
@@ -1506,12 +1519,7 @@
         known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
                 (str/join "." (shape/schema-and-name k)))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
-                       :let [_ (when-not (some shape/generated-name? (keys (::schemas registry)))
-                                 (error/fail! :pgmalli.error/not-a-registry
-                                              (str "the registry holds no schema pgmalli generates, so table " table
-                                                   " is unknown; pass (pgmalli.core/registry \"<schema>\")")
-                                              {:given table}))
-                             same-name (sort (filter #(= (table-name %) (table-name table)) known))
+                       :let [same-name (sort (filter #(= (table-name %) (table-name table)) known))
                              meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
                    (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
                  (column-problems registry scopes stmt ps opts)
@@ -2897,6 +2905,8 @@
                (shape/table-key (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
                                   (qualified name nil)
                                   (qualified name (:schema (with-defaults r opts))))))
+        _ (when-not (or (::generated? r) (contains? registry name))
+            (unknown-table! r (if (namespace name) (str/join "." (shape/schema-and-name name)) (clojure.core/name name))))
         s (shape/schema-of registry name)]
     (cond (shape/row-schema? s) nil
           (shape/read-row? s) (error/fail! :pgmalli.error/unknown-schema

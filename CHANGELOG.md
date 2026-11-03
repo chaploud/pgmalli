@@ -286,8 +286,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `:read` names a type by any of its spellings: an alias (`"int4"`, `"timestamptz"`), an enum
   type or a domain of the registry with its schema or without (`"app.mood"` reads a column
   of type `mood` too).
-* A table of a query read against a registry holding no schema pgmalli generates is a
-  `:pgmalli.error/not-a-registry` error, not `:unknown-table`; `(pgmalli.core/registry)` of no
+* A table of a query, or of `h/values-schema` and `h/set-schema`, read against a registry
+  holding no schema pgmalli generates is a `:pgmalli.error/not-a-registry` error from every
+  function, not `:unknown-table` or an untyped result; a table of `pg_catalog` still reads; `(pgmalli.core/registry)` of no
   schema is an `:invalid-options` error.
 * `h/humanize` begins a problem of `h/schema-problems` with its var; `h/schema-problems` of a
   namespace not loaded is an `:invalid-options` error.
