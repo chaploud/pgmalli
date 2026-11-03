@@ -39,7 +39,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   one of a SELECT of aggregates alone, at most one where the WHERE holds a primary key or a
   UNIQUE constraint equal to a value, up to as many as an INSERT's `:values` has rows under RETURNING,
   at most `:limit`; where it is one, `{:result :one}` gives no `[:maybe]`. A table other tables
-  inherit has `:pg/inherited true`.
+  inherit has `:pg/inherited true`, a DEFERRABLE primary key `:pg/primary-key-deferrable true`
+  and a DEFERRABLE UNIQUE constraint `:deferrable true`; an invalid unique index (a failed
+  `CREATE INDEX CONCURRENTLY`) is no longer in `:pg/unique`.
+* A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
+  folds it to (`:users/id`), as the driver returns it.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does
   not take is an error whose data names it (`:unknown`) and the one meant (`:did-you-mean`).
 * The columns of a CTE or a subquery are typed as its SELECT types them; a column it does not

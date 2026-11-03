@@ -324,7 +324,9 @@
         sc (into (with-meta {} {::using using})
                  (for [r refs :let [[table alias written listed] (table-ref r schema)] :when alias
                        :let [cte? (boolean (and written (not (targets r)) (or (ctes written) (ctes ::code-ctes))))
-                             table (when table (catalog-table registry table written))]]
+                             table (when table (catalog-table registry table written))
+                             ;; an unquoted :USERS is PostgreSQL's users: the registry's name, which the driver returns
+                             table (if (and table (nil? (column-entries registry table)) (column-entries registry (folded table))) (folded table) table)]]
                    [alias (cond-> {:table table :cte? cte?
                                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))
                                    ;; named, but the registry lacks it (pg_catalog's aside): no row can be told of it
@@ -1826,7 +1828,8 @@
   "Whether x yields one value per row and names no function, which may return a set
    (generate_series, unnest) and so more rows: a column, a constant, DEFAULT, a cast of one."
   [x]
-  (or (keyword? x) (constant? x) (nil? x) (= [:default] x)
+  ;; :%f.a is HoneySQL's f(a)
+  (or (and (keyword? x) (not (shorthand-fn x))) (constant? x) (nil? x) (= [:default] x)
       (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? (second x)))))
 
 (defn- row-count
@@ -1865,8 +1868,9 @@
                            :when (or (nil? q) (= q alias))]
                        (folded col)))
           props (when table (shape/row-props (get (::schemas registry) (shape/table-key table))))
-          ;; a partial UNIQUE index holds over some rows alone
-          key-columns (cond-> (map :columns (remove :where (:pg/unique props))) (:pg/primary-key props) (conj (:pg/primary-key props)))
+          ;; a partial UNIQUE index holds over some rows alone, a DEFERRABLE key only at commit
+          key-columns (cond-> (map :columns (remove #(or (:where %) (:deferrable %)) (:pg/unique props)))
+                        (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props)))
           unique? (and (not (:pg/inherited props)) (some #(every? equal %) key-columns))
           limit (let [n (:limit stmt)] (when (and (integer? n) (<= 0 n)) n))
           ;; a limit only a parameter or code tells may be 0

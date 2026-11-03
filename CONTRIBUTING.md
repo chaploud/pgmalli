@@ -53,8 +53,10 @@ When a change touches what a type or CHECK becomes, update [docs/types.md](docs/
 `test/resources/pgmalli/oracle/corpus.edn`, and seeded mutants of them, on PostgreSQL, each
 sent twice: its values inlined, and as parameters the way HoneySQL and pgjdbc send them. It
 prints where `check` disagrees: a false positive (PostgreSQL takes the query, `check` faults
-it) or a miss (PostgreSQL refuses it, `check` lets it pass). `pgmalli.oracle-test` holds the
-false positives at none in `bb test:jvm`.
+it) or a miss (PostgreSQL refuses it, `check` lets it pass). Where PostgreSQL runs a query,
+the return of `query-schema`, by default and under `{:result :one}`, must take what
+`execute!` and `execute-one!` returned; it prints each it refuses. `pgmalli.oracle-test` holds
+the false positives and the refused returns at none in `bb test:jvm`.
 
 `a-query-wrapped-keeps-its-problems` asks no database: each case wrapped in a FROM subquery,
 a CTE or EXISTS must have the problems it had alone.

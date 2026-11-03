@@ -370,12 +370,15 @@
                                      :max-bits {:fact :length :fn :length :max max_length})))
       (and precision (= "numeric" data_type)) (conj (merge base {:fact :numeric :precision precision :scale scale})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial exclude]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial exclude deferrable]}]
   (case type
     "EXCLUDE" [(merge base {:fact :exclude :constraint cname :method (:method exclude) :partial? (boolean (:partial exclude))
                             :elements (mapv #(select-keys % [:column :op]) (:elements exclude))})]
-    "PRIMARY KEY" [(merge base {:fact :primary-key :constraint cname :columns columns})]
-    "UNIQUE" [(merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index) :partial? (boolean partial)})]
+    "PRIMARY KEY" [(cond-> (merge base {:fact :primary-key :constraint cname :columns columns}) deferrable (assoc :deferrable? true))]
+    ;; an invalid unique index (a CREATE INDEX CONCURRENTLY that failed) holds nothing
+    "UNIQUE" (when-not (and index (false? is_valid))
+               [(cond-> (merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index) :partial? (boolean partial)})
+                  deferrable (assoc :deferrable? true))])
     ;; NOT ENFORCED: the database never checks it, so it is not a reference, only noted
     "FOREIGN KEY" (if (false? is_enforced)
                     [(merge base {:fact :not-enforced :constraint cname :input (str "FOREIGN KEY " (pr-str columns))})]

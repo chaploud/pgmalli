@@ -605,3 +605,13 @@
         {:keys [registry]} (r/rendered (p/facts {:name "public" :types {} :tables {"par" (assoc table :inherited true) "solo" table}}))]
     (is (true? (:pg/inherited (second (:pg.public/par registry)))))
     (is (not (contains? (second (:pg.public/solo registry)) :pg/inherited)))))
+
+(deftest a-key-checked-at-commit-or-an-invalid-index-says-so
+  (let [table {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}
+                         {:name "k" :position 2 :data_type "integer" :is_nullable false}]
+               :constraints {"t_pkey" {:name "t_pkey" :type "PRIMARY KEY" :columns ["id"] :deferrable true}
+                             "t_k_key" {:name "t_k_key" :type "UNIQUE" :columns ["k"] :deferrable true}
+                             "t_bad (index)" {:name "t_bad" :type "UNIQUE" :columns ["k" "id"] :index true :is_valid false}}}
+        props (second (:pg.public/t (:registry (r/rendered (p/facts {:name "public" :types {} :tables {"t" table}})))))]
+    (is (true? (:pg/primary-key-deferrable props)))
+    (is (= [{:columns ["k"] :deferrable true}] (:pg/unique props)) "an invalid unique index holds nothing")))

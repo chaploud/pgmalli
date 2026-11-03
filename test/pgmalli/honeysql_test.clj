@@ -1650,7 +1650,10 @@
         ret #(last (h/query-schema reg [:db] %))]
     (is (= {:max 1} (second (ret {:select [:id] :from [:t] :where [:= :id 1]}))))
     (is (not (map? (second (ret {:select [:id] :from [:t] :where [:= :e "a"]})))) "a partial UNIQUE index holds over some rows")
-    (is (not (map? (second (ret {:select [:id] :from [:p] :where [:= :id 1]})))) "a table inheriting it may hold the same key")))
+    (is (not (map? (second (ret {:select [:id] :from [:p] :where [:= :id 1]})))) "a table inheriting it may hold the same key")
+    (is (not (map? (second (ret {:select [:id :%generate_series.1.3] :from [:t] :where [:= :id 1]})))) ":%f.a is a function")
+    (let [reg (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d" :pg/primary-key ["id"] :pg/primary-key-deferrable true} [:id [:int {:pg/type "integer"}]]]}})]
+      (is (not (map? (second (last (h/query-schema reg [:db] {:select [:id] :from [:d] :where [:= :id 1]}))))) "a DEFERRABLE key holds at commit alone"))))
 
 (deftest an-unknown-table-names-the-one-meant
   (is (= [{:kind :unknown-table :table "sample.usres" :did-you-mean ["sample.users"]}] (check {:select [:id] :from [:usres]})))

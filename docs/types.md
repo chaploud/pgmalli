@@ -58,7 +58,8 @@ The table's map carries:
 |---|---|
 | `:pg/table` | `"public.users"` (`:pg/view` for a view) |
 | `:pg/primary-key` | `["id"]` |
-| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, `:where true` for a partial one |
+| `:pg/primary-key-deferrable` | `true`: the primary key is DEFERRABLE, checked at commit |
+| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, `:where true` for a partial one, `:deferrable true` for a DEFERRABLE one; an invalid unique index is left out |
 | `:pg/inherited` | `true`: other tables inherit it (not as partitions), so a query reads their rows too |
 | `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |
 | `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; `:where true` for a partial one |

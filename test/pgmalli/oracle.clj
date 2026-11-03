@@ -13,13 +13,19 @@
    reports a literal outside a CHECK's list, which matches no row, or NULL that ON CONFLICT DO
    UPDATE sets into a NOT NULL column, which fails once a row conflicts).
 
+   Where PostgreSQL runs a case, the return of query-schema (default and {:result :one}) must
+   take what next.jdbc's execute! and execute-one! returned: a case it refuses carries
+   :return-rejections.
+
    bb oracle [seed] [mutants-per-query] prints the counts and every case but the agreeing ones;
-   pgmalli.oracle-test holds the false positives at none."
+   pgmalli.oracle-test holds the false positives and the return rejections at none."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.pprint :as pp]
             [clojure.string :as str]
             [honey.sql :as sql]
+            [malli.core :as m]
+            [malli.error :as me]
             [malli.generator :as mg]
             [next.jdbc :as jdbc]
             next.jdbc.result-set
@@ -113,12 +119,12 @@
 
 (defn- verdict
   "PostgreSQL's verdict on [sql & params]: :ok with the :rows it matched (selected or
-   written), or the kind of problem check would report for it, or :other."
+   written) and the :result execute! returned, or the kind of problem check would report for it, or :other."
   [^java.sql.Connection conn [sql & params :as sqlvec]]
   (try
     (jdbc/execute! conn (into [(str "EXPLAIN " sql)] params))
     (try (let [r (jdbc/execute! conn sqlvec)]
-           {:pg :ok :rows (or (:next.jdbc/update-count (first r)) (count r))})
+           {:pg :ok :rows (or (:next.jdbc/update-count (first r)) (count r)) :result r})
          (catch PSQLException e
            (case (.getSQLState e)
              "23502" {:pg :not-null-violation :state "23502" :message (.getMessage e)}
@@ -156,6 +162,22 @@
           (empty? ks) :miss
           :else :mismatch)))
 
+(defn- return-rejections
+  "Where the return schema of query-schema refuses what next.jdbc returned for sqlvec (rows, as
+   execute! returned them; execute-one! is run, rolled back, for {:result :one})."
+  [registry ^java.sql.Connection conn query fmt arg-keys sqlvec rows]
+  (vec (for [[result value] [[:many (constantly rows)]
+                             [:one #(try (jdbc/execute-one! conn sqlvec) (finally (.rollback conn)))]]
+             :let [r (try (let [s (m/schema (h/query-schema registry arg-keys query (cond-> {:format fmt} (= :one result) (assoc :result :one)))
+                                            {:registry registry})
+                                ret (last (m/children s))
+                                x (value)]
+                            (when-not (m/validate ret x)
+                              {:schema (m/form ret) :value x :explain (me/humanize (m/explain ret x))}))
+                          (catch Exception e {:error (ex-message e)}))]
+             :when r]
+         (assoc r :result result))))
+
 (defn columns
   "The column names of the oracle schema, which mutants draw from."
   [db]
@@ -188,9 +210,11 @@
                          ;; a query the HoneySQL on the classpath cannot write (an older one) is left out
                          sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception _ nil))]
                    :when sqlvec
-                   :let [v (verdict conn sqlvec)
-                         problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query {:format fmt})))]]
-               (merge c v {:format mode :sql (first sqlvec) :params (vec (rest sqlvec)) :problems problems :outcome (outcome v problems)})))))))
+                   :let [{:keys [result] :as v} (verdict conn sqlvec)
+                         problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query {:format fmt})))
+                         returned (when result (return-rejections registry conn query fmt (vec (keys args)) sqlvec result))]]
+               (merge c (dissoc v :result)
+                      {:return-rejections returned :format mode :sql (first sqlvec) :params (vec (rest sqlvec)) :problems problems :outcome (outcome v problems)})))))))
 
 (defn -main
   "bb oracle [seed] [mutants-per-query]: the run on a throwaway PostgreSQL (docker, as the tests
@@ -204,6 +228,13 @@
         (let [results (run test-db/*db* seed per-query)]
           (println "seed" seed "per query" per-query "cases" (count results))
           (pp/pprint (frequencies (map :outcome results)))
+          (let [rs (filter (comp seq :return-rejections) results)]
+            (println "return rejected" (count rs))
+            (doseq [r rs]
+              (println "\n" (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
+                       "\n  rows:" (:rows r))
+              (doseq [x (:return-rejections r)]
+                (println "  " (:result x) (or (:error x) (str (pr-str (:schema x)) "\n    value: " (pr-str (:value x)) "\n    explain: " (pr-str (:explain x))))))))
           (doseq [o [:false-positive :mismatch :miss :other-flagged]
                   :let [rs (filter #(= o (:outcome %)) results)]
                   :when (seq rs)]

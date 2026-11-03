@@ -1,7 +1,7 @@
 (ns pgmalli.oracle-test
-  "check reports nothing for a query PostgreSQL takes: the corpus and seeded mutants of it,
-   against a real PostgreSQL, sent inlined and as parameters (see pgmalli.oracle; bb oracle for
-   the misses as well). JVM only:
+  "check reports nothing for a query PostgreSQL takes, and query-schema's return takes the rows
+   next.jdbc returns for it: the corpus and seeded mutants of it, against a real PostgreSQL, sent
+   inlined and as parameters (see pgmalli.oracle; bb oracle for the misses as well). JVM only:
    babashka has no JDBC, so bb test does not list it."
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [pgmalli.core :as pgmalli]
@@ -12,15 +12,29 @@
 
 (use-fixtures :once (fn [t] (with-postgres #(do (when *db* (exec-sql! oracle/schema-sql)) (t)))))
 
+(def ^:private results (delay (oracle/run *db* 42 3)))
+
 (deftest check-reports-nothing-postgresql-takes
   (when *db*
-    (let [results (oracle/run *db* 42 3)]
-      (is (< 500 (count results)) "the corpus and its mutants ran")
-      (doseq [r (filter #(= :false-positive (:outcome %)) results)]
-        (is false (str "PostgreSQL takes " (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r))
-                       "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
-                       "\n  check:  " (pr-str (:problems r))
-                       "\n  re-run: bb oracle 42 3 (the case is under :false-positive)"))))))
+    (is (< 500 (count @results)) "the corpus and its mutants ran")
+    (doseq [r (filter #(= :false-positive (:outcome %)) @results)]
+      (is false (str "PostgreSQL takes " (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r))
+                     "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
+                     "\n  check:  " (pr-str (:problems r))
+                     "\n  re-run: bb oracle 42 3 (the case is under :false-positive)")))))
+
+(deftest query-schema-return-takes-what-postgresql-returns
+  (when *db*
+    (doseq [r @results
+            x (:return-rejections r)]
+      (is false (str "query-schema's return refuses what " (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r)) " returned"
+                     " under " (if (= :one (:result x)) "{:result :one}" "the default")
+                     "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
+                     "\n  rows:   " (:rows r)
+                     (if (:error x)
+                       (str "\n  error:  " (:error x))
+                       (str "\n  schema: " (pr-str (:schema x)) "\n  value:  " (pr-str (:value x)) "\n  explain: " (pr-str (:explain x))))
+                     "\n  re-run: bb oracle 42 3 (the case is under return rejected)")))))
 
 (def ^:private wrappers
   "Places a query keeps its problems in: a FROM subquery, a CTE body, EXISTS."

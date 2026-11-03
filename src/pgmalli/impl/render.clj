@@ -350,13 +350,16 @@
     {:pg/view (str schema-name "." table)}
     (prune {:pg/table (str schema-name "." table)
          :pg/primary-key (some #(when (= :primary-key (:fact %)) (:columns %)) tfacts)
+         ;; DEFERRABLE: checked at commit, so a transaction may read duplicates before it
+         :pg/primary-key-deferrable (when (some #(and (= :primary-key (:fact %)) (:deferrable? %)) tfacts) true)
          :pg/unique (not-empty (vec (for [f (sort-by :columns (filter (comp #{:unique} :fact) tfacts))]
                                       (cond-> {:columns (:columns f)}
                                         (false? (:nulls-distinct? f)) (assoc :nulls-distinct false)
                                         ;; from a unique index rather than a constraint
                                         (:index? f) (assoc :index true)
                                         ;; a partial index: unique among the rows its predicate holds for
-                                        (:partial? f) (assoc :where true)))))
+                                        (:partial? f) (assoc :where true)
+                                        (:deferrable? f) (assoc :deferrable true)))))
          :pg/foreign-keys (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:references} :fact) tfacts))]
                                             (cond-> {:columns (:columns f)
                                                      :table (str (get-in f [:to :schema]) "." (get-in f [:to :table]))
