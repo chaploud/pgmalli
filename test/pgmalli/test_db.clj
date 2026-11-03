@@ -29,7 +29,10 @@
           name (str "pgmalli-test-" port)
           {:keys [exit]} (p/sh ["docker" "run" "-d" "--rm" "--name" name
                                 "-e" "POSTGRES_PASSWORD=pw" "-e" "POSTGRES_DB=t"
-                                "--tmpfs" "/var/lib/postgresql:rw,size=256m"
+                                ;; the image's VOLUME (/var/lib/postgresql/data up to 17, its parent
+                                ;; from 18) would put the data on a disk volume docker keeps
+                                "--tmpfs" "/var/lib/postgresql:rw,size=1g"
+                                "--tmpfs" "/var/lib/postgresql/data:rw,size=1g"
                                 "-p" (str "127.0.0.1:" port ":5432") image
                                 "-c" "fsync=off" "-c" "synchronous_commit=off" "-c" "full_page_writes=off"])]
       (cond (zero? exit) {:name name :port port}
@@ -49,7 +52,7 @@
     (let [c (start-container!)]
       ;; the thread pool behind babashka.process is gone at shutdown, so use ProcessBuilder here
       (.addShutdownHook (Runtime/getRuntime)
-                        (Thread. #(.waitFor (.start (ProcessBuilder. ["docker" "rm" "-f" (:name c)])))))
+                        (Thread. #(.waitFor (.start (ProcessBuilder. ["docker" "rm" "-f" "-v" (:name c)])))))
       (wait-ready! (:name c))
       c)))
 
