@@ -1616,12 +1616,32 @@
                                  ;; unnest(?) AS x(a): the elements of ? are a, typed where a goes, as a typed array
                                  (let [m (unnest-columns stmt)]
                                    (when (seq m)
-                                     (for [[op side value] (comparison-sides stmt)
-                                           :let [p (unnest-arg m value)]
-                                           :when (and p (column-keyword? side) (not (unnest-arg m side)))
-                                           :let [t (compared-column-type registry sc side op opts)]
-                                           :when (not (untyped? t))]
-                                       [p (jdbc/array-type t opts :unnest)])))
+                                     (concat
+                                      (for [[op side value] (comparison-sides stmt)
+                                            :let [p (unnest-arg m value)]
+                                            :when (and p (column-keyword? side) (not (unnest-arg m side)))
+                                            :let [t (compared-column-type registry sc side op opts)]
+                                            :when (not (untyped? t))]
+                                        [p (jdbc/array-type t opts :unnest)])
+                                      ;; UPDATE ... SET col = x.a FROM unnest(?) AS x(a)
+                                      (for [[col v] (assignments stmt)
+                                            :let [p (unnest-arg m v)]
+                                            :when p
+                                            :let [t (column-type registry (target-scope sc stmt schema) col true (written-events stmt) opts)]]
+                                        [p (jdbc/array-type t opts :unnest)])
+                                      ;; [:cast :x.a :date]: an array of what PostgreSQL casts to the type, typed
+                                      (for [x (mapcat own-nodes (map val (clause-entries stmt)))
+                                            :when (and (vector? x) (= :cast (first x)) (= 3 (count x)))
+                                            :let [p (unnest-arg m (second x))]
+                                            :when p
+                                            :let [s (:schema (expression-type registry sc x opts))
+                                                  t (some->> s (slot-type registry))]
+                                            :when t
+                                            :let [element (accepted-type registry s :cast opts)
+                                                  arrays (for [[sch sent] (jdbc/write-rows opts true)
+                                                               :when (and (string? sent) (accept/accepts? t (accept/element sent) :cast))]
+                                                           (walk/postwalk-replace {:pgmalli/element element} sch))]]
+                                        [p (shape/either (distinct arrays) :any)]))))
                                  (let [{:keys [select]} (insert-parts stmt)
                                        m (when (map? select) (unnest-columns select))]
                                    (when (seq m)

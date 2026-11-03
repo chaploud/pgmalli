@@ -1787,3 +1787,10 @@
 (deftest a-case-is-named-after-its-else
   (is (= [:nick] (map first (rest (row {:select [[[:case [:= :id 1] "a" :else :nick]]] :from [:users]})))))
   (is (= [:case] (map first (rest (row {:select [[[:case [:= :id 1] "a" :else "b"]]] :from [:users]}))))))
+
+(deftest an-unnest-tables-column-assigned-by-update-or-cast-types-its-argument
+  (is (= {:ids [:pg/array bigint] :ss [:pg/array int4]}
+         (args {:update :users :set {:score :r.s} :from [[[:unnest :?ids :?ss] [:r {:columns [:i :s]}]]] :where [:= :users.id :r.i]} (dissoc opts :send))))
+  (is (m/validate (:ns (args {:update :users :set {:nick [:cast :r.n :text]} :from [[[:unnest :?ids :?ns] [:r {:columns [:i :n]}]]] :where [:= :users.id :r.i]} (dissoc opts :send)))
+                  (into-array String ["a"]) {:registry registry})
+      "an array of what casts to the type"))

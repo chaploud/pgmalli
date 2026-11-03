@@ -77,7 +77,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * The columns of a CTE or a subquery (LATERAL too, a recursive CTE as its first member) are
   typed as its SELECT types them; a column it does not
   give is `:unknown-column`. An argument of an `unnest` in `FROM` is an array of the type of
-  where its column goes.
+  where its column goes: compared, assigned by `INSERT ... SELECT` or `UPDATE ... SET`, or cast.
 * `h/row-schema` types the functions that build json and jsonb (`jsonb_build_object`,
   `jsonb_agg` ...) as a column of the type is read: an object or an array under `{:read {:json
   :parsed}}`.
