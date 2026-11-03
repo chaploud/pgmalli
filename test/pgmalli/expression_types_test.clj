@@ -277,12 +277,6 @@
 (defn- server-version [ds]
   (first (str/split (:server_version (jdbc/execute-one! ds ["SHOW server_version"])) #"\.")))
 
-(defn- register-operators!
-  "Registers with HoneySQL each operator of the catalog it has not, which it would write as a
-   function call."
-  []
-  (doseq [[n] (:operators @types/catalog)] (when-not (sql/registered-op? (keyword n)) (sql/register-op! (keyword n)))))
-
 (deftest every-function-and-operator-of-the-catalog-is-typed-as-postgresql-types-it
   (when *db*
     (let [registry (registry)
@@ -293,7 +287,6 @@
           ;; RowDescription describes a domain's value as of its base type
           base (into {} (map (juxt :d :b)) (jdbc/execute! ds ["SELECT format_type(oid, NULL) AS d, format_type(typbasetype, NULL) AS b FROM pg_type WHERE typtype = 'd'"]
                                                          {:builder-fn rs/as-unqualified-maps}))
-          _ (register-operators!)
           cs (with-open [con (jdbc/get-connection ds)]
                (doall
                 (for [[_ es] (calls version)
@@ -312,7 +305,7 @@
    rolled back."
   [^java.sql.Connection con q params]
   (try (jdbc/execute! con (sql/format q {:params params})) false
-       (catch java.sql.SQLException _ true)
+       (catch java.sql.SQLException e (some? (oracle/refused e)))
        (finally (.rollback con))))
 
 (defn- argument-failures
@@ -334,7 +327,6 @@
 
 (deftest an-argument-of-a-call-takes-what-postgresql-takes
   (when *db*
-    (register-operators!)
     (let [registry (registry)
           ds (datasource)
           version (server-version ds)

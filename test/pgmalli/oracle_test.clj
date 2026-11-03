@@ -22,43 +22,67 @@
   (str "\n  re-run: bb oracle " seed " " mutants " (" under "), or PGMALLI_FUZZ_SEED=" seed
        " PGMALLI_ORACLE_MUTANTS=" mutants " clojure -M:test -n pgmalli.oracle-test"))
 
-(def ^:private results (delay (oracle/run *db* seed mutants)))
+(def ^:private results (delay (into (oracle/run *db* seed mutants) (oracle/run-profiles *db* seed))))
 (def ^:private arg-failures (delay (oracle/arg-matrix *db*)))
 
 (def pending
   "False rejections the oracle finds in src that src does not fix yet, held out of the failing
    tests until it does: {:test :id :reason :repro}, :test the deftest's failures it holds
-   (:false-positive, :return, :column, :arg), :id a pattern of the failure's signature: the
-   case's id (its corpus id for a mutant), for :return followed by the keys the return
-   refuses; \"table.column context\" for :arg. pending-entries-still-fail fails on an entry
-   that no longer matches a failure, so a fix empties it."
+   (:false-positive, :return, :column, :arg), :id a pattern of the failure's signature (see
+   failures). pending-entries-still-fail fails on an entry that no longer matches a failure, so
+   a fix empties it."
   [{:test :false-positive
-    :id #"^enum-arg$"
+    :id #"^enum-arg params( instant| lenient)? uncast-string$"
     :reason (str "check reports :uncast-string for an argument compared with an enum column under pgjdbc's default whatever it holds;"
                  " arg-types takes a PGobject there (or NULL, which the oracle sends as it generates no PGobject), which PostgreSQL takes")
-    :repro "{:select [:id] :from [:users] :where [:= :mood :?m]} with :m nil"}])
+    :repro "{:select [:id] :from [:users] :where [:= :mood :?m]} with :m nil"}
+   {:test :arg
+    :id #"^refused (matrix\.types\.[cd]_citext|shapes\.(name|mail)) \S+ date-time$"
+    :reason (str "a citext column (an extension's string type), or a domain over it, takes no class :send sends :unknown"
+                 " but String, where a text column takes it (:time/local-date for a LocalDate); PostgreSQL reads an untyped value there as citext")
+    :repro (str "(h/arg-types registry {:select [:id] :from [:shapes] :where [:= :name :?x]} {:send {java.time.LocalDate :unknown}})"
+                " gives [:or [:string {:pg/type \"citext\"}] PGobject]; with :nick (text), [:or [:string ...] :time/local-date]")}])
 
 (defn- held
   "The pending entry of test that holds the failure of signature id, or nil."
   [test id]
   (some #(when (and (= test (:test %)) (re-find (:id %) id)) %) pending))
 
-(defn- case-id [r] (name (or (:base r) (:id r))))
-(defn- arg-id [f] (str (:table f) "." (:column f) " " (name (:context f))))
+(defn- case-id
+  "A case's run: its id (a mutant's base--n), mutation, format and option profile, as present."
+  [r]
+  (str/join " " (map name (keep r [:id :mutation :format :profile]))))
+
+(defn- false-positive-id [r] (str (case-id r) " " (str/join "," (sort (distinct (map (comp name :kind) (:problems r)))))))
 
 (defn- return-id
-  "The signature of return rejection x of case r: its case-id and the keys whose values the
-   return refuses."
+  "Return rejection x of case r: the keys whose values the return refuses."
   [r x]
   (str (case-id r) " " (str/join "," (sort (distinct (map name (mapcat #(when (map? %) (keys %)) (tree-seq sequential? seq (:explain x)))))))))
 
+(defn- column-id [r x] (str (case-id r) " " (cond (:label x) (:label x) (:error x) "error" :else "keys")))
+
+(defn- arg-id [f]
+  (if (= :sent (:kind f))
+    (str "sent " (:class f) " " (name (:profile f)))
+    (str (name (:kind f)) " " (:table f) "." (:column f) " " (name (:context f)) " " (name (:profile f)))))
+
 (defn- failures
-  "[test signature] of each failure of the run, pending or not."
+  "[test signature] of each failure of the run, pending or not. A signature: for
+   :false-positive, case-id and the kinds check reports; for :return, case-id and the keys the
+   return refuses; for :column, case-id and the column's label (error, keys); for :arg, the
+   kind, \"table.column\", the context and the send profile (\"sent class profile\" for :sent)."
   []
-  (concat (for [r @results :when (= :false-positive (:outcome r))] [:false-positive (case-id r)])
+  (concat (for [r @results :when (= :false-positive (:outcome r))] [:false-positive (false-positive-id r)])
           (for [r @results x (:return-rejections r)] [:return (return-id r x)])
-          (for [r @results :when (seq (:column-mismatches r))] [:column (case-id r)])
+          (for [r @results x (:column-mismatches r)] [:column (column-id r x)])
           (for [f @arg-failures] [:arg (arg-id f)])))
+
+(defn- case-text
+  "Case r as a failure names it: its id, mutation, format and option profile."
+  [r]
+  (str (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r))
+       (some->> (:profile r) oracle/option-profiles :opts pr-str (str " under "))))
 
 (deftest corpus-queries-are-distinct
   (doseq [[k f] {"id" first "query" second}
@@ -86,8 +110,8 @@
 (deftest check-reports-nothing-postgresql-takes
   (when *db*
     (doseq [r (filter #(= :false-positive (:outcome %)) @results)
-            :when (not (held :false-positive (case-id r)))]
-      (is false (str "PostgreSQL takes " (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r))
+            :when (not (held :false-positive (false-positive-id r)))]
+      (is false (str "PostgreSQL takes " (case-text r)
                      "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
                      "\n  check:  " (pr-str (:problems r))
                      (re-run "the case is under :false-positive"))))))
@@ -100,7 +124,7 @@
       (is false (str (if (= :keys (:result x))
                        "row-schema's keys are not the result set's for "
                        "query-schema's return refuses what ")
-                     (:id r) (some->> (:mutation r) (str " mutated by ")) " sent " (name (:format r)) " returned"
+                     (case-text r) " returned"
                      " under " (case (:result x) :one "{:result :one}" :many "the default result" :keys "its keys")
                      "\n  SQL:    " (:sql r) (when (seq (:params r)) (str "\n  params: " (pr-str (:params r))))
                      "\n  rows:   " (:rows r)
@@ -112,18 +136,24 @@
 (deftest row-schema-describes-the-columns-postgresql-returns
   (when *db*
     (doseq [r @results
-            :when (not (held :column (case-id r)))
-            x (:column-mismatches r)]
-      (is false (str "row-schema describes the columns of " (:id r) (some->> (:mutation r) (str " mutated by "))
-                     " sent " (name (:format r)) " otherwise than PostgreSQL's ResultSet metadata"
+            x (:column-mismatches r)
+            :when (not (held :column (column-id r x)))]
+      (is false (str "row-schema describes the columns of " (case-text r)
+                     " otherwise than PostgreSQL's ResultSet metadata"
                      "\n  SQL:      " (:sql r) (when (seq (:params r)) (str "\n  params:   " (pr-str (:params r))))
                      "\n  mismatch: " (pr-str x)
                      (re-run "the case is under columns described otherwise"))))))
 
 (deftest row-schema-types-about-as-many-columns-as-it-did
   (when *db*
-    (let [n (reduce + (keep :columns-typed @results))]
+    (let [n (reduce + (keep :columns-typed (remove :profile @results)))]
       (is (< 17000 n) (str "row-schema names a :pg/type of " n " columns PostgreSQL returned: fewer typed, or fewer cases")))))
+
+(deftest no-case-runs-out-of-time
+  (when *db*
+    (doseq [r @results :when (= :timeout (:outcome r))]
+      (is false (str (case-text r) " outran the statement_timeout of pgmalli.oracle/in-parallel, which says nothing of check"
+                     "\n  SQL:    " (:sql r) (re-run "the case is under :timeout"))))))
 
 (deftest arg-types-take-what-postgresql-takes
   (when *db*

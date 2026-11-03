@@ -256,8 +256,8 @@ There are three ways to check a row read from the database:
 | `h/row-schema` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
 | `m/decode` with `pgmalli/transformer` ([reading rows](docs/reading-rows.md#decoding-instead)) | rows turned into the registry's types first |
 
-[docs/reading-rows.md](docs/reading-rows.md) has every option: `next.jdbc.date-time`,
-`next.jdbc.optional`, and the types your own `ReadableColumn` extensions return.
+[docs/reading-rows.md](docs/reading-rows.md) has every option: `next.jdbc.date-time`
+and the types your own `ReadableColumn` extensions return.
 
 ## Generating test data
 

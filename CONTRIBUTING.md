@@ -24,6 +24,7 @@ and `bb fixture` do not.
 | `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
+| `bb test:stricter` | `test/resources/pgmalli/stricter.edn` rewritten: where PostgreSQL takes a parameter that `accept/holds?` leaves out |
 | `bb mutate --file src/... [--kind table\|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs]` | each mutant of the file (an element left out of a def's literal collection; and/or, when/when-not, =/not=, true/false swapped) against the tests (`--ns`, or the bb suite, or the JVM suite under `--jvm`; database tests only under `--db`), each run killed after `--timeout` seconds, the file written back after each; prints the survivors with file:line and writes `--out` (target/mutate.edn) |
 
 Before a pull request: `bb test:all`, then read the log of each task that did not exit 0. Each
@@ -86,10 +87,9 @@ them. The oracle prints:
   CHECK's list is reported by design.
 - where PostgreSQL runs the query, a return `query-schema` refuses: by default it must take what
   `execute!` returned, under `{:result :one}` what `execute-one!` returned.
-- the same queries' keys: those of `row-schema`'s map, with the ones under
-  `:pgmalli/unknown-keys`, must equal the keys the builder gives the result set's columns,
-  under the default builder and every map builder of `pgmalli.impl.jdbc`.
-- under the unqualified builder, a `:pg/type` other than the type PostgreSQL describes (a
+- the same queries' keys: those of `row-schema`'s map must equal the keys next.jdbc's
+  `as-unqualified-maps` gives the result set's columns.
+- a `:pg/type` other than the type PostgreSQL describes (a
   domain as its base type); an untyped column passes.
 
 `pgmalli.oracle/arg-matrix` tests `arg-types` with values that do not come from `arg-types`.
@@ -98,8 +98,12 @@ An argument goes beside each column of the oracle schema (compared with `=`, `<>
 and as LIMIT) and is sent a fixed list of values: one of each class of
 `pgmalli.impl.accept/class-types`, NULL, numbers at the integer bounds, a fraction, `""`, `"1"`
 and the schema's labels. It fails where PostgreSQL takes a value the argument's schema refuses
-and the rules of docs/queries.md#stricter-than-postgresql do not leave out, and where
-`accept/holds?` says a value goes and PostgreSQL refuses its type. Besides the oracle schema's
+(or, set by UPDATE and INSERT, `set-schema`'s and `values-schema`'s row) and the rules of
+docs/queries.md#stricter-than-postgresql do not leave out, and where `accept/holds?` says a
+value goes and PostgreSQL refuses its type. It sends each value as pgjdbc's `setObject` does,
+and the java.time values as `next.jdbc.date-time` does with the `:send` that says so
+(`pgmalli.oracle/send-profiles`), whatever the JVM has loaded, and fails where `sent-type`
+names a type other than PostgreSQL's `pg_typeof` of the value sent. Besides the oracle schema's
 columns, it creates the schema `matrix`, whose table `types` holds, for every type of
 `pgmalli.impl.types` (an extension's where the server has it) and the typmods numeric(10,2),
 varchar(5), char(3), timestamp(3) and bit(4), a column of the type, of its array, of a domain
@@ -115,8 +119,16 @@ argument matrix send their cases over `PGMALLI_ORACLE_WORKERS` connections (the 
 column described otherwise or argument-matrix failure, except those listed in
 `pgmalli.oracle-test/pending`: false rejections in `src` not fixed yet, each with its reason
 and a reproduction. `pending-entries-still-fail` fails on an entry that no longer fails, so a
-fix removes it. The test also fails on a corpus id or query listed twice, and on a corpus query
-that did not run in both formats (one the pinned HoneySQL cannot write).
+fix removes it. The corpus runs again under `pgmalli.oracle/option-profiles` (`:send {String
+:unknown}` over `stringtype=unspecified`, `:time :instant` reading timestamps as Instants,
+`:compare :lenient`). A statement that runs out of its timeout fails the test, as does a corpus
+id or query listed twice, and a corpus query that did not run in both formats (one the pinned
+HoneySQL cannot write).
+
+`pgmalli.accept-test` holds `accept/accepts?` to PostgreSQL both ways, and `accept/holds?`
+one way: where `holds?` says a value goes, PostgreSQL takes it. Where PostgreSQL takes one that
+`holds?` leaves out, the stricter rule, is pinned in `test/resources/pgmalli/stricter.edn`;
+after changing `holds?`, run `bb test:stricter` and read the diff.
 
 `a-query-wrapped-keeps-its-problems` sends no query to PostgreSQL, only reads the oracle
 schema: each case wrapped in a FROM subquery, a CTE or EXISTS must have the problems it had

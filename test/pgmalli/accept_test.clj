@@ -2,7 +2,8 @@
   "pgmalli.impl.accept against pgjdbc and PostgreSQL themselves: the type setObject sends a
    value of each class as, and each sent type prepared where a value of each type goes.
    JVM only (babashka has no java.sql), so bb test does not list it."
-  (:require [clojure.string :as str]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is use-fixtures]]
             [malli.core :as m]
             [next.jdbc :as jdbc]
@@ -102,19 +103,46 @@
                                (into-array String (map :sql pairs))]
                           {:builder-fn rs/as-unqualified-maps})))))
 
+(def ^:private stricter-file "test/resources/pgmalli/stricter.edn")
+
+(defn- stricter
+  "{[sent context] [t ...]}: of verdicts vs, where PostgreSQL takes a parameter sent compared or
+   assigned that holds? leaves out (docs/queries.md \"Stricter than PostgreSQL\")."
+  [vs]
+  (into (sorted-map-by #(compare (pr-str %1) (pr-str %2)))
+        (update-vals (group-by (juxt :sent :context)
+                               (filter (fn [{:keys [accepted-t sent context taken]}]
+                                         (and taken (not= :cast context)
+                                              (not (accept/holds? accepted-t (if (= "feel" sent) [:enum "feel"] sent) context))))
+                                       vs))
+                     #(vec (sort (map :t %))))))
+
+(defn- triples [m] (set (for [[[sent context] ts] m t ts] [sent context t])))
+
 (deftest accept-is-postgresqls
   (when *db*
-    (doseq [:let [vs (verdicts)
-                  compares-itself (set (for [{:keys [t sent context taken]} vs :when (and taken (= :compare context) (= t sent))] t))]
-            {:keys [t accepted-t sent context taken]} vs
-            :let [sent-t (if (= "feel" sent) [:enum "feel"] sent)
-                  pair (str (pr-str sent) " " context " " t)]]
-      ;; accepts? may take what PostgreSQL refuses (PostgreSQL 18 casts bytea and the integers), never the
-      ;; other way; a type it does not answer for (answers? false) types its arguments :any
-      (when (and taken (accept/answers? accepted-t)) (is (accept/accepts? accepted-t sent-t context) (str "PostgreSQL takes " pair)))
-      ;; a type with no = (json, point, xml) compares with nothing, its own type neither
-      (when (and (not= :cast context) (accept/holds? accepted-t sent-t) (not (and (= :compare context) (not (compares-itself t)))))
-        (is taken (str "PostgreSQL refuses " pair))))))
+    (let [vs (verdicts)
+          compares-itself (set (for [{:keys [t sent context taken]} vs :when (and taken (= :compare context) (= t sent))] t))]
+      (doseq [{:keys [t accepted-t sent context taken]} vs
+              :let [sent-t (if (= "feel" sent) [:enum "feel"] sent)
+                    pair (str (pr-str sent) " " context " " t)]]
+        ;; accepts? may take what PostgreSQL refuses (PostgreSQL 18 casts bytea and the integers), never the
+        ;; other way; a type it does not answer for (answers? false) types its arguments :any
+        (when (and taken (accept/answers? accepted-t)) (is (accept/accepts? accepted-t sent-t context) (str "PostgreSQL takes " pair)))
+        ;; a type with no = (json, point, xml) compares with nothing, its own type neither
+        (when (and (not= :cast context) (accept/holds? accepted-t sent-t) (not (and (= :compare context) (not (compares-itself t)))))
+          (is taken (str "PostgreSQL refuses " pair))))
+      ;; the other way, where holds? is stricter than PostgreSQL, pinned: a change of it is a choice
+      (let [now (stricter vs)]
+        (if (System/getenv "PGMALLI_UPDATE_STRICTER")
+          (spit stricter-file (with-out-str (println "{") (doseq [[k ts] now] (pr k) (print " ") (prn ts)) (println "}")))
+          (let [was (triples (edn/read-string (slurp stricter-file)))
+                [left-out held] (map #(sort-by pr-str %) [(remove was (triples now)) (remove (triples now) was)])]
+            (is (and (empty? left-out) (empty? held))
+                (str "where PostgreSQL takes a parameter, holds? leaves out otherwise than " stricter-file
+                     " ([sent context column-type]); bb test:stricter rewrites it"
+                     (when (seq left-out) (str "\n  now left out: " (str/join " " (map pr-str left-out))))
+                     (when (seq held) (str "\n  now held: " (str/join " " (map pr-str held))))))))))))
 
 (deftest a-jsonb-cast-to-a-scalar-type-takes-a-scalar-alone
   (when *db*
