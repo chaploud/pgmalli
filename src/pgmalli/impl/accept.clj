@@ -9,29 +9,17 @@
 
 ;;; what pgjdbc sends
 
-(def ^:private class-types
-  "[class type] pgjdbc's setObject sends a value of class as (any other Number with setNumber);
-   a String and a Character go by the connection's stringtype, which :write's rows say."
+(def class-types
+  "[class type]: the type pgjdbc's setObject sends a value of class as, with no extension and
+   its default stringtype (varchar): any other Number with setNumber, a Character with
+   setString, a Java array as an array of its elements' type."
   [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
    [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
-   [Boolean "boolean"] [java.util.UUID "uuid"]
+   [Boolean "boolean"] [String "character varying"] [Character "character varying"] [java.util.UUID "uuid"]
    [(Class/forName "[B") "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
    [java.time.OffsetTime "time with time zone"] [java.time.LocalDateTime "timestamp without time zone"]
-   [java.time.OffsetDateTime "timestamp with time zone"]])
-
-(defn pgjdbc-write
-  "[[schema type] ...]: the values an application commonly sends through pgjdbc with no
-   extension, as malli schemas, and the type it sends each as; a String untyped (:unknown) under
-   its stringtype=unspecified. pgjdbc sends more (a BigInt as numeric, a Float as real:
-   class-types; a Character as a String), which an application adds as rows."
-  [{:keys [stringtype]}]
-  [[:int "bigint"] ['decimal? "numeric"] [:double "double precision"]
-   [:boolean "boolean"] [:string (if (= :unspecified stringtype) :unknown "character varying")]
-   [:uuid "uuid"] ['bytes? "bytea"] [:time/local-date "date"] [:time/local-time "time without time zone"]
-   [:time/offset-time "time with time zone"] [:time/local-date-time "timestamp without time zone"]
-   [:time/offset-date-time "timestamp with time zone"]])
-
-(def default-write (pgjdbc-write {}))
+   [java.time.OffsetDateTime "timestamp with time zone"]
+   [(Class/forName "[J") "bigint[]"] [(Class/forName "[I") "integer[]"] [(Class/forName "[Ljava.lang.String;") "character varying[]"]])
 
 (defn class-type
   "The type pgjdbc sends value as by its class; nil for a class class-types does not list."
@@ -95,7 +83,7 @@
 
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context
-   (:compare, :assign or :cast). sent :unknown is a value sent untyped (a :write row's), which PostgreSQL
+   (:compare, :assign or :cast). sent :unknown is a value sent untyped (:send's :unknown), which PostgreSQL
    types from the context: anywhere but a comparison with json, which has no operator."
   [t sent context]
   (let [json-compared? (and (= "json" t) (= :compare context))]

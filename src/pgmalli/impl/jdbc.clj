@@ -17,30 +17,26 @@
 
 ;;; the options
 
-(def read-options-schema
-  "The options as-read takes, closed: a misspelt key or value is an error rather than a check
-   silently weakened."
+(def options-schema
+  "The options pgmalli takes, closed: a misspelt key or value is an error rather than a check
+   silently weakened. :jdbc and :format are the maps an application passes to next.jdbc and
+   sql/format, open: pgmalli reads the keys of them it names."
   [:map {:closed true}
-   [:qualified? {:optional true} :boolean]
-   [:kebab? {:optional true} :boolean]
-   [:lower? {:optional true} :boolean]
-   [:nil-columns {:optional true} [:enum :absent]]
+   [:schema {:optional true} :string]
    [:time {:optional true} [:enum :inst :instant :local]]
    [:read {:optional true} [:and [:map-of [:or :string [:enum :array :json]] :any]
                             [:map [:array {:optional true} [:enum :vector :sequential]]
-                             [:json {:optional true} [:enum :parsed]]]]]])
-
-(def options-schema
-  "The options pgmalli.honeysql takes: as-read's, and those of docs/queries.md#options."
-  (into read-options-schema
-        [[:schema {:optional true} :string]
-         ;; its rows, which options! checks one by one
-         [:write {:optional true} :any]
-         [:compare {:optional true} [:enum :strict :lenient]]
-         [:result {:optional true} [:enum :one]]
-         [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]
-         [:format {:optional true} :map]
-         [:accept {:optional true} [:enum :native :postgresql]]]))
+                             [:json {:optional true} [:enum :parsed]]]]]
+   [:jdbc {:optional true} [:map
+                            [:builder-fn {:optional true} [:or ifn? qualified-symbol?]]
+                            [:label-fn {:optional true} ifn?]
+                            [:qualifier-fn {:optional true} ifn?]
+                            [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
+   ;; {class type}, which options! checks
+   [:send {:optional true} [:map-of :any :any]]
+   [:compare {:optional true} [:enum :strict :lenient]]
+   [:result {:optional true} [:enum :one]]
+   [:format {:optional true} :map]])
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
@@ -68,17 +64,72 @@
 
 ;; compiled once: malli keeps a schema's validator, and these are checked on every call
 (def ^:private options (delay (m/schema options-schema)))
-(def ^:private read-options* (delay (m/schema read-options-schema)))
 
-(defn- element-row?
-  "A row of :write whose schema holds :pgmalli/element: a collection of an array's elements."
-  [[s]]
-  (boolean (some #{:pgmalli/element} (tree-seq coll? seq s))))
+;;; how next.jdbc keys a row
 
-(defn- sends-string?
-  "Whether a :write row's schema may take a String (shape/value-classes)."
-  [sch]
-  (boolean (some #(:string (shape/value-classes %)) (shape/alternatives sch))))
+(def ^:private builders
+  "next.jdbc's map builders by their symbols -> how they key a row: qualified by the table or
+   not, a NULL column's key absent (next.jdbc.optional), the function naming a label and a
+   qualifier, or :modified, the :label-fn and :qualifier-fn next.jdbc takes with them."
+  (let [maps {"as-maps" {:qualified? true} "as-unqualified-maps" {:qualified? false}
+              "as-lower-maps" {:qualified? true :fn str/lower-case} "as-unqualified-lower-maps" {:qualified? false :fn str/lower-case}
+              "as-modified-maps" {:qualified? true :fn :modified} "as-unqualified-modified-maps" {:qualified? false :fn :modified}}]
+    (merge (update-keys (merge maps {"as-kebab-maps" {:qualified? true :fn csk/->kebab-case-string}
+                                     "as-unqualified-kebab-maps" {:qualified? false :fn csk/->kebab-case-string}})
+                        #(symbol "next.jdbc.result-set" %))
+           (update-keys (update-vals maps #(assoc % :absent? true)) #(symbol "next.jdbc.optional" %)))))
+
+(defn- builder
+  "How the next.jdbc builder f keys a row (builders): the function, its var, or its qualified
+   symbol, which names it where next.jdbc does not load (babashka); nil for another."
+  [f]
+  (if (symbol? f)
+    (get builders f)
+    (let [f (if (var? f) @f f)]
+      (some (fn [[sym how]] (when (= f (some-> (try (requiring-resolve sym) (catch Exception _ nil)) deref)) how)) builders))))
+
+(defn row-keys
+  "How a row is keyed under opts: {:qualified? :absent? :label :qualifier}, as :jdbc's
+   :builder-fn (next.jdbc's as-maps by default) keys it, a modified builder by :jdbc's
+   :label-fn and :qualifier-fn. A set operation's member (::member in opts) is read unqualified
+   and with every column, as next.jdbc keys the whole row by the first member's labels."
+  [{:keys [jdbc] :as opts}]
+  (let [{:keys [builder-fn label-fn qualifier-fn]} jdbc
+        how (if builder-fn (builder builder-fn) {:qualified? true})
+        f (:fn how)]
+    {:qualified? (and (not (::member opts)) (:qualified? how))
+     :absent? (and (not (::member opts)) (:absent? how))
+     :label (cond (= :modified f) label-fn f f :else identity)
+     :qualifier (cond (= :modified f) (or qualifier-fn identity) f f :else identity)}))
+
+;;; what an application sends
+
+(def ^:private collections
+  "The Clojure collections an application may send as an array, and the malli schema of one,
+   :pgmalli/element in an element's place."
+  [[clojure.lang.IPersistentVector [:vector :pgmalli/element]] [clojure.lang.IPersistentSet [:set :pgmalli/element]]
+   [clojure.lang.Sequential [:sequential :pgmalli/element]]])
+
+(def ^:private class-schemas
+  "[class schema]: the malli schema of a value of class, for the classes pgjdbc sends and those
+   an application's extensions commonly do; another class is [:fn instance?]."
+  [[Long :int] [Integer :int] [Short :int] [Byte :int] [clojure.lang.BigInt 'integer?] [java.math.BigInteger 'integer?]
+   [java.math.BigDecimal 'decimal?] [Double :double] [Float 'float?]
+   [Boolean :boolean] [String :string] [Character 'char?] [java.util.UUID :uuid] [(Class/forName "[B") 'bytes?]
+   [java.time.LocalDate :time/local-date] [java.time.LocalTime :time/local-time] [java.time.OffsetTime :time/offset-time]
+   [java.time.LocalDateTime :time/local-date-time] [java.time.OffsetDateTime :time/offset-date-time]
+   [java.time.Instant :time/instant] [java.util.Date 'inst?] [clojure.lang.Keyword :keyword] [clojure.lang.Symbol :symbol]
+   [clojure.lang.IPersistentMap [:map-of :any :any]] [clojure.lang.IPersistentVector [:vector :any]]
+   [clojure.lang.IPersistentSet [:set :any]] [clojure.lang.Sequential [:sequential :any]]
+   ;; :pg/array reads its elements by value, as the column's (array-type puts its type in)
+   [(Class/forName "[J") [:pg/array :pgmalli/element]] [(Class/forName "[I") [:pg/array :pgmalli/element]]
+   [(Class/forName "[Ljava.lang.String;") [:pg/array :pgmalli/element]]])
+
+(def ^:private class-schema
+  ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
+  (memoize (fn [^Class c]
+             (or (some (fn [[k s]] (when (= k c) s)) class-schemas)
+                 [:fn {:pg/class (.getName c)} (fn [x] (instance? c x))]))))
 
 (defn- array-type-name
   "\"varchar[]\" as \"character varying[]\": an array type named by an element type types knows
@@ -87,179 +138,87 @@
   (when-let [[_ e] (and (string? t) (re-matches #"(.+)\[\]" t))]
     (some-> (types/entry e) :name (str "[]"))))
 
-(defn- migration
-  "[lines form] for the options of pgmalli 0.3 given (:stringtype, :write as a map): what each
-   is now, and the :write that adds their rows to (h/pgjdbc-write); where :write is rows
-   already, those rows, a String's untyped under :stringtype :unspecified."
-  [{:keys [stringtype write]}]
-  (let [;; a schema as data to paste: a predicate function as its symbol
-        form #(try (m/form %) (catch Exception _ %))
-        m (when (map? write) (into {} (map (fn [[k v]] [k (if (string? k) (form v) v)])) write))
-        given-stringtype (or stringtype (:stringtype m))
-        ;; pgjdbc's values; another was never an option, and the suggestion leaves it out
-        stringtype (#{:varchar :unspecified} given-stringtype)
-        keyword-row " is a row [:keyword :unknown] where a keyword goes untyped"
-        stringtype-line (cond (= :varchar stringtype) ":stringtype :varchar is pgjdbc's default; leave it out"
-                              (and (nil? stringtype) (some? given-stringtype))
-                              (str ":stringtype " (pr-str given-stringtype) " was never an option; pgjdbc's is :varchar or :unspecified"))
-        call (if (= :unspecified stringtype) (list 'h/pgjdbc-write {:stringtype stringtype}) '(h/pgjdbc-write))
-        said (concat
-              (cond (= :unspecified stringtype) [[":stringtype :unspecified is (h/pgjdbc-write {:stringtype :unspecified})"]]
-                    stringtype-line [[stringtype-line]])
-              (when-let [kinds (:enum m)]
-                [[(str ":enum " (pr-str kinds) (if (some #{:keyword} kinds) keyword-row " needs no row")
-                       "; a column's labels stay its own")
-                  (when (some #{:keyword} kinds) [:keyword :unknown])]])
-              (for [k (:array m)] [(str ":array's " (pr-str k) " is a row " (pr-str [[k :pgmalli/element] :unknown])) [[k :pgmalli/element] :unknown]])
-              (for [[t sch] m :when (string? t)
-                    :let [n (:name (types/entry t) t)
-                          kw? (some #(= :keyword (shape/kind %)) (shape/alternatives sch))]]
-                (cond (and (accept/string-type? n) kw?)
-                      [(str (pr-str t) " " (pr-str sch) keyword-row "; a column's strings stay its own") [:keyword :unknown]]
-                      (some #{[sch n]} accept/default-write)
-                      [(str (pr-str t) " " (pr-str sch) " is in (h/pgjdbc-write) already: leave it out")]
-                      (and (nil? (types/entry t)) (sends-string? sch))
-                      [(str (pr-str t) " " (pr-str sch) " is no type of docs/types.md (an enum's or a domain's name?): a String goes"
-                            " as varchar, which an enum takes only cast, or with every String untyped under"
-                            " (h/pgjdbc-write {:stringtype :unspecified})" (when kw? (str "; a keyword" keyword-row)))
-                       (when kw? [:keyword :unknown])]
-                      (nil? (types/entry t))
-                      [(str (pr-str t) " " (pr-str sch) " is no type of docs/types.md (an enum's or a domain's name?): its value an extension sends"
-                            " untyped is a row " (pr-str [sch :unknown])) [sch :unknown]]
-                      :else [(str (pr-str t) " " (pr-str sch) " is a row " (pr-str [sch t])) [sch t]]))
-              (for [k (keys m) :when (not (or (string? k) (#{:enum :array :stringtype} k)))]
-                [(str (pr-str k) " is no option of pgmalli 0.3's :write")]))]
-    (if (sequential? write)
-      ;; :write is rows already: :stringtype is the type of its string rows
-      [[(cond (= :unspecified stringtype) ":stringtype :unspecified sends :write's varchar string rows untyped (:unknown)"
-              stringtype-line stringtype-line
-              :else ":stringtype nil is no option; leave it out")]
-       (let [rows (vec (for [[sch t :as row] write]
-                         (if (and (= :unspecified stringtype) (vector? row) (string? t) (= "character varying" (:name (types/entry t)))
-                                  (sends-string? sch))
-                           [sch :unknown]
-                           row)))
-             ;; a String goes untyped under :unspecified, a row of its own where none says how it goes
-             rows (if (and (= :unspecified stringtype) (not-any? (fn [[sch]] (sends-string? sch)) (filter vector? rows)))
-                    (conj rows [:string :unknown])
-                    rows)
-             base (accept/pgjdbc-write {:stringtype stringtype})
-             n (count base)]
-         ;; rows built on pgjdbc's: the call, not a copy of them
-         (if (and (some? stringtype) (= base (take n rows)))
-           (if (> (count rows) n) (list 'into call (vec (drop n rows))) call)
-           rows))]
-      (let [rows (vec (distinct (keep second said)))]
-        [(map first said) (if (seq rows) (list 'into call rows) call)]))))
+(defn- type-name
+  "A :send type by its name: a type types knows, an array of one, :unknown; nil otherwise."
+  [t]
+  (cond (= :unknown t) t
+        (array-type-name t) (array-type-name t)
+        :else (some-> (types/entry t) :name)))
 
-(defn- migration!
-  "The error for options of pgmalli 0.3 (:stringtype, :write as a map): what each is now."
-  [{:keys [write] :as opts}]
-  (let [[lines suggested] (migration opts)
-        given (if (map? write) (select-keys opts [:write :stringtype]) (select-keys opts [:stringtype]))]
-    (error/fail! :pgmalli.error/invalid-options
-                 (str "pgmalli options: " (pr-str given) " is no longer read; :write is a vector of [schema type] rows,"
-                      " pgjdbc's (h/pgjdbc-write) by default" (when (seq lines) (str ": " (str/join "; " lines)))
-                      ". All told, :write is " (pr-str suggested) " (docs/queries.md#what-your-application-sends)")
-                 {:given given})))
+(defn send-map
+  "{class type} an application sends: pgjdbc's (accept/class-types) but a Character, which a
+   char? on every string argument would say nothing of, with :send merged over it, a class
+   :send maps to nil left out."
+  [{:keys [send]}]
+  (into {} (remove (comp nil? val)) (merge (dissoc (into {} accept/class-types) Character) send)))
 
 (defn options!
-  "opts when pgmalli.honeysql takes them: their keys and values, :write a sequence of [schema
-   type] rows, each type one types knows (a name or an alias) or :unknown, a collection row's
-   type an array of one (\"bigint[]\") or :unknown, each schema one registry reads (a malli registry; nil when the caller has checked
-   them); an error naming what it does not, with the one meant or, for an option of pgmalli
-   0.3, what it is now."
-  [opts registry]
-  (let [{:keys [write]} opts
-        fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})
-        collection? #(#{:sequential :vector :set :pg/array} (shape/kind %))]
-    (when (and (contains? opts :write) (not (or (sequential? write) (map? write))))
-      (fail! (str ":write is a vector of [schema type] rows, such as (h/pgjdbc-write); got " (pr-str write)) write))
-    (when (map? write) (migration! opts))
-    (doseq [[i row] (map-indexed vector write)
-            :let [[s t] (when (vector? row) row)
-                  what (str ":write's row " i " " (pr-str row))]]
-      (cond (not (and (vector? row) (= 2 (count row))))
-            (fail! (str what " is no [schema type] row"
-                        (when (and (= 2 (count write)) (not (vector? (first write))) (or (string? (second write)) (= :unknown (second write))))
-                          (str "; :write is a vector of rows: " (pr-str [(vec write)]))))
-                   row)
-            (not (or (= :unknown t) (string? t)))
-            (fail! (str what ": a type is a name of docs/types.md (\"varchar\") or :unknown for a value sent untyped"
-                        (cond (and (string? s) (types/entry s)) (str "; a row is [schema type]: " (pr-str [t s]))
-                              (and (ident? t) (types/entry (name t))) (str ", a string: " (pr-str [s (name t)]))))
-                   row)
-            (and (element-row? row) (not-every? collection? (shape/alternatives s)))
-            (fail! (str what ": :pgmalli/element goes in a collection, [[:sequential :pgmalli/element] :unknown]") row)
-            (and (= :unknown t) (not (element-row? row)) (every? collection? (shape/alternatives s)))
-            (fail! (str what ": a collection sent untyped is an array, its elements :pgmalli/element: "
-                        (pr-str [(shape/either (for [a (shape/alternatives s)] [(shape/head a) :pgmalli/element]) nil) :unknown]))
-                   row)
-            (and (element-row? row) (not (or (= :unknown t) (array-type-name t))))
-            (fail! (str what ": a collection row goes as an array type (\"bigint[]\"), or untyped (:unknown), which PostgreSQL"
-                        " types from where it goes (= ANY(?), not unnest(?))")
-                   row)
-            (element-row? row) nil
-            (or (str/ends-with? t "[]") (str/starts-with? t "_"))
-            (fail! (str what ": an array goes as a collection of its elements, "
-                        (pr-str [[(if (collection? s) (shape/head s) :vector) :pgmalli/element] (or (array-type-name t) :unknown)]))
-                   row)
-            (not (or (= :unknown t) (types/entry t)))
-            (fail! (str what ": " (pr-str t) " is no type pgmalli knows (docs/types.md)"
-                        (if-let [suggest (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types))]
-                          (error/did-you-mean (pr-str suggest))
-                          (if (sends-string? s)
-                            "; a String goes as varchar, which an enum takes only cast, or with every String untyped under (h/pgjdbc-write {:stringtype :unspecified})"
-                            (str "; an enum's or a domain's value an extension sends untyped is a row " (pr-str [s :unknown])))))
-                   row)
-            registry
-            (try (m/schema (clojure.walk/postwalk-replace {:pgmalli/element :any} s) {:registry registry})
-                 (catch Exception e
-                   (error/fail! :pgmalli.error/invalid-options
-                                (str "pgmalli options: " what ": no malli schema the registry reads ("
-                                     (pr-str (or (get-in (ex-data e) [:data :schema]) (ex-message e))) ")")
-                                {:given row} e))))))
-  ;; after its rows are checked: the :write it suggests keeps them
-  (when (contains? opts :stringtype) (migration! opts))
-  (checked! @options opts)
-  opts)
+  "opts when pgmalli takes them: their keys and values; :send a map of classes to a type types
+   knows (a name or an alias), an array of one (\"bigint[]\"), :unknown or nil; :jdbc's
+   :builder-fn one of next.jdbc's map builders, a modified one with :label-fn. An error names
+   what it does not take, with the one meant; :write and :stringtype of pgmalli 0.3 name :send."
+  [opts]
+  (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
+    (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
+      (fail! (str (pr-str old) " is no longer read: what an application sends is :send, a map of classes to the type"
+                  " each goes as ({String :unknown} for stringtype=unspecified); see CHANGELOG.md and"
+                  " docs/queries.md#what-your-application-sends")
+             old))
+    (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns :return-keys]))]
+      (fail! (str (pr-str old) " is no longer read: pass the options you pass to next.jdbc as :jdbc"
+                  " ({:jdbc {:builder-fn rs/as-unqualified-kebab-maps :return-keys true}}); see CHANGELOG.md")
+             old))
+    (when (contains? opts :send)
+      (when-not (map? (:send opts))
+        (fail! (str ":send is a map of classes to types, {clojure.lang.Keyword :unknown}; got " (pr-str (:send opts))) (:send opts)))
+      (doseq [[c t :as e] (:send opts)]
+        (cond (not (class? c))
+              (fail! (str ":send's key " (pr-str c) " is no class; a key is the class of a value sent (String, clojure.lang.Keyword)") e)
+              (and (some? t) (not (type-name t)))
+              (fail! (str ":send's " (pr-str c) " goes as " (pr-str t) ", which is no type of docs/types.md, an array of one (\"bigint[]\")"
+                          " or :unknown for a value sent untyped (an enum's or a domain's value too)"
+                          (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
+                     e))))
+    (let [{:keys [builder-fn label-fn] :as jdbc} (:jdbc opts)]
+      (when builder-fn
+        (let [how (builder builder-fn)]
+          (cond (nil? how)
+                (fail! (str ":jdbc's :builder-fn is none of next.jdbc.result-set's or next.jdbc.optional's map builders ("
+                            (str/join ", " (distinct (sort (map name (keys builders))))) "), whose keys pgmalli knows")
+                       (select-keys jdbc [:builder-fn]))
+                (and (= :modified (:fn how)) (not label-fn))
+                (fail! ":jdbc's modified builder takes :label-fn, as next.jdbc's does" (select-keys jdbc [:builder-fn]))))))
+    (checked! @options opts)
+    opts))
 
 (defn write-rows
-  "The rows of :write (accept/default-write without it), each type by its name, of a
-   collection (element-row?) or not."
+  "[schema type] for each class send-map sends, in pgjdbc's order (accept/class-types) and then
+   by name, by array? an array argument's (a Clojure
+   collection or a Java array sent as an array type or untyped, the collection's elements
+   :pgmalli/element) or another's."
   [opts array?]
-  (for [[s t :as row] (or (:write opts) accept/default-write)
-        :when (= array? (element-row? row))]
-    [s (cond (= :unknown t) t array? (array-type-name t) :else (:name (types/entry t)))]))
-
-(defn- string-rows
-  "The types of :write's rows that take strings (:sure) and of those that may, whose kind
-   pgmalli cannot tell too (:all, shape/value-classes), in row order; pgjdbc's varchar without
-   one."
-  [opts]
-  (let [rows (write-rows opts false)
-        types (fn [pred] (or (not-empty (vec (distinct (for [[s t] rows :when (some pred (shape/alternatives s))] t))))
-                             ["character varying"]))]
-    {:sure (types #(#{:string 'string? :re} (shape/kind %)))
-     :all (types sends-string?)}))
-
-(defn string-sends
-  "The types :write may send a String as (string-rows)."
-  [opts]
-  (:all (string-rows opts)))
+  (for [[c t] (sort-by (fn [[c]] [(or (first (keep-indexed #(when (= c (first %2)) %1) accept/class-types)) Long/MAX_VALUE) (str c)])
+                       (send-map opts))
+        :let [t (type-name t)
+              coll (some (fn [[k s]] (when (.isAssignableFrom ^Class k c) s)) collections)
+              array (or (.isArray ^Class c) (and coll (or (= :unknown t) (array-type-name t))))]
+        :when (= array? (boolean (and array (not= c (Class/forName "[B")))))]
+    [(if (and array coll) coll (class-schema c)) t]))
 
 (defn sent-type
   "The type a literal value goes to PostgreSQL as: :unknown under sql/format's :inline, which
-   writes it into the SQL; a String or Character untyped (:unknown) where any row may send one so,
-   else as the first row's type that takes strings (varchar without one); any other value as pgjdbc sends its class (accept/class-type), nil for
-   a class it does not list."
+   writes it into the SQL; otherwise as send-map sends its class, nil for a class it does not
+   list."
   [value {:keys [format] :as opts}]
-  (cond (:inline format) :unknown
-        (or (string? value) (char? value)) (let [{:keys [sure all]} (string-rows opts)]
-                                             (if (some #{:unknown} all) :unknown (first sure)))
-        :else (accept/class-type value)))
+  (if (:inline format)
+    :unknown
+    (let [m (send-map opts)]
+      (some (fn [c] (some-> (get m c) type-name)) (cons (class value) (supers (class value)))))))
 
-;;; what the driver returns and takes
+(defn string-sends
+  "The types a String is sent as: send-map's for String and Character."
+  [opts]
+  (vec (distinct (keep #(some-> (get (send-map opts) %) type-name) [String Character]))))
 
 (defn- pg-type [s] (when (and (vector? s) (map? (second s))) (:pg/type (second s))))
 
@@ -300,10 +259,10 @@
 
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
-   column; :unnest, unnest(?) assigned): the collections :write's rows with :pgmalli/element
-   send, t in its place ([[:sequential :pgmalli/element] :unknown]), of those PostgreSQL takes
+   column; :unnest, unnest(?) assigned): the collections and Java arrays :send sends as an
+   array (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
-   element type t's takes (accept/accepts?); :any without one."
+   element type is one of t's own (accept/holds?), as a column takes a value; :any without one."
   [t opts use]
   (let [p (some #(when (and (vector? %) (map? (second %))) (:pg/type (second %))) (shape/alternatives t))
         elem (some-> p types/entry :name)
@@ -311,45 +270,49 @@
                  (if (= :unknown sent)
                    (not= :unnest use)
                    (or (not (and elem (accept/known? elem)))
-                       (accept/accepts? elem (subs sent 0 (- (count sent) 2)) (if (= :compare use) :compare :assign)))))
+                       (accept/holds? elem (subs sent 0 (- (count sent) 2))))))
         alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)] (clojure.walk/postwalk-replace {:pgmalli/element t} s)))]
     (shape/either alts :any)))
 
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's
    argument is an array of its elements' (array-type); otherwise the types read-type shares
-   with it (:time extends both sides), and what :write sends as its type, which is all of it
+   with it (:time extends both sides), and what :send sends as its type, which is all of it
    where read-type has the driver's object (:any)."
   [schema opts]
   (if (array-column? schema)
     (array-type (write-type (last schema) opts) opts :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
           n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
-          alts (concat (when-not (= :any (shape/head t)) [t])
-                       ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
-                       (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
-                             a (shape/alternatives s)]
-                         a))]
-      (shape/either alts t))))
+          ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
+          sent (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
+                     a (shape/alternatives s)]
+                 a)]
+      (cond (empty? sent) t
+            (= :any (shape/head t)) (shape/either sent t)
+            ;; a CHECK holds over every value sent as the type: the alternatives go in its base
+            :else (shape/update-base t (fn [base]
+                                         ;; a kind the base has already takes its bounds (a varchar(n)'s length)
+                                         (let [more (remove #(= (shape/kind %) (shape/kind base)) sent)]
+                                           (shape/either (distinct (cons base more)) base))))))))
 
 ;;; rows as next.jdbc builds them
 
 (defn row-key
-  "The key next.jdbc gives a column: qualified by its table when the column has one, unless
-   :qualified? is false; table is [schema name], or \"schema.table\" split at its first dot; kebab-cased (:kebab?) or lower-cased
-   (:lower?) as its builders do it."
-  [table column {:keys [qualified? kebab? lower?] :or {qualified? true}}]
-  (let [k (cond kebab? csk/->kebab-case-string lower? str/lower-case :else identity)]
+  "The key next.jdbc gives a column (row-keys): qualified by its table when the column has one
+   and the builder qualifies; table is [schema name], or \"schema.table\" split at its first dot."
+  [table column opts]
+  (let [{:keys [qualified? label qualifier]} (row-keys opts)]
     (if (and qualified? table)
-      (keyword (k (if (vector? table) (second table) (last (str/split table #"\." 2)))) (k column))
-      (keyword (k column)))))
+      (keyword (qualifier (if (vector? table) (second table) (last (str/split table #"\." 2)))) (label column))
+      (keyword (label column)))))
 
 (defn row-entry
-  "A row map's entry for a column read as inner: NULL a [:maybe], or the key absent under
-   :nil-columns :absent (next.jdbc.optional)."
+  "A row map's entry for a column read as inner: NULL a [:maybe], or the key absent under a
+   next.jdbc.optional builder."
   ([k inner nullable? opts] (row-entry k nil inner nullable? opts))
-  ([k props inner nullable? {:keys [nil-columns]}]
-   (let [absent? (and nullable? (= :absent nil-columns))
+  ([k props inner nullable? opts]
+   (let [absent? (and nullable? (:absent? (row-keys opts)))
          props (cond-> props absent? (assoc :optional true))
          s (if (and nullable? (not absent?)) [:maybe inner] inner)]
      (if (empty? props) [k s] [k props s]))))
@@ -382,28 +345,6 @@
                                                       (or (instance? java.util.Date x) (instance? java.time.Instant x)) (java.time.LocalDateTime/ofInstant (instant x) zone)
                                                       :else x))}}))))
 
-(def ^:private builders
-  "next.jdbc's map builders -> how they key a row (next.jdbc 1.3)."
-  (let [maps {"as-maps" {:qualified? true} "as-unqualified-maps" {:qualified? false}
-              "as-lower-maps" {:qualified? true :lower? true} "as-unqualified-lower-maps" {:qualified? false :lower? true}}]
-    (merge (update-keys (merge maps {"as-kebab-maps" {:qualified? true :kebab? true} "as-unqualified-kebab-maps" {:qualified? false :kebab? true}})
-                        #(symbol "next.jdbc.result-set" %))
-           (update-keys (update-vals maps #(assoc % :nil-columns :absent)) #(symbol "next.jdbc.optional" %)))))
-
-(defn read-options
-  "The reading options of a next.jdbc result set builder named by its symbol; documented on
-   pgmalli.core/read-options."
-  [builder]
-  (let [b (if (var? builder) (symbol builder) builder)]
-    (or (get builders b)
-        (let [known (vec (sort (keys builders)))
-              suggest (error/suggest b known)]
-          (error/fail! :pgmalli.error/invalid-options
-                       (str b (cond (str/includes? (str b) "modified") " keys rows by functions of yours: give :qualified? and :kebab? as they do"
-                                    suggest (str " is not one of next.jdbc's map builders; did you mean " suggest "?")
-                                    :else (str " is not one of next.jdbc's map builders pgmalli knows; it knows " known)))
-                       (cond-> {:given b :known known} suggest (assoc :suggest suggest)))))))
-
 (defn- data-columns
   "The row map of a generated schema as data (columns gives the malli schema)."
   [registry name]
@@ -420,8 +361,8 @@
   [schemas s opts f]
   (if-let [d (when (and (vector? s) (= :ref (first s))) (get schemas (last s)))]
     (let [base (through-domain schemas (shape/domain-base d) opts f)]
-      ;; compared without :write's rows, which add values to the base type and do not change how the driver reads it
-      (if (= base (f base (assoc opts :write [])))
+      ;; compared with nothing sent, as sends add values to the base type and do not change how the driver reads it
+      (if (= base (f base (assoc opts :send (zipmap (map first accept/class-types) (repeat nil)))))
         s
         (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
     s))
@@ -442,7 +383,7 @@
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
    pgmalli.core/as-read."
   [registry name opts]
-  (checked! @read-options* opts)
+  (options! opts)
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         table (when (or (:pg/table props) (:pg/view props)) (shape/schema-and-name name))

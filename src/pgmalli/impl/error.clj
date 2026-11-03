@@ -1,7 +1,7 @@
 (ns pgmalli.impl.error
   "The errors pgmalli throws. ex-data carries :pgmalli/error, a kind a program dispatches on,
    its :cognitect.anomalies/category, and where they apply :given (the input at fault),
-   :known (what was expected) and :suggest (the one probably meant). Messages say what is
+   :known (what was expected) and :did-you-mean (a vector of the ones probably meant). Messages say what is
    wrong, with which input, and what to do, in one line. Neither carries a db map, a URL or a
    password.")
 

@@ -3,7 +3,8 @@
    the classpath as pgmalli/<schema>.edn), read and used. Generation and freshness, which need
    psql, are pgmalli.generate; datasets, pgmalli.data; HoneySQL queries checked and typed,
    pgmalli.honeysql."
-  (:require [pgmalli.impl.describe :as d]
+  (:require [malli.core :as m]
+            [pgmalli.impl.describe :as d]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
@@ -47,24 +48,16 @@
   [registry name]
   (portable/portable registry name))
 
-(defn read-options
-  "The reading options (see as-read) of a next.jdbc map builder, named by its symbol or var
-   (#'rs/as-maps):
-   'next.jdbc.result-set/as-unqualified-kebab-maps, 'next.jdbc.optional/as-maps (NULL columns
-   absent) and the like. An error for another (the modified builders key rows by functions of
-   yours, the array builders build no map)."
-  [builder]
-  (jdbc/read-options builder))
-
 (defn as-read
   "The [:map ...] of a table's or view's row as next.jdbc builds it from what PostgreSQL's
    JDBC driver returns. Validate with {:registry registry}.
 
-   (as-read registry :pg.public/users {:qualified? false})
+   (as-read registry :pg.public/users {:jdbc {:builder-fn rs/as-unqualified-maps}})
 
    By default, as next.jdbc's default builder (as-maps) builds rows with no extension: keys
-   :table/column, the types docs/reading-rows.md lists. Options: docs/reading-rows.md#options;
-   read-options gives a builder's.
+   :table/column, the types docs/reading-rows.md lists. :jdbc takes the options passed to
+   next.jdbc (its :builder-fn, :label-fn and :qualifier-fn key the row). Options:
+   docs/reading-rows.md#options.
 
    Throws when an option is unknown, or name is no table's or view's row schema."
   ([registry name] (as-read registry name {}))
@@ -80,6 +73,20 @@
    (jdbc/checked! [:map {:closed true} [:zone {:optional true} [:fn {:error/message "should be a java.time.ZoneId"} #(instance? java.time.ZoneId %)]]] opts)
    (jdbc/transformer opts)))
 
+(defn- schema!
+  "schema when malli reads it under registry; an error naming the type it does not know."
+  [registry schema]
+  (try (m/schema schema {:registry registry})
+       schema
+       (catch clojure.lang.ExceptionInfo e
+         (let [unknown (-> e ex-data :data :schema)]
+           (if (= ::m/invalid-schema (:type (ex-data e)))
+             (error/fail! :pgmalli.error/unknown-schema
+                          (str "describe: " (pr-str unknown) " is no type malli or the registry knows"
+                               (when (keyword? unknown) (error/did-you-mean (some-> (error/suggest unknown (filter keyword? (keys (shape/schemas-of registry)))) pr-str))))
+                          {:given unknown})
+             (throw e))))))
+
 (defn describe
   "A schema as short data for people and tools to read: a column as its PostgreSQL type
    (\"varchar(40)\", \"timestamptz\"), ? when it takes NULL, (optional) when its key may be
@@ -92,7 +99,7 @@
   ([schema]
    (when (shape/generated-name? schema)
      (error/fail! :pgmalli.error/invalid-options (str "describe reads " (pr-str schema) " through a registry: (describe registry " (pr-str schema) ")") {:given schema}))
-   (d/describe {} schema))
+   (d/describe {} (schema! (reg/registry) schema)))
   ([registry schema]
    (when (shape/generated-name? schema) (shape/schema-of registry schema))
-   (d/describe (shape/schemas-of registry) schema)))
+   (d/describe (shape/schemas-of registry) (schema! registry schema))))

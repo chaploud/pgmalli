@@ -2,6 +2,7 @@
   "row-schema's keys against the rows next.jdbc builds from PostgreSQL's JDBC driver. JVM only
    (babashka has no java.sql), so bb test does not list it."
   (:require [clojure.set]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
@@ -75,12 +76,12 @@
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [q (concat queries using-chains), builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
               row (jdbc/execute! ds (sql/format q) {:builder-fn @(requiring-resolve builder)})
-              :let [schema (h/row-schema registry q (pgmalli/read-options builder))
+              :let [schema (h/row-schema registry q {:jdbc {:builder-fn @(requiring-resolve builder)}})
                     entries (m/children (m/schema schema))
                     untold (:pgmalli/untold (m/properties (m/schema schema)))]]
         (is (= (count untold) (count (remove (set (map first entries)) (keys row))))
             (str "a key the row lacks is one :pgmalli/untold names " (pr-str builder q row)))
-        (is (or (empty? untold) (:qualified? (pgmalli/read-options builder)))
+        (is (or (empty? untold) (not= builder 'next.jdbc.result-set/as-unqualified-kebab-maps))
             (str "only a qualified key is untold (a cast column, one through a subquery): " (pr-str q)))
         (is (clojure.set/subset? (set (for [[k p] entries :when (not (:optional p))] k)) (set (keys row)))
             (pr-str builder q))
@@ -102,7 +103,7 @@
               return-keys [nil true ["name"]]
               builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
               :let [jdbc-opts (cond-> {:builder-fn @(requiring-resolve builder)} return-keys (assoc :return-keys return-keys))
-                    opts (cond-> (pgmalli/read-options builder) return-keys (assoc :return-keys return-keys))
+                    opts {:jdbc jdbc-opts}
                     [_ row] (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))
                     [_ one] (m/children (m/schema (h/query-schema registry [] q (assoc opts :result :one)) {:registry registry}))]]
         (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
@@ -120,14 +121,15 @@
     (let [{:keys [host port db user password]} *db*
           ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))
-          opts {:qualified? false :write (conj (h/pgjdbc-write) [[:sequential :pgmalli/element] :unknown])}]
+          opts {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps}}]
       (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest :?bodies]]]}]}
                            {:n 1 :feel "ok" :bodies ["a" "b"]}]
                           [{:select [:id] :from [:notes] :where [:and [:= [:cast :n :text] :?t] [:< [:composite :n :id] [:composite :?n :?id]]]}
                            {:t "1" :n 2 :id 99}]]
-              :let [types (h/arg-types registry q opts)]]
+              :let [types (h/arg-types registry q opts)
+                    params (update-vals params #(if (vector? %) (into-array String %) %))]]
         (is (m/validate (into [:map] types) params {:registry registry}) (pr-str q))
-        (is (some? (jdbc/execute! ds (sql/format q {:params (update-vals params #(if (vector? %) (into-array String %) %))}))) (pr-str q)))
+        (is (some? (jdbc/execute! ds (sql/format q {:params params}))) (pr-str q)))
       (let [q {:select [[[:cast "ok" :feel] :f] [[:cast 2 :positive] :p] [[:cast :n :int] :i] [[:cast true :bool] :b]] :from [:notes]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
         (is (some? row))
@@ -140,17 +142,17 @@
     (let [{:keys [host port db user password]} *db*
           ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
-      (doseq [[q opts values] [[{:select [:id] :from [:prices] :where [:= :id :?x]} {:accept :postgresql} [1 1M 1.0]]
+      (doseq [[q opts values] [[{:select [:id] :from [:prices] :where [:= :id :?x]} {} [1 (int 1)]]
                                [{:select [:id] :from [:prices] :where [:> :amount :?x]} {} [1 2.5M]]
                                [{:select [:id] :from [:prices] :where [:< :at [:cast :?x :timestamptz]]} {}
                                 ["2026-01-01T00:00:00Z" (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0)
                                  (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
-                               [{:select [:id] :from [:prices] :limit :?x} {:accept :postgresql} [nil 1 1M 1.0]]]
+                               [{:select [:id] :from [:prices] :limit :?x} {} [nil 1]]]
               :let [t (:x (h/arg-types registry q opts))]
               v values]
         (is (m/validate t v {:registry registry}) (str (pr-str q) " " (pr-str v)))
         (is (vector? (jdbc/execute! ds (sql/format q {:params {:x v}}))) (str (pr-str q) " " (pr-str v))))
-      (is (not (m/validate (:x (h/arg-types registry {:select [:id] :from [:prices] :where [:= :id :?x]} {:accept :postgresql})) "1"))
+      (is (not (m/validate (:x (h/arg-types registry {:select [:id] :from [:prices] :where [:= :id :?x]})) "1"))
           "a varchar compared with a bigint is no argument PostgreSQL takes"))))
 
 (deftest pg-array-is-what-the-driver-takes
@@ -171,14 +173,14 @@
           ds (jdbc/get-datasource {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))
           ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
-          args (h/arg-types registry ins {:write (conj (h/pgjdbc-write) [[:pg/array :pgmalli/element] :unknown])})
+          args (h/arg-types registry ins)
           v (into-array String ["a" "b"])]
       (is (m/validate (:paths args) v {:registry registry}) "a String[] for a text[] column")
       (is (not (m/validate (:paths args) ["a"] {:registry registry})) "a vector the driver refuses")
       (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
       (let [q {:select [:paths :meta] :from [:docs]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn next.jdbc.result-set/as-unqualified-maps}))]
-        (is (m/validate (h/row-schema registry q {:qualified? false}) row) (pr-str (update-vals row class)))))))
+        (is (m/validate (h/row-schema registry q {:jdbc {:builder-fn next.jdbc.result-set/as-unqualified-maps}}) row) (pr-str (update-vals row class)))))))
 
 (deftest as-read-is-the-row-the-driver-returns
   (when *db*
@@ -189,9 +191,23 @@
           registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
       (doseq [builder ['next.jdbc.result-set/as-maps 'next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
               :let [row (first (jdbc/execute! ds ["SELECT * FROM odd_keys"] {:builder-fn @(requiring-resolve builder)}))
-                    schema (pgmalli/as-read registry :pg.public/odd_keys (pgmalli/read-options builder))]]
+                    schema (pgmalli/as-read registry :pg.public/odd_keys {:jdbc {:builder-fn (requiring-resolve builder)}})]]
         (is (= (set (keys row)) (set (map first (drop 2 schema)))) (str builder))
-        (is (m/validate schema row {:registry registry}) (str builder " " (pr-str (update-vals row class))))))))
+        (is (m/validate schema row {:registry registry}) (str builder " " (pr-str (update-vals row class)))))
+      (doseq [[builder jdbc-opts] [['next.jdbc.result-set/as-modified-maps {:label-fn str/upper-case :qualifier-fn #(str "t_" %)}]
+                                   ['next.jdbc.result-set/as-unqualified-modified-maps {:label-fn #(str/replace % "_" "")}]]
+              :let [jdbc-opts (assoc jdbc-opts :builder-fn @(requiring-resolve builder))
+                    row (first (jdbc/execute! ds ["SELECT * FROM odd_keys"] jdbc-opts))]]
+        (is (= (set (keys row)) (set (map first (drop 2 (pgmalli/as-read registry :pg.public/odd_keys {:jdbc jdbc-opts})))))
+            (str builder " keys a row by its :label-fn and :qualifier-fn"))))))
+
+(deftest a-builder-fn-as-its-symbol-its-var-or-itself-is-the-same
+  (let [registry (pgmalli/registry "sample")
+        q {:select [:id :nick] :from [:users] :where [:= :id :?id]}]
+    (doseq [sym ['next.jdbc.result-set/as-unqualified-kebab-maps 'next.jdbc.optional/as-maps]
+            :let [forms [sym (requiring-resolve sym) @(requiring-resolve sym)]]]
+      (is (apply = (for [f forms] (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn f}}))) (str sym))
+      (is (apply = (for [f forms] (h/row-schema registry q {:schema "sample" :jdbc {:builder-fn f}}))) (str sym)))))
 
 (deftest as-read-keys-a-table-of-a-schema-with-a-dot-by-the-table-alone
   (when *db*

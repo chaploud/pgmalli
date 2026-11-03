@@ -5,49 +5,47 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ## Unreleased
 
+* `:send` says what an application sends, as pgjdbc's `setObject` decides it by class: a map
+  of classes to the type each goes as (a name or alias, an array type `"bigint[]"`, or
+  `:unknown` for a value sent untyped), merged over pgjdbc's; `nil` takes a class out. A class
+  adds to a column's own values where PostgreSQL takes its type as the column's own (a narrower
+  number, another string type, an untyped value to a text or enum column), and in a cast all
+  PostgreSQL casts. A Clojure collection sent as an array type or `:unknown`, and a Java array,
+  is an array argument: compared with `= ANY(?)`, assigned to an array column, or under
+  `unnest`, which takes a typed array alone.
+* `:jdbc` takes the options an application passes to next.jdbc: `:builder-fn` (one of
+  next.jdbc's map builders, as the function, its var, or its qualified symbol where next.jdbc
+  does not load), `:label-fn` and `:qualifier-fn` key rows as next.jdbc does, the modified
+  builders too; `:return-keys` adds RETURNING to a write.
+* `h/values-schema` and `h/set-schema` type a whole row written into a table, for `:values` and
+  `:set` built at run time, keyed as the `:jdbc` builder keys a row where HoneySQL writes that
+  key back to the column. `h/set-schema` takes a non-empty map.
 * `h/arg-types` types an argument under a cast (`[:cast :?at :timestamptz]`) with what
-  PostgreSQL casts to the type: a string too, and an enum type's labels alone.
-* An argument takes a narrower number a row sends: an integer to a `numeric`, `real` or `double
-  precision` column, a narrower integer to an integer column, a `real` to a `double precision`
-  one.
-* `{:accept :postgresql}` types an argument with all PostgreSQL takes where it goes (a `bigint`
-  compared with a `numeric`, anything assigned to a `text` column); by default (`:native`) it
-  takes its column's own values, as before.
-* `:write` is what an application sends: rows of `[schema type]`, the type a name or alias, or
-  `:unknown` for a value sent untyped. `h/pgjdbc-write` gives pgjdbc's rows, the default;
-  `(h/pgjdbc-write {:stringtype :unspecified})` gives them under that connection property. A row
-  adds to a column's own values where the column takes its type as its own (a narrower number,
-  another string type, an untyped value to a text or enum column), and wherever PostgreSQL takes
-  it under `:accept :postgresql` or in a cast. A row of `:pgmalli/element` in a collection is
-  what an array argument may be. A type pgmalli does not know, or a schema the registry does not
-  read, is an error naming the row.
-* `h/insert-schema` and `h/update-schema` type a whole row written into a table, for `:values`
-  and `:set` built at run time.
-* Assigned to an integer column (under `:accept :postgresql`) or cast to an integer type, a
-  fraction is held to the range half a unit wider, as PostgreSQL rounds it first.
-* `h/check` reports a string sent as any type a column does not take (`{:write [[:string
-  "text"]]}` to an enum), not only varchar.
+  PostgreSQL casts to the type: a string too, and an enum type's labels alone. Assigned or cast
+  to an integer type, a fraction is held to the range half a unit wider, as PostgreSQL rounds it.
 * An argument in `:limit` or `:offset` takes nil (none). A comparison in a select or ORDER BY
-  expression types its argument, and `h/check` reads it: its unknown columns, uncast strings and
-  enum literals are problems now.
-* `h/check` reports a string assigned to a reg* column other than regclass (regtype, regproc
-  ...) as `:uncast-string`: PostgreSQL takes none.
-* What to do: an instrumented function whose argument was `:any` under a cast or in a select or
-  ORDER BY comparison now has its type checked; a query whose select or ORDER BY compares an
-  unknown column or an enum with a literal outside its labels now has problems.
-* What to do: rewrite `:write` and `:stringtype` as rows from `h/pgjdbc-write`; the old forms
-  are an error saying what each is now, when the schema is built (a namespace whose
-  `:malli/schema` passes one fails to load). `{:stringtype :unspecified}` is `{:write
-  (h/pgjdbc-write {:stringtype :unspecified})}`. `:write {"text" [:or :string :keyword]}` and
-  `:write {:enum [:string :keyword]}` are a row `[:keyword :unknown]` (or the type your
-  extension sends a keyword as): a column's strings and labels stay its own. `:write {:array [k
-  ...]}` is a row `[[k :pgmalli/element] :unknown]` for each k (or the array type your extension
-  sends it as, `"bigint[]"`, which `unnest` needs). `:write {"T" s}` for another type is a row
-  `[s "T"]`, left out where `(h/pgjdbc-write)` has that same row (`[:uuid "uuid"]`, `[:int
-  "bigint"]` ...); for an enum type's name, a keyword is a row `[:keyword :unknown]` and a
-  String needs none (cast it, or `{:stringtype :unspecified}`). A row adds to a column's own
-  values rather than replacing them, except where pgmalli knew only the driver's object (`:any`:
-  json, jsonb, interval; an array takes the `:pgmalli/element` rows).
+  expression types its argument, and `h/check` reads it.
+* `h/check` reports a string sent as any type a column does not take, not only varchar, and a
+  string assigned to a reg* column other than regclass.
+* `pgmalli.core/describe` refuses a type neither malli nor the registry knows.
+* What to do:
+  * Options: `{:stringtype :unspecified}` is `{:send {String :unknown}}`. `:write {"text" [:or
+    :string :keyword]}` and `:write {:enum [:string :keyword]}` are `{:send
+    {clojure.lang.Keyword :unknown}}` (or the type your extension sends a keyword as).
+    `:write {:array [k ...]}` is `{:send {clojure.lang.IPersistentVector :unknown}}` and the
+    like for the collections you send (or the array type your extension sends them as,
+    `"bigint[]"`, which `unnest` needs). `:write {"T" s}` is the class of `s`'s values mapped
+    to `"T"`, left out where pgjdbc sends it so already.
+  * `:qualified? false`, `:kebab? true`, `:lower? true` and `:nil-columns :absent` are the
+    builder you pass next.jdbc, as `{:jdbc {:builder-fn rs/as-unqualified-kebab-maps}}`;
+    `:return-keys` moves into `:jdbc`. `read-options` is gone: pass the builder.
+  * `h/explain` is `h/humanize`. An error's ex-data names the one probably meant as
+    `:did-you-mean`, a vector, as `h/check`'s problems do, instead of `:suggest`.
+  * The old options are an error saying what each is now, when the schema is built (a
+    namespace whose `:malli/schema` passes one fails to load).
+  * An instrumented function whose argument was `:any` under a cast or in a select or ORDER BY
+    comparison now has its type checked; a query whose select or ORDER BY compares an unknown
+    column or an enum with a literal outside its labels now has problems.
 
 ## 0.3.3 (2026-11-03)
 

@@ -1,8 +1,9 @@
 (ns pgmalli.driver-types-test
   "as-read against the rows next.jdbc builds from PostgreSQL's JDBC driver: one row of every
-   type pgmalli renders, read through every builder read-options knows, under every :time.
+   type pgmalli renders, read through every next.jdbc map builder pgmalli knows, under every :time.
    JVM only (babashka has no java.sql), so bb test does not list it."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [malli.core :as m]
             [next.jdbc :as jdbc]
             next.jdbc.date-time
@@ -56,9 +57,10 @@
                 builder (keys @#'pgmalli.impl.jdbc/builders)
                 table [:pg.public/t :pg.public/v]
                 :let [_ (read-as)
-                      rows (jdbc/execute! ds [(str "SELECT * FROM " (name table) " ORDER BY id")]
-                                          {:builder-fn @(requiring-resolve builder)})
-                      schema (pgmalli/as-read registry table (assoc (pgmalli/read-options builder) :time time))]]
+                      jdbc-opts (cond-> {:builder-fn @(requiring-resolve builder)}
+                                  (str/includes? (name builder) "modified") (assoc :label-fn str/upper-case :qualifier-fn #(str "t_" %)))
+                      rows (jdbc/execute! ds [(str "SELECT * FROM " (name table) " ORDER BY id")] jdbc-opts)
+                      schema (pgmalli/as-read registry table {:jdbc jdbc-opts :time time})]]
           (testing (str builder " :time " time " " table)
             (is (= [] (vec (distinct (disagreements registry schema rows)))))))
         (finally (next.jdbc.date-time/read-as-default))))))

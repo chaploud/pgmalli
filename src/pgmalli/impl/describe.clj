@@ -25,6 +25,7 @@
 (defn- leaf [s]
   (cond (keyword? s) (name s)
         (symbol? s) (get '{decimal? "numeric" double? "float8"} s (str s))
+        (and (vector? s) (= :fn (first s)) (:pg/class (props-of s))) (:pg/class (props-of s))
         (vector? s) (name (first s))
         :else (pr-str s)))
 
@@ -54,7 +55,7 @@
       (= :=> head) {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
       (= :function head) (mapv #(describe schemas %) children)
       (= :cat head) (mapv #(describe schemas %) children)
-      ;; what :write lets an array argument be
+      ;; what :send lets an array argument be
       (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children))
       (let [elem (describe schemas (last (first children)))]
         (str elem "[] (" (str/join ", " (map #(name (first %)) children)) ")"))

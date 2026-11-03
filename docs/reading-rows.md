@@ -34,10 +34,7 @@ converts dates and timestamps alone:
 
 | option | for |
 |---|---|
-| `:qualified? false` | keys `:id`, as `as-unqualified-maps` builds them |
-| `:kebab? true` | kebab-case keys and tables, as the kebab builders do |
-| `:lower? true` | lower-case keys and tables, as the lower builders do |
-| `:nil-columns :absent` | NULL columns left out, as `next.jdbc.optional` builds rows |
+| `:jdbc {...}` | the options you pass to next.jdbc: its `:builder-fn` keys the row (`as-maps` by default), with `:label-fn` and `:qualifier-fn` under a modified builder |
 | `:time :inst` | the default: dates and timestamps as `java.sql.Date` and `Timestamp` (`inst?`) |
 | `:time :instant` | `next.jdbc.date-time/read-as-instant` |
 | `:time :local` | `next.jdbc.date-time/read-as-local` |
@@ -48,30 +45,39 @@ converts dates and timestamps alone:
 An option pgmalli does not know is an error that suggests the intended name:
 
 ```clojure
-(try (pgmalli/as-read registry :pg.public/users {:qualifed? true})
+(try (pgmalli/as-read registry :pg.public/users {:tmie :instant})
      (catch clojure.lang.ExceptionInfo e (ex-message e)))
-;; => "pgmalli options: {:qualifed? [\"should be spelled :qualified?\"]}"
+;; => "pgmalli options: {:tmie [\"disallowed key\"]}; did you mean :time?"
 ```
 
-## From a next.jdbc builder
+## Keys from a next.jdbc builder
 
-`read-options` gives the options of a next.jdbc builder, named by its symbol or var:
+Pass the options you pass to next.jdbc as `:jdbc`. Its `:builder-fn` is one of next.jdbc's map
+builders (`next.jdbc.result-set`'s and `next.jdbc.optional`'s), which keys the row as next.jdbc
+does: unqualified, kebab-case or lower-case keys, a NULL column left out under
+`next.jdbc.optional`, keys named by your `:label-fn` and `:qualifier-fn` under a modified
+builder. Another builder (an array builder, your own) is an error, as pgmalli cannot tell its
+keys:
 
 ```clojure
-(pgmalli/read-options 'next.jdbc.result-set/as-unqualified-kebab-maps)
-;; => {:qualified? false, :kebab? true}
+(require '[next.jdbc.result-set :as rs]
+         '[next.jdbc.optional :as opt]
+         '[clojure.string :as str])
 
-(pgmalli/read-options 'next.jdbc.optional/as-maps)
-;; => {:qualified? true, :nil-columns :absent}
+(pgmalli/describe registry (pgmalli/as-read registry :pg.public/posts {:jdbc {:builder-fn rs/as-unqualified-kebab-maps}}))
+;; => {:author-id "bigint", :id "bigint", :likes "integer", :title "varchar(200)", :title-upper "text?", :views "integer"}
+
+(pgmalli/describe registry (pgmalli/as-read registry :pg.public/posts {:jdbc {:builder-fn rs/as-modified-maps
+                                                                              :label-fn str/upper-case
+                                                                              :qualifier-fn #(str "app." %)}}))
+;; => #:app.posts{:AUTHOR_ID "bigint", :ID "bigint", :LIKES "integer", :TITLE "varchar(200)", :TITLE_UPPER "text?", :VIEWS "integer"}
+
+(pgmalli/describe registry (pgmalli/as-read registry :pg.public/users {:jdbc {:builder-fn opt/as-maps}}))
+;; => #:users{:closed_at "timestamptz (optional)", :created_at "timestamptz", :email "varchar(120)", :group_id "integer", :id "bigint", :nick "varchar(40) (optional)", :status "user_status: active | closed"}
 ```
 
-```clojure
-(-> (pgmalli/as-read registry :pg.public/users (pgmalli/read-options 'next.jdbc.optional/as-maps))
-    (m/schema {:registry registry})
-    (mu/get :users/created_at)
-    (m/form))
-;; => [inst? #:pg{:default [:now], :type "timestamp with time zone"}]
-```
+Where next.jdbc does not load (babashka), name the builder by its qualified symbol:
+`{:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}`.
 
 ## Your own extensions
 

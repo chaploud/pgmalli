@@ -92,16 +92,15 @@
             (is (nil? (try (jdbc/execute! ds (sql/format stmt)) nil (catch Exception x (ex-message x))))
                 (str "PostgreSQL refuses a generated " t ": fix its entry in src/pgmalli/impl/types.clj/types"))
             (let [rows (jdbc/execute! ds [(str "SELECT * FROM " table)] {:builder-fn @(requiring-resolve builder)})
-                  schema (pgmalli/as-read registry (keyword "pg.public" (str/replace table #"^public\." "")) (pgmalli/read-options builder))]
+                  schema (pgmalli/as-read registry (keyword "pg.public" (str/replace table #"^public\." "")) {:jdbc {:builder-fn builder}})]
               (is (m/validate [:sequential schema] rows {:registry registry})
                   (str "pgjdbc returns a " t " as " (some-> (:c (first rows)) class .getName) ": fix its :read in src/pgmalli/impl/types.clj/types")))))))))
 
 (deftest every-nextjdbc-map-builder-is-known
-  ;; as-modified-maps and the like key rows by functions of the caller's
   (let [next-jdbc (str "next.jdbc " (test-db/version "next.jdbc"))
         theirs (set (for [n ['next.jdbc.result-set 'next.jdbc.optional]
                           s (keys (ns-publics n))
-                          :when (and (re-matches #"as-.*maps" (name s)) (not (str/includes? (name s) "modified")))]
+                          :when (re-matches #"as-.*maps" (name s))]
                       (symbol (name n) (name s))))
         ours (set (keys @#'pjdbc/builders))]
     (doseq [b (sort (set/difference theirs ours))]

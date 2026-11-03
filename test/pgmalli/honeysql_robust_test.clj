@@ -41,7 +41,7 @@
 
 (deftest a-broken-query-returns-data-or-throws-ex-info
   (let [opts {:schema "sample"}
-        keys-opts (assoc opts :return-keys ["id"])
+        keys-opts (assoc opts :jdbc {:return-keys ["id"]})
         fs {'check #(h/check registry % opts) 'arg-types #(h/arg-types registry % opts)
             'row-schema #(h/row-schema registry % opts) 'query-schema #(h/query-schema registry [:x] % opts)
             'check+return-keys #(h/check registry % keys-opts) 'row-schema+return-keys #(h/row-schema registry % keys-opts)}

@@ -63,7 +63,7 @@
                           (if suggest
                             (str "; did you mean " (pr-str suggest) "?")
                             (str "; it has " (pr-str (vec (take 5 known))) (when (< 5 (count known)) " ..."))))
-                     (cond-> {:given name :known known} suggest (assoc :suggest suggest)))))
+                     (cond-> {:given name :known known} suggest (assoc :did-you-mean [suggest])))))
     (get schemas name)))
 
 (defn row-map
@@ -186,7 +186,7 @@
                  (if row
                    (str (pr-str name) " is the schema of what is sent to " (:pg/table props) "; " what " takes its row schema " (pr-str row))
                    (str (pr-str name) " is no table's or view's row schema; " what " takes one such as " (pr-str (vec (take 3 rows)))))
-                 (cond-> {:given name :known rows} row (assoc :suggest row)))))
+                 (cond-> {:given name :known rows} row (assoc :did-you-mean [row])))))
 
 (defn head
   "A schema's type: its first element, or itself."

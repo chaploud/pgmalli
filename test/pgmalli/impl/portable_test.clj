@@ -22,13 +22,13 @@
       (is (= 'bytes? (get-in (pgmalli/portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
       (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
   (testing "as-read: the map as next.jdbc builds it"
-    (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant})]
+    (let [r (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.optional/as-maps} :time :instant})]
       (is (= [:users/group_name {:optional true} [:string {:pg/type "text"}]] (nth r 5)) "NULL columns absent, keys qualified")
       (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "timestamps as Instants")
       (is (= [:users/born {:optional true} ['inst? {:pg/type "date"}]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
       (is (m/validate r {:users/id 1 :users/group_id 1 :users/mood "sad" :users/seq 1 :users/score 1 :users/total 2} opts)))
-    (is (some #{[:nick-upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]] :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:kebab? true :qualified? false})))
-    (is (= :order-items/line-no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {:qualified? true :kebab? true}) 2)))
+    (is (some #{[:nick-upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]] :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-kebab-maps}})))
+    (is (= :order-items/line-no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {:jdbc {:builder-fn 'next.jdbc.result-set/as-kebab-maps}}) 2)))
         "the table half is kebab-cased too"))
   (testing "portable converts what it inlines"
     (let [reg (pgmalli/registry {:registry {:pg.public/code [:and :string [:pg/check-value {:pg/constraint "c"} [:<> :VALUE ""]]]
@@ -51,10 +51,10 @@
 
 (deftest a-misspelt-name-suggests-the-one-meant
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean :pg.sample.users/insert\?" (pgmalli/columns registry :pg.sample/users_insert)))]
-    (is (= :pg.sample.users/insert (:suggest (ex-data e))))))
+    (is (= [:pg.sample.users/insert] (:did-you-mean (ex-data e))))))
 
 (deftest read-names-the-types-an-extension-reads-otherwise
-  (let [r (pgmalli/as-read registry :pg.sample/users {:qualified? true :nil-columns :absent :time :instant :read {"date" :time/local-date}})]
+  (let [r (pgmalli/as-read registry :pg.sample/users {:jdbc {:builder-fn 'next.jdbc.optional/as-maps} :time :instant :read {"date" :time/local-date}})]
     (is (= [:users/born {:optional true} :time/local-date] (nth r 2)) "over :time, NULL still allowed")
     (is (= [:users/updated_at {:optional true} [:time/instant {:pg/type "timestamp"}]] (last r)) "the other types as :time reads them")))
 
@@ -68,7 +68,7 @@
 (deftest as-read-given-an-insert-schema-names-the-row-schema
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"what is sent to sample.users; as-read takes its row schema :pg.sample/users"
                                 (pgmalli/as-read registry :pg.sample.users/insert)))]
-    (is (= :pg.sample/users (:suggest (ex-data e))))))
+    (is (= [:pg.sample/users] (:did-you-mean (ex-data e))))))
 
 (deftest describe-reads-as-postgresql-types
   (is (= {:id "bigint" :nick "varchar(40)?"} (select-keys (pgmalli/describe registry :pg.sample/users) [:id :nick])))
@@ -87,3 +87,9 @@
   (is (= {:k [:pg.x/t]} (pgmalli/describe (merge registry {:pg.x/t [:map [:k [:vector [:ref :pg.x/t]]]]}) :pg.x/t))
       "a recursive schema names itself where it recurs")
   (is (= "text? (optional)" (:nick (pgmalli/describe [:map [:nick {:optional true} [:maybe [:string {:pg/type "text"}]]]])))))
+
+(deftest describe-of-a-type-nobody-knows-is-an-error
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"describe: :foo is no type malli or the registry knows" (pgmalli/describe :foo)))]
+    (is (= :pgmalli.error/unknown-schema (:pgmalli/error (ex-data e)))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is no type malli or the registry knows" (pgmalli/describe registry [:map [:id :pg.sample/nope]]))
+      "a reference inside a schema too"))

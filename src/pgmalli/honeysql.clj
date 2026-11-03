@@ -14,7 +14,7 @@
    does. An unqualified table is in :schema (default \"public\"). What code in the query
    builds (a list) is not in the data and is not judged.
 
-   Types are what next.jdbc and PostgreSQL's JDBC driver return, and what :write says the
+   Types are what next.jdbc and PostgreSQL's JDBC driver return, and what :send says the
    application sends (pgjdbc's by default). The functions take
    the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
@@ -47,11 +47,7 @@
   {"ctid" [:some {:pg/type "tid"}] "xmin" [:some {:pg/type "xid"}] "xmax" [:some {:pg/type "xid"}]
    "cmin" [:some {:pg/type "cid"}] "cmax" [:some {:pg/type "cid"}] "tableoid" [:int {:pg/type "oid"}]})
 
-(defn- options!
-  "opts checked (jdbc/options!), :write's schemas against registry unless registry is already
-   reading's, whose caller checked them."
-  [registry opts]
-  (jdbc/options! opts (when-not (::schemas registry) registry)))
+(defn- options! [_registry opts] (jdbc/options! opts))
 
 (defn- reading
   "The registry as this namespace reads it: its schemas taken once (a composite registry merges
@@ -965,7 +961,7 @@
 
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
-   assigned or under equality-ops; and, where :write sends a String typed (varchar, pgjdbc's
+   assigned or under equality-ops; and, where :send sends a String typed (varchar, pgjdbc's
    default), a string HoneySQL sends as a parameter (not inlined, not cast) to a column
    PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar): a
    literal, or an argument to an enum column or to one whose own values are strings."
@@ -982,7 +978,7 @@
         typed? (not= :unknown (jdbc/sent-type "" opts))]
     (concat
      ;; an argument to an enum type's column, or to one whose own values are strings: a String,
-     ;; which goes typed unless :write sends it untyped (stringtype=unspecified)
+     ;; which goes typed unless :send sends it untyped (stringtype=unspecified)
      (for [{:keys [col value scope assigned?] :as use} uses
            :let [k (param-key value)] :when (and k typed?)
            :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
@@ -1088,7 +1084,7 @@
   "stmt as pgjdbc sends it; nil when next.jdbc returns the update count instead of rows. A write
    with no RETURNING gets RETURNING * under :return-keys true, RETURNING the columns named under a
    vector of them, but for TRUNCATE, whose generated keys have no column."
-  [stmt {:keys [return-keys]}]
+  [stmt {{:keys [return-keys]} :jdbc}]
   (cond (or (not (map? stmt)) (contains? stmt :returning) (not-any? #(contains? stmt %) write-keys)) stmt
         (not return-keys) nil
         (contains? stmt :truncate) stmt
@@ -1097,7 +1093,7 @@
 (defn- return-key-problems
   "pgjdbc quotes the names of :return-keys as written (its quoteReturningIdentifiers, true by
    default): one that is a column of the target only folded (:group-id for group_id) is none."
-  [registry stmt scopes {:keys [return-keys schema] :or {schema default-schema} :as opts}]
+  [registry stmt scopes {{:keys [return-keys]} :jdbc :keys [schema] :or {schema default-schema} :as opts}]
   (when (and (sequential? return-keys) (map? stmt) (not= stmt (sent stmt opts)))
     (let [[_ alias] (some-> (first (write-targets stmt)) (table-ref schema))
           {:keys [table opaque?]} (get (first (chain scopes)) alias)
@@ -1113,7 +1109,7 @@
    ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]
 
    A problem in a nested statement (a subquery, a CTE) carries :in, where the statement sits:
-   (get-in q (:in p)) for data, the position in the form for code. explain says each problem
+   (get-in q (:in p)) for data, the position in the form for code. humanize says each problem
    as a sentence. Names resolve as PostgreSQL resolves them. A clause pgmalli does not read is an
    :unread-clause problem. Code in the query (a list) is not read. Options: docs/queries.md#options.
    Throws when body is no HoneySQL data."
@@ -1258,16 +1254,16 @@
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
    :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
-   (jdbc/write-type), and the values of each type :write sends that PostgreSQL takes there (cast,
-   or {:accept :postgresql}) or holds as its own (accept/holds?): for an untyped one, the rows
-   sent untyped; for a typed one, the values a column of that type takes (:time's too, and the
-   rows sent as it); assigned or cast, a
-   number held to a number column's range (within). Compared, the values lose the bounds a
+   (jdbc/write-type), and the values of each type :send sends that the column holds as its own
+   (accept/holds?) or, cast, that PostgreSQL casts (accept/accepts?): for an untyped one, the
+   values sent untyped; for a typed one, the values a column of that type takes (:time's too,
+   and the values sent as it); assigned or cast, a number held to a number column's range
+   (within). Compared, the values lose the bounds a
    comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
    labels, a text label as a keyword too where a row of keywords goes, a number label as each
    number class sent and as a string where one goes untyped or cast; untyped own values, or of a type pgmalli.impl.accept does not answer for,
    are the type alone (:any under a cast)."
-  [registry s context {:keys [accept] :as opts}]
+  [registry s context opts]
   (let [own (cond-> (driver-type registry jdbc/write-type s opts)
               (= :compare context) loose
               ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a CHECK's bounds hold after it
@@ -1276,9 +1272,7 @@
                                                        %))
                                      shape/without-gen))
         t (slot-type registry s)
-        takes? (if (or (= :cast context) (= :postgresql accept))
-                 #(accept/accepts? t % context)
-                 #(accept/holds? t %))
+        takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t %))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
         alts (for [p sent
                    a (if (= :unknown p)
@@ -1318,7 +1312,7 @@
   "The type of an argument compared with a column by op, t as accepted-type gives it compared
    (its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond them, matching
    no row), without NULL; :in's a non-empty vector, list or set of it, as
-   sql/format expands it (IN () is not SQL); an array's the collections :write's rows with :pgmalli/element send (jdbc/array-type).
+   sql/format expands it (IN () is not SQL); an array's the collections and Java arrays :send sends as an array (jdbc/array-type).
    {:compare :lenient} takes nil too but in :in (nil formats as IN ?)."
   [op t array? {:keys [compare] :as opts}]
   (let [lenient? (= :lenient compare)]
@@ -1352,10 +1346,8 @@
                          (concat (for [[op side value] (comparison-sides stmt)
                                        :let [x (array-arg value)]
                                        :when (arg-key (or x value))
-                                       ;; compared, an untyped array PostgreSQL types from the column, each element read as the column's type
-                                       :let [o (cond-> opts (and x (every? #(= :unknown (second %)) (jdbc/write-rows opts true))) (dissoc :accept))
-                                             t (cond (column-keyword? side) (compared-column-type registry sc side op o)
-                                                     (vector? side) (if-let [s (:schema (expression-type registry sc side o))] (compared-schema-type registry s op o) :any)
+                                       :let [t (cond (column-keyword? side) (compared-column-type registry sc side op opts)
+                                                     (vector? side) (if-let [s (:schema (expression-type registry sc side opts))] (compared-schema-type registry s op opts) :any)
                                                      :else :any)]]
                                    [(or x value) (compared-type op t x opts)])
                                  ;; LIMIT and OFFSET take a bigint of at least 0 by assignment, NULL for none
@@ -1514,12 +1506,13 @@
                                 :nullable? (not-any? #(and % (not (:nullable? %))) ts)})))))
 
 (defn- select-row
-  "The row a SELECT returns. Under :qualified?, a column through an opaque table, or a cast
+  "The row a SELECT returns. Under a qualifying builder, a column through an opaque table, or a cast
    column, has a key this cannot tell: the driver keys it by the table it comes from at the
    bottom (a subquery's, a CTE's), or keeps it when PostgreSQL drops a cast to the column's own
    type. The row leaves those out, an open map, and names them under :pgmalli/untold."
-  [registry stmt chain {:keys [qualified? schema] :or {qualified? true schema default-schema} :as opts}]
+  [registry stmt chain {:keys [schema] :or {schema default-schema} :as opts}]
   (let [registry (reading registry)
+        qualified? (:qualified? (jdbc/row-keys opts))
         sc (first chain)
         ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw or code
         ;; there may be one, and a join :join-by builds (read nowhere here) may be outer
@@ -1582,7 +1575,7 @@
 
 (defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (-> opts (assoc :qualified? false) (dissoc :nil-columns)))) members)]
+    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (assoc opts ::jdbc/member true))) members)]
       (when (and (every? some? rows) (apply = (map count rows)))
         (into [:map]
               (for [entries (apply map vector (map rest rows))
@@ -1662,32 +1655,42 @@
 
 ;;; what an application writes
 
-(defn pgjdbc-write
-  "The rows of :write for pgjdbc with no extension: [[schema type] ...], the values an
-   application sends and the type each goes as; under {:stringtype :unspecified}, its connection
-   property, a String goes untyped (:unknown). The default of :write; add or remove rows to say
-   what your application's extensions send (docs/queries.md#what-your-application-sends)."
-  ([] (pgjdbc-write {}))
-  ([opts]
-   (when-not (map? opts)
-     (error/fail! :pgmalli.error/invalid-options (str "pgjdbc-write takes an options map, {:stringtype :unspecified}; got " (pr-str opts)) {:given opts}))
-   (jdbc/checked! [:map {:closed true} [:stringtype {:optional true} [:enum :varchar :unspecified]]] opts)
-   (accept/pgjdbc-write opts)))
+(defn- written-key
+  "The key of column (a keyword, or a string where the registry keys it so) in a :values or :set
+   map that HoneySQL writes back to column under sql/format's opts (the format): of the key :jdbc's
+   builder reads column as (unqualified), the keyword, the column's name as a string, the first
+   it writes as column (unquoted, PostgreSQL folds a name to lower case)."
+  [column {:keys [format] :as opts}]
+  (let [n (name column)
+        fmt (honeysql 'honey.sql/format)
+        candidates (distinct [(jdbc/row-key nil n opts) (keyword n) n])
+        writes (fn [k]
+                 (let [sql (first (fmt {:insert-into :t :values [{k 1}]} (or format {})))
+                       col (second (re-find #"\((.*?)\)" sql))]
+                   (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" col)] q (str/lower-case col))))]
+    (if fmt
+      (or (some #(when (= n (writes %)) %) candidates) (if (string? column) n (keyword n)))
+      (if (string? column) n (keyword n)))))
 
 (defn- written-row
-  "The [:map ...] of the derived schema (\"insert\", \"update\") of the table row name: each column
-   typed as an argument assigned to it, optional as the derived schema has it, keyed by its
-   name as HoneySQL writes it back to the column (docs/queries.md#a-row-written-into-a-table); one
-   the database may fill takes :default too, and one it writes :default alone."
+  "The [:map ...] of the derived schema (\"insert\", \"update\") of the table name names (a
+   registry row name, or a table keyword as HoneySQL names it, in :schema): each column typed as
+   an argument assigned to it, optional as the derived schema has it, keyed as HoneySQL writes it
+   back to the column (written-key); one the database may fill takes :default too, and one it
+   writes :default alone. update takes a non-empty map: HoneySQL writes an empty :set as SET
+   alone, which PostgreSQL refuses."
   [registry name derived what opts]
   (options! registry opts)
+  (when-not (keyword? name)
+    (error/fail! :pgmalli.error/invalid-options
+                 (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
+                 {:given name}))
   (let [r (reading registry)
         ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
-        ;; name the one meant; a table as HoneySQL names it (:users, :app.users, "users") qualified in :schema
-        name (if (or (not (or (keyword? name) (string? name)))
-                     (str/starts-with? (cond-> (str name) (keyword? name) (subs 1)) "pg."))
+        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
+        name (if (str/starts-with? (subs (str name) 1) "pg.")
                name
-               (shape/table-key (qualified (keyword name) (:schema opts default-schema))))
+               (shape/table-key (qualified name (:schema opts default-schema))))
         s (shape/schema-of registry name)
         dn (shape/derived-name name derived)]
     (cond (shape/row-schema? s) nil
@@ -1700,50 +1703,41 @@
                        (error/fail! :pgmalli.error/unknown-schema
                                     (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
                                     {:given dn})))
-          ;; HoneySQL writes a string key as it is, and a keyword's - as _ where names are unquoted (or
-          ;; :quoted-snake); nothing else changes, so b1 stays :b1
-          q? (quoted? (:format opts))
-          kebab? (and (:kebab? opts) (or (not q?) (:quoted-snake (:format opts))))
-          ;; unquoted, PostgreSQL folds a keyword's name to lower case: a column with capitals only a string reaches
-          key #(let [n (clojure.core/name %)
-                     ;; :quoted-always quotes a name it matches as it is
-                     always? (some-> (:quoted-always (:format opts)) (re-find n))]
-                 (cond (string? %) %
-                       (and (not q?) (not always?) (not= n (str/lower-case n))) n
-                       :else (keyword (cond-> n (and kebab? (not always?)) (str/replace "_" "-")))))
+          key #(written-key % opts)
           default (into [:enum] default-values)
           ;; the columns the database may fill: optional in what an INSERT may carry
-          fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))]
-      (into [:map {:closed true}]
-            (concat
-             ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
-             (for [[k props c] written
-                   :let [t (cond-> (accepted-type r c :assign opts) (maybe? c) nullable)
-                         t (if (fills k) [:or t default] t)]]
-               (if (:optional props) [(key k) {:optional true} t] [(key k) t]))
-             ;; one the database writes (generated, identity ALWAYS) takes it alone
-             (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-               [(key k) {:optional true} default]))))))
+          fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
+          m (into [:map {:closed true}]
+                  (concat
+                   ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
+                   (for [[k props c] written
+                         :let [t (cond-> (accepted-type r c :assign opts) (maybe? c) nullable)
+                               t (if (fills k) [:or t default] t)]]
+                     (if (:optional props) [(key k) {:optional true} t] [(key k) t]))
+                   ;; one the database writes (generated, identity ALWAYS) takes it alone
+                   (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
+                     [(key k) {:optional true} default])))]
+      (if (= "update" derived) [:and m [:map-of {:min 1} :any :any]] m))))
 
-(defn insert-schema
-  "The [:map ...] of one row an INSERT's :values may carry into the table whose row schema is
-   name (:pg.public/users, or :users in :schema), typed as arg-types types an argument: each
-   column as an argument assigned to it, keyed by its name as HoneySQL writes it back to the
+(defn values-schema
+  "The [:map ...] of one row an INSERT's :values may carry into a table, named as HoneySQL names
+   it (:users in :schema) or by its row schema (:pg.public/users), typed as arg-types types an
+   argument: each column as an argument assigned to it, keyed as HoneySQL writes it back to the
    column (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
    (generated, identity ALWAYS) taking :default alone. Options: docs/queries.md#options.
 
-   (insert-schema registry :pg.public/users)"
-  ([registry name] (insert-schema registry name {}))
-  ([registry name opts] (written-row registry name "insert" "insert-schema" opts)))
+   (values-schema registry :users)"
+  ([registry name] (values-schema registry name {}))
+  ([registry name opts] (written-row registry name "insert" "values-schema" opts)))
 
-(defn update-schema
-  "The [:map ...] an UPDATE's :set may carry into the table whose row schema is name: as
-   insert-schema, every column optional.
+(defn set-schema
+  "The schema of the map an UPDATE's :set may carry into a table: as values-schema, every column
+   optional, at least one.
 
-   (update-schema registry :pg.public/users)"
-  ([registry name] (update-schema registry name {}))
-  ([registry name opts] (written-row registry name "update" "update-schema" opts)))
+   (set-schema registry :users)"
+  ([registry name] (set-schema registry name {}))
+  ([registry name opts] (written-row registry name "update" "set-schema" opts)))
 
 ;;; problems as text
 
@@ -1767,10 +1761,10 @@
    :uncast-string (fn [{:keys [column value arg type]}]
                     (let [what (if arg (str "argument " arg) (pr-str value))]
                       (str what " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
-                           " (HoneySQL sends a string as a parameter, typed as :write sends it: varchar under pgjdbc's default);"
+                           " (HoneySQL sends a string as a parameter, typed as :send sends it: varchar under pgjdbc's default);"
                            " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
                            (if (str/ends-with? type "[]") (str "[:raw " (pr-str type) "]") (str ":" type))
-                           "], or pass {:write (h/pgjdbc-write {:stringtype :unspecified})}"
+                           "], or pass {:send {String :unknown}}"
                            " when the connection sets stringtype=unspecified")))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
@@ -1779,11 +1773,11 @@
    :unread-clause (fn [{:keys [clause]}] (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand"))
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))})
 
-(defn explain
+(defn humanize
   "A sentence for each problem of check (or of query-schema's :pgmalli/problems): what is wrong
    and what to do.
 
-   (is (= [] (check registry q)) (explain (check registry q)))"
+   (is (= [] (check registry q)) (humanize (check registry q)))"
   [problems]
   (mapv (fn [{:keys [kind in] :as p}]
           (str (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))

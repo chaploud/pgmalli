@@ -177,7 +177,7 @@ sent do not show.
 ```
 
 These schemas hold the database's types. For a row your code builds and HoneySQL sends,
-`h/insert-schema` and `h/update-schema` type each column as an argument, with what your
+`h/values-schema` and `h/set-schema` type each column as an argument, with what your
 application sends ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 
 A `numeric` column takes a BigDecimal (`10M`); a long such as `10` fails. Enum values are
@@ -238,20 +238,19 @@ builds it, to validate results as they come back:
 ;; => true
 ```
 
-By default the keys are those of next.jdbc's default builder, `as-maps`. Another builder's
-options come from `read-options`:
+By default the keys are those of next.jdbc's default builder, `as-maps`. Pass the options you
+pass to next.jdbc as `:jdbc`, and the row is keyed as its builder keys it:
 
 ```clojure
-(pgmalli/read-options 'next.jdbc.result-set/as-unqualified-maps)
-;; => {:qualified? false}
+(require '[next.jdbc.result-set :as rs])
 
-(mu/keys (m/schema (pgmalli/as-read registry :pg.public/users {:qualified? false})
+(mu/keys (m/schema (pgmalli/as-read registry :pg.public/users {:jdbc {:builder-fn rs/as-unqualified-maps}})
                    {:registry registry}))
 ;; => (:closed_at :created_at :email :group_id :id :nick :status)
 ```
 
-When every key of a row is reported missing, the row came from another builder: pass its
-`read-options`.
+When every key of a row is reported missing, the row came from another builder: pass the
+options you pass to next.jdbc.
 
 There are three ways to check a row read from the database:
 
@@ -317,15 +316,15 @@ can match no row ([docs/queries.md](docs/queries.md#reported-though-postgresql-r
 ```
 
 HoneySQL sends a string as a parameter, and pgjdbc sends it as `varchar`, which no enum column
-takes. Cast it, or tell `h/check` your connection has
-`stringtype=unspecified`:
+takes. Cast it, or tell `h/check` your connection sends a `String` untyped
+(`stringtype=unspecified`):
 
 ```clojure
 (h/check registry {:select [:id] :from [:users] :where [:= :status "active"]})
 ;; => [{:kind :uncast-string, :column :status, :value "active", :type "user_status"}]
 
 (h/check registry {:select [:id] :from [:users] :where [:= :status "active"]}
-         {:write (h/pgjdbc-write {:stringtype :unspecified})})
+         {:send {String :unknown}})
 ;; => []
 ```
 
@@ -348,14 +347,14 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list where written or under `=`, `IN` and `IS NOT DISTINCT FROM`, with `:allowed` |
-| `:uncast-string` | a string sent typed (`varchar` under pgjdbc's default, or the type `:write` sends it as) where the column's type takes none (an enum, a number, a date ...); not where `:write` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}` |
+| `:uncast-string` | a string sent typed (`varchar` under pgjdbc's default, or the type `:send` sends it as) where the column's type takes none (an enum, a number, a date ...); not where `:send` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}` |
 | `:unread-clause` | a clause pgmalli does not read; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
-`h/explain` says each problem as what is wrong and what to do:
+`h/humanize` says each problem as what is wrong and what to do:
 
 ```clojure
-(h/explain (h/check registry {:select [:nik] :from [:users]}))
+(h/humanize (h/check registry {:select [:nik] :from [:users]}))
 ;; => ["unknown column nik; did you mean nick?"]
 ```
 
@@ -371,7 +370,7 @@ Check every query of a project in one test:
 (deftest queries-agree-with-the-schema
   (doseq [[k q] queries]
     (let [problems (h/check registry q)]
-      (is (= [] problems) (str k ": " (h/explain problems))))))
+      (is (= [] problems) (str k ": " (h/humanize problems))))))
 ```
 
 [docs/queries.md](docs/queries.md) covers subqueries, CTEs, code in a query and argument types.
@@ -588,7 +587,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/fault` | pgmalli's own fault (please report it), or psql failing to read the catalog: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |
 
 Each error's ex-data also carries `:cognitect.anomalies/category`, and `:given`, `:known` and
-`:suggest` where they apply.
+`:did-you-mean` (the names probably meant, as a problem of `h/check` names them) where they apply.
 
 ## Development
 

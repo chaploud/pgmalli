@@ -49,7 +49,7 @@
           (is (if pg18? (or (not taken) (accept/accepts? accepted-t sent-t context)) (= taken (accept/accepts? accepted-t sent-t context)))
               (str (pr-str sent) " " context " " t)))))))
 
-(deftest sent-type-is-pgjdbcs
+(deftest class-types-are-the-types-pgjdbc-sends
   (when *db*
     (let [{:keys [host port db user password]} *db*]
       (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db) :user user :password password})]
@@ -66,22 +66,22 @@
                                   ;; another error is of the value, which the type took ("1" is no regclass)
                                   (catch java.sql.SQLException e (not (#{"42883" "42804" "42846" "42725"} (.getSQLState e)))))]]
           ;; PostgreSQL 18 adds explicit casts between bytea and the integers, which accepts? takes on every version
-          (is (if pg18? (or (not taken?) (accept/accepts? t (pgjdbc/sent-type v {}) :cast)) (= taken? (accept/accepts? t (pgjdbc/sent-type v {}) :cast)))
+          (is (if pg18? (or (not taken?) (accept/accepts? t (accept/class-type v) :cast)) (= taken? (accept/accepts? t (accept/class-type v) :cast)))
               (str (pr-str v) " " (class v) " " t)))))))
 
-(deftest pgjdbc-write-says-what-goes-as-which-type
-  (let [registry (pgmalli/registry {:registry {}})]
-    (doseq [v [1 1M 1.0 true "1" (java.util.UUID/randomUUID) (.getBytes "a")
-               (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
-               (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
-      (is (= [(pgjdbc/sent-type v {})] (for [[s t] accept/default-write :when (m/validate s v {:registry registry})] t))
-          (str (class v) " goes as one type")))))
+(deftest the-schema-of-each-class-sent-takes-its-values
+  (doseq [:let [registry (pgmalli/registry {:registry {}})]
+          v [1 (int 1) (short 1) 1M 1N (biginteger 1) 1.0 (float 1) true "1" (java.util.UUID/randomUUID) (.getBytes "a")
+             (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
+             (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
+    (is (some (fn [[s t]] (and (= t (pgjdbc/sent-type v {})) (m/validate s v {:registry registry}))) (pgjdbc/write-rows {} false))
+        (str (class v) " goes as its type"))))
 
 (deftest a-string-goes-untyped-under-stringtype-unspecified
   (when *db*
     (exec-sql! "CREATE TYPE untyped_mood AS ENUM ('ok'); CREATE TABLE untyped_probe (e untyped_mood, t text, i integer)")
     (let [{:keys [host port db user password]} *db*
-          sent (pgjdbc/sent-type "1" {:write (accept/pgjdbc-write {:stringtype :unspecified})})]
+          sent (pgjdbc/sent-type "1" {:send {String :unknown}})]
       (is (= :unknown sent))
       (with-open [con (jdbc/get-connection {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" db "?stringtype=unspecified") :user user :password password})]
         (doseq [[col t v] [["e" [:enum "untyped_mood"] "ok"] ["t" "text" "1"] ["i" "integer" "1"]]
