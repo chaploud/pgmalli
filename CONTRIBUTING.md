@@ -7,7 +7,7 @@ Issues and pull requests are welcome.
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the image).
 `bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb oracle`, `bb docs:example`,
-`bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:docs`
+`bb catalog`, `bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:docs`
 and `bb fixture` do not.
 
 ## Tests
@@ -103,8 +103,9 @@ and a reproduction. `pending-entries-still-fail` fails on an entry that no longe
 fix removes it. The test also fails on a corpus id or query listed twice, and on a corpus query
 that did not run in both formats (one the pinned HoneySQL cannot write).
 
-`a-query-wrapped-keeps-its-problems` asks no database: each case wrapped in a FROM subquery,
-a CTE or EXISTS must have the problems it had alone.
+`a-query-wrapped-keeps-its-problems` sends no query to PostgreSQL, only reads the oracle
+schema: each case wrapped in a FROM subquery, a CTE or EXISTS must have the problems it had
+alone.
 
 After changing how `pgmalli.honeysql` resolves scopes or names, run `bb oracle` with a few
 seeds. A query it got wrong goes into the corpus.
@@ -120,7 +121,7 @@ ran. The tests that catch a change upstream, each naming the list to update:
 | test | catches |
 |---|---|
 | `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
-| `pgmalli.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops |
+| `pgmalli.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops; a type, implicit cast, range, function, operator or relation of `pg_catalog` that differs from the catalog snapshot (`resources/pgmalli/impl/catalog.edn`, which `bb catalog` rewrites) |
 | `pgmalli.accept-test` | a type pgjdbc's `setObject` sends a class as that differs from `accept/class-types`; a type PostgreSQL takes or refuses where `accept/accepts?` says otherwise |
 | `pgmalli.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/row-schema` gives (the typing tables in src/pgmalli/honeysql.clj); a name PostgreSQL gives an unaliased expression that differs from `expression-name`'s |
 
@@ -129,6 +130,12 @@ A type of PostgreSQL's or of an extension is one entry of `types` in
 `types` and run `pgmalli.upstream-test`: it creates every extension the PostgreSQL image ships,
 fails on a type in neither list, and generates, inserts and reads back a NOT NULL column of
 every entry.
+
+A new PostgreSQL version: add it to the `pg` matrix of `.github/workflows/ci.yml` (a test holds
+the snapshot's versions to it), run `bb catalog`, and read the diff of
+`resources/pgmalli/impl/catalog.edn`: what is `:in` the new version alone is what it adds.
+`bb catalog` stops on a type or range whose facts differ between versions, which
+`pgmalli.impl.types` reads one of.
 
 A failing weekly run comments on the open issue labelled `upstream` (or opens it) with the
 list; the next passing run closes it. GitHub disables a scheduled workflow after 60 days
@@ -141,6 +148,8 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
   `PGMALLI_PGSCHEMA_DIR` (pgschema's `testdata/diff`).
 - `bb sweep <sql-dir> <out-dir> [glob]` takes SQL files through the whole pipeline and writes
   what did not go through as EDN; `bb sweep:report <out-dir>` groups it for reading.
+- `bb catalog` rewrites `resources/pgmalli/impl/catalog.edn`, the snapshot of `pg_catalog`
+  that types a query's functions, operators and casts, from each PostgreSQL version CI runs.
 - `bb fixture` rewrites `test/resources/pgmalli/{sample,other}.edn`, which the tests read,
   from `dev/fixture.clj`. Edit that file, not the EDN.
 
