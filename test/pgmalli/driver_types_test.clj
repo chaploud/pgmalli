@@ -16,7 +16,7 @@
             [pgmalli.impl.files :as files]
             pgmalli.impl.jdbc
             [pgmalli.oracle :as oracle]
-            [pgmalli.test-db :refer [*db* datasource exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [*db* datasource exec-sql! jdbc-url with-postgres]]))
 
 (use-fixtures :once with-postgres
   (fn [f]
@@ -83,3 +83,36 @@
                                :when (and (taken? k v)
                                           (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v)))))]
                            [k (some-> v class .getName)])))))))))
+
+(defn- taken?
+  "Whether PostgreSQL takes v as sql's parameter, run and rolled back."
+  [ds sql v]
+  (with-open [con (jdbc/get-connection ds)]
+    (.setAutoCommit con false)
+    (try (jdbc/execute! con [sql v]) true
+         (catch Exception _ false)
+         (finally (.rollback con)))))
+
+(deftest an-enum-label-goes-as-a-string-only-where-pgjdbc-sends-it-untyped
+  (when *db*
+    (let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
+          unspecified (jdbc/get-datasource {:jdbcUrl (str (jdbc-url) "?stringtype=unspecified") :user (:user *db*) :password (:password *db*)})
+          typed (doto (org.postgresql.util.PGobject.) (.setType "matrix.mood") (.setValue "a"))
+          ok? #(m/validate %1 %2 {:registry registry})]
+      (doseq [[ds o vs] [[(datasource) {:schema "matrix"} ["a" typed]] [unspecified {:schema "matrix" :send {String :unknown}} ["a"]]]
+              v vs
+              [sql valid?] [["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (:v (h/arg-types registry {:update :types :set {:e :?v} :where [:= :id 2]} o)) %)]
+                            ["UPDATE matrix.types SET e = ? WHERE id = 2" #(ok? (h/set-schema registry :types o) {:e %})]
+                            ["SELECT id FROM matrix.types WHERE e = ?" #(ok? (:v (h/arg-types registry {:select [:id] :from [:types] :where [:= :e :?v]} o)) %)]]]
+        (testing (str sql " " (pr-str o) " " (class v))
+          (is (= (taken? ds sql v) (valid? v))))))))
+
+(deftest a-json-column-takes-a-pgobject-whatever-is-sent-as-json
+  (when *db*
+    (let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
+          v (doto (org.postgresql.util.PGobject.) (.setType "jsonb") (.setValue "{}"))]
+      (is (every? #(taken? (datasource) (str "UPDATE matrix.types SET " % " = ? WHERE id = 2") v) ["c_jsonb" "c_json"]))
+      (doseq [o [{:schema "matrix"} {:schema "matrix" :send {clojure.lang.IPersistentMap "jsonb"}}]]
+        (is (m/validate (h/set-schema registry :types o) {:c_jsonb v :c_json v} {:registry registry}))
+        (is (m/validate (:v (h/arg-types registry {:update :types :set {:c_jsonb :?v} :where [:= :id 2]} o)) v {:registry registry}))))))
+

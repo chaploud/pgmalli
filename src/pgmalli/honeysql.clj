@@ -1721,13 +1721,16 @@
 
 (defn- labelled-type
   "The type of an argument where a value of own values own, labels (an enum's, a CHECK's list),
-   goes in context, alts the [type alternative] of each type sent it takes: the labels as each
-   value class taken sends them, a text label as a keyword, a number as the number class of each
-   number row (1.0 as 1 where a bigint goes to a double precision)."
-  [own alts context]
+   goes in context, alts the [type alternative] of each type sent it takes, strings? whether a
+   String goes as a type that takes the labels: a text label as a String only then, as a keyword
+   where a row of keywords goes; a number as the number class of each number row (1.0 as 1 where
+   a bigint goes to a double precision). Where no label is sent (an enum's under pgjdbc's
+   default, which sends a String as varchar), a PGobject, which pgjdbc sends as the type it names."
+  [own alts context strings?]
   (let [e (shape/domain-base own)
         [props labels] (if (map? (second e)) [(second e) (drop 2 e)] [nil (rest e)])
         kinds (set (map (comp shape/kind second) alts))
+        kept (filter #(or strings? (not (string? %))) labels)
         as (fn [l] (concat (when (and (string? l) (some #(:keyword (shape/value-classes (second %))) alts)) [(keyword l)])
                            ;; a number label as a string, which PostgreSQL reads as the number where a string goes (untyped, or cast)
                            (when (and (number? l) (some #(:string (shape/value-classes (second %))) alts)) [(str l)])
@@ -1735,14 +1738,17 @@
                              (concat (when (and (kinds :int) (== l (Math/rint (double l)))) [(long l)])
                                      (when (kinds 'decimal?) [(bigdec l)])
                                      (when (kinds :double) [(double l)])))))
-        more (remove (set labels) (distinct (mapcat as labels)))
-        labelled (if (seq more) (shape/update-base own (constantly (into (cond-> [:enum] props (conj props)) (concat labels more)))) own)
+        sent (concat kept (remove (set kept) (distinct (mapcat as labels))))
+        labelled (cond (empty? sent) nil
+                       (= sent labels) own
+                       ;; a domain's checks stay around its labels
+                       :else (shape/update-base own (constantly (into (cond-> [:enum] props (conj props)) sent))))
         ;; cast, PostgreSQL converts another kind to the number type first (1.5 to 2, true to 1)
         ;; and checks the list after: those values are not held to the labels here
         converted (when (and (= :cast context) (every? number? labels))
-                    (distinct (remove #(#{:int 'integer? :string} (shape/kind %)) (map second alts))))]
-    ;; a domain's checks stay around its labels
-    (if (seq converted) (into [:or labelled] converted) labelled)))
+                    (distinct (remove #(#{:int 'integer? :string} (shape/kind %)) (map second alts))))
+        all (concat (when labelled [labelled]) converted (when (nil? labelled) [jdbc/pg-object]))]
+    (if (next all) (into [:or] all) (first all))))
 
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
@@ -1753,8 +1759,8 @@
    and the values sent as it); assigned or cast, a number held to a number column's range
    (within). Compared, the values lose the bounds a
    comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
-   labels, a text label as a keyword too where a row of keywords goes, a number label as each
-   number class sent and as a string where one goes untyped or cast; untyped own values, or of a type pgmalli.impl.accept does not answer for,
+   labels as labelled-type sends them, a text label as a String where a String goes as a type
+   that takes it; untyped own values, or of a type pgmalli.impl.accept does not answer for,
    are the type alone (:any under a cast)."
   [registry s context opts]
   (let [own (cond-> (driver-type registry jdbc/write-type s opts)
@@ -1785,7 +1791,7 @@
       ;; a cast takes a string and every explicit cast, of types pgmalli.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
       (or (nil? t) (untyped? own)) own
-      (= :enum (shape/kind own)) (labelled-type own alts context)
+      (= :enum (shape/kind own)) (labelled-type own alts context (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))))
       :else
       (let [own-alts (shape/alternatives own)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
@@ -2734,7 +2740,8 @@
 (defn- one-value
   "t without what HoneySQL writes in :values or :set as something else than one value: a keyword
    as a column (:default is added after), a Clojure vector or sequence as a row of parameters,
-   (?, ?), which no column takes; a set, or a Java array, is one value."
+   (?, ?), which no column takes; a set, or a Java array, is one value. An enum of keywords alone
+   is a PGobject, which pgjdbc sends as the type it names."
   [t]
   (case (shape/head t)
     :maybe [:maybe (one-value (last t))]
@@ -2743,10 +2750,29 @@
                               (map one-value (shape/alternatives t)))
                       t)
     :enum (let [[h & r] t
-                [p & labels] (if (map? (first r)) r (cons nil r))]
-            (into (cond-> [h] p (conj p)) (remove keyword? labels)))
+                [p & labels] (if (map? (first r)) r (cons nil r))
+                values (remove keyword? labels)]
+            (if (seq values) (into (cond-> [h] p (conj p)) values) jdbc/pg-object))
     :any [:and t [:not [:or :keyword [:sequential :any]]]]
     t))
+
+(defn- expression
+  "What HoneySQL writes in :values or :set as an expression, a vector or list headed by a keyword
+   but :default ([:cast \"a\" :t], [:now]): [:lift v] v as one parameter, of type a; another
+   untyped."
+  [a]
+  [:alt {:error/message "should be a HoneySQL expression, a vector headed by a keyword"}
+   [:cat [:= :lift] a]
+   [:cat [:and :keyword [:not [:enum :lift :default]]] [:* [:or :nil :some]]]])
+
+(defn- generated-values
+  "t without the values of a class alone (a PGobject), which malli does not generate; nil where
+   nothing is left."
+  [t]
+  (cond (and (= :fn (shape/head t)) (:pg/class (shape/column-props t))) nil
+        (= :maybe (shape/head t)) (if-let [x (generated-values (last t))] [:maybe x] :nil)
+        (= :or (shape/head t)) (some-> (seq (keep generated-values (shape/alternatives t))) (shape/either t))
+        :else t))
 
 (defn- written-row*
   "The closed map of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
@@ -2763,25 +2789,32 @@
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
           triggered? (filled-by-trigger? (shape/row-props s) (keyword derived))
-          ;; [keys required? type] of each column
+          ;; [keys required? type generated] of each column, generated the values it takes that
+          ;; malli generates (nil for none)
           columns (concat
                    ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
                    (for [[k props c] written
-                         :let [t (cond-> (one-value (accepted-type r c :assign opts)) (or (shape/maybe? c) triggered?) nullable)]]
-                     [(written-keys k opts) (not (or (:optional props) triggered?)) (if (fills k) [:or t default] t)])
+                         :let [a (cond-> (accepted-type r c :assign opts) (or (shape/maybe? c) triggered?) nullable)
+                               t (one-value a)
+                               plain (if (fills k) [:or t default] t)]]
+                     [(written-keys k opts) (not (or (:optional props) triggered?)) [:or plain (expression a)] (generated-values plain)])
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-                     [(written-keys k opts) false default]))
-          one-key (into [:map {:closed true}]
-                        (for [[[k] required? t] columns] (if required? [k t] [k {:optional true} t])))
+                     [(written-keys k opts) false default default]))
+          entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
+          one-key (into [:map {:closed true}] (for [[[k] required? t] columns] (entry k required? t)))
+          ;; a column that generates nothing is left out where it may be; a required one fails to generate
+          generated (into [:map] (for [[[k] required? t g] columns :when (or g required?)] (entry k required? (or g t))))
           nonempty [:not [:= nil {}]]
-          non-empty #(if (= "update" derived) [:and % nonempty] %)]
+          non-empty #(if (= "update" derived) [:and % nonempty] %)
+          gen (non-empty generated)]
       (if (every? #(= 1 (count (first %))) columns)
-        (non-empty one-key)
+        (let [[h & more :as x] (non-empty one-key)]
+          (if (map? (first more)) (update x 1 assoc :gen/schema gen) (into [h {:gen/schema gen}] more)))
         ;; a column HoneySQL writes from more than one key: any one of them, not two (the column twice)
-        (-> [:and {:gen/schema (non-empty one-key)}
+        (-> [:and {:gen/schema gen}
              (into [:map {:closed true}] (for [[ks _ t] columns, k ks] [k {:optional true} t]))]
-            (into (for [[ks required? _] columns :when (and required? (next ks))]
+            (into (for [[ks required?] columns :when (and required? (next ks))]
                     (into [:or] (for [k ks] [:map [k :some]]))))
             (into (for [[ks] columns, [i k] (map-indexed vector ks), k2 (drop (inc i) ks)]
                     [:not {:error/message (str "HoneySQL writes " (pr-str k) " and " (pr-str k2) " to one column, twice")}

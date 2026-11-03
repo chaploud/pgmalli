@@ -10,6 +10,7 @@
             [pgmalli.generate :as generate]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
+            [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.registry :as registry]
             [pgmalli.impl.shape :as shape]
@@ -389,7 +390,7 @@
         (is (= [:any {:pg/type "jsonb"}] (read :input o)))
         (is (= [:int {:min 1 :max 99 :pg/type "integer" :pg/constraints ["jobs_n_check"]}] (read :n o))))
       (testing "write: the declared shape for what :send sends as jsonb"
-        (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (:i (h/arg-types reg {:update :jobs :set {:input :?i}} sends))))
+        (is (= [:or [:map {:pg/type "jsonb"} [:prompt :string]] jdbc/pg-object] (:i (h/arg-types reg {:update :jobs :set {:input :?i}} sends))))
         (is (m/validate (h/values-schema reg :jobs sends) row {:registry reg}))
         (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg}))))
       (testing "the rows the schema makes are rows PostgreSQL takes"
