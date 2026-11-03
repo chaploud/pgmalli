@@ -112,18 +112,25 @@
           version (first (str/split (first (column ds "SHOW server_version")) #"\."))
           server (source/shape (json/read-str (str (first (column ds source/query)))))
           snapshot @types/catalog
-          ;; the server's overloads of a name, against the ones the snapshot says it has
-          mine (fn [os] (set (for [o os :when (or (nil? (:in o)) (some #{version} (:in o)))] (dissoc o :in))))
-          hint (str "PostgreSQL " version " differs from resources/pgmalli/catalog.edn: run bb catalog")]
+          here? (fn [{:keys [in]}] (or (nil? in) (some #{version} in)))
+          ;; what the snapshot says this version has
+          mine (fn [os] (set (for [o os :when (here? o)] (dissoc o :in))))
+          ours {:types (into {} (for [[n t] (:types snapshot) :when (here? t)] [n (dissoc t :in)]))
+                :ranges (into {} (for [[n r] (:ranges snapshot) :when (here? r)] [n (dissoc r :in)]))
+                :casts (set (for [[s t in] (:casts snapshot) :when (here? in)] [s t]))}
+          hint (str "PostgreSQL " version " differs from resources/pgmalli/impl/catalog.edn (run bb catalog): ")
+          differs (fn [what theirs ours]
+                    (str hint what "\n  server only: " (set/difference (set theirs) (set ours)) "\n  snapshot only: " (set/difference (set ours) (set theirs))))]
       (is (some #{version} (:versions snapshot)) (str "PostgreSQL " version " is not among the catalog's versions: add it to CI and run bb catalog"))
-      (doseq [k [:types :casts :ranges]]
-        (is (= (get server k) (into (empty (get server k)) (get snapshot k))) (str (name k) ": " hint)))
+      (doseq [k [:types :casts :ranges]
+              :when (not= (get server k) (get ours k))]
+        (is false (differs (name k) (get server k) (get ours k))))
       (doseq [k [:functions :operators]
               n (set (concat (keys (get server k)) (keys (get snapshot k))))
               :let [theirs (get-in server [k n] #{}) ours (mine (get-in snapshot [k n]))]
               :when (not= theirs ours)]
-        (is false (str (name k) " " n ": " hint "\n  server only: " (set/difference theirs ours) "\n  snapshot only: " (set/difference ours theirs))))
+        (is false (differs (str (name k) " " n) theirs ours)))
       (doseq [n (set (concat (keys (:relations server)) (keys (:relations snapshot))))
-              :let [theirs (get-in server [:relations n] []) ours (vec (mine (get-in snapshot [:relations n])))]
-              :when (not= (set theirs) (set ours))]
-        (is false (str "relation " n ": " hint "\n  server only: " (set/difference (set theirs) (set ours)) "\n  snapshot only: " (set/difference (set ours) (set theirs))))))))
+              :let [theirs (get-in server [:relations n] []) ours (mine (get-in snapshot [:relations n]))]
+              :when (not= (set theirs) ours)]
+        (is false (differs (str "relation " n) theirs ours))))))

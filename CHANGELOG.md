@@ -48,12 +48,18 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     whatever type `:send` sends it as, not only `varchar`; a string assigned to a reg* column
     other than `regclass`; a CHECK's list of numbers compared with a value outside it; and a
     column a CTE or a subquery does not give.
+* `generate` checks every `:overrides` key: a constraint name or a type no column of the
+  schemas has, `{:skip reason}` under a type or column key and a value that is no malli schema
+  are errors naming the key meant. Drop the keys of what was dropped from the database.
+* Generate again if a schema has a domain over `timestamp(n) with time zone` or `time(n)`, or
+  a column of a type pgmalli does not know overridden by its type: their files change.
 * Generate again if a schema has a table other tables inherit, a DEFERRABLE primary key or
   unique constraint, an invalid unique index, or a domain whose CHECK lists its values: their
   files change, and `pgmalli.main check` reports them stale.
 * Generate again: every file has the schema's functions and operators (`:functions`,
-  `:operators`), and `pgmalli.main check` reports a file without them stale. Until then, a call
-  is typed by `pg_catalog`'s functions alone.
+  `:operators`), and `pgmalli.main check` reports a file without them stale, in one line. Until
+  then, a call is typed by `pg_catalog`'s functions alone. A function or operator that differs
+  is reported by its name (`{:key :functions :name "f" :file ... :db ...}`).
 
 ### Added
 
@@ -90,7 +96,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `least`, `ARRAY[...]`, `VALUES` and a set operation's columns of their values' common type, and
   every function and operator of `pg_catalog` (aggregates, with `FILTER` too, window functions
   under `:over`, polymorphic ones) of the type it resolves to, from a snapshot of `pg_catalog`
-  of PostgreSQL 16, 17 and 18 (`resources/pgmalli/catalog.edn`, which `bb catalog` rewrites);
+  of PostgreSQL 16, 17 and 18 (`resources/pgmalli/impl/catalog.edn`, which `bb catalog` rewrites);
   a literal `[:inline ...]` writes; `INTERVAL '1 day'`; a cast to a type with its length
   (`[:varchar 10]`) or to an array type; `current_user` and the like as `name`. A function of
   `pg_catalog` in FROM has its columns, of no table, so a qualified builder keys them
@@ -140,6 +146,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
   read under `{:read {:json :parsed}}`, written for what `:send` sends as its type. A key that
   names no column is an error.
+* An `:overrides` type key may be the type's alias or a HoneySQL cast's spelling
+  (`:timestamptz`, `:timestamp-with-time-zone`); `pgmalli.main` suggests one for an unrendered
+  type, or the column's key for an array type.
 
 ### Changed
 
@@ -221,7 +230,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   of a name ending in one (`:db?`). A misspelt option or config key reads
   `{:shcema ["disallowed key"]}; did you mean: :schema`.
 * A `:db` holding next.jdbc's `:dbtype` is an error saying to drop it.
-* `pgmalli.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`.
+* A schema of `:schemas` the database lacks is an error naming the schema meant.
+* `pgmalli.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`, and warns of
+  a PostgreSQL newer than 18: its new functions and types are not typed. A PostgreSQL older
+  than 16 is an error.
+* A file's `:database-version` is the major version for a server whose version names its build
+  too (`17.6 (Debian 17.6-1.pgdg120+1)`), which a minor upgrade no longer makes stale.
+* A column overridden by its type is no longer listed in `:unrendered`.
+* A domain over a type with a typmod inside its name (`timestamp(3) with time zone`,
+  `time(0)`) has the type's schema instead of `:any`.
 
 ## 0.3.3 (2026-11-03)
 

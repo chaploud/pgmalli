@@ -45,8 +45,16 @@
                      d (differences k (get-in before [:registry k]) (get-in after [:registry k]))]
                  d)
                (for [k (distinct (concat (keys before) (keys after)))
-                     :when (and (not (#{:registry :database-version :schema} k)) (not= (get before k) (get after k)))]
-                 {:key k :file (get before k) :db (get after k)}))))
+                     :when (and (not (#{:registry :database-version :schema} k)) (not= (get before k) (get after k)))
+                     d (cond (not (#{:functions :operators} k)) [{:key k :file (get before k) :db (get after k)}]
+                             ;; a file of a pgmalli that did not read them: every name would differ
+                             (not (contains? before k)) [{:key k :absent :file}]
+                             (not (contains? after k)) [{:key k :absent :db}]
+                             :else (for [n (sort (distinct (concat (keys (get before k)) (keys (get after k)))))
+                                         :let [a (get-in before [k n]) b (get-in after [k n])]
+                                         :when (not= a b)]
+                                     {:key k :name n :file a :db b}))]
+                 d))))
 
 (defn- files [config]
   (into {} (for [schema (:schemas (files/config config))

@@ -30,9 +30,9 @@
 
 ;;; types
 
+
 (defn- base-type [data-type]
-  ;; without a schema prefix or a typmod: "public.money" and "numeric(12,2)" name numeric
-  (let [t (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" "")]
+  (let [t (types/bare-name (or data-type ""))]
     (if-let [elem (types/element t)]
       [:vector (base-type elem)]
       (:schema (types/entry t) :any))))
@@ -219,17 +219,40 @@
           {:schema base :unrendered [] :skipped [] :applied []}
           (sort-by (juxt (comp fact-order :fact) :constraint) facts)))
 
-(defn override-key
-  "The :overrides key of a type: its name without schema or typmod, as a keyword
-   (\"public.inet\" and \"numeric(12,2)\" are :inet and :numeric)."
+(defn type-name
+  "The type a column type names, without schema or typmod, by the name pgmalli.impl.types keys
+   it by (\"public.inet\" is inet, \"int4\" integer)."
   [data-type]
-  (keyword (str/replace (str/replace (or data-type "") #"^[^.]+\." "") #"\(.*\)$" "")))
+  (let [t (types/bare-name data-type)]
+    (:name (types/entry t) t)))
+
+(def ^:private by-keyword (types/by-keyword any?))
+
+(defn key-type-name
+  "The type an :overrides type key names: a name, an alias or a cast's spelling of a type of
+   pgmalli.impl.types (:timestamptz, :timestamp-with-time-zone), else the key's name."
+  [k]
+  (:name (by-keyword k) (name k)))
+
+(defn type-key?
+  "Whether an :overrides key names a type: a keyword without a namespace."
+  [k]
+  (simple-keyword? k))
+
+(defn override-key
+  "The :overrides key of a type, as a keyword EDN reads back (a type's alias where its name has a
+   space, as :timestamptz); nil when it has none (an array type, \"char\")."
+  [data-type]
+  (let [t (type-name data-type)]
+    (some #(let [k (keyword %)] (when (and (re-matches #"[A-Za-z_][A-Za-z0-9_*+!?<>=-]*" %) (= t (key-type-name k))) k))
+          (cons t (:aliases (types/entry t))))))
 
 (defn- type-override
   "The schema an override gives every column of a type (keyword keys of :overrides name types:
    {:inet [:re ...]}), nil when there is none."
   [overrides data-type]
-  (get overrides (override-key data-type)))
+  (let [t (type-name data-type)]
+    (some (fn [[k v]] (when (and (type-key? k) (= t (key-type-name k))) v)) overrides)))
 
 (defn column-override-key
   "The :overrides key of one column: :schema.table/column."
@@ -245,7 +268,9 @@
   [{:keys [schema table column type]} facts overrides]
   (if-let [own (get overrides (column-override-key schema table column))]
     [own (remove (comp (conj type-facts :unknown-type) :fact) facts)]
-    [(or (type-override overrides type) (base-type type)) facts]))
+    (if-let [of-type (type-override overrides type)]
+      [of-type (remove (comp #{:unknown-type} :fact) facts)]
+      [(base-type type) facts])))
 
 (defn- column-schema
   "Schema of one column with provenance properties; nullable columns wrapped in [:maybe ...]."

@@ -38,8 +38,10 @@
    :stale lists the schemas whose file differs from what the database yields now. A difference
    names the registry entry (:name) and, for a row or insert schema, the :column, :property
    (of the map, or with :column of that column), :checks or column :order that differ, with the
-   :file and :db sides (nil where a side lacks it); the file's other parts (:unrendered,
-   :skipped, :diagnostics) as wholes under :key. :missing lists the schemas with no file.
+   :file and :db sides (nil where a side lacks it); a function or operator by :key (:functions
+   or :operators) and :name, or :absent :file when the file has none (an older pgmalli's); the
+   file's other parts (:unrendered, :skipped, :diagnostics) as wholes under :key. :missing lists
+   the schemas with no file.
 
    Option {:db? false} reads the files alone: no :stale key, as nothing was compared."
   ([config] (diff/check config))

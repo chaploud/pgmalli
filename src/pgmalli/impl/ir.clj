@@ -128,5 +128,8 @@
    (let [out (if (= :psql (via db)) (psql-out (assoc db :schema schema)) ((requiring-resolve 'pgmalli.impl.ir-jdbc/out) db (jdbc-sql schema)))
          ir (keywordize (json/parse (str/trim out)) false)]
      (when-not (:exists ir)
-       (error/fail! :pgmalli.error/invalid-config (str "schema " (pr-str schema) " does not exist in the database; check :schemas in pgmalli.edn") {:given schema}))
-     (dissoc ir :exists))))
+       (let [meant (error/suggest schema (:schemas ir))]
+         (error/fail! :pgmalli.error/invalid-config (str "schema " (pr-str schema) " does not exist in the database; check :schemas in pgmalli.edn"
+                                                         (error/did-you-mean (some-> meant pr-str)))
+                      (cond-> {:given schema} meant (assoc :did-you-mean [meant])))))
+     (dissoc ir :exists :schemas))))

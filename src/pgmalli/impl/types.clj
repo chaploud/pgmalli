@@ -23,7 +23,7 @@
 
    catalog is what PostgreSQL's own catalog says of pg_catalog's types (typcategory,
    typispreferred), implicit casts, ranges, functions and operators, which bb catalog writes to
-   resources/pgmalli/catalog.edn from each PostgreSQL version CI runs."
+   resources/pgmalli/impl/catalog.edn from each PostgreSQL version CI runs."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]))
@@ -175,7 +175,7 @@
   (set (keys (by-keyword pred))))
 
 (def catalog
-  "resources/pgmalli/catalog.edn: {:versions [v ...] :types {name {:category c :preferred true}}
+  "resources/pgmalli/impl/catalog.edn: {:versions [v ...] :types {name {:category c :preferred true}}
    :casts #{[source target]} :ranges {range {:subtype t :multirange m}} :functions {name
    [overload ...]} :operators {name [overload ...]}}, an overload {:args [type ...] :result type}
    with :set, :kind (:a an aggregate, :w a window function), :variadic, :defaults (how many of
@@ -184,7 +184,7 @@
    values) and
    :in (the versions that have it, where not every one does); :relations {name [column ...]} of
    pg_catalog's tables and views, a column {:name :type :not-null} with :in too."
-  (delay (edn/read-string (slurp (io/resource "pgmalli/catalog.edn")))))
+  (delay (edn/read-string (slurp (io/resource "pgmalli/impl/catalog.edn")))))
 
 (defn element
   "The element type of an array type t (\"bigint[]\" is bigint); nil for another."

@@ -19,10 +19,13 @@
             [clojure.string :as str]
             [clojure.pprint :as pp]
             [clojure.walk :as walk]
+            [malli.core :as m]
+            [malli.registry :as mr]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.ir :as ir]
             [pgmalli.impl.jdbc :as jdbc]
             [pgmalli.impl.pattern :as pattern]
+            [pgmalli.impl.registry :as registry]
             [pgmalli.impl.render :as render]))
 
 (def default-config {:schemas ["public"] :out-dir "resources/pgmalli" :overrides {} :db {}})
@@ -80,30 +83,76 @@
                :functions (:functions r) :operators (:operators r)
                :unrendered (mapv left-out (:unrendered r)) :skipped (mapv left-out (:skipped r)))))
 
+(def ^:private override-registry
+  "The base schemas, and any qualified name: a reference to the user's registry, which
+   generation does not see."
+  (mr/composite-registry registry/base (reify mr/Registry (-schema [_ k] (when (qualified-keyword? k) :any)) (-schemas [_] {}))))
+
+(defn- column-meant
+  "The column key meant by k: k with its schema (:users/email for :public.users/email) or
+   without pg. (:pg.public.users/email), else the closest."
+  [k columns schemas]
+  (or (some (set columns) (cons (keyword (str/replace (namespace k) #"^pg\." "") (name k))
+                                (for [s schemas] (keyword (str s "." (namespace k)) (name k)))))
+      (error/suggest k columns)))
+
 (defn checked-overrides!
-  "overrides when each column key (:schema.table/column) names a column of facts; an error
-   naming the column meant, or the columns of the table, otherwise."
+  "overrides when each key names what it overrides in facts: a constraint name, a type of a
+   column (render/key-type-name) or a column (:schema.table/column); {:skip reason} under a
+   constraint name, a malli schema otherwise. An error names the one meant otherwise."
   [overrides facts]
   (let [columns (for [f facts :when (= :column (:fact f))] (render/column-override-key (:schema f) (:table f) (:column f)))
-        by-table (group-by namespace columns)]
-    (doseq [k (keys overrides) :when (and (keyword? k) (namespace k)) :when (not (some #{k} columns))]
-      (let [table (namespace k)
-            meant (error/suggest k columns)]
-        (error/fail! :pgmalli.error/invalid-config
-                     (str ":overrides: " k
-                          (if (by-table table) (str " names no column of " table) (str " names no table or view of the schemas generated: " (str/join ", " (distinct (keep :schema facts)))))
-                          (cond meant (error/did-you-mean meant)
-                                (by-table table) (str "; it has " (str/join ", " (sort (by-table table))))
-                                :else ""))
-                     (cond-> {:given k} meant (assoc :did-you-mean [meant])))))
+        by-table (group-by namespace columns)
+        schemas (distinct (keep :schema facts))
+        generated (str "the schemas generated: " (str/join ", " schemas))
+        types (set (for [f facts :when (= :column (:fact f))] (render/type-name (:type f))))
+        type-keys (keep render/override-key types)
+        constraints (distinct (keep :constraint facts))
+        fail! (fn [message given meant]
+                (error/fail! :pgmalli.error/invalid-config (str ":overrides: " (pr-str given) " " message (error/did-you-mean (some-> meant pr-str)))
+                             (cond-> {:given given} meant (assoc :did-you-mean [meant]))))]
+    (doseq [[k v] overrides]
+      (cond (string? k)
+            (when-not (some #{k} constraints)
+              (fail! (str "names no constraint of " generated) k (error/suggest k constraints)))
+            (render/type-key? k)
+            (when-not (types (render/key-type-name k))
+              (fail! (str "names no type of a column of " generated) k (error/suggest k type-keys)))
+            (not (some #{k} columns))
+            (let [table (namespace k)
+                  meant (column-meant k columns schemas)]
+              (error/fail! :pgmalli.error/invalid-config
+                           (str ":overrides: " k
+                                (if (by-table table) (str " names no column of " table) (str " names no table or view of " generated))
+                                (cond meant (error/did-you-mean meant)
+                                      (by-table table) (str "; it has " (str/join ", " (sort (by-table table))))
+                                      :else ""))
+                           (cond-> {:given k} meant (assoc :did-you-mean [meant])))))
+      (cond (and (map? v) (contains? v :skip))
+            (when-not (string? k)
+              (fail! (str (pr-str v) ": only a constraint is skipped; give the " (if (render/type-key? k) "type" "column") " a malli schema") k nil))
+            :else
+            (try (m/schema v {:registry override-registry})
+                 (catch Exception e
+                   (error/fail! :pgmalli.error/invalid-config
+                                (str ":overrides: " (pr-str k) "'s schema " (pr-str v) " is no malli schema: " (if-let [t (:type (ex-data e))] (str (name t) " " (pr-str (:data (ex-data e)))) (ex-message e)))
+                                {:given k} e)))))
     overrides))
+
+(defn major-version
+  "\"PostgreSQL 17\" of the server's \"PostgreSQL 17.6 (Debian ...)\": a minor upgrade changes no
+   schema. A server older than 16 is an error."
+  [version]
+  (let [major (parse-long (or (re-find #"\d+" version) "0"))]
+    (when (< major 16)
+      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL 16 or later") {:given version}))
+    (str "PostgreSQL " major)))
 
 (defn- read-schema
   "[database-version facts] of one schema, read from the database."
   [db schema]
   (let [ir (ir/from-db (assoc db :schema schema))]
-    ;; the major version alone: a minor upgrade changes no schema
-    [(str/replace (:database_version ir) #"^(PostgreSQL \d+)\.\d+$" "$1") (pattern/facts ir)]))
+    [(major-version (:database_version ir)) (pattern/facts ir)]))
 
 (defn from-database
   "Generated data for one schema, read from the database."

@@ -17,7 +17,8 @@
             [pgmalli.impl.error :as error]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.render :as render]
-            [pgmalli.impl.shape :as shape]))
+            [pgmalli.impl.shape :as shape]
+            [pgmalli.impl.types :as types]))
 
 (defn- warn [& xs] (binding [*out* *err*] (apply println "pgmalli:" xs)))
 
@@ -60,9 +61,10 @@
          "; unrendered: " (count (:unrendered data)) ", diagnostics: " (count (:diagnostics data)))))
 
 (defn- override-key
-  "What :overrides takes for an unrendered entry: its constraint's name, or its type as a keyword."
-  [{:keys [constraint type]}]
-  (or constraint (render/override-key type)))
+  "What :overrides takes for an unrendered entry: its constraint's name, its type as a keyword,
+   or the column's key for a type no keyword names (pair[])."
+  [{:keys [constraint type table column]}]
+  (or constraint (render/override-key type) (when (and table column) (keyword table column))))
 
 (defn- print-unrendered [schema facts]
   (when (seq facts)
@@ -71,25 +73,38 @@
             :let [k (override-key f)]]
       (println (str "  " (or table domain) " " (or constraint column) ": "
                     (cond sql sql type (str "type " type) :else (name kind))))
-      (println (str "    to keep it, add to pgmalli.edn :overrides {" (pr-str k) " <malli schema>}"
-                    (when (string? k) (str ", or {" (pr-str k) " {:skip \"<why>\"}} to silence it")))))))
+      (when k
+        (println (str "    to keep it, add to pgmalli.edn :overrides {" (pr-str k) " <malli schema>}"
+                      (when (string? k) (str ", or {" (pr-str k) " {:skip \"<why>\"}} to silence it"))))))))
 
 (defn- print-diagnostics [schema ds]
   (when (seq ds)
     (println (str schema ": diagnostics (" (count ds) "):"))
     (doseq [d ds] (println (str "  " (name (:severity d)) " " (:table d) ": " (:message d))))))
 
-(defn- print-difference [schema {:keys [name key column property checks order file db]}]
-  (println (str/join " " (remove nil? [schema (pr-str (or key name)) (some-> column pr-str) (some-> property pr-str)
-                                       (cond checks "CHECKs" order "column order")])))
-  (println "  file:" (pr-str file))
-  (println "  db:  " (pr-str db)))
+(defn- print-difference [schema {:keys [name key column property checks order absent file db]}]
+  (if absent
+    (println (str schema " " key ": the " (clojure.core/name absent) " has none, as an older pgmalli wrote it; generate writes them"))
+    (do (println (str/join " " (remove nil? [schema (some-> key pr-str) (some-> name pr-str) (some-> column pr-str) (some-> property pr-str)
+                                             (cond checks "CHECKs" order "column order")])))
+        (println "  file:" (pr-str file))
+        (println "  db:  " (pr-str db)))))
+
+(defn- version-warning
+  "Why a file of a server's version (\"PostgreSQL 19\") is typed as an older one, nil when the
+   catalog snapshot has it."
+  [database-version]
+  (let [versions (:versions @types/catalog)]
+    (when-not (some #(= database-version (str "PostgreSQL " %)) versions)
+      (str database-version " is newer than the versions this pgmalli knows (" (str/join ", " versions)
+           "): a query's pg_catalog functions and types are typed as PostgreSQL " (last versions) " has them"))))
 
 (defn- generate! [config path]
   (let [written (generate/generate! config)
         out-dir (:out-dir (files/config config))]
     (when-not (= "pgmalli" (last (str/split (str/replace out-dir #"/+$" "") #"/")))
       (warn (str ":out-dir " out-dir " does not end in pgmalli: pgmalli.core/registry reads pgmalli/<schema>.edn from the classpath")))
+    (when-let [w (some-> written vals first files/read-edn :database-version version-warning)] (warn w))
     (doseq [[schema out] written
             :let [data (files/read-edn out)]]
       (println "wrote" out (str "(schema " schema "; " (counts data) ")"))

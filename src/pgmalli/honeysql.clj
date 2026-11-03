@@ -2179,7 +2179,7 @@
 
 (defn- call-type
   "The expression type of a call (call-parts), its arguments of expression types ts."
-  [registry [kind n args :as parts] ts opts]
+  [registry [kind n :as parts] ts opts]
   (when-let [{t :result o :overload} (let [ins (mapv :type ts) os (reached registry opts parts)]
                                        (if (every? some? ins)
                                          (resolve/call kind n ins os)
@@ -2192,11 +2192,10 @@
                    (or (result-schema registry t ts) (some->> (:schema o) (own-type-schema registry t))))]
       (when schema
         {:type t :schema schema
-         ;; the catalog does not say when a function returns NULL: an aggregate that starts from
-         ;; a value (count), a window function of no argument (row_number) and a btree operator
-         ;; (a comparison) of values do not
-         :nullable? (not (or (:non-null o)
-                             (and catalog? (= :w (:kind o)) (empty? args))
+         ;; the catalog does not say when a function returns NULL: pg_catalog's aggregates that
+         ;; start from a value (count) and windows of no argument (row_number) do not, and a btree
+         ;; operator (a comparison) of values does not; a schema's own may (its transition function may)
+         :nullable? (not (or (and catalog? (:non-null o))
                              (and (:btree o) (not-any? :nullable? ts))))}))))
 
 (defn- subquery-type

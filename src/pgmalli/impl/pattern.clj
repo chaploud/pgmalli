@@ -495,6 +495,23 @@
 
 ;;; API
 
+(defn function-overload
+  "An overload as pgmalli.impl.types/catalog holds one, of a function as ir.sql and the catalog's
+   query read it: {:args :result :set :kind :variadic :defaults :non_null :columns}."
+  [{:keys [args result set kind variadic defaults non_null columns]}]
+  (cond-> {:args (vec args) :result result}
+    set (assoc :set true)
+    (not= "f" kind) (assoc :kind (keyword kind))
+    variadic (assoc :variadic true)
+    (pos? defaults) (assoc :defaults defaults)
+    non_null (assoc :non-null true)
+    columns (assoc :columns (mapv vec columns))))
+
+(defn operator-overload
+  "An operator's overload, of {:args :result :btree} as ir.sql and the catalog's query read it."
+  [{:keys [args result btree]}]
+  (cond-> {:args (vec args) :result result} btree (assoc :btree true)))
+
 (defn facts
   "Facts of one schema, ordered by type name, table name, column name and constraint name.
    Column positions are not used for ordering because they depend on migration order."
@@ -512,16 +529,8 @@
     (vec
      (concat
       (for [[n vs] enums] {:fact :enum-type :schema schema-name :type-name n :values vs})
-      (for [{:keys [name args result set kind variadic defaults columns]} (:functions schema)]
-        {:fact :function :schema schema-name :name name
-         :overload (cond-> {:args args :result result}
-                     set (assoc :set true)
-                     (not= "f" kind) (assoc :kind (keyword kind))
-                     variadic (assoc :variadic true)
-                     (pos? defaults) (assoc :defaults defaults)
-                     columns (assoc :columns columns))})
-      (for [{:keys [name args result btree]} (:operators schema)]
-        {:fact :operator :schema schema-name :name name :overload (cond-> {:args args :result result} btree (assoc :btree true))})
+      (for [f (:functions schema)] {:fact :function :schema schema-name :name (:name f) :overload (function-overload f)})
+      (for [o (:operators schema)] {:fact :operator :schema schema-name :name (:name o) :overload (operator-overload o)})
       domain-facts*
       (for [[tname t] (sort-by key (:tables schema))
             :let [base {:schema schema-name :table tname}

@@ -358,7 +358,7 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   its value as a `PGobject`), and a function in FROM,
   whose columns (its OUT arguments, or one named after the alias; `ordinality` under
   `WITH ORDINALITY`) are of no table. pgmalli reads the functions, operators and implicit casts
-  from a snapshot of `pg_catalog` (`resources/pgmalli/catalog.edn`) of the PostgreSQL versions it
+  from a snapshot of `pg_catalog` (`resources/pgmalli/impl/catalog.edn`) of the PostgreSQL versions it
   supports, as of the versions the registry's files were generated on (as for `pg_catalog`'s
   tables above): a call one of them resolves otherwise is untyped, and a function of PostgreSQL
   18 alone (`uuidv7`) is typed for a registry generated on 18. Of an argument whose type is not

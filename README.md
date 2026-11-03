@@ -508,7 +508,9 @@ file and lists them all:
 `:overrides` in `pgmalli.edn` replaces what pgmalli generates. A constraint name replaces
 that CHECK, or `{:skip reason}` leaves it out; use it for the CHECKs listed in `:unrendered`.
 A type keyword replaces the schema of every column of that type, such as `:inet`, which is
-otherwise `:any`. A keyword `:schema.table/column` replaces the schema of that one column's
+otherwise `:any`; it is the type's name, an alias of [docs/types.md](docs/types.md) or a
+HoneySQL cast's spelling (`:timestamptz`, `:timestamp-with-time-zone`). An array type has no
+keyword: override its columns. A keyword `:schema.table/column` replaces the schema of that one column's
 value, its type's schema with it (an enum's, a `varchar(n)`'s length); it comes before an
 override of the type:
 
@@ -529,8 +531,10 @@ names what your extension reads it as (`{:read {"inet" :string}}`); the `:inet` 
 holds for what is written. A json or jsonb column's driver object is a PGobject, so its shape is
 the parsed value's: it is read under `{:read {:json :parsed}}`, and an argument takes it for the
 classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`). Without
-those, a read or an argument is the driver's object. A key that names no column of the
-schemas generated is an error that names the column meant.
+those, a read or an argument is the driver's object. `generate` checks every key against the
+schemas generated: a constraint name, a type of a column and a column must be theirs,
+`{:skip reason}` goes under a constraint name alone, and a value must be a malli schema (a
+qualified name passes, as your registry's). An error names the key meant.
 
 A `[:ref ...]` to your own schema needs a registry holding it:
 
@@ -550,7 +554,7 @@ A `[:ref ...]` to your own schema needs a registry holding it:
 
 | | |
 |---|---|
-| PostgreSQL | 16 and later, to generate |
+| PostgreSQL | 16, 17 and 18, to generate; a newer one is a warning (its new functions and types are not typed), an older one an error |
 | Clojure | 1.11.4 and later |
 | JDK | 25 (what CI runs) |
 | malli | 0.20.0 and later |
@@ -603,7 +607,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/reference-cycle` | tables referencing each other in a cycle |
 | `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |
 | `:pgmalli.error/db-unavailable`, `psql-missing` | the database, or psql, out of reach |
-| `:pgmalli.error/fault` | pgmalli's own fault (please report it), or psql failing to read the catalog: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |
+| `:pgmalli.error/fault` | pgmalli's own fault (please report it), or reading the catalog failing: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |
 
 Each error's ex-data also carries `:cognitect.anomalies/category`, and `:given`, `:known` and
 `:did-you-mean` (the names probably meant, as a problem of `h/check` names them) where they apply.

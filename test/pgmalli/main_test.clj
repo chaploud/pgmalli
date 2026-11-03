@@ -71,6 +71,30 @@
     (is (= 1 (count (str/split-lines err))))
     (is (not (str/includes? err "s3cret")))))
 
+(deftest a-function-differs-by-name-and-a-file-without-functions-in-one-line
+  (let [printed #(str/split-lines (with-out-str (#'main/print-difference "public" %)))]
+    (is (= ["public :functions \"g\"" "  file: [{:args [], :result \"text\"}]" "  db:   nil"]
+           (printed {:key :functions :name "g" :file [{:args [] :result "text"}] :db nil})))
+    (is (= ["public :operators: the file has none, as an older pgmalli wrote it; generate writes them"]
+           (printed {:key :operators :absent :file})))))
+
+(deftest an-unrendered-type-no-keyword-names-is-overridden-by-its-column
+  (is (= ["public: unrendered (3), left out of the schemas:"
+          "  public.t ps: type pair[]"
+          "    to keep it, add to pgmalli.edn :overrides {:public.t/ps <malli schema>}"
+          "  public.t p: type pair"
+          "    to keep it, add to pgmalli.edn :overrides {:pair <malli schema>}"
+          "  public.t z: type timestamp with time zone"
+          "    to keep it, add to pgmalli.edn :overrides {:timestamptz <malli schema>}"]
+         (str/split-lines (with-out-str (#'main/print-unrendered "public" [{:kind :type :table "public.t" :column "ps" :type "pair[]"}
+                                                                           {:kind :type :table "public.t" :column "p" :type "pair"}
+                                                                           {:kind :type :table "public.t" :column "z" :type "timestamp with time zone"}]))))))
+
+(deftest a-server-newer-than-the-catalog-snapshot-is-a-warning
+  (is (nil? (#'main/version-warning "PostgreSQL 18")))
+  (is (= "PostgreSQL 19 is newer than the versions this pgmalli knows (16, 17, 18): a query's pg_catalog functions and types are typed as PostgreSQL 18 has them"
+         (#'main/version-warning "PostgreSQL 19"))))
+
 (deftest check-names-a-missing-file-and-the-command-that-writes-it
   (when *db*
     (let [out-dir (temp-dir)
