@@ -94,6 +94,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   not take is an error whose data names it (`:unknown`) and the one meant (`:did-you-mean`). A
   name the registry lacks is an error listing its tables, views and types before the schemas
   derived from them.
+* A domain over `bit`, `bit varying` or `numeric(p,s)` is read as the driver returns its base:
+  a Boolean for `bit(1)`, a PGobject for another bit string, a Double too for a `numeric`'s NaN.
 * What to do:
   * Options: `{:stringtype :unspecified}` is `{:send {String :unknown}}`. `:write {"text" [:or
     :string :keyword]}` and `:write {:enum [:string :keyword]}` are `{:send

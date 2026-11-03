@@ -783,6 +783,23 @@
     (is (= [:map [:x [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row :p)))
     (is (= [:map [:x [:maybe [:enum {:pg/type "mood"} "ok" "sad"]]]] (row :m)) "a domain over an enum is the enum")))
 
+(deftest a-domain-over-bit-or-numeric-is-read-as-the-driver-reads-its-base
+  (let [reg (pgmalli/registry {:registry {:pg.public/d1 [:string {:pg/type "bit(1)"}]
+                                          :pg.public/d4 [:string {:pg/type "bit(4)"}]
+                                          :pg.public/dv [:string {:pg/type "bit varying(5)"}]
+                                          :pg.public/t [:map {:pg/table "public.t"}
+                                                        [:d1 [:ref {:pg/type "d1"} :pg.public/d1]]
+                                                        [:d4 [:ref {:pg/type "d4"} :pg.public/d4]]
+                                                        [:dv [:ref {:pg/type "dv"} :pg.public/dv]]]}})]
+    (is (= [:map [:d1 [:boolean {:pg/type "bit(1)"}]] [:d4 [:any {:pg/type "bit(4)"}]] [:dv [:any {:pg/type "bit varying(5)"}]]]
+           (h/row-schema reg {:select [:d1 :d4 :dv] :from [:t]} {:jdbc unqualified}))
+        "a Boolean for bit(1), a PGobject otherwise"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/nm [:and ['decimal? {:pg/type "numeric(6,2)"}] [:pg/numeric {:precision 6 :scale 2}]]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:n [:ref {:pg/type "nm"} :pg.public/nm]]]}})]
+    (is (= [:map [:n [:or ['decimal? {:pg/type "numeric(6,2)"}] ['double? {:pg/type "numeric(6,2)"}]]]]
+           (h/row-schema reg {:select [:n] :from [:t]} {:jdbc unqualified}))
+        "a numeric domain's NaN is a Double")))
+
 (deftest a-number-label-is-read-from-a-string-sent-untyped
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
     (is (m/validate (:l (h/arg-types reg {:update :t :set {:l [:cast :?l :integer]}} {:send unspecified})) "1" {:registry reg}))))

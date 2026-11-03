@@ -279,9 +279,10 @@
   [schema {:keys [read] :as opts}]
   (let [t (pg-type schema)
         head (if (vector? schema) (first schema) schema)
-        driver-read (:read (types/entry t))]
+        ;; a domain's base comes with its typmod: "bit(4)"
+        driver-read (when-not (array-column? schema) (:read (types/entry (shape/type-name {:pg/type t}))))]
     (or (shape/read-as read schema)
-        (cond (= :bit driver-read) (if (= 1 (:max (second schema))) [:boolean {:pg/type t}] [:any {:pg/type t}])
+        (cond (= :bit driver-read) (if (or (= 1 (:max (second schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
               (= :or-double driver-read) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
               driver-read [driver-read {:pg/type t}]
               (#{:time/local-time :time/offset-time} head) ['inst? {:pg/type t}]
