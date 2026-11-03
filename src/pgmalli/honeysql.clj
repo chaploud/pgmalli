@@ -91,20 +91,15 @@
         t (cond (or (keyword? f) (symbol? f) (map? f)) [f] (vector? f) f)]
     t))
 
-(defn- join-items
-  "[join-key item] for the tables the joins bring in, in join-keys' order."
+(defn- joins
+  "[join-key item condition] of every join of a statement, in join-keys' order."
   [stmt]
-  (for [k join-keys :let [j (get stmt k)] :when (vector? j), t (map first (partition 2 j))] [k t]))
+  (for [k join-keys :let [j (get stmt k)] :when (vector? j), [t c] (partition 2 j)] [k t c]))
 
 (defn- table-items
   "The table items of a statement's FROM (and USING, CROSS JOIN) and joins."
   [stmt]
-  (concat (from-items stmt from-keys) (map second (join-items stmt))))
-
-(defn- join-items*
-  "[item condition] of every join of a statement."
-  [stmt]
-  (for [k join-keys :let [j (get stmt k)] :when (vector? j), pair (partition 2 j)] (vec pair)))
+  (concat (from-items stmt from-keys) (map second (joins stmt))))
 
 (declare insert-parts star? expression-type type-schema accepted-type driver-type quoted?)
 
@@ -121,7 +116,7 @@
   (boolean (or (contains? stmt :join-by)
                (some seq? (concat (keep stmt (concat from-keys join-keys write-keys))
                                   (from-items stmt from-keys)
-                                  (map second (join-items stmt))))
+                                  (map second (joins stmt))))
                ;; an :insert-into target insert-parts finds no table in
                (and (contains? stmt :insert-into) (nil? (insert-parts stmt))))))
 
@@ -299,13 +294,17 @@
 
 (defn- catalog? [table] (boolean (re-find #"^(pg_catalog|information_schema)\." table)))
 
+(defn- join-base
+  "The alias of the item the joins attach to: the last FROM item, a comma binding looser than
+   JOIN."
+  [stmt schema]
+  (take-last 1 (map #(second (table-ref % schema)) (from-items stmt [:from :using]))))
+
 (defn- outer-aliases
   "The aliases an outer join may leave NULL: a LEFT JOIN's table, every table before a RIGHT
    JOIN's, both sides of a FULL (and :outer-join) one."
   [stmt schema]
-  (let [alias #(second (table-ref % schema))
-        ;; the joins attach to the last FROM item: a comma binds looser than JOIN
-        from (take-last 1 (map alias (from-items stmt [:from :using])))]
+  (let [alias #(second (table-ref % schema))]
     (:nullable
      (reduce (fn [{:keys [before] :as acc} [k t]]
                (let [a (when t (alias t))]
@@ -315,9 +314,9 @@
                        (:outer-join :full-join) (update acc :nullable into (cond-> before a (conj a)))
                        acc)
                      (update :before conj a))))
-             {:before (vec from) :nullable #{}}
+             {:before (vec (join-base stmt schema)) :nullable #{}}
              ;; a RIGHT or FULL JOIN code builds nulls the tables before it all the same
-             (concat (join-items stmt)
+             (concat (joins stmt)
                      (for [k [:right-join :full-join :outer-join] :when (seq? (get stmt k))] [k nil]))))))
 
 (defn- scope
@@ -327,12 +326,12 @@
   [registry stmt ctes {:keys [schema]}]
   (let [registry (reading registry)
         refs (concat (from-items stmt from-keys)
-                     (map second (join-items stmt))
+                     (map second (joins stmt))
                      (write-targets stmt))
         nullable (outer-aliases stmt schema)
         ;; UPDATE, DELETE FROM and INSERT INTO name a table, which a CTE of the same name does not hide
         targets (set (write-targets stmt))
-        using (set (for [[_ j] (join-items* stmt) :when (and (vector? j) (= :using (first j))) c (rest j) :when (keyword? c)]
+        using (set (for [[_ _ j] (joins stmt) :when (and (vector? j) (= :using (first j))) c (rest j) :when (keyword? c)]
                      (folded (name c))))
         sc (into (with-meta {} {::using using})
                  (for [r refs :let [[table alias written listed] (table-ref r schema)] :when alias
@@ -713,30 +712,40 @@
   (let [maps (map #(update-keys % target-column) (filter map? (when (vector? (:values stmt)) (:values stmt))))]
     (if columns (map #(select-keys % (map target-column columns)) maps) maps)))
 
+(defn- writes
+  "[column value event clause] of what a statement writes: :set, ON CONFLICT DO UPDATE SET (a
+   map of assignments, or the columns taken from EXCLUDED, valued ::excluded: a vector of them,
+   or {:fields [...] :where ...}), and the rows of :values, maps or positional rows under the
+   columns listed (:values may be a symbol, rows passed in, saying nothing about the columns).
+   Under missing, a column one map of :values lacks and another has is written (missing column)."
+  ([stmt] (writes stmt nil))
+  ([stmt missing]
+   (let [{:keys [columns]} (insert-parts stmt)
+         do-update (:do-update-set stmt)
+         maps (value-rows stmt columns)
+         union (distinct (mapcat keys maps))]
+     (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update :set]))
+             (for [[c v] (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c ::excluded])
+                               (map? do-update) (for [[c v] do-update] [(target-column c) v])
+                               (vector? do-update) (for [c do-update] [c ::excluded]))]
+               [c v :update :do-update-set])
+             (for [row maps, c (if (or columns (nil? missing)) (keys row) union)]
+               [c (if (contains? row c) (get row c) (missing c)) :insert :values])
+             (when (and columns (vector? (:values stmt)))
+               (for [row (filter vector? (:values stmt)), [c v] (map vector columns row)] [c v :insert :values]))))))
+
 (defn- assignments
-  "[column value] pairs a statement assigns: :set, the maps of :values (which may be a symbol,
-   rows passed in, saying nothing about the columns), and the items of INSERT ... SELECT under
-   the columns listed, by position."
+  "[column value] pairs a statement assigns: what it writes (a column taken from EXCLUDED with
+   no value), and the items of INSERT ... SELECT under the columns listed, by position."
   [stmt]
-  (let [values (:values stmt)
-        {:keys [columns select]} (insert-parts stmt)
-        do-update (:do-update-set stmt)]
+  (let [{:keys [columns select]} (insert-parts stmt)]
     (filter (comp column-keyword? first)
-            (map (fn [[c v]] [(target-column c) v])
-            (concat (when (map? (:set stmt)) (:set stmt))
-                    ;; ON CONFLICT DO UPDATE SET: a map of assignments, the columns taken from EXCLUDED, or
-                    ;; {:fields [...] :where ...} (the columns taken from EXCLUDED, under a condition)
-                    (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update)) :when (keyword? c)] [c nil])
-                          (map? do-update) do-update
-                          (vector? do-update) (for [c do-update :when (keyword? c)] [c nil]))
-                    (when (vector? values)
-                      (concat (mapcat identity (value-rows stmt columns))
-                              ;; positional rows under the listed columns
-                              (when columns (mapcat #(map vector columns %) (filter vector? values)))))
-                    ;; a star or :raw makes columns the data does not count
-                    (let [items (map bare (selected-items select))]
-                      (when (and columns (map? select) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
-                        (map vector columns items))))))))
+            (map (fn [[c v]] [(target-column c) (when-not (= ::excluded v) v)])
+                 (concat (writes stmt)
+                         ;; a star or :raw makes columns the data does not count
+                         (let [items (map bare (selected-items select))]
+                           (when (and columns (map? select) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
+                             (map vector columns items))))))))
 
 (defn- target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
@@ -957,8 +966,8 @@
                                                          (column-keyword? (second x)))]
                                           [(second x) sc])
                                         ;; a keyword assigned in SET is a column the statement sees
-                                        (for [m [(:set stmt) (:do-update-set stmt)] :when (and (map? m) (not (contains? m :fields)))
-                                              [_ v] m :when (column-keyword? v)]
+                                        (for [[_ v _ clause] (writes stmt)
+                                              :when (and (not= :values clause) (not= ::excluded v) (column-keyword? v))]
                                           [v sc])
                                         (for [c assigned] [c target])))
           :when (if (or (star? col) (whole-row? scope col))
@@ -1031,22 +1040,10 @@
   (let [target (target-scope scopes stmt schema)
         i (:insert-into stmt)
         overriding? (and (vector? i) (map? (first i)) (#{:system :user} (:overriding-value (first i))))
-        columns (:columns (insert-parts stmt))
-        rows (when (vector? (:values stmt)) (:values stmt))
-        maps (value-rows stmt columns)
-        union (distinct (mapcat keys maps))
-        defaults (set (:values-default-columns format))
-        do-update (:do-update-set stmt)
-        writes (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update :set]))
-                        (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c ::excluded :update :do-update-set])
-                              (map? do-update) (for [[c v] do-update] [(target-column c) v :update :do-update-set])
-                              (vector? do-update) (for [c do-update] [c ::excluded :update :do-update-set]))
-                        (for [row maps, c (if columns (keys row) union)]
-                          [c (cond (contains? row c) (get row c) (defaults c) [:default]) :insert :values])
-                        (when columns (for [row (filter vector? rows), [c v] (map vector columns row)] [c v :insert :values])))]
+        defaults (set (:values-default-columns format))]
     (when (seq target)
       (distinct
-       (for [[col v how clause] writes
+       (for [[col v how clause] (writes stmt #(when (defaults %) [:default]))
              :when (column-keyword? col)
              :let [{:keys [table] s :schema} (resolve-column registry target col)
                    cp (some-> s shape/column-props)
@@ -1122,6 +1119,13 @@
       (and (number? l) (number? v) (== l v))
       (and (number? l) (string? v) (some-> (parse-number v) (== l)))))
 
+(defn- side-schema
+  "The column schema of one side of a comparison: a column's, or an expression's where
+   expression-type tells it; nil otherwise."
+  [registry sc side opts]
+  (cond (column-keyword? side) (:schema (resolve-column registry sc side))
+        (vector? side) (:schema (expression-type registry sc side opts))))
+
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
    assigned or under equality-ops; and, where :send sends a String typed (varchar, pgjdbc's
@@ -1131,28 +1135,27 @@
   [registry sc stmt {:keys [schema] :as opts}]
   (let [uses (concat (for [[op side value] (comparison-sides stmt)
                            :when (not (like-ops op))
-                           ;; an expression's type, where row-schema tells it
-                           :let [s (when (and (vector? side) (not (column-keyword? side))) (:schema (expression-type registry sc side opts)))]
+                           :let [s (side-schema registry sc side opts)]
                            :when (or s (column-keyword? side))]
-                       (cond-> {:col side :value value :scope sc :op op} s (assoc :schema s)))
+                       {:col side :value value :op op :schema s})
                      (let [target (target-scope sc stmt schema)]
-                       (when (seq target) (for [[col value] (assignments stmt)] {:col col :value value :scope target :assigned? true}))))
+                       (when (seq target)
+                         (for [[col value] (assignments stmt)]
+                           {:col col :value value :assigned? true :schema (:schema (resolve-column registry target col))}))))
         sends (jdbc/string-sends opts)
         typed? (not= :unknown (jdbc/sent-type "" opts))]
     (concat
      ;; an argument to an enum type's column, or to one whose own values are strings: a String,
      ;; which goes typed unless :send sends it untyped (stringtype=unspecified)
-     (for [{:keys [col value scope assigned?] :as use} uses
+     (for [{:keys [col value assigned?] s :schema} uses
            :let [k (param-key value)] :when (and k typed?)
-           :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
-                 t (some->> s (uncast-type registry))]
+           :let [t (some->> s (uncast-type registry))]
            ;; one assigned to a nullable column may be nil, which PostgreSQL takes
            :when (and t (not (takes-string? registry s assigned? sends)) (not (and assigned? (shape/maybe? s)))
                       (or (enum-type registry s) (some #(= :string (shape/kind %)) (shape/alternatives (driver-type registry jdbc/write-type s opts)))))]
        {:kind :uncast-string :column col :arg k :type t})
-     (for [{:keys [col value scope assigned? op] :as use} uses
-           :let [s (or (:schema use) (:schema (resolve-column registry scope col)))
-                 strings? (or (string? value) (and (vector? value) (every? string? value)))
+     (for [{:keys [col value assigned? op] s :schema} uses
+           :let [strings? (or (string? value) (and (vector? value) (every? string? value)))
                  numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
                  values (cond (or strings? numbers?) (if (vector? value) value [value])
                               (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
@@ -1358,13 +1361,6 @@
       (let [inner (accepted-type registry s :assign opts)]
         (if (or (shape/maybe? s) (and (not opaque?) (some #(filled-by-trigger? (table-props registry table) %) events))) [:maybe inner] inner))
       :any)))
-
-(defn- side-schema
-  "The column schema of one side of a comparison: a column's, or an expression's where
-   expression-type tells it; nil otherwise."
-  [registry sc side opts]
-  (cond (column-keyword? side) (:schema (resolve-column registry sc side))
-        (vector? side) (:schema (expression-type registry sc side opts))))
 
 (defn- compared-arg-type
   "The type of an argument op compares with side, as compared-schema narrows side's schema; :any
@@ -1714,7 +1710,6 @@
    to the merged type keeps no table."
   [registry stmt sc schema]
   (let [alias #(second (table-ref % schema))
-        joins (for [k join-keys :let [j (get stmt k)] :when (vector? j), [t c] (partition 2 j)] [k (alias t) c])
         col-schema (fn [a column]
                      (when-let [{:keys [table opaque?]} (get sc a)]
                        (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (folded column)))))))
@@ -1745,8 +1740,8 @@
                              acc (filter keyword? (rest c)))
                      acc)
                    (update :before conj right)))
-             {:before (vec (take-last 1 (map alias (from-items stmt [:from :using])))) :merges {}}
-             joins))))
+             {:before (vec (join-base stmt schema)) :merges {}}
+             (for [[k t c] (joins stmt)] [k (alias t) c])))))
 
 (defn- type-schema
   "A column's schema for a value of the PostgreSQL type t (a name or an alias), as the registry
