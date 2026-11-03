@@ -48,6 +48,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     whatever type `:send` sends it as, not only `varchar`; a string assigned to a reg* column
     other than `regclass`; a CHECK's list of numbers compared with a value outside it; and a
     column a CTE or a subquery does not give.
+* `generate` checks every `:overrides` key: a constraint name or a type no column of the
+  schemas has, `{:skip reason}` under a type or column key and a value that is no malli schema
+  are errors naming the key meant. Drop the keys of what was dropped from the database.
+* Generate again if a schema has a domain over `timestamp(n) with time zone` or `time(n)`, or
+  a column of a type pgmalli does not know overridden by its type: their files change.
 * Generate again if a schema has a table other tables inherit, a DEFERRABLE primary key or
   unique constraint, an invalid unique index, or a domain whose CHECK lists its values: their
   files change, and `pgmalli.main check` reports them stale.
@@ -136,6 +141,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
   read under `{:read {:json :parsed}}`, written for what `:send` sends as its type. A key that
   names no column is an error.
+* An `:overrides` type key may be the type's alias or a HoneySQL cast's spelling
+  (`:timestamptz`, `:timestamp-with-time-zone`); `pgmalli.main` suggests one for an unrendered
+  type, or the column's key for an array type.
 
 ### Changed
 
@@ -201,6 +209,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `{:shcema ["disallowed key"]}; did you mean: :schema`.
 * A `:db` holding next.jdbc's `:dbtype` is an error saying to drop it.
 * `pgmalli.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`.
+* A column overridden by its type is no longer listed in `:unrendered`.
+* A domain over a type with a typmod inside its name (`timestamp(3) with time zone`,
+  `time(0)`) has the type's schema instead of `:any`.
 
 ## 0.3.3 (2026-11-03)
 

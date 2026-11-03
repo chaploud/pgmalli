@@ -1,7 +1,7 @@
 (ns pgmalli.impl.files-test
   "The config and the text of a generated file; no database."
   (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is]]
+            [clojure.test :refer [deftest is testing]]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.pattern :as p]))
 
@@ -27,10 +27,29 @@
   (let [facts (p/facts {:name "public" :types {}
                         :tables {"jobs" {:columns [{:name "input" :position 1 :data_type "jsonb" :is_nullable false}
                                                    {:name "n" :position 2 :data_type "integer" :is_nullable false}]
-                                         :constraints {}}}})
+                                         :constraints {"jobs_n_check" {:name "jobs_n_check" :type "CHECK" :check_clause "CHECK (n > 0)"}}}}})
         checked #(files/checked-overrides! % facts)
-        ok {:public.jobs/input :map "jobs_check" :int :inet :string}]
-    (is (= ok (checked ok)))
+        fails (fn [overrides] (try (checked overrides) nil (catch clojure.lang.ExceptionInfo e [(ex-message e) (:pgmalli/error (ex-data e)) (:did-you-mean (ex-data e))])))
+        ok {:public.jobs/input [:map [:p [:ref :app/prompt]]] "jobs_n_check" {:skip "why"} :int4 :pg/integer :jsonb :app/doc}]
+    (is (= ok (checked ok)) "a type by an alias, a reference to the user's registry")
+    (testing "a type key names a type of a column"
+      (is (= [":overrides: :jsnob names no type of a column of the schemas generated: public; did you mean: :jsonb" :pgmalli.error/invalid-config [:jsonb]]
+             (fails {:jsnob :map})))
+      (is (= [":overrides: :inet names no type of a column of the schemas generated: public" :pgmalli.error/invalid-config nil]
+             (fails {:inet :string}))))
+    (testing "a string key names a constraint"
+      (is (= [":overrides: \"jobs_n_chek\" names no constraint of the schemas generated: public; did you mean: \"jobs_n_check\"" :pgmalli.error/invalid-config ["jobs_n_check"]]
+             (fails {"jobs_n_chek" {:skip "x"}}))))
+    (testing "{:skip reason} leaves out a constraint alone"
+      (is (= [":overrides: :public.jobs/n {:skip \"x\"}: only a constraint is skipped; give the column a malli schema" :pgmalli.error/invalid-config nil]
+             (fails {:public.jobs/n {:skip "x"}}))))
+    (testing "a value is a malli schema"
+      (is (= ":overrides: :jsonb's schema [:strin] is no malli schema: invalid-schema {:schema :strin, :form [:strin]}"
+             (first (fails {:jsonb [:strin]})))))
+    (testing "a column key without its schema, or with pg., names the column meant"
+      (is (= [":overrides: :jobs/input names no table or view of the schemas generated: public; did you mean: :public.jobs/input" :pgmalli.error/invalid-config [:public.jobs/input]]
+             (fails {:jobs/input :map})))
+      (is (= [:public.jobs/input] (last (fails {:pg.public.jobs/input :map})))))
     (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo
                                   #"^:overrides: :public.jobs/inptu names no column of public.jobs; did you mean: :public.jobs/input$"
                                   (checked {:public.jobs/inptu :map})))]

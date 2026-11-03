@@ -359,11 +359,14 @@
     (let [k (:dispatch (second f))] (assoc f 1 (assoc (second f) :dispatch #(get % k) :pg/dispatch k)))
     f))
 
+(def base
+  "The schemas a generated schema or an override names besides the generated ones."
+  (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas))
+
 (defn registry
   "The registry pgmalli.core/registry documents."
   [& schemas]
   (let [data (map #(if (map? %) % (read-generated %)) schemas)
-        base (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas)
         generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints (with-domain-hints s) false (str k))))]))
                         (apply merge (map :registry data)))]
     (merge base

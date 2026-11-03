@@ -508,7 +508,9 @@ file and lists them all:
 `:overrides` in `pgmalli.edn` replaces what pgmalli generates. A constraint name replaces
 that CHECK, or `{:skip reason}` leaves it out; use it for the CHECKs listed in `:unrendered`.
 A type keyword replaces the schema of every column of that type, such as `:inet`, which is
-otherwise `:any`. A keyword `:schema.table/column` replaces the schema of that one column's
+otherwise `:any`; it is the type's name, an alias of [docs/types.md](docs/types.md) or a
+HoneySQL cast's spelling (`:timestamptz`, `:timestamp-with-time-zone`). An array type has no
+keyword: override its columns. A keyword `:schema.table/column` replaces the schema of that one column's
 value, its type's schema with it (an enum's, a `varchar(n)`'s length); it comes before an
 override of the type:
 
@@ -526,8 +528,10 @@ NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are 
 datasets included. A json or jsonb column's driver object is a PGobject, so its shape is the
 parsed value's: it is read under `{:read {:json :parsed}}`, and an argument takes it for the
 classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`). Without
-those, a read or an argument is the driver's object. A key that names no column of the
-schemas generated is an error that names the column meant.
+those, a read or an argument is the driver's object. `generate` checks every key against the
+schemas generated: a constraint name, a type of a column and a column must be theirs,
+`{:skip reason}` goes under a constraint name alone, and a value must be a malli schema (a
+qualified name passes, as your registry's). An error names the key meant.
 
 A `[:ref ...]` to your own schema needs a registry holding it:
 
