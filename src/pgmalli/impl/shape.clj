@@ -94,11 +94,15 @@
   [column-props]
   (boolean (or (:pg/generated column-props) (= :always (:pg/identity column-props)))))
 
+(defn props
+  "The property map of schema vector s; nil for none."
+  [s]
+  (when (and (vector? s) (map? (second s))) (second s)))
+
 (defn row-props
   "The properties of a row (or insert, update) schema's map: :pg/table or :pg/view, keys..."
   [s]
-  (let [m (when (vector? s) (row-map s))]
-    (when (and (vector? m) (map? (second m))) (second m))))
+  (props (when (vector? s) (row-map s))))
 
 (defn maybe?
   "Whether a column schema takes NULL: [:maybe ...]."
@@ -108,8 +112,7 @@
 (defn column-props
   "Properties of a column schema, looking through [:maybe ...]."
   [s]
-  (let [s (if (maybe? s) (last s) s)]
-    (if (and (vector? s) (map? (second s))) (second s) {})))
+  (or (props (if (maybe? s) (last s) s)) {}))
 
 (defn domain-base
   "The base of a domain's registry schema: the first schema of [:and base checks...]."
@@ -212,6 +215,18 @@
   [t]
   (if (vector? t) (first t) t))
 
+(defn resolved
+  "Column schema s of a registry's schemas under the references it makes, through domains over
+   domains: {:base b :refs [ref ...]}, refs the [:ref ...] schemas followed, outermost first, b
+   the base of the last one's schema ([:and b checks...]); that schema itself, :enum? true, where
+   it is an [:enum ...] (an enum type, or a domain that is a CHECK's list alone)."
+  [schemas s]
+  (loop [b s refs []]
+    (if-let [d (ref-target schemas b)]
+      (let [refs (conj refs b)]
+        (if (= :enum (head d)) {:base d :refs refs :enum? true} (recur (domain-base d) refs)))
+      {:base b :refs refs})))
+
 (defn kind
   "The kind of value t takes: its head, through [:and t checks...]; a function schema ([:fn f])
    is a kind of its own."
@@ -268,7 +283,7 @@
    nil when the column's :pg/type is not among them."
   [read schema]
   (let [inner (non-null schema)]
-    (when-let [s (get read (when (and (vector? inner) (map? (second inner))) (:pg/type (second inner))))]
+    (when-let [s (get read (:pg/type (props inner)))]
       (if (identical? inner schema) s [:maybe s]))))
 
 (defn merge-props

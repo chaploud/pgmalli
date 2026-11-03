@@ -16,16 +16,20 @@
 
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
 
-(def class-types
-  "[class type]: the type pgjdbc's setObject sends a value of class as, with no extension and
-   its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
-   Character with setString, a Java array as an array of its elements' type."
-  (filterv some? [[Long "bigint"] [Integer "integer"] [Short "smallint"] [Byte "smallint"] [java.math.BigDecimal "numeric"]
-   [clojure.lang.BigInt "numeric"] [java.math.BigInteger "numeric"] [Double "double precision"] [Float "real"]
-   [Boolean "boolean"] [String "character varying"] [Character "character varying"] [java.util.UUID "uuid"]
-   [bytes-class "bytea"] [java.time.LocalDate "date"] [java.time.LocalTime "time without time zone"]
-   [java.time.OffsetTime "time with time zone"] [java.time.LocalDateTime "timestamp without time zone"]
-   [java.time.OffsetDateTime "timestamp with time zone"]
+(def classes
+  "[class type schema]: the type pgjdbc's setObject sends a value of class as, with no extension
+   and its default stringtype (varchar): BigInt and BigInteger as setNumber sends a Number, a
+   Character with setString, a Java array as an array of its elements' type; nil for a class it
+   sends no type of its own for. schema is the malli schema of a value of class, for the classes
+   pgjdbc sends and those an application's extensions commonly do; nil for a Java array."
+  (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
+   [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
+   [Double "double precision" :double] [Float "real" 'float?]
+   [Boolean "boolean" :boolean] [String "character varying" :string] [Character "character varying" 'char?]
+   [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate "date" :time/local-date]
+   [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]
+   [java.time.LocalDateTime "timestamp without time zone" :time/local-date-time]
+   [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
    [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
    [(array Short/TYPE) "smallint[]"] [(array Short) "smallint[]"] [(array Double/TYPE) "double precision[]"]
@@ -37,11 +41,18 @@
    ;; java.sql's arrays (babashka has not all of these classes)
    (some-> (named "java.sql.Date") array-of (vector "date[]"))
    (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
-   (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))]))
+   (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))
+   [java.time.Instant nil :time/instant] [java.util.Date nil 'inst?] [clojure.lang.Keyword nil :keyword] [clojure.lang.Symbol nil :symbol]
+   [clojure.lang.IPersistentMap nil [:map-of :any :any]] [clojure.lang.IPersistentVector nil [:vector :any]]
+   [clojure.lang.IPersistentSet nil [:set :any]] [clojure.lang.Sequential nil [:sequential :any]]]))
+
+(def class-types
+  "[class type] of classes, for the classes pgjdbc sends a type of its own for, in its order."
+  (vec (for [[c t] classes :when t] [c t])))
 
 ;;; what PostgreSQL takes
 
-(defn known?
+(defn answers?
   "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one."
   [t]
   (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]))))
@@ -98,7 +109,7 @@
    types from the context. A type sent that pgmalli does not know (an extension's) is taken: its
    extension's casts are not in the catalog."
   [t sent context]
-  (cond (not (or (= :unknown sent) (known? sent) (string-type? sent))) true
+  (cond (not (or (= :unknown sent) (answers? sent) (string-type? sent))) true
         (= :compare context) (or (and (string-type? t) (string-type? sent)) (compares? t sent))
         :else (or (= :unknown sent) (converts? t sent context))))
 

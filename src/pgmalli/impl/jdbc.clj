@@ -130,22 +130,10 @@
   [n pred]
   [:fn {:pg/class n :error/message (str "should be an " n)} pred])
 
-(def ^:private class-schemas
-  "[class schema]: the malli schema of a value of class, for the classes pgjdbc sends and those
-   an application's extensions commonly do; another class is [:fn instance?]."
-  [[Long :int] [Integer :int] [Short :int] [Byte :int] [clojure.lang.BigInt 'integer?] [java.math.BigInteger 'integer?]
-   [java.math.BigDecimal 'decimal?] [Double :double] [Float 'float?]
-   [Boolean :boolean] [String :string] [Character 'char?] [java.util.UUID :uuid] [accept/bytes-class 'bytes?]
-   [java.time.LocalDate :time/local-date] [java.time.LocalTime :time/local-time] [java.time.OffsetTime :time/offset-time]
-   [java.time.LocalDateTime :time/local-date-time] [java.time.OffsetDateTime :time/offset-date-time]
-   [java.time.Instant :time/instant] [java.util.Date 'inst?] [clojure.lang.Keyword :keyword] [clojure.lang.Symbol :symbol]
-   [clojure.lang.IPersistentMap [:map-of :any :any]] [clojure.lang.IPersistentVector [:vector :any]]
-   [clojure.lang.IPersistentSet [:set :any]] [clojure.lang.Sequential [:sequential :any]]])
-
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
   (memoize (fn [^Class c]
-             (or (some (fn [[k s]] (when (= k c) s)) class-schemas)
+             (or (some (fn [[k _ s]] (when (= k c) s)) accept/classes)
                  ;; java.sql's dates, times and timestamps are java.util.Dates
                  (when (.isAssignableFrom java.util.Date c) 'inst?)
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
@@ -153,19 +141,11 @@
                  (when (and (.isArray c) (not= c accept/bytes-class)) [:pg/array :pgmalli/element])
                  (class-fn (.getName c) (fn [x] (instance? c x)))))))
 
-(defn- array-type-name
-  "\"varchar[]\" as \"character varying[]\": an array type named by an element type types knows
-   (a name or an alias), by that type's name; nil otherwise."
+(defn- sent-name
+  "A :send type by its name (types/canonical-name): :unknown, a type types knows or an array of
+   one; nil otherwise."
   [t]
-  (when-let [e (types/element t)]
-    (some-> (types/entry e) :name (str "[]"))))
-
-(defn- type-name
-  "A :send type by its name: a type types knows, an array of one, :unknown; nil otherwise."
-  [t]
-  (cond (= :unknown t) t
-        (array-type-name t) (array-type-name t)
-        :else (some-> (types/entry t) :name)))
+  (if (= :unknown t) t (when (types/entry (or (types/element t) (when (string? t) t))) (types/canonical-name t))))
 
 (defn send-map
   "{class type} an application sends: pgjdbc's (accept/class-types) but a Character, which a
@@ -221,7 +201,7 @@
       (doseq [[c t :as e] (:send opts)]
         (cond (not (class? c))
               (fail! (str ":send's key " (pr-str c) " is no class; a key is the class of a value sent (String, clojure.lang.Keyword)") e)
-              (and (some? t) (not (type-name t)))
+              (and (some? t) (not (sent-name t)))
               (fail! (str ":send's " (pr-str c) " goes as " (pr-str t) ", which is no type of docs/types.md, an array of one (\"bigint[]\")"
                           " or :unknown for a value sent untyped (an enum's or a domain's value too)"
                           (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
@@ -262,9 +242,9 @@
    :pgmalli/element) or another's."
   [opts array?]
   (for [[c t] (sorted-sends (send-map opts))
-        :let [t (type-name t)
+        :let [t (sent-name t)
               coll (collection-schema c)
-              array (or (.isArray ^Class c) (and coll (or (= :unknown t) (array-type-name t))))]
+              array (or (.isArray ^Class c) (and coll (or (= :unknown t) (types/element t))))]
         :when (= array? (boolean (and array (not= c accept/bytes-class))))]
     [(if (and array coll) coll (class-schema c)) t]))
 
@@ -277,20 +257,20 @@
     :unknown
     (let [m (send-map opts)]
       ;; its class's entry, else its superclasses' and interfaces' in pgjdbc's order (write-rows's)
-      (or (some-> (get m (class value)) type-name)
-          (some (fn [[c t]] (when (instance? c value) (type-name t))) (sorted-sends m))))))
+      (or (some-> (get m (class value)) sent-name)
+          (some (fn [[c t]] (when (instance? c value) (sent-name t))) (sorted-sends m))))))
 
 (defn string-sends
   "The types a String is sent as: send-map's for String and Character."
   [opts]
-  (vec (distinct (keep #(some-> (get (send-map opts) %) type-name) [String Character]))))
+  (vec (distinct (keep #(some-> (get (send-map opts) %) sent-name) [String Character]))))
 
-(defn- pg-type [s] (when (and (vector? s) (map? (second s))) (:pg/type (second s))))
+(defn- pg-type [s] (:pg/type (shape/props s)))
 
 (defn- array-column?
   "An array column's schema: [:vector {:pg/type \"text[]\"} :string]."
   [s]
-  (and (vector? s) (= :vector (first s)) (some-> (pg-type s) (str/ends-with? "[]"))))
+  (and (vector? s) (= :vector (first s)) (types/element (pg-type s))))
 
 (defn- driver-type
   "What read-type and write-type share: dates and timestamps under :time, arrays, json and
@@ -344,7 +324,7 @@
         takes? (fn [sent]
                  (if (= :unknown sent)
                    (not= :unnest use)
-                   (cond (and elem (accept/known? elem)) (accept/holds? elem (types/element sent))
+                   (cond (and elem (accept/answers? elem)) (accept/holds? elem (types/element sent))
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
                          (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
@@ -354,11 +334,11 @@
                   (let [x (when (string? sent) (types/element sent))
                         ;; an element of no known type (an opaque column's) stays so
                         e (when (and x elem (not= x elem)) (types/entry x))]
-                    (if-let [s (:schema e)]
+                    (if e
                       (let [;; pgmalli's integer types are integers, as :int is
                             kind #(let [k (shape/kind %)] (if (pgtypes/int-ranges k) :int k))
                             own (set (map kind (shape/alternatives (shape/non-null t))))
-                            more (remove #(own (kind %)) (shape/alternatives (write-type (if (keyword? s) [s {:pg/type (:name e)}] s) opts)))]
+                            more (remove #(own (kind %)) (shape/alternatives (write-type (types/type-schema (:name e)) opts)))]
                         (shape/either (distinct (concat (shape/alternatives t) more)) t))
                       t)))
         alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)
@@ -492,12 +472,10 @@
   "s, a column of an enum type or of a domain over one, read as {:read {:enum :keyword}} says: its
    labels keywords. nil for another column."
   [schemas s]
-  (loop [t s]
-    (when-let [target (shape/ref-target schemas t)]
-      (if (= :enum (shape/head target))
-        (into [:enum (cond-> (shape/column-props s) (:default (shape/column-props s)) (update :default keyword))]
-              (map keyword (remove map? (rest target))))
-        (recur (shape/domain-base target))))))
+  (let [{:keys [base enum?]} (shape/resolved schemas s)]
+    (when enum?
+      (into [:enum (cond-> (shape/column-props s) (:default (shape/column-props s)) (update :default keyword))]
+            (map keyword (shape/entries base))))))
 
 (defn column-read-type
   "read-type of a column schema (without NULL) of a registry's schemas, a domain read as the
@@ -521,10 +499,10 @@
         target (shape/ref-target schemas e)
         s (cond (nil? target) s
                 (= :enum (shape/head target))
-                (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (remove map? (rest target))))
+                (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (shape/entries target)))
                 ;; a domain's array reads as its base type's, elements and all
                 :else (if-let [base (base-type-name target)]
-                        (-> s (assoc-in [1 :pg/type] (str base "[]")) (assoc (dec (count s)) (shape/domain-base target)))
+                        (-> s (assoc-in [1 :pg/type] (types/array-of base)) (assoc (dec (count s)) (shape/domain-base target)))
                         s))
         ;; a domain's value is sent as its base type's: the classes sent as that type, held to the
         ;; domain's checks, its definition in place of the reference
@@ -546,7 +524,7 @@
   (let [w (column-write-type* schemas s opts)
         r (column-read-type schemas s (dissoc opts :read))
         t (pg-type r)]
-    (if (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (str/ends-with? t "[]"))
+    (if (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (types/element t))
              (or (types/json? t) (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t}))))))
       (shape/either (concat (shape/alternatives w) [pg-object]) w)
       w)))

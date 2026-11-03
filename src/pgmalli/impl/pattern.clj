@@ -192,16 +192,14 @@
   "A type's name as a cast and a column spell it alike: no schema, no quotes, an alias as its
    type (bpchar -> character)."
   [t]
-  (let [n (-> (if (keyword? t) (name t) (str t)) (str/replace #"^[^.\"]+\.|\"" "") str/lower-case)]
-    (or (some-> (types/entry (str/replace n "-" " ")) :name) n)))
+  (types/cast-name (str/replace (types/bare-name (name t)) "\"" "")))
 
 (defn- column-type-info
   "What normalize needs of a column of type t (under its domains): its type-key, the types a
    cast to keeps its value in (:keeps: text and varchar for a text, varchar, name, citext or enum
    value; bit and varbit for a bit string), whether it is a float (:float?), and :not-null?."
   [t enum? not-null?]
-  (let [t (str/replace t #"\(.*\)$" "")
-        e (types/entry t)]
+  (let [e (types/entry t)]
     {:type (type-key t)
      :keeps (cond (or enum? (= "citext" (:name e)) (and (= :text (:eval e)) (not= "character" (:name e)))) text-types
                   (#{"bit" "bit varying"} (:name e)) #{"bit" "bit varying"}
@@ -394,7 +392,7 @@
                        (false? is_valid) (assoc :valid? false))])
     []))
 
-(defn- citext? [type-name] (boolean (re-find #"(?:^|\.)citext$" (str/replace (str type-name) #"\(.*\)$" ""))))
+(defn- citext? [type-name] (= "citext" (:name (types/entry type-name))))
 
 (defn- citext-fact
   "A column pattern over a citext value as citext reads it: ~ and LIKE ignoring case; nil for

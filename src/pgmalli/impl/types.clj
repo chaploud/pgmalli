@@ -199,6 +199,39 @@
   [t]
   (when (string? t) (second (re-matches #"(.+)\[\]" t))))
 
+(defn array-of
+  "The array type of elements of type t: \"x[]\", t itself for an array (PostgreSQL's array types
+   take any number of dimensions); nil for no name."
+  [t]
+  (cond (element t) t (string? t) (str t "[]")))
+
+(defn canonical-name
+  "The name of type t as format_type prints it: a type of types (timestamptz, varchar(10)) by its
+   name, without a schema or typmod, an array of one as \"x[]\"; another as it is."
+  [t]
+  (when (string? t)
+    (if-let [e (element t)]
+      (some-> (canonical-name e) array-of)
+      (:name (entry t) t))))
+
+(defn cast-name
+  "canonical-name of the type a cast spells t (:double-precision, :TIMESTAMPTZ, \"bpchar\"):
+   HoneySQL writes - as a space, and PostgreSQL folds the case."
+  [t]
+  (canonical-name (str/lower-case (str/replace (name t) "-" " "))))
+
+(defn type-schema
+  "A column's schema for a value of type t (a name or an alias, \"x[]\" an array), as the registry
+   writes one; nil for a type types lacks."
+  [t]
+  (cond
+    ;; pgjdbc reads a void value as a PGobject of ""
+    (= "void" t) [:any {:pg/type "void"}]
+    (element t) (when-let [{n :name s :schema} (entry (element t))]
+                  [:vector {:pg/type (array-of n)} s])
+    :else (when-let [{n :name s :schema} (some-> t entry)]
+            (if (vector? s) (into [(first s) (assoc (second s) :pg/type n)] (drop 2 s)) [s {:pg/type n}]))))
+
 (defn category
   "PostgreSQL's typcategory of type t (a name as format_type prints it, \"x[]\", or [:enum
    name]): \"A\" for an array, \"E\" an enum; nil for a type pg_catalog lacks."

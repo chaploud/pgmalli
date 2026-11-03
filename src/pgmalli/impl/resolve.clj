@@ -13,7 +13,9 @@
 (def ^:private compatible-family #{"anycompatible" "anycompatiblearray" "anycompatiblenonarray" "anycompatiblerange" "anycompatiblemultirange"})
 (def ^:private polymorphic (into element-family compatible-family))
 
-(defn- unbound? [t] (contains? #{:unknown :free} t))
+(defn unbound?
+  "Whether t is no type yet: an untyped literal or NULL (:unknown), a parameter (:free)."
+  [t] (contains? #{:unknown :free} t))
 
 (defn- coerces?
   "can_coerce_type: whether PostgreSQL takes a value of type in where decl goes, implicitly;
@@ -37,8 +39,6 @@
                               :else p))
                       (first known) (rest known))]
         (when (and t (every? #(coerces? % t) ts)) t)))))
-
-(defn- array-of [t] (cond (types/element t) t (string? t) (str t "[]")))
 
 (defn- range-of [m] (some (fn [[r {mr :multirange}]] (when (= m mr) r)) (:ranges @types/catalog)))
 
@@ -70,7 +70,7 @@
                (not (and elem (some #{"anyenum"} decls) (not= "E" (types/category elem))))
                (not (and compat (some #{"anycompatiblenonarray"} decls) (types/element compat))))
       (cond-> {}
-        elem (assoc :elem elem :array (or (first arrays) (array-of elem)))
+        elem (assoc :elem elem :array (or (first arrays) (types/array-of elem)))
         (first rs) (assoc :range (first rs))
         (seq (of "anymultirange")) (assoc :multirange (first (of "anymultirange")))
         compat (assoc :compat compat)
@@ -86,7 +86,7 @@
       "anyrange" (:range b)
       "anymultirange" (or (:multirange b) (some-> (:range b) multirange))
       ("anycompatible" "anycompatiblenonarray") (:compat b)
-      "anycompatiblearray" (some-> (:compat b) array-of)
+      "anycompatiblearray" (some-> (:compat b) types/array-of)
       "anycompatiblerange" (:compat-range b)
       "anycompatiblemultirange" (some-> (:compat-range b) multirange)
       decl)))

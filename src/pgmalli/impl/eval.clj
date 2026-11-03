@@ -486,7 +486,7 @@
   [d]
   (if (float4? d) (Float/valueOf (unchecked-float d)) (throw (ex-info "value out of range for type real" {}))))
 
-(def ^:private real-types #{:real :float4})
+(def ^:private real-types (types/keywords #(= "real" (:name %))))
 
 (defn- cast-to [v t]
   (cond

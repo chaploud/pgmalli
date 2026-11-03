@@ -223,8 +223,7 @@
   "The type a column type names, without schema or typmod, by the name pgmalli.impl.types keys
    it by (\"public.inet\" is inet, \"int4\" integer)."
   [data-type]
-  (let [t (types/bare-name data-type)]
-    (:name (types/entry t) t)))
+  (types/canonical-name (types/bare-name data-type)))
 
 (def ^:private by-keyword (types/by-keyword any?))
 
