@@ -35,8 +35,8 @@ jobs:
           java-version: "25"
       - uses: DeLaGuardo/setup-clojure@6d46099eae24853c33c0482f2bb54edf4f1a4c74 # 13.7.0
         with:
-          cli: latest
-          bb: latest
+          cli: 1.12.5.1664
+          bb: 1.13.219
       - name: install psql
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - name: pull postgres image
