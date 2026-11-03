@@ -280,7 +280,7 @@
     (is (= [:map [:group_id int4]] (row '{:select [:group_id] :from [:users]} opts)))
     (is (= {'x bigint} (args '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]}))
         "an untyped use never hides a typed one")
-    (is (= [:=> [:cat bigint :any] [:sequential {:max 1 :min 1} [:map [:n bigint]]]]
+    (is (= [:=> {:pgmalli/problems []} [:cat bigint :any] [:sequential {:max 1 :min 1} [:map [:n bigint]]]]
            (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
         "a symbol used nowhere is :any")
     (is (= [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
@@ -421,7 +421,7 @@
       "a body that is code, after another CTE, is a table whose columns are not known"))
 
 (deftest one-row-results
-  (is (= [:=> [:cat bigint] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]
+  (is (= [:=> {:pgmalli/problems []} [:cat bigint] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]
          (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
@@ -435,7 +435,7 @@
                {:truncate :users}]]
       (is (= counted (row q)) (pr-str q))
       (is (= counted (row q {:schema "sample"})) "whatever the builder: next.jdbc builds this map itself")
-      (is (= [:=> [:cat] counted] (h/query-schema registry [] q (assoc opts :result :one))) "execute-one! returns it, never nil"))
+      (is (= [:=> {:pgmalli/problems []} [:cat] counted] (h/query-schema registry [] q (assoc opts :result :one))) "execute-one! returns it, never nil"))
     (is (= [:map [:id int4]]
            (row {:delete-from :groups :returning [:id]})))
     (is (= [:map [:id int4] [:name text]]
@@ -443,7 +443,7 @@
         "pgjdbc adds RETURNING * under :return-keys true")
     (is (= [:map [:name text]]
            (row {:update :groups :set {:name "b"}} (assoc-in opts [:jdbc :return-keys] ["name"]))))
-    (is (= [:=> [:cat] [:maybe [:map [:name text]]]]
+    (is (= [:=> {:pgmalli/problems []} [:cat] [:maybe [:map [:name text]]]]
            (h/query-schema registry [] {:delete-from :groups} (-> opts (assoc-in [:jdbc :return-keys] ["name"]) (assoc :result :one))))
         "a write returning rows may return none")
     (is (nil? (row {:truncate :users} (assoc-in opts [:jdbc :return-keys] true)))
@@ -998,7 +998,7 @@
   (let [s (h/query-schema registry [:id] {:select [:nick_name] :from [:users] :where [:= :id :?id]} opts)]
     (is (= {:pgmalli/problems [{:kind :unknown-column :column :nick_name}]} (m/properties (m/schema s))))
     (is (= :any (last s)) "the row it cannot tell"))
-  (is (nil? (m/properties (m/schema (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} opts) {:registry registry})))
+  (is (= {:pgmalli/problems []} (m/properties (m/schema (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} opts) {:registry registry})))
       "none on a query that agrees"))
 
 (def checked
@@ -1043,7 +1043,7 @@
       "[:. a b] is a.b, named b"))
 
 (deftest a-clause-read-nowhere-is-a-problem
-  (is (= [{:kind :unread-clause :clause :join-by}] (check {:select [:id] :from [:users] :join-by [:left [:groups [:= 1 1]]]})))
+  (is (= [{:kind :unread-clause :clause :fetch-next}] (check {:select [:id] :from [:users] :fetch-next 1})))
   (is (= [] (check {:select [:id] :from [:users] :for :update :window [:w {:partition-by [:id]}]})) "clauses that change nothing read here")
   (is (= [{:kind :unknown-column :column :table}
           {:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:table 1 :group_id 1 :mood "sad" :score 1}]}))
@@ -1064,7 +1064,7 @@
   (is (vector? (check {:select [:a] :from [[[:jsonb_to_record :x] [:r {:columns [[:raw "a int"]]}]]]}))))
 
 (deftest a-local-code-binds-is-no-missing-arg
-  (is (nil? (m/properties (m/schema (h/query-schema registry '[ids] '{:select [:id] :from [:users] :where (into [:or] (for [i ids] [:= :id i]))} opts))))))
+  (is (= {:pgmalli/problems []} (m/properties (m/schema (h/query-schema registry '[ids] '{:select [:id] :from [:users] :where (into [:or] (for [i ids] [:= :id i]))} opts))))))
 
 (deftest a-call-in-the-wrong-shape-is-an-error
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes the function's args first" (h/query-schema registry {:select [:id] :from [:users]} opts)))
@@ -1094,7 +1094,8 @@
 
 (deftest a-subquery-in-a-row-is-read
   (let [sub {:select [:id] :from [:groups] :join-by [:left [:users [:= 1 1]]]}]
-    (is (some #{{:kind :unread-clause :clause :join-by}} (check {:update :users :set {:group_id sub}})))))
+    (is (= [{:kind :ambiguous-column :column :id :candidates ["sample.groups" "sample.users"] :in [:set 0 1]}]
+           (check {:update :users :set {:group_id sub}})))))
 
 (deftest a-right-join-code-builds-nulls-the-tables-before-it
   (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]]
@@ -1397,21 +1398,34 @@
   (testing "an argument reaching an enum type's column as a String"
     (is (= []
            (check {:select [:id] :from [:users] :where [:= :mood :?m]} opts)))
-    (is (= []
-           (check {:select [:id] :from [:users] :where [:= :mood :?m]} opts))
-        "an extension sending a keyword as a String sends varchar all the same")
+    (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}]
+           (check {:select [:id] :from [:users] :where [:= :mood [:lift "sad"]]} opts))
+        "[:lift s] is a String sent as varchar")
     (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]} opts))))
-  (testing ":join-by leaves its tables open"
-    (is (= [{:kind :unread-clause :clause :join-by}]
-           (check {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:left [[:groups :g] [:= :g.id :u.group_id]]]}))))
+  (testing ":join-by's joins are read as the join clauses'"
+    (is (= [] (check {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:left [[:groups :g] [:= :g.id :u.group_id]]]}))))
   (testing "ROLLUP's total row is NULL in its grouped columns"
     (is (= [:maybe int4]
            (second (second (row {:select [:group_id [[:count :*] :n]] :from [:users] :group-by [[:rollup :group_id]]})))))))
 
-(deftest a-row-is-nullable-where-a-join-or-grouping-pgmalli-does-not-read-may-null-it
-  (let [nullable? (fn [q] (every? #(= :maybe (first (last %))) (drop 1 (row q))))]
-    (is (nullable? {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:right [[:groups :g] [:= :g.id 9]]]}))
-    (is (nullable? {:select [:group_id] :from [:users] :group-by [[:raw "CUBE(group_id)"]]}))))
+(deftest a-row-is-nullable-where-a-grouping-pgmalli-does-not-read-may-null-it
+  (is (every? #(= :maybe (first (last %))) (drop 1 (row {:select [:group_id] :from [:users] :group-by [[:raw "CUBE(group_id)"]]})))))
+
+(deftest join-by-joins-in-its-order-as-the-join-clauses
+  (let [q {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:right [[:groups :g] [:= :g.id 9]]]}]
+    (is (= [:map [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]] [:name text]] (row q))
+        "a RIGHT JOIN leaves the tables before it NULL")
+    (is (= (row q) (row (assoc q :join-by [{:right [[:groups :g] [:= :g.id 9]]}]))) "maps of a join type and its clauses")
+    (is (= [{:kind :unknown-column :column :g.nope}] (check (assoc q :select [:g.nope]))))
+    (is (= [{:kind :unknown-column :column :nope :in [:join-by 1 0]}]
+           (check {:select [:u.id] :from [[:users :u]] :join-by [:left [{:select [:nope] :from [:groups]} [:= 1 1]]]}))
+        "a subquery joined, where it sits")
+    (is (= [] (check {:select [:u.id :g.name] :from [[:users :u]] :join-by [:cross [[:groups :g]]]})))))
+
+(deftest table-is-select-star-from
+  (is (= (row {:select [:*] :from [:groups]}) (row {:table :groups})))
+  (is (= [] (check {:union [{:table :groups} {:table :groups}]})))
+  (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:table :nope}))))
 
 (deftest an-argument-no-use-types-is-any
   (is (= {:e [:any {:pgmalli/untyped :type}] :n [:maybe [:int {:pg/type "bigint" :min 0}]]} (args {:select [:id] :from [:users] :where [:= [:public.my-fn :nick] :?e] :offset :?n}))))
@@ -1887,7 +1901,7 @@
   (is (= [:map [:m [:maybe int4]]]
          (row {:with [[:s {:update :users :set {:score 1} :returning [:score]}]] :select [[[:max :score] :m]] :from [:s]}))))
 
-(deftest a-key-compared-with-null-matches-at-most-one-row
+(deftest a-not-null-key-compared-with-null-matches-at-most-one-row
   (is (= {:max 1} (second (last (h/query-schema registry [:db] {:select [:nick] :from [:users] :where [:= :id nil]} opts))))))
 
 (deftest trim-names-its-column-btrim
@@ -2338,7 +2352,7 @@
   (is (= {:y [:any {:pgmalli/untyped :position}]} (args {:select [[:?y :y]] :from [:users]})))
   (is (= [:any {:pgmalli/untyped :code}] (:x (args '{:select [:id] :from [:users] :where [:= :id (inc :?x)]}))))
   (is (= [:any {:pgmalli/untyped :type}] (:x (args {:update :users :set {:no_such :?x} :where [:= :id 1]}))))
-  (is (= [:=> [:cat :any [:any {:pgmalli/untyped :position}]] [:sequential [:map [:y [:maybe :any]]]]]
+  (is (= [:=> {:pgmalli/problems []} [:cat :any [:any {:pgmalli/untyped :position}]] [:sequential [:map [:y [:maybe :any]]]]]
          (h/query-schema registry [:db :y] {:select [[:?y :y]] :from [:users]} opts))
       "an argument the query lacks stays :any"))
 
@@ -2346,3 +2360,37 @@
   (is (= {:row [:any {:pgmalli/untyped :position}]} (args {:insert-into :users :values [:?row]})))
   (is (= {:rows [:any {:pgmalli/untyped :position}]} (args {:insert-into :users :values :?rows})))
   (is (= [:any {:pgmalli/untyped :position}] (:row (args {:update :users :set :?row :where [:= :id :?id]})))))
+
+(deftest a-column-of-another-schemas-enum-type-is-of-that-type-and-of-its-row-type-the-drivers-object
+  (let [reg (pgmalli/registry {:schema "a" :registry {:pg.a/mood [:enum "x" "y"]
+                                                      :pg.a/v [:map {:pg/view "a.v"} [:id :int]]
+                                                      :pg.a/t [:map {:pg/table "a.t"} [:id :int]]}}
+                              {:schema "b" :registry {:pg.b/t [:map {:pg/table "b.t"} [:m [:any {:pg/type "a.mood"}]] [:ms [:vector {:pg/type "a.mood[]"} :any]]
+                                                               [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]}})]
+    (is (= [:map [:m [:enum {:pg/type "a.mood"} "x" "y"]] [:ms [:vector {:pg/type "a.mood[]"} [:maybe [:enum "x" "y"]]]] [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]
+           (:row (h/analyze reg {:select [:m :ms :v :t] :from [:t]} {:schema "b"}))))))
+
+(deftest an-argument-tested-for-null-alone-stays-untyped-and-takes-nil-inlined-where-compared-too
+  (let [inline (assoc opts :format {:inline true})]
+    (is (= {:id [:any {:pgmalli/untyped :position}]} (args {:select [:id] :from [:users] :where [:is :?id nil]} inline)))
+    (is (= {:id [:maybe bigint]} (args {:select [:id] :from [:users] :where [:or [:<> :?id nil] [:= :id :?id]]} inline)))
+    (is (= {:id bigint} (args {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]})))))
+
+(deftest a-wrong-input-fails-saying-what-to-do
+  (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
+    (is (re-find #"should be true, false or a vector of column names" (second (fails #(check {:select [:id] :from [:users]} {:jdbc {:return-keys "id"}})))))
+    (is (= :pgmalli.error/invalid-options (first (fails #(h/schema-problems {:ns 'no.such.ns})))))
+    (is (= :pgmalli.error/invalid-options (first (fails #(pgmalli/registry)))))
+    (let [q {:select [:id] :from [:users] :where [:= :id :?id]}]
+      (is (= (repeat 3 :pgmalli.error/not-a-registry)
+             (map #(first (fails (fn [] (% (m/default-schemas))))) [#(h/analyze % q) #(h/values-schema % :users) #(h/set-schema % :users)]))
+          "a table no registry pgmalli generates can hold")
+      (is (= [:map [:relname [:string {:pg/type "name"}]]] (:row (h/analyze (m/default-schemas) {:select [:relname] :from [:pg_class]})))
+          "pg_catalog's")))
+  (is (= ["clojure.core/map: the query takes argument :y, which the function's args lack; a typo in args?"]
+         (h/humanize [{:kind :missing-arg :arg :y :var #'map}]))
+      "schema-problems' :var first")
+  (is (= {:pgmalli/problems []} (second (h/query-schema registry [] {:select [:id] :from [:users]} opts)))
+      "a query schema's parts are where they are, problems or not")
+  (is (= {:args [["bigint"]] :returns [{:id "bigint"}]}
+         (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))

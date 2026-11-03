@@ -216,10 +216,14 @@
 
 (defn refused
   "e, an SQLException of a statement, when PostgreSQL refuses the statement for its data, its
-   constraints or its text (SQLSTATE class 22, 23, 42); throws it otherwise: a statement timed
-   out (57014) or a lost connection says nothing of the statement."
+   constraints, its text or the objects it names; throws it where the server or the connection
+   failed it whatever it says (SQLSTATE class 08, 25, 40, 53, 57, 58, or none): a statement
+   timed out (57014), a deadlock or a lost connection says nothing of the statement. XX000 is
+   the class of an error PostgreSQL raises without one, for a statement too (a NUMA function
+   where the platform has none)."
   [^java.sql.SQLException e]
-  (if (#{"22" "23" "42"} (some-> (.getSQLState e) (subs 0 2))) e (throw e)))
+  (let [c (some-> (.getSQLState e) (subs 0 2))]
+    (if (and c (not (#{"08" "25" "40" "53" "57" "58"} c))) e (throw e))))
 
 (defn- pg-kind [state message]
   (case state
@@ -277,11 +281,12 @@
                     "23514" {:pg :enum-literal :state "23514" :message (.getMessage e)}
                     "57014" {:pg :timeout :state "57014"}
                     ;; it plans: what fails as it runs is the rows' (a division by zero)
-                    {:pg :ok})))
+                    (do (refused e) {:pg :ok}))))
            :planned? true)
     (catch PSQLException e
-      {:pg (if (= "57014" (.getSQLState e)) :timeout (pg-kind (.getSQLState e) (.getMessage e)))
-       :state (.getSQLState e) :message (.getMessage e)})
+      (if (= "57014" (.getSQLState e))
+        {:pg :timeout :state "57014"}
+        {:pg (pg-kind (.getSQLState (refused e)) (.getMessage e)) :state (.getSQLState e) :message (.getMessage e)}))
     (finally (.rollback conn))))
 
 ;; PostgreSQL says 42P01 "missing FROM-clause entry for table x" where check says
@@ -787,8 +792,9 @@
          (let [state (.getSQLState e)]
            (when-not (or (#{"23503" "23505"} state)
                          (and (= "23502" state) (not null-refused?) (not= column (some-> (.getServerErrorMessage e) .getColumn))))
-             (cond-> {:state state :message (first (str/split-lines (.getMessage e)))}
-               (= "57014" state) (assoc :timeout? true)))))
+             (if (= "57014" state)
+               {:state state :timeout? true}
+               {:state (.getSQLState (refused e)) :message (first (str/split-lines (.getMessage e)))}))))
        (finally (.rollback conn))))
 
 (def ^:private compared-contexts #{:= :<> :in :any :returning :unnest :compared-and-cast})

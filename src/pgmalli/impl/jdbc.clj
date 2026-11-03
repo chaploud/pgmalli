@@ -21,7 +21,8 @@
   [:map {:closed true}
    [:schema {:optional true} :string]
    [:jdbc {:optional true} [:map
-                            [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
+                            [:return-keys {:optional true} (let [m {:error/message "should be true, false or a vector of column names ([\"id\"], [:id])"}]
+                                                             [:or [:boolean m] [:vector (assoc m :min 1) [:or :string :keyword]]])]]]
    [:result {:optional true} [:enum :one]]
    [:format {:optional true} :map]])
 
@@ -224,14 +225,21 @@
 
 (declare write-type)
 
+(def pg-object
+  "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
+   the type its getType names, which is known at run time alone."
+  (class-fn "org.postgresql.util.PGobject"
+            (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
+
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
    column; :unnest, unnest(?) assigned): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
    element type is one of t's own (accept/holds?), as a column takes a value, its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
-   an array of that type alone. ::element-type in opts names t's type where t's schema names
-   none (numeric[]'s decimal?). :any without one."
+   an array of that type alone; where t takes a PGobject (of a type known at run time alone), a
+   PGobject too. ::element-type in opts names t's type where t's schema names none (numeric[]'s
+   decimal?). :any without one."
   [t opts use]
   ;; t may take NULL (a nullable column's elements); its type is the one without
   ;; an array column names its elements' type (a domain's array its base's), which goes first
@@ -260,7 +268,7 @@
         alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)
                              a (shape/alternatives s)]
                          (clojure.walk/postwalk-replace {:pgmalli/element (element sent)} a)))]
-    (shape/either alts :any)))
+    (shape/either (cond-> alts (and (seq alts) (some #{pg-object} (shape/alternatives (shape/non-null t)))) (concat [pg-object])) :any)))
 
 (defn- base-type-name
   "The type a column schema names, on itself or on the base of its [:and base checks...]
@@ -379,12 +387,6 @@
         ;; (a number domain's: its checks read the number; another's may hold code only the registry runs)
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
     (write-type (through-domain schemas s #(write-type % (assoc opts ::nothing-sent true))) opts)))
-
-(def pg-object
-  "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
-   the type its getType names, which is known at run time alone."
-  (class-fn "org.postgresql.util.PGobject"
-            (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
 (def typed
   "The values the one sending sends with a type of their own (nil and a value sent untyped are

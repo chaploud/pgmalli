@@ -65,12 +65,17 @@
 
 ;;; what PostgreSQL takes
 
-(defn- string-type?
-  "Whether t is of PostgreSQL's string category, or an extension's type of strings (citext),
-   which pg_catalog's catalog does not hold."
+(defn- extension-string?
+  "Whether t is an extension's type of strings (citext), which pg_catalog's catalog does not
+   hold."
   [t]
-  (boolean (or (= "S" (types/category t))
-               (when-let [e (and (string? t) (types/entry t))] (and (:extension e) (= :string (:schema e)))))))
+  (boolean (and (not= "S" (types/category t))
+                (when-let [e (and (string? t) (types/entry t))] (and (:extension e) (= :string (:schema e)))))))
+
+(defn- string-type?
+  "Whether t is of PostgreSQL's string category, or an extension's type of strings."
+  [t]
+  (or (= "S" (types/category t)) (extension-string? t)))
 
 (defn answers?
   "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one, or an
@@ -115,7 +120,7 @@
   (memoize
    (fn [t sent]
      (let [os (resolve/overloads :operators "=")
-           [t sent] (map #(if (and (string? %) (not= "S" (types/category %)) (string-type? %)) "text" %) [t sent])]
+           [t sent] (map #(if (extension-string? %) "text" %) [t sent])]
        (boolean (some (fn [v] (resolve/call :operators "=" [t sent] (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in))))
                       (:versions @types/catalog)))))))
 
@@ -125,7 +130,7 @@
    types from the context. A type sent that pgmalli does not know (an extension's) is taken: its
    extension's casts are not in the catalog."
   [t sent context]
-  (cond (not (or (= :unknown sent) (answers? sent) (string-type? sent))) true
+  (cond (not (or (= :unknown sent) (answers? sent))) true
         (= :compare context) (or (and (string-type? t) (string-type? sent)) (compares? t sent))
         :else (or (= :unknown sent) (converts? t sent context))))
 

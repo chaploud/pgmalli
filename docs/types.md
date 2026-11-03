@@ -95,9 +95,9 @@ spelling.
 | a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]` (`[:some ...]` when NOT NULL), listed in `:unrendered` |
 
 An enum or domain of another schema (`wh.stock.sku` of type `catalog.sku`) is `[:any]`
-(`[:some]` when NOT NULL): each schema's file stands alone. Its `:unrendered` entry names the
-schema (`:type-schema "catalog"`). With both loaded (`(pgmalli/registry "catalog" "wh")`),
-override its columns: `{:overrides {:wh.stock/sku [:ref :pg.catalog/sku]}}`.
+(`[:some]` when NOT NULL) in the file: each schema's file stands alone. Its `:unrendered` entry
+names the schema (`:type-schema "catalog"`). A registry holding both
+(`(pgmalli/registry "catalog" "wh")`) reads the column as of that type, an array of it too.
 
 `:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
 do; malli's own `:string` counts UTF-16 units. `:pg/max-length n` is the
@@ -110,6 +110,7 @@ then `:min` and `:max` count what it keeps.
 A row schema differs from PostgreSQL in a few places:
 
 - An array's elements are not NULL: PostgreSQL takes NULL elements, a row schema refuses them.
+  What a row is read as (`as-read`, `analyze`'s `:row`) takes them.
 - A `numeric(p, s)` value is checked by the column's CHECKs before PostgreSQL rounds it to `s`
   places.
 - A `varchar(n)` value with spaces past `n` is checked by its CHECKs before those spaces are
@@ -138,8 +139,10 @@ yet are listed under `unsupported` there, each with why
 ## jsonb columns
 
 PostgreSQL holds a jsonb column's shape in CHECKs at most (`jsonb_typeof(payload) = 'object'`
-becomes `:map`); its keys and their types are the application's. Write them as malli and join
-them to the generated schema, with no copy of either:
+becomes `:map`); its keys and their types are the application's. An override of the column
+(`{:overrides {:public.evidence/payload [:map [:course :string]]}}`) gives it one shape, read
+and written ([Overrides](../README.md#overrides)). For shapes that depend on another column,
+write them as malli and join them to the generated schema, with no copy of either:
 
 ```clojure
 (require '[pgmalli.core :as pgmalli]

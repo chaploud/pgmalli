@@ -71,6 +71,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/query-schema`'s return states the row count where the data tells it
   (`[:sequential {:max 1} row]`): an instrumented function's return is checked against it, and
   code that reads the row by position (`(second ret)`) reads it with `last` or `m/children`.
+  Its properties map is always there (`{:pgmalli/problems []}` for none), so the arguments are
+  `(nth s 2)` and the return `(nth s 3)`.
 * In `pgmalli.edn`, the database name under `:db` is `:dbname`, as in next.jdbc and libpq:
   `:db {:db "app"}` is `:db {:dbname "app"}`. The old key is an error naming the new one.
 * Checks and argument types are stricter, so a test that passed on 0.3.3 may fail; each
@@ -129,6 +131,10 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `v` of the column's type, not an expression, which belongs in the query body; it generates
   values alone
   ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
+* `h/analyze` reads `:join-by`'s joins as the join clauses', in its order, and `{:table t}` as
+  `SELECT * FROM t`.
+* A column of an enum type or a domain of another schema the registry holds is of that type:
+  `:problems` reads its labels, and an argument takes them as one of the schema's own.
 * `:format` also reads `:dialect`, `:quoted-snake` and `:quoted-always`.
 * Array arguments: a Java array, typed by its elements (`[:pg/array element]`), where it is
   compared with `= ANY(?)`, assigned to an array column, or passed to `unnest`, which takes
@@ -204,9 +210,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   catalog does not say when a function returns NULL. `current_timestamp` and the like (but
   `current_schema` and `system_user`, which may be NULL), `count`, `pg_catalog`'s `row_number`
   and a comparison of values that are not NULL are not.
-* `coalesce`, `CASE` and the like resolve as PostgreSQL's `select_common_type`: `CASE` takes its
-  `ELSE` value first, and a `varchar` before a `text` stays `varchar`. A typed string among
-  numbers is no longer typed as the numbers (PostgreSQL refuses it).
 * A jsonb column a CHECK or an override shapes takes that shape as an argument for a map and a
   vector, not any value of the class.
 * A domain whose CHECK lists its values
@@ -238,7 +241,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   (`:in`).
 * An argument compared with or assigned to a column the driver reads as a PGobject (`json`,
   `jsonb`, `citext`, `bit(n)` for n > 1, `bit varying`, a domain over them) takes a PGobject or
-  an instance of a subclass, so a value read can be written back.
+  an instance of a subclass, so a value read without an extension can be written back. An array argument whose elements take a
+  PGobject takes one too (`= ANY(?)` of an enum column, a PGobject of type `"status[]"`).
 * A domain over `bit`, `bit varying` or `numeric(p,s)` is read as the driver returns its base
   type: a Boolean for `bit(1)`, a PGobject for another bit string, a Double too for a
   `numeric`'s NaN.
@@ -287,6 +291,32 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A column overridden by its type is no longer listed in `:unrendered`.
 * A domain over a type with a typmod inside its name (`timestamp(3) with time zone`,
   `time(0)`) has the type's schema instead of `:any`.
+* `:problems` leaves a named argument to `:args`, which types it by the class sent (a keyword
+  or a `PGobject` reaches an enum column): `:uncast-string` is a literal string's alone,
+  `[:lift "s"]` too.
+* An expression of a `numeric(p,s)` column (`round`, `coalesce`, `-`) is typed as `numeric`: an
+  argument compared with it takes an integer, and its value read a Double for NaN.
+* A `citext` column, or a domain over one, takes as an argument what a `text` column takes.
+* An argument cast where every use of the cast is compared (`[:= :mail [:cast :?m :email]]`)
+  leaves out the CHECKs, lengths and ranges of the type cast to: PostgreSQL evaluates the cast
+  only where its plan reaches it, for a row the other conditions keep or once ahead of the scan.
+* `coalesce`, `greatest`, `least`, `CASE` and a set operation of columns all of one domain are of
+  that domain, as PostgreSQL resolves them.
+* An array read as a vector takes nil elements: PostgreSQL returns NULL elements of
+  `array_agg`, `ARRAY[...]` and an array column.
+* A set operation of a domain's column and an untyped literal is of the domain's base type,
+  without the domain's CHECKs or its base type's length, as PostgreSQL resolves it.
+* `:rows` and `query-schema`'s return no longer tell one row at most where a UNIQUE column is
+  compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows.
+* Under `{:format {:inline true}}`, an argument the query tests for NULL
+  (`[:or [:= :?id nil] [:= :id :?id]]`, `NULL IS NULL OR id = NULL`) takes nil, whatever its
+  other uses.
+* A table of a query, or of `h/values-schema` and `h/set-schema`, read against a registry
+  holding no schema pgmalli generates is a `:pgmalli.error/not-a-registry` error from every
+  function, not `:unknown-table` or an untyped result; a table of `pg_catalog` still reads; `(pgmalli.core/registry)` of no
+  schema is an `:invalid-options` error.
+* `h/humanize` begins a problem of `h/schema-problems` with its var; `h/schema-problems` of a
+  namespace not loaded is an `:invalid-options` error.
 
 ## 0.3.3 (2026-11-03)
 

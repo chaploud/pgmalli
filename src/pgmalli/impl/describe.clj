@@ -50,10 +50,10 @@
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))
       ;; a table with CHECKs: its columns
       (and (= :and head) (vector? (first children)) (= :map (ffirst children))) (describe schemas (first children))
-      (#{:sequential :vector :set} head) (or (type-label p) [(describe schemas (first children))])
+      (#{:sequential :vector :set :pg/array} head) (or (type-label p) [(describe schemas (first children))])
       (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " children))
       (= :=> head) (cond-> {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
-                     (:pgmalli/problems p) (assoc :pgmalli/problems (:pgmalli/problems p)))
+                     (seq (:pgmalli/problems p)) (assoc :pgmalli/problems (:pgmalli/problems p)))
       (= :function head) (mapv #(describe schemas %) children)
       (= :cat head) (mapv #(describe schemas %) children)
       ;; an argument of several collections (IN's)

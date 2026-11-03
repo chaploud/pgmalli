@@ -142,6 +142,10 @@
     (let [n (reduce + (keep :columns-typed @results))]
       (is (< 17000 n) (str "row-schema names a :pg/type of " n " columns PostgreSQL returned: fewer typed, or fewer cases")))))
 
+(deftest every-corpus-query-ran
+  (when *db*
+    (is (= #{} (reduce disj (set (map first oracle/corpus)) (map :id @results))))))
+
 (deftest no-case-runs-out-of-time
   (when *db*
     (doseq [r @results :when (= :timeout (:outcome r))]

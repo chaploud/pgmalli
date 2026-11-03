@@ -112,4 +112,4 @@
 (deftest a-clause-of-yours-is-reported
   (sql/register-clause! ::mine (fn [_ x] [(str "MINE " x)]) :where)
   (is (= [{:kind :unread-clause :clause ::mine}] (:problems (h/analyze {} {::mine 1}))))
-  (is (some #{{:kind :unread-clause :clause :table}} (:problems (h/analyze {} {:table :t})))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"table public.t is unknown" (h/analyze {} {:table :t})) "TABLE t, read as SELECT * FROM t"))

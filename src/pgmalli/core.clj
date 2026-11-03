@@ -31,6 +31,8 @@
 
    A generated data map (see generated) is taken in place of a name."
   [& schemas]
+  (when (empty? schemas)
+    (error/fail! :pgmalli.error/invalid-options "registry takes the schemas to read: (registry \"public\")" {:given []}))
   (apply reg/registry schemas))
 
 (defn as-read

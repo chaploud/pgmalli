@@ -315,7 +315,7 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list when written into the column or compared with `=`, `IN` or `IS NOT DISTINCT FROM`; with `:allowed` |
-| `:uncast-string` | a string literal, which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...); not under `:format {:inline true}`. A named argument is typed as `:args` types it |
+| `:uncast-string` | a string literal (or `[:lift "s"]`), which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...); not under `:format {:inline true}`. A named argument is typed as `:args` types it |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
@@ -341,7 +341,10 @@ Check every query of a project in one test:
       (is (= [] problems) (str k ": " (h/humanize problems))))))
 ```
 
-[docs/queries.md](docs/queries.md) covers subqueries, CTEs, code in a query and argument types.
+[docs/queries.md](docs/queries.md) covers subqueries, CTEs, code in a query, the types of the
+arguments and of the row, a row written into a table (`h/values-schema`, `h/set-schema`),
+the tables a query reads and writes (`:tables`), the `:params` map of `sql/format`, the
+options, and what pgmalli checks more strictly than PostgreSQL or not at all.
 
 ## Function schemas for queries
 
@@ -352,7 +355,7 @@ HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
 
 (h/query-schema registry [:id] find-user-q)
-;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 ```
 
 Put it on the function as a schema object over the registry. `malli.instrument` and

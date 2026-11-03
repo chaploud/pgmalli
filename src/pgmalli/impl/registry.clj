@@ -363,12 +363,29 @@
   "The schemas a generated schema or an override names besides the generated ones."
   (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas))
 
+(defn- with-other-schemas-types
+  "The generated schemas with a column of an enum type or a domain of another of them as a column
+   of the schema's own type: a file stands alone, so it types such a column :any."
+  [schemas]
+  (let [own (fn [t] (when-let [[_ s n] (and (string? t) (re-matches #"([a-z_][a-z0-9_$]*)\.([a-z_][a-z0-9_$]*)" t))]
+                      (let [k (shape/schema-key s n)]
+                        ;; a table's, a view's or a composite type's row is a PGobject
+                        (when (some-> (get schemas k) shape/column-entries empty?) k))))
+        typed (fn [f]
+                (let [p (when (vector? f) (second f))
+                      t (:pg/type p)]
+                  (cond (and (= :any (first f)) (= 2 (count f)) (own t)) [:ref p (own t)]
+                        (and (= :vector (first f)) (= 3 (count f)) (= :any (last f)) (own (types/element t)))
+                        [:vector p [:ref (own (types/element t))]]
+                        :else f)))]
+    (update-vals schemas #(if (shape/row-schema? %) (walk/postwalk (fn [f] (if (and (vector? f) (map? (second f))) (typed f) f)) %) %))))
+
 (defn registry
   "The registry pgmalli.core/registry documents."
   [& schemas]
   (let [data (map #(if (map? %) % (read-generated %)) schemas)
         generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints (with-domain-hints s) false (str k))))]))
-                        (apply merge (map :registry data)))]
+                        (with-other-schemas-types (apply merge (map :registry data))))]
     (merge base
            (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
                         #(walk/postwalk dispatch-by-key %))

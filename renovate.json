@@ -48,6 +48,32 @@
         "github-actions"
       ],
       "groupName": "github actions"
+    },
+    {
+      "description": "A PostgreSQL version of the CI matrix is added by hand (CONTRIBUTING.md): a new digest of each, in one PR, and no new major",
+      "matchManagers": [
+        "custom.regex"
+      ],
+      "matchDepNames": [
+        "postgres"
+      ],
+      "groupName": "postgres images",
+      "major": {
+        "enabled": false
+      }
+    }
+  ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "The PostgreSQL images CI tests against, pinned by digest",
+      "managerFilePatterns": [
+        "/^\\.github/workflows/ci\\.yml$/"
+      ],
+      "matchStrings": [
+        "(?<depName>postgres):(?<currentValue>\\d+-alpine)@(?<currentDigest>sha256:[a-f0-9]+)"
+      ],
+      "datasourceTemplate": "docker"
     }
   ]
 }
