@@ -114,7 +114,7 @@
           snapshot @types/catalog
           ;; the server's overloads of a name, against the ones the snapshot says it has
           mine (fn [os] (set (for [o os :when (or (nil? (:in o)) (some #{version} (:in o)))] (dissoc o :in))))
-          hint (str "PostgreSQL " version " differs from resources/pgmalli/catalog.edn: run bb catalog")]
+          hint (str "PostgreSQL " version " differs from resources/pgmalli/impl/catalog.edn: run bb catalog")]
       (is (some #{version} (:versions snapshot)) (str "PostgreSQL " version " is not among the catalog's versions: add it to CI and run bb catalog"))
       (doseq [k [:types :casts :ranges]]
         (is (= (get server k) (into (empty (get server k)) (get snapshot k))) (str (name k) ": " hint)))

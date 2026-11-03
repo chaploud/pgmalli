@@ -1,5 +1,5 @@
 (ns catalog
-  "Rewrites resources/pgmalli/catalog.edn from pg_catalog of each PostgreSQL version CI runs:
+  "Rewrites resources/pgmalli/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs:
    bb catalog dumps each version in a babashka of its own (pgmalli.test-db starts one image per
    process). An overload not every version has names the versions it is :in;
    pgmalli.upstream-test checks the file against the server it runs on."
@@ -50,7 +50,7 @@
                  (source/shape (read-string (:out (p/shell {:out :string :extra-env {"PGMALLI_PG_IMAGE" (str "postgres:" v "-alpine")}}
                                                     "bb" "catalog:dump"))))))
         c (merged versions cs)]
-    (spit "resources/pgmalli/catalog.edn"
+    (spit "resources/pgmalli/impl/catalog.edn"
           (str ";; pg_catalog's types, implicit casts, functions, operators and relations of PostgreSQL " (str/join ", " versions)
                ": bb catalog writes it\n"
                ;; a line a name: a regenerated file's diff is the names that changed

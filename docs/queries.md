@@ -352,7 +352,7 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   its value as a `PGobject`), and a function in FROM,
   whose columns (its OUT arguments, or one named after the alias; `ordinality` under
   `WITH ORDINALITY`) are of no table. pgmalli reads the functions, operators and implicit casts
-  from a snapshot of `pg_catalog` (`resources/pgmalli/catalog.edn`) of the PostgreSQL versions it
+  from a snapshot of `pg_catalog` (`resources/pgmalli/impl/catalog.edn`) of the PostgreSQL versions it
   supports; a call one of them resolves otherwise is untyped. Of an argument whose type is not
   told, a call is typed where every overload of its number of arguments returns one type that is
   not polymorphic (`count`, `jsonb_build_object`). A function of `json` or `jsonb` that

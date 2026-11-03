@@ -28,7 +28,7 @@
          docs:example {:doc "Rewrite docs/example/pgmalli/public.edn from docs/example/schema.sql (needs docker)"
                        :extra-paths ["dev"]
                        :task (load-file "dev/docs_example.clj")}
-         catalog {:doc "Rewrite resources/pgmalli/catalog.edn from pg_catalog of each PostgreSQL version CI runs (needs docker)"
+         catalog {:doc "Rewrite resources/pgmalli/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs (needs docker)"
                   :extra-paths ["dev"]
                   :requires ([catalog])
                   :task (catalog/-main)}

@@ -1,5 +1,5 @@
 (ns pgmalli.catalog-source
-  "What resources/pgmalli/catalog.edn is read from: the query of pg_catalog, and its result as
+  "What resources/pgmalli/impl/catalog.edn is read from: the query of pg_catalog, and its result as
    the file holds one version's. bb catalog (dev/catalog.clj) writes the file with them, and
    pgmalli.upstream-test checks the file against the server it runs on.")
 

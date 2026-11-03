@@ -90,7 +90,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `least`, `ARRAY[...]`, `VALUES` and a set operation's columns of their values' common type, and
   every function and operator of `pg_catalog` (aggregates, with `FILTER` too, window functions
   under `:over`, polymorphic ones) of the type it resolves to, from a snapshot of `pg_catalog`
-  of PostgreSQL 16, 17 and 18 (`resources/pgmalli/catalog.edn`, which `bb catalog` rewrites);
+  of PostgreSQL 16, 17 and 18 (`resources/pgmalli/impl/catalog.edn`, which `bb catalog` rewrites);
   a literal `[:inline ...]` writes; `INTERVAL '1 day'`; a cast to a type with its length
   (`[:varchar 10]`) or to an array type; `current_user` and the like as `name`. A function of
   `pg_catalog` in FROM has its columns, of no table, so a qualified builder keys them
