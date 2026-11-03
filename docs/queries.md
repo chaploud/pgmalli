@@ -100,6 +100,10 @@ Give `h/check` the options you give `sql/format`, as `:format`:
 A table with a BEFORE row trigger for the statement (`:pg/before-triggers`) gets neither
 `:not-null-violation` nor `:missing-required-column`: the trigger may fill the row.
 
+A target `:a.b` (`{:set {:p.x 1}}`, `INSERT INTO t (p.x)`) is the field `b` of the composite
+column `a`, as PostgreSQL reads it: `a` must be a column of the table, and what goes into the
+field is not checked.
+
 `h/check` does not see what an argument holds; `h/arg-types` types one assigned to a NOT NULL
 column without nil, unless such a trigger may fill it.
 

@@ -800,6 +800,20 @@
            (h/row-schema reg {:select [:n] :from [:t]} {:jdbc unqualified}))
         "a numeric domain's NaN is a Double")))
 
+(deftest a-field-of-a-composite-column-is-assigned-to-that-column-its-value-unchecked
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:id :int]
+                                                        [:p [:maybe [:map {:pg/type "pair"} [:a :int] [:b :string]]]]]}})
+        check #(h/check reg % {})]
+    (is (= [] (check {:update :t :set {:p.a 5} :where [:= :id 1]})))
+    (is (= [] (check {:update :t :set {:p.b :?v} :where [:= :id 1]})))
+    (is (= [] (check {:insert-into [[:t [:id :p.a]] {:values [[1 5]]}]})))
+    (is (= [] (check {:insert-into :t :columns [:id :p.a] :values [[1 5]]})))
+    (is (= [] (check {:insert-into :t :values [{:id 1 :p.a 5}]})))
+    (is (= [{:kind :unknown-column :column :q :did-you-mean [:p]}] (check {:update :t :set {:q.a 5} :where [:= :id 1]}))
+        "the column of the field is looked for")
+    (is (= {:v :any} (h/arg-types reg {:update :t :set {:p.b :?v} :where [:= :id 1]})))))
+
 (deftest a-number-label-is-read-from-a-string-sent-untyped
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
     (is (m/validate (:l (h/arg-types reg {:update :t :set {:l [:cast :?l :integer]}} {:send unspecified})) "1" {:registry reg}))))

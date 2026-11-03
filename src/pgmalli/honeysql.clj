@@ -705,6 +705,20 @@
   [c]
   (if (and (keyword? c) (namespace c)) (keyword (name c)) c))
 
+(defn- field-column
+  "The column of an assignment target :a.b, a field of the composite column a, as PostgreSQL
+   reads SET a.b and INSERT INTO t (a.b); nil for another target."
+  [c]
+  (when (and (keyword? c) (nil? (namespace c)))
+    (let [[a & fields] (str/split (name c) #"\.")]
+      (when fields (keyword a)))))
+
+(defn- to-field
+  "A write [column value ...] to a field as one to its column, its value ::untold: the field's
+   type is not in the registry."
+  [[c & more :as w]]
+  (if-let [a (field-column c)] (into [a ::untold] (rest more)) w))
+
 (defn- value-rows
   "The maps of :values as HoneySQL writes them under the statement's column list: only the
    listed keys."
@@ -714,7 +728,7 @@
 
 (defn- writes
   "[column value event clause] of what a statement writes: :set, ON CONFLICT DO UPDATE SET (a
-   map of assignments, or the columns taken from EXCLUDED, valued ::excluded: a vector of them,
+   map of assignments, or the columns taken from EXCLUDED, valued ::untold: a vector of them,
    or {:fields [...] :where ...}), and the rows of :values, maps or positional rows under the
    columns listed (:values may be a symbol, rows passed in, saying nothing about the columns).
    Under missing, a column one map of :values lacks and another has is written (missing column)."
@@ -724,15 +738,16 @@
          do-update (:do-update-set stmt)
          maps (value-rows stmt columns)
          union (distinct (mapcat keys maps))]
-     (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update :set]))
-             (for [[c v] (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c ::excluded])
-                               (map? do-update) (for [[c v] do-update] [(target-column c) v])
-                               (vector? do-update) (for [c do-update] [c ::excluded]))]
-               [c v :update :do-update-set])
-             (for [row maps, c (if (or columns (nil? missing)) (keys row) union)]
-               [c (if (contains? row c) (get row c) (missing c)) :insert :values])
-             (when (and columns (vector? (:values stmt)))
-               (for [row (filter vector? (:values stmt)), [c v] (map vector columns row)] [c v :insert :values]))))))
+     (map to-field
+      (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update :set]))
+              (for [[c v] (cond (and (map? do-update) (contains? do-update :fields)) (for [c (vectorish (:fields do-update))] [c ::untold])
+                                (map? do-update) (for [[c v] do-update] [(target-column c) v])
+                                (vector? do-update) (for [c do-update] [c ::untold]))]
+                [c v :update :do-update-set])
+              (for [row maps, c (if (or columns (nil? missing)) (keys row) union)]
+                [c (if (contains? row c) (get row c) (missing c)) :insert :values])
+              (when (and columns (vector? (:values stmt)))
+                (for [row (filter vector? (:values stmt)), [c v] (map vector columns row)] [c v :insert :values])))))))
 
 (defn- assignments
   "[column value] pairs a statement assigns: what it writes (a column taken from EXCLUDED with
@@ -740,12 +755,12 @@
   [stmt]
   (let [{:keys [columns select]} (insert-parts stmt)]
     (filter (comp column-keyword? first)
-            (map (fn [[c v]] [(target-column c) (when-not (= ::excluded v) v)])
+            (map (fn [[c v]] [(target-column c) (when-not (= ::untold v) v)])
                  (concat (writes stmt)
                          ;; a star or :raw makes columns the data does not count
                          (let [items (map bare (selected-items select))]
                            (when (and columns (map? select) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
-                             (map vector columns items))))))))
+                             (map (comp to-field vector) columns items))))))))
 
 (defn- target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
@@ -959,7 +974,8 @@
 (defn- column-problems [registry sc stmt {:keys [schema] :as opts}]
   (let [target (target-scope sc stmt schema)
         ;; a target code names is not in the data: its columns are not judged
-        assigned (when (seq target) (concat (filter column-keyword? (:columns (insert-parts stmt))) (map first (assignments stmt))))]
+        assigned (when (seq target) (concat (map #(or (field-column %) %) (filter column-keyword? (:columns (insert-parts stmt))))
+                                            (map first (assignments stmt))))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (select-parts % opts)) (selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c] (comparisons stmt)] [c sc])
@@ -969,7 +985,7 @@
                                           [(second x) sc])
                                         ;; a keyword assigned in SET is a column the statement sees
                                         (for [[_ v _ clause] (writes stmt)
-                                              :when (and (not= :values clause) (not= ::excluded v) (column-keyword? v))]
+                                              :when (and (not= :values clause) (not= ::untold v) (column-keyword? v))]
                                           [v sc])
                                         (for [c assigned] [c target])))
           :when (if (or (star? col) (whole-row? scope col))
