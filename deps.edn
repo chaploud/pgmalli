@@ -22,6 +22,8 @@
                     :exec-fn lread.test-doc-blocks/gen-tests
                     :exec-args {:docs ["README.md" "docs/reading-rows.md" "docs/queries.md" "docs/datasets.md" "docs/types.md"]}}
   :docs {:extra-paths ["docs/example" "target/test-doc-blocks/test"]}
+  ;; with :test, as bb test:docs:update runs it: the docs' ;; => lines rewritten with what each form gives
+  :docs-update {:extra-paths ["dev" "docs/example"] :main-opts ["-m" "update-docs"]}
   ;; with :test, as bb oracle runs it: pgmalli.oracle's -main instead of the test runner
   :oracle {:main-opts ["-m" "pgmalli.oracle"]}
   :build {:deps {io.github.clojure/tools.build {:git/tag "v0.10.14" :git/sha "1176afd"}}

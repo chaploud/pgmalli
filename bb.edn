@@ -46,5 +46,10 @@
          test:docs {:doc "Run the code of README.md and docs/*.md and check every ;; => (JVM)"
                     :task (do (shell "clojure -X:test-doc-blocks")
                               (shell "clojure -M:test:docs -d target/test-doc-blocks/test"))}
+         test:update {:doc "bb test:update [ns ...]: run the bb suite and write each failing (is (= literal form)) back with what it got; read the git diff"
+                      :extra-paths ["dev"]
+                      :task (load-file "dev/update_expected.clj")}
+         test:docs:update {:doc "bb test:docs:update [file.md ...]: rewrite each ;; => of the docs with what its form gives (JVM); read the git diff"
+                           :task (apply shell "clojure -M:test:docs-update" *command-line-args*)}
          test:jvm {:doc "Run the test suite on the JVM"
                    :task (shell "clojure -M:test")}}}
