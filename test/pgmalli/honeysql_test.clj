@@ -2105,6 +2105,22 @@
                  :where [:exists {:select [1] :from [:groups] :where [:= :groups.id [:cast :x.i :integer]]}]}))
         "a subquery reads it in the scope it sees")))
 
+(deftest an-insert-selects-argument-takes-nil-where-the-select-may-drop-its-row
+  (let [q (fn [select] {:insert-into [[:users [:group_id :score]] select]})
+        g #(:g (args (q %)))
+        ss #(:ss (args (q %) (sends opts {IPersistentVector "integer[]"})))
+        plain (g {:select [:?g :?s]})
+        elements (ss {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})]
+    (is (= plain (:g (args {:insert-into :users :values [{:group_id :?g :score :?s}]}))) "a row of arguments reaches the column, as one of :values does")
+    (is (not (m/validate elements [1 nil] {:registry registry})) "unnest of arguments drops no element")
+    (is (= plain (g {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})))
+    (doseq [more [{:where [:is-not :?g nil]} {:having true} {:limit 1} {:offset 1} {:group-by [:?s]}
+                  {:from [[[:unnest :?ss] [:x {:columns [:s]}]] :groups]}
+                  {:from [[[:unnest :?ss] [:x {:columns [:s]}]]] :join [:groups [:= :groups.id 1]]}]]
+      (is (= [:maybe plain] (g (merge {:select [:?g :?s]} more))) (pr-str more))
+      (is (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) [1 nil] {:registry registry}) (pr-str more)))
+    (is (= [:maybe plain] (g {:select-distinct [:?g :?s]})))))
+
 (deftest an-inserted-value-takes-nil-only-from-a-before-insert-trigger
   ;; PostgreSQL checks NOT NULL on the row proposed for insertion before it looks for a conflict
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:update ["touch"]}}

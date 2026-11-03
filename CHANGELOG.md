@@ -137,7 +137,20 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   PostgreSQL rounds it. An argument cast to a number domain with a CHECK list takes another
   number class or a boolean, which PostgreSQL converts (1.5 to 2) before the CHECK.
 * Where a BEFORE row trigger runs for the write, an argument assigned to a NOT NULL column takes
-  nil, as `h/check` already allowed: the trigger may fill it.
+  nil, as `h/check` already allowed: the trigger may fill it. The write is the value's own: a
+  value inserted under `ON CONFLICT DO UPDATE` takes nil for a BEFORE INSERT trigger alone, as
+  PostgreSQL checks NOT NULL on the row proposed before it looks for a conflict.
+* An argument (or an `unnest`'s element) that `INSERT INTO t (cols) SELECT` assigns to a NOT NULL
+  column takes nil where the SELECT may drop the row before it reaches the column: `WHERE`,
+  `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, or a `FROM` item other than
+  `unnest` of arguments. A SELECT of arguments alone, or from `unnest` of them, types it as
+  `:values` does.
+* `h/check` and `h/arg-types` read a comparison in every clause, as in `WHERE`: in `SET`,
+  `RETURNING` and the rows of `:values` too, which see the tables PostgreSQL lets them (the rows
+  of `:values` not the table inserted into). The column of `unnest(?)` in `FROM` is read as its
+  argument's elements wherever it goes, in a subquery too, and compared under `IS [NOT] DISTINCT
+  FROM` takes nil. A problem with an item of `INSERT ... SELECT` is reported in the SELECT
+  (`:in`).
 * An argument compared with or assigned to a column the driver reads as a PGobject (`citext`,
   `bit(n)` for n > 1, `bit varying`, a domain over them) takes a PGobject, so a value read can
   be written back.

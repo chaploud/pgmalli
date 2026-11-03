@@ -753,6 +753,19 @@
 
 ;;; the expression positions of a statement
 
+(defn- unnest-of-arguments?
+  "Whether a FROM item is unnest(?, ...) of arguments alone."
+  [item]
+  (boolean (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)) (every? arg-key (rest (first item))))))
+
+(defn- may-drop-rows?
+  "Whether SELECT stmt may return no row where its arguments make one: it filters, groups,
+   limits, deduplicates or combines rows, or reads a table. unnest(?) of arguments drops none:
+   an empty array makes no row its other arguments go to."
+  [stmt]
+  (not (and (every? #{:select :from :order-by} (keys stmt))
+            (every? unnest-of-arguments? (from-items stmt [:from])))))
+
 (defn- positions
   "The expression positions of statement stmt, one read for check and arg-types: {:x node
    :clause k :chain scopes :negated? bool} for every node of every clause sql/format writes, in
@@ -796,7 +809,7 @@
        (when (and (:columns feed) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
          (for [[col v] (map (comp to-field vector) (:columns feed) items)
                :when (not= ::untold v)]
-           {:x v :assign (target-column col) :event :insert :target (:target feed) :may-drop? false
+           {:x v :assign (target-column col) :event :insert :target (:target feed) :may-drop? (may-drop-rows? stmt)
             :chain chain :clause :select}))))))
 
 (defn- expression-nodes [ps] (remove :assign ps))

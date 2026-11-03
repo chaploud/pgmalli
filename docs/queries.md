@@ -122,7 +122,9 @@ column `a`, as PostgreSQL reads it: `a` must be a column of the table, and what 
 field is not checked.
 
 `h/check` does not see what an argument holds; `h/arg-types` types one assigned to a NOT NULL
-column without nil, unless such a trigger may fill it.
+column without nil, unless such a trigger may fill it (for the write of the value: an inserted
+one under `ON CONFLICT DO UPDATE` too is checked before the conflict) or the SELECT of
+`INSERT ... SELECT` may drop the row.
 
 ## The types of the arguments
 
@@ -139,12 +141,12 @@ keyed as in `sql/format`'s `:params`:
 
 | where the argument is | its type |
 |---|---|
-| compared with a column, in a condition or in a select or ORDER BY expression | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type; a `PGobject` too where the driver reads the column as one (`citext`, `bit(n)` for n > 1, `bit varying`, a domain over them), which pgjdbc sends as the type it names |
+| compared with a column, in any clause (a condition, a select, ORDER BY, SET, RETURNING) | the column's kind without NULL: an enum type's labels kept, a CHECK's list under `=`, `IN` and `IS NOT DISTINCT FROM`; other comparisons take the column's base type; a `PGobject` too where the driver reads the column as one (`citext`, `bit(n)` for n > 1, `bit varying`, a domain over them), which pgjdbc sends as the type it names |
 | compared with an expression `h/row-schema` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
-| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, to an array type (or a domain over one) any array, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned to a NOT NULL column |
-| assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it: a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
-| an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | an array, typed as `:send` sends one, of where its column goes: compared with a column, assigned by `INSERT ... SELECT` or `UPDATE ... SET`, or cast (an array of what PostgreSQL casts to the type) |
+| cast (`[:cast :?at :timestamptz]`) | what PostgreSQL casts to the type, of what [`:send`](#what-your-application-sends) sends: a string too, to an array type (or a domain over one) any array, an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); `:any` for a type whose values pgmalli does not type (json, inet); nil too, unless every use of the cast is compared (not under `{:compare :lenient}`; NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned where nil may not go (as assigned below) |
+| assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it, or the SELECT of `INSERT ... SELECT` may drop the row (`WHERE`, `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, a `FROM` item other than `unnest` of arguments): a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, as [`:send`](#what-your-application-sends) sends one typed |
+| an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | an array, typed as `:send` sends one, of where its column goes, as an argument there: compared, assigned, or cast (an array of what PostgreSQL casts to the type), in a subquery too |
 | an argument of `coalesce`, `greatest`, `least` or `nullif`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
 | an argument of a function or an operator of `pg_catalog` (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the one type every function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil; `:any` where they take more than one |
 | a `LIKE` pattern | the column's kind (`:string`) |
@@ -165,9 +167,9 @@ it; a value at exactly half a unit past may round out of range):
 ```
 
 Where its uses type an argument differently, the first statement wins (an enclosing one before
-its subqueries; among those, the ones of `:with`, then of `:from` and the joins, then of the
-other clauses in the order HoneySQL writes them), and within it a comparison (the first),
-then `:limit` / `:offset`, a cast, an assignment, an `unnest`'s array, an argument of
+its subqueries; among those, the ones of `:with`, then the others in the order HoneySQL writes
+their clauses), and within it a comparison (the first), then `:limit` / `:offset`, a cast, an
+assignment, an argument of
 `coalesce`, `greatest`, `least`, `nullif` or `CASE`, of a function or an operator. It takes nil
 where any of its uses does.
 
