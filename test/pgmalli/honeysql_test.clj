@@ -1995,6 +1995,11 @@
   (is (= [{:kind :unread-clause :clause :frobnicate}] (check {:select [:id] :from [:users] :frobnicate [:x]}))
       "nothing close, nothing suggested"))
 
+(deftest current-schema-and-system-user-may-be-null
+  ;; CURRENT_SCHEMA is NULL under an empty search_path, SYSTEM_USER under trust authentication (docs 9.27)
+  (is (= [:map [:s [:maybe [:string {:pg/type "name"}]]] [:u [:maybe [:string {:pg/type "text"}]]] [:c [:string {:pg/type "name"}]]]
+         (row {:select [[:current_schema :s] [:system_user :u] [:current_catalog :c]]}))))
+
 (deftest functions-and-operators-have-the-type-pg-catalog-resolves-them-to
   (let [row #(h/row-schema registry {:select (vec (for [[k e] %] [e k])) :from [:users]} opts)
         day [:cast [:inline "1 day"] :interval]]
@@ -2004,7 +2009,7 @@
             [:later [:maybe ['inst? {:pg/type "timestamptz"}]]]
             [:ago [:maybe ['inst? {:pg/type "timestamp with time zone"}]]]
             [:user [:string {:pg/type "name"}]]
-            [:sys [:string {:pg/type "text"}]]] (row {:i [:interval "1 day"] :w [:* 7 day] :later [:+ :closed_at [:cast [:inline "7 days"] :interval]]
+            [:sys [:maybe [:string {:pg/type "text"}]]]] (row {:i [:interval "1 day"] :w [:* 7 day] :later [:+ :closed_at [:cast [:inline "7 days"] :interval]]
                      :ago [:- :current_timestamp day] :user :current_user :sys :system_user}))
         "INTERVAL '1 day'; a bigint times an interval; timestamptz plus or minus an interval")
     (is (= [:map

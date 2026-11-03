@@ -647,10 +647,21 @@
 
 ;;; what a statement selects, compares and assigns
 
+(def ^:private sql-value-types
+  "The type of an SQL word (docs 9.9.5, 9.27)."
+  {:true "boolean" :false "boolean" :current_timestamp "timestamp with time zone" :current_date "date"
+   :current_time "time with time zone" :localtimestamp "timestamp without time zone"
+   :localtime "time without time zone" :current_user "name" :session_user "name" :current_role "name"
+   :user "name" :current_schema "name" :current_catalog "name" :system_user "text"})
+
+(def ^:private nullable-sql-values
+  "The SQL words that may be NULL: CURRENT_SCHEMA under a search_path of no existing schema,
+   SYSTEM_USER under trust authentication (docs 9.27)."
+  #{:current_schema :system_user})
+
 (def ^:private sql-values
   "Keywords HoneySQL writes as SQL words, not columns."
-  #{:current_timestamp :current_date :current_time :localtime :localtimestamp :current_user :session_user :current_role
-    :system_user :current_catalog :current_schema :user :true :false :null :default :*})
+  (into #{:null :default :*} (keys sql-value-types)))
 
 (defn- sql-value
   "The SQL word HoneySQL writes for keyword x, lower-cased (:null for :NULL), or nil for a
@@ -1995,13 +2006,6 @@
     (when-let [{n :name s :schema} (some-> t types/entry)]
       (if (vector? s) (into [(first s) (assoc (second s) :pg/type n)] (drop 2 s)) [s {:pg/type n}]))))
 
-(def ^:private sql-value-types
-  "The type of an SQL word (docs 9.9.5, 9.27)."
-  {:true "boolean" :false "boolean" :current_timestamp "timestamp with time zone" :current_date "date"
-   :current_time "time with time zone" :localtimestamp "timestamp without time zone"
-   :localtime "time without time zone" :current_user "name" :session_user "name" :current_role "name"
-   :user "name" :current_schema "name" :current_catalog "name" :system_user "text"})
-
 (def ^:private grammar-operators
   "The operators PostgreSQL's grammar writes words as."
   {"LIKE" "~~" "NOT LIKE" "!~~" "ILIKE" "~~*" "NOT ILIKE" "!~~*"})
@@ -2121,7 +2125,7 @@
       (string? x) (let [t (jdbc/sent-type x opts)] (if (= :unknown t) {:type :unknown :schema (type-schema "text")} (typed t)))
       (boolean? x) (typed "boolean")
       (number? x) (let [t (jdbc/sent-type x opts)] (when-not (= :unknown t) (typed t)))
-      (sql-value x) (typed (sql-value-types (sql-value x)))
+      (sql-value x) (cond-> (typed (sql-value-types (sql-value x))) (nullable-sql-values (sql-value x)) (assoc :nullable? true))
       (column-keyword? x) (when-let [{s :schema :keys [nullable?]} (resolve-column registry chain x)]
                             ;; a subquery's or a CTE's column has the type its SELECT gives, an opaque table's none
                             (when s {:schema (shape/non-null s) :nullable? (boolean (or nullable? (shape/maybe? s)))
