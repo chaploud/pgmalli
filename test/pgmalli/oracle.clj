@@ -525,6 +525,65 @@
    which pgjdbc types as it does (a String as varchar)."
   {:inline {:inline true} :params {}})
 
+(def ^:dynamic *workers*
+  "How many connections run and arg-matrix send their cases over, each to its own copy of the
+   database: PGMALLI_ORACLE_WORKERS, or the processors up to 4."
+  (or (some-> (System/getenv "PGMALLI_ORACLE_WORKERS") parse-long)
+      (min 4 (.availableProcessors (Runtime/getRuntime)))))
+
+(defn in-parallel
+  "(f conn x) for each of xs, in xs' order: x i on worker i mod *workers*, each over a
+   connection (autocommit off, statement_timeout 3s) to its own copy of db, or to db where
+   there is one worker. Every case rolls back what it does, so what a worker ran before does not
+   change a case; only sequences move, which no outcome reads."
+  [db xs f]
+  (let [xs (vec xs)
+        n (max 1 (min *workers* (count xs)))
+        dbs (if (= 1 n) [db] (test-db/copies! db n))]
+    (try
+      (let [parts (mapv deref (doall (for [k (range n)]
+                                       (future
+                                         (with-open [conn (jdbc/get-connection (test-db/datasource (dbs k)))]
+                                           (jdbc/execute! conn ["SET statement_timeout = 3000"])
+                                           (.setAutoCommit conn false)
+                                           (mapv #(f conn %) (take-nth n (drop k xs))))))))]
+        (mapv #((parts (mod % n)) (quot % n)) (range (count xs))))
+      (finally (when (< 1 n) (test-db/drop! dbs))))))
+
+(defn run-cases
+  "run over cs, the cases of cases and generated-corpus's ({:id :query :opts}, :generated? for
+   the latter), on db."
+  [db cs seed all-builders?]
+  (let [registry (registry db)
+        [doms listed] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
+                        [(domains conn) (listed (relations conn))])]
+    (into []
+          cat
+          (in-parallel
+           db cs
+           (fn [conn {:keys [id base query] :as c}]
+             (let [before (volatile! nil)]
+               (vec (for [[mode fmt] formats
+                          :let [fmt (merge fmt (:format (:opts c)))
+                                opts (assoc (:opts c) :format fmt)
+                                ;; a named argument takes a value of the type arg-types gives it
+                                args (into {} (for [[k s] (h/arg-types registry query opts)]
+                                                [k (when-not (= :any s) (generated s registry seed))]))
+                                sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception e e))]]
+                      (cond
+                        (instance? Exception sqlvec) (assoc c :format mode :outcome :unformatted :format-error (ex-message sqlvec))
+                        (= sqlvec (:sqlvec @before)) (assoc (:result @before) :format mode)
+                        :else
+                        (let [{:keys [result] :as v} (cond-> (verdict conn sqlvec) (= :params mode) (uncast-string (:verdict @before)))
+                              problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query opts)))
+                              returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result all-builders?))
+                              described (when result (column-mismatches registry conn doms query opts sqlvec))
+                              r (merge c (dissoc v :result)
+                                       {:return-rejections returned :column-mismatches described :format mode :sql (first sqlvec) :params (vec (rest sqlvec))
+                                        :problems problems :outcome (outcome v problems #(by-design? listed (or base id) %))})]
+                          (vreset! before {:sqlvec sqlvec :verdict v :result r})
+                          r))))))))))
+
 (defn run
   "Every case's :sql, PostgreSQL's verdict, check's :problems (:unread-clause aside: PostgreSQL
    has none) and :outcome, on db (a pgmalli :db map of a database oracle/schema.sql is loaded
@@ -534,37 +593,11 @@
    :unformatted. all-builders?: every corpus query's rows read with each of builders."
   ([db seed per-query] (run db seed per-query false))
   ([db seed per-query all-builders?]
-   (let [ds (test-db/datasource db)
-         registry (registry db)
-         names (mutation-names db)]
-     (with-open [conn (jdbc/get-connection ds)]
-       (let [doms (domains conn)
-             listed (listed (relations conn))
-             gen (for [[id q opts] (generated-corpus conn)] {:id id :query q :opts opts :generated? true})]
-         (jdbc/execute! conn ["SET statement_timeout = 3000"])
-         (.setAutoCommit conn false)
-         (vec (for [{:keys [id base query] :as c} (concat (cases names seed per-query) gen)
-                    :let [before (volatile! nil)]
-                    [mode fmt] formats
-                    :let [fmt (merge fmt (:format (:opts c)))
-                          opts (assoc (:opts c) :format fmt)
-                          ;; a named argument takes a value of the type arg-types gives it
-                          args (into {} (for [[k s] (h/arg-types registry query opts)]
-                                          [k (when-not (= :any s) (generated s registry seed))]))
-                          sqlvec (try (sql/format query (assoc fmt :params args)) (catch Exception e e))]]
-                (cond
-                  (instance? Exception sqlvec) (assoc c :format mode :outcome :unformatted :format-error (ex-message sqlvec))
-                  (= sqlvec (:sqlvec @before)) (assoc (:result @before) :format mode)
-                  :else
-                  (let [{:keys [result] :as v} (cond-> (verdict conn sqlvec) (= :params mode) (uncast-string (:verdict @before)))
-                        problems (vec (remove #(= :unread-clause (:kind %)) (h/check registry query opts)))
-                        returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result all-builders?))
-                        described (when result (column-mismatches registry conn doms query opts sqlvec))
-                        r (merge c (dissoc v :result)
-                                 {:return-rejections returned :column-mismatches described :format mode :sql (first sqlvec) :params (vec (rest sqlvec))
-                                  :problems problems :outcome (outcome v problems #(by-design? listed (or base id) %))})]
-                    (vreset! before {:sqlvec sqlvec :verdict v :result r})
-                    r)))))))))
+   (run-cases db
+              (concat (cases (mutation-names db) seed per-query)
+                      (for [[id q opts] (with-open [conn (jdbc/get-connection (test-db/datasource db))] (generated-corpus conn))]
+                        {:id id :query q :opts opts :generated? true}))
+              seed all-builders?)))
 
 ;;; the argument matrix
 
@@ -728,55 +761,54 @@
    list or with NULL. :rule: holds? (accepts? under a cast) says PostgreSQL takes a value there,
    and PostgreSQL refuses its type (SQLSTATE class 42)."
   [db]
-  (let [ds (test-db/datasource db)]
-    (with-open [conn (jdbc/get-connection ds)]
-      (matrix-schema! conn)
-      (jdbc/execute! conn ["SET statement_timeout = 3000"])
-      (.setAutoCommit conn false)
-      (let [registry (registry db "matrix")
-            cols (matrix-columns conn)
-            labels (distinct (concat (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified))
-                                     (filter string? (mapcat :list cols))))
-            values (matrix-values labels)
-            ;; one place per query, in the order of its text, so that a run repeats
-            places (->> (concat (for [col cols [context q] (matrix-queries col)] (assoc col :context context :query q))
-                                [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}])
-                        (into (sorted-map) (map (juxt (comp pr-str :query) identity)))
-                        vals)]
-        (vec (for [{:keys [context query column list notnull compared-type quoted?] t :type :as place} places
-                   :let [fmt (if quoted? {:quoted true} {})
-                         s (try (some-> (:x (h/arg-types registry query {:format fmt})) (m/schema {:registry registry})) (catch Exception _ nil))]
-                   :when s
-                   v values
-                   :let [;; IN takes a collection, which sql/format expands
-                         arg (if (= :in context) [v] v)
-                         sent (pjdbc/sent-type v {})
-                         cast? (= :cast context)
-                         takes? (and sent (if cast?
-                                            (accept/accepts? t sent :cast)
-                                            ;; an array assigned to an array column: element by element, as array-type reads it
-                                            (let [assign? (#{:update :insert :insert-select :insert-select-dropped} context)
-                                                  elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))]
-                                              (accept/holds? (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
-                                                             (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
-                                                             (if assign? :assign :compare)))))
-                         refused? (not (try (m/validate s arg) (catch Exception _ false)))
-                         ;; NULL in a NOT NULL column fails once a row is written; the table may have none
-                         null-refused? (and (nil? v) notnull (#{:update :insert :insert-select} context))
-                         explained? (or (and (some? v) (not takes?))
-                                        (and (compared-contexts context) (or (nil? v) (and list (outside? list v))))
-                                        null-refused?)
-                         ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
-                         rule? (and takes? (not cast?))]
-                   :when (or rule? (and refused? (not explained?)))
-                   :let [sqlvec (sql/format query (assoc fmt :params {:x arg}))
-                         pg (refusal conn sqlvec column null-refused?)
-                         kind (cond (and refused? (not explained?) (nil? pg)) :refused
-                                    (and rule? (some-> (:state pg) (str/starts-with? "42"))) :rule)]
-                   :when kind]
-               (merge (select-keys place [:table :column :context :type])
-                      {:kind kind :sql (first sqlvec) :value v :class (some-> v class .getName) :sent sent
-                       :schema (m/form s) :pg (or pg :ok)})))))))
+  (let [[cols labels] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
+                        (matrix-schema! conn)
+                        (let [cols (matrix-columns conn)]
+                          [cols (distinct (concat (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified))
+                                                  (filter string? (mapcat :list cols))))]))
+        registry (registry db "matrix")
+        values (matrix-values labels)
+        fmt #(if % {:quoted true} {})
+        ;; one place per query, in the order of its text, so that a run repeats
+        places (->> (concat (for [col cols [context q] (matrix-queries col)] (assoc col :context context :query q))
+                            [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}])
+                    (into (sorted-map) (map (juxt (comp pr-str :query) identity)))
+                    vals)]
+    (into [] cat
+          (in-parallel
+           db places
+           (fn [conn {:keys [context query column list notnull compared-type quoted?] t :type :as place}]
+             (when-let [s (try (some-> (:x (h/arg-types registry query {:format (fmt quoted?)})) (m/schema {:registry registry})) (catch Exception _ nil))]
+               (vec (for [v values
+                          :let [;; IN takes a collection, which sql/format expands
+                                arg (if (= :in context) [v] v)
+                                sent (pjdbc/sent-type v {})
+                                cast? (= :cast context)
+                                takes? (and sent (if cast?
+                                                   (accept/accepts? t sent :cast)
+                                                   ;; an array assigned to an array column: element by element, as array-type reads it
+                                                   (let [assign? (#{:update :insert :insert-select :insert-select-dropped} context)
+                                                         elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))]
+                                                     (accept/holds? (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
+                                                                    (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
+                                                                    (if assign? :assign :compare)))))
+                                refused? (not (try (m/validate s arg) (catch Exception _ false)))
+                                ;; NULL in a NOT NULL column fails once a row is written; the table may have none
+                                null-refused? (and (nil? v) notnull (#{:update :insert :insert-select} context))
+                                explained? (or (and (some? v) (not takes?))
+                                               (and (compared-contexts context) (or (nil? v) (and list (outside? list v))))
+                                               null-refused?)
+                                ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
+                                rule? (and takes? (not cast?))]
+                          :when (or rule? (and refused? (not explained?)))
+                          :let [sqlvec (sql/format query (assoc (fmt quoted?) :params {:x arg}))
+                                pg (refusal conn sqlvec column null-refused?)
+                                kind (cond (and refused? (not explained?) (nil? pg)) :refused
+                                           (and rule? (some-> (:state pg) (str/starts-with? "42"))) :rule)]
+                          :when kind]
+                      (merge (select-keys place [:table :column :context :type])
+                             {:kind kind :sql (first sqlvec) :value v :class (some-> v class .getName) :sent sent
+                              :schema (m/form s) :pg (or pg :ok)})))))))))
 
 (defn arg-failure-text
   "An arg-matrix failure as bb oracle and pgmalli.oracle-test print it."

@@ -91,6 +91,19 @@
   [sql]
   (exec-in! *container* (:dbname *db*) sql))
 
+(defn copies!
+  "n new databases copied from db (CREATE DATABASE ... TEMPLATE), as :db maps. Nothing may be
+   connected to db; PostgreSQL waits a few seconds for a closed connection's backend to go."
+  [db n]
+  (let [dbs (for [k (range n)] (assoc db :dbname (str (:dbname db) "_" (System/nanoTime) "_" k)))]
+    (exec-in! *container* "postgres" (apply str (for [d dbs] (str "CREATE DATABASE " (:dbname d) " TEMPLATE " (:dbname db) ";\n"))))
+    (vec dbs)))
+
+(defn drop!
+  "Drops the databases dbs (:db maps), closing what is connected to them."
+  [dbs]
+  (exec-in! *container* "postgres" (apply str (for [d dbs] (str "DROP DATABASE IF EXISTS " (:dbname d) " WITH (FORCE);\n")))))
+
 (defn jdbc-url
   "The JDBC URL of db, *db* by default."
   ([] (jdbc-url *db*))
