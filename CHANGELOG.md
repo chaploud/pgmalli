@@ -66,7 +66,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   unaliased CASE is named after its ELSE where that has a name of its own, as PostgreSQL names
   it.
 * A cast to a type with its length (`[:cast :?x [:varchar 10]]`) has the type, in
-  `h/row-schema` and `h/arg-types`.
+  `h/row-schema` and `h/arg-types`. An argument cast to a number domain with a CHECK list takes
+  another number class or a boolean, which PostgreSQL converts (1.5 to 2) before the CHECK.
 * The columns of a CTE or a subquery are typed as its SELECT types them: a LATERAL subquery
   with the tables before it, a recursive CTE as its first member, NULL allowed and a CHECK's
   list read as its base type; a column it does not give is `:unknown-column`. Under qualified

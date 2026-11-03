@@ -1539,9 +1539,14 @@
                                  (concat (when (and (kinds :int) (== l (Math/rint (double l)))) [(long l)])
                                          (when (kinds 'decimal?) [(bigdec l)])
                                          (when (kinds :double) [(double l)])))))
-            more (remove (set labels) (distinct (mapcat as labels)))]
+            more (remove (set labels) (distinct (mapcat as labels)))
+            labelled (if (seq more) (shape/update-base own (constantly (into (cond-> [:enum] props (conj props)) (concat labels more)))) own)
+            ;; cast, PostgreSQL converts another kind to the number type first (1.5 to 2, true to 1)
+            ;; and checks the list after: those values are not held to the labels here
+            converted (when (and (= :cast context) (every? number? labels))
+                        (distinct (remove #(#{:int 'integer? :string} (shape/kind %)) (map second alts))))]
         ;; a domain's checks stay around its labels
-        (if (seq more) (shape/update-base own (constantly (into (cond-> [:enum] props (conj props)) (concat labels more)))) own))
+        (if (seq converted) (into [:or labelled] converted) labelled))
       :else
       (let [own-alts (shape/alternatives own)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;

@@ -32,24 +32,7 @@
    case's id (its corpus id for a mutant), for :return followed by the keys the return
    refuses; \"table.column context\" for :arg. pending-entries-still-fail fails on an entry
    that no longer matches a failure, so a fix empties it."
-  [{:test :return :id #"^gen-(max|case|coalesce|greatest)-(kinds\.|lists\.ls|nums\.moods|shapes\.ps)"
-    :reason "an array column through max, CASE, coalesce or greatest is typed [:vector ...]; the driver returns a java.sql.Array (PgArray), as it does for the column itself"
-    :repro '(h/query-schema reg [] {:select [[[:max :kinds.ints] :x]] :from [:kinds]})}
-   {:test :return :id #"(?i)shapes\.b[14]|^\S+ (b[14],?)+$"
-    :reason "a column of a domain over bit (bit(1)) or bit(4) is typed :string; the driver returns a Boolean for bit(1) and a PGobject for bit(4), as row-schema types the base types"
-    :repro '(h/query-schema reg [] {:select [:b1 :b4] :from [:shapes]})}
-   {:test :column :id #"^gen-max-lists\.w$"
-    :reason "max of a varchar domain with a CHECK list (word) is typed as the domain's [:enum ...]; PostgreSQL's max(varchar) is text (an aggregate over a domain returns its base's result type)"
-    :repro '(h/row-schema reg {:select [[[:max :lists.w] :x]] :from [:lists]})}
-   {:test :false-positive :id #"^composite-field-(set|insert)$"
-    :reason "a composite column's field assigned (SET p.a = 5, INSERT INTO shapes (p.a)) is reported :unknown-column"
-    :repro '(h/check reg {:update :shapes :set {:p.a 5} :where [:= :id 1]})}
-   {:test :arg :id #"^lists\.l cast$"
-    :reason "a cast to an integer domain with a CHECK list (lvl_d IN (1, 2)) refuses a Float 1.0, a Boolean and 1.5 / 1.5M, which PostgreSQL casts to 1, 1 and 2"
-    :repro '(h/arg-types reg {:select [[[:cast :?x :lvl_d] :v]]})}
-   {:test :arg :id #"^shapes\.ids cast$"
-    :reason "a cast to a domain over int[] (ints_d) refuses double[], real[], boolean[] and numeric[], which PostgreSQL casts"
-    :repro '(h/arg-types reg {:select [[[:cast :?x :ints_d] :v]]})}])
+  [])
 
 (defn- held
   "The pending entry of test that holds the failure of signature id, or nil."

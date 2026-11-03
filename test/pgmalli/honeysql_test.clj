@@ -736,6 +736,14 @@
     (is (not (ok? (h/values-schema reg :pg.public/t) {:p -3 :a 1M})))
     (is (not (ok? (:x (h/arg-types reg {:select [[[:cast :?x :amount] :a]]})) -3M)))))
 
+(deftest a-cast-to-an-integer-domain-with-a-check-list-takes-what-postgresql-converts
+  (let [reg (pgmalli/registry {:registry {:pg.public/lvl [:enum {:pg/type "integer"} 1 2]}})
+        x (:x (h/arg-types reg {:select [[[:cast :?x :lvl] :v]]}))
+        ok? #(m/validate x % {:registry reg})]
+    ;; PostgreSQL converts the value to integer, rounding, then checks the list
+    (is (every? ok? [1 2 1.0 (float 1) 1.5 1.5M true]))
+    (is (not (ok? 3)) "a Long outside the list stays refused")))
+
 (deftest a-number-check-lists-labels-go-as-each-number-sent
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                          [:d [:enum {:pg/type "double precision" :pg/constraints ["t_d_check"]} 1.0 2.0]]
