@@ -45,8 +45,7 @@
       "a CTE built up in code is one too")
   (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [:group_id :mood :score] :from [:users]}]}))
       "INSERT INTO table (columns) SELECT")
-  (is (= [] (check '{:insert-into :users :values rows})) "rows passed in say nothing about the columns")
-  (is (= {'rows [:sequential {:min 1} (h/values-schema registry :users opts)]} (args '{:insert-into :users :values rows}))))
+  (is (= [] (check '{:insert-into :users :values rows})) "rows passed in say nothing about the columns"))
 
 (deftest a-list-of-plain-items-is-read-as-honeysql-reads-a-vector
   (is (= [{:kind :unknown-column :column :nope}] (check {:select '(:id :nope) :from [:users]})))
@@ -2352,17 +2351,7 @@
          (h/query-schema registry [:db :y] {:select [[:?y :y]] :from [:users]} opts))
       "an argument the query lacks stays :any"))
 
-(deftest a-whole-row-argument-is-typed-as-the-row-written
-  (let [values (h/values-schema registry :users opts)]
-    (is (= values (:row (args {:insert-into :users :values [:?row]}))))
-    (is (= values (get (args '{:insert-into :users :values [row]}) 'row)) "a symbol, as code puts it in")
-    (is (= [:sequential {:min 1} values] (:rows (args {:insert-into :users :values :?rows}))))
-    (is (= (h/set-schema registry :users opts) (:row (args {:update [:users :u] :set :?row :where [:= :u.id :?id]}))))
-    (is (= [:=> [:cat :any values] [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]]
-           (h/query-schema registry [:db :row] {:insert-into :users :values [:?row] :returning [:id]} opts))))
-  (is (= (h/values-schema registry :users opts) (:row (args {:insert-into :users :values [:?row]} opts))))
-  (is (= [:any {:pgmalli/untyped :position}] (:row (args {:insert-into [:users [:group_id :mood]] :values [:?row]})))
-      "a row of listed columns is values, not a map")
-  (is (= [:any {:pgmalli/untyped :position}] (get (args '{:insert-into t :values [:?row]}) :row))
-      "a table code names"))
-
+(deftest an-argument-where-a-whole-row-goes-is-untyped-as-honeysql-cannot-format-it
+  (is (= {:row [:any {:pgmalli/untyped :position}]} (args {:insert-into :users :values [:?row]})))
+  (is (= {:rows [:any {:pgmalli/untyped :position}]} (args {:insert-into :users :values :?rows})))
+  (is (= [:any {:pgmalli/untyped :position}] (:row (args {:update :users :set :?row :where [:= :id :?id]})))))

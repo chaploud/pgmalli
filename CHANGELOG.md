@@ -103,9 +103,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   the arguments' types, the row, how many rows where the data tells, the problems of `h/check`
   and the tables of `h/tables`
   ([docs/queries.md](docs/queries.md#function-schemas)). `h/query-schema` is built of it.
-* `h/arg-types` (and `h/query-schema`) type an argument where a whole row goes, `:values
-  [:?row]`, `:values :?rows` and `:set :?row`, as `h/values-schema` and `h/set-schema` type the
-  row ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 * The one sending includes pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`,
   `UUID[]` and the arrays of java.sql dates, times and timestamps.
 * `:jdbc` takes the options your application passes to next.jdbc

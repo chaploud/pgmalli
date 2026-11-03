@@ -158,7 +158,6 @@ keyed as in `sql/format`'s `:params`, as the one sending sends them
 | compared with `ANY`, `SOME` or `ALL` of an array (`[:= :?tag [:any :tags]]`) | as with a column of the array's element type |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
-| where a whole row goes: `:values [:?row]`, `:values :?rows`, `:set :?row` (no `:columns`), which HoneySQL formats once your code puts the row in the argument's place | the row `h/values-schema` or `h/set-schema` gives for the target table ([a row written into a table](#a-row-written-into-a-table)); of `:values :?rows`, a non-empty sequence of them |
 | used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
@@ -260,15 +259,6 @@ An UPDATE's `:set` cannot be checked this way: a CHECK applies to the whole upda
 
 (m/validate (h/set-schema registry :users) {} {:registry registry})
 ;; => false
-```
-
-Where the query data holds an argument in the row's place, which your code replaces with the
-row before `sql/format`, `h/arg-types` and `h/query-schema` type it so:
-
-```clojure
-(= (h/values-schema registry :users)
-   (:row (h/arg-types registry {:insert-into :users :values [:?row] :returning [:id]})))
-;; => true
 ```
 
 ### What your application sends

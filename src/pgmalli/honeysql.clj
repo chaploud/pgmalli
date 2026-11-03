@@ -2052,29 +2052,6 @@
                 :else (into [:and] (sort-by pr-str [a b])))]
     (cond-> t nil? nullable)))
 
-(declare written-row*)
-
-(defn- row-args
-  "An argument where a whole row goes, which HoneySQL formats once the application has put the
-   row in its place: :values [:?row] a row, :values :?rows rows (one at least), :set :?row a row
-   of the statement's target table, as written-row* types it. None where the target is no table
-   of the registry (a view, a table code names) or :columns lists the columns (a row is then values)."
-  [registry stmt scopes opts]
-  (let [target (fn [item derived]
-                 (let [[_ alias] (table-ref item (:schema opts))
-                       {:keys [table opaque?]} (get (first (chain scopes)) alias)]
-                   (when (and table (not opaque?)) (written-row* registry (shape/table-key table) derived opts))))
-        values (:values stmt)
-        {:keys [columns select] :as insert} (insert-parts stmt)
-        rows (cond (arg-key values) [[values true]]
-                   (vector? values) (for [r values :when (arg-key r)] [r false]))]
-    (concat
-     (when (and insert (seq rows) (not columns) (not select))
-       (when-let [t (target (insert-target stmt) "insert")]
-         (for [[k many?] rows] [k (if many? [:sequential {:min 1} t] t)])))
-     (when (arg-key (:set stmt))
-       (some->> (target (:update stmt) "update") (vector (:set stmt)) vector)))))
-
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
    :params takes them (:id): every one of them, one pgmalli cannot type [:any {:pgmalli/untyped
@@ -2092,8 +2069,9 @@
          registry (reading registry)
          opts (with-defaults registry opts)
          uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
-         typed (for [[s scopes _ ps] (once registry statement-positions body opts)
-                     use (concat (mapcat #(% registry ps opts) uses) (row-args registry s scopes opts))]
+         typed (for [[_ _ _ ps] (once registry statement-positions body opts)
+                     f uses
+                     use (f registry ps opts)]
                  use)
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
          types (reduce (fn [acc [x t]] (if-let [k (arg-key x)] (update acc k both-uses t) acc))
