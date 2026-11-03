@@ -145,7 +145,7 @@ Where its uses type an argument differently, the first statement wins (an enclos
 its subqueries; among those, the ones of `:with`, then of `:from` and the joins, then of the
 other clauses in the order HoneySQL writes them), and within it a comparison (the first),
 then `:limit` / `:offset`, a cast, an assignment, an `unnest`'s array, an argument of
-`coalesce`, `greatest`, `least` or `nullif`.
+`coalesce`, `greatest`, `least` or `nullif`. It takes nil where any of its uses does.
 
 A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
 matches no row.
@@ -197,8 +197,9 @@ takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
-They type values: a keyword other than `:default`, which HoneySQL writes as a column, and a
-HoneySQL expression other than `:default` (`[:cast "closed" :user_status]`,
+They type values: a keyword other than `:default`, which HoneySQL writes as a column, a vector
+or a sequence, which it writes as a row of parameters, and a HoneySQL expression other than
+`:default` (`[:cast "closed" :user_status]`,
 `[:now]`) is not one. Under pgjdbc's default they still take an enum column's label as a
 String, which PostgreSQL refuses (it goes as varchar), as `h/check` reports of a query.
 Validate a row under the registry (`{:registry registry}`). The table's CHECKs across columns

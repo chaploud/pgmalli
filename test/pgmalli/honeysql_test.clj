@@ -1706,3 +1706,23 @@
   (let [s (h/values-schema registry :users (sends opts {clojure.lang.Keyword :unknown}))]
     (is (not (m/validate s {:group_id 1 :score 1 :mood :sad} {:registry registry})))
     (is (m/validate s {:group_id 1 :score 1 :mood "sad"} {:registry registry}))))
+
+(deftest an-argument-takes-nil-where-any-use-does
+  (is (= {:v [:maybe bigint]} (args {:select [:id] :from [:users] :where [:or [:= :id :?v] [:is-distinct-from :id :?v]]})))
+  (is (= {:v [:maybe bigint]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:= :id :?v]]}))
+      "whatever the order"))
+
+(deftest an-enum-arrays-argument-is-an-array-of-the-enum-alone
+  (let [reg (pgmalli/registry {:registry {:pg.public/feel [:enum "a" "b"]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
+                                                        [:fs [:maybe [:vector {:pg/type "feel[]"} [:ref {:pg/type "feel"} :pg.public/feel]]]]]}})
+        t (:v (h/arg-types reg {:update :t :set {:fs :?v} :where [:= :id 1]} {:send {clojure.lang.IPersistentVector :unknown}}))]
+    (is (m/validate t ["a"] {:registry reg}) "an untyped array PostgreSQL reads as feel[]")
+    (is (not (m/validate t (into-array String ["a"]) {:registry reg})) "a String[] goes as varchar[], which feel[] does not take")))
+
+(deftest a-written-row-takes-no-vector-honeysql-would-write-as-a-row
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
+                                                        [:tags [:maybe [:vector {:pg/type "text[]"} [:string {:pg/type "text"}]]]]]}})
+        s (h/values-schema reg :t {:send {clojure.lang.IPersistentVector :unknown}})]
+    (is (not (m/validate s {:id 1 :tags ["a"]} {:registry reg})))
+    (is (m/validate s {:id 1 :tags (into-array String ["a"])} {:registry reg}))))

@@ -51,8 +51,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   and a typed array of a narrower number (`"bigint[]"`) one a `numeric[]`, `real[]` or `double
   precision[]` column takes.
 * Under `{:compare :lenient}` the elements of an argument in `:in` or `= ANY` take nil too.
-* `h/values-schema` and `h/set-schema` take no keyword but `:default`: HoneySQL writes one as a
-  column, whatever `:send` sends.
+* `h/values-schema` and `h/set-schema` take no keyword but `:default`, nor a vector or a
+  sequence: HoneySQL writes a keyword as a column and a vector as a row of parameters, whatever
+  `:send` sends.
+* An argument takes nil where any of its uses does, whatever the order they are written in.
+* An enum type's array takes a typed array of that type alone.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
 * `:unknown-table` names the tables probably meant as `:did-you-mean`, and an option pgmalli does

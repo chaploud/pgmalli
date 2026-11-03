@@ -1482,6 +1482,8 @@
    (jdbc/options! opts)
    (query! body)
    (let [registry (reading registry)
+         ;; the SELECTs of INSERT ... SELECT, whose items the INSERT types where it assigns them
+         sources (set (keep #(:select (insert-parts %)) (statements body)))
          typed (mapcat (fn [[stmt sc]]
                          (concat (for [[op side value] (comparison-sides stmt)
                                        :let [x (array-arg value)]
@@ -1499,7 +1501,8 @@
                                  (let [casts (filter #(and (vector? %) (= :cast (first %)) (= 3 (count %)) (arg-key (second %)))
                                                      ;; this statement's own and the items INSERT ... SELECT assigns: a
                                                      ;; subquery's casts are its uses
-                                                     (mapcat own-nodes (cons (selected-items (:select (insert-parts stmt))) (map val (clause-entries stmt)))))
+                                                     (mapcat own-nodes (cons (selected-items (:select (insert-parts stmt)))
+                                                                             (map val (clause-entries (cond-> stmt (sources stmt) (dissoc :select)))))))
                                        target (target-scope sc stmt schema)
                                        refusing (frequencies
                                                  (concat (when-not (= :lenient (:compare opts))
@@ -1556,9 +1559,14 @@
                        (statement-chains registry body opts))
          ;; an argument no use types, a function's or an operator's, is :any
          untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
+         ;; the first use types an argument; nil where any use takes it (a later IS DISTINCT FROM,
+         ;; or a nullable column it is assigned to), which then holds whatever the order
          types (reduce (fn [acc [x t]]
                          (let [k (arg-key x)]
-                           (if (and k (untyped? (acc k))) (assoc acc k t) acc)))
+                           (cond (nil? k) acc
+                                 (untyped? (acc k)) (assoc acc k t)
+                                 (maybe? t) (update acc k nullable)
+                                 :else acc)))
                        untyped typed)
          in-data (data-args body)]
      (into {} (for [[k t] types] [k (cond-> t (not (in-data k)) nullable)])))))
@@ -1963,6 +1971,15 @@
             (into (cond-> [h] p (conj p)) (remove keyword? labels)))
     t))
 
+(defn- one-parameter
+  "t without the Clojure vectors and sequences in it: HoneySQL writes one in :values or :set as
+   a row of parameters, (?, ?), which no column takes; a set, or a Java array, is one."
+  [t]
+  (case (shape/head t)
+    :maybe [:maybe (one-parameter (last t))]
+    :or (shape/either (remove #(#{:vector :sequential} (shape/head %)) (map one-parameter (shape/alternatives t))) t)
+    t))
+
 (defn- written-row
   "The [:map ...] of the derived schema (\"insert\", \"update\") of the table name names (a
    registry row name, or a table keyword as HoneySQL names it, in :schema): each column typed as
@@ -2004,7 +2021,7 @@
                   (concat
                    ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
                    (for [[k props c] written
-                         :let [t (cond-> (without-keywords (accepted-type r c :assign opts)) (or (maybe? c) triggered?) nullable)
+                         :let [t (cond-> (one-parameter (without-keywords (accepted-type r c :assign opts))) (or (maybe? c) triggered?) nullable)
                                t (if (fills k) [:or t default] t)]]
                      (if (or (:optional props) triggered?) [(key k) {:optional true} t] [(key k) t]))
                    ;; one the database writes (generated, identity ALWAYS) takes it alone

@@ -294,8 +294,10 @@
         takes? (fn [sent]
                  (if (= :unknown sent)
                    (not= :unnest use)
-                   (or (not (and elem (accept/known? elem)))
-                       (accept/holds? elem (accept/element sent)))))
+                   (cond (and elem (accept/known? elem)) (accept/holds? elem (accept/element sent))
+                         ;; an enum type's (or a domain's) array takes an array of that type alone
+                         (and p (not elem)) (= p (accept/element sent))
+                         :else true)))
         ;; a typed array's elements are also the values of its element type, where the column
         ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
         element (fn [sent]
