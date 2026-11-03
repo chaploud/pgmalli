@@ -182,8 +182,8 @@
   (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]
     (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:name [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
            (row body (dissoc opts :jdbc))))
-    (is (= [:map [:id [:maybe :any]]] (row {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]}))
-        "typed where the members agree, nullable where one is")
+    (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]] (row {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]}))
+        "of the members' type, NULL left out, nullable where one is")
     (is (nil? (row {:union [{:select [:id] :from [:users]} '(other)]})))))
 
 (deftest an-in-argument-is-what-sql-format-expands
@@ -2170,3 +2170,28 @@
   (is (not= (:o (args {:select [:id] :from [:users] :offset :?o}))
             (:a (args {:select [:id] :from [:users] :offset [:+ :?a 1]})))
       "a + 1 is at least 0, a need not be"))
+
+(deftest a-scalar-subquery-has-its-columns-type-and-may-be-null
+  (is (= [:map [:n [:maybe bigint]] [:g [:maybe text]] [:two [:maybe :any]]]
+         (row {:select [[{:select [[[:count :*]]] :from [:groups]} :n]
+                        [{:select [:g.name] :from [[:groups :g]] :where [:= :g.id :u.group_id]} :g]
+                        [{:select [:id :nick] :from [:users]} :two]]
+               :from [[:users :u]]}))
+      "no row is NULL; a subquery of two columns is no value")
+  (is (= [:map [:n [:maybe :any]]]
+         (row {:with [[:c {:select [:id] :from [:users]}]] :select [[{:select [[[:max :id]]] :from [:c]} :n]] :from [:groups]}))
+      "one reading a CTE of the query is not read on its own")
+  (is (= [:map [:n bigint]] (row {:select [[[:coalesce [[:count :id]] 0] :n]] :from [:users]}))
+      "[[f x]] is (f(x)), of f's type"))
+
+(deftest a-null-member-of-a-set-operation-takes-the-others-type
+  (is (= [:map [:x [:maybe int4]] [:y text]]
+         (row {:union-all [{:select [[nil :x] [[:inline "a"] :y]]}
+                           {:select [[:score :x] [:name :y]] :from [:groups :users]}]}))
+      "NULL and a literal of no type are left out where PostgreSQL resolves the column")
+  (is (= [:map [:z [:maybe [:string {:pg/type "character varying"}]]]]
+         (row {:union-all [{:select [[[:inline "a"] :z]]} {:select [[:nick :z]] :from [:users]}]}))
+      "a literal is no value of the column's length"))
+
+(deftest a-void-function-is-of-type-void-which-the-driver-reads-as-an-object
+  (is (= [:map [:l [:maybe [:any {:pg/type "void"}]]]] (row {:select [[[:pg_advisory_xact_lock :id] :l]] :from [:users]}))))

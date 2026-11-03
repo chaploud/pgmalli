@@ -415,6 +415,15 @@
                                  ""])
                               cs))))))))
 
+(defn- own-statement?
+  "Whether statement inner reads alike on its own: it reads no CTE of ctes (those its place in
+   the query sees), whose name, read on its own, would be a table's."
+  [inner ctes schema]
+  (let [defined (cte-names inner)]
+    (not-any? #(let [[_ _ written] (table-ref % schema)]
+                 (and written (not (defined (folded written))) (or (contains? ctes (folded written)) (contains? ctes ::code-ctes))))
+              (mapcat table-items (statements inner)))))
+
 (defn- typed-scope
   "sc with :types ({column schema}, a column whose type is not told nil) and :origins ({column
    table}, the table PostgreSQL traces the column to, \"\" none; one it does not tell absent) on
@@ -422,12 +431,7 @@
    on one that reads a CTE ctes holds (one stmt sees but the query of its own would not)."
   [registry body stmt sc ctes outer {:keys [schema] :as opts}]
   (let [items (table-items stmt)
-        ;; read on its own, a name a CTE seen here holds would be read as a table
-        own? (fn [inner]
-               (let [defined (cte-names inner)]
-                 (not-any? #(let [[_ _ written] (table-ref % schema)]
-                              (and written (not (defined (folded written))) (or (ctes (folded written)) (ctes ::code-ctes))))
-                           (mapcat table-items (statements inner)))))]
+        own? #(own-statement? % ctes schema)]
     (reduce (fn [sc item]
               (let [[_ alias written] (table-ref item schema)
                     {:keys [table cte? columns] :as entry} (get sc alias)
@@ -514,7 +518,8 @@
                         ctes (into base (keep cte-name) (cte-entries x))
                         outer (if open? (list :open) outer)
                         ;; a column of a table code brings in is the enclosing data's, untyped
-                        chain (cons (typed-scope registry body x (scope registry x ctes opts) ctes outer opts) (cond->> outer (code-sources? x) (cons :open)))]
+                        chain (cons (vary-meta (typed-scope registry body x (scope registry x ctes opts) ctes outer opts) assoc ::ctes ctes)
+                                     (cond->> outer (code-sources? x) (cons :open)))]
                     (cons [x chain path outer]
                           (concat
                            (for [k with-keys :let [w (get x k)] :when (some? w)
@@ -1928,9 +1933,13 @@
   "A column's schema for a value of the PostgreSQL type t (a name or an alias, \"x[]\" an array),
    as the registry writes one; nil for a type types lacks."
   [t]
-  (if-let [e (types/element t)]
-    (when-let [{n :name s :schema} (types/entry e)]
+  (cond
+    ;; pgjdbc reads a void value as a PGobject of ""
+    (= "void" t) [:any {:pg/type "void"}]
+    (types/element t)
+    (when-let [{n :name s :schema} (types/entry (types/element t))]
       [:vector {:pg/type (str n "[]")} s])
+    :else
     (when-let [{n :name s :schema} (some-> t types/entry)]
       (if (vector? s) (into [(first s) (assoc (second s) :pg/type n)] (drop 2 s)) [s {:pg/type n}]))))
 
@@ -2029,6 +2038,22 @@
                              (and (= :w (:kind o)) (empty? args))
                              (and (:btree o) (not-any? :nullable? ts))))}))))
 
+(defn- subquery-type
+  "The expression type of scalar subquery stmt in the chain of scopes c (docs 4.2.11): its one
+   column's, NULL where it returns no row; nil where that is not told, or it reads a CTE of the
+   query, which read on its own would be a table."
+  [registry c stmt opts]
+  (let [c (chain c)]
+    (when (own-statement? stmt (::ctes (meta (first c))) (:schema opts))
+      (let [memo (::derived registry)
+            k [::scalar stmt (dissoc opts :jdbc) c]
+            ts (if (and memo (contains? @memo k))
+                 (@memo k)
+                 (let [v (derived-types* registry stmt opts c)] (some-> memo (swap! assoc k v)) v))
+            [[_ s] more] ts]
+        (when (and s (nil? more))
+          (let [s (shape/non-null s)] {:schema s :type (resolver-type registry s) :nullable? true}))))))
+
 (defn- expression-type
   "{:schema column-schema :nullable? bool :type t} of an expression, t its type as
    pgmalli.impl.resolve takes it (:unknown for an untyped literal, :free for an argument), as
@@ -2050,6 +2075,9 @@
                             ;; a subquery's or a CTE's column has the type its SELECT gives, an opaque table's none
                             (when s {:schema (shape/non-null s) :nullable? (boolean (or nullable? (shape/maybe? s)))
                                      :type (resolver-type registry (shape/non-null s))}))
+      (statement? x) (subquery-type registry chain x opts)
+      ;; [[f x]], HoneySQL's (f(x))
+      (and (vector? h) (= 1 (count x))) (sub h)
       (and (not (keyword? x)) (not (keyword? h))) nil
       ;; [:inline v] writes v into the SQL: a string an unknown literal, a number by its value
       (= :inline h) (let [v (second x)]
@@ -2202,14 +2230,32 @@
             last-of (into {} (map (juxt first identity)) entries)]
         (into (cond-> [:map] (seq unknown-keys) (conj {:pgmalli/unknown-keys unknown-keys})) (map last-of) (distinct (map first entries)))))))
 
+(defn- unknown-columns
+  "{position literal?} of the columns of SELECT stmt that are NULL or a literal of no type
+   (:unknown), which PostgreSQL leaves out when it resolves a set operation's column (docs 10.5)."
+  [registry stmt c opts]
+  (when-not (or (some #(contains? stmt %) set-operation-keys) (contains? stmt :values))
+    (let [items (selected-items stmt)]
+      (when-not (some #(let [[col] (select-parts % opts)] (and col (star? col))) items)
+        (into {} (keep-indexed (fn [i item]
+                                 (let [[col alias] (select-parts item opts)
+                                       m (when (nil? col) (expression-type registry c (if alias (first item) (item-expression item)) opts))]
+                                   (when (= :unknown (:type m)) [i (some? (:schema m))])))
+                               items))))))
+
 (defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (assoc opts ::jdbc/member true))) members)]
+    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains (assoc opts ::jdbc/member true))) members)
+          unknown (map-indexed (fn [i m] (unknown-columns registry m (get chains (conj path i)) opts)) members)]
       (when (and (every? some? rows) (apply = (map count rows)))
         (into [:map]
-              (for [entries (apply map vector (map rest rows))
+              (for [[j entries] (map-indexed vector (apply map vector (map rest rows)))
                     :let [schemas (map last entries)
-                          inners (distinct (map shape/non-null schemas))]]
+                          known (keep identity (map (fn [s u] (when-not (contains? u j) s)) schemas unknown))
+                          ;; a literal is a value of the type, not of the column's bounds
+                          literal? (and (seq known) (some #(get % j) unknown))
+                          inners (distinct (map (cond->> shape/non-null literal? (comp loose (partial beyond-list registry) shape/non-null))
+                                                (or (seq known) schemas)))]]
                 ;; PostgreSQL resolves each column's type as CASE's
                 (jdbc/row-entry (jdbc/tableless-key (ffirst entries) opts)
                                 (cond (= 1 (count inners)) (first inners)

@@ -105,7 +105,8 @@
                           (for [[a b] pairs, f [#(vector :coalesce %1 %2) #(vector :greatest %1 %2) #(vector :least %1 %2)
                                                 #(vector :case [:= 1 1] %1 :else %2) #(vector :nullif %1 %2)]]
                             (f a b))))
-      (report "UNION" (compared registry ds :union pairs)))))
+      (report "UNION" (compared registry ds :union pairs))
+      (report "UNION with NULL" (compared registry ds :union (concat (for [c cols] [c nil]) (for [c cols] [nil c])))))))
 
 (deftest every-aggregate-of-every-type-is-typed-as-postgresql-types-it
   (when *db*
@@ -114,7 +115,7 @@
                         (for [c cols, f [:sum :avg :min :max :count]] [f c])))))
 
 (def ^:private values
-  "SQL words, json builders, literals and parameters."
+  "SQL words, json builders, literals, parameters, scalar subqueries and a parenthesized call."
   [:current_timestamp :current_date :current_time :localtimestamp :localtime :true :false
    :current_user :session_user [:now] :%now [:count :*] :%count.*
    [:jsonb_build_object "a" (col "integer")] [:json_build_object "a" (col "integer")] [:jsonb_build_array (col "integer")] [:json_build_array (col "integer")]
@@ -124,6 +125,7 @@
    [:inline "s"] [:inline true] [:inline false]
    1 10000000000 1.5M 1.5 "s" true
    [:lift 1] [:lift (int 1)] [:lift (short 1)] [:lift 10000000000] [:lift 1.5M] [:lift 1.5] [:lift (float 1.5)]
+   {:select [[[:max (col "integer")]]] :from [:u]} {:select [(col "text")] :from [:u]} [[:count (col "integer")]]
    [:lift 1N] [:lift "s"] [:lift true] [:lift (java.util.UUID/randomUUID)] [:lift (java.time.LocalDate/of 2026 1 1)]])
 
 (deftest words-json-builders-literals-and-parameters-are-typed-as-postgresql-types-them
