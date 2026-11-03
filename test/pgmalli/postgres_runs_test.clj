@@ -32,6 +32,9 @@
                          INSERT INTO uq VALUES (1, NULL, 1, NULL), (2, NULL, 1, NULL);
                          CREATE TABLE arr (xs int[], cs citext[]);
                          INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
+                         CREATE TABLE typed (id int, i int, b bigint, n numeric, u uuid, d date, ts timestamp, tz timestamptz,
+                           ok boolean, j jsonb, s status, p dpos, xs int[], ip inet);
+                         INSERT INTO typed (id) VALUES (1);
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
@@ -41,11 +44,12 @@
 (defn- pg-object [type value] (doto (PGobject.) (.setType type) (.setValue value)))
 
 (defn- runs!
-  "Runs q with params and opts' :format, rolled back; throws what PostgreSQL refuses. Each
-   java.sql.Array is read as a vector while connected (an array of citext needs the connection),
-   as a ReadableColumn extension under {:read {:array :vector}} reads it."
+  "Runs q with params and opts' :format, rolled back, on a stringtype=unspecified connection
+   where opts send a String :unknown; throws what PostgreSQL refuses. Each java.sql.Array is
+   read as a vector while connected (an array of citext needs the connection), as a
+   ReadableColumn extension under {:read {:array :vector}} reads it."
   [q params opts]
-  (with-open [con (jdbc/get-connection (datasource))]
+  (with-open [con (jdbc/get-connection (datasource (cond-> *db* (= :unknown (get-in opts [:send String])) (assoc :url-params "stringtype=unspecified"))))]
     (.setAutoCommit con false)
     (try (walk/postwalk #(if (instance? java.sql.Array %) (vec (.getArray ^java.sql.Array %)) %)
                         (jdbc/execute! con (sql/format q (assoc (:format opts) :params params))))
@@ -195,3 +199,31 @@
       (is (accepted? reg q {:m "a"} {}))
       (is (thrown? Exception (runs! {:select [[[:cast :?m :mail] :v]]} {:m "a"} {})))
       (is (not (m/validate (:m (h/arg-types reg {:select [[[:cast :?m :mail] :v]]})) "a" {:registry reg}))))))
+
+(deftest a-java-sql-date-or-timestamp-goes-to-a-date-or-timestamp-under-every-time
+  (when *db*
+    (let [reg (registry)
+          ts (java.sql.Timestamp. 0)
+          sd (java.sql.Date/valueOf "1990-01-02")]
+      (doseq [opts [{} {:time :local} {:time :instant}]
+              [q params] [[{:select [:id] :from [:typed] :where [:>= :tz :?x]} {:x ts}]
+                          [{:select [:id] :from [:typed] :where [:< :ts :?x]} {:x ts}]
+                          [{:select [:id] :from [:typed] :where [:= :d :?x]} {:x sd}]
+                          [{:update :typed :set {:tz :?x :ts :?x} :where [:= :id 1]} {:x ts}]
+                          [{:update :typed :set {:d :?x} :where [:= :id 1]} {:x sd}]
+                          [{:select [:id] :from [:typed] :where [:< [:composite :tz :id] [:composite :?c :?i]]} {:c ts :i 1}]]]
+        (testing (pr-str opts q)
+          (is (some? (runs! q params opts)))
+          (is (accepted? reg q params opts)))))))
+
+(deftest a-string-sent-untyped-goes-to-a-column-of-any-type
+  (when *db*
+    (let [reg (registry)
+          opts {:send {String :unknown}}]
+      (doseq [[c v] {:i "1" :b "1" :n "1.5" :u "00000000-0000-0000-0000-000000000000" :d "2020-01-01"
+                     :tz "2020-01-01 00:00:00+00" :ok "true" :j "{\"a\": 1}" :s "live" :p "1" :xs "{1,2}" :ip "10.0.0.1"}
+              q [{:select [:id] :from [:typed] :where [:= c :?x]}
+                 {:update :typed :set {c :?x} :where [:= :id 1]}]]
+        (testing (pr-str q v)
+          (is (some? (runs! q {:x v} opts)))
+          (is (accepted? reg q {:x v} opts)))))))

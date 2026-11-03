@@ -144,7 +144,7 @@ keyed as in `sql/format`'s `:params`, here for an application that sends a `Stri
                        :where [:and [:= :group_id :?group] [:in :status :?statuses]]
                        :limit :?n}
              {:send {String :unknown}})
-;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:maybe [:int {:pg/type "bigint", :min 0}]]}
+;; => {:group [:or [:int #:pg{:type "integer"}] :string], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed"]]], :n [:maybe [:or [:int {:pg/type "bigint", :min 0}] :string]]}
 ```
 
 | where the argument is | its type |
@@ -297,7 +297,7 @@ row before `sql/format`, `h/arg-types` and `h/query-schema` type it so:
 ### What your application sends
 
 An argument takes its column's own values as pgmalli reads them: the `:time` type of a date or
-timestamp, an enum's labels, a `varchar(n)`'s strings. What else reaches the column is decided
+timestamp (and under every `:time` a `java.sql.Date` or `Timestamp`, `inst?`), an enum's labels, a `varchar(n)`'s strings. What else reaches the column is decided
 by what your application sends, as pgjdbc's `setObject` decides by a value's class: a `Long`
 goes as `bigint`, a `String` as `varchar`, a `LocalDate` as `date`, a keyword nowhere unless a
 `SettableParameter` extension of yours sends it. `:send` says so, a map of classes to the type
@@ -313,7 +313,7 @@ for a value sent untyped), merged over pgjdbc's; `nil` takes a class out:
 
 (h/arg-types registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}
              {:send app-send})
-;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:or [:pg/array [:int #:pg{:type "bigint"}]] [:vector [:int #:pg{:type "bigint"}]]]}
+;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} "active" "closed" :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:or [:pg/array [:int #:pg{:type "bigint"}]] [:vector [:or [:int #:pg{:type "bigint"}] :string :keyword]]]}
 ```
 
 pgjdbc's classes are those `pgmalli.impl.accept/class-types` lists: the numbers, `Boolean`,
@@ -322,10 +322,15 @@ value reaches an argument only through its class's entry or one of its superclas
 interfaces'.
 
 A class adds to what a column takes where its type is the column's or one the column takes as
-its own (a narrower number, another string type, an untyped value to a text or enum column), and
-in a cast wherever PostgreSQL casts it. `:unknown` is a value whose text PostgreSQL reads as a
-value of the type where it goes: a text or varchar column takes it as a string, an enum or a
-text column's CHECK list as its labels (a keyword as a label's name). A json, jsonb or interval
+its own (a narrower number, another string type, an untyped value), and in a cast wherever
+PostgreSQL casts it. `:unknown` is a value whose text PostgreSQL reads as a value of the type
+where it goes, through that type's input function: a column of any type takes it (under
+`{String :unknown}`, a `String` goes to a `bigint`, `uuid` or `timestamptz` column, as `"1"`,
+`"2020-01-01"` or `"{1,2}"`), and text PostgreSQL's input refuses fails when the query runs. An
+enum or a text column's CHECK list takes it as its labels (a keyword as a label's name); a domain
+over an enum, compared, does not take it, as PostgreSQL resolves no `=` for it; nor, compared,
+does a type whose `=` pgmalli's catalog does not hold (an extension's, `ltree`, `hstore`, but
+`citext`), as some have none. A json, jsonb or interval
 column, where pgmalli knows only the driver's object, takes the classes sent as exactly its type
 (`{clojure.lang.IPersistentMap "jsonb"}`); `:any` without one. A json or jsonb column a CHECK
 (`jsonb_typeof`) or an [override](../README.md#overrides) shapes takes that shape for them.

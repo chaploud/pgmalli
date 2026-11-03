@@ -123,10 +123,11 @@
 
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type, a number of a type
-   PostgreSQL converts to t implicitly, a string of another string type, or one sent untyped
-   where t's values are text (a string type, an enum), which PostgreSQL reads as the value
-   itself; compared, not where t is a domain over an enum ([:enum name {:domain? true}]), which
-   has no = for an untyped value. Stricter than accepts?: a numeric is not one of a real's or a
+   PostgreSQL converts to t implicitly, a string of another string type, or one sent untyped,
+   which PostgreSQL reads through t's input function, which every type has; compared, where t
+   has an = of its own the catalog holds (json, point and an extension's type but citext have
+   none here), not where t is a domain over an enum ([:enum name {:domain? true}]), which has no
+   = for an untyped value. Stricter than accepts?: a numeric is not one of a real's or a
    double precision's own, a decimal sent to a float column being the mix-up a type would catch."
   ([t sent] (holds? t sent :assign))
   ([t sent context]
@@ -135,5 +136,6 @@
             (not (and (= "numeric" sent) (= :float (:eval (types/types t))))))
        (and (string-type? t) (string-type? sent))
        (and (= :unknown sent)
-            (or (string-type? t)
-                (and (vector? t) (not (and (= :compare context) (:domain? (get t 2))))))))))
+            (or (not= :compare context)
+                (string-type? t)
+                (if (vector? t) (not (:domain? (get t 2))) (compares? t t)))))))

@@ -185,6 +185,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Changed
 
+* A value sent untyped (`:send`'s `:unknown`, `{String :unknown}` on a `stringtype=unspecified`
+  connection) goes to a column of any type, compared or assigned, as PostgreSQL reads it through
+  the type's input function: a `String` to a `bigint`, `uuid`, `date`, `timestamptz` or `int[]`
+  column, not only to a text or enum column.
+* A `java.sql.Date` or `java.sql.Timestamp` goes to a date or timestamp column under `{:time
+  :local}` and `{:time :instant}` too, as pgjdbc sends it under every `:time`.
 * `h/arg-types` gives an argument it cannot type as `[:any {:pgmalli/untyped why}]`, `why` saying
   whether no use of it is typed, the type where it is used is unknown, or only code uses it
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)). It validates as `:any` did.
