@@ -1957,3 +1957,10 @@
 
 (deftest a-with-ordinality-table-function-is-named-by-its-alias
   (is (= [] (check {:select [:r.value :r.ordinality] :from [:users [[:with-ordinality [:jsonb_array_elements :users.nick] :r]]]}))))
+
+(deftest a-jdbc-key-close-to-one-pgmalli-reads-is-an-error-unless-next-jdbc-reads-it
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^pgmalli options: :jdbc's :buildr-fn is no next.jdbc option; did you mean: :builder-fn$"
+                                (row {:select [:id] :from [:users]} (assoc opts :jdbc {:buildr-fn 'next.jdbc.result-set/as-unqualified-maps}))))]
+    (is (= [:builder-fn] (:did-you-mean (ex-data e)))))
+  (is (some? (row {:select [:id] :from [:users]} (assoc opts :jdbc {:fetch-size 10 :timeout 5 :my-own 1})))
+      "next.jdbc's other options and an application's own pass"))

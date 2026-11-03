@@ -79,6 +79,9 @@ keys:
 Where next.jdbc does not load (babashka), name the builder by its qualified symbol:
 `{:jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps}}`.
 
+pgmalli passes over the other keys of `:jdbc`, but one spelled close to a key it reads and read
+by no next.jdbc function (`:buildr-fn`) is an error naming the key meant.
+
 ## Your own extensions
 
 A `ReadableColumn` extension changes what a column type comes back as. Key it by the

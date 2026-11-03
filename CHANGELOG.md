@@ -23,6 +23,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   array of a narrower number (`"bigint[]"`) goes to a `numeric[]`, `real[]` or
   `double precision[]` column, and an integer to a `numeric(p,s)` one, as to a `numeric` one. A
   domain over an enum takes no untyped value compared: PostgreSQL has no `=` for it.
+* A `:jdbc` key spelled close to one pgmalli reads and read by no next.jdbc function
+  (`:buildr-fn`) is an error naming the key meant; the others pass.
 * `:jdbc` takes the options an application passes to next.jdbc: `:builder-fn` (one of
   next.jdbc's map builders, as the function, its var, or its qualified symbol where next.jdbc
   does not load) keys rows as next.jdbc does, and under a modified builder `:label-fn` and

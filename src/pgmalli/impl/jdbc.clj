@@ -168,6 +168,18 @@
   [{:keys [send]}]
   (into {} (remove (comp nil? val)) (merge (dissoc (into {} accept/class-types) Character) send)))
 
+(def ^:private jdbc-read
+  "The keys of :jdbc pgmalli reads."
+  [:builder-fn :label-fn :qualifier-fn :return-keys])
+
+(def ^:private next-jdbc-options
+  "The options next.jdbc reads (its own and its PreparedStatement's): a :jdbc key among them,
+   though spelled close to one of jdbc-read, is no misspelling."
+  #{:auto-commit :batch :batch-size :builder-fn :column-fn :columns :concurrency :cursors :fetch :fetch-size
+    :isolation :label-fn :large :limit :max-rows :multi-rs :name-fn :offset :order-by :qualifier-fn :read-only
+    :result-type :return-generated-keys :return-keys :rollback-only :schema :schema-opts :suffix :table-fn
+    :timeout :top})
+
 (defn options!
   "opts when pgmalli takes them: their keys and values; :send a map of classes to a type types
    knows (a name or an alias), an array of one (\"bigint[]\"), :unknown or nil; :jdbc's
@@ -196,6 +208,12 @@
                           (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
                      e))))
     (let [{:keys [builder-fn label-fn] :as jdbc} (:jdbc opts)]
+      (doseq [k (when (map? jdbc) (keys jdbc))
+              :let [meant (when-not (next-jdbc-options k) (error/suggest k jdbc-read))]
+              :when meant]
+        (error/fail! :pgmalli.error/invalid-options
+                     (str "pgmalli options: :jdbc's " (pr-str k) " is no next.jdbc option" (error/did-you-mean meant))
+                     {:given [k] :did-you-mean [meant]}))
       (doseq [k [:label-fn :qualifier-fn] :let [f (get jdbc k)] :when (symbol? f)]
         (fail! (str ":jdbc's " k " is the function next.jdbc takes, not its symbol: " (pr-str f)
                     " (a symbol is the builder-fn's alone, for babashka)")
