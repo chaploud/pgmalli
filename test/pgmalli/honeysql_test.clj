@@ -2576,6 +2576,30 @@
     (is (= [[:mood [:= :x]] [:c [:maybe [:= :x]]]] (read-mood "mood") (read-mood "sample.mood"))
         "an enum type of the registry by its name and qualified")))
 
+(deftest read-names-a-type-by-its-canonical-name-whatever-schema-a-column-spells-it-in
+  (let [reg (pgmalli/registry {:schema "public" :registry {:pg.public/mood [:enum "happy" "sad"]
+                                                           :pg.public/users [:map {:pg/table "public.users"} [:id :int]]
+                                                           :pg.public/notes [:map {:pg/table "public.notes"} [:m [:ref {:pg/type "mood"} :pg.public/mood]]
+                                                                             [:u [:any {:pg/type "users"}]]]}}
+                              {:schema "xo" :registry {:pg.xo/mood [:enum "x" "y"]
+                                                       :pg.xo/users [:map {:pg/table "xo.users"} [:id :int]]
+                                                       :pg.xo/refs [:map {:pg/table "xo.refs"} [:m [:ref {:pg/type "public.mood"} :pg.public/mood]]
+                                                                    [:om [:ref {:pg/type "mood"} :pg.xo/mood]] [:u [:any {:pg/type "users"}]]
+                                                                    [:pr [:any {:pg/type "app.pair"}]]]}})
+        o {:jdbc unqualified}
+        read (fn [table r] (into {} (map (juxt first last)) (rest (pgmalli/as-read reg table (assoc o :read r)))))
+        fails #(try (%) nil (catch clojure.lang.ExceptionInfo e (ex-message e)))]
+    (is (= :keyword (:m (read :pg.public/notes {"public.mood" :keyword}))) "a column spelling it bare in its own schema")
+    (is (= [:keyword [:ref {:pg/type "mood"} :pg.xo/mood]] (map (read :pg.xo/refs {"mood" :keyword}) [:m :om]))
+        "a bare key in :schema's (public), not a column's bare spelling in another schema")
+    (is (= [[:any {:pg/type "users"}] :string] (map :u [(read :pg.public/notes {"xo.users" :string}) (read :pg.xo/refs {"xo.users" :string})]))
+        "a bare spelling of a type no registry key refers to, in the schema of its row")
+    (is (= :string (:pr (read :pg.xo/refs {"app.pair" :string}))) "a type of a schema the registry lacks")
+    (is (= [:map [:m :keyword] [:om :string]]
+           (h/row-schema reg {:select [:m :om] :from [:xo.refs]} (assoc o :schema "xo" :read {"public.mood" :keyword "xo.mood" :string}))))
+    (is (= "pgmalli options: :read names type \"public.mood\" twice, as \"mood\" and \"public.mood\"; name it once"
+           (fails #(read :pg.public/notes {"mood" :string "public.mood" :keyword}))))))
+
 (deftest a-column-of-another-schemas-enum-type-is-of-that-type-and-of-its-row-type-the-drivers-object
   (let [reg (pgmalli/registry {:schema "a" :registry {:pg.a/mood [:enum "x" "y"]
                                                       :pg.a/v [:map {:pg/view "a.v"} [:id :int]]
@@ -2593,7 +2617,7 @@
 
 (deftest read-names-each-type-once
   (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
-    (is (= [:pgmalli.error/invalid-options "pgmalli options: :read names type integer twice, as \"integer\" and \"int4\"; name it once"]
+    (is (= [:pgmalli.error/invalid-options "pgmalli options: :read names type \"integer\" twice, as \"integer\" and \"int4\"; name it once"]
            (fails #(row {:select [:id] :from [:users]} (assoc opts :read {"integer" :string "int4" :double})))))
     (is (= :pgmalli.error/invalid-options (first (fails #(row {:select [:id] :from [:users]} (assoc opts :read {"mood" :string "sample.mood" :keyword}))))))))
 

@@ -89,9 +89,12 @@ by no next.jdbc function (`:buildr-fn`) is an error naming the key meant.
 
 A `ReadableColumn` extension changes what a column type comes back as. Key it by the
 `:pg/type` and give the schema of the value returned. A type is named by any of its spellings:
-an alias (`"int4"`), an enum type or a domain of the registry with its schema or without
-(`"app.mood"`, `"mood"`), any `:pg/type` the registry's columns carry (an extension's
-`"geometry"`). Two keys of one type, or a type of none of these, are an error.
+an alias (`"int4"`), or a type of the registry or of a `:pg/type` its columns carry (an
+extension's `"geometry"`), with its schema or without (`"app.mood"`, `"mood"`). A name without
+a schema is the type of `:schema` (`"public"` by default), else of the one schema that has a
+type of that name. A key reads every column of the type, whichever schema's table spells it
+how (`"mood"` in `public`, `"public.mood"` in `app`). Two keys of one type, or a type of none
+of these, are an error.
 
 ```clojure
 (-> (pgmalli/as-read registry :pg.public/users {:read {"timestamp with time zone" :time/instant}})

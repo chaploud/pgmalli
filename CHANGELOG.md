@@ -82,8 +82,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 ### Added
 
 * `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems :tables}`:
-  the arguments' types, the row, how many rows where the data tells, the problems of `h/check`
-  and the tables of `h/tables`
+  the arguments' types, the row, how many rows where the data tells (not where a UNIQUE column
+  is compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows), the problems
+  of `h/check` and the tables of `h/tables`
   ([docs/queries.md](docs/queries.md#function-schemas)). `h/query-schema` is built of it.
 * `h/arg-types` (and `h/query-schema`) type an argument where a whole row goes, `:values
   [:?row]`, `:values :?rows` and `:set :?row`, as `h/values-schema` and `h/set-schema` type the
@@ -283,15 +284,16 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   only where its plan reaches it, for a row the other conditions keep or once ahead of the scan.
 * `coalesce`, `greatest`, `least`, `CASE` and a set operation of columns all of one domain are of
   that domain, as PostgreSQL resolves them.
-* `:read` names a type by any of its spellings: an alias (`"int4"`, `"timestamptz"`), an enum
-  type or a domain of the registry with its schema or without (`"app.mood"` reads a column
-  of type `mood` too).
+* `:read` names a type by any of its spellings: an alias (`"int4"`, `"timestamptz"`), or a
+  type of a schema with the schema or without, a bare name read in `:schema`'s first
+  (`"public.mood"` and, under the default `:schema`, `"mood"` read every column of
+  `public.mood`, whichever schema's table spells it how).
 * Under `{:read {:array :vector}}` (or `:sequential`), an array's elements take nil: PostgreSQL
-  returns NULL elements of `array_agg`, `ARRAY[...]` and an array column.
+  returns NULL elements of `array_agg`, `ARRAY[...]` and an array column. An element of
+  `citext`, or of a domain but over an enum, is the driver's `PGobject`, and `array_agg` and
+  `ARRAY[...]` of a domain's values are an array of the domain, as PostgreSQL types them.
 * A set operation of a domain's column and an untyped literal is of the domain's base type,
   without the domain's CHECKs or its base type's length, as PostgreSQL resolves it.
-* `:rows` and `query-schema`'s return no longer tell one row at most where a UNIQUE column is
-  compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows.
 * Under `{:format {:inline true}}`, an argument the query tests for NULL
   (`[:or [:= :?id nil] [:= :id :?id]]`, `NULL IS NULL OR id = NULL`) takes nil, whatever its
   other uses.

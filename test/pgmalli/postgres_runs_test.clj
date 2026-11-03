@@ -23,15 +23,15 @@
                          CREATE TABLE accounts (id bigserial PRIMARY KEY, email text NOT NULL, group_id int,
                            status status NOT NULL DEFAULT 'draft', amount numeric(10,2), plain numeric,
                            flags varbit, created timestamptz, tags status[], name citext, nick ci, mail mail);
-                         INSERT INTO accounts (email, mail) VALUES ('a', 'a@x'), ('b', NULL);
+                         INSERT INTO accounts (email, mail, name, nick) VALUES ('a', 'a@x', 'n', 'k'), ('b', NULL, NULL, NULL);
                          CREATE DOMAIN d3 AS varchar(3);
                          CREATE DOMAIN dpos AS int CHECK (VALUE BETWEEN 1 AND 9);
                          CREATE TABLE dd (a d3, n dpos);
                          INSERT INTO dd VALUES ('abc', 1);
                          CREATE TABLE uq (id int PRIMARY KEY, code text UNIQUE, a int, b int, UNIQUE (a, b));
                          INSERT INTO uq VALUES (1, NULL, 1, NULL), (2, NULL, 1, NULL);
-                         CREATE TABLE arr (xs int[]);
-                         INSERT INTO arr VALUES ('{1,NULL}');
+                         CREATE TABLE arr (xs int[], cs citext[]);
+                         INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
@@ -41,11 +41,14 @@
 (defn- pg-object [type value] (doto (PGobject.) (.setType type) (.setValue value)))
 
 (defn- runs!
-  "Runs q with params and opts' :format, rolled back; throws what PostgreSQL refuses."
+  "Runs q with params and opts' :format, rolled back; throws what PostgreSQL refuses. Each
+   java.sql.Array is read as a vector while connected (an array of citext needs the connection),
+   as a ReadableColumn extension under {:read {:array :vector}} reads it."
   [q params opts]
   (with-open [con (jdbc/get-connection (datasource))]
     (.setAutoCommit con false)
-    (try (jdbc/execute! con (sql/format q (assoc (:format opts) :params params)))
+    (try (walk/postwalk #(if (instance? java.sql.Array %) (vec (.getArray ^java.sql.Array %)) %)
+                        (jdbc/execute! con (sql/format q (assoc (:format opts) :params params))))
          (finally (.rollback con)))))
 
 (defn- accepted?
@@ -56,11 +59,9 @@
          (every? (fn [[k v]] (m/validate (get types k :any) v {:registry reg})) params))))
 
 (defn- returned?
-  "Whether query-schema's return takes the rows PostgreSQL returns for q, each java.sql.Array
-   read as a vector, as a ReadableColumn extension under {:read {:array :vector}} reads it."
+  "Whether query-schema's return takes the rows PostgreSQL returns for q."
   [reg q params opts]
-  (let [rows (walk/postwalk #(if (instance? java.sql.Array %) (vec (.getArray ^java.sql.Array %)) %) (runs! q params opts))]
-    (m/validate (last (m/children (m/schema (h/query-schema reg [] q opts) {:registry reg}))) rows)))
+  (m/validate (last (m/children (m/schema (h/query-schema reg [] q opts) {:registry reg}))) (runs! q params opts)))
 
 (deftest what-postgresql-runs-pgmalli-takes
   (when *db*
@@ -123,6 +124,23 @@
                  {:select [[[:array_append :xs nil] :x]] :from [:arr]}]]
         (testing (pr-str q)
           (is (returned? reg q {} o)))))))
+
+(deftest an-array-of-citext-or-of-a-domain-read-as-a-vector-holds-the-drivers-objects
+  (when *db*
+    (let [reg (registry)
+          o {:read {:array :vector}}]
+      (doseq [q [{:select [:cs] :from [:arr]}
+                 {:select [[[:array_agg :name] :x]] :from [:accounts]}
+                 {:select [[[:array_agg :nick] :x]] :from [:accounts]}
+                 {:select [[[:array_agg :n] :x]] :from [:dd]}
+                 {:select [[[:array_agg :a] :x]] :from [:dd]}
+                 {:select [[[:array [:n]] :x]] :from [:dd]}]]
+        (testing (pr-str q)
+          (is (some? (runs! q {} {})))
+          (is (returned? reg q {} o))))
+      (is (m/validate [:sequential (pgmalli/as-read reg :pg.public/arr o)]
+                      (runs! {:select [:*] :from [:arr]} {} {})
+                      {:registry reg})))))
 
 (deftest a-named-argument-is-left-to-arg-types-and-a-lifted-string-is-a-literal
   (when *db*
