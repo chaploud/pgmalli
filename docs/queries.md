@@ -99,7 +99,7 @@ An INSERT or UPDATE is checked against what PostgreSQL refuses to write:
 ```
 
 NULL is any of `nil`, `:null` (in any case), `[:inline nil]` and `[:lift nil]`; a `:null` the
-format quotes (`:quoted`, or a `:dialect`) is a column named `null`. HoneySQL also writes NULL
+format quotes (`:quoted`, a `:dialect`, or the dialect `sql/set-dialect!` set) is a column named `null`. HoneySQL also writes NULL
 for a key one map of `:values` lacks and another has. `users.status`
 has a default, but the first row below gets NULL:
 
@@ -469,7 +469,7 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 | `:jdbc`, `:time`, `:read` | how next.jdbc keys the rows and the driver reads values ([reading-rows.md](reading-rows.md#options)); `:jdbc`'s `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
 | `:send {Class type}` | what your application sends, and the type each class goes as: [what your application sends](#what-your-application-sends); pgjdbc's by default |
 | `:compare :lenient` | arguments compared with a column take nil too, and so do the elements of one in `:in` or `= ANY` (`:strict` by default) |
-| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read |
+| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them and the dialect `sql/set-dialect!` set |
 | `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |
 
 ## Function schemas

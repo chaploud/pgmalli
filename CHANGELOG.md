@@ -201,6 +201,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `:pgmalli.error/invalid-options` error naming the ones it holds, in every function of
   `pgmalli.honeysql`; before, each did something of its own (an unknown table, `:any`, nil).
   `pgmalli.core/describe` of a query schema shows its `:pgmalli/problems`.
+* An alias, `:default`, `:null` and a key of `:values` are read as the loaded HoneySQL writes them
+  under `:format` (`:quoted-snake` too) and the dialect `sql/set-dialect!` set.
 * An argument under `SOME` (`[:= :id [:some :?ids]]`) is typed as one under `ANY`.
 * `h/check` reads an assignment target `:a.b` as the field `b` of the composite column `a`,
   where it reported `:unknown-column`; the value is not checked.

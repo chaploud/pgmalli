@@ -1362,6 +1362,15 @@
   (is (= [{:kind :unknown-column :column :nope}]
          (:pgmalli/problems (pgmalli/describe registry (h/query-schema registry [] {:select [:nope] :from [:users]} opts))))))
 
+(deftest an-alias-is-the-name-honeysql-writes-under-the-format-options
+  (let [q {:select [[:id :user-id]] :from [:users]}
+        key #(ffirst (rest (row q (assoc opts :format %))))]
+    (is (= :user_id (key {})))
+    (is (= :user-id (key {:quoted true})))
+    (is (= :user_id (key {:quoted true :quoted-snake true})) ":quoted-snake writes it with _")
+    (is (= :user-id (key {:dialect :ansi})) "a dialect quotes")
+    (is (= :user_id (key {:dialect :ansi :quoted false})))))
+
 (deftest a-table-of-another-schema-is-the-one-meant-when-schema-is-left-out
   (let [ps (h/check (pgmalli/registry "sample" "other") {:select [:id] :from [:users]} {:schema "other"})]
     (is (= [{:kind :unknown-table :table "other.users" :did-you-mean ["sample.users"]}] ps))

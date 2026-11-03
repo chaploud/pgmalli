@@ -159,7 +159,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? arg-key loose expression-type accepted-type driver-type quoted? call-parts reached own-type-schema type-call registry-type operator?)
+(declare insert-parts star? arg-key loose expression-type accepted-type driver-type quoted? call-parts reached own-type-schema type-call registry-type operator? formatted-name)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -1044,10 +1044,14 @@
   (if (and (vector? item) (= 1 (count item))) (first item) item))
 
 (defn- alias-label
-  "The label PostgreSQL gives an alias: folded as any unquoted name (:user-id labels user_id),
-   as it is under sql/format's :quoted or as a string, which HoneySQL quotes."
+  "The label PostgreSQL gives an alias: the name the loaded HoneySQL writes under sql/format's
+   options (formatted-name: :user-id labels user_id, \"user-id\" quoted); a string as it is,
+   which HoneySQL quotes."
   [alias opts]
-  (if (or (string? alias) (quoted? (:format opts))) (name alias) (folded (name alias))))
+  (if (string? alias)
+    alias
+    (or (first (formatted-name (keyword (name alias)) (:format opts)))
+        (if (quoted? (:format opts)) (name alias) (folded (name alias))))))
 
 (defn- item-name
   "The name of the output column a select item makes: its alias, its column's name, or the name
@@ -1256,11 +1260,23 @@
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column (keyword c)})))))))
 
+(def ^:private formatted-name
+  "[name quoted?] of the column k (a keyword, or a string) as the loaded HoneySQL writes it under
+   sql/format's options format, name as PostgreSQL reads it: a quoted one as it is, else folded
+   to lower case. nil without HoneySQL."
+  (memoize (fn [k format]
+             (when-let [f (honeysql 'honey.sql/format)]
+               (let [col (second (re-find #"\((.*?)\)" (first (f {:insert-into :t :values [{k 1}]} (dissoc (or format {}) :params)))))]
+                 (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" col)] [q true] [(str/lower-case col) false]))))))
+
 (defn- quoted?
-  "Whether sql/format's options quote a name: :quoted, or a :dialect other than :nrql unless
+  "Whether sql/format's options quote a name, as the loaded HoneySQL writes one (a dialect set
+   with set-dialect! too); without HoneySQL, under :quoted, or a :dialect other than :nrql unless
    :quoted false."
   [{:keys [quoted dialect] :as format}]
-  (if (contains? format :quoted) quoted (and (contains? format :dialect) (not= :nrql dialect))))
+  (if-let [[_ q?] (formatted-name :a format)]
+    q?
+    (if (contains? format :quoted) quoted (and (contains? format :dialect) (not= :nrql dialect)))))
 
 (defn- null-value?
   "Whether HoneySQL writes v as NULL: nil, [:inline nil], [:lift nil], or :null (any case) where
@@ -2618,15 +2634,9 @@
    it writes as column (unquoted, PostgreSQL folds a name to lower case)."
   [column {:keys [format] :as opts}]
   (let [n (name column)
-        fmt (honeysql 'honey.sql/format)
-        candidates (distinct [(jdbc/row-key nil n opts) (keyword n) n])
-        writes (fn [k]
-                 (let [sql (first (fmt {:insert-into :t :values [{k 1}]} (or format {})))
-                       col (second (re-find #"\((.*?)\)" sql))]
-                   (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" col)] q (str/lower-case col))))]
-    (if fmt
-      (or (some #(when (= n (writes %)) %) candidates) (if (string? column) n (keyword n)))
-      (if (string? column) n (keyword n)))))
+        candidates (distinct [(jdbc/row-key nil n opts) (keyword n) n])]
+    (or (some #(when (= n (first (formatted-name % format))) %) candidates)
+        (if (string? column) n (keyword n)))))
 
 (defn- one-value
   "t without what HoneySQL writes in :values or :set as something else than one value: a keyword
