@@ -6,14 +6,12 @@
      :rejected       an insert row the database refused
      :false-positive a row the database took that the insert schema rejects
      :read-back      a row read back that as-read rejects
-     :rejected-dataset / :short  a generated dataset the database refused, or that came out short
    plus what pgmalli.pipeline finds in the catalog. JVM only (JDBC). PGMALLI_FUZZ_SEED changes
    the seed (default 42, fixed in CI), PGMALLI_FUZZ_SCHEMAS the number of schemas (default 30);
    PGMALLI_FUZZ_CASE runs one, as a failure's report says."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is use-fixtures]]
             [clojure.test.check.generators :as tcg]
-            [honey.sql :as sql]
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
@@ -21,7 +19,6 @@
             [next.jdbc.result-set :as rs]
             next.jdbc.date-time
             [pgmalli.core :as pgmalli]
-            [pgmalli.data :as data]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.json :as json]
             [pgmalli.impl.shape :as shape]
@@ -303,12 +300,6 @@
     (try (jdbc/execute! conn (into [(first sql-params)] (map sendable) (rest sql-params))) (.releaseSavepoint conn sp) nil
          (catch java.sql.SQLException e (.rollback conn sp) {:sqlstate (.getSQLState e) :message (ex-message e)}))))
 
-(defn- try-insert!
-  "attempt! for HoneySQL data; a statement that cannot be formatted is a finding too."
-  [conn stmt]
-  (try (attempt! conn (sql/format stmt {:quoted true}))
-       (catch Exception e {:sqlstate "-" :message (str "format: " (ex-message e))})))
-
 (def ^:private unique-violation "23505")
 
 (defn- table-key [schema t] (shape/schema-key schema (:name t)))
@@ -338,7 +329,8 @@
                      f (if err
                          [(assoc err :table (:name t))]
                          (for [row rows
-                               :let [refused (try-insert! tx (first (data/inserts reg {(str schema "." (:name t)) [row]})))]
+                               :let [by-key (into {} (map (juxt row-key identity)) (:all-columns t))
+                                     refused (attempt! tx [(insert-sql model t (update-keys row by-key))])]
                                :when (and refused (not= unique-violation (:sqlstate refused)))]
                            (merge {:kind :rejected :table (:name t) :row row} refused)))]
                  f)
@@ -353,17 +345,7 @@
                      :let [read (pgmalli/as-read reg k {})]
                      row (jdbc/execute! tx [(str "SELECT * FROM " (q schema) "." (q n))] {:builder-fn rs/as-unqualified-maps})
                      :when (not (m/validate read row opts))]
-                 {:kind :read-back :table n :row row :message (pr-str (me/humanize (m/explain read row opts)))}))))
-           (let [[dataset err] (pipeline/try-step :dataset #(tcg/generate (data/dataset-generator reg {:rows 3}) 30 seed))]
-             (if err
-               [err]
-               (concat
-                (pipeline/short-findings dataset)
-                (jdbc/with-transaction [tx ds {:rollback-only true}]
-                  (doall (for [stmt (data/inserts reg dataset)
-                               :let [refused (try-insert! tx stmt)]
-                               :when refused]
-                           (merge {:kind :rejected-dataset :table (let [t (:insert-into stmt)] (name (if (vector? t) (last t) t)))} refused)))))))))))))
+                 {:kind :read-back :table n :row row :message (pr-str (me/humanize (m/explain read row opts)))}))))))))))
 
 
 (defn- cases

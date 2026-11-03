@@ -24,7 +24,7 @@
                     ;; GHSA-p6pp-m3f8-5c89 (fixed in 2.18.11)
                     :override-deps {com.fasterxml.jackson.core/jackson-core {:mvn/version "2.22.4"}}
                     :exec-fn lread.test-doc-blocks/gen-tests
-                    :exec-args {:docs ["README.md" "docs/reading-rows.md" "docs/queries.md" "docs/datasets.md" "docs/types.md"]}}
+                    :exec-args {:docs ["README.md" "docs/reading-rows.md" "docs/queries.md" "docs/types.md"]}}
   :docs {:extra-paths ["docs/example" "target/test-doc-blocks/test"]}
   ;; with :test, as bb test:docs:update runs it: the docs' ;; => lines rewritten with what each form gives
   :docs-update {:extra-paths ["docs/example"] :main-opts ["-m" "update-docs"]}

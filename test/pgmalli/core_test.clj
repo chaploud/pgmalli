@@ -1,18 +1,13 @@
 (ns pgmalli.core-test
-  (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing use-fixtures]]
-            clojure.test.check.generators
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
             honey.sql
             [malli.core :as m]
             [malli.generator :as mg]
             [pgmalli.core :as pgmalli]
-            [pgmalli.data :as data]
             [pgmalli.generate :as generate]
             [pgmalli.honeysql :as h]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.jdbc :as jdbc]
-            [pgmalli.impl.portable :as portable]
-            [pgmalli.impl.registry :as registry]
             [pgmalli.impl.shape :as shape]
             [pgmalli.test-db :refer [*db* exec-sql! sql-literal with-postgres]])
   (:import (java.io File)))
@@ -57,7 +52,7 @@
             (is (= [{:columns ["age"] :index true} {:columns ["age"] :index true :where true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
                 "unique indexes over plain columns count, key columns only, even one named as a constraint is, a partial one marked; expression ones do not")
             (is (some #(= "closed" (:pg/constraint (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
-            (let [col (fn [k] (shape/non-null (portable/column reg :pg.public/prices k)))]
+            (let [col (fn [k] (shape/non-null (some (fn [[c _ s]] (when (= k c) s)) (shape/column-entries (shape/schema-of reg :pg.public/prices)))))]
               (is (= [[:pg/numeric {:precision 3 :scale 1}] [:pg/numeric {:precision 3 :scale 5}] [:pg/numeric {:precision 2 :scale -3}]]
                      (map #(last (col %)) [:p1 :p2 :p3]))
                   "the scale is read as PostgreSQL stores it, signed")
@@ -70,8 +65,6 @@
                     (str k ": the database draws the line where the schema does")))
               (is (m/validate :pg.public/parted {:k 150 :v nil} {:registry reg}))
               (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
-              (is (every? #(< -1 (:k %) 200) (get (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1) "public.parted"))
-                  "generated rows land in a partition")
               (is (= 1 (count (re-seq #"k_nonneg" (pr-str (:pg.public/parted reg))))) "the parent's own CHECK is not repeated from every partition")
               (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"} {:kind :redundant-unique :constraint "users_age_open_idx"}]
                      (map #(select-keys % [:kind (if (= :redundant-unique (:kind %)) :constraint :table)]) (:diagnostics data)))
@@ -84,39 +77,6 @@
           (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
-
-(deftest inserts-load-into-the-database
-  (when *db*
-    (let [out-dir (str (doto (File/createTempFile "pgmalli-ins" "") .delete))
-          config {:db *db* :out-dir out-dir}]
-      (exec-sql! "CREATE SCHEMA ins;
-                  CREATE TYPE ins.mood AS ENUM ('happy', 'sad');
-                  CREATE TABLE ins.groups (id integer PRIMARY KEY, name text NOT NULL UNIQUE);
-                  CREATE TABLE ins.users (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-                                          group_id integer NOT NULL REFERENCES ins.groups,
-                                          parent_id bigint REFERENCES ins.users,
-                                          mood ins.mood NOT NULL DEFAULT 'happy',
-                                          nick text NOT NULL CHECK (nick <> ''),
-                                          nick_upper text GENERATED ALWAYS AS (upper(nick)) STORED,
-                                          tags text[] NOT NULL DEFAULT '{}',
-                                          meta jsonb);
-                  CREATE TABLE ins.hashed (k integer NOT NULL, s text NOT NULL, u uuid) PARTITION BY HASH (k, s, u);
-                  CREATE TABLE ins.hashed_0 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 0);
-                  CREATE TABLE ins.hashed_1 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 1);
-                  CREATE TABLE ins.hashed_3 PARTITION OF ins.hashed FOR VALUES WITH (MODULUS 4, REMAINDER 3);")
-      (generate/generate! (assoc config :schemas ["ins"]))
-      (let [registry (pgmalli/registry (files/read-edn (files/path-for config "ins")))
-            dataset (clojure.test.check.generators/generate (data/dataset-generator registry {:rows 4}) 30 7)
-            statements (data/inserts registry dataset)
-            counts (fn [] (str/join " " (for [t ["ins.groups" "ins.users" "ins.hashed"]]
-                                          (str "IF (SELECT count(*) FROM " t ") <> " (count (get dataset t))
-                                               " THEN RAISE EXCEPTION '" t " has the wrong number of rows'; END IF;"))))]
-        (is (= [:ins.groups :ins.hashed [{:overriding-value :system} :ins.users]] (map :insert-into statements)))
-        (is (= 4 (count (get dataset "ins.hashed"))) "every generated row lands in one of the three partitions (remainder 2 has none): routed as the database routes")
-        (exec-sql! (str (str/join ";\n" (map #(first (honey.sql/format % {:inline true})) statements)) ";\n"
-                        "DO $$ BEGIN " (counts) " END $$;"))
-        (is true "every INSERT ran, identity ids kept, generated column left to the database")))))
-
 
 (deftest char-varchar-and-integer-checks-hold-as-postgresql-holds-them
   (when *db*
@@ -225,17 +185,6 @@
       (is (not (ok? {:ma ["nope"]})) "an array of an enum holds its labels")
       (is (not (ok? {:da ["x"]})) "an array of a domain holds its values"))))
 
-(deftest inserts-name-the-types-of-the-schema-as-they-are-spelt
-  (when *db*
-    (let [[reg] (registry-of "tq" "CREATE SCHEMA tq; CREATE TYPE tq.\"MixedE\" AS ENUM ('a', 'b'); CREATE DOMAIN tq.\"Dom\" AS int CHECK (VALUE > 0);
-                                   CREATE TABLE tq.t (k int PRIMARY KEY, e tq.\"MixedE\" NOT NULL, ea tq.\"MixedE\"[], de tq.\"MixedE\"[], d tq.\"Dom\", da tq.\"Dom\"[], c char(3));
-                                   CREATE TABLE tq.e (id serial PRIMARY KEY);")
-          rows {"tq.t" [{:k 1 :e "b" :ea ["a" "b"] :de [] :d 1 :da [2] :c "bb"}] "tq.e" [{} {}]}]
-      (exec-sql! (str (str/join ";\n" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg rows))) ";\n"
-                      "DO $$ BEGIN IF (SELECT c FROM tq.t) <> 'bb' THEN RAISE EXCEPTION 'char(3) cut'; END IF;"
-                      " IF (SELECT count(*) FROM tq.e) <> 2 THEN RAISE EXCEPTION 'rows of defaults missing'; END IF; END $$;"))
-      (is true "every INSERT ran: quoted types, arrays of them, empty arrays, char(n) whole, rows of defaults"))))
-
 (deftest citext-checks-take-what-postgresql-takes
   (when *db*
     (let [[reg data] (registry-of "ci" "CREATE SCHEMA ci; CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
@@ -258,17 +207,6 @@
                       " END $$;"))
       (is true "the schema agrees with PostgreSQL on every value; a citext cast to text compares with case"))))
 
-(deftest names-with-dots-and-domains-over-arrays-insert
-  (when *db*
-    (let [[reg] (registry-of "a.b" "CREATE SCHEMA \"a.b\"; CREATE TYPE \"a.b\".\"m.x\" AS ENUM ('x', 'y');
-                                   CREATE DOMAIN \"a.b\".ma AS \"a.b\".\"m.x\"[]; CREATE DOMAIN \"a.b\".ia AS int[] CHECK (cardinality(VALUE) < 4);
-                                   CREATE TABLE \"a.b\".\"T\" (id int PRIMARY KEY, v \"a.b\".\"m.x\"[] NOT NULL, s \"a.b\".\"m.x\", d \"a.b\".ma NOT NULL, i \"a.b\".ia);")
-          rows {"a.b.T" [{:id 1 :v ["x"] :s "y" :d ["x" "y"] :i [1 2]} {:id 2 :v [] :s nil :d [] :i []}]}
-          generated (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 4}) 30 3)]
-      (is (nil? (m/explain (data/dataset-schema reg) rows {:registry reg})))
-      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (concat (data/inserts reg rows) (data/inserts reg (update generated "a.b.T" (partial map #(update % :id + 10))))))))
-      (is true "every INSERT ran"))))
-
 (deftest a-domain-reads-as-the-driver-reads-its-base
   (when *db*
     (let [[reg] (registry-of "dr" "CREATE SCHEMA dr; CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
@@ -279,24 +217,19 @@
              (pgmalli/as-read reg :pg.dr/t {}))
           "a citext a PGobject, as pgjdbc returns it; jsonb parsed, the domain's own"))))
 
-(deftest an-exclude-constraint-is-on-the-table-and-datasets-keep-its-equal-columns-apart
+(deftest an-exclude-constraint-is-on-the-table
   (when *db*
     (exec-sql! "CREATE EXTENSION IF NOT EXISTS btree_gist; CREATE SCHEMA ex;
                 CREATE TABLE ex.slots (id int PRIMARY KEY, room int NOT NULL CHECK (room BETWEEN 1 AND 3), seat int NOT NULL,
                   EXCLUDE USING gist (room WITH =, seat WITH <>));")
     (let [g (files/from-database {:db *db*} "ex")
           registry (pgmalli/registry g)
-          props (m/properties (pgmalli/columns registry :pg.ex/slots))
-          ds (clojure.test.check.generators/generate (data/dataset-generator registry {:rows 3}) 30 1)]
+          props (shape/row-props (shape/schema-of registry :pg.ex/slots))]
       (is (= [{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} {:column "seat" :op "<>"}]}]
              (:pg/exclude props)))
-      (is (= [:exclude] (map :kind (:diagnostics g))) "the schemas do not check it, and say so")
-      (is (= 3 (count (distinct (map :room (get ds "ex.slots"))))) "no two rows share a room, so none conflict")
-      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts registry ds))))
-      (is (m/validate (data/dataset-schema registry) {"ex.slots" [{:id 1 :room 1 :seat 1} {:id 2 :room 1 :seat 1}]} {:registry registry})
-          "a dataset the database takes (equal seats in one room) is valid: the rule is for generating"))))
+      (is (= [:exclude] (map :kind (:diagnostics g))) "the schemas do not check it, and say so"))))
 
-(deftest char-n-integer-and-domain-checks-generate-rows-postgresql-takes-and-hold-as-it-does
+(deftest char-n-integer-and-domain-checks-hold-as-postgresql-holds-them
   (when *db*
     (let [[reg] (registry-of "cn" "CREATE SCHEMA cn;
                                    CREATE DOMAIN cn.d4 AS char(4) CHECK (char_length(VALUE) <= 2);
@@ -310,49 +243,11 @@
                                                       d cn.d4, r cn.r4, i cn.di, c cn.cc NOT NULL, o cn.o NOT NULL,
                                                       a int, b int, CHECK (b = (a * 0.5)::int), n int CHECK (n = 2.5::integer));")
           base {:country "JP" :cur "JPY" :c "JP" :o 1}
-          takes? (fn [row] (try (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg {"cn.t" [row]})))) true
+          takes? (fn [row] (try (exec-sql! (first (honey.sql/format {:insert-into :cn.t :values [row]} {:inline true}))) true
                                 (catch clojure.lang.ExceptionInfo _ false)))]
       (doseq [row [{:d "ab  "} {:d "abc"} {:r "ab"} {:i 5} {:i 2000000000} {:a 5 :b 3} {:a 5 :b 2} {:n 3} {:n 2}]
               :let [row (merge base row)]]
-        (is (= (takes? row) (m/validate :pg.cn.t/insert row {:registry reg})) (pr-str row)))
-      ;; babashka has no test.chuck: strings of a regex are drawn and filtered there, which ^[A-Z]{2}$ defeats
-      (when @registry/regex-generation?
-        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
-          (is (= 5 (count (get ds "cn.t"))) (pr-str (data/short-tables ds)))
-          (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))))
-
-(deftest inserts-quote-the-column-names-postgresql-would-fold-split-or-refuse
-  (when *db*
-    (let [[reg] (registry-of "qc" "CREATE SCHEMA qc; CREATE TABLE qc.\"Warehouse\" (\"Code\" int PRIMARY KEY, \"c.d\" int, \"order\" int, plain int);")
-          rows {"qc.Warehouse" [{:Code 1 "c.d" 2 :order 3 :plain 4}]}
-          [stmt] (data/inserts reg rows)]
-      (exec-sql! (str (first (honey.sql/format stmt {:inline true}))
-                      "; DO $$ BEGIN IF (SELECT row(\"Code\", \"c.d\", \"order\", plain)::text FROM qc.\"Warehouse\") <> '(1,2,3,4)'"
-                      " THEN RAISE EXCEPTION 'wrong row'; END IF; END $$;"))
-      (is (= ["INSERT INTO \"qc\".\"Warehouse\" (\"Code\", \"c.d\", \"order\", plain) VALUES (?, ?, ?, ?)" 1 2 3 4]
-             (honey.sql/format stmt)))
-      (is (= [{:plain 4}] (:values (first (data/inserts reg {"qc.Warehouse" [{:plain 4}]}))))
-          "rows stay maps of keywords while no column needs quoting"))))
-
-(deftest an-hstore-map-as-pgjdbc-reads-it-inserts
-  (when *db*
-    (let [[reg] (registry-of "hs" "CREATE EXTENSION IF NOT EXISTS hstore SCHEMA public; CREATE SCHEMA hs; CREATE TABLE hs.t (id int PRIMARY KEY, h public.hstore);")
-          m (doto (java.util.HashMap.) (.put "color" "red") (.put "a \"b\\" "=>,") (.put "size" nil))]
-      (exec-sql! (str (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg {"hs.t" [{:id 1 :h m} {:id 2 :h {}}]})))
-                      "; DO $$ BEGIN IF (SELECT h FROM hs.t WHERE id = 1) <> hstore(ARRAY['color', 'a \"b\\', 'size'], ARRAY['red', '=>,', NULL])"
-                      " OR (SELECT h FROM hs.t WHERE id = 2) <> ''::hstore THEN RAISE EXCEPTION 'wrong hstore'; END IF; END $$;"))
-      (is true "the map went in as the same hstore"))))
-
-(deftest a-partial-unique-index-keeps-generated-rows-apart
-  (when *db*
-    (let [[reg] (registry-of "pu" "CREATE SCHEMA pu; CREATE TABLE pu.t (id int PRIMARY KEY, kind smallint NOT NULL CHECK (kind BETWEEN 1 AND 8), active boolean NOT NULL);
-                                   CREATE UNIQUE INDEX t_kind_active ON pu.t (kind) WHERE active;")]
-      (doseq [seed (range 20)
-              :let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 seed)]]
-        (is (= 5 (count (distinct (map :kind (get ds "pu.t"))))) (str "seed " seed))
-        (exec-sql! (str (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))) "; DELETE FROM pu.t;")))
-      (is (m/validate (data/dataset-schema reg) {"pu.t" [{:id 1 :kind 1 :active false} {:id 2 :kind 1 :active true}]} {:registry reg})
-          "a dataset the database takes is valid: the rule is for generating"))))
+        (is (= (takes? row) (m/validate :pg.cn.t/insert row {:registry reg})) (pr-str row))))))
 
 (deftest a-type-of-another-schema-says-its-schema-and-an-override-refers-to-it
   (when *db*
@@ -366,12 +261,8 @@
           reg (pgmalli/registry (files/from-database config "catalog") (files/from-database config "wh"))]
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "abc" :k nil} {:registry reg})))
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "c"} {:registry reg})))
-      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg {"wh.stock" [{:id 1 :sku "ABC" :k "a"}]}))))
-      ;; babashka has no test.chuck: ^[A-Z]{3}$ defeats strings drawn and filtered
-      (when @registry/regex-generation?
-        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 1)]
-          (is (= 3 (count (get ds "wh.stock"))) (pr-str (data/short-tables ds)))
-          (exec-sql! (str "DELETE FROM wh.stock;" (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds))))))))))
+      (is (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "a"} {:registry reg}))
+      (exec-sql! "INSERT INTO wh.stock VALUES (1, 'ABC', 'a')"))))
 
 (deftest a-column-override-shapes-reads-and-writes-of-that-column
   (when *db*
@@ -391,32 +282,22 @@
       (testing "write: the declared shape for a map sent as jsonb"
         (is (= [:or [:map {:pg/type "jsonb"} [:prompt :string]] jdbc/pg-object] (:i (h/arg-types reg {:update :jobs :set {:input :?i}} sends))))
         (is (m/validate (h/values-schema reg :jobs sends) row {:registry reg}))
-        (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg}))))
-      (testing "the rows the schema makes are rows PostgreSQL takes"
-        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
-          (is (= 5 (count (get ds "ov.jobs"))))
-          (is (every? #(string? (get-in % [:input :prompt])) (get ds "ov.jobs")))
-          (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))
+        (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg})))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #":overrides: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"
                           (files/generated-all {:db *db* :schemas ["ov"] :overrides {:ov.jobs/inptu :map}})))))
 
-(deftest like-with-an-escape-takes-and-generates-what-postgresql-takes
+(deftest like-with-an-escape-takes-what-postgresql-takes
   (when *db*
     (let [[reg data] (registry-of "le" "CREATE SCHEMA le; CREATE TABLE le.t (id int PRIMARY KEY,
                                           a text NOT NULL CHECK (a LIKE 'a!%%' ESCAPE '!'), b text NOT NULL CHECK (b LIKE 'b\\_%' ESCAPE '\\'),
                                           c text NOT NULL CHECK (c LIKE 'c\\%' ESCAPE ''), d text NOT NULL CHECK (d ILIKE 'd!!_' ESCAPE '!'));")
           base {:id 1 :a "a%" :b "b_" :c "c\\" :d "d!x"}
-          row-sql (fn [row] (first (honey.sql/format (first (data/inserts reg {"le.t" [row]})) {:inline true})))]
+          row-sql (fn [row] (first (honey.sql/format {:insert-into :le.t :values [row]} {:inline true})))]
       (is (empty? (:unrendered data)))
       (doseq [[k v ok] [[:a "a%x" true] [:a "ax" false] [:b "b_x" true] [:b "bx" false] [:c "c\\x" true] [:c "cx" false] [:d "D!y" true] [:d "dxy" false]]
               :let [row (assoc base k v)]]
         (is (= ok (m/validate :pg.le/t row {:registry reg})) (pr-str row))
-        (is (= ok (try (exec-sql! (str (row-sql row) "; DELETE FROM le.t;")) true (catch clojure.lang.ExceptionInfo _ false))) (pr-str row)))
-      ;; babashka has no test.chuck: strings of a LIKE pattern are drawn and filtered there
-      (when @registry/regex-generation?
-        (let [ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
-          (is (= 5 (count (get ds "le.t"))) (pr-str (data/short-tables ds)))
-          (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))))
+        (is (= ok (try (exec-sql! (str (row-sql row) "; DELETE FROM le.t;")) true (catch clojure.lang.ExceptionInfo _ false))) (pr-str row))))))
 
 (deftest a-check-through-a-cast-that-changes-the-value-takes-what-postgresql-takes
   (when *db*
@@ -432,45 +313,11 @@
         (is (or (unrendered (str "t_" c "_check")) (m/validate :pg.vc/t (assoc base (keyword c) v) {:registry reg}))
             (str chk " takes " (pr-str v)))))))
 
-(deftest dates-and-times-insert-inline-and-as-parameters
-  (when *db*
-    (let [[reg] (registry-of "dt" "CREATE SCHEMA dt; CREATE DOMAIN dt.day AS date CHECK (VALUE > '2000-01-01');
-                                   CREATE TABLE dt.t (id int PRIMARY KEY, d date NOT NULL, ts timestamp NOT NULL, tz timestamptz NOT NULL,
-                                                      tm time NOT NULL, tt timetz NOT NULL, iv interval NOT NULL, ds date[] NOT NULL, dd dt.day NOT NULL);")
-          ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 5)
-          sql (fn [opts] (str/join ";" (map #(first (honey.sql/format % opts)) (data/inserts reg ds))))]
-      (is (= 3 (count (get ds "dt.t"))))
-      (exec-sql! (sql {:inline true}))
-      (is (re-find #"CAST\(\? AS date\)" (first (honey.sql/format (first (data/inserts reg ds))))) "a parameter cast from its text"))))
-
-(deftest a-like-is-true-on-a-not-null-column-and-two-regexes-generate-rows-postgresql-takes
-  (when (and *db* @registry/regex-generation?)
-    (let [[reg data] (registry-of "lt" "CREATE SCHEMA lt; CREATE TABLE lt.t (id int PRIMARY KEY,
-                                          a text NOT NULL CHECK ((a LIKE 'a#%' ESCAPE '#') IS TRUE),
-                                          r text NOT NULL CHECK (r ~ '^a' AND r ~ 'z$'), k text NOT NULL CHECK (k LIKE 'b%' AND k ~ 'y$'));")
-          ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 5}) 30 1)]
-      (is (empty? (:unrendered data)))
-      (is (= 5 (count (get ds "lt.t"))) (pr-str (data/short-tables ds)))
-      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (data/inserts reg ds)))))))
-
-(deftest overlapping-likes-and-dates-outside-iso-years-insert
-  (when (and *db* @registry/regex-generation?)
-    (let [[reg] (registry-of "ol" "CREATE SCHEMA ol; CREATE DOMAIN ol.dd AS date; CREATE DOMAIN ol.di AS interval; CREATE DOMAIN ol.bd AS bytea;
-                                   CREATE TABLE ol.a (id int PRIMARY KEY, v varchar(1) NOT NULL CHECK (v LIKE 'x%') CHECK (v LIKE '%x'),
-                                                      d date, ds ol.dd[], di ol.di[], b bytea, j jsonb[], bd ol.bd, ba bytea[], tz timestamptz);")
-          ds (clojure.test.check.generators/generate (data/dataset-generator reg {:rows 3}) 30 1)
-          rows {"ol.a" [{:id 100 :v "x" :d (java.time.LocalDate/of -5 1 1) :ds [(java.time.LocalDate/of 10000 1 1)]
-                         :di [(java.time.Duration/ofHours 2)] :b (byte-array [1 255]) :j [{"a" 1} nil]
-                         :bd (byte-array [0]) :ba [(byte-array [2 3])] :tz nil}]}]
-      (is (= 3 (count (get ds "ol.a"))) "x% and %x generate x")
-      (exec-sql! (str/join ";" (map #(first (honey.sql/format % {:inline true})) (concat (data/inserts reg ds) (data/inserts reg rows)))))
-      (is true "inserted"))))
-
 (deftest an-unqualified-name-means-the-generated-schema-of-that-name
   (let [registry (pgmalli/registry "sample")
         meant (fn [f] (try (f) (catch clojure.lang.ExceptionInfo e [(ex-message e) (:did-you-mean (ex-data e))])))]
     (is (= ["the registry has no schema named :users; did you mean: :pg.sample/users" [:pg.sample/users]]
            (meant #(pgmalli/as-read registry :users))))
     (is (= [:pg.sample/users] (second (meant #(pgmalli/describe registry :users)))))
-    (is (= [:pg.sample/users] (second (meant #(pgmalli/columns registry :pg.public/users))))
+    (is (= [:pg.sample/users] (second (meant #(pgmalli/as-read registry :pg.public/users))))
         "a name of another schema means the one of the registry")))

@@ -1,6 +1,6 @@
 # HoneySQL queries
 
-Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md) · [datasets](datasets.md)
+Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md)
 
 `pgmalli.honeysql` reads a HoneySQL query as data and compares it with the registry. The
 examples use [example/schema.sql](example/schema.sql).

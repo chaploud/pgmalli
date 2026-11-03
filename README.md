@@ -10,14 +10,14 @@ generate test data and check HoneySQL queries, without a database at hand.
 - [Installation](#installation): generate the registry with psql or JDBC
 - [Validating rows and writes](#validating-rows-and-writes): rows, INSERTs and UPDATEs
 - [Rows read through next.jdbc](#rows-read-through-nextjdbc)
-- [Generating test data](#generating-test-data): rows and whole datasets
+- [Generating test data](#generating-test-data)
 - [Checking HoneySQL queries](#checking-honeysql-queries)
 - [Function schemas for queries](#function-schemas-for-queries): instrument query functions
 - [Keeping the files current](#keeping-the-files-current): stale files fail CI
 - [Overrides](#overrides)
 - [Supported versions](#supported-versions), [Limits](#limits) and [Stability](#stability)
 - Reference: [types and constraints](docs/types.md), [reading rows](docs/reading-rows.md),
-  [queries](docs/queries.md), [datasets](docs/datasets.md)
+  [queries](docs/queries.md)
 
 ## Quickstart
 
@@ -140,7 +140,7 @@ your test alias:
 com.gfredericks/test.chuck {:mvn/version "0.2.15"}
 ```
 
-Without it, `mg/generate` and `dataset-generator` usually fail on such a column with
+Without it, `mg/generate` usually fails on such a column with
 `:malli.generator/such-that-failure`. babashka has no test.chuck: there the strings are drawn
 and filtered ([docs/types.md](docs/types.md#check-constraints)).
 
@@ -193,18 +193,6 @@ strings:
 
 (m/validate :pg.public/user_status "deleted" {:registry registry})
 ;; => false
-```
-
-`columns` gives a table's plain `[:map ...]`, without its table-level CHECKs, for `malli.util`
-functions such as `mu/select-keys`:
-
-```clojure
-(require '[malli.util :as mu])
-
-(m/validate (mu/select-keys (pgmalli/columns registry :pg.public/users) [:email])
-            {:email "ann@example.com"}
-            {:registry registry})
-;; => true
 ```
 
 humanize's messages are for developers: they name tables, columns, types and the CHECK's SQL.
@@ -272,31 +260,6 @@ There are two ways to check a row read from the database:
             {:registry registry})
 ;; => true
 ```
-
-A dataset is several tables at once, foreign keys pointing at generated rows:
-
-```clojure
-(require '[pgmalli.data :as data]
-         '[clojure.test.check.generators :as gen])
-
-(def sample (gen/generate (data/dataset-generator registry {:rows 3}) 30 42))
-
-(map count (vals sample))
-;; => (3 3 3 3)
-
-(m/validate (data/dataset-schema registry) sample {:registry registry})
-;; => true
-```
-
-`inserts` turns it into HoneySQL INSERTs in an order the database accepts:
-
-```clojure
-(map :insert-into (data/inserts registry sample))
-;; => (:public.groups [{:overriding-value :system} :public.users] [{:overriding-value :system} :public.events] [{:overriding-value :system} :public.posts])
-```
-
-[docs/datasets.md](docs/datasets.md) covers running them, keeping a dataset as a fixture
-file, `:except`, short tables and how foreign keys are filled.
 
 ## Checking HoneySQL queries
 
@@ -415,16 +378,6 @@ query still loads. `h/schema-problems` gathers them for one test
 arguments, the row, how many rows, the problems and the tables it reads and writes
 ([docs/queries.md](docs/queries.md#function-schemas)).
 
-`pgmalli/portable` gives a named schema as data that malli's default registry and
-`malli.experimental.time` read. pgmalli's own schema types become malli's; the CHECKs only
-pgmalli can evaluate and a `numeric(p,s)`'s precision are left out. Use it where a schema
-cannot carry the registry, such as `:malli/schema` written as data:
-
-```clojure
-(m/validate (pgmalli/portable registry :pg.public/user_status) "closed")
-;; => true
-```
-
 `pgmalli/describe` reads a schema back as PostgreSQL types, to see what a function takes and
 returns:
 
@@ -517,7 +470,7 @@ columns is kept or skipped whole:
 pgmalli still adds what the database says of the column: `[:maybe ...]` unless it is NOT
 NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are read
 (`as-read`, `h/row-schema`) and written (`h/arg-types`, `h/values-schema`, `h/set-schema`),
-datasets included, but for a type the driver reads as an object of its own: an `inet`, read as a
+but for a type the driver reads as an object of its own: an `inet`, read as a
 PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read; the
 `:public.hosts/ip` override above holds for what is written. A json or jsonb column is read
 parsed ([the one reading](docs/reading-rows.md#the-one-reading-and-sending)), so its shape holds for what is
@@ -564,8 +517,7 @@ and pgjdbc are yours to add.
 
 - The registry is the schema at generate time; nothing reads the database at run time
   ([Keeping the files current](#keeping-the-files-current)).
-- PRIMARY KEY, UNIQUE and foreign keys hold across a dataset (`dataset-schema`), not in a row
-  schema ([docs/datasets.md](docs/datasets.md#a-dataset)).
+- PRIMARY KEY, UNIQUE and foreign keys are not checked: a row schema holds for one row.
 - Triggers, EXCLUDE constraints and policies are not enforced
   ([docs/types.md](docs/types.md#what-is-read)).
 - `h/check` reads a query as data: of a query that code builds at run time, it checks only the
@@ -580,11 +532,10 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 1. the keys of `pgmalli.edn`
 2. the generated file and the registry names
 3. the kinds of `:unrendered` entries and of `h/check`'s problems
-4. the tags `write-dataset` writes (`#pgmalli/instant` and the others)
-5. the public functions of `pgmalli.core`, `pgmalli.generate`, `pgmalli.data` and
-   `pgmalli.honeysql`, and their options
-6. the `:pgmalli/error` kinds of the errors pgmalli throws
-7. the command line: the `generate` and `check` commands, `check --edn`'s output and the exit
+4. the public functions of `pgmalli.core`, `pgmalli.generate` and `pgmalli.honeysql`, and
+   their options
+5. the `:pgmalli/error` kinds of the errors pgmalli throws
+6. the command line: the `generate` and `check` commands, `check --edn`'s output and the exit
    codes 0 to 3
 
 | `:pgmalli/error` | when |
@@ -595,8 +546,6 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
 | `:pgmalli.error/not-query-data` | a query that is no HoneySQL data |
 | `:pgmalli.error/not-generated` | a generated file missing from the classpath |
-| `:pgmalli.error/invalid-dataset` | a dataset not shaped `{"schema.table" [row ...]}`, naming tables or columns the registry lacks, or a file `read-dataset` cannot read as one |
-| `:pgmalli.error/reference-cycle` | tables referencing each other in a cycle |
 | `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |
 | `:pgmalli.error/db-unavailable`, `psql-missing` | the database, or psql, out of reach |
 | `:pgmalli.error/fault` | pgmalli's own fault (please report it), or reading the catalog failing: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |

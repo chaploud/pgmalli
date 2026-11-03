@@ -1,14 +1,12 @@
 (ns pgmalli.core
   "The application side of pgmalli: the schemas generated from a PostgreSQL schema (files on
    the classpath as pgmalli/<schema>.edn), read and used. Generation and freshness, which need
-   psql, are pgmalli.generate; datasets, pgmalli.data; HoneySQL queries checked and typed,
-   pgmalli.honeysql."
+   psql, are pgmalli.generate; HoneySQL queries checked and typed, pgmalli.honeysql."
   (:require [clojure.string :as str]
             [malli.core :as m]
             [pgmalli.impl.describe :as d]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.jdbc :as jdbc]
-            [pgmalli.impl.portable :as portable]
             [pgmalli.impl.registry :as reg]
             [pgmalli.impl.shape :as shape]))
 
@@ -34,22 +32,6 @@
    A generated data map (see generated) is taken in place of a name."
   [& schemas]
   (apply reg/registry schemas))
-
-(defn columns
-  "The [:map ...] of a row or insert schema, without the table-level constraints: what
-   malli.util's select-keys, optional-keys and the like take (the [:and ...] of a table with
-   constraints is not a map to them)."
-  [registry name]
-  (reg/columns registry name))
-
-(defn portable
-  "The named schema as data malli's default registry reads (plus malli.experimental.time):
-   the schema's own types inlined, pgmalli's types as their malli counterparts, generation
-   hints dropped, the CHECKs only pgmalli evaluates and a numeric(p,s)'s precision left out.
-   For :malli/schema metadata and other places the registry cannot follow. A name the registry
-   does not hold is an error."
-  [registry name]
-  (portable/portable registry name))
 
 (defn as-read
   "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it under

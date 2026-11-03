@@ -50,6 +50,13 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `:pgmalli.error/invalid-options` error. Compare NULL in the query body (`[:= :x nil]`, which
   HoneySQL writes as IS NULL, or `IS NOT DISTINCT FROM`).
 * `pgmalli.core/read-options` is removed.
+* Datasets are removed: the namespace `pgmalli.data` (`dataset-schema`, `dataset-generator`,
+  `short-tables`, `inserts`, `write-dataset`, `read-dataset`, `readers`) and the error kinds
+  `:pgmalli.error/invalid-dataset` and `:pgmalli.error/reference-cycle`. `mg/generate` still
+  gives a row of a table.
+* `pgmalli.core/portable` and `pgmalli.core/columns` are removed. A table's schema is
+  `(m/deref (m/schema :pg.public/users {:registry registry}))`; with CHECKs across columns it is
+  `[:and [:map ...] ...]`, its map the first child.
 * `h/row-schema`'s `:pgmalli/untold` property is removed: with unqualified keys, every key is
   told.
 * pgmalli no longer depends on camel-snake-kebab.
@@ -259,8 +266,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
 * An invalid unique index (a failed `CREATE INDEX CONCURRENTLY`) is no longer in `:pg/unique`.
-* `pgmalli/portable` leaves out a `numeric(p,s)`'s precision, which malli's types cannot
-  express.
 * `pgmalli.core/describe` refuses a type neither malli nor the registry knows.
 * An option pgmalli does not take is an error whose data names it (`:unknown`) and the one
   meant (`:did-you-mean`).

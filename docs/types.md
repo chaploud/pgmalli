@@ -1,6 +1,6 @@
 # PostgreSQL types and constraints in malli
 
-Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md) · [datasets](datasets.md)
+Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md)
 
 What each part of a PostgreSQL schema becomes in the registry.
 
@@ -17,8 +17,8 @@ For a schema `public`:
 | `:pg.public/<enum>` | `[:enum ...]` |
 | `:pg.public/<domain>` | a non-NULL value of the domain |
 
-A row schema checks one row. PRIMARY KEY, UNIQUE and FOREIGN KEY hold across rows;
-[`data/dataset-schema`](datasets.md#a-dataset) checks them.
+A row schema checks one row. PRIMARY KEY, UNIQUE and FOREIGN KEY hold across rows, and no
+schema checks them.
 
 An **insert schema** is a closed map. Identity ALWAYS and generated columns are left out.
 Identity BY DEFAULT, defaulted and nullable columns are optional. The table's CHECKs read an
@@ -28,8 +28,7 @@ An **update schema** is a closed map of the same columns, every one optional. A 
 column cannot be set to NULL. It carries no table CHECK: those hold on the whole updated row,
 which an UPDATE does not send.
 
-A **view's** columns are all `[:maybe ...]`. Views have no insert schema and are not part of
-datasets.
+A **view's** columns are all `[:maybe ...]`. Views have no insert schema.
 
 A **domain** is its base type with its CHECKs applied. The column decides whether NULL is
 allowed. A domain's NOT NULL and DEFAULT apply to every column of the domain.
@@ -101,7 +100,7 @@ schema (`:type-schema "catalog"`). With both loaded (`(pgmalli/registry "catalog
 override its columns: `{:overrides {:wh.stock/sku [:ref :pg.catalog/sku]}}`.
 
 `:string`'s `:min` and `:max` count characters (code points), as `varchar(n)` and `length`
-do; malli's own `:string`, in `portable` output, counts UTF-16 units. `:pg/max-length n` is the
+do; malli's own `:string` counts UTF-16 units. `:pg/max-length n` is the
 type's `n`: as PostgreSQL does, it cuts spaces past `n` off (`"abcd  "` fits `varchar(4)`),
 then `:min` and `:max` count what it keeps.
 
@@ -117,10 +116,9 @@ A row schema differs from PostgreSQL in a few places:
   cut.
 
 The types without a malli counterpart generate from a fixed list of literals PostgreSQL
-accepts, and are inserted as text cast to the type (an interval too, in ISO 8601). A NOT NULL
+accepts (an interval in ISO 8601). A NOT NULL
 column of a type pgmalli cannot make a value of fails to generate, naming it:
 `public.t.p: pgmalli cannot make a value of type pair; give one with :overrides in pgmalli.edn`.
-In a dataset its table comes out short with that reason.
 
 Dates and times generate within 2025 (in domains and arrays too), `timetz` offsets within
 what PostgreSQL takes, a `jsonb_typeof = 'array'` column an array of JSON values.
@@ -178,7 +176,7 @@ Generate a version's rows from its own schema, so the generator need not guess t
 
 ```clojure
 (def new-event-v2
-  (-> (pgmalli/columns registry :pg.public.events/insert)
+  (-> (m/deref (m/schema :pg.public.events/insert {:registry registry}))
       (mu/assoc :schema_version [:= 2])
       (mu/assoc :payload evidence-v2)))
 
@@ -287,11 +285,7 @@ A partitioned table's row schema carries a CHECK named `<table> (partitions)`: t
 partitions' bounds.
 
 An EXCLUDE is a table property, not a check: a row it would reject validates all the same,
-and each EXCLUDE is listed in `:diagnostics`. Datasets keep its `=` columns distinct, so their
-rows never conflict, except for one with no `=` column, an expression or a WHERE. A partial
-unique index (`... WHERE active`) is not checked by `dataset-schema`; generated datasets keep
-its columns distinct over all rows, so the rows it covers never conflict. A row a trigger
-would reject validates too; a row-level INSERT trigger is listed in `:diagnostics`.
+and each EXCLUDE is listed in `:diagnostics`. A row a trigger would reject validates too; a row-level INSERT trigger is listed in `:diagnostics`.
 
 Not read: other indexes, policies and privileges.
 
@@ -309,8 +303,6 @@ A name defined in two of the schemas passed keeps the later schema's.
 Every pgmalli function taking a registry takes any malli registry holding the generated
 names, a `malli.registry/composite-registry` included. In a composite registry the first
 registry holding a name wins.
-
-For `pgmalli.core/columns`, see the [README](../README.md#validating-rows-and-writes).
 
 ## The generated file
 

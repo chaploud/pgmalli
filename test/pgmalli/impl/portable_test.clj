@@ -1,5 +1,5 @@
 (ns pgmalli.impl.portable-test
-  "The same schemas in other shapes: portable, as-read and one column, on the checked-in
+  "The same schemas in other shapes: portable-data and as-read, on the checked-in
    test/resources/pgmalli/sample.edn."
   (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
@@ -9,9 +9,11 @@
             [pgmalli.impl.shape :as shape]
             [pgmalli.sample :refer [opts registry user]]))
 
+(defn- portable [registry name] (portable/portable-data registry (shape/schema-of registry name)))
+
 (deftest other-shapes-of-the-same-schema
   (testing "portable: what malli's default registry reads"
-    (let [p (pgmalli/portable registry :pg.sample/users)
+    (let [p (portable registry :pg.sample/users)
           opts {:registry (merge (m/default-schemas) (malli.experimental.time/schemas))}]
       (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (get-in p [1 7 1])) "the enum is inlined")
       (is (= [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] (get-in p [1 4 1])) "integers carry their range")
@@ -19,7 +21,7 @@
       (is (= 3 (count p)) "the :pg/check constraints are left out")
       (is (m/validate p (assoc user :group_name "a") opts))
       (is (not (m/validate p (assoc user :group_id 2147483648) opts)))
-      (is (= 'bytes? (get-in (pgmalli/portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
+      (is (= 'bytes? (get-in (portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
       (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
   (testing "as-read: the map as next.jdbc builds it"
     (let [r (pgmalli/as-read registry :pg.sample/users)]
@@ -33,16 +35,10 @@
   (testing "portable converts what it inlines"
     (let [reg (pgmalli/registry {:registry {:pg.public/code [:and :string [:pg/check-value {:pg/constraint "c"} [:<> :VALUE ""]]]
                                             :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
-      (is (= [:map {:pg/table "public.t"} [:c [:string {:pg/type "code"}]]] (pgmalli/portable reg :pg.public/t)))))
-  (testing "column and non-null"
-    (is (= [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]] (portable/column registry :pg.sample/users :nick)))
-    (is (= [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] (shape/non-null (portable/column registry :pg.sample/users "nick"))))
-    (is (nil? (portable/column registry :pg.sample/users :nope)))))
+      (is (= [:map {:pg/table "public.t"} [:c [:string {:pg/type "code"}]]] (portable reg :pg.public/t))))))
 
 (deftest unknown-names-are-an-error
-  (doseq [[what f] {:portable #(pgmalli/portable registry :pg.sample/nope)
-                    :column #(portable/column registry :pg.sample/nope :id)
-                    :columns #(pgmalli/columns registry :pg.sample/nope)
+  (doseq [[what f] {:portable #(portable registry :pg.sample/nope)
                     :as-read #(pgmalli/as-read registry :pg.sample/nope)}]
     (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no schema named" (f)) (str what))]
       (is (= :pgmalli.error/unknown-schema (:pgmalli/error (ex-data e))) (str what))
@@ -50,15 +46,14 @@
       (is (some #{:pg.sample/users} (:known (ex-data e))) (str what)))))
 
 (deftest a-misspelt-name-suggests-the-one-meant
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :pg.sample.users/insert" (pgmalli/columns registry :pg.sample/users_insert)))]
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :pg.sample.users/insert" (pgmalli/as-read registry :pg.sample/users_insert)))]
     (is (= [:pg.sample.users/insert] (:did-you-mean (ex-data e))))))
 
 (deftest as-read-defaults-its-options
   (is (= (pgmalli/as-read registry :pg.sample/users {}) (pgmalli/as-read registry :pg.sample/users))))
 
-(deftest as-read-and-columns-take-row-schemas
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema; as-read takes one such as \[:pg.sample/" (pgmalli/as-read registry :pg.sample/mood)))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema; columns takes one" (pgmalli/columns registry :pg.sample/mood))))
+(deftest as-read-takes-row-schemas
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"no table's or view's row schema; as-read takes one such as \[:pg.sample/" (pgmalli/as-read registry :pg.sample/mood))))
 
 (deftest as-read-given-an-insert-schema-names-the-row-schema
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"what is sent to sample.users; as-read takes its row schema :pg.sample/users"

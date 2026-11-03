@@ -377,12 +377,3 @@
            (into {} (for [d data :when (:schema d)]
                       [(shape/routines-key (:schema d))
                        [:any {:pg/functions (:functions d) :pg/operators (:operators d) :pg/database-version (:database-version d)}]])))))
-
-(defn columns
-  "The [:map ...] of a row or insert schema, without the table-level constraints."
-  [registry name]
-  (let [props (shape/row-props (shape/schema-of registry name))]
-    (when-not (or (:pg/table props) (:pg/view props))
-      (shape/not-a-row! registry name "columns")))
-  (let [s (m/deref (m/schema name {:registry registry}))]
-    (if (= :and (m/type s)) (first (m/children s)) s)))

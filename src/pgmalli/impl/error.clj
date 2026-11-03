@@ -11,8 +11,6 @@
    :pgmalli.error/unknown-schema :cognitect.anomalies/not-found
    :pgmalli.error/not-a-registry :cognitect.anomalies/incorrect
    :pgmalli.error/not-query-data :cognitect.anomalies/incorrect
-   :pgmalli.error/invalid-dataset :cognitect.anomalies/incorrect
-   :pgmalli.error/reference-cycle :cognitect.anomalies/unsupported
    :pgmalli.error/not-generated :cognitect.anomalies/not-found
    :pgmalli.error/cannot-generate :cognitect.anomalies/unsupported
    :pgmalli.error/db-unavailable :cognitect.anomalies/unavailable

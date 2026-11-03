@@ -2,7 +2,6 @@
   "Generated files as malli registries, on the checked-in test/resources/pgmalli/{sample,other}.edn."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [clojure.test.check.generators :as tcg]
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
@@ -11,12 +10,12 @@
             [pgmalli.impl.pattern :as p]
             [pgmalli.impl.portable :as portable]
             [pgmalli.impl.registry :as reg]
+            [pgmalli.impl.shape :as shape]
             [malli.registry]
             malli.experimental.time
             [pgmalli.core :as pgmalli]
-            [pgmalli.data :as data]
             [pgmalli.honeysql :as h]
-            [pgmalli.sample :refer [good opts registry user]]))
+            [pgmalli.sample :refer [opts registry user]]))
 
 (deftest registry-from-classpath
   (is (m/validate :pg.sample/users user opts))
@@ -24,7 +23,7 @@
           :pg/foreign-keys [{:columns ["group_id" "group_name"] :table "sample.groups" :to ["id" "name"]}
                             {:columns ["group_id"] :table "sample.groups" :to ["id"]}
                             {:columns ["referrer_id"] :table "sample.users" :to ["id"]}]}
-         (m/properties (pgmalli/columns registry :pg.sample/users))))
+         (shape/row-props (shape/schema-of registry :pg.sample/users))))
   (is (= {:closed_at ["violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"]}
          (me/humanize (m/explain :pg.sample/users (assoc user :closed_at nil) opts)))
       "errors name the constraint")
@@ -93,7 +92,7 @@
           [:born {:optional true} [:maybe [:time/local-date {:pg/type "date"}]]]
           [:closed_at {:optional true} [:maybe [:time/instant {:pg/type "timestamptz"}]]]
           [:group_id {:optional true} [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]
-         (vec (take 5 (pgmalli/portable registry :pg.sample.users/update)))))
+         (vec (take 5 (portable/portable-data registry (shape/schema-of registry :pg.sample.users/update))))))
   (is (m/validate :pg.sample.users/update {:nick "n"} opts) "any subset of the columns")
   (is (not (m/validate :pg.sample.users/update {:score nil} opts)) "a NOT NULL column cannot be set to NULL")
   (is (not (m/validate :pg.sample.users/update {:id 1} opts)) "an identity ALWAYS column cannot be set")
@@ -102,23 +101,16 @@
 
 (deftest several-schemas
   (let [registry (pgmalli/registry "sample" "other")
-        opts {:registry registry}
-        ds (data/dataset-schema registry)]
+        opts {:registry registry}]
     (is (m/validate :pg.other.notes/insert {:id 1 :user_id 1} opts))
-    (is (m/validate ds (assoc good "other.notes" [{:id 1 :user_id 1}]) opts))
-    (is (not (m/validate ds (assoc good "other.notes" [{:id 1 :user_id 9}]) opts)) "a reference into another schema")
-    (doseq [sample (tcg/sample (data/dataset-generator registry {:rows 4}) 4)]
-      (is (m/validate ds sample opts) (pr-str sample)))
-    (is (m/validate (data/dataset-schema (pgmalli/registry "other")) {"other.notes" [{:id 1 :user_id 9}]} {:registry (pgmalli/registry "other")})
-        "a reference to a table outside the registry is not checked")))
+    (is (m/validate :pg.sample/users user opts))))
 
 (deftest any-malli-registry-will-do
   (let [composite (malli.registry/composite-registry registry {:app/flag :boolean})]
     (is (m/validate :pg.sample/groups {:id 1 :name "g"} {:registry composite}))
     (is (= [] (h/check composite {:select [:id] :from [:groups]} {:schema "sample"})))
-    (is (= 2 (count (keys (tcg/generate (data/dataset-generator composite {:rows 2}) 20 1)))) "datasets from a composite registry")
-    (is (= (portable/column registry :pg.sample/users :nick) (portable/column composite :pg.sample/users :nick)))
-    (is (= (pgmalli/portable registry :pg.sample/users) (pgmalli/portable composite :pg.sample/users)) "portable inlines references through a composite registry")
+    (is (= (portable/portable-data registry (shape/schema-of registry :pg.sample/users)) (portable/portable-data composite (shape/schema-of composite :pg.sample/users)))
+        "portable-data inlines references through a composite registry")
     (is (= (h/query-schema registry '[id] {:select [:id] :from [:groups]} {:schema "sample"})
            (h/query-schema composite '[id] {:select [:id] :from [:groups]} {:schema "sample"})))))
 
@@ -182,8 +174,7 @@
                                                                                   :constraints {"c" {:name "c" :type "CHECK" :check_clause "CHECK (\"Mixed Col\" = 1 AND b > 0 OR \"Mixed Col\" = 2 AND b < 0)"}}}}})
                                               {}))]
     (is (m/validate :pg.public/t {"Mixed Col" 1 :b 1} {:registry reg}))
-    (is (not (m/validate :pg.public/t {"Mixed Col" 1 :b -1} {:registry reg})))
-    (is (= 2 (count (get (tcg/generate (data/dataset-generator reg {:rows 2}) 20 1) "public.t"))))))
+    (is (not (m/validate :pg.public/t {"Mixed Col" 1 :b -1} {:registry reg})))))
 
 (deftest a-bounded-numeric-generates-at-its-scale
   (is (every? #(and (<= (.scale ^BigDecimal %) 2) (pos? %)) (generated-values :p))))

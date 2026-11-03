@@ -4,16 +4,14 @@
   (:require [clojure.set :as set]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
-            [clojure.test.check.generators :as tcg]
-            [honey.sql :as sql]
             [malli.core :as m]
+            [malli.generator :as mg]
             [clojure.data.json :as json]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             next.jdbc.date-time
             [pgmalli.catalog-source :as source]
             [pgmalli.core :as pgmalli]
-            [pgmalli.data :as data]
             [pgmalli.impl.files :as files]
             [pgmalli.impl.types :as types]
             [pgmalli.test-db :as test-db :refer [*db* datasource]]))
@@ -70,6 +68,15 @@
               :let [err (try (jdbc/execute! ds [(str "SELECT " (test-db/sql-literal l) "::" t)]) nil (catch Exception x (ex-message x)))]]
         (is (nil? err) (str "PostgreSQL does not read " (pr-str l) " as " t " (" err "): fix its :literals in src/pgmalli/impl/types.clj/types"))))))
 
+(defn- text-of
+  "A generated value of type t as text PostgreSQL reads as t."
+  [t v]
+  (cond (#{"json" "jsonb"} t) (json/write-str v)
+        (map? v) (str/join ", " (for [[k x] v :let [q #(str "\"" (str/replace (str %) #"[\\\"]" "\\\\$0") "\"")]]
+                                        (str (q k) "=>" (if (nil? x) "NULL" (q x)))))
+        (bytes? v) (apply str "\\x" (map #(format "%02x" (bit-and % 0xff)) v))
+        :else (str v)))
+
 (deftest a-not-null-column-of-every-supported-type-generates-inserts-and-reads-back
   (when *db*
     (let [ds (datasource)
@@ -77,17 +84,17 @@
       (doseq [e (set (keep :extension (vals types/types)))]
         (jdbc/execute! ds [(str "CREATE EXTENSION IF NOT EXISTS \"" e "\"")]))
       (jdbc/execute! ds [(str/join ";\n" (for [[table t] tables] (str "CREATE TABLE " table " (id integer PRIMARY KEY, c " t " NOT NULL)")))])
-      (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))
-            dataset (tcg/generate (data/dataset-generator registry {:rows 3}) 30 42)]
-        (is (nil? (data/short-tables dataset)))
-        (doseq [stmt (data/inserts registry dataset)
-                :let [table (name (:insert-into stmt))
-                      t (tables (str/replace table #"^public\." ""))]]
+      (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+        (doseq [[table t] tables
+                [id {:keys [c]}] (map-indexed vector (mg/sample (keyword (str "pg.public." table) "insert") {:registry registry :size 3 :seed 42}))]
           (testing t
-            (is (nil? (try (jdbc/execute! ds (sql/format stmt)) nil (catch Exception x (ex-message x))))
-                (str "PostgreSQL refuses a generated " t ": fix its entry in src/pgmalli/impl/types.clj/types"))
+            (is (nil? (try (jdbc/execute! ds [(str "INSERT INTO " table " VALUES (" id ", " (test-db/sql-literal (text-of t c)) "::" t ")")]) nil (catch Exception x (ex-message x))))
+                (str "PostgreSQL refuses a generated " t " " (pr-str c) ": fix its entry in src/pgmalli/impl/types.clj/types"))))
+        (doseq [[table t] tables]
+          (testing t
             (let [rows (jdbc/execute! ds [(str "SELECT * FROM " table)] {:builder-fn rs/as-unqualified-maps})
-                  schema (pgmalli/as-read registry (keyword "pg.public" (str/replace table #"^public\." "")))]
+                  schema (pgmalli/as-read registry (keyword "pg.public" table))]
+              (is (= 3 (count rows)))
               (is (m/validate [:sequential schema] rows {:registry registry})
                   (str "pgjdbc returns a " t " as " (some-> (:c (first rows)) class .getName) ": fix its :read in src/pgmalli/impl/types.clj/types")))))))))
 
