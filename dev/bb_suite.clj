@@ -4,7 +4,7 @@
 
 (def jvm-only
   #{'pgmalli.accept-test 'pgmalli.catalog-fuzz-test 'pgmalli.driver-types-test
-    'pgmalli.oracle-test 'pgmalli.row-keys-test 'pgmalli.upstream-test 'pgmalli.expression-types-test})
+    'pgmalli.oracle-test 'pgmalli.postgres-runs-test 'pgmalli.row-keys-test 'pgmalli.upstream-test 'pgmalli.expression-types-test})
 
 (defn namespaces
   "Every test/**/*_test.clj as a namespace symbol, sorted; with jvm? false, without jvm-only."

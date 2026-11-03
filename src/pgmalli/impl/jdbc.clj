@@ -33,7 +33,8 @@
                             [:builder-fn {:optional true} [:or ifn? qualified-symbol?]]
                             [:label-fn {:optional true} [:or fn? [:fn var?]]]
                             [:qualifier-fn {:optional true} [:or fn? [:fn var?]]]
-                            [:return-keys {:optional true} [:or :boolean [:vector {:min 1} [:or :string :keyword]]]]]]
+                            [:return-keys {:optional true} (let [m {:error/message "should be true, false or a vector of column names ([\"id\"], [:id])"}]
+                                                             [:or [:boolean m] [:vector (assoc m :min 1) [:or :string :keyword]]])]]]
    ;; {class type}, which options! checks
    [:send {:optional true} [:map-of :any :any]]
    [:compare {:optional true} [:enum :strict :lenient]]
@@ -179,54 +180,88 @@
     :result-type :return-generated-keys :return-keys :rollback-only :schema :schema-opts :suffix :table-fn
     :timeout :top})
 
+(defn- read-types!
+  "Fails on a type :read names that is neither one types knows (a name or an alias) nor one of
+   registry's (an enum type, a domain, an array of one), or on a value that is no malli schema
+   in registry."
+  [registry read]
+  (let [schemas (shape/schemas-of registry)
+        own (set (for [k (keys schemas) :when (shape/generated-name? k)
+                       :let [[sch n] (shape/schema-and-name k)]
+                       t [n (str sch "." n)], t [t (types/array-of t)]]
+                   t))
+        known? #(or (own %) (types/entry (or (types/element %) %)))]
+    (doseq [[t v] read :when (string? t)]
+      (when-not (known? t)
+        (error/fail! :pgmalli.error/invalid-options
+                     (str "pgmalli options: :read names type " (pr-str t) ", which is no type of docs/types.md nor of the registry"
+                          (error/did-you-mean (some-> (error/suggest t (concat (mapcat (fn [[n e]] (cons n (:aliases e))) types/types) own)) pr-str)))
+                     {:given t}))
+      (when-not (try (m/schema v {:registry registry}) (catch Exception _ nil))
+        (error/fail! :pgmalli.error/invalid-options
+                     (str "pgmalli options: :read reads " (pr-str t) " as " (pr-str v) ", which is no malli schema of the registry")
+                     {:given {t v}})))))
+
+(def ^:private canonical-read
+  "A :read with each type by its name (types/canonical-name) too, as a column's :pg/type names it."
+  (memoize (fn [read] (merge read (update-keys read #(if (string? %) (types/canonical-name %) %))))))
+
 (defn options!
   "opts when pgmalli takes them: their keys and values; :send a map of classes to a type types
    knows (a name or an alias), an array of one (\"bigint[]\"), :unknown or nil; :jdbc's
-   :builder-fn one of next.jdbc's map builders, a modified one with :label-fn. An error names
-   what it does not take, with the one meant; :write and :stringtype of pgmalli 0.3 name :send."
-  [opts]
-  (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
-    (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
-      (fail! (str (pr-str old) " is no longer read: what an application sends is :send, a map of classes to the type"
-                  " each goes as ({String :unknown} for stringtype=unspecified); see https://github.com/chaploud/pgmalli/blob/main/docs/queries.md#what-your-application-sends"
-                  " and " error/changelog)
-             old))
-    (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns :return-keys]))]
-      (fail! (str (pr-str old) " is no longer read: pass the options you pass to next.jdbc as :jdbc, "
-                  (pr-str {:jdbc (old-options-jdbc old)}) "; see " error/changelog)
-             old))
-    (when (contains? opts :send)
-      (when-not (map? (:send opts))
-        (fail! (str ":send is a map of classes to types, {clojure.lang.Keyword :unknown}; got " (pr-str (:send opts))) (:send opts)))
-      (doseq [[c t :as e] (:send opts)]
-        (cond (not (class? c))
-              (fail! (str ":send's key " (pr-str c) " is no class; a key is the class of a value sent (String, clojure.lang.Keyword)") e)
-              (and (some? t) (not (sent-name t)))
-              (fail! (str ":send's " (pr-str c) " goes as " (pr-str t) ", which is no type of docs/types.md, an array of one (\"bigint[]\")"
-                          " or :unknown for a value sent untyped (an enum's or a domain's value too)"
-                          (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
-                     e))))
-    (let [{:keys [builder-fn label-fn] :as jdbc} (:jdbc opts)]
-      (doseq [k (when (map? jdbc) (keys jdbc))
-              :let [meant (when-not (next-jdbc-options k) (error/suggest k jdbc-read))]
-              :when meant]
-        (error/fail! :pgmalli.error/invalid-options
-                     (str "pgmalli options: :jdbc's " (pr-str k) " is no next.jdbc option" (error/did-you-mean meant))
-                     {:given [k] :did-you-mean [meant]}))
-      (doseq [k [:label-fn :qualifier-fn] :let [f (get jdbc k)] :when (symbol? f)]
-        (fail! (str ":jdbc's " k " is the function next.jdbc takes, not its symbol: " (pr-str f)
-                    " (a symbol is the builder-fn's alone, for babashka)")
-               (select-keys jdbc [k])))
-      (when builder-fn
-        (let [how (builder builder-fn)]
-          (cond (nil? how)
-                (fail! (str ":jdbc's :builder-fn is none of next.jdbc.result-set's or next.jdbc.optional's map builders ("
-                            (str/join ", " (distinct (sort (map name (keys builders))))) "), whose keys pgmalli knows")
-                       (select-keys jdbc [:builder-fn]))
-                (and (= :modified (:fn how)) (not label-fn))
-                (fail! ":jdbc's modified builder takes :label-fn, as next.jdbc's does" (select-keys jdbc [:builder-fn]))))))
-    (checked! @options opts)
-    opts))
+   :builder-fn one of next.jdbc's map builders, a modified one with :label-fn; given the
+   registry, :read's types those types or the registry knows, each read as a malli schema. An
+   error names what it does not take, with the one meant; :write and :stringtype of pgmalli 0.3
+   name :send."
+  ([registry opts]
+   (options! opts)
+   (when (map? (:read opts)) (read-types! registry (:read opts)))
+   opts)
+  ([opts]
+   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
+     (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
+       (fail! (str (pr-str old) " is no longer read: what an application sends is :send, a map of classes to the type"
+                   " each goes as ({String :unknown} for stringtype=unspecified); see https://github.com/chaploud/pgmalli/blob/main/docs/queries.md#what-your-application-sends"
+                   " and " error/changelog)
+              old))
+     (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns :return-keys]))]
+       (fail! (str (pr-str old) " is no longer read: pass the options you pass to next.jdbc as :jdbc, "
+                   (pr-str {:jdbc (old-options-jdbc old)}) "; see " error/changelog)
+              old))
+     (when (contains? opts :send)
+       (when-not (map? (:send opts))
+         (fail! (str ":send is a map of classes to types, {clojure.lang.Keyword :unknown}; got " (pr-str (:send opts))) (:send opts)))
+       (doseq [[c t :as e] (:send opts)]
+         (cond (not (class? c))
+               (fail! (str ":send's key " (pr-str c) " is no class; a key is the class of a value sent (String, clojure.lang.Keyword)") e)
+               (and (some? t) (not (sent-name t)))
+               (fail! (str ":send's " (pr-str c) " goes as " (pr-str t) ", which is no type of docs/types.md, an array of one (\"bigint[]\")"
+                           " or :unknown for a value sent untyped (an enum's or a domain's value too)"
+                           (when (string? t) (error/did-you-mean (some-> (error/suggest t (mapcat (fn [[n e]] (cons n (:aliases e))) types/types)) pr-str))))
+                      e))))
+     (let [{:keys [builder-fn label-fn] :as jdbc} (:jdbc opts)]
+       (doseq [k (when (map? jdbc) (keys jdbc))
+               :let [meant (when-not (next-jdbc-options k) (error/suggest k jdbc-read))]
+               :when meant]
+         (error/fail! :pgmalli.error/invalid-options
+                      (str "pgmalli options: :jdbc's " (pr-str k) " is no next.jdbc option" (error/did-you-mean meant))
+                      {:given [k] :did-you-mean [meant]}))
+       (doseq [k [:label-fn :qualifier-fn] :let [f (get jdbc k)] :when (symbol? f)]
+         (fail! (str ":jdbc's " k " is the function next.jdbc takes, not its symbol: " (pr-str f)
+                     " (a symbol is the builder-fn's alone, for babashka)")
+                (select-keys jdbc [k])))
+       (when builder-fn
+         (let [how (builder builder-fn)]
+           (cond (nil? how)
+                 (fail! (str ":jdbc's :builder-fn is none of next.jdbc.result-set's or next.jdbc.optional's map builders ("
+                             (str/join ", " (distinct (sort (map name (keys builders))))) "), whose keys pgmalli knows"
+                             (when-let [meant (and (symbol? builder-fn) (some #(when (= (name builder-fn) (name %)) %) (keys builders)))]
+                               (str "; a symbol names one fully qualified, " (pr-str meant))))
+                        (select-keys jdbc [:builder-fn]))
+                 (and (= :modified (:fn how)) (not label-fn))
+                 (fail! ":jdbc's modified builder takes :label-fn, as next.jdbc's does" (select-keys jdbc [:builder-fn]))))))
+     (checked! @options opts)
+     opts)))
 
 (def ^:private class-order (zipmap (map first accept/class-types) (range)))
 
@@ -301,7 +336,7 @@
         head (if (vector? schema) (first schema) schema)
         ;; a domain's base comes with its typmod: "bit(4)"
         driver-read (when-not (array-column? schema) (:read (types/entry (shape/type-name {:pg/type t}))))]
-    (or (shape/read-as read schema)
+    (or (shape/read-as (canonical-read read) schema)
         (cond (= :bit driver-read) (if (or (= 1 (:max (second schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
               (= :or-double driver-read) [:or (driver-type schema opts read-type) ['double? {:pg/type t}]]
               driver-read [driver-read {:pg/type t}]
@@ -312,6 +347,12 @@
 
 (declare write-type)
 
+(def pg-object
+  "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
+   the type its getType names, which is known at run time alone."
+  (class-fn "org.postgresql.util.PGobject"
+            (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
+
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
    column; :unnest, unnest(?) assigned): the collections and Java arrays :send sends as an
@@ -319,8 +360,9 @@
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
    element type is one of t's own (accept/holds?), as a column takes a value, its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
-   an array of that type alone. ::element-type in opts names t's type where t's schema names
-   none (numeric[]'s decimal?). :any without one."
+   an array of that type alone; where t takes a PGobject (of a type known at run time alone), a
+   PGobject too. ::element-type in opts names t's type where t's schema names none (numeric[]'s
+   decimal?). :any without one."
   [t opts use]
   ;; t may take NULL (a nullable column's elements); its type is the one without
   ;; an array column names its elements' type (a domain's array its base's), which goes first
@@ -349,7 +391,7 @@
         alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)
                              a (shape/alternatives s)]
                          (clojure.walk/postwalk-replace {:pgmalli/element (element sent)} a)))]
-    (shape/either alts :any)))
+    (shape/either (cond-> alts (and (seq alts) (some #{pg-object} (shape/alternatives (shape/non-null t)))) (concat [pg-object])) :any)))
 
 (defn- base-type-name
   "The type a column schema names, on itself or on the base of its [:and base checks...]
@@ -492,7 +534,7 @@
         x (when (array-column? s) (last s))
         target (shape/ref-target schemas x)
         s (if (and target (not= :enum (shape/head target))) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
-    (or (shape/read-as read s)
+    (or (shape/read-as (canonical-read read) s)
         ;; PostgreSQL describes a domain's column as its base type's, which a ReadableColumn sees
         (when (= :keyword (:enum read)) (keyword-enum schemas s))
         (read-type (through-domain schemas s opts read-type) opts))))
@@ -518,12 +560,6 @@
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
     (write-type (through-domain schemas s opts write-type) opts)))
 
-(def pg-object
-  "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
-   the type its getType names, which is known at run time alone."
-  (class-fn "org.postgresql.util.PGobject"
-            (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
-
 (defn column-write-type
   "column-write-type*: a column the driver reads as a PGobject (json, jsonb, citext, bit(n > 1))
    takes one too, so a value read is written back."
@@ -540,7 +576,7 @@
   "The [:map ...] of a row as a JDBC result builder returns it; the options are documented on
    pgmalli.core/as-read."
   [registry name opts]
-  (options! opts)
+  (options! registry opts)
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         table (when (or (:pg/table props) (:pg/view props)) (shape/schema-and-name name))

@@ -171,17 +171,30 @@
         t (cond (or (keyword? f) (symbol? f) (map? f)) [f] (vector? f) f)]
     t))
 
+(defn- join-by-entries
+  "[join-key path clauses] of each join of :join-by v, as sql/format reads it (join types and
+   their clauses in turn, or maps of them), the join-key its join-keys' (or :cross-join), path
+   where its clauses sit in v; none for code."
+  [v]
+  (let [k #(let [n (keyword (name %))] (get {:left :left-join :right :right-join :inner :inner-join :outer :outer-join :full :full-join :cross :cross-join} n n))]
+    (cond (and (vector? v) (every? map? v)) (for [[i m] (map-indexed vector v), [j c] m :when (ident? j)] [(k j) [i j] c])
+          (and (vector? v) (even? (count v)) (every? ident? (take-nth 2 v))) (for [i (range 0 (count v) 2)] [(k (nth v i)) [(inc i)] (nth v (inc i))]))))
+
 (defn- joins
-  "[join-key item condition] of every join of a statement, in join-keys' order."
+  "[join-key item condition] of every join of a statement, in the order sql/format writes them:
+   :join-by's, then join-keys'; a cross join's condition nil."
   [stmt]
-  (for [k join-keys :let [j (get stmt k)] :when (vector? j), [t c] (partition 2 j)] [k t c]))
+  (concat (for [[k _ c] (join-by-entries (:join-by stmt)) :when (vector? c)
+                [t c] (if (= :cross-join k) (map vector c (repeat nil)) (partition 2 c))]
+            [k t c])
+          (for [k join-keys :let [j (get stmt k)] :when (vector? j), [t c] (partition 2 j)] [k t c])))
 
 (defn- table-items
   "The table items of a statement's FROM (and USING, CROSS JOIN) and joins."
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? arg-key loose expression-type accepted-type driver-schema quoted? call-parts reached own-type-schema type-call registry-type operator? formatted-name)
+(declare insert-parts star? arg-key loose expression-type accepted-type quoted? call-parts reached own-type-schema type-call registry-type operator? formatted-name)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -190,11 +203,11 @@
   (if (quoted? format) #{[:default]} #{:default [:default]}))
 
 (defn- code-sources?
-  "Whether code (a list), or :join-by (read nowhere here), brings in some of a statement's
-   tables, whose columns the data then does not show."
+  "Whether code (a list) brings in some of a statement's tables, whose columns the data then
+   does not show."
   [stmt]
-  (boolean (or (contains? stmt :join-by)
-               (some seq? (concat (keep stmt (concat from-keys join-keys write-keys))
+  (boolean (or (some seq? (concat (keep stmt (concat from-keys join-keys write-keys [:join-by]))
+                                  (map last (join-by-entries (:join-by stmt)))
                                   (from-items stmt from-keys)
                                   (map second (joins stmt))))
                ;; an :insert-into target insert-parts finds no table in
@@ -596,6 +609,12 @@
                    (map-indexed (fn [i t] [[k i] t (if (lateral? t) :lateral :outer)]) v)
                    (and (vector? v) (some #{k} join-keys))
                    (map-indexed (fn [i t] [[k i] t (cond (odd? i) :own (lateral? t) :lateral :else :outer)]) v)
+                   (and (= :join-by k) (seq (join-by-entries v)))
+                   (for [[jk p c] (join-by-entries v)
+                         part (if (vector? c)
+                                (map-indexed (fn [i t] [(into [k] (conj p i)) t (cond (and (odd? i) (not= :cross-join jk)) :own (lateral? t) :lateral :else :outer)]) c)
+                                [[(into [k] p) c :own]])]
+                     part)
                    (some #{k} from-keys) [[[k] v :outer]]
                    ;; code builds the joins: their conditions, which see the statement's tables, are in it
                    :else [[[k] v :own]])]
@@ -1439,9 +1458,9 @@
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
    assigned or under equality-ops; and, where :send sends a String typed (varchar, pgjdbc's
-   default), a string HoneySQL sends as a parameter (not inlined, not cast) to a column
-   PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar): a
-   literal, or an argument to an enum column or to one whose own values are strings."
+   default), a string literal HoneySQL sends as a parameter (not inlined, not cast; [:lift s]
+   too) to a column PostgreSQL takes no such string for (enum = varchar does not exist, nor inet
+   = varchar). A named argument is arg-types', which types it by the class sent."
   [registry ps opts]
   (let [uses (concat (for [[op side value chain] (comparison-sides ps)
                            :when (not (like-ops op))
@@ -1449,36 +1468,29 @@
                            :when (or s (column-keyword? side))]
                        {:col side :value value :op op :schema s})
                      (for [{:keys [assign x target] :as a} (assignments ps) :when (seq target)
-                           :let [{s :schema :keys [nullable?]} (assigned-column registry a)]]
-                       {:col assign :value x :assigned? true :schema s :nullable? nullable?}))
+                           :let [{s :schema} (assigned-column registry a)]]
+                       {:col assign :value x :assigned? true :schema s}))
         sends (jdbc/string-sends opts)
         typed? (not= :unknown (jdbc/sent-type "" opts))]
-    (concat
-     ;; an argument to an enum type's column, or to one whose own values are strings: a String,
-     ;; which goes typed unless :send sends it untyped (stringtype=unspecified)
-     (for [{:keys [col value assigned? nullable?] s :schema} uses
-           :let [k (param-key value)] :when (and k typed?)
-           :let [t (some->> s (uncast-type registry))]
-           ;; one assigned where NULL may go may be nil, which PostgreSQL takes
-           :when (and t (not (takes-string? registry s assigned? sends)) (not nullable?)
-                      (or (enum-type registry s) (some #(= :string (shape/kind %)) (shape/alternatives (driver-schema registry jdbc/column-write-type s opts)))))]
-       {:kind :uncast-string :column col :arg k :type t})
-     (for [{:keys [col value assigned? op] s :schema} uses
-           :let [strings? (or (string? value) (and (vector? value) (every? string? value)))
-                 numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
-                 values (cond (or strings? numbers?) (if (vector? value) value [value])
-                              (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
-                 allowed (when s (enum-values registry (if assigned? s (compared-schema registry s op))))
-                 uncast (when (and s typed? strings? (not (takes-string? registry s assigned? sends)))
-                          (uncast-type registry s))]
-           :when (seq values)
-           v values
-           :let [invalid? (and allowed (not (some #(label= % v) allowed)))]
-           p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
-              ;; a value outside the enum fails however it is sent
-              (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
-           :when p]
-       p))))
+    (for [{:keys [col assigned? op] s :schema :as use} uses
+          :let [lifted? #(and (vector? %) (= :lift (first %)) (string? (second %)))
+                unlift #(if (lifted? %) (second %) %)
+                value (let [v (:value use)] (if (and (vector? v) (not (keyword? (first v)))) (mapv unlift v) (unlift v)))
+                strings? (or (string? value) (and (vector? value) (every? string? value)))
+                numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
+                values (cond (or strings? numbers?) (if (vector? value) value [value])
+                             (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
+                allowed (when s (enum-values registry (if assigned? s (compared-schema registry s op))))
+                uncast (when (and s typed? strings? (not (takes-string? registry s assigned? sends)))
+                         (uncast-type registry s))]
+          :when (seq values)
+          v values
+          :let [invalid? (and allowed (not (some #(label= % v) allowed)))]
+          p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
+             ;; a value outside the enum fails however it is sent
+             (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
+          :when p]
+      p)))
 
 (defn- problems
   "The problems of one statement: unknown tables; columns selected, returned, inserted, set
@@ -1494,7 +1506,12 @@
         known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
                 (str/join "." (shape/schema-and-name k)))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
-                       :let [same-name (sort (filter #(= (table-name %) (table-name table)) known))
+                       :let [_ (when-not (some shape/generated-name? (keys (::schemas registry)))
+                                 (error/fail! :pgmalli.error/not-a-registry
+                                              (str "the registry holds no schema pgmalli generates, so table " table
+                                                   " is unknown; pass (pgmalli.core/registry \"<schema>\")")
+                                              {:given table}))
+                             same-name (sort (filter #(= (table-name %) (table-name table)) known))
                              meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
                    (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
                  (column-problems registry scopes stmt ps opts)
@@ -1505,7 +1522,7 @@
 (def ^:private read-clauses
   "The clauses check, arg-types and row-schema read."
   (into statement-keys (concat with-keys from-keys join-keys
-                               [:where :having :group-by :order-by :limit :offset :values :columns :set
+                               [:join-by :where :having :group-by :order-by :limit :offset :values :columns :set
                                 :on-conflict :do-update-set :returning])))
 
 (def ^:private ignored-clauses
@@ -1544,14 +1561,22 @@
 (defn- as-vectors
   "x with each list (or other seq) of no symbol and no list in it a vector: HoneySQL reads a
    sequential as it reads a vector, and code is a list with a symbol in it ((vec cols),
-   (:cols opts))."
+   (:cols opts)); and {:table t}, TABLE t, as the SELECT * FROM t it is (docs 7.2.1). The
+   rows of :values, :set and :do-update-set are maps of columns, not statements."
   [x]
-  (cond (seq? x) (if (and (seq x) (not-any? #(or (symbol? %) (seq? %)) x))
-                   (mapv as-vectors x)
-                   (apply list (map as-vectors x)))
-        (map? x) (into (empty x) (map (fn [[k v]] [k (as-vectors v)])) x)
-        (branch? x) (into (empty x) (map as-vectors) x)
-        :else x))
+  (let [row #(if (map? %) (update-vals % as-vectors) (as-vectors %))]
+    (cond (seq? x) (if (and (seq x) (not-any? #(or (symbol? %) (seq? %)) x))
+                     (mapv as-vectors x)
+                     (apply list (map as-vectors x)))
+          (map? x) (let [m (into (empty x) (map (fn [[k v]] [k (cond (#{:set :do-update-set} k) (row v)
+                                                                      (and (= :values k) (or (vector? v) (and (seq? v) (every? map? v)))) (mapv row v)
+                                                                      :else (as-vectors v))]))
+                                 x)]
+                     (if (and (contains? m :table) (not (statement? m)) (not (contains? m :from)))
+                       (-> m (dissoc :table) (assoc :select [:*] :from [(:table m)]))
+                       m))
+          (branch? x) (into (empty x) (map as-vectors) x)
+          :else x)))
 
 (defn- query!
   "body as HoneySQL query data (as-vectors), when it is that (a map, or code holding maps); an
@@ -1608,7 +1633,7 @@
    docs/queries.md#options. Throws when body is no HoneySQL data."
   ([registry body] (check registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)
@@ -1631,7 +1656,7 @@
    ;; => {:reads #{\"public.groups\"}, :writes #{\"public.users\"}}"
   ([registry body] (tables registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          {:keys [schema] :as opts} (with-defaults registry opts)
@@ -1713,7 +1738,7 @@
       (cond (= :and h) (let [base (loose (first children))]
                          (if-let [pg (and (vector? base) (not (map? (second base))) (:pg/type p))]
                            (into [(first base) {:pg/type pg}] (rest base))
-                           (if (and (keyword? base) (:pg/type p)) [base {:pg/type (:pg/type p)}] base)))
+                           (if (and (ident? base) (:pg/type p)) [base {:pg/type (:pg/type p)}] base)))
             (= :maybe h) [h (loose (last t))]
             ;; an array column's :pg/type is what tells the driver's java.sql.Array from :read's vector
             (#{:vector :sequential :set :pg/array} h) (if-let [pg (:pg/type p)] [h {:pg/type pg} (loose (last t))] [h (loose (last t))])
@@ -2093,7 +2118,7 @@
    docs/queries.md#options."
   ([registry body] (arg-types registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)
@@ -2386,12 +2411,11 @@
   (let [qualified? (:qualified? (jdbc/row-keys opts))
         sc (first chain)
         ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw or code
-        ;; there may be one, and a join :join-by builds (read nowhere here) may be outer
-        regrouped? (or (contains? stmt :join-by)
-                       (let [g (:group-by stmt)]
-                         (or (seq? g)
-                             (some #(or (seq? %) (and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))))
-                                   (vectorish g)))))
+        ;; there may be one
+        regrouped? (let [g (:group-by stmt)]
+                     (or (seq? g)
+                         (some #(or (seq? %) (and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))))
+                               (vectorish g))))
         ;; table nil: an expression comes from no table, and the driver keys it unqualified
         entry (fn [table column schema nullable? props]
                 (jdbc/row-entry (jdbc/row-key table column opts) props (output-type registry schema opts)
@@ -2580,7 +2604,7 @@
    the table PostgreSQL traces it to. Options: docs/queries.md#options."
   ([registry body] (row-schema registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)]
      (when (map? body)
        (let [registry (reading registry)
@@ -2609,7 +2633,7 @@
 (def ^:private row-count-keys
   "The clauses row-count reads, and those that change no count."
   (into #{:select :select-distinct :from :where :group-by :having :order-by :limit :offset :with :returning
-          :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :for}
+          :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :for :join-by}
         join-keys))
 
 (defn- plain-value?
@@ -2656,7 +2680,7 @@
    :values has rows of an INSERT returning (a trigger, a rule or ON CONFLICT may skip one); at most
    :limit, from none where a parameter or code gives the limit."
   [registry stmt {:keys [schema] :as opts}]
-  ;; a clause this does not read (:join-by, :fetch, a set operation ...) may change the count
+  ;; a clause this does not read (:fetch, a set operation ...) may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)) (not (code-sources? stmt)))
     (let [write? (some #(contains? stmt %) write-keys)
           items (map bare (selected-items stmt))
@@ -2697,7 +2721,7 @@
    ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:users/email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}}"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (let [body (query! body)
          registry (reading registry)
          opts (with-defaults registry opts)]
@@ -2708,7 +2732,7 @@
       :tables (tables registry body opts)})))
 
 (defn query-schema
-  "[:=> [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
+  "[:=> {:pgmalli/problems [...]} [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
    and running body, of what analyze tells: the args' types (:any for a key the query lacks), the
    row (:any when it cannot be resolved), [:sequential {:max n} row] where the data tells how
    many rows (docs/queries.md#function-schemas): under {:result :one} no [:maybe] where it tells
@@ -2717,13 +2741,12 @@
    (query-schema registry [:db :id] {:select [:email] :from [:users] :where [:= :id :?id]})
 
    The problems of check, and a query argument args lack (:missing-arg), are the schema's
-   :pgmalli/problems property, not an error: the vector is then one longer, so read its parts
-   with m/children. The return is what execute! returns on a datasource or connection, under
+   :pgmalli/problems property ([] for none), not an error. The return is what execute! returns on a datasource or connection, under
    {:result :one} what execute-one! returns. Options: docs/queries.md#options. Throws when args are
    not keywords or symbols."
   ([registry args body] (query-schema registry args body {}))
   ([registry args body {:keys [result] :as opts}]
-   (jdbc/options! opts)
+   (jdbc/options! registry opts)
    (when-not (and (sequential? args) (every? #(or (keyword? %) (symbol? %)) args))
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords or symbols ([:db :id]), not " (pr-str args))
@@ -2731,7 +2754,7 @@
    (let [{types :args :keys [row rows problems]} (analyze registry body opts)
          problems (into problems
                         (for [k (sort-by str (data-args (query! body))) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))]
-     (into (cond-> [:=>] (seq problems) (conj {:pgmalli/problems problems}))
+     (into [:=> {:pgmalli/problems problems}]
            [(into [:cat] (map #(get types % :any)) args)
             (let [{:keys [min max]} rows]
               (cond (nil? row) :any
@@ -2742,15 +2765,18 @@
 ;;; what an application writes
 
 (defn- written-keys
-  "The keys of column (a keyword, or a string where the registry keys it so) in a :values or :set
-   map that HoneySQL writes to column under sql/format's opts (the format), the first as reading
-   keys it: the key :jdbc's builder reads column as (unqualified), the column's keyword and its
-   kebab spelling (:group-id), each where HoneySQL writes it as column (unquoted, PostgreSQL folds
-   a name to lower case); else the column's name as a string, which HoneySQL quotes."
-  [column {:keys [format] :as opts}]
+  "The keys of column (a keyword, or a string where the registry keys it so) of table
+   (\"schema.table\") in a :values or :set map that HoneySQL writes to column under sql/format's
+   opts (the format), the first as reading keys it unqualified: the key :jdbc's builder reads
+   column as, unqualified and qualified by the table, the key next.jdbc's default builder reads
+   it as (:users/email), the column's keyword and its kebab spelling (:group-id), each where
+   HoneySQL writes it as column (it drops a keyword's namespace; unquoted, PostgreSQL folds a
+   name to lower case); and the column's name as a string, which HoneySQL quotes."
+  [table column {:keys [format] :as opts}]
   (let [n (name column)
         writes? #(= n (first (formatted-name % format false)))]
-    (or (seq (filter writes? (distinct [(jdbc/row-key nil n opts) (keyword n) (keyword (str/replace n "_" "-"))])))
+    (or (seq (filter writes? (distinct [(jdbc/row-key nil n opts) (keyword n) (keyword (str/replace n "_" "-"))
+                                        (jdbc/row-key table n opts) (jdbc/row-key table n {}) n])))
         [(if (or (string? column) (writes? n)) n (keyword n))])))
 
 (defn- one-value
@@ -2770,14 +2796,16 @@
 (defn- expression
   "What HoneySQL writes in :values or :set as an expression, a vector or list headed by a keyword
    but :default ([:cast \"a\" :t], [:now]): [:lift v] v as one parameter, of type a; another
-   untyped; and words, the keywords it writes as one there (:current_timestamp, a column in :set)."
+   untyped; a map of clauses, which it writes as a subquery, untyped; and words, the keywords it
+   writes as one there (:current_timestamp, a column in :set)."
   [a words]
-  (let [e [:alt {:error/message "should be a HoneySQL expression, a vector headed by a keyword"}
-           [:cat [:= :lift] a]
-           [:cat [:and :keyword [:not [:enum :lift :default]]] [:* [:or :nil :some]]]]]
-    (if (seq words)
-      [:or e (into [:enum {:error/message "should be a word HoneySQL writes as one, such as :current_timestamp"}] (sort words))]
-      e)))
+  (cond-> [:or
+           [:alt {:error/message "should be a HoneySQL expression, a vector headed by a keyword"}
+            [:cat [:= :lift] a]
+            [:cat [:and :keyword [:not [:enum :lift :default]]] [:* [:or :nil :some]]]]
+           [:map-of {:min 1 :error/message "should be a subquery, a map of HoneySQL clauses"}
+            (into [:enum] (sort (into read-clauses (concat ignored-clauses (some-> (honeysql 'honey.sql/clause-order) (apply [])))))) [:or :nil :some]]]
+    (seq words) (conj (into [:enum {:error/message "should be a word HoneySQL writes as one, such as :current_timestamp"}] (sort words)))))
 
 (defn- generated-values
   "t without the values of a class alone (a PGobject), which malli does not generate; nil where
@@ -2798,6 +2826,7 @@
   [r name derived opts]
   (when-let [d (get (::schemas r) (shape/derived-name name derived))]
     (let [s (get (::schemas r) name)
+          table (:pg/table (shape/row-props s))
           written (shape/column-entries d)
           default (into [:enum] (sort-by vector? (default-values (:format opts))))
           ;; the columns the database may fill: optional in what an INSERT may carry
@@ -2814,10 +2843,10 @@
                          :let [a (cond-> (accepted-type r c :assign (assoc opts ::keywords-columns true)) (or (shape/maybe? c) triggered?) nullable)
                                t (one-value a)
                                plain (if (fills k) [:or t default] t)]]
-                     [(written-keys k opts) (not (or (:optional props) triggered?)) [:or plain (expression a words)] (generated-values plain)])
+                     [(written-keys table k opts) (not (or (:optional props) triggered?)) [:or plain (expression a words)] (generated-values plain)])
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-                     [(written-keys k opts) false default default]))
+                     [(written-keys table k opts) false default default]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
           one-key (into [:map {:closed true}] (for [[[k] required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
@@ -2832,16 +2861,19 @@
              (into [:map {:closed true}] (for [[ks _ t] columns, k ks] [k {:optional true} t]))]
             (into (for [[ks required?] columns :when (and required? (next ks))]
                     (into [:or] (for [k ks] [:map [k :some]]))))
-            (into (for [[ks] columns, [i k] (map-indexed vector ks), k2 (drop (inc i) ks)]
-                    [:not {:error/message (str "HoneySQL writes " (pr-str k) " and " (pr-str k2) " to one column, twice")}
-                     [:map [k [:or :nil :some]] [k2 [:or :nil :some]]]]))
+            (into (for [[ks] columns :when (next ks)]
+                    [:not {:error/message (str "HoneySQL writes " (str/join ", " (map pr-str (butlast ks))) " and " (pr-str (last ks))
+                                               " to one column; give one of them")}
+                     (shape/either (for [[i k] (map-indexed vector ks), k2 (drop (inc i) ks)]
+                                     [:map [k [:or :nil :some]] [k2 [:or :nil :some]]])
+                                   nil)]))
             (cond-> (= "update" derived) (conj nonempty)))))))
 
 (defn- written-row
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
    names it, in :schema); an error naming what was meant for another name."
   [registry name derived what opts]
-  (jdbc/options! opts)
+  (jdbc/options! registry opts)
   (when-not (keyword? name)
     (error/fail! :pgmalli.error/invalid-options
                  (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
@@ -2872,7 +2904,9 @@
    argument: each column as an argument assigned to it, keyed by one of the keys HoneySQL writes
    to the column (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
-   (generated, identity ALWAYS) taking :default alone. Where a BEFORE row trigger runs for the
+   (generated, identity ALWAYS) taking :default alone. A column takes a HoneySQL expression
+   too, untyped ([:now], [:+ :n 1]), an SQL word (:current_timestamp), a map of clauses
+   (a subquery), and [:lift v] with v of its type. Where a BEFORE row trigger runs for the
    write, every column is optional and takes nil. Options: docs/queries.md#options.
 
    (values-schema registry :users)"
@@ -2913,14 +2947,13 @@
                    (str ":values row " row " has " values " values for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column value allowed]}]
                    (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
-   :uncast-string (fn [{:keys [column value arg type]}]
-                    (let [what (if arg (str "argument " arg) (pr-str value))]
-                      (str what " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
-                           " (HoneySQL sends a string as a parameter, typed as :send sends it: varchar under pgjdbc's default);"
-                           " write [:cast " (if arg (str ":?" (name arg)) (pr-str value)) " "
-                           (if (types/element type) (str "[:raw " (pr-str type) "]") (str ":" type))
-                           "], or pass {:send {String :unknown}}"
-                           " when the connection sets stringtype=unspecified")))
+   :uncast-string (fn [{:keys [column value type]}]
+                    (str (pr-str value) " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
+                         " (HoneySQL sends a string as a parameter, typed as :send sends it: varchar under pgjdbc's default);"
+                         " write [:cast " (pr-str value) " "
+                         (if (types/element type) (str "[:raw " (pr-str type) "]") (str ":" type))
+                         "], or pass {:send {String :unknown}}"
+                         " when the connection sets stringtype=unspecified"))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
@@ -2937,8 +2970,9 @@
 
    (is (= [] (check registry q)) (humanize (check registry q)))"
   [problems]
-  (mapv (fn [{:keys [kind in] :as p}]
-          (str (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))
+  (mapv (fn [{:keys [kind in var] :as p}]
+          (str (when var (str (symbol var) ": "))
+               (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))
         problems))
 
 (defn schema-problems
@@ -2950,7 +2984,10 @@
   ([] (schema-problems {}))
   ([{:keys [ns] :or {ns (all-ns)}}]
    (vec (for [n (if (sequential? ns) ns [ns])
-              [_ v] (sort-by key (ns-interns (the-ns n)))
+              [_ v] (sort-by key (ns-interns (or (if (symbol? n) (find-ns n) n)
+                                                 (error/fail! :pgmalli.error/invalid-options
+                                                              (str "schema-problems reads loaded namespaces; " (pr-str n) " is none (require it first)")
+                                                              {:given n}))))
               :let [s (:malli/schema (meta v))
                     props (cond (satisfies? malli.core/Schema s) (malli.core/properties s)
                                 (and (vector? s) (map? (second s))) (second s))]

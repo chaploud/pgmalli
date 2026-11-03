@@ -319,9 +319,11 @@ can match no row ([docs/queries.md](docs/queries.md#stricter-than-postgresql)):
 ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]} {:kind :enum-literal, :column :status, :value "gone", :allowed ["active" "closed"]}]
 ```
 
-HoneySQL sends a string as a parameter, and pgjdbc sends it as `varchar`, which no enum column
-takes. Cast it, or tell `h/check` your connection sends a `String` untyped
-(`stringtype=unspecified`):
+HoneySQL sends a string literal as a parameter, and pgjdbc sends it as `varchar`, which no enum
+column takes. Cast it, or tell `h/check` your connection sends a `String` untyped
+(`stringtype=unspecified`). Pass the same `:send` to every function of `pgmalli.honeysql`:
+under pgjdbc's default, an argument compared with or assigned to an enum column takes a
+`PGobject` alone ([docs/queries.md](docs/queries.md#what-your-application-sends)).
 
 ```clojure
 (h/check registry {:select [:id] :from [:users] :where [:= :status "active"]})
@@ -351,7 +353,7 @@ The problems it reports:
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list when written into the column or compared with `=`, `IN` or `IS NOT DISTINCT FROM`; with `:allowed` |
-| `:uncast-string` | a string sent typed (`varchar` under pgjdbc's default, or the type `:send` sends it as) where the column's type takes none (an enum, a number, a date ...); not where `:send` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}` |
+| `:uncast-string` | a string literal (or `[:lift "s"]`) sent typed (`varchar` under pgjdbc's default, or the type `:send` sends it as) where the column's type takes none (an enum, a number, a date ...); not where `:send` sends a string untyped (`stringtype=unspecified`) or under `:format {:inline true}`. A named argument (`:?status`) is `h/arg-types`', which types it by the class sent |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
@@ -377,7 +379,11 @@ Check every query of a project in one test:
       (is (= [] problems) (str k ": " (h/humanize problems))))))
 ```
 
-[docs/queries.md](docs/queries.md) covers subqueries, CTEs, code in a query and argument types.
+[docs/queries.md](docs/queries.md) covers subqueries, CTEs, code in a query, the types of the
+arguments and of the row, a row written into a table (`h/values-schema`, `h/set-schema`),
+`h/tables` (the tables a query reads and writes), `h/params-schema` (the `:params` map of
+`sql/format`), the options, and what pgmalli checks more strictly than PostgreSQL or not at
+all.
 
 ## Function schemas for queries
 
@@ -388,7 +394,7 @@ HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
 
 (h/query-schema registry [:id] find-user-q)
-;; => [:=> [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:users/id [:int #:pg{:identity :always, :type "bigint"}]] [:users/email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 ```
 
 Put it on the function as a schema object over the registry. `malli.instrument` and
@@ -509,14 +515,13 @@ file and lists them all:
 
 ## Overrides
 
-`:overrides` in `pgmalli.edn` replaces what pgmalli generates. A constraint name replaces
-that CHECK, or `{:skip reason}` leaves it out; use it for the CHECKs listed in `:unrendered`.
-A type keyword replaces the schema of every column of that type, such as `:inet`, which is
-otherwise `:any`; it is the type's name, an alias of [docs/types.md](docs/types.md) or a
-HoneySQL cast's spelling (`:timestamptz`, `:timestamp-with-time-zone`). An array type has no
-keyword: override its columns. A keyword `:schema.table/column` replaces the schema of that one column's
-value, its type's schema with it (an enum's, a `varchar(n)`'s length); it comes before an
-override of the type:
+`:overrides` in `pgmalli.edn` replaces what pgmalli generates:
+
+| key | replaces |
+|---|---|
+| a constraint name (`"chk_scores"`) | that CHECK; `{:skip reason}` leaves it out. Use it for the CHECKs listed in `:unrendered` |
+| a type keyword (`:inet`) | the schema of every column of that type, such as `:inet`, otherwise `:any`. The type's name, an alias of [docs/types.md](docs/types.md) or a HoneySQL cast's spelling (`:timestamptz`, `:timestamp-with-time-zone`); an array type has none: override its columns |
+| `:schema.table/column` | the schema of that one column's value, its type's schema with it (an enum's, a `varchar(n)`'s length); it comes before an override of the type |
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
@@ -529,16 +534,14 @@ override of the type:
 pgmalli still adds what the database says of the column: `[:maybe ...]` unless it is NOT
 NULL, its CHECKs, its default and `:pg/type`. The schema holds where values are read
 (`as-read`, `h/row-schema`) and written (`h/arg-types`, `h/values-schema`, `h/set-schema`),
-datasets included, but for a type the driver reads as an object of its own: an `inet`, read as a
-PGobject (an `hstore` as a `java.util.Map`), stays that object where it is read unless `:read`
-names what your extension reads it as (`{:read {"inet" :string}}`); the `:inet` override above
-holds for what is written. A json or jsonb column's driver object is a PGobject, so its shape is
-the parsed value's: it is read under `{:read {:json :parsed}}`, and an argument takes it for the
-classes `:send` sends as the column's type (`{clojure.lang.IPersistentMap "jsonb"}`). Without
-those, a read or an argument is the driver's object. `generate` checks every key against the
-schemas generated: a constraint name, a type of a column and a column must be theirs,
-`{:skip reason}` goes under a constraint name alone, and a value must be a malli schema (a
-qualified name passes, as your registry's). An error names the key meant.
+datasets included. A type the driver reads as an object of its own (`inet` and json as a
+PGobject, `hstore` as a `java.util.Map`) is that object where it is read unless `:read` names
+what your extension reads it as ([docs/reading-rows.md](docs/reading-rows.md#your-own-extensions)),
+and an argument takes the override's shape for the classes `:send` sends as the column's type
+([docs/queries.md](docs/queries.md#what-your-application-sends)). `generate` checks every key
+against the schemas generated: a constraint name, a type of a column and a column must be
+theirs, `{:skip reason}` goes under a constraint name alone, and a value must be a malli schema
+(a qualified name passes, as your registry's). An error names the key meant.
 
 A `[:ref ...]` to your own schema needs a registry holding it:
 

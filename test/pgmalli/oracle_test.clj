@@ -31,17 +31,7 @@
    (:false-positive, :return, :column, :arg), :id a pattern of the failure's signature (see
    failures). pending-entries-still-fail fails on an entry that no longer matches a failure, so
    a fix empties it."
-  [{:test :false-positive
-    :id #"^enum-arg params( instant| lenient)? uncast-string$"
-    :reason (str "check reports :uncast-string for an argument compared with an enum column under pgjdbc's default whatever it holds;"
-                 " arg-types takes a PGobject there (or NULL, which the oracle sends as it generates no PGobject), which PostgreSQL takes")
-    :repro "{:select [:id] :from [:users] :where [:= :mood :?m]} with :m nil"}
-   {:test :arg
-    :id #"^refused (matrix\.types\.[cd]_citext|shapes\.(name|mail)) \S+ date-time$"
-    :reason (str "a citext column (an extension's string type), or a domain over it, takes no class :send sends :unknown"
-                 " but String, where a text column takes it (:time/local-date for a LocalDate); PostgreSQL reads an untyped value there as citext")
-    :repro (str "(h/arg-types registry {:select [:id] :from [:shapes] :where [:= :name :?x]} {:send {java.time.LocalDate :unknown}})"
-                " gives [:or [:string {:pg/type \"citext\"}] PGobject]; with :nick (text), [:or [:string ...] :time/local-date]")}])
+  [])
 
 (defn- held
   "The pending entry of test that holds the failure of signature id, or nil."
