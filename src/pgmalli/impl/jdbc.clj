@@ -292,7 +292,8 @@
    element type is one of t's own (accept/holds?), as a column takes a value; :any without one."
   [t opts use]
   ;; t may take NULL (a nullable column's elements); its type is the one without
-  (let [p (some pg-type (shape/alternatives (shape/non-null t)))
+  ;; an array column names its elements' type (a domain's array its base's), which goes first
+  (let [p (or (::element-type opts) (some pg-type (shape/alternatives (shape/non-null t))))
         elem (some-> p types/entry :name)
         takes? (fn [sent]
                  (if (= :unknown sent)
@@ -330,7 +331,8 @@
    where read-type has the driver's object (:any)."
   [schema opts]
   (if (array-column? schema)
-    (array-type (write-type (last schema) opts) opts :assign)
+    ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
+    (array-type (write-type (last schema) opts) (assoc opts ::element-type (accept/element (pg-type schema))) :assign)
     (let [t (driver-type schema (dissoc opts :read) write-type)
           n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values whatever is sent
@@ -442,10 +444,15 @@
    driver takes its base."
   [schemas s opts]
   (let [;; an array's elements of an enum type are its labels: array-type takes an array of that type alone
-        s (if-let [e (when (array-column? s)
-                       (let [x (last s)] (when (and (vector? x) (= :ref (first x)) (= :enum (shape/head (get schemas (last x))))) x)))]
-            (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (remove map? (rest (get schemas (last e))))))
-            s)]
+        e (when (array-column? s) (let [x (last s)] (when (and (vector? x) (= :ref (first x))) x)))
+        target (some->> e last (get schemas))
+        s (cond (nil? target) s
+                (= :enum (shape/head target))
+                (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (remove map? (rest target))))
+                ;; a domain's array reads as its base type's
+                :else (if-let [base (some #(:pg/type (shape/column-props %)) [target (shape/domain-base target)])]
+                        (assoc-in s [1 :pg/type] (str base "[]"))
+                        s))]
     (write-type (through-domain schemas s opts write-type) opts)))
 
 (defn as-read

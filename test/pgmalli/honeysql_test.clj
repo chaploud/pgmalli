@@ -1794,3 +1794,11 @@
   (is (m/validate (:ns (args {:update :users :set {:nick [:cast :r.n :text]} :from [[[:unnest :?ids :?ns] [:r {:columns [:i :n]}]]] :where [:= :users.id :r.i]} (dissoc opts :send)))
                   (into-array String ["a"]) {:registry registry})
       "an array of what casts to the type"))
+
+(deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
+  (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric"} 'decimal? [:> 0]]
+                                          :pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
+                                                        [:nn [:maybe [:vector {:pg/type "numeric[]"} 'decimal?]]]
+                                                        [:dn [:maybe [:vector {:pg/type "dnum[]"} [:ref {:pg/type "dnum"} :pg.public/dnum]]]]]}})]
+    (doseq [c [:nn :dn]]
+      (is (m/validate (:p (h/arg-types reg {:update :z :set {c :?p} :where [:= :id 1]})) (long-array [1]) {:registry reg}) (name c)))))

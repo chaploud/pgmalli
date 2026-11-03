@@ -360,9 +360,14 @@
                                                WHERE k.contype = 'c' AND cardinality(k.conkey) = 1"] unqualified))
         list-of (fn [def] (when-let [[_ items] (re-find #"ARRAY\[(.*)\]" def)]
                             (vec (for [[_ s n] (re-seq #"'([^']*)'|(-?\d+(?:\.\d+)?)" items)] (if s s (bigdec n))))))]
-    (vec (for [{:keys [tbl col declared base enum domain writable notnull]}
+    (vec (for [{:keys [tbl col declared base enum domain domain_array writable notnull]}
                (jdbc/execute! conn ["SELECT c.relname AS tbl, a.attname AS col, format_type(a.atttypid, NULL) AS declared,
-                                       format_type(b.oid, NULL) AS base, b.typtype = 'e' AS enum, t.typtype = 'd' AS domain,
+                                       -- an array of a domain reads as an array of its base
+                                       CASE WHEN b.typcategory = 'A' THEN (SELECT format_type(coalesce(nullif(e.typbasetype, 0), e.oid), NULL) || '[]'
+                                                                           FROM pg_type e WHERE e.oid = b.typelem)
+                                            ELSE format_type(b.oid, NULL) END AS base,
+                                       b.typtype = 'e' AS enum, t.typtype = 'd' AS domain,
+                                       b.typcategory = 'A' AND (SELECT e.typtype = 'd' FROM pg_type e WHERE e.oid = b.typelem) AS domain_array,
                                        a.attgenerated = '' AND a.attidentity <> 'a' AS writable, a.attnotnull AS notnull
                                      FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid
                                      JOIN pg_namespace n ON n.oid = c.relnamespace JOIN pg_type t ON t.oid = a.atttypid
@@ -371,6 +376,8 @@
                                      ORDER BY 1, a.attnum"] unqualified)]
            {:table tbl :column col :declared declared :writable writable :notnull notnull
             :type (if enum (cond-> [:enum base] domain (conj {:domain? true})) (canonical {} base))
+            ;; compared, a domain's array is its own type, no array of the base's
+            :compared-type (when domain_array declared)
             :list (some (comp list-of :def) (checks [tbl col]))}))))
 
 (defn- matrix-queries
@@ -428,7 +435,7 @@
             places (vals (into (sorted-map) (map (juxt (comp pr-str :query) identity)) (concat (for [col cols [context q] (matrix-queries col)]
                                        (assoc col :context context :query q))
                                      [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}])))]
-        (vec (for [{:keys [context query column list notnull] t :type :as place} places
+        (vec (for [{:keys [context query column list notnull compared-type] t :type :as place} places
                    :let [s (try (some-> (:x (h/arg-types registry query)) (m/schema {:registry registry})) (catch Exception _ nil))]
                    :when s
                    v values
@@ -438,7 +445,12 @@
                          cast? (= :cast context)
                          takes? (and sent (if cast?
                                             (accept/accepts? t sent :cast)
-                                            (accept/holds? t (if (= :any context) (accept/element sent) sent) (if (#{:update :insert} context) :assign :compare))))
+                                            ;; an array assigned to an array column: element by element, as array-type reads it
+                                            (let [assign? (#{:update :insert} context)
+                                                  elements? (and assign? (string? t) (accept/element t) (string? sent) (accept/element sent))]
+                                              (accept/holds? (cond elements? (accept/element t) (and compared-type (not assign?)) compared-type :else t)
+                                                             (cond (= :any context) (accept/element sent) elements? (accept/element sent) :else sent)
+                                                             (if assign? :assign :compare)))))
                          refused? (not (try (m/validate s arg) (catch Exception _ false)))
                          ;; NULL in a NOT NULL column fails once a row is written; the table may have none
                          null-refused? (and (nil? v) notnull (#{:update :insert} context))
