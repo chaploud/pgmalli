@@ -2,6 +2,7 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [pgmalli.impl.types :as types]
+            [pgmalli.test-db :as test-db]
             [update-docs]
             [update-expected]))
 
@@ -45,3 +46,6 @@
   (is (= (:versions @types/catalog)
          (re-seq #"\d+" (second (re-find #"(?m)^\s+pg: \[(.*)\]" (slurp ".github/workflows/ci.yml")))))
       "a version added to or dropped from CI's matrix: run bb catalog"))
+
+(deftest a-test-run-removes-the-containers-of-its-hosts-dead-runs-alone
+  (is (= ["b"] (test-db/orphans ["a other:7" "b me:7" "c me:8" "d 7"] "me" #{8}))))

@@ -22,16 +22,29 @@
 (defn- free-port []
   (with-open [s (ServerSocket. 0)] (.getLocalPort s)))
 
-(def ^:private pid-label "pgmalli.test.pid")
+(def ^:private run-label "pgmalli.test.pid")
+
+(def ^:private host (delay (str/trim (:out (p/sh ["hostname"])))))
+
+(defn orphans
+  "The ids of the containers of lines (docker ps's \"id host:pid\") whose run is gone: of host, its
+   pid no live process (alive? says). A run of another host, which a devcontainer and the
+   machine running it are on one docker daemon, is left: its pid names no process here."
+  [lines host alive?]
+  (for [line lines
+        :let [[id label] (str/split line #" " 2)
+              [h pid] (some-> label (str/split #":" 2))
+              n (some-> pid parse-long)]
+        :when (and (= host h) n (not (alive? n)))]
+    id))
 
 (defn- remove-orphans!
   "Removes the containers of test runs whose process is gone: a run killed (SIGKILL) runs no
    shutdown hook."
   []
-  (let [{:keys [out]} (p/sh ["docker" "ps" "-a" "--filter" (str "label=" pid-label) "--format" (str "{{.ID}} {{.Label \"" pid-label "\"}}")])]
-    (doseq [[id pid] (map #(str/split % #" ") (str/split-lines (str/trim out)))
-            :let [h (some-> pid parse-long ProcessHandle/of)]
-            :when (and h (not (and (.isPresent h) (.isAlive ^ProcessHandle (.get h)))))]
+  (let [{:keys [out]} (p/sh ["docker" "ps" "-a" "--filter" (str "label=" run-label) "--format" (str "{{.ID}} {{.Label \"" run-label "\"}}")])]
+    (doseq [id (orphans (str/split-lines (str/trim out)) @host
+                        #(let [h (ProcessHandle/of %)] (and (.isPresent h) (.isAlive ^ProcessHandle (.get h)))))]
       (p/sh ["docker" "rm" "-f" "-v" id]))))
 
 (defn- start-container! []
@@ -41,7 +54,7 @@
     (let [port (free-port)
           name (str "pgmalli-test-" port)
           {:keys [exit]} (p/sh ["docker" "run" "-d" "--rm" "--name" name
-                                "--label" (str pid-label "=" (.pid (ProcessHandle/current)))
+                                "--label" (str run-label "=" @host ":" (.pid (ProcessHandle/current)))
                                 "-e" "POSTGRES_PASSWORD=pw" "-e" "POSTGRES_DB=t"
                                 ;; PGDATA off the image's VOLUME (/var/lib/postgresql/data up to 17),
                                 ;; which is on disk; 18 refuses a mount there
