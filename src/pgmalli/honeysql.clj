@@ -457,9 +457,15 @@
                                       (mapcat table-items (statements m))))
                         (when set-op (get stmt set-op)))
             op (when self? set-op)
-            stmt (if op (first (get stmt op)) stmt)]
-        (when (and (map? stmt) (not-any? #(contains? stmt %) with-keys) (or (nil? listed) (sequential? listed)))
-          [(cond-> stmt (seq before) (assoc k before)) (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
+            stmt (if op (first (get stmt op)) stmt)
+            ;; a body's own :with comes after the entries before it, which it sees; one of
+            ;; :with-recursive under a :with, or naming one of them again, is not read here
+            own (when (map? stmt) (some #(when (contains? stmt %) %) with-keys))
+            stmt (cond (or (empty? before) (nil? own)) (cond-> stmt (seq before) (assoc k before))
+                       (and (= k own) (vector? (get stmt own)) (not-any? (set (keep cte-name before)) (keep cte-name (get stmt own))))
+                       (assoc stmt k (into before (get stmt own))))]
+        (when (and (map? stmt) (or (nil? listed) (sequential? listed)))
+          [stmt (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
 (defn- function-columns
   "[[column schema origin] ...] of a function of pg_catalog or of a generated schema in FROM

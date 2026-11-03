@@ -122,8 +122,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `x = ANY(array)` (boolean), a function returning `void` (`[:any {:pg/type "void"}]`), a call
   whose overloads all return one type that is not polymorphic (`count`, `jsonb_build_object`)
   even of arguments it cannot type, and a set operation's column of a NULL member. A recursive
-  CTE keeps its types through a CTE or a subquery reading it, and a subquery reading a CTE is
-  read under it. A table or view of `pg_catalog` has its columns, from the snapshot.
+  CTE keeps its types through a CTE or a subquery reading it, a subquery reading a CTE is
+  read under it, and a CTE whose body has a `:with` of its own is read under the CTEs before it. A table or view of `pg_catalog` has its columns, from the snapshot.
 * The snapshot is read as of the PostgreSQL versions the registry's files were generated on
   (`:database-version`): a function of PostgreSQL 18 alone (`uuidv7`, `casefold`) is typed for a
   registry generated on 18, and a column of `pg_catalog`'s tables one supported version lacks

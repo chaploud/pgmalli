@@ -1795,6 +1795,10 @@
         "a column its SELECT does not give is none")
     (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}] [:b {:select [:id] :from [:a]}]] :select [:id] :from [:b]}))
         "a CTE reads the ones before it")
+    (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}]
+                                            [:b {:with [[:c {:select [:id] :from [:a]} :materialized]] :select-distinct [:id] :from [:c]} :materialized]]
+                                     :select [:id] :from [:b]}))
+        "a CTE's body with a :with of its own sees the ones before it too")
     (is (= [] (check {:with [[[:c {:columns [:x]}] {:select [:id :nick] :from [:users]}]] :select [:x :nick] :from [:c]}))
         "a CTE's name may rename its columns, by position")
     (is (= [:map [:x bigint]] (row {:with [[[:c {:columns [:x]}] {:select [[[:cast :id :bigint] :id]] :from [:users]}]] :select [:x] :from [:c]})))
