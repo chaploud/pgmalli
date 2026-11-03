@@ -1108,8 +1108,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reads HoneySQL query data" (check body)) (pr-str body))))
 
 (deftest a-row-of-a-table-the-registry-lacks-is-nil
-  (is (nil? (h/row-schema registry {:select [:id] :from [:users]})) ":schema left out: no sample here")
-  (is (= [{:kind :unknown-table :table "public.users"}] (h/check registry {:select [:id] :from [:users]}))))
+  (is (nil? (h/row-schema registry {:select [:id] :from [:users]})) ":schema left out: no sample here"))
 
 (deftest a-cte-code-builds-may-be-any-unqualified-table
   (is (= [:map [:id [:maybe :any]]] (row '{:with ctes :select [:id] :from :recent})))
@@ -1332,6 +1331,11 @@
          (check {:select [:u.scroe] :from [[:users :u]]})))
   (is (= [{:kind :unknown-column :column :zzz}] (check {:select [:zzz] :from [:users]}))
       "nothing close, nothing suggested"))
+
+(deftest a-table-of-another-schema-is-the-one-meant-when-schema-is-left-out
+  (let [ps (h/check registry {:select [:id] :from [:users]})]
+    (is (= [{:kind :unknown-table :table "public.users" :did-you-mean ["sample.users"]}] ps))
+    (is (= ["unknown table public.users; sample.users exists; pass {:schema \"sample\"}, or name it :sample.users"] (h/humanize ps)))))
 
 (deftest a-qualifier-no-table-or-alias-has-is-the-problem-with-the-alias-meant
   (is (= [{:kind :unknown-column :column :users.id :qualifier "users" :did-you-mean [:u.id]}]

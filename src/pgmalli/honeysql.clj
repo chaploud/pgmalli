@@ -68,6 +68,11 @@
 
 (defn- table-columns [registry table] ((::table-columns registry) table))
 
+(defn- table-name
+  "The table's name of \"schema.table\"."
+  [t]
+  (if-let [i (str/last-index-of t ".")] (subs t (inc i)) t))
+
 ;;; statements, CTEs and scope
 
 (def ^:private set-operation-keys [:union :union-all :intersect :except :except-all])
@@ -985,7 +990,7 @@
             meant (for [sc scopes
                         [alias {:keys [table order]}] sc
                         :when (or (and table (contains? (table-columns registry table) c)) (some #{c} order))
-                        :let [d (apply min (map #(error/edit-distance a %) (remove nil? [alias (some-> table (str/replace #"^.*\." ""))])))]
+                        :let [d (apply min (map #(error/edit-distance a %) (remove nil? [alias (some-> table table-name)])))]
                         :when (<= d 2)]
                     [(keyword (str alias "." c)) d])]
         [a (some->> (seq meant) (sort-by second) (map first) distinct (take 3) vec)]))))
@@ -1226,7 +1231,8 @@
         known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
                 (str/join "." (shape/schema-and-name k)))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
-                       :let [meant (error/suggestions table known 3)]]
+                       :let [same-name (sort (filter #(= (table-name %) (table-name table)) known))
+                             meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
                    (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
                  (column-problems registry scopes stmt opts)
                  (insert-problems registry stmt schema)
@@ -2323,10 +2329,12 @@
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
   {:unknown-table (fn [{:keys [table did-you-mean]}]
-                   (str "unknown table " table
-                        (if did-you-mean
-                          (str "; did you mean " (str/join " or " did-you-mean) "?")
-                          "; check its name, or :schema when it is in another schema")))
+                   (let [elsewhere (first (filter #(= (table-name %) (table-name table)) did-you-mean))]
+                     (str "unknown table " table
+                          (cond elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
+                                               ", or name it :" elsewhere)
+                                did-you-mean (str "; did you mean " (str/join " or " did-you-mean) "?")
+                                :else "; check its name, or :schema when it is in another schema"))))
    :unknown-column (fn [{:keys [column did-you-mean qualifier]}]
                      (str "unknown column " (column-name column)
                           (when qualifier (str "; no table or alias " qualifier " in the statement"))

@@ -340,7 +340,7 @@ The problems it reports:
 
 | `:kind` | for |
 |---|---|
-| `:unknown-table` | a table the registry lacks |
+| `:unknown-table` | a table the registry lacks; `:did-you-mean` lists a table of that name in another schema first |
 | `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`) |
 | `:ambiguous-column` | an unqualified column of two tables, with `:candidates` |
 | `:missing-required-column` | an INSERT lacking a required column |

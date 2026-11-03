@@ -106,6 +106,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   read as a vector, as HoneySQL reads it, where it was taken for code and left unchecked; a list
   with a symbol in it is still code.
 * `h/row-schema`'s `:pgmalli/untold` property is `:pgmalli/unknown-keys`.
+* `:unknown-table` lists a table of the same name in another schema first in `:did-you-mean`,
+  and `h/humanize` says to pass its `:schema`.
 * `:unknown-column` keeps the qualifier in `:did-you-mean` (`:u.nick` for `:u.nik`). A qualifier
   that names no table or alias of the statement is under `:qualifier`, with the alias probably
   meant (`:u.id` for `:users.id` under `[:users :u]`).
