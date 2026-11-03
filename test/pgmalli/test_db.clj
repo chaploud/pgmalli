@@ -29,10 +29,10 @@
           name (str "pgmalli-test-" port)
           {:keys [exit]} (p/sh ["docker" "run" "-d" "--rm" "--name" name
                                 "-e" "POSTGRES_PASSWORD=pw" "-e" "POSTGRES_DB=t"
-                                ;; the image's VOLUME (/var/lib/postgresql/data up to 17, its parent
-                                ;; from 18) would put the data on a disk volume docker keeps
+                                ;; PGDATA off the image's VOLUME (/var/lib/postgresql/data up to 17),
+                                ;; which is on disk; 18 refuses a mount there
                                 "--tmpfs" "/var/lib/postgresql:rw,size=1g"
-                                "--tmpfs" "/var/lib/postgresql/data:rw,size=1g"
+                                "-e" "PGDATA=/var/lib/postgresql/pgdata"
                                 "-p" (str "127.0.0.1:" port ":5432") image
                                 "-c" "fsync=off" "-c" "synchronous_commit=off" "-c" "full_page_writes=off"])]
       (cond (zero? exit) {:name name :port port}
