@@ -222,7 +222,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An argument compared with a literal of no type (`[:= :?w [:inline "1"]]`) takes any value, as
   PostgreSQL reads the literal as the argument's type.
 * An override of a type the driver reads as an object of its own (`:inet` a PGobject, `:hstore` a
-  `java.util.Map`) holds for writes; a read stays the driver's object unless `:read` names the type.
+  `java.util.Map`) holds for writes; a read stays the driver's object (`:some` where the column is never NULL)
+  unless `:read` names the type: `{:read {"tstzrange" :string}}` for an extension reading a range as its text.
 * A `:schema` the registry holds no generated file, table or view of is an
   `:pgmalli.error/invalid-options` error naming the ones it holds, in every function of
   `pgmalli.honeysql`; before, each did something of its own (an unknown table, `:any`, nil).

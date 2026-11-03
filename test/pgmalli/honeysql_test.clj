@@ -2235,6 +2235,9 @@
         "pgjdbc reads inet as a PGobject, hstore as a java.util.Map")
     (is (= [:map {:pg/table "public.t"} [:ip [:any {:pg/type "inet"}]] [:h [:any {:pg/type "hstore"}]]] (pgmalli/as-read reg :pg.public/t o)))
     (is (= [:map [:ip :string]] (h/row-schema reg {:select [:ip] :from [:t]} (assoc o :read {"inet" :string}))) ":read names what an extension reads")
+    (let [reg (pgmalli/registry {:registry {:pg.public/r [:map {:pg/table "public.r"} [:v [:some {:pg/type "tstzrange"}]]]}})]
+      (is (= [:map [:v [:some {:pg/type "tstzrange"}]]] (h/row-schema reg {:select [:v] :from [:r]} o)) "a column never NULL stays so")
+      (is (= [:map [:v :string]] (h/row-schema reg {:select [:v] :from [:r]} (assoc o :read {"tstzrange" :string})))))
     (is (= {:ip ip :h hs} (h/arg-types reg {:update :t :set {:ip :?ip :h :?h}} o)))))
 
 (deftest a-value-of-the-wrong-class-for-a-driver-object-says-the-class-it-should-be
