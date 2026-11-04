@@ -2602,3 +2602,11 @@
   (is (= {:n [:any {:pgmalli/untyped :position}]}
          (args {:merge-into :users :using [[:groups :g]] :on [:= :users.group_id :g.id] :when-matched {:update {:set {:name :?n}}}}))
       ":name is a column there, not a cast to the type name"))
+
+(deftest a-document-value-of-an-array-column-is-a-json-array-or-the-arrays-text
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                         [:a [:maybe [:vector {:pg/type "integer[]"} [:maybe [:pg/integer {:pg/type "integer"}]]]]]]}})
+        d (:doc (:args (h/analyze reg {:select [:*] :from [[[:jsonb_populate_record [:cast nil :t] :?doc] :r]]})))]
+    (is (m/validate d {:a [1 2]} {:registry reg}))
+    (is (m/validate d {:a "{1,2}"} {:registry reg}) "jsonb_populate_record reads a JSON string through integer[]'s input")
+    (is (not (m/validate d {:a 1} {:registry reg})))))

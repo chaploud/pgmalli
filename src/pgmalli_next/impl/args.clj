@@ -296,14 +296,17 @@
 (defn- json-field-type
   "The type of a value of a key of a JSON document json_populate_record reads into a column of
    schema s, as the one sending's jsonb writes it (accept/json-classes): of a json or jsonb
-   column, as read back; of an array column, a sequential of its elements' (NULL too); of
+   column, as read back; of an array column, a sequential of its elements' (NULL too) or a
+   string, the array's text; of
    another, what its type's input reads of a JSON number, boolean or string (accepted-type
    under :json), no PGobject, which the document does not hold."
   [registry s opts]
   (let [s (shape/non-null s)
         p (:pg/type (shape/column-props s))]
     (cond (types/json? p) (query/driver-schema registry jdbc/column-read-type s opts)
-          (types/element p) [:sequential (query/nullable (json-field-type registry (last s) opts))]
+          ;; a JSON array element by element; a JSON string through the array type's input ("{1,2}"),
+          ;; as any type's input reads a String's text
+          (types/element p) [:or [:sequential (query/nullable (json-field-type registry (last s) opts))] :string]
           :else (let [t (accepted-type registry s :json opts)]
                   (shape/either (remove #{jdbc/pg-object} (shape/alternatives t)) t)))))
 
