@@ -1334,13 +1334,13 @@
   (is (= [{:kind :unknown-column :column :users.id :qualifier "users" :did-you-mean [:u.id]}]
          (check {:select [:users.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}))
       "an aliased table named by its name, as PostgreSQL hints")
-  (is (= ["unknown column usr.id; no table or alias usr in the statement; did you mean: :u.id"]
+  (is (= ["unknown column usr.id; no table or alias usr in the statement; did you mean: u.id"]
          (h/humanize (check {:select [:usr.id] :from [[:users :u]]}))))
   (is (= [{:kind :unknown-column :column :x.id :qualifier "x"}] (check {:select [:x.id] :from [:users]}))
       "no alias close: nothing suggested"))
 
 (deftest each-problem-reads-as-what-to-do
-  (is (= ["unknown column nik; did you mean: :nick"
+  (is (= ["unknown column nik; did you mean: nick"
           "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:cast \"sad\" :mood]"]
          (h/humanize (check {:select [:nik] :from [:users] :where [:= :mood "sad"]} opts))))
   (is (every? string? (h/humanize [{:kind :something-new}])) "a kind with no sentence still prints"))
@@ -1822,7 +1822,7 @@
 
 (deftest an-unknown-table-names-the-one-meant
   (is (= [{:kind :unknown-table :table "sample.usres" :did-you-mean ["sample.users"]}] (check {:select [:id] :from [:usres]})))
-  (is (= ["unknown table sample.usres; did you mean: :sample.users"] (h/humanize (check {:select [:id] :from [:usres]})))))
+  (is (= ["unknown table sample.usres; did you mean: sample.users"] (h/humanize (check {:select [:id] :from [:usres]})))))
 
 (deftest a-misspelt-option-names-the-one-meant-in-its-data
   (let [d (ex-data (try (:problems (h/analyze registry {:select [:id] :from [:users]} {:jdcb {}})) (catch clojure.lang.ExceptionInfo e e)))]
@@ -2639,7 +2639,7 @@
     (is (= #{} (kinds {:insert-into :users :values [{:score 1 :group_id 1 :mood :default :nick :null :born :?b}]})))
     (is (= [{:kind :unknown-column :column :users.score :clause :set :did-you-mean [:score]}] (check {:update :users :set {:users.score 1} :where [:= :id 1]}))
         "SET users.score is field score of a column users")
-    (is (= ["unknown column users.nick: PostgreSQL reads an assigned users.nick as a field of a column users; assign it unqualified: :nick"]
+    (is (= ["unknown column users.nick: PostgreSQL reads an assigned users.nick as a field of a column users; assign it unqualified: nick"]
            (h/humanize (check {:insert-into :users :values [{:group_id 1 :score 1 :users.nick "a"}]}))))))
 
 (deftest a-cast-to-float-of-a-precision-up-to-24-is-a-real-and-dec-is-numeric
@@ -2733,7 +2733,7 @@
   (let [v (h/values-schema registry :users opts)]
     (is (m/validate v {:group_id 1 :score 1 :nick :null} {:registry registry}) "HoneySQL writes VALUES (..., null)")
     (is (= [] (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]}))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: :sample.users$"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: sample.users$"
                         (h/values-schema registry :usres opts))))
 
 (deftest an-sql-word-is-a-value-as-honeysql-writes-it-under-the-format
@@ -2743,14 +2743,37 @@
       "quoted, :current_user is a column \"current_user\"")
   (is (= [:unknown-column] (map :kind (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]} (assoc opts :format {:quoted-always #"^null$"}))))
       ":quoted-always matching it writes \"null\"")
+  (is (m/validate (h/values-schema registry :users (assoc opts :format {:quoted-always #"^(null|default)$"})) {:group_id 1 :score 1 :nick :NULL} {:registry registry})
+      "HoneySQL writes :NULL as NULL where it quotes null")
   (is (= [:unknown-column] (map :kind (check {:insert-into :users :values [[1 1 :foo]]}))) "a positional row's keyword past any column list"))
 
 (deftest an-order-by-items-direction-inside-over-or-an-aggregate-is-no-column
   (doseq [q [{:select [[[:over [[:row_number] {:partition-by [:group_id] :order-by [[:score :desc]]}]] :rn]] :from [:users]}
              {:select [[[:array_agg [:order-by :nick [:id :desc]]] :a]] :from [:users]}
              {:select [[[:string_agg :nick [:order-by "," [:score :desc-nulls-last]]] :a]] :from [:users]}
-             {:select [[[:within-group [:percentile_cont 0.5] {:order-by [[:score :desc]]}] :p]] :from [:users]}]]
+             {:select [[[:within-group [:percentile_cont 0.5] {:order-by [[:score :desc]]}] :p]] :from [:users]}
+             {:select [[[:over [[:row_number] {:order-by [[:score :DESC]]}]] :rn]] :from [:users]}]]
     (is (= [] (check q)) (pr-str q))))
+
+(deftest the-forms-honeysqls-docs-write-are-read-as-the-sql-they-are
+  (doseq [q [{:select [:id [[:over [[:sum :score] {:order-by [:id] :frame [:rows :between :unbounded-preceding :current-row]} :t]]]] :from [:users]}
+             {:select [[[:at-time-zone :closed_at :UTC] :z]] :from [:users]}
+             {:with-recursive [[[:t {:columns [:n]}] {:union-all [{:select [[1]]} {:select [[[:+ :n 1]]] :from [:t] :where [:< :n 5]}]} :search-depth-first-by :n :set :ord]] :select [:n] :from [:t] :order-by [:ord]}
+             {:with-recursive [[[:t {:columns [:n]}] {:union-all [{:select [[1]]} {:select [[[:+ :n 1]]] :from [:t] :where [:< :n 5]}]} :cycle [:n] :set :looped :using :path]] :select [:n :looped :path] :from [:t]}
+             {:update :users :set {:score :v.score} :from [[{:values [[1 10]]} [:v [:composite :id :score]]]] :where [:= :users.id :v.id]}
+             {:select [:u.id :x.a] :from [[:users :u]] :cross-join [[[:lateral [:jsonb_to_record [:cast "{}" :jsonb]]] [[:raw "x(a int)"]]]]}
+             {:select [:g.name :u.nick] :from [[:groups :g]] :left-join [[[:join [:users :u] {:join [[:groups :h] [:= :h.id :u.group_id]]}]] [:= :u.group_id :g.id]]}
+             {:union-all [{:nest {:select [:id] :from [:users] :order-by [:id] :limit 1}} {:nest {:select [:id] :from [:groups] :limit 1}}]}
+             {:select [[[:array_agg {:distinct :nick :order-by [:nick]}] :nicks]] :from [:users]}
+             {:select [[[:filter :%count.* {:where [:< :score 100]}] :%count.c]] :from [:users]}
+             {:update :users :set {:score 1} :where [:= :id 1] :returning [:old.score :new]}]]
+    (is (= [] (check q)) (pr-str q)))
+  (is (= [:looped] (map first (rest (row {:with-recursive [[[:t {:columns [:n]}] {:union-all [{:select [[1]]} {:select [[[:+ :n 1]]] :from [:t] :where [:< :n 5]}]} :cycle [:n] :set :looped :using :path]] :select [:looped] :from [:t]})))))
+  (is (= [[:boolean {:pg/type "boolean"}]] (map (comp last last) (rest (row {:with-recursive [[[:t {:columns [:n]}] {:union-all [{:select [[1]]} {:select [[[:+ :n 1]]] :from [:t] :where [:< :n 5]}]} :cycle [:n] :set :looped :using :path]] :select [:looped] :from [:t]})))))
+  (is (nil? (row {:select [[[:. [:nest :p] :*]]] :from [[{:select [[[:row 1 2] :p]]} :s]]})) "(p).* is the fields of p")
+  (is (= [:unknown-column] (map :kind (check {:select [:u.nick] :from [[:groups :g]] :left-join [[[:join [:users :u] {:join [[:groups :h] [:= :h.id :u.grop_id]]}]] [:= :u.group_id :g.id]]})))
+      "a column of the nested join's ON is checked")
+  (is (= [:unknown-column] (map :kind (check {:update :users :set {:score 1} :where [:= :old.id 1]}))) "old is RETURNING's alone"))
 
 (deftest a-written-row-generates-what-it-takes-under-the-format
   (doseq [f [{:quoted true} {:quoted-always #"^default$"}]

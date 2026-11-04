@@ -126,7 +126,7 @@
                                               :when (and (expression-clauses clause) (not (and item? (#{:select :select-distinct :select-distinct-on :order-by :returning} clause))))
                                               ;; [expr direction], an item of an ORDER BY inside OVER or an aggregate, is no
                                               ;; call: its expression alone names a column
-                                              :let [ordered? (and (vector? x) (= 2 (count x)) (sort-directions (second x)))
+                                              :let [ordered? (and (vector? x) (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x))))))
                                                     [kind _ args] (if ordered? [:order [] [(first x)]] (when-not (syntax/comparison? x) (syntax/call-parts x)))]
                                               :when kind
                                               a args

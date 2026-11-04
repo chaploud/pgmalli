@@ -363,7 +363,7 @@
         {:keys [x chain]} (syntax/expression-nodes ps)
         :let [{:keys [table set? type json arg] :as call} (query/populate-call registry chain x opts)]
         :when arg
-        :let [item (some (fn [{i :x}] (when (and (vector? i) (identical? x (first i))) i)) ps)
+        :let [item (some (fn [{i :x top? :top?}] (when (and top? (vector? i) (identical? x (first i))) i)) ps)
               columns (query/populated-columns registry call item opts)]
         :when columns
         :let [s (if (syntax/param-key json) (types/type-schema type) (:schema (query/expression-type registry chain json opts)))

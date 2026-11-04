@@ -145,7 +145,7 @@
      (let [pred (case word
                   :null #(and (keyword? %) (syntax/null-value? % format))
                   :default #(syntax/default-value? % format))]
-       (when-let [gen (first (filter pred [word [word]]))]
+       (when-let [gen (first (filter pred [word [word] (keyword (str/upper-case (name word)))]))]
          [:fn {:error/message (str "should be " (str/upper-case (name word)) " as HoneySQL writes it (" (pr-str gen) ")")
                :gen/elements [gen] :pgmalli/describe (pr-str gen)}
           pred])))))
@@ -246,13 +246,13 @@
   [column did-you-mean]
   (str ": PostgreSQL reads an assigned " (column-name column) " as a field of a column "
        (first (str/split (column-name column) #"\.")) "; assign "
-       (if did-you-mean (str "it unqualified: :" (column-name (first did-you-mean))) "the column unqualified")))
+       (if did-you-mean (str "it unqualified: " (column-name (first did-you-mean))) "the column unqualified")))
 
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
   {:unknown-table (fn [{:keys [table did-you-mean quoted]}] (query/unknown-table-text table did-you-mean quoted))
    :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint]}]
-                     (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map #(str ":" (column-name %)) did-you-mean))))]
+                     (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean))))]
                        (str "unknown column " (column-name column)
                             (when qualifier (str "; no table or alias " qualifier " in the statement"))
                             (case clause

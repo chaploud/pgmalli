@@ -143,7 +143,7 @@
                             (syntax/folded table) " write :" (syntax/folded table))
                elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
                               ", or name it :" elsewhere)
-               did-you-mean (error/did-you-mean (str/join " or " (map #(str ":" %) did-you-mean)))
+               did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
                :else "; check its name, or :schema when it is in another schema"))))
 
 (defn unknown-table!
@@ -253,11 +253,14 @@
                                           :all-listed? (let [v (when (and (vector? r) (map? (first r))) (:values (first r)))]
                                                          (boolean (and (vector? v) (seq v) (every? vector? v) (<= (count (first v)) (count listed))))))
                             (nullable alias) (assoc :nullable? true)
-                            (syntax/unnest-elements r format) (assoc :elements (syntax/unnest-elements r format)))]))]
-    ;; ON CONFLICT: EXCLUDED is the row proposed for insertion, with the target's columns
-    (if-let [[_ alias] (when (contains? stmt :on-conflict) (some-> (syntax/insert-target stmt) (syntax/table-ref opts)))]
-      (let [target (assoc (get sc alias) :excluded? true)] (assoc sc "excluded" target))
-      sc)))
+                            (syntax/unnest-elements r format) (assoc :elements (syntax/unnest-elements r format)))]))
+        ;; ON CONFLICT's EXCLUDED, the row proposed for insertion, and PostgreSQL 18's RETURNING old and
+        ;; new: the target's columns, which only a qualifier names
+        [_ target] (some-> (first (syntax/write-targets stmt)) (syntax/table-ref opts))
+        row (when target (assoc (get sc target) :qualifier-only? true))]
+    (cond-> sc
+      (and row (contains? stmt :on-conflict)) (assoc "excluded" row)
+      (and row (contains? stmt :returning)) (merge (into {} (for [n ["old" "new"] :when (not (contains? sc n))] [n (assoc row :nullable? true)]))))))
 
 (defn populate-call
   "{:table :set? :type :json :arg} of x, a call of pg_catalog's json_populate_record,
@@ -336,7 +339,7 @@
               (let [[_ alias written] (syntax/table-ref item opts)
                     {:keys [table cte? columns] :as entry} (get sc alias)
                     lateral (syntax/lateral? item)
-                    [inner listed recursive?] (cond (or (nil? entry) columns) nil
+                    [inner listed recursive? added] (cond (or (nil? entry) columns) nil
                                                     cte? (syntax/cte-statement body written opts)
                                                     (and (nil? table) (vector? item) (map? (first item))) [(first item)]
                                                     ;; [[:lateral subquery] alias]
@@ -354,7 +357,8 @@
                              (and entry (nil? inner) (nil? table) (not cte?) (vector? item) (not (map? (first item))))
                              ;; a function sees the tables before it too
                              (function-columns registry item (cons (dissoc sc alias) outer) opts))
-                    named (map-indexed (fn [i [c t]] [(nth listed i c) t]) ts)
+                    named (concat (map-indexed (fn [i [c t]] [(nth listed i c) t]) ts)
+                                  (when ts (for [[c t] added] [c (some-> t types/type-schema)])))
                     ;; a CTE's name may list new names for its columns, by position; a recursive
                     ;; one's later rows may hold NULL where its first member's do not
                     types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (beyond-list registry t)) t)])))]
@@ -413,8 +417,8 @@
       (when-let [{:keys [table opaque? nullable? types elements] :as entry} (get scope alias)]
         (when (has-column? registry entry column) [[alias table opaque? nullable? types elements]]))
       ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
-      (distinct (for [[a {:keys [table opaque? excluded? nullable? types elements] :as entry}] scope
-                      :when (and (not excluded?) (has-column? registry entry column))]
+      (distinct (for [[a {:keys [table opaque? qualifier-only? nullable? types elements] :as entry}] scope
+                      :when (and (not qualifier-only?) (has-column? registry entry column))]
                   [a table opaque? nullable? types elements])))))
 
 (defn column-hits
@@ -465,8 +469,8 @@
   (let [found (for [[stmt scopes] (once registry statement-chains body opts)
                     :let [own (first scopes)
                           targets (set (keep #(some-> % (syntax/table-ref opts) second) (syntax/write-targets stmt)))]
-                    [alias {:keys [table cte? excluded?]}] (when (map? own) own)
-                    :when (and table (not cte?) (not excluded?))]
+                    [alias {:keys [table cte? qualifier-only?]}] (when (map? own) own)
+                    :when (and table (not cte?) (not qualifier-only?))]
                 [(if (targets alias) :writes :reads) table])]
     (merge {:reads #{} :writes #{}}
            (update-vals (group-by first found) #(set (map second %))))))
@@ -1017,7 +1021,7 @@
                      (map second (mapcat columns tables))
                      ;; SELECT * lists a column USING merges once
                      (concat (mapcat (fn [[c m]] (merged c m)) merges)
-                             (for [[alias e] sc, [c en] (columns e)
+                             (for [[alias e] sc :when (not (:qualifier-only? e)), [c en] (columns e)
                                    :when (not (some #{alias} (:tables (get merges c))))]
                                en))))))
         items (for [item (syntax/selected-items stmt)

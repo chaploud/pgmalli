@@ -545,4 +545,145 @@
  [:window-order-desc {:select [:id [[:over [[:row_number] {:partition-by [:group_id] :order-by [[:score :desc]]} :rn]]]] :from [:users]}]
  [:aggregate-order-desc {:select [[[:array_agg [:order-by :nick [:id :desc]]] :a] [[:string_agg :nick [:order-by "," [:score :desc-nulls-last]]] :b]] :from [:users]}]
  [:within-group-desc {:select [[[:within-group [:percentile_cont 0.5] {:order-by [[:score :desc]]}] :p]] :from [:users]}]
+ ;; the forms of HoneySQL's README and docs, written over this schema
+ ;; clause-reference.md "with, with-recursive": NOT MATERIALIZED
+ [:hdoc-cte-not-materialized {:with [[:recent {:select [:id :user_id :title] :from [:posts] :where [:> :created_at [:- [:now] [:interval "7 days"]]]} :not-materialized]] :select [:r.title :u.nick] :from [[:recent :r]] :join [[:users :u] [:= :u.id :r.user_id]]}]
+ ;; clause-reference.md "with, with-recursive": MATERIALIZED
+ [:hdoc-cte-materialized {:with [[:counts {:select [:user_id [:%count.* :n]] :from [:posts] :group-by [:user_id]} :materialized]] :select [:u.nick :c.n] :from [[:users :u]] :left-join [[:counts :c] [:= :c.user_id :u.id]]}]
+ ;; clause-reference.md "with, with-recursive": SEARCH DEPTH FIRST BY .. SET
+ [:hdoc-recursive-search {:with-recursive [[[:t {:columns [:n]}] {:union-all [{:select [[1]]} {:select [[[:+ :n 1]]] :from [:t] :where [:< :n 5]}]} :search-depth-first-by :n :set :ord]] :select [:n] :from [:t] :order-by [:ord]}]
+ ;; clause-reference.md "with, with-recursive": CYCLE .. SET .. USING
+ [:hdoc-recursive-cycle {:with-recursive [[[:t {:columns [:n]}] {:union-all [{:select [[1]]} {:select [[[:+ :n 1]]] :from [:t] :where [:< :n 5]}]} :cycle [:n] :set :is_cycle :using :path]] :select [:n :is_cycle] :from [:t]}]
+ ;; clause-reference.md "window, partition-by (and over)": an inline window and a named one (OVER w)
+ [:hdoc-window-named {:select [:id [[:over [[:avg :score] {:partition-by [:group_id] :order-by [:id]} :avg_score] [[:max :score] :w :max_score]]]] :from [:users] :window [:w {:partition-by [:group_id]}]}]
+ ;; clause-reference.md "window, partition-by (and over)": multiple windows
+ [:hdoc-window-multiple {:select [:id [[:over [[:rank] :w :group_rank] [[:dense_rank] :x :overall_rank]]]] :from [:users] :window [:w {:partition-by [:group_id] :order-by [[:score :desc]]} :x {:order-by [[:score :desc]]}]}]
+ ;; clause-reference.md "window, partition-by (and over)": OVER () from {} and nil
+ [:hdoc-over-empty {:select [:id [[:over [[:count :*] {} :total] [[:sum :score] nil :sum_score]]]] :from [:users]}]
+ ;; clause-reference.md "frame": ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+ [:hdoc-frame-rows {:select [:id [[:over [[:sum :score] {:partition-by [:group_id] :order-by [:id] :frame [:rows :between :unbounded-preceding :current-row]} :running_total]]]] :from [:users]}]
+ ;; clause-reference.md "frame": RANGE BETWEEN n PRECEDING AND n FOLLOWING
+ [:hdoc-frame-range {:select [:id [[:over [[:avg :score] {:order-by [:score] :frame [:range :between [10 :preceding] [10 :following]]} :moving_avg]]]] :from [:users]}]
+ ;; clause-reference.md "frame": GROUPS CURRENT ROW EXCLUDE TIES
+ [:hdoc-frame-groups {:select [:id [[:over [[:sum :score] {:order-by [:score] :frame [:groups :current-row :exclude-ties]} :grp]]]] :from [:users]}]
+ ;; clause-reference.md "frame": a frame in a named WINDOW
+ [:hdoc-window-frame-named {:select [:id [[:over [[:sum :score] :w :running]]]] :from [:users] :window [:w {:order-by [:id] :frame [:rows :unbounded-preceding]}]}]
+ ;; clause-reference.md "distinct, expr": a clause as an aggregate's argument (DISTINCT .. ORDER BY ..)
+ [:hdoc-agg-distinct-clause {:select [:group_id [[:array_agg {:distinct :nick :order-by [:nick]}] :nicks]] :from [:users] :group-by [:group_id]}]
+ ;; special-syntax.md "filter, within-group": FILTER on :%count.* and PERCENTILE_DISC WITHIN GROUP
+ [:hdoc-filter-within-group {:select [:group_id [[:filter :%count.* {:where [:< :score 100]}] :c] [[:within-group [:percentile_disc [:inline 0.25]] {:order-by [:score]}] :p25]] :from [:users] :group-by [:group_id]}]
+ ;; clause-reference.md "order-by" / README.md "Big, complicated example": NULLS FIRST
+ [:hdoc-order-nulls-first {:select [:id :nick] :from [:users] :order-by [[:nick :nulls-first] [:score :desc]]}]
+ ;; clause-reference.md "order-by": a function call ([[:random]])
+ [:hdoc-order-by-random {:select [:id :title] :from [:posts] :order-by [[[:random]]] :limit 1}]
+ ;; clause-reference.md "order-by": a CASE with a direction
+ [:hdoc-order-by-case {:select [:id :title] :from [:posts] :order-by [[[:case [:< [:now] :created_at] :created_at :else [:now]] :desc]]}]
+ ;; special-syntax.md "alias": ORDER BY a string alias
+ [:hdoc-alias-order {:select [:id [[:upper :nick] "nick-upper"]] :from [:users] :order-by [[[:alias "nick-upper"]]]}]
+ ;; special-syntax.md "alias": GROUP BY a string alias
+ [:hdoc-alias-group {:select [[[:date_trunc [:inline "month"] :created_at] "month"] [:%count.* :n]] :from [:posts] :group-by [[:alias "month"]]}]
+ ;; clause-reference.md "group-by": an expression
+ [:hdoc-group-by-expr {:select [[[:date_trunc [:inline "day"] :created_at] :day] [:%count.* :n]] :from [:posts] :group-by [[:date_trunc [:inline "day"] :created_at]]}]
+ ;; clause-reference.md "for" / README.md "Locking": FOR UPDATE
+ [:hdoc-for-update {:select [:id :score] :from [:users] :where [:= :id 1] :for :update}]
+ ;; clause-reference.md "for": FOR UPDATE OF <alias> SKIP LOCKED
+ [:hdoc-for-update-of-skip-locked {:select [:p.id :p.title] :from [[:posts :p]] :join [[:users :u] [:= :u.id :p.user_id]] :where [:= :u.id 1] :for [:update :p :skip-locked]}]
+ ;; clause-reference.md "for": FOR NO KEY UPDATE NOWAIT
+ [:hdoc-for-no-key-update-nowait {:select [:id] :from [:tickets] :where [:= :state "open"] :for [:no-key-update :nowait]}]
+ ;; clause-reference.md "for": FOR SHARE OF two tables
+ [:hdoc-for-share-of-tables {:select [:u.id :g.name] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :for [:share [:u :g]]}]
+ ;; clause-reference.md "limit, offset, fetch": OFFSET .. ROWS FETCH NEXT .. ROWS ONLY
+ [:hdoc-offset-fetch {:select [:id :title] :from [:posts] :order-by [[:created_at :desc]] :offset 20 :fetch 10}]
+ ;; clause-reference.md "limit, offset, fetch": FETCH FIRST without OFFSET
+ [:hdoc-fetch-first {:select [:id] :from [:users] :order-by [:id] :fetch 1}]
+ ;; clause-reference.md "values examples": DEFAULT VALUES
+ [:hdoc-insert-default-values {:insert-into :audits :values :default :returning [:id :note_upper]}]
+ ;; clause-reference.md "values with hash maps": the :values-default-columns option
+ [:hdoc-values-default-columns {:insert-into :groups :values [{:name "a" :created_at [:now]} {:name "b"}]} {:format {:values-default-columns #{:created_at}}}]
+ ;; clause-reference.md "values examples": positional rows without a column list
+ [:hdoc-insert-positional {:insert-into :tags :values [[100 "p1"] [101 "p2"]]}]
+ ;; clause-reference.md "update": SET a column to DEFAULT and to NULL
+ [:hdoc-update-set-default {:update :tickets :set {:state [:default] :kind nil} :where [:= :id 1]}]
+ ;; clause-reference.md "insert-into": second case, [table [columns]] with :values
+ [:hdoc-insert-table-cols {:insert-into [:posts [:user_id :title]] :values [[1 "a"] [2 "b"]] :returning [:id]}]
+ ;; clause-reference.md "insert-into": second case with an alias, [[table alias] [columns]]
+ [:hdoc-insert-alias-cols {:insert-into [[:tags :t] [:name]] :values [["x"]] :on-conflict [:name] :do-update-set {:name [:|| :t.name "!"]}}]
+ ;; clause-reference.md "insert-into": third case with an alias and columns, [[[table alias] [columns]] query]
+ [:hdoc-insert-alias-cols-select {:insert-into [[[:tags :t] [:name]] {:select [:title] :from [:posts]}] :on-conflict [:name] :do-nothing true}]
+ ;; README.md "Composite types": a composite value in a positional row
+ [:hdoc-insert-composite {:insert-into :shapes :columns [:name :p] :values [["small" [:composite 1 "inch"]]]}]
+ ;; clause-reference.md "update" / special-syntax.md "composite": UPDATE .. FROM (VALUES ..) AS v (a, b)
+ [:hdoc-update-from-values-composite {:update :users :set {:score :v.score} :from [[{:values [[1 10] [2 20]]} [:v [:composite :id :score]]]] :where [:= :users.id :v.id]}]
+ ;; clause-reference.md "on-conflict ..": {:on-constraint name} nested in :on-conflict
+ [:hdoc-on-constraint {:insert-into :tags :values [{:name "x"}] :on-conflict {:on-constraint :tags_name_key} :do-nothing true}]
+ ;; clause-reference.md "on-conflict ..": empty :on-conflict and a separate :on-constraint
+ [:hdoc-on-constraint-separate {:insert-into :tags :values [{:name "x"}] :on-conflict [] :on-constraint :tags_name_key :do-update-set {:name :EXCLUDED.name} :returning [:id]}]
+ ;; postgresql.md "Upsert": ON CONFLICT (col) WHERE .. and :do-update-set {:fields [..] :where ..}
+ [:hdoc-on-conflict-where {:insert-into :users :values [{:id 1 :group_id 1 :nick "a" :score 5}] :on-conflict [:id {:where [:> :score 0]}] :do-update-set {:fields [:nick :score] :where [:= :users.group_id 1]}}]
+ ;; clause-reference.md "on-conflict ..": :on-conflict and :do-update-set as a single keyword
+ [:hdoc-do-update-set-keyword {:insert-into :tags :values [{:name "x"}] :on-conflict :name :do-update-set :name}]
+ ;; postgresql.md "Upsert": counter, :do-update-set {:fields {col expr} :where ..}
+ [:hdoc-upsert-counter {:insert-into :users :values [{:id 1 :group_id 1 :score 1}] :on-conflict :id :do-update-set {:fields {:score [:+ :users.score 1]} :where [:> :users.score 0]} :returning [:id :score]}]
+ ;; clause-reference.md "join-by": :left then :join, in that order
+ [:hdoc-join-by {:select [:p.title :u.nick :g.name] :from [[:posts :p]] :join-by [:left [[:users :u] [:= :u.id :p.user_id]] :join [[:groups :g] [:= :g.id :u.group_id]]]}]
+ ;; clause-reference.md "join, left-join, ..": :inner-join
+ [:hdoc-inner-join {:select [:u.nick :g.name] :from [[:users :u]] :inner-join [[:groups :g] [:= :g.id :u.group_id]]}]
+ ;; special-syntax.md "join": a nested JOIN as a join's table
+ [:hdoc-nested-join {:select [:g.name :u.nick :p.title] :from [[:groups :g]] :left-join [[[:join [:users :u] {:join [[:posts :p] [:= :p.user_id :u.id]]}]] [:= :u.group_id :g.id]]}]
+ ;; clause-reference.md "cross-join": CROSS JOIN LATERAL fn(..) with a [:raw] column definition alias
+ [:hdoc-cross-join-lateral-raw {:select [:h.id [:x.id :x_id] :x.value] :from [[:hosts :h]] :cross-join [[[:lateral [:jsonb_to_recordset [:coalesce [:-> :h.doc [:inline "items"]] [:cast [:inline "[]"] :jsonb]]]] [[:raw "x(id text, value jsonb)"]]]]}]
+ ;; clause-reference.md "from": ONLY(table) as [:only table]
+ [:hdoc-from-only {:select [:id :title] :from [[[:only :events]]]}]
+ ;; clause-reference.md "select, select-distinct, table": the :table clause
+ [:hdoc-table {:table :tags}]
+ ;; clause-reference.md "select, select-distinct, table": ^:distinct metadata on :select
+ [:hdoc-select-distinct-meta {:select ^:distinct [:group_id :mood] :from [:users]}]
+ ;; clause-reference.md "intersect, union, ..": except-all
+ [:hdoc-except-all {:except-all [{:select [:user_id] :from [:posts]} {:select [:id] :from [:users] :where [:< :score 1]}]}]
+ ;; special-syntax.md "nest": :nest as a clause, set operation members with ORDER BY and LIMIT
+ [:hdoc-union-all-nest {:union-all [{:nest {:select [:id :nick] :from [:users] :order-by [:id] :limit 1}} {:nest {:select [:id :title] :from [:posts] :order-by [:id] :limit 1}}]}]
+ ;; special-syntax.md "nest": an extra pair of parentheses in WHERE
+ [:hdoc-nest-where {:select [:id] :from [:users] :where [:and [:nest [:or [:= :nick "a"] [:> :score 0]]] [:= :group_id 1]]}]
+ ;; special-syntax.md / postgresql.md "array": a typed ARRAY[..]::INTEGER[]
+ [:hdoc-array-typed {:select [:id] :from [:kinds] :where [:= :ints [:array [1] :integer]]}]
+ ;; special-syntax.md "array": an empty typed ARRAY[]::TEXT[]
+ [:hdoc-array-empty-typed {:update :kinds :set {:texts [:array [] :text]}}]
+ ;; special-syntax.md / postgresql.md "array": ARRAY(subquery) in a select list
+ [:hdoc-array-subquery {:select [:u.id [[:array {:select [:p.id] :from [[:posts :p]] :where [:= :p.user_id :u.id]}] :post_ids]] :from [[:users :u]]}]
+ ;; special-syntax.md "at time zone"
+ [:hdoc-at-time-zone {:select [:id [[:at-time-zone :created_at :UTC] :created_utc]] :from [:posts]}]
+ ;; special-syntax.md "case": :case-expr (CASE x WHEN ..)
+ [:hdoc-case-expr {:select [:id [[:case-expr :state "open" 1 "closed" 0 :else -1] :s]] :from [:tickets]}]
+ ;; special-syntax.md "cast": a hyphenated type (DOUBLE PRECISION)
+ [:hdoc-cast-double-precision {:select [[[:cast :score :double-precision] :s]] :from [:users]}]
+ ;; special-syntax.md "composite": a row in a select list
+ [:hdoc-composite-select {:select [[[:composite :id :nick] :c]] :from [:users]}]
+ ;; special-syntax.md "dot . .:.": a composite's field and fields, [:. [:nest col] field]
+ [:hdoc-composite-field {:select [[[:. [:nest :p] :a]] [[:. [:nest :p] :*]]] :from [:shapes]}]
+ ;; special-syntax.md "call": a computed, schema-qualified function name
+ [:hdoc-call-schema-fn {:select [:id [[:call [:. :public :user_score] :id] :s]] :from [:users]}]
+ ;; README.md "Functions": a function name written verbatim ([:'schema.fn ..])
+ [:hdoc-verbatim-fn {:select [:id [[:'public.user_score :id] :s]] :from [:users]}]
+ ;; special-syntax.md "escape": SIMILAR TO .. ESCAPE
+ [:hdoc-similar-to-escape {:select [:id] :from [:posts] :where [:similar-to :title [:escape "t*%" [:inline "*"]]]}]
+ ;; operator-reference.md "like, not like, ilike, not ilike"
+ [:hdoc-ilike {:select [:id] :from [:users] :where [:or [:ilike :nick "A%"] [:not-like :name "%x%"] [:not-ilike :nick "z%"]]}]
+ ;; special-syntax.md "between and not-between": NOT BETWEEN
+ [:hdoc-not-between {:select [:id] :from [:users] :where [:not-between :score 1 100]}]
+ ;; operator-reference.md "is, is-not": IS TRUE and IS NOT FALSE
+ [:hdoc-is-true {:select [:id] :from [:kinds] :where [:or [:is :flag true] [:is-not :flag false]]}]
+ ;; special-syntax.md "inline": a typed literal, [:inline :DATE "..."]
+ [:hdoc-inline-date {:select [:id] :from [:posts] :where [:>= :created_at [:inline :DATE "2026-01-01"]]}]
+ ;; special-syntax.md "param": [:param :x] in place of :?x
+ [:hdoc-param {:select [:id :nick] :from [:users] :where [:and [:= :group_id [:param :gid]] [:>= :score [:param :min_score]]]}]
+ ;; README.md "Miscellaneous": [:raw [..]] of strings and an [:inline ..]
+ [:hdoc-raw-vector {:select [:id] :from [:posts] :where [:< :created_at [:raw ["now() - interval " [:inline "5 seconds"]]]]}]
+ ;; README.md "Big, complicated example": its shape (SELECT DISTINCT, comma FROM, JOIN, LEFT JOIN, OR of ANDs, IN with [:param], BETWEEN, ORDER BY .. NULLS FIRST, LIMIT, OFFSET), its joins on the last FROM item as PostgreSQL requires
+ [:hdoc-big-example {:select-distinct [:p.id :p.title :u.nick [:g.name "group-name"] [[:now]]] :from [[:groups :g] [:users :u]] :join [[:posts :p] [:= :p.user_id :u.id]] :left-join [[:post_tags :pt] [:= :pt.post_id :p.id]] :where [:or [:and [:= :u.group_id :g.id] [:not= :u.nick [:param :nick]]] [:in :p.id [1 [:param :pid] 3]] [:between :u.score 10 20]] :order-by [[:u.nick :desc] :p.title [:p.id :nulls-first]] :limit 50 :offset 10}]
+ ;; GROUP BY ROLLUP (not in HoneySQL's docs: a function call it writes as such; in the task's list)
+ [:hdoc-group-rollup {:select [:group_id :mood [:%count.* :n]] :from [:users] :group-by [[:rollup :group_id :mood]]}]
+ ;; GROUP BY CUBE (as above)
+ [:hdoc-group-cube {:select [:group_id :mood [:%count.* :n]] :from [:users] :group-by [[:cube :group_id :mood]]}]
+ ;; GROUP BY GROUPING SETS of [:composite ..] (as above)
+ [:hdoc-grouping-sets {:select [:group_id :mood [[:grouping :group_id :mood] :g] [:%count.* :n]] :from [:users] :group-by [[:grouping-sets [:composite :group_id :mood] [:composite :group_id] [:composite :mood]]]}]
 ]
