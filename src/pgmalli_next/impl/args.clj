@@ -212,6 +212,15 @@
         :when (and top? (#{:limit :offset} clause) (syntax/param-key x))]
     [x (query/nullable (accepted-type registry [:int {:pg/type "bigint" :min 0}] :assign opts))]))
 
+(defn- truth-tested-args
+  "? IS [NOT] TRUE, FALSE or UNKNOWN: PostgreSQL takes the argument as a boolean, as assigned
+   (coerce_to_boolean); NULL too."
+  [registry ps opts]
+  (for [{:keys [x]} (syntax/expression-nodes ps)
+        :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x)) (syntax/param-key (second x))
+                   (syntax/truth-value? (nth x 2) (:format opts)))]
+    [(second x) (query/nullable (accepted-type registry (types/type-schema "boolean") :assign opts))]))
+
 (defn- cast-arrays
   "The arrays whose elements PostgreSQL casts to the type of column schema s, elements of
    element type, typed; :any for none."
@@ -513,7 +522,7 @@
    the function, on its schema; :untyped, such an argument whose other uses take no value sent
    with a type, and the type they name."
   [registry body opts]
-  (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
+  (let [uses [comparison-args limit-args truth-tested-args cast-args assignment-args resolving-args call-args]
         sps (query/once registry query/statement-positions body opts)
         ;; an argument in a clause pgmalli does not read (an :unread-clause) is not typed by it
         typed (concat (for [[_ _ path ps] sps

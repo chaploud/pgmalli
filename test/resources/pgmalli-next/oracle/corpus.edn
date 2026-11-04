@@ -537,4 +537,8 @@
  [:own-from-ordinality {:select [:n.uid :n.label :n.ordinality] :from [[[:with-ordinality [:user_names 1] :n]]]}]
  [:own-from-setof {:select [:g.id :g.name] :from [[[:all_groups] :g]]}]
  [:own-arg {:select [:id] :from [:users] :where [:= [:user_score :?id] 1]}]
+ ;; ? IS [NOT] TRUE, FALSE or UNKNOWN takes a boolean; ? IS NULL, no type
+ [:is-not-true-arg {:select [:id] :from [:users] :where [:is-not :?x true]}]
+ [:is-false-arg {:select [:id] :from [:users] :where [:or [:is :?x false] [:is-not :?y :unknown]]}]
+ [:is-null-arg {:select [:id] :from [:users] :where [:is :?x nil]}]
 ]

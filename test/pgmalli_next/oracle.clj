@@ -891,7 +891,8 @@
         fmt #(if % {:quoted true} {})
         ;; one place per query, in the order of its text, so that a run repeats
         places (->> (concat (for [col cols [context q] (matrix-queries col)] (assoc col :context context :query q))
-                            [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}])
+                            [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}
+                             {:context :truth-test :type "boolean" :query {:select [:*] :from [:users] :where [:is-not :?x true]}}])
                     (into (sorted-map) (map (juxt (comp pr-str :query) identity)))
                     vals)]
     (into (with-open [conn (jdbc/get-connection (test-db/datasource db))]

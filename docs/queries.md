@@ -176,6 +176,7 @@ keyed as in `sql/format`'s `:params`, as the one sending sends them
 | compared with `ANY`, `SOME` or `ALL` of an array (`[:= :?tag [:any :tags]]`) | as with a column of the array's element type |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
+| tested with `IS [NOT] TRUE`, `FALSE` or `UNKNOWN` (`[:is-not :?x true]`; not `IS NULL`, which PostgreSQL types nothing by) | a boolean, or nil |
 | anywhere else | `:any` |
 
 An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one of `:position`
