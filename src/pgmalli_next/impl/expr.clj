@@ -1,0 +1,382 @@
+(ns pgmalli-next.impl.expr
+  "Turns expressions as printed by PostgreSQL's deparser (pg_get_constraintdef, pg_get_expr)
+   into HoneySQL-style data. Only that output format is supported, not arbitrary SQL.
+
+   Covered: comparison, logical, arithmetic, string, array, jsonb and regex operators (see
+   named-ops); IS [NOT] NULL/TRUE/FALSE; IS [NOT] DISTINCT FROM; [NOT] IN; ANY/ALL (ARRAY[...]);
+   [NOT] BETWEEN [SYMMETRIC]; [NOT] LIKE/ILIKE; ::casts; function calls; TRIM(BOTH FROM x);
+   CASE; CURRENT_TIMESTAMP and friends; AT TIME ZONE; (x).field; x[i]; quoted identifiers;
+   string, number, boolean and NULL literals.
+
+   Operators whose symbol is not a readable EDN keyword (~, @>, ...) get a named keyword
+   (named-ops)."
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk]
+            [pgmalli-next.impl.types :as types]))
+
+;;; tokens
+
+(def ^:private keywords
+  #{"AND" "OR" "NOT" "IS" "NULL" "IN" "ANY" "ALL" "SOME" "ARRAY" "CASE" "WHEN" "THEN" "ELSE" "END" "COLLATE"
+    "TRUE" "FALSE" "LIKE" "ILIKE" "BETWEEN" "SIMILAR" "TO" "FROM" "BOTH" "LEADING" "TRAILING"
+    "DISTINCT" "ESCAPE" "SYMMETRIC" "AT" "TIME" "ZONE"
+    "CURRENT_TIMESTAMP" "CURRENT_DATE" "CURRENT_TIME" "LOCALTIMESTAMP" "LOCALTIME"
+    "CURRENT_USER" "SESSION_USER" "CURRENT_ROLE"})
+
+(def ^:private ops
+  ;; longest first
+  ["::" "=>" "<>" "!=" "<=" ">=" "!~~*" "!~~" "~~*" "~~" "!~*" "!~" "~*" "~" "||" "&&" "->>" "->" "#>>" "#>" "@>" "<@" "?|" "?&" "?"
+   "=" "<" ">" "+" "-" "*" "/" "%" "^"])
+
+(defn- quoted [s i quote-char what]
+  (let [end (loop [j (inc i)]
+              (cond (>= j (count s)) (throw (ex-info (str "unterminated " what) {:pos i :input s}))
+                    (and (= (.charAt ^String s j) quote-char) (< (inc j) (count s))
+                         (= (.charAt ^String s (inc j)) quote-char)) (recur (+ j 2))
+                    (= (.charAt ^String s j) quote-char) j
+                    :else (recur (inc j))))]
+    [(str/replace (subs s (inc i) end) (str quote-char quote-char) (str quote-char)) (inc end)]))
+
+(defn- tokenize [s]
+  (loop [i 0 out []]
+    (if (>= i (count s))
+      out
+      (let [c (.charAt ^String s i)]
+        (cond
+          (Character/isWhitespace c) (recur (inc i) out)
+          (= c \') (let [[v next] (quoted s i \' "string")] (recur next (conj out {:t :str :v v})))
+          (= c \") (let [[v next] (quoted s i \" "identifier")] (recur next (conj out {:t :ident :v v})))
+
+          (or (Character/isDigit c) (and (= c \.) (< (inc i) (count s)) (Character/isDigit (.charAt ^String s (inc i)))))
+          (let [m (re-find #"^\d*\.?\d+(?:[eE][+-]?\d+)?" (subs s i))
+                v (if (re-find #"[.eE]" m) (bigdec m) (try (Long/parseLong m) (catch Exception _ (bigint m))))]
+            (recur (+ i (count m)) (conj out {:t :num :v v})))
+
+          ;; an operator of an extension outside the search path: OPERATOR(public.~)
+          (re-find #"^OPERATOR\(\s*(?:\"[^\"]+\"|[\p{L}_][\p{L}\p{N}_$]*)\.([^\s)]+)\s*\)" (subs s i))
+          (let [[m op] (re-find #"^OPERATOR\(\s*(?:\"[^\"]+\"|[\p{L}_][\p{L}\p{N}_$]*)\.([^\s)]+)\s*\)" (subs s i))]
+            (if (some #{op} ops)
+              (recur (+ i (count m)) (conj out {:t :op :v op}))
+              (throw (ex-info (str "unknown operator: " op) {:pos i :input s}))))
+
+          (or (Character/isLetter c) (= c \_))
+          (let [m (re-find #"^[\p{L}_][\p{L}\p{N}_$]*" (subs s i))
+                up (str/upper-case m)]
+            (recur (+ i (count m)) (conj out (if (keywords up) {:t :kw :v up} {:t :ident :v m}))))
+
+          :else
+          (if-let [op (some #(when (str/starts-with? (subs s i) %) %) ops)]
+            (recur (+ i (count op)) (conj out {:t :op :v op}))
+            (case c
+              \( (recur (inc i) (conj out {:t :lparen}))
+              \) (recur (inc i) (conj out {:t :rparen}))
+              \[ (recur (inc i) (conj out {:t :lbracket}))
+              \] (recur (inc i) (conj out {:t :rbracket}))
+              \, (recur (inc i) (conj out {:t :comma}))
+              \. (recur (inc i) (conj out {:t :dot}))
+              (throw (ex-info (str "unexpected character: " c) {:pos i :input s})))))))))
+
+;;; Pratt parser
+
+(def ^:private named-ops
+  "Operators whose symbol is not a readable EDN keyword -> [precedence name]."
+  {"~" [7 :regex] "~*" [7 :iregex] "!~" [7 :not-regex] "!~*" [7 :not-iregex]
+   "~~" [7 :like] "~~*" [7 :ilike] "!~~" [7 :not-like] "!~~*" [7 :not-ilike]
+   "#>" [7 :json-path] "#>>" [7 :json-path-text] "@>" [7 :contains] "<@" [7 :contained-by]
+   "?" [7 :has-key] "?|" [7 :has-any-key] "?&" [7 :has-all-keys] "&&" [7 :overlaps]
+   "%" [9 :mod] "^" [10 :pow]})
+
+(def ^:private binary-ops
+  "operator -> [precedence keyword], following PostgreSQL precedence."
+  (merge
+   {"OR" [1 :or] "AND" [2 :and]
+    "=" [5 :=] "<>" [5 :<>] "!=" [5 :<>] "<" [5 :<] ">" [5 :>] "<=" [5 :<=] ">=" [5 :>=]
+    "LIKE" [6 :like] "ILIKE" [6 :ilike]
+    "||" [7 :||] "->" [7 :->] "->>" [7 :->>]
+    "+" [8 :+] "-" [8 :-] "*" [9 :*] "/" [9 :/]}
+   named-ops))
+
+(def ^:private prec-not 3)
+(def ^:private prec-is 4)
+(def ^:private prec-in 6)
+(def ^:private prec-unary-minus 10)
+(def ^:private prec-postfix 12)
+
+(declare parse-expr)
+
+(defn- peek-tok [st] (first (:toks @st)))
+(defn- next-tok! [st] (let [t (peek-tok st)] (swap! st update :toks rest) t))
+(defn- kw? [tok v] (and (= :kw (:t tok)) (= v (:v tok))))
+(defn- op? [tok v] (and (= :op (:t tok)) (= v (:v tok))))
+(defn- expect! [st pred what]
+  (let [t (next-tok! st)]
+    (when-not (pred t) (throw (ex-info (str "expected " what) {:got t :input (:input @st)})))
+    t))
+
+(def ^:private closing-text {:rparen "')'" :rbracket "']'"})
+
+(defn- parse-list
+  "Comma-separated expressions up to and including the closing token."
+  [st close]
+  (if (= close (:t (peek-tok st)))
+    (do (next-tok! st) [])
+    (loop [acc [(parse-expr st 0)]]
+      (let [t (next-tok! st)]
+        (cond (= :comma (:t t)) (recur (conj acc (parse-expr st 0)))
+              (= close (:t t)) acc
+              :else (throw (ex-info (str "expected ',' or " (closing-text close)) {:got t :input (:input @st)})))))))
+
+(defn- ident-name
+  "Dotted qualification (schema.func) folded into one name."
+  [st first-tok]
+  (loop [parts [(:v first-tok)]]
+    (if (and (= :dot (:t (peek-tok st))) (= :ident (:t (second (:toks @st)))))
+      (do (next-tok! st) (recur (conj parts (:v (next-tok! st)))))
+      (str/join "." parts))))
+
+(defn- parse-type
+  "Type name after ::. Handles multi-word names, (n[,m]) modifiers and [] dimensions."
+  [st]
+  (let [t (next-tok! st)
+        ;; TIME is also a keyword (AT TIME ZONE)
+        _ (when-not (or (= :ident (:t t)) (kw? t "TIME")) (throw (ex-info "expected a type name" {:got t :input (:input @st)})))
+        base (if (= :kw (:t t)) "time" (ident-name st t))
+        words (loop [ws [base]]
+                (let [n (peek-tok st)
+                      nv (some-> (:v n) str/lower-case)
+                      prev (str/lower-case (peek ws))]
+                  (if (and (#{:ident :kw} (:t n))
+                           (or (and (#{"character" "bit"} prev) (= nv "varying"))
+                               (and (= "double" prev) (= nv "precision"))
+                               (and (#{"timestamp" "time"} prev) (#{"with" "without"} nv))
+                               (and (#{"with" "without"} prev) (= nv "time"))
+                               (and (= "time" prev) (= nv "zone") (>= (count ws) 3))))
+                    (do (next-tok! st) (recur (conj ws (:v n))))
+                    ws)))
+        mods (when (= :lparen (:t (peek-tok st))) (next-tok! st) (vec (parse-list st :rparen)))
+        ;; timestamp(0) without time zone: the typmod comes before the words
+        words (loop [ws words]
+                (let [n (peek-tok st) nv (some-> (:v n) str/lower-case) prev (str/lower-case (peek ws))]
+                  (if (and mods (#{:ident :kw} (:t n))
+                           (or (and (#{"timestamp" "time"} prev) (#{"with" "without"} nv))
+                               (and (#{"with" "without"} prev) (= nv "time"))
+                               (and (= "time" prev) (= nv "zone"))))
+                    (do (next-tok! st) (recur (conj ws (:v n))))
+                    ws)))
+        dims (loop [n 0]
+               (if (= :lbracket (:t (peek-tok st)))
+                 (do (next-tok! st) (expect! st #(= :rbracket (:t %)) "']'") (recur (inc n)))
+                 n))
+        k (keyword (str (str/join "-" (map str/lower-case words)) (apply str (repeat dims "-array"))))]
+    (if (seq mods) (into [k] mods) k)))
+
+(defn- parse-case [st]
+  (let [simple (when-not (kw? (peek-tok st) "WHEN") (parse-expr st 0))
+        clauses (loop [acc []]
+                  (if (kw? (peek-tok st) "WHEN")
+                    (do (next-tok! st)
+                        (let [c (parse-expr st 0)
+                              _ (expect! st #(kw? % "THEN") "THEN")
+                              r (parse-expr st 0)]
+                          (recur (conj acc (if simple [:= simple c] c) r))))
+                    acc))
+        else (when (kw? (peek-tok st) "ELSE") (next-tok! st) (parse-expr st 0))]
+    (expect! st #(kw? % "END") "END")
+    (cond-> (into [:case] clauses) (some? else) (conj :else else))))
+
+(defn- parse-call [st name]
+  (cond
+    (and (= "trim" (str/lower-case name)) (kw? (peek-tok st) "BOTH"))
+    (do (next-tok! st)
+        (let [chars (when-not (kw? (peek-tok st) "FROM") (parse-expr st 0))
+              _ (expect! st #(kw? % "FROM") "FROM")
+              x (parse-expr st 0)]
+          (expect! st #(= :rparen (:t %)) "')'")
+          (if chars [:trim chars x] [:trim x])))
+    (op? (peek-tok st) "*")
+    (do (next-tok! st) (expect! st #(= :rparen (:t %)) "')'") [(keyword (str/lower-case name)) :*])
+    :else (into [(keyword (str/lower-case name))] (parse-list st :rparen))))
+
+(defn- parse-primary [st]
+  (let [t (next-tok! st)]
+    (case (:t t)
+      :str (:v t)
+      :num (:v t)
+      :lparen (let [e (parse-expr st 0)] (expect! st #(= :rparen (:t %)) "')'") e)
+      :op (if (= "-" (:v t))
+            (let [e (parse-expr st prec-unary-minus)] (if (number? e) (- e) [:- e]))
+            (throw (ex-info (str "operator at start of expression: " (:v t)) {:input (:input @st)})))
+      :kw (case (:v t)
+            "NULL" nil "TRUE" true "FALSE" false
+            "NOT" [:not (parse-expr st prec-not)]
+            ("CURRENT_TIMESTAMP" "CURRENT_DATE" "CURRENT_TIME" "LOCALTIMESTAMP" "LOCALTIME"
+             "CURRENT_USER" "SESSION_USER" "CURRENT_ROLE") [:raw (:v t)]
+            "ARRAY" (do (expect! st #(= :lbracket (:t %)) "'['") [:array (parse-list st :rbracket)])
+            ("ANY" "ALL" "SOME") (do (expect! st #(= :lparen (:t %)) "'('")
+                                     (let [e (parse-expr st 0)]
+                                       (expect! st #(= :rparen (:t %)) "')'")
+                                       [(if (= "ALL" (:v t)) :all :any) e]))
+            "CASE" (parse-case st)
+            (throw (ex-info (str "unexpected keyword: " (:v t)) {:input (:input @st)})))
+      :ident (let [name (ident-name st t)]
+               (if (= :lparen (:t (peek-tok st)))
+                 (do (next-tok! st) (parse-call st name))
+                 (keyword name)))
+      (throw (ex-info "expected an expression" {:got t :input (:input @st)})))))
+
+(defn- flatten-op [op a b]
+  (into [op] (concat (if (and (vector? a) (= op (first a))) (rest a) [a])
+                     (if (and (vector? b) (= op (first b))) (rest b) [b]))))
+
+(defn- parse-expr [st min-prec]
+  (loop [left (parse-primary st)]
+    (let [t (peek-tok st)]
+      (cond
+        (op? t "::")
+        (if (< min-prec prec-postfix) (do (next-tok! st) (recur [:cast left (parse-type st)])) left)
+
+        (and (= :dot (:t t)) (= :ident (:t (second (:toks @st)))))
+        (if (< min-prec prec-postfix) (do (next-tok! st) (recur [:field left (keyword (:v (next-tok! st)))])) left)
+
+        ;; t.* : the whole row, as an argument
+        (and (= :dot (:t t)) (op? (second (:toks @st)) "*"))
+        (if (< min-prec prec-postfix) (do (next-tok! st) (next-tok! st) (recur [:row left])) left)
+
+        ;; expr COLLATE "name": the collation is left out, the value is the same
+        (kw? t "COLLATE")
+        (if (< min-prec prec-postfix) (do (next-tok! st) (ident-name st (next-tok! st)) (recur left)) left)
+
+        ;; name => value : a named argument
+        (op? t "=>")
+        (if (keyword? left) (do (next-tok! st) (recur [:named left (parse-expr st 0)])) left)
+
+        (= :lbracket (:t t))
+        (if (< min-prec prec-postfix)
+          (do (next-tok! st)
+              (let [i (parse-expr st 0)] (expect! st #(= :rbracket (:t %)) "']'") (recur [:subscript left i])))
+          left)
+
+        (kw? t "AT")
+        (if (<= min-prec prec-postfix)
+          (do (next-tok! st) (expect! st #(kw? % "TIME") "TIME") (expect! st #(kw? % "ZONE") "ZONE")
+              (recur [:at-time-zone left (parse-expr st (dec prec-postfix))]))
+          left)
+
+        (kw? t "IS")
+        (if (<= min-prec prec-is)
+          (do (next-tok! st)
+              (let [neg (when (kw? (peek-tok st) "NOT") (next-tok! st) true)
+                    n (next-tok! st)]
+                (cond
+                  (kw? n "DISTINCT") (do (expect! st #(kw? % "FROM") "FROM")
+                                         (recur [(if neg :is-not-distinct-from :is-distinct-from) left (parse-expr st (inc prec-is))]))
+                  ;; IS [NOT] JSON [VALUE | ARRAY | OBJECT | SCALAR] [WITH | WITHOUT UNIQUE [KEYS]]
+                  (= "JSON" (str/upper-case (str (:v n))))
+                  (let [words (loop [ws []]
+                                (let [w (str/upper-case (str (:v (peek-tok st))))]
+                                  (if (#{"VALUE" "ARRAY" "OBJECT" "SCALAR" "WITH" "WITHOUT" "UNIQUE" "KEYS"} w)
+                                    (do (next-tok! st) (recur (conj ws w)))
+                                    ws)))]
+                    (recur (into [(if neg :is-not-json :is-json) left] (map #(keyword (str/lower-case %)) words))))
+                  (#{"NULL" "TRUE" "FALSE"} (:v n))
+                  (recur [(if neg :is-not :is) left ({"NULL" nil "TRUE" true "FALSE" false} (:v n))])
+                  :else (throw (ex-info "unexpected token after IS" {:got n :input (:input @st)})))))
+          left)
+
+        (or (kw? t "NOT") (kw? t "IN") (kw? t "BETWEEN") (kw? t "LIKE") (kw? t "ILIKE"))
+        (if (<= min-prec prec-in)
+          (let [neg (when (kw? t "NOT") (next-tok! st) true)
+                t (next-tok! st)]
+            (case (:v t)
+              "IN" (do (expect! st #(= :lparen (:t %)) "'('")
+                       (recur [(if neg :not-in :in) left (parse-list st :rparen)]))
+              "BETWEEN" (let [symmetric (when (kw? (peek-tok st) "SYMMETRIC") (next-tok! st) true)
+                              lo (parse-expr st (inc prec-in))
+                              _ (expect! st #(kw? % "AND") "AND")
+                              hi (parse-expr st (inc prec-in))
+                              e [(if symmetric :between-symmetric :between) left lo hi]]
+                          (recur (if neg [:not e] e)))
+              ("LIKE" "ILIKE") (let [e [(if (= "LIKE" (:v t)) :like :ilike) left (parse-expr st (inc prec-in))]]
+                                 (recur (if neg [:not e] e)))
+              (throw (ex-info "unexpected token after NOT" {:got t :input (:input @st)}))))
+          left)
+
+        (and (#{:op :kw} (:t t)) (binary-ops (:v t)))
+        (let [[prec hop] (binary-ops (:v t))]
+          (if (<= min-prec prec)
+            (do (next-tok! st)
+                (let [right (parse-expr st (inc prec))]
+                  (recur (if (#{:and :or} hop) (flatten-op hop left right) [hop left right]))))
+            left))
+
+        :else left))))
+
+;;; API
+
+(defn parse
+  "Expression string -> data. Throws ex-info with :input (and :pos or :got) when it cannot be read."
+  [s]
+  (let [st (atom {:toks (tokenize s) :input s})
+        e (parse-expr st 0)]
+    (when-let [t (peek-tok st)]
+      (throw (ex-info (str "trailing token: " (pr-str t)) {:got t :input s})))
+    e))
+
+(defn try-parse
+  "Like parse, but returns {:expr e} or {:error message :input s}."
+  [s]
+  (try {:expr (parse s)}
+       (catch Exception e {:error (or (ex-message e) (str (class e))) :input s})))
+
+(defn check-clause
+  "The expression inside \"CHECK (...)\" as data. Trailing NOT VALID / NO INHERIT are ignored."
+  [s]
+  (let [[_ inner] (re-matches #"(?s)CHECK\s*\((.*)\)(?:\s+(?:NOT VALID|NO INHERIT|NOT ENFORCED|ENFORCED))*\s*" s)]
+    (when-not inner (throw (ex-info "not a CHECK (...) clause" {:input s})))
+    (parse inner)))
+
+(def ^:private numeric-types
+  (types/keywords #(or (:range %) (#{:exact :float} (:eval %)))))
+
+(defn strip-casts
+  "An expression with its casts ([:cast x type]) replaced by what they cast."
+  [e]
+  (walk/postwalk (fn [f] (if (and (vector? f) (= :cast (first f)) (= 3 (count f))) (second f) f)) e))
+
+(defn canonical
+  "Undoes rewrites PostgreSQL applies when deparsing, without changing meaning:
+   numeric literals printed as casts ('-1'::integer -> -1), array casts,
+   col = ANY (ARRAY[...]) -> [:in col [...]], col <> ALL (ARRAY[...]) -> [:not-in col [...]],
+   and a one-element IN -> = (NOT IN -> <>)."
+  [e]
+  (walk/postwalk
+   (fn [f]
+     (if-not (vector? f)
+       f
+       (case (first f)
+         :cast (let [[_ x t] f]
+                 (cond (and (vector? x) (= :array (first x))) x
+
+                       (and (string? x) (numeric-types t)
+                            (re-matches #"-?\d+(\.\d+)?([eE][+-]?\d+)?" x))
+                       (if (re-find #"[.eE]" x) (bigdec x) (or (parse-long x) (bigdec x)))
+
+                       :else f))
+
+         := (let [[_ x y] f]
+              (if (and (vector? y) (= :any (first y)) (vector? (second y)) (= :array (first (second y))))
+                [:in x (second (second y))]
+                f))
+
+         :<> (let [[_ x y] f]
+               (if (and (vector? y) (= :all (first y)) (vector? (second y)) (= :array (first (second y))))
+                 [:not-in x (second (second y))]
+                 f))
+
+         :in (if (= 1 (count (nth f 2))) [:= (second f) (first (nth f 2))] f)
+
+         :not-in (if (= 1 (count (nth f 2))) [:<> (second f) (first (nth f 2))] f)
+
+         f)))
+   e))
+

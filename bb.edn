@@ -4,9 +4,9 @@
         com.gfredericks/test.chuck {:mvn/version "0.2.15"}}
  :tasks {:init (defn suite
                 "The test runner's arguments for bb test:jvm or test:floor <suite>: all, without a suite;
-                 main, all but pgmalli.oracle-test; oracle, pgmalli.oracle-test (CI runs each in a job)."
+                 main, all but pgmalli-next.oracle-test; oracle, pgmalli-next.oracle-test (CI runs each in a job)."
                 [all main]
-                (case (first *command-line-args*) nil all "main" main "oracle" ["-n" "pgmalli.oracle-test"]))
+                (case (first *command-line-args*) nil all "main" main "oracle" ["-n" "pgmalli-next.oracle-test"]))
          lint {:doc "clj-kondo over src, test and dev"
                :task (shell "clj-kondo --lint src test dev")}
          test:matrix {:doc "bb test against the PostgreSQL versions CI covers"
@@ -28,10 +28,10 @@
          mutate {:doc "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs] [--out f.edn]: which mutants of a source file the tests miss: the bb suite, or the JVM suite under --jvm; database tests only under --db (needs docker)"
                  :extra-paths ["dev"]
                  :task (load-file "dev/mutate.clj")}
-         docs:example {:doc "Rewrite docs/example/pgmalli/public.edn from docs/example/schema.sql (needs docker)"
+         docs:example {:doc "Rewrite docs/example/pgmalli-next/public.edn from docs/example/schema.sql (needs docker)"
                        :extra-paths ["dev"]
                        :task (load-file "dev/docs_example.clj")}
-         catalog {:doc "Rewrite resources/pgmalli/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs (needs docker)"
+         catalog {:doc "Rewrite resources/pgmalli-next/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs (needs docker)"
                   :extra-paths ["dev"]
                   :requires ([catalog])
                   :task (catalog/-main)}
@@ -39,7 +39,7 @@
                        :extra-paths ["dev"]
                        :requires ([catalog])
                        :task (prn (catalog/dump))}
-         fixture {:doc "Rewrite test/resources/pgmalli/{sample,other}.edn from dev/fixture.clj (no database)"
+         fixture {:doc "Rewrite test/resources/pgmalli-next/{sample,other}.edn from dev/fixture.clj (no database)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/fixture.clj")}
          test {:doc "Run the test suite with babashka (every test/**/*_test.clj but the ones that need next.jdbc)"
@@ -60,19 +60,19 @@
                       :task (apply update-expected/-main *command-line-args*)}
          test:update:jvm {:doc "bb test:update:jvm [ns ...]: bb test:update on the JVM, for the namespaces that need next.jdbc too"
                           :task (apply shell "clojure -M:test:test-update" *command-line-args*)}
-         test:stricter {:doc "Rewrite test/resources/pgmalli/stricter.edn, where PostgreSQL takes a parameter that accept/holds? leaves out (JVM, docker); read the diff"
-                        :task (shell {:extra-env {"PGMALLI_UPDATE_STRICTER" "1"}} "clojure -M:test -n pgmalli.accept-test")}
+         test:stricter {:doc "Rewrite test/resources/pgmalli-next/stricter.edn, where PostgreSQL takes a parameter that accept/holds? leaves out (JVM, docker); read the diff"
+                        :task (shell {:extra-env {"PGMALLI_UPDATE_STRICTER" "1"}} "clojure -M:test -n pgmalli-next.accept-test")}
          test:docs:update {:doc "bb test:docs:update [file.md ...]: rewrite each ;; => of the docs with what its form gives (JVM); read the git diff"
                            :task (apply shell "clojure -M:test:docs-update" *command-line-args*)}
          test:jvm {:doc "bb test:jvm [main|oracle]: run the test suite on the JVM, or one part of it"
-                   :task (apply shell "clojure -M:test" (suite [] ["-r" "pgmalli\\.(?!oracle-test$).*-test$"]))}
+                   :task (apply shell "clojure -M:test" (suite [] ["-r" "pgmalli-next\\.(?!oracle-test$).*-test$"]))}
          ;; the oldest versions README supports, in a string: as deps (in deps.edn or as EDN here)
          ;; Renovate would raise them. fuzz-test builds its CHECKs with HoneySQL, which 2.4.1066
          ;; writes IS DISTINCT FROM in wrong
          test:floor {:doc "bb test:floor [main|oracle]: run the JVM suite, or one part of it, on the oldest Clojure, HoneySQL, malli, next.jdbc and pgjdbc README supports"
                      :task (apply shell "clojure" "-Sdeps"
                                   "{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version \"2.4.1066\"} org.clojure/clojure {:mvn/version \"1.11.4\"} metosin/malli {:mvn/version \"0.20.0\"} com.github.seancorfield/next.jdbc {:mvn/version \"1.3.1048\"} org.postgresql/postgresql {:mvn/version \"42.7.7\"}}}}}"
-                                  "-M:test:floor" (suite ["-r" "pgmalli\\.(?!fuzz-test).*"] ["-r" "pgmalli\\.(?!fuzz-test|oracle-test$).*"]))}
+                                  "-M:test:floor" (suite ["-r" "pgmalli-next\\.(?!fuzz-test).*"] ["-r" "pgmalli-next\\.(?!fuzz-test|oracle-test$).*"]))}
          test:all {:doc "lint, bb test, test:jvm, test:floor, oracle and test:docs at once, each into target/<task>.log (: as -), and the exit code of each (needs docker)"
                    :requires ([babashka.fs :as fs] [babashka.process :as p] [clojure.string :as str])
                    :task (let [_ (fs/create-dirs "target")

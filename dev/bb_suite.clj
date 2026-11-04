@@ -3,8 +3,8 @@
   (:require [clojure.string :as str]))
 
 (def jvm-only
-  #{'pgmalli.accept-test 'pgmalli.catalog-fuzz-test 'pgmalli.driver-types-test
-    'pgmalli.oracle-test 'pgmalli.postgres-runs-test 'pgmalli.row-keys-test 'pgmalli.upstream-test 'pgmalli.expression-types-test})
+  #{'pgmalli-next.accept-test 'pgmalli-next.catalog-fuzz-test 'pgmalli-next.driver-types-test
+    'pgmalli-next.oracle-test 'pgmalli-next.postgres-runs-test 'pgmalli-next.row-keys-test 'pgmalli-next.upstream-test 'pgmalli-next.expression-types-test})
 
 (defn namespaces
   "Every test/**/*_test.clj as a namespace symbol, sorted; with jvm? false, without jvm-only."

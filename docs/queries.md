@@ -10,8 +10,8 @@ reads and writes (`:tables`, [below](#the-tables-a-query-uses)). The examples us
 [example/schema.sql](example/schema.sql).
 
 ```clojure
-(require '[pgmalli.core :as pgmalli]
-         '[pgmalli.honeysql :as h]
+(require '[pgmalli-next.core :as pgmalli]
+         '[pgmalli-next.honeysql :as h]
          '[malli.core :as m]
          '[next.jdbc.result-set :as rs])
 
@@ -301,7 +301,7 @@ by the one sending, which your application installs
 | a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`) |
 | a `PGobject` | the type it names |
 
-Another class (a set, a list, a symbol) is sent nowhere. `pgmalli.impl.accept/classes` holds
+Another class (a set, a list, a symbol) is sent nowhere. `pgmalli-next.impl.accept/classes` holds
 this table. A value reaches an argument through its class's row or one of its superclasses' or
 interfaces'.
 
@@ -397,7 +397,7 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   its value as a `PGobject`), and a function in FROM,
   whose columns (its OUT arguments, or one named after the alias; `ordinality` under
   `WITH ORDINALITY`) are of no table. pgmalli reads the functions, operators and implicit casts
-  from a snapshot of `pg_catalog` (`resources/pgmalli/impl/catalog.edn`) of the PostgreSQL versions it
+  from a snapshot of `pg_catalog` (`resources/pgmalli-next/impl/catalog.edn`) of the PostgreSQL versions it
   supports, as of the versions the registry's files were generated on (as for `pg_catalog`'s
   tables above): a call one of them resolves otherwise is untyped, and a function of PostgreSQL
   18 alone (`uuidv7`) is typed for a registry generated on 18. Of an argument whose type is not
@@ -435,7 +435,7 @@ or its negator) of values that are not NULL. An argument of the application's ow
 ;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [:time/instant #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe [:string #:pg{:type "text"}]]]]
 ```
 
-Its columns are read as `pgmalli.core/as-read` reads them ([the one reading](reading-rows.md#the-one-reading-and-sending)):
+Its columns are read as `pgmalli-next.core/as-read` reads them ([the one reading](reading-rows.md#the-one-reading-and-sending)):
 
 ```clojure
 (:row (h/analyze registry {:select [:id :created_at] :from [:users]}))

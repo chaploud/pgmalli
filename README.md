@@ -1,7 +1,7 @@
-# pgmalli
+# pgmalli-next
 
-[![ci](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml)
-[![Clojars](https://img.shields.io/clojars/v/io.github.chaploud/pgmalli.svg)](https://clojars.org/io.github.chaploud/pgmalli)
+[![ci](https://github.com/chaploud/pgmalli-next/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chaploud/pgmalli-next/actions/workflows/ci.yml)
+[![Clojars](https://img.shields.io/clojars/v/io.github.chaploud/pgmalli-next.svg)](https://clojars.org/io.github.chaploud/pgmalli-next)
 
 Your PostgreSQL schema as [malli](https://github.com/metosin/malli) schemas: validate rows,
 generate test data and check HoneySQL queries, without a database at hand.
@@ -25,27 +25,27 @@ The examples use [docs/example/schema.sql](docs/example/schema.sql): `groups`, `
 `posts` and `events`, with an enum, identity and generated columns, a jsonb column, and
 CHECKs. Add pgmalli to your dependencies ([Installation](#installation)), and add
 `"resources"` to `:paths` in `deps.edn` (and in `bb.edn` for babashka): the generated files go
-in `resources/pgmalli`, and the default `:paths` is `["src"]` alone.
+in `resources/pgmalli-next`, and the default `:paths` is `["src"]` alone.
 
 To try it, create an empty database, load `docs/example/schema.sql` into it from a clone of
 this repository, then run `generate` in your project. pgmalli reads the database with `psql`,
-so psql's own settings apply (`PGHOST`, `PGDATABASE`, `PGUSER` ...), or `:db` in `pgmalli.edn`
+so psql's own settings apply (`PGHOST`, `PGDATABASE`, `PGUSER` ...), or `:db` in `pgmalli-next.edn`
 ([Installation](#installation)):
 
 ```shell
 $ createdb pgmalli_example
-$ psql -d pgmalli_example -f path/to/pgmalli/docs/example/schema.sql
+$ psql -d pgmalli_example -f path/to/pgmalli-next/docs/example/schema.sql
 $ export PGDATABASE=pgmalli_example
-$ clojure -M -m pgmalli.main generate
-pgmalli: no pgmalli.edn here; using the defaults (schema public, files in resources/pgmalli)
-wrote resources/pgmalli/public.edn (schema public; tables: 4, views: 0, enums: 1, domains: 0; unrendered: 0, diagnostics: 0)
-done: files written: 1; commit them, and run `clojure -M -m pgmalli.main check` in CI
+$ clojure -M -m pgmalli-next.main generate
+pgmalli-next: no pgmalli-next.edn here; using the defaults (schema public, files in resources/pgmalli-next)
+wrote resources/pgmalli-next/public.edn (schema public; tables: 4, views: 0, enums: 1, domains: 0; unrendered: 0, diagnostics: 0)
+done: files written: 1; commit them, and run `clojure -M -m pgmalli-next.main check` in CI
 ```
 
 Load the generated file as a registry and validate an INSERT:
 
 ```clojure
-(require '[pgmalli.core :as pgmalli]
+(require '[pgmalli-next.core :as pgmalli]
          '[malli.core :as m]
          '[malli.error :as me]
          '[malli.generator :as mg])
@@ -94,15 +94,15 @@ shows how CI catches a forgotten one.
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-io.github.chaploud/pgmalli {:mvn/version "0.3.3"}
+io.github.chaploud/pgmalli-next {:mvn/version "0.3.3"}
 ```
 
-`pgmalli.main` reads `pgmalli.edn` from the working directory, or the file given after the
+`pgmalli-next.main` reads `pgmalli-next.edn` from the working directory, or the file given after the
 command (`generate ci.edn`):
 
 ```clojure
 {:schemas ["public"]                  ; the default
- :out-dir "resources/pgmalli"         ; the default; keep it on the classpath
+ :out-dir "resources/pgmalli-next"         ; the default; keep it on the classpath
  :db {:host "localhost" :port 5432 :dbname "app_dev" :user "app"}}
 ```
 
@@ -120,16 +120,16 @@ From Clojure:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-(require '[pgmalli.generate :as generate])
+(require '[pgmalli-next.generate :as generate])
 
 (generate/generate! {:schemas ["public"]})
-;; => {"public" "resources/pgmalli/public.edn"}
+;; => {"public" "resources/pgmalli-next/public.edn"}
 ```
 
 `generate!` also takes `:db {:datasource ds}`, a `javax.sql.DataSource`. Generating needs a
 [supported PostgreSQL](#supported-versions). Applications need only the generated files.
 
-On babashka, put the same coordinate in `bb.edn`'s `:deps` and run `bb -m pgmalli.main generate`.
+On babashka, put the same coordinate in `bb.edn`'s `:deps` and run `bb -m pgmalli-next.main generate`.
 Everything but JDBC works there.
 
 To generate rows of a column with a regex CHECK (`~` or `LIKE`) on the JVM, add test.chuck to
@@ -269,7 +269,7 @@ data tells (`:rows`), the problems PostgreSQL would report (`:problems`) and the
 and writes (`:tables`):
 
 ```clojure
-(require '[pgmalli.honeysql :as h])
+(require '[pgmalli-next.honeysql :as h])
 
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
 ;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
@@ -398,7 +398,7 @@ returns:
 ;; => {:args ["bigint"], :returns [:maybe {:id "bigint", :email "varchar(120)"}]}
 ```
 
-The options of `pgmalli.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
+The options of `pgmalli-next.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
 
 ## Keeping the files current
 
@@ -417,16 +417,16 @@ no file:
 (is (nil? (:missing (generate/check {:schemas ["public"]} {:db? false}))))
 ```
 
-`clojure -M -m pgmalli.main check` prints each difference, then a line with the command to
+`clojure -M -m pgmalli-next.main check` prints each difference, then a line with the command to
 run:
 
 ```shell
-$ clojure -M -m pgmalli.main check
-pgmalli: no pgmalli.edn here; using the defaults (schema public, files in resources/pgmalli)
+$ clojure -M -m pgmalli-next.main check
+pgmalli-next: no pgmalli-next.edn here; using the defaults (schema public, files in resources/pgmalli-next)
 public :pg.public/groups :motto
   file: nil
   db:   [:maybe [:string {:pg/type "text"}]]
-stale: public (differences: 1); run `clojure -M -m pgmalli.main generate` and commit the files
+stale: public (differences: 1); run `clojure -M -m pgmalli-next.main generate` and commit the files
 ```
 
 | exit | when |
@@ -439,13 +439,13 @@ stale: public (differences: 1); run `clojure -M -m pgmalli.main generate` and co
 Findings go to stdout; warnings and errors go to stderr, one line each (`PGMALLI_DEBUG=1` adds
 the stack trace), followed by the usage for a usage error. `--help` prints the usage to stdout.
 `check --edn` prints `generate/check`'s map instead of the differences. A config path that
-does not exist is an error; only with no path does a missing `pgmalli.edn` mean the defaults.
+does not exist is an error; only with no path does a missing `pgmalli-next.edn` mean the defaults.
 
 `generate/diff` gives the same differences between two generated files, the effect of a
 migration:
 
 ```clojure
-(require '[pgmalli.generate :as generate])
+(require '[pgmalli-next.generate :as generate])
 
 (let [before (pgmalli/generated "public")
       after (update-in before [:registry :pg.public/groups] conj [:motto [:maybe :string]])]
@@ -465,7 +465,7 @@ file and lists them all:
 
 ## Overrides
 
-`:overrides` in `pgmalli.edn` replaces what pgmalli generates. A keyword `:schema.table/column`
+`:overrides` in `pgmalli-next.edn` replaces what pgmalli generates. A keyword `:schema.table/column`
 replaces the schema of that one column's value, its type's schema with it (an enum's, a
 `varchar(n)`'s length), such as an `inet` column, which is otherwise `:any`. A constraint name
 with `{:skip reason}` leaves that CHECK out; use it for the CHECKs listed in `:unrendered`. To
@@ -541,10 +541,10 @@ and pgjdbc are yours to add.
 
 Changing any of these is breaking; before 1.0 it bumps the minor version:
 
-1. the keys of `pgmalli.edn`
+1. the keys of `pgmalli-next.edn`
 2. the generated file and the registry names
 3. the kinds of `:unrendered` entries and of `h/analyze`'s problems
-4. the public functions of `pgmalli.core`, `pgmalli.generate` and `pgmalli.honeysql`, and
+4. the public functions of `pgmalli-next.core`, `pgmalli-next.generate` and `pgmalli-next.honeysql`, and
    their options
 5. the `:pgmalli/error` kinds of the errors pgmalli throws
 6. the command line: the `generate` and `check` commands, `check --edn`'s output and the exit
@@ -552,7 +552,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 
 | `:pgmalli/error` | when |
 |---|---|
-| `:pgmalli.error/invalid-config` | `pgmalli.edn` or a `:db` map pgmalli cannot use, or a schema the database lacks |
+| `:pgmalli.error/invalid-config` | `pgmalli-next.edn` or a `:db` map pgmalli cannot use, or a schema the database lacks |
 | `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |

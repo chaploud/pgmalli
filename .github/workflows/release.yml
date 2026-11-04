@@ -1,7 +1,7 @@
 name: release
 # Pushing a vX.Y.Z tag on main builds the jar, publishes it to Clojars and creates a GitHub release.
 # The tag is the version: v1.2.3 publishes 1.2.3.
-# Secret: CLOJARS_PASSWORD, a Clojars deploy token of chaploud scoped to io.github.chaploud/pgmalli,
+# Secret: CLOJARS_PASSWORD, a Clojars deploy token of chaploud scoped to io.github.chaploud/pgmalli-next,
 # kept in the environment clojars (deployments from v* tags only).
 on:
   push:
@@ -39,8 +39,8 @@ jobs:
         with:
           name: jar
           path: |
-            target/pgmalli.jar
-            target/classes/META-INF/maven/io.github.chaploud/pgmalli/pom.xml
+            target/pgmalli-next.jar
+            target/classes/META-INF/maven/io.github.chaploud/pgmalli-next/pom.xml
   deploy:
     name: publish to Clojars
     needs: build
@@ -77,6 +77,6 @@ jobs:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: jar
-      - run: gh release create "$GITHUB_REF_NAME" pgmalli.jar --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
+      - run: gh release create "$GITHUB_REF_NAME" pgmalli-next.jar --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}

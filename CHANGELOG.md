@@ -49,17 +49,17 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     takes a value sent typed alone, not a keyword, a date sent untyped or nil: PostgreSQL
     cannot type the parameter then.
   * `:time`, `:read` and `:send` are removed: an error names the one reading or the one sending.
-  * `pgmalli.core/transformer` is removed: read rows with the extension instead of decoding them.
+  * `pgmalli-next.core/transformer` is removed: read rows with the extension instead of decoding them.
 * `:compare` is removed: a comparison is strict, and an argument compared with a column takes
   no nil, as on 0.3.3 by default. `{:compare :lenient}` (or any `:compare`) is an
   `:pgmalli.error/invalid-options` error. Compare NULL in the query body (`[:= :x nil]`, which
   HoneySQL writes as IS NULL, or `IS NOT DISTINCT FROM`).
-* `pgmalli.core/read-options` is removed.
+* `pgmalli-next.core/read-options` is removed.
 * Datasets are removed: the namespace `pgmalli.data` (`dataset-schema`, `dataset-generator`,
   `short-tables`, `inserts`, `write-dataset`, `read-dataset`, `readers`) and the error kinds
   `:pgmalli.error/invalid-dataset` and `:pgmalli.error/reference-cycle`. `mg/generate` still
   gives a row of a table.
-* `pgmalli.core/portable` and `pgmalli.core/columns` are removed. A table's schema is
+* `pgmalli-next.core/portable` and `pgmalli-next.core/columns` are removed. A table's schema is
   `(m/deref (m/schema :pg.public/users {:registry registry}))`; with CHECKs across columns it is
   `[:and [:map ...] ...]`, its map the first child.
 * `h/row-schema`'s `:pgmalli/untold` property is removed: with unqualified keys, every key is
@@ -73,7 +73,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   code that reads the row by position (`(second ret)`) reads it with `last` or `m/children`.
   Its properties map is always there (`{:pgmalli/problems []}` for none), so the arguments are
   `(nth s 2)` and the return `(nth s 3)`.
-* In `pgmalli.edn`, the database name under `:db` is `:dbname`, as in next.jdbc and libpq:
+* In `pgmalli-next.edn`, the database name under `:db` is `:dbname`, as in next.jdbc and libpq:
   `:db {:db "app"}` is `:db {:dbname "app"}`. The old key is an error naming the new one.
 * Checks and argument types are stricter, so a test that passed on 0.3.3 may fail; each
   failure is a real mismatch with the schema.
@@ -104,7 +104,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   have, `{:skip reason}` under a column key and a value that is no malli schema are errors
   naming the key meant. Drop the keys of what was dropped from the database.
 * Generate again: every file holds the schema's functions and operators (`:functions`,
-  `:operators`), and `pgmalli.main check` reports a file without them stale, in one line; until
+  `:operators`), and `pgmalli-next.main check` reports a file without them stale, in one line; until
   then, a call is typed by `pg_catalog`'s functions alone. A file also changes where its schema
   has a domain over `timestamp(n) with time zone` or `time(n)`, a table other tables inherit, a DEFERRABLE primary key or
   unique constraint, an invalid unique index, or a domain whose CHECK lists its values. A
@@ -192,14 +192,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   given unqualified (`:users`) or of another schema (`:pg.public/users`) names the registry's
   name (`:pg.sample/users`); an error for a name the registry lacks lists its tables, views and
   types before the schemas derived from them.
-* `pgmalli.main`: `--help` prints the usage to stdout and exits 0; an unknown option is named
+* `pgmalli-next.main`: `--help` prints the usage to stdout and exits 0; an unknown option is named
   before the usage, exit 2. The usage shows the command to run, the exit codes and
   `PGMALLI_DEBUG`.
 * `:overrides` takes one column, `:schema.table/column`: its schema replaces that column's
   value, read and written, NULL-ability and CHECKs still the database's
   ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
   read parsed, written for a map and a vector, which go as `jsonb`.
-* `pgmalli.main` suggests the column's `:overrides` key for an unrendered type, and
+* `pgmalli-next.main` suggests the column's `:overrides` key for an unrendered type, and
   `{:skip reason}` for an unrendered CHECK.
 
 ### Changed
@@ -272,8 +272,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   unless `:read` names the type: `{:read {"tstzrange" :string}}` for an extension reading a range as its text.
 * A `:schema` the registry holds no generated file, table or view of is an
   `:pgmalli.error/invalid-options` error naming the ones it holds, in every function of
-  `pgmalli.honeysql`; before, each did something of its own (an unknown table, `:any`, nil).
-  `pgmalli.core/describe` of a query schema shows its `:pgmalli/problems`.
+  `pgmalli-next.honeysql`; before, each did something of its own (an unknown table, `:any`, nil).
+  `pgmalli-next.core/describe` of a query schema shows its `:pgmalli/problems`.
 * An alias, `:default`, `:null` and a key of `:values` are read as the loaded HoneySQL writes them
   under `:format` (`:quoted-snake` too) and the dialect `sql/set-dialect!` set.
 * An argument under `SOME` (`[:= :id [:some :?ids]]`) is typed as one under `ANY`.
@@ -285,7 +285,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
 * An invalid unique index (a failed `CREATE INDEX CONCURRENTLY`) is no longer in `:pg/unique`.
-* `pgmalli.core/describe` refuses a type neither malli nor the registry knows.
+* `pgmalli-next.core/describe` refuses a type neither malli nor the registry knows.
 * An option pgmalli does not take is an error whose data names it (`:unknown`) and the one
   meant (`:did-you-mean`).
 * Messages name the one probably meant as `; did you mean: x`, which no longer doubles the `?`
@@ -293,7 +293,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `{:shcema ["disallowed key"]}; did you mean: :schema`.
 * A `:db` holding next.jdbc's `:dbtype` is an error saying to drop it.
 * A schema of `:schemas` the database lacks is an error naming the schema meant.
-* `pgmalli.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`, and warns of
+* `pgmalli-next.main generate` prints its counts as `tables: 4, views: 0, enums: 1 ...`, and warns of
   a PostgreSQL newer than 18: its new functions and types are not typed. A PostgreSQL older
   than 16 is an error.
 * A file's `:database-version` is the major version for a server whose version names its build
@@ -324,7 +324,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   other uses.
 * A table of a query, or of `h/values-schema` and `h/set-schema`, read against a registry
   holding no schema pgmalli generates is a `:pgmalli.error/not-a-registry` error from every
-  function, not `:unknown-table` or an untyped result; a table of `pg_catalog` still reads; `(pgmalli.core/registry)` of no
+  function, not `:unknown-table` or an untyped result; a table of `pg_catalog` still reads; `(pgmalli-next.core/registry)` of no
   schema is an `:invalid-options` error.
 * `h/humanize` begins a problem of `h/schema-problems` with its var; `h/schema-problems` of a
   namespace not loaded is an `:invalid-options` error.
@@ -379,7 +379,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   to a CHECK.
 * Generate again if a schema has a LIKE CHECK with text between two `%`s (`'%-%'`), a
   `col IS NULL OR <pattern>` CHECK, or types or functions named like built-ins (`text`,
-  `lower`): their files change, and `pgmalli.main check` reports them stale. The LIKE regex
+  `lower`): their files change, and `pgmalli-next.main check` reports them stale. The LIKE regex
   matches what it matched; the others were read wrong (a built-in's name taken for the
   schema's own) or said their CHECK's name alone.
 * A schema name with `/`, `\` or `..`, or two names differing only in case, is a config
@@ -396,7 +396,7 @@ listed; the [README](README.md) describes what this one does.
 
 * PostgreSQL schemas as malli: rows, insert and update schemas, enums, domains, keys,
   EXCLUDE constraints and triggers, and CHECKs as malli or evaluated as PostgreSQL evaluates
-  them. Generated over psql or JDBC (`generate!`, `pgmalli.main`), read as a registry
+  them. Generated over psql or JDBC (`generate!`, `pgmalli-next.main`), read as a registry
   (`registry`, `generated`, `columns`, `portable`), read back as PostgreSQL types (`describe`).
 * Rows and datasets generated as the database takes them, written as HoneySQL INSERTs and
   kept as EDN fixtures (`pgmalli.data`: `dataset-schema`, `dataset-generator`, `short-tables`,
@@ -404,9 +404,9 @@ listed; the [README](README.md) describes what this one does.
 * Rows typed as next.jdbc builds them from what pgjdbc returns (`as-read`, `read-options`,
   `transformer`).
 * HoneySQL queries checked against the schema with no database, their arguments and rows
-  typed, and each problem said as what to do (`pgmalli.honeysql`: `check`, `arg-types`,
+  typed, and each problem said as what to do (`pgmalli-next.honeysql`: `check`, `arg-types`,
   `params-schema`, `row-schema`, `query-schema`, `tables`, `schema-problems`, `explain`).
-* Generated files kept current in CI (`generate/check`, `generate/diff`, `pgmalli.main check`).
+* Generated files kept current in CI (`generate/check`, `generate/diff`, `pgmalli-next.main check`).
 
 Supported, each and later: PostgreSQL 16, HoneySQL 2.4.1066, next.jdbc 1.3, pgjdbc 42.7,
 malli 0.20 and Clojure 1.11; babashka for everything but JDBC.

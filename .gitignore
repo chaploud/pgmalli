@@ -9,4 +9,4 @@ target/
 
 # generate run in this checkout writes here; pgmalli ships ir.sql, and impl/catalog.edn (bb catalog)
 # where no schema's file can go
-resources/pgmalli/*.edn
+resources/pgmalli-next/*.edn

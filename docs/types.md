@@ -119,7 +119,7 @@ A row schema differs from PostgreSQL in a few places:
 The types without a malli counterpart generate from a fixed list of literals PostgreSQL
 accepts (an interval in ISO 8601). A NOT NULL
 column of a type pgmalli cannot make a value of fails to generate, naming it:
-`public.t.p: pgmalli cannot make a value of type pair; give one with :overrides in pgmalli.edn`.
+`public.t.p: pgmalli cannot make a value of type pair; give one with :overrides in pgmalli-next.edn`.
 
 Dates and times generate within 2025 (in domains and arrays too), `timetz` offsets within
 what PostgreSQL takes, a `jsonb_typeof = 'array'` column an array of JSON values.
@@ -131,7 +131,7 @@ The types of these extensions are supported, in whatever schema the extension is
 returns their values as `PGobject`s (`hstore` as a `java.util.Map`), which `as-read` takes.
 
 Every type pgmalli supports is one entry of `types` in
-[src/pgmalli/impl/types.clj](../src/pgmalli/impl/types.clj): its malli schema, the literals
+[src/pgmalli_next/impl/types.clj](../src/pgmalli_next/impl/types.clj): its malli schema, the literals
 it generates, the cast on insert and what the driver returns. The types it does not support
 yet are listed under `unsupported` there, each with why
 ([CONTRIBUTING.md](../CONTRIBUTING.md#following-upstream) says how to add one).
@@ -145,7 +145,7 @@ and written ([Overrides](../README.md#overrides)). For shapes that depend on ano
 write them as malli and join them to the generated schema, with no copy of either:
 
 ```clojure
-(require '[pgmalli.core :as pgmalli]
+(require '[pgmalli-next.core :as pgmalli]
          '[malli.core :as m]
          '[malli.util :as mu]
          '[malli.error :as me]
@@ -298,7 +298,7 @@ bound not above the upper.
 
 ## Registries
 
-`pgmalli.core/registry` returns a map: malli's default schemas, `malli.util`'s,
+`pgmalli-next.core/registry` returns a map: malli's default schemas, `malli.util`'s,
 `malli.experimental.time`'s, pgmalli's `:pg/*` types, and the generated and derived names.
 Its `:string`, `:double` and `:re` replace malli's ([above](#names-in-the-registry)).
 A name defined in two of the schemas passed keeps the later schema's.
@@ -309,7 +309,7 @@ registry holding a name wins.
 
 ## The generated file
 
-`pgmalli.core/generated` reads a schema's file as data:
+`pgmalli-next.core/generated` reads a schema's file as data:
 
 | key | holds |
 |---|---|
@@ -317,7 +317,7 @@ registry holding a name wins.
 | `:database-version` | the major version it was read from, `"PostgreSQL 17"` |
 | `:diagnostics` | what deserves a look in the database |
 | `:registry` | `{name schema}`: the rows, enums and domains; the insert and update schemas are derived when it is loaded |
-| `:functions`, `:operators` | `{name [overload ...]}`: the schema's own functions (no procedure or trigger function) and operators, which [`pgmalli.honeysql`](queries.md#the-row-a-query-returns) resolves a call to beside `pg_catalog`'s. An overload is `{:args [type ...] :result type}`, types named as `:pg/type` names them, with `:set true` for a set-returning function, `:kind` (`:a` an aggregate, `:w` a window function), `:variadic true`, `:defaults` (how many of the last arguments may be left out), `:columns` (`[[name type] ...]` it returns in FROM: its OUT or `TABLE` arguments, or its composite type's columns), `:btree true` for a comparison operator |
+| `:functions`, `:operators` | `{name [overload ...]}`: the schema's own functions (no procedure or trigger function) and operators, which [`pgmalli-next.honeysql`](queries.md#the-row-a-query-returns) resolves a call to beside `pg_catalog`'s. An overload is `{:args [type ...] :result type}`, types named as `:pg/type` names them, with `:set true` for a set-returning function, `:kind` (`:a` an aggregate, `:w` a window function), `:variadic true`, `:defaults` (how many of the last arguments may be left out), `:columns` (`[[name type] ...]` it returns in FROM: its OUT or `TABLE` arguments, or its composite type's columns), `:btree true` for a comparison operator |
 | `:unrendered` | what pgmalli cannot express, left out of the schemas |
 | `:skipped` | what `:overrides` skips |
 

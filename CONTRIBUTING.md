@@ -16,15 +16,15 @@ and `bb fixture` do not.
 |---|---|
 | `bb lint` | clj-kondo |
 | `bb test` | the suite on babashka (`PGMALLI_SKIP_DB=1` skips the database tests) |
-| `bb test:jvm [main\|oracle]` | the suite on the JVM; `main` all but `pgmalli.oracle-test`, `oracle` that alone |
+| `bb test:jvm [main\|oracle]` | the suite on the JVM; `main` all but `pgmalli-next.oracle-test`, `oracle` that alone |
 | `bb test:matrix` | the suite on every PostgreSQL version CI covers |
 | `bb test:docs` | the code blocks of README.md and docs/, each `;; =>` asserted |
 | `bb test:floor [main\|oracle]` | the suite on the JVM with the oldest versions README supports |
 | `bb test:all` | `bb lint`, `bb test`, `bb test:jvm`, `bb test:floor`, `bb oracle` and `bb test:docs` at once, each into `target/<task>.log` (`:` as `-`); prints each exit code |
-| `bb oracle [seed] [mutants]` | `pgmalli.honeysql/check` against PostgreSQL itself |
+| `bb oracle [seed] [mutants]` | `pgmalli-next.honeysql/check` against PostgreSQL itself |
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
-| `bb test:stricter` | `test/resources/pgmalli/stricter.edn` rewritten: where PostgreSQL takes a parameter that `accept/holds?` leaves out |
+| `bb test:stricter` | `test/resources/pgmalli-next/stricter.edn` rewritten: where PostgreSQL takes a parameter that `accept/holds?` leaves out |
 | `bb mutate --file src/... [--kind table\|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs]` | each mutant of the file (an element left out of a def's literal collection; and/or, when/when-not, =/not=, true/false swapped) against the tests (`--ns`, or the bb suite, or the JVM suite under `--jvm`; database tests only under `--db`), each run killed after `--timeout` seconds, the file written back after each; prints the survivors with file:line and writes `--out` (target/mutate.edn) |
 
 Before a pull request: `bb test:all`, then read the log of each task that did not exit 0. Each
@@ -33,24 +33,24 @@ task starts its own PostgreSQL container. On a machine without docker, `bb lint`
 read the git diff: a rewritten expectation is a changed behaviour.
 
 `bb mutate` runs the bb suite unless told otherwise, which leaves out the tests that pin much
-of a file such as `src/pgmalli/impl/resolve.clj` (those comparing with PostgreSQL). Run such a
+of a file such as `src/pgmalli_next/impl/resolve.clj` (those comparing with PostgreSQL). Run such a
 file against the JVM namespaces that test it, with a database:
-`bb mutate --file src/pgmalli/impl/resolve.clj --jvm --db --ns pgmalli.expression-types-test pgmalli.impl.resolve-test pgmalli.honeysql-test`,
+`bb mutate --file src/pgmalli_next/impl/resolve.clj --jvm --db --ns pgmalli-next.expression-types-test pgmalli-next.impl.resolve-test pgmalli-next.honeysql-test`,
 with `--fn <def>` for one def.
 
 `bb test` runs every `*_test` namespace but those that need next.jdbc. One namespace or one test
-on the JVM: `clojure -M:test -n pgmalli.honeysql-test`,
-`clojure -M:test -v pgmalli.honeysql-test/some-test`.
+on the JVM: `clojure -M:test -n pgmalli-next.honeysql-test`,
+`clojure -M:test -v pgmalli-next.honeysql-test/some-test`.
 
 In a REPL on the test classpath (`clojure -M:test:repl`, or an editor's with the `:test` alias),
-`(require 'pgmalli.honeysql-test :reload)` then `(clojure.test/run-tests 'pgmalli.honeysql-test)`
+`(require 'pgmalli-next.honeysql-test :reload)` then `(clojure.test/run-tests 'pgmalli-next.honeysql-test)`
 runs one namespace. The first database test starts the container, and later runs reuse it until
 the REPL exits; each run of a namespace gets a new database.
 
 ## Documentation
 
 The examples run against [docs/example/schema.sql](docs/example/schema.sql). After changing
-it, `bb docs:example` generates `docs/example/pgmalli/` again; a test fails until it does. A
+it, `bb docs:example` generates `docs/example/pgmalli-next/` again; a test fails until it does. A
 block that cannot run (a shell command, a database call) gets `<!-- :test-doc-blocks/skip -->`
 before it.
 
@@ -65,15 +65,15 @@ again, with `PGMALLI_FUZZ_SEED`, `PGMALLI_FUZZ_CASE` or `PGMALLI_FUZZ_SCHEMAS` s
 
 ## The PostgreSQL oracle
 
-`bb oracle [seed] [mutants]` compares `pgmalli.honeysql` with PostgreSQL itself, on the
-database of `test/resources/pgmalli/oracle/schema.sql`. The seed is `PGMALLI_FUZZ_SEED` or 42,
+`bb oracle [seed] [mutants]` compares `pgmalli-next.honeysql` with PostgreSQL itself, on the
+database of `test/resources/pgmalli-next/oracle/schema.sql`. The seed is `PGMALLI_FUZZ_SEED` or 42,
 the number of mutants per query `PGMALLI_ORACLE_MUTANTS` or 8. The queries are:
 
-- the corpus, `test/resources/pgmalli/oracle/corpus.edn` (`[id query opts?]`, opts merged into
+- the corpus, `test/resources/pgmalli-next/oracle/corpus.edn` (`[id query opts?]`, opts merged into
   each call's options);
 - seeded mutants of them (a column, an alias or a table swapped, a qualifier dropped or added),
   drawn from the catalog but `matrix`, `kinds` and names that need quoting;
-- the queries `pgmalli.oracle/generated-corpus` builds from the catalog: each kind of column
+- the queries `pgmalli-next.oracle/generated-corpus` builds from the catalog: each kind of column
   (type with its typmod, CHECKs, NOT NULL, kind of type and relation, quoting, schema) through
   casts, subqueries, joins, aggregates, CTEs, set operations and RETURNING, and each pair of
   kinds PostgreSQL unites through UNION, CASE, coalesce, greatest and EXCEPT. A column of a new
@@ -92,47 +92,47 @@ them. The oracle prints:
 - a `:pg/type` other than the type PostgreSQL describes (a
   domain as its base type); an untyped column passes.
 
-`pgmalli.oracle/arg-matrix` tests `arg-types` with values that do not come from `arg-types`.
+`pgmalli-next.oracle/arg-matrix` tests `arg-types` with values that do not come from `arg-types`.
 An argument goes beside each column of the oracle schema (compared with `=`, `<>`, `IN` and
 `= ANY`, set by UPDATE and INSERT, beside it in coalesce, CASE and greatest, cast to its type,
 and as LIMIT) and is sent a fixed list of values: one of each class of
-`pgmalli.impl.accept/class-types`, NULL, numbers at the integer bounds, a fraction, `""`, `"1"`
+`pgmalli-next.impl.accept/class-types`, NULL, numbers at the integer bounds, a fraction, `""`, `"1"`
 and the schema's labels. It fails where PostgreSQL takes a value the argument's schema refuses
 (or, set by UPDATE and INSERT, `set-schema`'s and `values-schema`'s row) and the rules of
 docs/queries.md#stricter-than-postgresql do not leave out, and where `accept/holds?` says a
 value goes and PostgreSQL refuses its type. It sends each value as pgjdbc's `setObject` does,
 and the java.time values as `next.jdbc.date-time` does with the `:send` that says so
-(`pgmalli.oracle/send-profiles`), whatever the JVM has loaded, and fails where `sent-type`
+(`pgmalli-next.oracle/send-profiles`), whatever the JVM has loaded, and fails where `sent-type`
 names a type other than PostgreSQL's `pg_typeof` of the value sent. Besides the oracle schema's
 columns, it creates the schema `matrix`, whose table `types` holds, for every type of
-`pgmalli.impl.types` (an extension's where the server has it) and the typmods numeric(10,2),
+`pgmalli-next.impl.types` (an extension's where the server has it) and the typmods numeric(10,2),
 varchar(5), char(3), timestamp(3) and bit(4), a column of the type, of its array, of a domain
 over it (`CHECK (VALUE IS NOT NULL)`) and of an array of that domain. A type added to
-`pgmalli.impl.types` without `:literals` needs a value in `pgmalli.oracle/samples`. The oracle
+`pgmalli-next.impl.types` without `:literals` needs a value in `pgmalli-next.oracle/samples`. The oracle
 schema's table `kinds` adds arrays of domains whose CHECK reads the value (`posint[]`,
 `money2[]`).
 
-`pgmalli.oracle-test` runs the same under the seed `PGMALLI_FUZZ_SEED`, with 3 mutants per
+`pgmalli-next.oracle-test` runs the same under the seed `PGMALLI_FUZZ_SEED`, with 3 mutants per
 query (or `PGMALLI_ORACLE_MUTANTS`) and a sample of the builders per query. The oracle and the
 argument matrix send their cases over `PGMALLI_ORACLE_WORKERS` connections (the processors, up to
 4), each to its own copy of the database. It fails `bb test:jvm` on any false positive, refused return,
 column described otherwise or argument-matrix failure, except those listed in
-`pgmalli.oracle-test/pending`: false rejections in `src` not fixed yet, each with its reason
+`pgmalli-next.oracle-test/pending`: false rejections in `src` not fixed yet, each with its reason
 and a reproduction. `pending-entries-still-fail` fails on an entry that no longer fails, so a
 fix removes it. A statement that runs out of its timeout fails the test, as does a corpus
 id or query listed twice, and a corpus query that did not run in both formats (one the pinned
 HoneySQL cannot write).
 
-`pgmalli.accept-test` holds `accept/accepts?` to PostgreSQL both ways, and `accept/holds?`
+`pgmalli-next.accept-test` holds `accept/accepts?` to PostgreSQL both ways, and `accept/holds?`
 one way: where `holds?` says a value goes, PostgreSQL takes it. Where PostgreSQL takes one that
-`holds?` leaves out, the stricter rule, is pinned in `test/resources/pgmalli/stricter.edn`;
+`holds?` leaves out, the stricter rule, is pinned in `test/resources/pgmalli-next/stricter.edn`;
 after changing `holds?`, run `bb test:stricter` and read the diff.
 
 `a-query-wrapped-keeps-its-problems` sends no query to PostgreSQL, only reads the oracle
 schema: each case wrapped in a FROM subquery, a CTE or EXISTS must have the problems it had
 alone.
 
-After changing how `pgmalli.honeysql` resolves scopes or names, run `bb oracle` with a few
+After changing how `pgmalli-next.honeysql` resolves scopes or names, run `bb oracle` with a few
 seeds. A query it got wrong goes into the corpus.
 
 ## Following upstream
@@ -145,23 +145,23 @@ ran. The tests that catch a change upstream, each naming the list to update:
 
 | test | catches |
 |---|---|
-| `pgmalli.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
-| `pgmalli.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops; a type, implicit cast, range, function, operator or relation of `pg_catalog` that differs from the catalog snapshot (`resources/pgmalli/impl/catalog.edn`, which `bb catalog` rewrites) |
-| `pgmalli.accept-test` | a type pgjdbc's `setObject` sends a class as that differs from `accept/class-types`; a type PostgreSQL takes or refuses where `accept/accepts?` says otherwise |
-| `pgmalli.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/analyze`'s `:row` gives (`pgmalli.impl.resolve` over the catalog snapshot, and the grammar `pgmalli.honeysql` types itself: `sql-value-types`, `grammar-operators`, `json-shapes`); a name PostgreSQL gives an unaliased expression that differs from `expression-name`'s |
+| `pgmalli-next.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
+| `pgmalli-next.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli_next/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops; a type, implicit cast, range, function, operator or relation of `pg_catalog` that differs from the catalog snapshot (`resources/pgmalli-next/impl/catalog.edn`, which `bb catalog` rewrites) |
+| `pgmalli-next.accept-test` | a type pgjdbc's `setObject` sends a class as that differs from `accept/class-types`; a type PostgreSQL takes or refuses where `accept/accepts?` says otherwise |
+| `pgmalli-next.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/analyze`'s `:row` gives (`pgmalli-next.impl.resolve` over the catalog snapshot, and the grammar `pgmalli-next.honeysql` types itself: `sql-value-types`, `grammar-operators`, `json-shapes`); a name PostgreSQL gives an unaliased expression that differs from `expression-name`'s |
 
 A type of PostgreSQL's or of an extension is one entry of `types` in
-`src/pgmalli/impl/types.clj`, or one of `unsupported` there with why. To add one, move it to
-`types` and run `pgmalli.upstream-test`: it creates every extension the PostgreSQL image ships,
+`src/pgmalli_next/impl/types.clj`, or one of `unsupported` there with why. To add one, move it to
+`types` and run `pgmalli-next.upstream-test`: it creates every extension the PostgreSQL image ships,
 fails on a type in neither list, and generates, inserts and reads back a NOT NULL column of
 every entry.
 
 A new PostgreSQL version: add it to the `pg` matrix of `.github/workflows/ci.yml` (a test holds
 the snapshot's versions to it) with its image by digest under `include` (Renovate updates the
 digests, not the versions), run `bb catalog`, and read the diff of
-`resources/pgmalli/impl/catalog.edn`: what is `:in` the new version alone is what it adds.
+`resources/pgmalli-next/impl/catalog.edn`: what is `:in` the new version alone is what it adds.
 `bb catalog` stops on a type or range whose facts differ between versions, which
-`pgmalli.impl.types` reads one of.
+`pgmalli-next.impl.types` reads one of.
 
 A failing weekly run comments on the open issue labelled `upstream` (or opens it) with the
 list; the next passing run closes it. GitHub disables a scheduled workflow after 60 days
@@ -174,9 +174,9 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
   `PGMALLI_PGSCHEMA_DIR` (pgschema's `testdata/diff`).
 - `bb sweep <sql-dir> <out-dir> [glob]` takes SQL files through the whole pipeline and writes
   what did not go through as EDN; `bb sweep:report <out-dir>` groups it for reading.
-- `bb catalog` rewrites `resources/pgmalli/impl/catalog.edn`, the snapshot of `pg_catalog`
+- `bb catalog` rewrites `resources/pgmalli-next/impl/catalog.edn`, the snapshot of `pg_catalog`
   that types a query's functions, operators and casts, from each PostgreSQL version CI runs.
-- `bb fixture` rewrites `test/resources/pgmalli/{sample,other}.edn`, which the tests read,
+- `bb fixture` rewrites `test/resources/pgmalli-next/{sample,other}.edn`, which the tests read,
   from `dev/fixture.clj`. Edit that file, not the EDN.
 
 ## Releases
@@ -202,7 +202,7 @@ is a step nobody minds, a minor once it is work people plan for.
 
 The Clojars deploy token is the secret `CLOJARS_PASSWORD` of the environment `clojars`,
 which only `v*` tags can deploy from; only the deploy job sees it. It is chaploud's token,
-scoped to `io.github.chaploud/pgmalli`. To replace it, create one with the same scope on
+scoped to `io.github.chaploud/pgmalli-next`. To replace it, create one with the same scope on
 Clojars, run `gh secret set CLOJARS_PASSWORD --env clojars`, and disable the old token.
 
 Never move or delete a published tag; a broken release is fixed by the next version.

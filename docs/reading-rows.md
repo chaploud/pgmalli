@@ -2,11 +2,11 @@
 
 Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md)
 
-`pgmalli.core/as-read` gives the `[:map ...]` of a row as next.jdbc builds it from what
+`pgmalli-next.core/as-read` gives the `[:map ...]` of a row as next.jdbc builds it from what
 PostgreSQL's JDBC driver returns, read with next.jdbc's `as-unqualified-maps`. The examples use [example/schema.sql](example/schema.sql).
 
 ```clojure
-(require '[pgmalli.core :as pgmalli]
+(require '[pgmalli-next.core :as pgmalli]
          '[malli.core :as m])
 
 (def registry (pgmalli/registry "public"))

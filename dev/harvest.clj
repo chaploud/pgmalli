@@ -6,8 +6,8 @@
             [babashka.process :as p]
             [clojure.pprint :as pp]
             [clojure.string :as str]
-            [pgmalli.impl.ir :as ir]
-            [pgmalli.test-db :as db]))
+            [pgmalli-next.impl.ir :as ir]
+            [pgmalli-next.test-db :as db]))
 
 (defn- env-dir
   "The directory an env var names; nil when it is not there, and then that source is left out

@@ -18,7 +18,7 @@ jobs:
   upstream:
     name: suite on the newest upstreams
     # forks inherit the schedule; the report belongs to this repository's issues
-    if: github.repository == 'chaploud/pgmalli'
+    if: github.repository == 'chaploud/pgmalli-next'
     runs-on: ubuntu-latest
     permissions:
       contents: read

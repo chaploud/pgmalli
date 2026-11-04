@@ -1,5 +1,5 @@
 -- The example schema the README and docs/*.md use. bb docs:example generates
--- docs/example/pgmalli/public.edn from it; the doc tests read that file.
+-- docs/example/pgmalli-next/public.edn from it; the doc tests read that file.
 CREATE TYPE user_status AS ENUM ('active', 'closed');
 
 CREATE TABLE groups (
