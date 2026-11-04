@@ -304,7 +304,7 @@ by the one sending, which your application installs
 | `Instant`, `LocalDate`, `LocalDateTime`, `java.util.Date` (`java.sql.Date`, `java.sql.Timestamp`, `java.sql.Time`) | untyped, a timestamp's (a date's, a time's) text (`next.jdbc.date-time`) |
 | a keyword | untyped, its text (`:ns/a` as `ns/a`) |
 | a map, a vector | `jsonb` |
-| a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`) |
+| a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`); a `java.sql.Time[]` a `timetz[]`, a `java.sql.Date[]` a `date[]`, a `java.sql.Timestamp[]` a `timestamptz[]` |
 | a `PGobject` | the type it names |
 
 Another class (a set, a list, a symbol) is sent nowhere. `pgmalli-next.impl.accept/classes` holds

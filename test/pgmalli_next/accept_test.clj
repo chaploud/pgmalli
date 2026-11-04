@@ -223,3 +223,20 @@
                       state (do (.setAutoCommit con false) (try (refusal con (sql/format q {:params {:x v}})) (finally (.rollback con) (.setAutoCommit con true))))]]
           (testing (pr-str q v)
             (is (= (nil? state) (m/validate s v {:registry registry})) (str "PostgreSQL: " (or state "takes it")))))))))
+
+(deftest the-docs-table-of-what-is-sent-is-accepts-class-types
+  ;; docs/queries.md's "What your application sends": each row of classes and types written as
+  ;; `Class` and `type`, one type for all its classes or one for each
+  (let [section (second (re-find #"(?s)### What your application sends(.*?)\nAnother class" (slurp "docs/queries.md")))
+        by-name (into {} (for [[c t] accept/class-types] [(.getSimpleName ^Class c) t]))
+        rows (for [l (str/split-lines section)
+                   :let [[_ cs ts] (re-matches #"\| (.*?) \| (.*?) \|" l)]
+                   :when (and cs (re-find #"^`[A-Z]" cs))
+                   :let [classes (map second (re-seq #"`([A-Za-z][\w.]*)`" cs))
+                         sent (map second (re-seq #"`([a-z][\w ]*)`" ts))]
+                   :when (and (seq sent) (not (str/starts-with? ts "untyped")))]
+               [classes sent])]
+    (is (< 3 (count rows)) "the table is found")
+    (doseq [[classes sent] rows
+            [c t] (map vector classes (if (next sent) sent (repeat (first sent))))]
+      (is (= (types/canonical-name t) (types/canonical-name (by-name c))) (str c " in docs/queries.md")))))

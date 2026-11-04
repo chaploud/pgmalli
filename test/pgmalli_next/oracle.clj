@@ -653,11 +653,13 @@
     (or (values c) (throw (ex-info "no value of the class" {:class c})))))
 
 (defn- matrix-values
-  "What each argument is sent: a value of each class the one sending sends, nil, numbers at the
-   integer types' bounds and a fraction, an empty string, a number as a string, and each label
-   of the schema's enums and CHECK lists, alone, as a keyword and in a String[]."
+  "What each argument is sent: a value of each class the one sending sends and of the others of
+   values, nil, numbers at the integer types' bounds and a fraction, an empty string, a number as
+   a string, and each label of the schema's enums and CHECK lists, alone, as a keyword and in a
+   String[]."
   [labels]
   (vec (concat (map (comp value first) accept/class-types)
+               (vals (apply dissoc values (map first accept/class-types)))
                [nil 0 1.5 1.5M 2147483648 -2147483649 Long/MAX_VALUE Long/MIN_VALUE 9223372036854775808N "" "1"]
                labels
                (map keyword (filter string? labels))
