@@ -345,8 +345,8 @@
 (defn- order [f] [(or (:table f) (:type-name f) "") (or (:constraint f) "") (or (:column f) "")])
 
 (defn- map-props [schema-name table tfacts]
-  (if (some (comp #{:view} :fact) tfacts)
-    {:pg/view (str schema-name "." table)}
+  (if-let [v (some #(when (= :view (:fact %)) %) tfacts)]
+    (cond-> {:pg/view (str schema-name "." table)} (:materialized? v) (assoc :pg/materialized true))
     (prune {:pg/table (str schema-name "." table)
          :pg/primary-key (some #(when (= :primary-key (:fact %)) (:columns %)) tfacts)
          :pg/primary-key-deferrable (when (some #(and (= :primary-key (:fact %)) (:deferrable? %)) tfacts) true)

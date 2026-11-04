@@ -56,7 +56,7 @@ The table's map carries:
 
 | property | value |
 |---|---|
-| `:pg/table` | `"public.users"` (`:pg/view` for a view) |
+| `:pg/table` | `"public.users"` (`:pg/view` for a view, and `:pg/materialized true` for a materialized one) |
 | `:pg/primary-key` | `["id"]` |
 | `:pg/primary-key-deferrable` | `true`: the primary key is DEFERRABLE, so it may be checked only at commit |
 | `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, `:where true` for a partial one, `:deferrable true` for a DEFERRABLE one; an invalid unique index is left out |

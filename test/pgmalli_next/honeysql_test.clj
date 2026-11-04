@@ -2619,8 +2619,8 @@
 
 (deftest a-cast-to-float-of-a-precision-up-to-24-is-a-real-and-dec-is-numeric
   (let [row-type #(second (second (row {:select [[[:cast 1 %] :x]]})))]
-    (is (= (row-type :real) (row-type [:float 10]) (row-type [:raw "float(24)"])) "gram.y opt_float")
-    (is (= (row-type :double-precision) (row-type [:float 25]) (row-type :float)))
+    (is (= (row-type :real) (row-type [:float [:inline 10]]) (row-type [:raw "float(24)"])) "gram.y opt_float")
+    (is (= (row-type :double-precision) (row-type [:float [:inline 25]]) (row-type :float)))
     (is (= (row-type :numeric) (row-type :dec)))))
 
 (deftest a-table-has-system-columns-a-view-has-none
@@ -2656,3 +2656,34 @@
          (check {:insert-into :users :values [{:score 1 :group_id 1 :mood :sad}]})))
   (is (= [] (check {:insert-into :users :values [{:score 1 :group_id 1 :mood :DEFAULT :nick :Null}]}))
       "HoneySQL writes :DEFAULT as DEFAULT, :Null as NULL"))
+
+(deftest a-clause-analyze-does-not-read-is-left-whole-a-clauses-value-it-reads-is-walked-into
+  (is (= bigint-cmp (:x (args {:update :users :set {:score {:select [[[:max :score]]] :from [:users] :where [:= :id :?x]}} :where [:= :id 1]})))
+      "a subquery in SET: :score is a column there, no clause")
+  (is (= [{:kind :unread-clause :clause :qualify}]
+         (check {:select [:id] :from [:users] :qualify [:and [:= :mood "angry"] [:= :nopee 1]]}))
+      "no other problem of what it holds")
+  (is (= bigint-cmp (:x (args {:select [:id] :from [:users] :window [:w {:partition-by [[:= :id :?x]]}]})))
+      "a clause that changes no table or column is read all the same"))
+
+(deftest a-materialized-view-has-system-columns-as-a-table-does
+  (let [reg (pgmalli/registry {:registry {:pg.public/mv [:map {:pg/view "public.mv" :pg/materialized true} [:id [:int {:pg/type "integer"}]]]}})]
+    (is (= [] (:problems (h/analyze reg {:select [:ctid :xmin] :from [:mv]}))))))
+
+(deftest a-quoted-hint-names-a-name-the-registry-holds-and-a-misspelt-format-key-is-an-error
+  (let [q #(check % {:schema "sample" :format {:quoted true}})]
+    (is (:quoted (first (q {:select [:id] :from [:Users]}))))
+    (is (not (contains? (first (q {:select [:id] :from [:Nope]})) :quoted)) "sample.nope is no table either")
+    (is (:quoted (first (q {:select [:Nick] :from [:users]}))))
+    (is (not (contains? (first (q {:select [:Nope] :from [:users]})) :quoted))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :quoted" (check {:select [1]} {:format {:quote true}})))
+  (is (thrown? clojure.lang.ExceptionInfo (check {:select [1]} {:format {:quoted "yes"}}))))
+
+(deftest using-names-no-system-column
+  (is (= [:unknown-column] (distinct (map :kind (check {:select [:*] :from [:users] :join [:groups [:using :ctid]]}))))))
+
+(deftest another-parameter-of-the-call-refuses-an-untyped-value-only-where-every-type-it-may-be-does
+  (let [ok? #(m/validate %1 %2 {:registry registry})]
+    (is (ok? (:unit (args {:select [[[:date_trunc :?unit :?ts] :d]]})) :day) "date_trunc(unknown, timestamptz) resolves to (text, timestamptz)")
+    (is (ok? (:fmt (args {:select [[[:to_char :?ts :?fmt] :d]]})) nil))
+    (is (not (ok? (:x (args {:select [[[:date_trunc "day" :?x] :d]]})) (java.time.LocalDateTime/now))) "date_trunc(varchar, unknown) is not unique")))

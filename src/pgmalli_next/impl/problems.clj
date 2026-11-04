@@ -305,9 +305,7 @@
 
 (def ^:private read-clauses syntax/read-clauses)
 
-(def ^:private ignored-clauses
-  "Clauses that change no table, column or type these read."
-  #{:do-nothing :on-constraint :for :lock :fetch :window :partition-by :frame})
+(def ^:private ignored-clauses syntax/ignored-clauses)
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so

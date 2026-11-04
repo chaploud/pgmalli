@@ -307,7 +307,7 @@
                                                                :constraints {}}
                                                           "mv" {:kind "MATERIALIZED VIEW" :columns [{:name "id" :position 1 :data_type "integer" :is_nullable false}] :constraints {}}}}))]
     (is (= [:map {:pg/view "public.v"} [:id [:maybe [:pg/integer {:pg/type "integer"}]]] [:name [:maybe [:string {:pg/type "text"}]]]] (:pg.public/v registry)))
-    (is (= [:map {:pg/view "public.mv"} [:id [:maybe [:pg/integer {:pg/type "integer"}]]]] (:pg.public/mv registry))
+    (is (= [:map {:pg/view "public.mv" :pg/materialized true} [:id [:maybe [:pg/integer {:pg/type "integer"}]]]] (:pg.public/mv registry))
         "every column of a view may be NULL, whatever the catalog says")))
 
 (deftest odd-identifiers

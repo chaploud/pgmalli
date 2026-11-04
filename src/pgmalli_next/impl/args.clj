@@ -426,17 +426,23 @@
    nil neither, {:typed-only function} third: the argument's other uses take no value sent
    untyped either."
   [registry ps opts]
-  (for [{:keys [x chain]} (syntax/expression-nodes ps)
+  (for [{:keys [x chain clause]} (syntax/expression-nodes ps)
         :let [[kind n args :as parts] (when-not (or (syntax/comparison? x) (query/type-call registry chain x opts)) (syntax/call-parts x))]
         :when (and kind (some syntax/param-key args))
         :let [ins (mapv #(:type (query/expression-type registry chain % opts)) args)
               os (query/reached registry opts parts)]
         [j a] (map-indexed vector args)
         :when (syntax/param-key a)
-        ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
-        :let [[ins i] (if (and (= "unnest" n) (next args)) [[(nth ins j)] 0] [ins j])
+        ;; unnest(a, b) in FROM is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
+        :let [[ins i] (if (and (= "unnest" n) (next args) (some #{clause} syntax/from-keys)) [[(nth ins j)] 0] [ins j])
               ss (map types/type-schema (resolve/argument-types ins i os))
-              refused? (and (not (:inline (:format opts))) (resolve/untyped-refused? kind ins i os))
+              ;; another parameter of the call is of a type its value picks: refused whatever type it is
+              sibling-ins (reduce (fn [inss j] (if (and (not= j i) (= :free (nth ins j)))
+                                                 (let [ts (resolve/argument-types ins j os)]
+                                                   (if (seq ts) (for [x inss t ts] (assoc x j t)) inss))
+                                                 inss))
+                                  [ins] (range (count ins)))
+              refused? (and (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
               ;; a value of each type, which a :pg/type of one would misname; of a type whose values
               ;; pgmalli does not type (inet beside numeric for +), a PGobject, not any value
               t (cond (empty? ss) nil
@@ -499,19 +505,6 @@
               (when (seq ls) (into (vec (take (- (count t) (count (shape/entries t))) t)) ls)))
       (when-not (jdbc/untyped-kinds (shape/kind t)) t))))
 
-(defn- under-unread-clause?
-  "Whether the statement at path of body (:in's: a clause's key, an index into a vector, or into
-   a map's entries) sits in a clause analyze does not read (MERGE's :when-matched)."
-  [body path]
-  (loop [node body [i & more] path]
-    (cond (nil? i) false
-          ;; a clause by its key, or a map entry by its index where the walk met it inside a value
-          (and (map? node) (keyword? i)) (if (syntax/read-clauses i) (recur (get node i) more) true)
-          (and (map? node) (int? i)) (let [[k :as e] (nth (seq node) i nil)]
-                                       (if (and (keyword? k) (not (syntax/read-clauses k))) true (recur e more)))
-          (and (sequential? node) (int? i)) (recur (nth (vec node) i nil) more)
-          :else false)))
-
 (defn- analysis
   "{:args {arg schema} :untyped {arg {:function f :type t}}} of arg-types, an argument at a position PostgreSQL
    takes its type from the value alone (call-args' :typed-only) with :pgmalli/type-from-value,
@@ -520,10 +513,7 @@
   [registry body opts]
   (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
         sps (query/once registry query/statement-positions body opts)
-        ;; an argument in a clause pgmalli does not read (an :unread-clause) is not typed by it
-        typed (concat (for [[_ _ path ps] sps
-                            :when (not (under-unread-clause? body path))
-                            :let [ps (filter (comp syntax/read-clauses :clause) ps)]
+        typed (concat (for [[_ _ _ ps] sps
                             f uses
                             use (f registry ps opts)]
                         use)

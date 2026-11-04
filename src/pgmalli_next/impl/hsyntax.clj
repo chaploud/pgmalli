@@ -7,7 +7,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare called cast-target formatted-name null-value? operator? param-key quoted? star?)
+(declare called cast-target formatted-name null-value? operator? param-key quoted? shorthand-fn sql-value star?)
 
 (defn folded
   "An identifier as PostgreSQL reads what HoneySQL writes of it by default, unquoted: - is _,
@@ -107,10 +107,12 @@
   (if (quoted? format) #{[:default]} #{:default [:default]}))
 
 (defn value-keyword?
-  "Whether HoneySQL writes keyword v as a value, not a column: a parameter, NULL, or DEFAULT,
-   which it writes as SQL in any case (:DEFAULT, :Null) where the format leaves it unquoted."
+  "Whether HoneySQL writes keyword v as a value, not a column: a parameter, NULL, DEFAULT or
+   another SQL word (:current_timestamp, :true), which it writes as SQL in any case (:DEFAULT,
+   :Null) where the format leaves it unquoted, or a call (:%now)."
   [v format]
-  (boolean (or (param-key v) (null-value? v format)
+  (boolean (or (param-key v) (null-value? v format) (shorthand-fn v)
+               (and (not (quoted? format)) (sql-value v))
                (contains? (default-values format) v)
                (and (keyword? v) (contains? (default-values format) :default) (nil? (namespace v))
                     (= "default" (str/lower-case (name v)))))))
@@ -624,6 +626,24 @@
                                [:join-by :where :having :group-by :order-by :limit :offset :values :columns :set
                                 :on-conflict :do-update-set :returning])))
 
+(def ignored-clauses
+  "Clauses that change no table, column or type analyze reads, whose expressions it reads all the same."
+  #{:do-nothing :on-constraint :for :lock :fetch :window :partition-by :frame})
+
+(defn under-unread-clause?
+  "Whether the statement at path of body (:in's: a clause's key, an index into a vector, or into
+   a map's entries) sits in a clause analyze does not read (MERGE's :when-matched): a statement's
+   key checked against read-clauses, a clause's value (a :set map, a row) walked into."
+  [body path]
+  (loop [node body [i & more] path]
+    ;; the body is a statement whatever its clauses (MERGE INTO's none pgmalli reads)
+    (let [clause? #(and (or (identical? node body) (statement? node)) (keyword? %) (not (read-clauses %)) (not (ignored-clauses %)))]
+      (cond (nil? i) false
+            (and (map? node) (keyword? i)) (if (clause? i) true (recur (get node i) more))
+            (and (map? node) (int? i)) (let [[k :as e] (nth (seq node) i nil)] (if (clause? k) true (recur e more)))
+            (and (sequential? node) (int? i)) (recur (nth (vec node) i nil) more)
+            :else false))))
+
 (defn positions
   "The expression positions of statement stmt, one read for the problems and the arguments' types: {:x node
    :clause k :chain scopes :negated? bool :top? bool} for every node of every clause sql/format writes, in
@@ -905,7 +925,8 @@
               p (some-> (re-find #"^float\s*\(\s*(\d+)\s*\)" raw) second parse-long)]
           (when (re-matches #"[a-z_][\w$]*(\.[a-z_][\w$]*)?( [a-z_]\w*)*(\[\])?" n) (float-precision n p)))
         (and (vector? t) (keyword? (first t)) (not= :raw (first t)))
-        (float-precision (keyword-type (name (first t))) (let [p (second t)] (when (integer? p) p)))))
+        ;; a precision written into the SQL ([:inline 10]); a bare 10 HoneySQL sends as a parameter
+        (float-precision (keyword-type (name (first t))) (let [p (second t)] (when (and (vector? p) (= :inline (first p)) (integer? (second p))) (second p))))))
 
 (defn constant?
   "Whether x is the same value on every row: an argument, a literal (NULL too), or a cast of one."

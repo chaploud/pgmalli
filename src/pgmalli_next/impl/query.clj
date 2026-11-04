@@ -64,9 +64,11 @@
              [c (or (types/type-schema t) [:any {:pg/type t}])])))
 
 (defn- view?
-  "Whether the registry's row schema of table is a view's."
+  "Whether the registry's row schema of table is a view's, not a materialized one's, which is
+   stored as a table is."
   [registry table]
-  (boolean (some-> (get (::schemas registry) (shape/table-key table)) shape/row-props :pg/view)))
+  (let [p (some-> (get (::schemas registry) (shape/table-key table)) shape/row-props)]
+    (boolean (and (:pg/view p) (not (:pg/materialized p))))))
 
 (defn- held-schemas
   "The schemas a registry's schemas hold generated files, tables or views of, sorted."
@@ -437,13 +439,16 @@
 
 (defn statement-positions
   "[statement scopes path positions] for the statements of query body (statement-chains), the
-   SELECT of an INSERT ... SELECT fed the INSERT's columns."
+   SELECT of an INSERT ... SELECT fed the INSERT's columns; none in a clause analyze does not
+   read (an :unread-clause), nor a position of one."
   [registry body opts]
   (let [chains (once registry statement-chains body opts)
         feeds (for [[s c] chains :let [{:keys [columns select]} (syntax/insert-parts s)] :when (and columns (map? select))]
                 [select {:columns columns :target (syntax/target-scope c s opts)}])]
-    (for [[s c path outer] chains]
-      [s c path (syntax/positions s c outer (some (fn [[select f]] (when (identical? select s) f)) feeds) opts)])))
+    (for [[s c path outer] chains
+          :when (not (syntax/under-unread-clause? body path))]
+      [s c path (filter #(or (syntax/read-clauses (:clause %)) (syntax/ignored-clauses (:clause %)))
+                        (syntax/positions s c outer (some (fn [[select f]] (when (identical? select s) f)) feeds) opts))])))
 
 (defn- labels
   "The [:enum ...] of an enum column: a CHECK's list, an enum type, or a domain over either."
@@ -716,12 +721,13 @@
                      (reduce (fn [acc col]
                                (let [col (syntax/ident-name col (:format opts))
                                      earlier (get-in acc [:merges col])
-                                     holders (filter #(when-let [e (get sc %)] (has-column? registry e col)) before)
+                                     ;; USING names a column of the relations' own (no system column)
+                                     holders (when-not (system-columns col) (filter #(when-let [e (get sc %)] (has-column? registry e col)) before))
                                      ;; a column the left side or the right table lacks (column ... specified in USING clause does not exist)
                                      acc (cond-> acc
                                            (and (nil? earlier) (empty? holders) (every? #(get sc %) before))
                                            (update :missing conj {:column (keyword col) :side :left})
-                                           (and (get sc right) (not (has-column? registry (get sc right) col)))
+                                           (and (get sc right) (or (system-columns col) (not (has-column? registry (get sc right) col))))
                                            (update :missing conj {:column (keyword col) :side :right :table (:table (get sc right))}))
                                      l (cond earlier earlier
                                              (= 1 (count holders)) (table-side (first holders) col)
