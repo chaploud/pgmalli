@@ -157,7 +157,7 @@
 
 (def ^:private sends
   "{class type} the one sending sends (accept/class-types) but a Character, which a char? on
-   every string argument would say nothing of: it is taken by a character or \"char\" column
+   every string argument would say nothing of: it is taken by a character column
    alone (::characters)."
   (dissoc (into {} accept/class-types) Character))
 

@@ -126,7 +126,7 @@
   (let [context (if (#{:call :common} held-in) :compare held-in)
         t (query/slot-type registry s)
         opts (cond-> opts
-               (#{"character" "\"char\""} t) (assoc ::jdbc/characters true)
+               (= "character" t) (assoc ::jdbc/characters true)
                (= :common held-in) (assoc ::jdbc/array-use :common)
                (= :json held-in) (assoc ::jdbc/json true))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)

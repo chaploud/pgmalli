@@ -650,7 +650,8 @@ Write the query so PostgreSQL's reading is explicit instead.
   Taking them would put `:keyword` on every argument and four date schemas on every string
   argument. Send the value of the column's type (`1`, `(str inst)`), or cast it in the query.
 - A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
-  or `"char"` one: taking it would put `char?` on every string argument. Send `(str c)`.
+  one: taking it would put `char?` on every string argument (a `"char"` column takes a `varchar`
+  on assignment alone, cut to its first byte). Send `(str c)`.
 - A key of a `jsonb_populate_record` document (or of `json_populate_record` and their
   `recordset`) that names no column of the row type, which PostgreSQL ignores: almost always a
   misspelled or unconverted key (`:sort-order` for `sort_order`), whose value is then not
