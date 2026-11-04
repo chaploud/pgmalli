@@ -22,11 +22,6 @@
     "DISTINCT" "ESCAPE" "SYMMETRIC" "AT" "TIME" "ZONE"}
   (map str/upper-case (keys types/sql-words))))
 
-(def ^:private ops
-  ;; longest first
-  ["::" "=>" "<>" "!=" "<=" ">=" "!~~*" "!~~" "~~*" "~~" "!~*" "!~" "~*" "~" "||" "&&" "->>" "->" "#>>" "#>" "@>" "<@" "?|" "?&" "?"
-   "=" "<" ">" "+" "-" "*" "/" "%" "^"])
-
 (defn- quoted [s i quote-char what]
   (let [end (loop [j (inc i)]
               (cond (>= j (count s)) (throw (ex-info (str "unterminated " what) {:pos i :input s}))
@@ -35,6 +30,17 @@
                     (= (.charAt ^String s j) quote-char) j
                     :else (recur (inc j))))]
     [(str/replace (subs s (inc i) end) (str quote-char quote-char) (str quote-char)) (inc end)]))
+
+(defn- operator-at
+  "The operator at i of s as scan.l reads one: the longest run of +-*/<>=~!@#%^&|`?, a run of two
+   or more ending in + or - cut back unless it holds one of ~!@#%^&|`? (so 1<-2 is 1 < -2); nil
+   where none starts there. :: is read apart."
+  [^String s i]
+  (when-let [run (re-find #"^[+\-*/<>=~!@#%^&|`?]+" (subs s i))]
+    (loop [op run]
+      (if (and (> (count op) 1) (#{\+ \-} (last op)) (not (re-find #"[~!@#%^&|`?]" op)))
+        (recur (subs op 0 (dec (count op))))
+        op))))
 
 (defn- tokenize [s]
   (loop [i 0 out []]
@@ -54,9 +60,7 @@
           ;; an operator of an extension outside the search path: OPERATOR(public.~)
           (re-find #"^OPERATOR\(\s*(?:\"[^\"]+\"|[\p{L}_][\p{L}\p{N}_$]*)\.([^\s)]+)\s*\)" (subs s i))
           (let [[m op] (re-find #"^OPERATOR\(\s*(?:\"[^\"]+\"|[\p{L}_][\p{L}\p{N}_$]*)\.([^\s)]+)\s*\)" (subs s i))]
-            (if (some #{op} ops)
-              (recur (+ i (count m)) (conj out {:t :op :v op}))
-              (throw (ex-info (str "unknown operator: " op) {:pos i :input s}))))
+            (recur (+ i (count m)) (conj out {:t :op :v op})))
 
           (or (Character/isLetter c) (= c \_))
           (let [m (re-find #"^[\p{L}_][\p{L}\p{N}_$]*" (subs s i))
@@ -64,7 +68,7 @@
             (recur (+ i (count m)) (conj out (if (keywords up) {:t :kw :v up} {:t :ident :v m}))))
 
           :else
-          (if-let [op (some #(when (str/starts-with? (subs s i) %) %) ops)]
+          (if-let [op (if (str/starts-with? (subs s i) "::") "::" (operator-at s i))]
             (recur (+ i (count op)) (conj out {:t :op :v op}))
             (case c
               \( (recur (inc i) (conj out {:t :lparen}))
@@ -94,6 +98,15 @@
     "||" [7 :||] "->" [7 :->] "->>" [7 :->>]
     "+" [8 :+] "-" [8 :-] "*" [9 :*] "/" [9 :/]}
    named-ops))
+
+(defn- operator
+  "[precedence name] of binary operator op: binary-ops', else, for one of the catalog's of two
+   operands, any other operator's (gram.y's Op, above the comparisons, below + and -), named
+   [:pg/op op]."
+  [op]
+  (or (binary-ops op)
+      (when (some #(= 2 (count (:args %))) (get-in @types/catalog [:operators op]))
+        [7 [:pg/op op]])))
 
 (def ^:private prec-not 3)
 (def ^:private prec-is 4)
@@ -202,9 +215,11 @@
       :str (:v t)
       :num (:v t)
       :lparen (let [e (parse-expr st 0)] (expect! st #(= :rparen (:t %)) "')'") e)
-      :op (if (= "-" (:v t))
-            (let [e (parse-expr st prec-unary-minus)] (if (number? e) (- e) [:- e]))
-            (throw (ex-info (str "operator at start of expression: " (:v t)) {:input (:input @st)})))
+      :op (cond (= "-" (:v t)) (let [e (parse-expr st prec-unary-minus)] (if (number? e) (- e) [:- e]))
+                ;; a prefix operator of the catalog's (@ abs, |/ square root, ~ bitwise not)
+                (some #(= 1 (count (:args %))) (get-in @types/catalog [:operators (:v t)]))
+                [:pg/op (:v t) (parse-expr st prec-unary-minus)]
+                :else (throw (ex-info (str "operator at start of expression: " (:v t)) {:input (:input @st)})))
       :kw (if (types/sql-words (str/lower-case (:v t)))
             [:raw (:v t)]
             (case (:v t)
@@ -300,12 +315,14 @@
               (throw (ex-info "unexpected token after NOT" {:got t :input (:input @st)}))))
           left)
 
-        (and (#{:op :kw} (:t t)) (binary-ops (:v t)))
-        (let [[prec hop] (binary-ops (:v t))]
+        (and (#{:op :kw} (:t t)) (operator (:v t)))
+        (let [[prec hop] (operator (:v t))]
           (if (<= min-prec prec)
             (do (next-tok! st)
                 (let [right (parse-expr st (inc prec))]
-                  (recur (if (#{:and :or} hop) (flatten-op hop left right) [hop left right]))))
+                  (recur (cond (#{:and :or} hop) (flatten-op hop left right)
+                               (vector? hop) (conj hop left right)
+                               :else [hop left right]))))
             left))
 
         :else left))))

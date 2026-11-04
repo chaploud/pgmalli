@@ -133,3 +133,11 @@
 (deftest every-sql-value-word-a-query-reads-a-check-reads-too
   (doseq [w ["CURRENT_SCHEMA" "CURRENT_CATALOG" "USER" "SYSTEM_USER" "CURRENT_USER" "LOCALTIME"]]
     (is (= [:raw w] (pgmalli-next.impl.expr/parse w)) w)))
+
+(deftest an-operator-is-read-as-scanl-reads-one-and-any-of-the-catalogs-parses
+  (let [parse pgmalli-next.impl.expr/parse]
+    (is (= [:> [:pg/op "#" :x 1] 0] (parse "(x # 1) > 0")) "any other operator binds above >")
+    (is (= [:pg/op "-|-" :r :s] (parse "r -|- s")))
+    (is (= [:> [:pg/op "@" :x] 0] (parse "@ x > 0")) "a prefix operator")
+    (is (= [:< 1 -2] (parse "1<-2")) "a run ending in - without ~!@#%^&|`? is cut back: < then -")
+    (is (= [:not-ilike :x "a"] (parse "x !~~* 'a'")))))
