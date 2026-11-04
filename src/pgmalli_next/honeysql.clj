@@ -528,10 +528,14 @@
         [al listed] (if (and (vector? al) (map? (second al))) [(first al) (:columns (second al))] [al nil])
         [kind n args :as parts] (when (vector? f) (call-parts f))]
     (when (and (= :functions kind) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
-      (when-let [{t :result o :overload} (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) args) (reached registry opts parts))]
-        (let [cs (or (seq (:columns o)) (when-not (= "record" t) [[(if (alias? al) (alias-label al opts) n) t]]))
+      ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)), its columns each named unnest
+      (when-let [rs (let [rs (for [as (if (and (= "unnest" n) (next args)) (map vector args) [args])]
+                               (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) as) (reached registry opts parts)))]
+                      (when (every? some? rs) rs))]
+        (let [label (if (and (alias? al) (nil? (next rs))) (alias-label al opts) n)
+              cs (mapcat (fn [{t :result o :overload}] (or (seq (:columns o)) (when-not (= "record" t) [[label t]]))) rs)
               cs (cond-> (vec cs) ordinality? (conj ["ordinality" "bigint"]))
-              own #(own-type-schema registry % (:schema o))]
+              own #(own-type-schema registry % (:schema (:overload (first rs))))]
           (when (and (seq cs) (every? #(or (types/category (second %)) (own (second %))) cs))
             (vec (map-indexed (fn [i [c ct]]
                                 [(if (< i (count listed)) (folded (name (nth listed i))) c)
@@ -2292,24 +2296,45 @@
         (of-type (let [n (bigint x)] (cond (<= Integer/MIN_VALUE n Integer/MAX_VALUE) "integer" (<= Long/MIN_VALUE n Long/MAX_VALUE) "bigint" :else "numeric")))
         (number? x) (of-type "numeric")))
 
+(defn- cast-target
+  "The name of the type a cast's t names: a keyword (:double-precision, :mood, :app.mood),
+   [:varchar 10] with its typmod, or [:raw s], s one type's name with or without a typmod and []
+   (\"bigint[]\", \"varchar(10)[]\", \"app.mood\"), as an array cast is written: the reader reads
+   :bigint[] as :bigint and []; nil for another t."
+  [t]
+  (cond (ident? t) (name t)
+        (and (vector? t) (= :raw (first t)) (= 2 (count t)) (string? (second t)))
+        (let [n (-> (second t) str/trim str/lower-case (str/replace #"\(\s*\d+\s*(,\s*-?\d+\s*)?\)" "")
+                    (str/replace #"\s+" " ") (str/replace #" ?\[ ?\]$" "[]") str/trim)]
+          (when (re-matches #"[a-z_][\w$]*(\.[a-z_][\w$]*)?( [a-z_]\w*)*(\[\])?" n) n))
+        (and (vector? t) (keyword? (first t)) (not= :raw (first t))) (name (first t))))
+
+(defn- named-type-schema
+  "The column schema of a value of type n (as cast-target names it, \"x[]\" an array): a type of
+   pg_catalog, or an enum type or a domain of the registry, read as a column of it is; nil for
+   another."
+  [registry opts n]
+  (or (types/type-schema (types/cast-name n))
+      (let [e (types/element n)]
+        (when-let [s (own-type-schema registry (or e n) (:schema opts))]
+          (if e [:vector {:pg/type n} s] s)))))
+
 (defn- cast-type
-  "The expression type of [:cast v t], v of expression type m: t a type of pg_catalog
-   ([:varchar 10] with its typmod), or an enum type or a domain of the registry, read as a column
-   of it is."
+  "The expression type of [:cast v t], v of expression type m, t of cast-target."
   [registry [_ _ t] m opts]
-  (let [t (if (and (vector? t) (keyword? (first t))) (first t) t)]
-    (when-let [s (or (when (keyword? t) (types/type-schema (types/cast-name t)))
-                     (when (ident? t) (own-type-schema registry (name t) (:schema opts))))]
-      {:schema s :type (resolver-type registry s)
-       :nullable? (if m (boolean (:nullable? m)) true)})))
+  (when-let [s (some->> (cast-target t) (named-type-schema registry opts))]
+    {:schema s :type (resolver-type registry s)
+     :nullable? (if m (boolean (:nullable? m)) true)}))
 
 (defn- array-type
   "The expression type of ARRAY[es...], of the elements' (of expression types ms) common type,
    or of [:array es t], ARRAY[...]::t[]."
-  [registry [_ es t] ms]
+  [registry [_ es t] ms opts]
   (when (sequential? es)
     (if (keyword? t)
-      (some-> (of-type (types/array-of (types/cast-name t))) (assoc :nullable? false))
+      (let [n (types/array-of (cast-target t))]
+        (assoc (if-let [s (named-type-schema registry opts n)] {:schema s :type (resolver-type registry s)} (of-type (types/cast-name n)))
+               :nullable? false))
       (when-let [r (when (seq es) (common registry ms))]
         (when (and (string? (:type r)) (not (types/element (:type r))))
           (some-> (or (some->> (domain-array registry (:schema r)) (hash-map :type (types/array-of (:type r)) :schema))
@@ -2353,7 +2378,7 @@
       (= :cast h) (cast-type registry x (sub (second x)) opts)
       ;; INTERVAL '1 day'
       (= :interval h) (of-type "interval")
-      (= :array h) (array-type registry x (when (sequential? (second x)) (map sub (second x))))
+      (= :array h) (array-type registry x (when (sequential? (second x)) (map sub (second x))) opts)
       (or (#{:exists :not-exists :is :is-not} h) (distinct-ops h)) (of-type "boolean")
       (#{:and :or :not :xor :between :not-between :in :not-in :similar-to :not-similar-to} h) (typed-with-nulls "boolean" (rest x))
       ;; an aggregate's FILTER, an argument's DISTINCT, the ORDER BY after an aggregate's last

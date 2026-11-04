@@ -544,6 +544,17 @@
           [:b [:boolean {:pg/type "boolean"}]] [:f [:double {:pg/type "double precision"}]]]
          (row {:select [[[:cast "sad" :mood] :m] [[:cast :id :int] :i] [[:cast true :bool] :b] [[:cast :score :float] :f]] :from [:users]}))))
 
+(deftest a-raw-cast-target-is-read-only-as-one-types-name
+  (is (= [:map [:a [:vector {:pg/type "bigint[]"} [:maybe :int]]]
+          [:v [:vector {:pg/type "character varying[]"} [:maybe :string]]]
+          [:t [:time/instant {:pg/type "timestamp with time zone"}]] [:d [:double {:pg/type "double precision"}]]
+          [:m [:vector {:pg/type "mood[]"} [:maybe [:enum {:pg/type "mood"} "happy" "sad"]]]]
+          [:l [:maybe :any]]]
+         (row {:select [[[:cast :id [:raw " BIGINT [ ] "]] :a] [[:cast :id [:raw "varchar(10)[]"]] :v]
+                        [[:cast :id [:raw "timestamp(3) with time zone"]] :t] [[:cast :id [:raw "double precision"]] :d]
+                        [[:cast :id [:raw "mood[]"]] :m] [[:cast :id [:raw "lower(x)"]] :l]]
+               :from [:users]}))))
+
 (deftest an-argument-takes-its-slots-own-values
   (let [native opts
         args #(:args (h/analyze registry {:select [:id] :from [:users] :where %} (merge native %2)))

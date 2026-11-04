@@ -240,3 +240,20 @@
         (testing (str "stricter than PostgreSQL: " (pr-str q v))
           (is (some? (runs! q {:x v} {})))
           (is (not (accepted? reg q {:x v} {}))))))))
+
+(deftest an-array-cast-written-raw-types-its-argument-and-the-unnests-columns
+  (when *db*
+    (let [reg (registry)
+          pair {:select [:r.id :r.name] :from [[[:unnest [:cast :?ids [:raw "bigint[]"]] [:cast :?names [:raw "text[]"]]] [:r {:columns [:id :name]}]]]}]
+      (is (= [:map [:id [:maybe [:int {:pg/type "bigint"}]]] [:name [:maybe [:string {:pg/type "text"}]]]] (:row (h/analyze reg pair))))
+      (doseq [[q params] [[pair {:ids (long-array [1 2]) :names (into-array String ["a" "b"])}]
+                          [pair {:ids "{1,2}" :names "{a,b}"}]
+                          [{:select [:id] :from [:accounts] :where [:= :id [:any [:cast :?xs [:raw "bigint[]"]]]]} {:xs (long-array [1])}]
+                          [{:select [:id] :from [:accounts] :where [:= :id [:any [:cast :?xs [:raw "bigint[]"]]]]} {:xs "{1}"}]
+                          [{:select [[[:cast :?j [:raw "jsonb[]"]] :j]]} {:j "{\"{}\"}"}]
+                          [{:select [:id] :from [:accounts] :where [:= :tags [:cast :?t [:raw "status[]"]]]} {:t (into-array String ["live"])}]
+                          [{:select [[[:cast :?t [:raw "status[]"]] :t]]} {:t "{draft}"}]]]
+        (testing (pr-str q params)
+          (is (some? (runs! q params {})))
+          (is (accepted? reg q params {}))
+          (is (returned? reg q params {})))))))
