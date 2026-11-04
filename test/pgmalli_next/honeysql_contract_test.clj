@@ -7,6 +7,7 @@
             [clojure.test :refer [deftest is]]
             [honey.sql :as sql]
             [pgmalli-next.honeysql :as h]
+            [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.test-db :as test-db]))
 
 (def ^:private honeysql (str "HoneySQL " (or (test-db/version "honeysql") "(version unknown)")))
@@ -49,8 +50,8 @@
 (deftest operator-syntax-is-honeysqls-special-syntax
   ;; HoneySQL writes :in and :not-in in format-expr, outside its table
   (when-not (older-than-pinned?)
-    (doseq [op (sort (set/difference @#'h/operator-syntax (set (keys @@#'sql/special-syntax)) #{:in :not-in}))]
-      (is (nil? op) (str honeysql " no longer has special syntax " op ": remove it from operator-syntax in src/pgmalli_next/honeysql.clj")))))
+    (doseq [op (sort (set/difference @#'syntax/operator-syntax (set (keys @@#'sql/special-syntax)) #{:in :not-in}))]
+      (is (nil? op) (str honeysql " no longer has special syntax " op ": remove it from operator-syntax in src/pgmalli_next/impl/hsyntax.clj")))))
 
 (deftest sql-format-writes-what-pgmalli-reads
   (is (= ["SELECT a FROM t INNER JOIN j ON TRUE LEFT JOIN l ON TRUE RIGHT JOIN r ON TRUE INNER JOIN i ON TRUE FULL JOIN f ON TRUE"]
