@@ -136,10 +136,17 @@
         (= :or (shape/head t)) (some-> (seq (keep generated-values (shape/alternatives t))) (shape/either t))
         :else t))
 
-(def ^:private null-keyword
-  "A keyword HoneySQL writes as NULL where the format leaves it unquoted (:null, :NULL)."
-  [:fn {:error/message "should be NULL as HoneySQL writes it (:null)" :gen/elements [:null]}
-   (fn [x] (and (keyword? x) (nil? (namespace x)) (= "null" (str/lower-case (name x)))))])
+(def ^:private sql-word-schema
+  "[:fn] of what HoneySQL writes as NULL or DEFAULT (word) under format, one per format so that
+   the schemas of one call equal the next's."
+  (memoize
+   (fn [word format]
+     (let [[gen pred] (case word
+                        :null [:null #(and (keyword? %) (syntax/null-value? % format))]
+                        :default [(if (syntax/quoted? format) [:default] :default) #(syntax/default-value? % format)])]
+       [:fn {:error/message (str "should be " (str/upper-case (name word)) " as HoneySQL writes it (" (pr-str gen) ")")
+             :gen/elements [gen] :pgmalli/describe (pr-str gen)}
+        pred]))))
 
 (defn- written-row*
   "The closed map of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
@@ -151,7 +158,7 @@
   (when-let [d (get (::query/schemas r) (shape/derived-name name derived))]
     (let [s (get (::query/schemas r) name)
           written (shape/column-entries d)
-          default (into [:enum] (sort-by vector? (syntax/default-values (:format opts))))
+          default (sql-word-schema :default (:format opts))
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::query/schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
           triggered? (query/filled-by-trigger? (shape/row-props s) (keyword derived))
@@ -164,9 +171,7 @@
                                a (assigned (assoc opts ::args/keywords-columns true))
                                t (one-value a)
                                ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
-                               t (if (and (or (shape/maybe? c) triggered?) (syntax/null-value? :null (:format opts)))
-                                   [:or t null-keyword]
-                                   t)
+                               t (if (or (shape/maybe? c) triggered?) [:or t (sql-word-schema :null (:format opts))] t)
                                plain (if (fills k) [:or t default] t)
                                lifted (assigned opts)
                                labels (let [e (shape/domain-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]]

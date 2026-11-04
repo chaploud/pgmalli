@@ -7,7 +7,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare called cast-target formatted-name null-value? operator? param-key quoted? shorthand-fn sql-value star?)
+(declare called cast-target formatted-name operator? param-key quoted? shorthand-fn sql-value star?)
 
 (defn folded
   "An identifier as PostgreSQL reads what HoneySQL writes of it by default, unquoted: - is _,
@@ -100,22 +100,19 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(defn default-values
-  "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
-   :default and [:default], or [:default] alone where the format quotes names (\"default\")."
-  [format]
-  (if (quoted? format) #{[:default]} #{:default [:default]}))
+(declare sql-word?)
+
+(defn default-value?
+  "Whether HoneySQL writes v as DEFAULT: [:default], or :default in any case where the format
+   writes it as the word (sql-word?)."
+  [v format]
+  (boolean (or (= [:default] v) (sql-word? v "default" format))))
 
 (defn value-keyword?
-  "Whether HoneySQL writes keyword v as a value, not a column: a parameter, NULL, DEFAULT or
-   another SQL word (:current_timestamp, :true), which it writes as SQL in any case (:DEFAULT,
-   :Null) where the format leaves it unquoted, or a call (:%now)."
+  "Whether HoneySQL writes keyword v as a value, not a column: a parameter, a call (:%now), or an
+   SQL word (NULL, DEFAULT, :current_timestamp, :true) as the format writes one (sql-word?)."
   [v format]
-  (boolean (or (param-key v) (null-value? v format) (shorthand-fn v)
-               (and (not (quoted? format)) (sql-value v))
-               (contains? (default-values format) v)
-               (and (keyword? v) (contains? (default-values format) :default) (nil? (namespace v))
-                    (= "default" (str/lower-case (name v)))))))
+  (boolean (or (param-key v) (shorthand-fn v) (some-> (sql-value v) name (#(sql-word? v % format))))))
 
 (defn branch?
   "Whether a walk of query data goes into x: a collection, but not a value HoneySQL passes as it
@@ -205,9 +202,8 @@
   (cond
     ;; FROM public.users is referred to as users
     (keyword? x) [(qualified x opts) (table-part x format) (unqualified-name x format)]
-    ;; [:raw "ONLY events"] or [:raw "events *"], the grammar's relation_expr of an unquoted name:
-    ;; the table, children left out or in
-    (raw-relation x) (table-ref (raw-relation x) opts)
+    ;; [[:raw "ONLY events"]] or [[:raw "events *"] :e], the grammar's relation_expr of an unquoted
+    ;; name: the table, children left out or in (a bare [:raw ...] HoneySQL writes as raw AS "...")
     (and (vector? x) (raw-relation (first x))) (table-ref (assoc x 0 (raw-relation (first x))) opts)
     ;; a subquery with no alias (PostgreSQL 16): nothing names it, so no query reaches it by name
     (map? x) [nil (str "(subquery " (hash x) ")") nil]
@@ -224,8 +220,8 @@
         (and (keyword? a) (or (nil? b) (alias? b) (vector? b))) [(qualified a opts) (if (alias? b) (alias-name b) (table-part a format)) (unqualified-name a format) listed]
         (keyword? a) [nil (alias-name a) nil listed]
         ;; [[:unnest ...] [:t {:columns [:x]}]]: t.f reads as f(t), the function on a scalar result,
-        ;; so a function's alias is not held to the columns it lists
-        (alias? b) [nil (alias-name b) nil (when-not (vector? a) listed)]
+        ;; so a function's alias is not held to the columns it lists; a LATERAL subquery's is
+        (alias? b) [nil (alias-name b) nil (when (or (not (vector? a)) (and (= :lateral (first a)) (map? (second a)))) listed)]
         ;; [[:with-ordinality [:f args...] alias]]: f WITH ORDINALITY alias, named after the function
         ;; without one
         (and (nil? b) (vector? a) (= :with-ordinality (first a)))
@@ -482,7 +478,11 @@
     (let [c (subs (str x) 1)]
       (when (str/starts-with? c "%") (first (str/split (subs c 1) #"\."))))))
 
-(defn column-keyword? [x] (and (keyword? x) (not (sql-value x)) (not (param-key x)) (not (shorthand-fn x))))
+(defn column-keyword?
+  "Whether HoneySQL writes keyword x as a column: no parameter, call or SQL word; under format,
+   as it writes one (value-keyword?: under :quoted, :null is a column \"null\")."
+  ([x] (and (keyword? x) (not (sql-value x)) (not (param-key x)) (not (shorthand-fn x))))
+  ([x format] (and (keyword? x) (not (value-keyword? x format)))))
 
 (defn vectorish
   "x when it is a vector, [x] for a bare keyword (HoneySQL takes :order-by :id for [:id])."

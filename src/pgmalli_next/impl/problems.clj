@@ -108,10 +108,10 @@
                           [c t]))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (syntax/select-parts % opts)) (syntax/selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
-                                        (for [[_ c _ chain] (syntax/comparison-sides ps) :when (syntax/column-keyword? c)] [c chain])
+                                        (for [[_ c _ chain] (syntax/comparison-sides ps) :when (syntax/column-keyword? c format)] [c chain])
                                         (for [{:keys [x chain]} (syntax/expression-nodes ps)
                                               :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
-                                                         (syntax/column-keyword? (second x)))]
+                                                         (syntax/column-keyword? (second x) format))]
                                           [(second x) chain])
                                         ;; a keyword assigned in SET is a column the statement sees
                                         ;; a column a function's or an operator's argument names ([:upper :email], [:+ :score 1])
@@ -125,10 +125,10 @@
                                               :let [[kind _ args] (when-not (syntax/comparison? x) (syntax/call-parts x))]
                                               :when kind
                                               a args
-                                              :when (syntax/column-keyword? a)]
+                                              :when (syntax/column-keyword? a format)]
                                           [a chain])
                                         (for [{:keys [x chain clause]} (syntax/assignments ps)
-                                              :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x))]
+                                              :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x format))]
                                           [x chain])
                                         (for [c assigned] [c target])))
           ;; an assignment's target names a column, never a table: SET users.score is field score of a column users
@@ -185,7 +185,7 @@
                    (near-in registry table n) (assoc :did-you-mean (near-in registry table n)))))))
          ;; HoneySQL writes a keyword value as a column, which a VALUES row has none of in scope
          (distinct (for [row rows
-                         [target v] (cond (map? row) row (vector? row) (map vector columns row))
+                         [target v] (cond (map? row) row (vector? row) (map-indexed (fn [i v] [(get (vec columns) i) v]) row))
                          :when (and (keyword? v) (not (syntax/value-keyword? v format)))]
                      (cond-> {:kind :unknown-column :column v :clause :values :table table}
                        target (assoc :target target)))))))))
@@ -208,7 +208,7 @@
              :when (syntax/column-keyword? col)
              :let [{:keys [table] s :schema} (query/resolve-column registry target col)
                    cp (some-> s shape/column-props)
-                   p (cond (or (nil? s) ((syntax/default-values format) v)) nil
+                   p (cond (or (nil? s) (syntax/default-value? v format)) nil
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}

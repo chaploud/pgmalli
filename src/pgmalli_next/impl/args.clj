@@ -447,7 +447,7 @@
         [j a] (map-indexed vector args)
         :when (syntax/param-key a)
         ;; unnest(a, b) in FROM is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
-        :let [[ins i] (if (and (= "unnest" n) (next args) (some #{clause} syntax/from-keys)) [[(nth ins j)] 0] [ins j])
+        :let [[ins i] (if (and (= "unnest" n) (next args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth ins j)] 0] [ins j])
               ss (map types/type-schema (resolve/argument-types ins i os))
               ;; another parameter of the call is of a type its value picks: refused whatever type it is
               sibling-ins (reduce (fn [inss j] (if (and (not= j i) (= :free (nth ins j)))

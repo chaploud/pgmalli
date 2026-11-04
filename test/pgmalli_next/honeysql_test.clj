@@ -1892,7 +1892,7 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be either :default or [:default]" "should be [:lift v], v one of :happy :sad"]}
+    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be DEFAULT as HoneySQL writes it (:default)" "should be [:lift v], v one of :happy :sad"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %)) (vals r)))
                   (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))
@@ -2728,3 +2728,12 @@
     (is (= [] (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]}))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: :users$"
                         (h/values-schema registry :usres opts))))
+
+(deftest an-sql-word-is-a-value-as-honeysql-writes-it-under-the-format
+  (is (= [] (check {:update :users :set {:id :DEFAULT} :where [:= :id 1]})) "HoneySQL writes :DEFAULT as DEFAULT")
+  (is (m/validate (h/values-schema registry :users opts) {:group_id 1 :score 1 :total :DEFAULT} {:registry registry}))
+  (is (= [:unknown-column] (map :kind (check {:select [:id] :from [:users] :where [:= :nick :current_user]} (assoc opts :format {:quoted true}))))
+      "quoted, :current_user is a column \"current_user\"")
+  (is (= [:unknown-column] (map :kind (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]} (assoc opts :format {:quoted-always #"^null$"}))))
+      ":quoted-always matching it writes \"null\"")
+  (is (= [:unknown-column] (map :kind (check {:insert-into :users :values [[1 1 :foo]]}))) "a positional row's keyword past any column list"))
