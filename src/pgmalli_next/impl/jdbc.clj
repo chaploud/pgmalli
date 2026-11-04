@@ -116,16 +116,16 @@
   [opts ks]
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
     (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
-      (fail! (str (pr-str old) " is no longer read: " one-sending "; see " error/changelog) old))
+      (fail! (str (pr-str old) " is no longer read: " one-sending) old))
     (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns]))]
-      (fail! (str (pr-str old) " is no longer read: " builder-only "; see " error/changelog) old))
+      (fail! (str (pr-str old) " is no longer read: " builder-only) old))
     (when-let [old (not-empty (select-keys opts [:time :read]))]
-      (fail! (str (pr-str old) " is no longer read: " one-reading "; see " error/changelog) old))
+      (fail! (str (pr-str old) " is no longer read: " one-reading) old))
     (when (contains? opts :compare)
-      (fail! (str ":compare is no longer read: a compared argument takes no nil; compare NULL with [:= :x nil] or IS NULL in the query body; see " error/changelog)
+      (fail! (str ":compare is no longer read: a compared argument takes no nil; compare NULL with [:= :x nil] or IS NULL in the query body")
              (select-keys opts [:compare])))
     (when (contains? opts :return-keys)
-      (fail! (str ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}; see " error/changelog)
+      (fail! (str ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}")
              (select-keys opts [:return-keys])))
     (let [jdbc (:jdbc opts)]
       (doseq [k (when (map? jdbc) (keys jdbc))

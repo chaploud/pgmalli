@@ -17,7 +17,6 @@
    :pgmalli.error/psql-missing :cognitect.anomalies/unavailable
    :pgmalli.error/fault :cognitect.anomalies/fault})
 
-(def changelog "https://github.com/chaploud/pgmalli-next/blob/main/CHANGELOG.md")
 
 (defn fail!
   ([kind message] (fail! kind message {} nil))

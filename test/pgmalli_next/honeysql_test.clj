@@ -555,7 +555,7 @@
                     [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as the SettableParameter extension of .* sends them"]
                     [{:qualified? false} #":qualified\? false.* is no longer read: .*\{:builder-fn next.jdbc.result-set/as-unqualified-maps\}"]
                     [{:kebab? true} #":kebab\? true.* is no longer read"]
-                    [{:return-keys true} #":return-keys is no longer read: pass it as \{:jdbc \{:return-keys ...\}\}; see https://github.com/chaploud/pgmalli-next/blob/main/CHANGELOG.md$"]]]
+                    [{:return-keys true} #":return-keys is no longer read: pass it as \{:jdbc \{:return-keys ...\}\}$"]]]
     (let [e (try (args {:select [:id] :from [:users]} o) nil (catch clojure.lang.ExceptionInfo e e))]
       (is (re-find says (str (ex-message e))) (pr-str o))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o)))))

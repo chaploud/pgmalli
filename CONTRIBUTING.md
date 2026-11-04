@@ -185,14 +185,15 @@ versioning: patch for fixes, minor for additions and, before 1.0, any change to 
 contract; what is breaking is the README's [Stability](README.md#stability) list.
 
 A fix can change what `generate` writes for some schemas, so that `check` finds their files
-stale until they are regenerated. Its CHANGELOG entry says which schemas. Choose the version by
+stale until they are regenerated. Choose the version by
 what upgrading then costs the users at the time, not by precedent: a patch while regenerating
 is a step nobody minds, a minor once it is work people plan for.
 
 1. On main, in one commit: add the version's section to CHANGELOG.md (`## X.Y.Z (date)`) and
-   set the coordinate in README.md's Installation to the new version. The section has one
-   short bullet per change a user meets; a breaking one says what to do. A fix to something
-   not yet released gets no entry.
+   set the coordinate in README.md's Installation to the new version. The section is written
+   then, of the changes since the last tag, in a few short bullets: what a user meets, what a
+   breaking one has them do, and whether the files need regenerating. Nothing is written
+   between releases.
 2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The release workflow checks that the tag is on main, runs `bb test:jvm` and builds the
    jar; a second job deploys it to Clojars, and a third creates the GitHub release with the
