@@ -50,7 +50,8 @@
    (some-> (named "java.sql.Time") (vector :unknown 'inst? #{"D"}))
    [java.util.Date :unknown 'inst? #{"D"}]
    [clojure.lang.Keyword :unknown :keyword #{"S" "E"}]
-   [clojure.lang.IPersistentMap "jsonb" [:map-of :any :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
+   ;; the one sending's jsonb writes a key by its name or text: no nil key
+   [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
 (defn row-of
   "The row of rows (classes', json-classes') a value of class c is sent by: its class's, else the

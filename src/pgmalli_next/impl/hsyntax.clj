@@ -188,6 +188,14 @@
   (let [cs (when (map? m) (:columns m))]
     (when (and (sequential? cs) (every? #(or (keyword? %) (string? %)) cs)) cs)))
 
+(defn- raw-relation
+  "The table keyword [:raw s] names where s is the grammar's relation_expr of an unquoted name
+   (ONLY t, t *, schema.t), which PostgreSQL folds; nil for another x."
+  [x]
+  (when (and (vector? x) (= :raw (first x)) (= 2 (count x)) (string? (second x)))
+    (when-let [[_ n] (re-matches #"(?i)\s*(?:ONLY\s+)?([a-z_][\w$]*(?:\.[a-z_][\w$]*)?)\s*(?:\*\s*)?" (second x))]
+      (keyword (str/lower-case n)))))
+
 (defn table-ref
   "[table alias written columns] of a :from / join / target item: the table's qualified name,
    its alias, the name as written (nil when qualified by a schema), and the columns an alias
@@ -197,6 +205,10 @@
   (cond
     ;; FROM public.users is referred to as users
     (keyword? x) [(qualified x opts) (table-part x format) (unqualified-name x format)]
+    ;; [:raw "ONLY events"] or [:raw "events *"], the grammar's relation_expr of an unquoted name:
+    ;; the table, children left out or in
+    (raw-relation x) (table-ref (raw-relation x) opts)
+    (and (vector? x) (raw-relation (first x))) (table-ref (assoc x 0 (raw-relation (first x))) opts)
     ;; a subquery with no alias (PostgreSQL 16): nothing names it, so no query reaches it by name
     (map? x) [nil (str "(subquery " (hash x) ")") nil]
     (vector? x)

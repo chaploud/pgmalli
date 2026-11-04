@@ -4,7 +4,7 @@
    queries generated-corpus builds from the catalog (each kind of column through ~25 shapes,
    each pair of kinds PostgreSQL unites through 6, each pg_catalog relation and column of it)
    are formatted with HoneySQL and EXPLAINed (then run, rolled back, for NOT NULL) on the
-   database of oracle/schema.sql, and what PostgreSQL says is set beside what check reports. A mutant is drawn from a seeded
+   database of oracle/schema.sql, and what PostgreSQL says is set beside what check reports. A mutant is drawn from a seeded (by the seed and its query's id)
    java.util.Random, so a seed gives the same queries wherever it runs.
 
    Outcomes: :agree-ok, :agree-error, :false-positive (PostgreSQL takes it, check reports a
@@ -120,13 +120,14 @@
             [:wrong-key (if (seq path) (assoc-in q path swapped) swapped)]))))))
 
 (defn cases
-  "The corpus' queries and, for each, up to per-query distinct mutants drawn with seed from
-   names (mutation-names)."
+  "The corpus' queries and, for each, up to per-query distinct mutants drawn with seed and its id
+   from names (mutation-names)."
   [names seed per-query]
-  (let [rnd (Random. (long seed))
-        ;; a mutant that is a corpus query, or another mutant, runs once
+  (let [;; a mutant that is a corpus query, or another mutant, runs once
         seen (volatile! (set (map second corpus)))]
     (vec (for [[id q opts] corpus
+               ;; a query's own Random, of seed and its id: an entry added or moved draws no other's mutants anew
+               :let [rnd (Random. (+ (long seed) (.hashCode (name id))))]
                c (cons {:id id :query q :opts opts}
                        (->> (repeatedly (* 4 per-query) #(mutant rnd names q)) (remove nil?) distinct
                             (remove (fn [[_ m]] (= m q))) (take per-query)

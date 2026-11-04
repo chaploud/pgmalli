@@ -674,7 +674,7 @@
   (is (= {:m [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]}
          (:args (h/analyze docs {:update :docs :set {:meta :?m} :where [:= :id 1]} {})))
       "what goes as a shaped json column's type takes its shape")
-  (is (= {:m [:or [:map-of :any :any] [:vector :any] pg-object]}
+  (is (= {:m [:or [:map-of :some :any] [:vector :any] pg-object]}
          (:args (h/analyze (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
                       {:update :t :set {:j :?m}} {})))
       "what goes as a type pgmalli has the driver's object for is all its argument takes"))
@@ -2695,3 +2695,8 @@
     (is (ok? (:unit (args {:select [[[:date_trunc :?unit :?ts] :d]]})) :day) "date_trunc(unknown, timestamptz) resolves to (text, timestamptz)")
     (is (ok? (:fmt (args {:select [[[:to_char :?ts :?fmt] :d]]})) nil))
     (is (not (ok? (:x (args {:select [[[:date_trunc "day" :?x] :d]]})) (java.time.LocalDateTime/now))) "date_trunc(varchar, unknown) is not unique")))
+
+(deftest a-raw-from-item-of-only-a-table-is-that-table
+  (is (= [] (check {:select [:id :users.nick] :from [[[:raw "ONLY users"]]]})) "FROM ONLY users is referred to as users")
+  (is (= [:id :nick] (map first (rest (row {:select [:id :nick] :from [[[:raw "users *"]]]})))))
+  (is (= [:unknown-column] (map :kind (check {:select [:nope.nick] :from [[[:raw "ONLY users"]]]})))))

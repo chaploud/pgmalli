@@ -22,7 +22,7 @@
 (deftest a-shaped-json-column-takes-its-shape-from-a-map-or-vector-sent-as-jsonb
   (let [shaped [:map {:pg/type "jsonb"} [:prompt :string]]]
     (is (= shaped (jdbc/write-type shaped {})))
-    (is (= [:or [:map-of :any :any] [:vector :any]] (jdbc/write-type [:any {:pg/type "jsonb"}] {})) "an unshaped one takes what is sent")
+    (is (= [:or [:map-of :some :any] [:vector :any]] (jdbc/write-type [:any {:pg/type "jsonb"}] {})) "an unshaped one takes what is sent")
     (is (= [:any {:pg/type "json"}] (jdbc/write-type [:any {:pg/type "json"}] {})) "nothing goes as json: the driver's object")
     (is (= shaped (jdbc/read-type shaped false)) "read parsed, in the shape that is written")
     (is (= [:any {:pg/type "jsonb"}] (jdbc/read-type shaped true)) "as pgjdbc returns it: the driver's object")))
