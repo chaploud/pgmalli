@@ -169,20 +169,20 @@
    t implicitly (pg_cast's castcontext 'i', an array element by element), assigned or as a
    function's argument (:call); compared, also one t converts to implicitly, where = resolves (an
    array of t's type alone: anyarray's = takes no other); resolved with t to one type (:common:
-   coalesce's, CASE's), one of t's category select_common_type takes (an array of t's type alone,
-   as compared); a string of another string type; or one sent untyped, which PostgreSQL reads
-   through t's input function, which every type has; compared, a function's argument or resolved
-   with t, where t has an = of its own the catalog holds (json, point and an extension's type but
-   citext have none here), not where t is a domain over an enum ([:enum name {:domain? true}]),
-   which has no = for an untyped value. Under :json (a JSON number read through t's input), a
-   number of any number type, but an integer type's input reads no fraction."
+   coalesce's, CASE's), one of t's category select_common_type takes; a string of another string
+   type; or one sent untyped, which PostgreSQL reads through t's input function, which every type
+   has; compared, a function's argument or resolved with t, where t has an = of its own the
+   catalog holds (json, point and an extension's type but citext have none here), not where t is a
+   domain over an enum ([:enum name {:domain? true}]), which has no = for an untyped value. Under
+   :json (a JSON number read through t's input), a number of any number type, but an integer
+   type's input reads no fraction."
   ([t sent] (holds? t sent :assign))
   ([t sent context]
    (or (= t sent)
        (case context
          :json (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
          :compare (and (string? t) (string? sent) (some #(contains? (apply types/cast-contexts %) "i") [[sent t] [t sent]]) (compares? t sent))
-         :common (and (string? t) (string? sent) (not (types/element t)) (some? (resolve/common-type [t sent])))
+         :common (and (string? t) (string? sent) (some? (resolve/common-type [t sent])))
          (and (string? t) (string? sent) (types/implicit? sent t)))
        (and (string-type? t) (string-type? sent))
        (and (= :unknown sent)

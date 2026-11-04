@@ -2525,3 +2525,11 @@
     (is (= [{:kind :unknown-column :column :Nick :did-you-mean [:nick] :quoted true}] (check {:select [:Nick] :from [:users]} o)))
     (is (= ["unknown column Nick; under :quoted, PostgreSQL looks the name up as written: for the column nick write :nick"]
            (h/humanize (check {:select [:Nick] :from [:users]} o))))))
+
+(deftest an-array-argument-beside-an-array-column-takes-the-arrays-postgresql-resolves-them-with
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                         [:ids [:vector {:pg/type "integer[]"} [:maybe [:int {:pg/type "integer"}]]]]]}})
+        t (:x (:args (h/analyze reg {:select [[[:coalesce :ids :?x] :v]] :from [:t]})))]
+    (is (m/validate t (int-array [1]) {:registry reg}))
+    (is (m/validate t (double-array [1.5]) {:registry reg}) "coalesce(integer[], double precision[]) is a double precision[]")
+    (is (not (m/validate t (into-array String ["a"]) {:registry reg})) "text[] is of another category")))

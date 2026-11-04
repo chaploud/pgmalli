@@ -121,7 +121,9 @@
   [registry s held-in opts]
   (let [context (if (#{:call :common} held-in) :compare held-in)
         t (query/slot-type registry s)
-        opts (cond-> opts (#{"character" "\"char\""} t) (assoc ::jdbc/characters true))
+        opts (cond-> opts
+               (#{"character" "\"char\""} t) (assoc ::jdbc/characters true)
+               (= :common held-in) (assoc ::jdbc/array-use :common))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) query/loose
               ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a CHECK's bounds hold after it

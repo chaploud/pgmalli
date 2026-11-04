@@ -259,9 +259,9 @@
 
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
-   column; :unnest, unnest(?) assigned): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
+   column; :common, beside an array column in coalesce or CASE; :unnest, unnest(?) assigned): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
-   element type is one of t's own (accept/holds?), as a column takes a value, its elements
+   element type is one of t's own (accept/holds?, assigned; under :common, as coalesce resolves it; compared, t is what a comparison takes already), its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
    an array of that type alone; where t takes a PGobject (of a type known at run time alone), a
    PGobject too. ::element-type in opts names t's type where t's schema names none (numeric[]'s
@@ -274,7 +274,7 @@
         takes? (fn [sent]
                  (if (= :unknown sent)
                    (not= :unnest use)
-                   (cond (and elem (accept/answers? elem)) (accept/holds? elem (types/element sent))
+                   (cond (and elem (accept/answers? elem)) (accept/holds? elem (types/element sent) (if (= :common use) :common :assign))
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
                          (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
@@ -323,13 +323,13 @@
 
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's
-   argument is an array of its elements' (array-type); otherwise the types read-type shares
+   argument is an array of its elements' (array-type, used as ::array-use, :assign by default); otherwise the types read-type shares
    with it, and what the one sending sends as its type, which is all of it
    where read-type has the driver's object (:any)."
   [schema opts]
   (if (array-column? schema)
     ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
-    (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) :assign)
+    (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) (::array-use opts :assign))
     (let [k (shape/kind schema)
           t (driver-type schema true)
           ;; a date or time column takes the java.time value its type is (the one reading's, which
