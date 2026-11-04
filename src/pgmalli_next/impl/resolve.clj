@@ -4,7 +4,7 @@
    function call (10.3) and an operator (10.2), polymorphic types bound as docs 38.2.5 says.
 
    A type is a name as format_type prints it (\"x[]\" for an array), [:enum name] for an enum
-   type, :unknown for an untyped literal or NULL, and, where pgmalli-next.honeysql asks what a call
+   type, :unknown for an untyped literal or NULL, and, where pgmalli-next.impl.query asks what a call
    takes, :free for a parameter of any type. A domain is passed as its base type. nil means
    PostgreSQL may refuse it, or resolve it otherwise in one of the versions the catalog holds."
   (:require [pgmalli-next.impl.types :as types]))

@@ -23,10 +23,8 @@
   [:schema :jdbc :format])
 
 (defn- prepared
-  "[registry body opts] as a public function reads them: the registry as reading reads it, body
-   as query! reads it, opts checked (jdbc/options!, of ks) and with-defaults'. Without a body,
-   opts without with-defaults: a table named with its schema needs none. A public function
-   another one calls with what it read (a registry reading made) reads them as they are."
+  "[registry body opts] as a public function reads them. Without a body, opts are not
+   query/with-defaults': a table named with its schema needs no :schema."
   ([registry opts ks]
    (if (::query/schemas registry)
      [registry opts]
@@ -53,16 +51,14 @@
    :tables    {:reads #{\"schema.table\" ...} :writes #{...}}, aliases and CTEs resolved
    :document-columns
               {arg #{column ...}} for every argument that is the document of a
-              jsonb_populate_record, json_populate_record or their recordset: the columns of
-              the row type the statement uses of the call, as keywords; nil where a use names
-              none in particular (r.*, the whole row, :raw) (docs/queries.md#the-columns-a-document-fills)
+              jsonb_populate_record, json_populate_record or their recordset
+              (docs/queries.md#document-columns)
 
    Names resolve as PostgreSQL resolves them. query-schema builds a function schema of it.
    Options: docs/queries.md#options. Throws when body is no HoneySQL data: SQL already
    formatted, or code (a symbol in it): pass the data the code builds.
 
-   (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-   ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}, :document-columns {}}"
+   (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
    (let [[registry body opts] (prepared registry body opts option-keys)]
@@ -70,7 +66,7 @@
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
       :problems (problems/check registry body opts)
-      :tables (problems/tables registry body opts)
+      :tables (query/tables registry body opts)
       :document-columns (args/document-columns registry body opts)})))
 
 (defn query-schema

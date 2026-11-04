@@ -1,7 +1,7 @@
 (ns pgmalli-next.impl.jdbc
   "The JDBC side: what a column comes back as and what PostgreSQL takes for it under the one
    reading and sending (docs/reading-rows.md), and the row keys as-unqualified-maps gives.
-   as-read and pgmalli-next.honeysql both read columns and key rows here."
+   as-read and the query namespaces both read columns and key rows here."
   (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
@@ -339,7 +339,7 @@
               t)
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
-          ;; keeps those a class sent goes as (pgmalli-next.honeysql's labelled-type)
+          ;; keeps those a class sent goes as (pgmalli-next.impl.args/labelled-type)
           sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))]
       (cond (empty? sent) t
             ;; a json column an override or a CHECK shapes: what is sent as its type is held to that shape

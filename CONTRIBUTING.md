@@ -131,7 +131,7 @@ after changing `holds?`, run `bb test:stricter` and read the diff.
 schema: each case wrapped in a FROM subquery, a CTE or EXISTS must have the problems it had
 alone.
 
-After changing how `pgmalli-next.honeysql` resolves scopes or names, run `bb oracle` with a few
+After changing how `pgmalli-next.impl.query` resolves scopes or names, run `bb oracle` with a few
 seeds. A query it got wrong goes into the corpus.
 
 ## Following upstream
@@ -144,7 +144,7 @@ ran. The tests that catch a change upstream, each naming the list to update:
 
 | test | catches |
 |---|---|
-| `pgmalli-next.honeysql-contract-test` | a clause HoneySQL adds or drops, or special syntax of `operator-syntax` it drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
+| `pgmalli-next.honeysql-contract-test` | a clause HoneySQL adds or drops, or special syntax of `pgmalli-next.impl.hsyntax/operator-syntax` it drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
 | `pgmalli-next.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli_next/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops; a type, implicit cast, range, function, operator or relation of `pg_catalog` that differs from the catalog snapshot (`resources/pgmalli-next/impl/catalog.edn`, which `bb catalog` rewrites) |
 | `pgmalli-next.accept-test` | a type pgjdbc's `setObject` sends a class as that differs from `accept/class-types`; a type PostgreSQL takes or refuses where `accept/accepts?` says otherwise |
 | `pgmalli-next.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/analyze`'s `:row` gives (`pgmalli-next.impl.resolve` over the catalog snapshot, and the grammar pgmalli types itself: `sql-value-types` and `grammar-operators` in `pgmalli-next.impl.hsyntax`, `json-shapes` in `pgmalli-next.impl.query`); a name PostgreSQL gives an unaliased expression that differs from `pgmalli-next.impl.hsyntax/expression-name`'s |

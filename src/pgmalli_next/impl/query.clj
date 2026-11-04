@@ -1,7 +1,9 @@
 (ns pgmalli-next.impl.query
-  "A query read against a registry: the registry as pgmalli-next.honeysql reads it, what a name
-   refers to (docs/queries.md#what-a-name-refers-to), the type of an expression and the rows a
-   statement returns (docs/queries.md#the-row-a-query-returns)."
+  "A query read against a registry: the registry as a query reads it, what a name refers to
+   (docs/queries.md#what-a-name-refers-to) and the tables a query reads and writes, the type of
+   an expression and the rows a statement returns (docs/queries.md#the-row-a-query-returns).
+   What HoneySQL data says without a registry is pgmalli-next.impl.hsyntax; the arguments'
+   types pgmalli-next.impl.args; the problems pgmalli-next.impl.problems."
   (:require [clojure.string :as str]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
@@ -70,12 +72,12 @@
   (atom nil))
 
 (defn reading
-  "The registry as this namespace reads it: its schemas taken once (a composite registry merges
-   them on every lookup), the columns of a table memoized, since a column is looked for in
-   every table in scope, and the schemas' own functions and operators read once, all of it kept
-   for the next call with the same schemas; and, for this call alone, the rows of derived tables
-   and the statements of a query (::calls). The public functions take a registry and make one
-   of it; one passed on again is left as it is."
+  "The registry as a query is read against it: its schemas taken once (a composite registry
+   merges them on every lookup), the columns of a table memoized, since a column is looked for
+   in every table in scope, and the schemas' own functions and operators read once, all of it
+   kept for the next call with the same schemas; and, for one call of pgmalli-next.honeysql's
+   public functions, the rows of derived tables and the statements of a query (::calls). One
+   already read is left as it is."
   [registry]
   (if (::schemas registry)
     registry
@@ -94,7 +96,7 @@
       (assoc r ::derived (atom {}) ::calls (atom {})))))
 
 (defn once
-  "(f registry & args), once per call of a public function (reading's ::calls): the functions a
+  "(f registry & args), once per call of a pgmalli-next.honeysql public function (reading's ::calls): the functions a
    call makes of one another read the same statements."
   [registry f & args]
   (if-let [memo (::calls registry)]
@@ -364,6 +366,20 @@
              :element (get elements (syntax/folded column))})
           (and opaque (>= 1 (count (remove #(nth % 2) hits))))
           (let [[alias table] opaque] {:table (or table alias) :column column :schema nil :nullable? true :opaque? true}))))
+
+(defn tables
+  "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
+   joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM,
+   TRUNCATE), aliases and CTE names resolved."
+  [registry body {:keys [schema] :as opts}]
+  (let [found (for [[stmt scopes] (once registry statement-chains body opts)
+                    :let [own (first scopes)
+                          targets (set (keep #(some-> % (syntax/table-ref schema) second) (syntax/write-targets stmt)))]
+                    [alias {:keys [table cte? excluded?]}] (when (map? own) own)
+                    :when (and table (not cte?) (not excluded?))]
+                [(if (targets alias) :writes :reads) table])]
+    (merge {:reads #{} :writes #{}}
+           (update-vals (group-by first found) #(set (map second %))))))
 
 (defn statement-positions
   "[statement scopes path positions] for the statements of query body (statement-chains), the

@@ -1,5 +1,7 @@
 (ns pgmalli-next.impl.args
-  "The types of a query's arguments (docs/queries.md#the-types-of-the-arguments)."
+  "The types of a query's arguments (docs/queries.md#the-types-of-the-arguments), and the type
+   of an argument where a value of a column goes (accepted-type), which values-schema and
+   set-schema type a row's columns with."
   (:require [clojure.walk :as walk]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.hsyntax :as syntax]

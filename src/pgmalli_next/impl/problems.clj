@@ -1,6 +1,5 @@
 (ns pgmalli-next.impl.problems
-  "The problems analyze reports of a query (README.md's table of :kind) and the tables it reads
-   and writes."
+  "The problems analyze reports of a query (README.md's table of :kind)."
   (:require [clojure.string :as str]
             [honey.sql :as sql]
             [pgmalli-next.impl.accept :as accept]
@@ -214,7 +213,7 @@
    assigned or under equality-ops; and a string literal HoneySQL sends as a parameter (not
    inlined, not cast; [:lift s] too), which the one sending sends as varchar, to a column
    PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar). A
-   named argument is arg-types', which types it by the class sent."
+   named argument is args/arg-types', which types it by the class sent."
   [registry ps opts]
   (let [uses (concat (for [[op side value chain] (syntax/comparison-sides ps)
                            :when (not (syntax/like-ops op))
@@ -261,7 +260,7 @@
                  (string-problems registry ps opts)))))
 
 (def ^:private read-clauses
-  "The clauses check, arg-types and row-schema read."
+  "The clauses analyze reads."
   (into syntax/statement-keys (concat syntax/with-keys syntax/from-keys syntax/join-keys
                                [:join-by :where :having :group-by :order-by :limit :offset :values :columns :set
                                 :on-conflict :do-update-set :returning])))
@@ -317,17 +316,3 @@
                         (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
                       chains)]
     (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body)))))
-
-(defn tables
-  "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
-   joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM,
-   TRUNCATE), aliases and CTE names resolved."
-  [registry body {:keys [schema] :as opts}]
-  (let [found (for [[stmt scopes] (query/once registry query/statement-chains body opts)
-                    :let [own (first scopes)
-                          targets (set (keep #(some-> % (syntax/table-ref schema) second) (syntax/write-targets stmt)))]
-                    [alias {:keys [table cte? excluded?]}] (when (map? own) own)
-                    :when (and table (not cte?) (not excluded?))]
-                [(if (targets alias) :writes :reads) table])]
-    (merge {:reads #{} :writes #{}}
-           (update-vals (group-by first found) #(set (map second %))))))

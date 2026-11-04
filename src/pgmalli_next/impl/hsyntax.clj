@@ -579,7 +579,7 @@
                   (and (= 1 (count items)) (populate-item? (first items))))))))
 
 (defn positions
-  "The expression positions of statement stmt, one read for check and arg-types: {:x node
+  "The expression positions of statement stmt, one read for the problems and the arguments' types: {:x node
    :clause k :chain scopes :negated? bool :top? bool} for every node of every clause sql/format writes, in
    its order, as a walk of each clause's value meets them, not descending into the statements nested in it, scopes the chain clause-parts says the node is read in,
    negated? under an odd number of :not through :and and :or alone ([:not [:= :a 1]] is a <> 1;
@@ -788,7 +788,7 @@
 
 (defn query!
   "body as HoneySQL query data (as-vectors); an error saying so for SQL already formatted, for
-   nothing, which would otherwise check clean, for a registry (the arguments swapped), and for
+   nothing, which would otherwise have no problem, for a registry (the arguments swapped), and for
    code."
   [body]
   (when (or (::query/schemas body) (some shape/generated-name? (when (map? body) (keys body))))

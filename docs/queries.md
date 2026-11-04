@@ -621,7 +621,7 @@ Write the query so PostgreSQL's reading is explicit instead.
   by converting one side, which hides a mix-up the column's type would catch. Cast it in the
   query (`[:cast :?n :numeric]`) where the conversion is meant. A number PostgreSQL converts
   implicitly to the column's type (a `Long` to `numeric`, a `BigDecimal` to `double precision`)
-  is the column's own. The same holds for a value of a `jsonb_populate_record` document, which
+  is the column's own. A value of a `jsonb_populate_record` document likewise takes its column's own values, which
   PostgreSQL reads through the column type's input: no number to a `boolean` column (PostgreSQL
   reads `1` and `0`), and no `BigDecimal` to an integer column (it reads `1`, not `1.0`); send a
   `Boolean`, or a `Long`.

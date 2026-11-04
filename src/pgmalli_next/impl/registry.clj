@@ -1,5 +1,5 @@
 (ns pgmalli-next.impl.registry
-  "Generated files as malli registries: the file read from the classpath, the generation hints
+  "Generated files as malli registries: the file read (from the classpath, or a path), the generation hints
    and the insert and update schemas derived from the row schemas, and the registry they make.
 
    \"registry\" is two things here: the file's :registry key is a plain {name schema} map of

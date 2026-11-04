@@ -1,19 +1,7 @@
 (ns pgmalli-next.impl.files
-  "Config -> generated EDN files, one per schema. The config is documented on pgmalli-next.generate.
-
-   File contents, in this order:
-     {:schema \"public\" :database-version \"PostgreSQL 17\" :diagnostics [...]
-      :registry {name schema} :functions {name [overload ...]} :operators {name [overload ...]}
-      :unrendered [entry ...] :skipped [entry ...]}
-
-   :functions and :operators are the schema's own, which pgmalli-next.honeysql resolves a call to
-   besides pg_catalog's: an overload as pgmalli-next.impl.types/catalog holds one.
-
-   An :unrendered or :skipped entry is {:kind :table or :domain :column :constraint :sql :type},
-   the keys that apply.
-
-   Output is deterministic (sorted maps, pprint). Overrides that are not EDN (functions)
-   are rejected at generation time."
+  "Config -> generated EDN files, one per schema: README.md#installation, and the file
+   docs/types.md#the-generated-file. Output is deterministic (sorted maps, pprint); overrides
+   that are not EDN (functions) are rejected at generation time."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]
