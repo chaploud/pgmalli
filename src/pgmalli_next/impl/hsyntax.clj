@@ -16,8 +16,8 @@
   (some-> s (str/replace "-" "_") str/lower-case))
 
 (defn- unformatted-name
-  "The name PostgreSQL reads of s where the loaded HoneySQL formats nothing under format (a
-   dialect of a later HoneySQL): as written where format quotes, else folded."
+  "The name PostgreSQL reads of s where the loaded HoneySQL formats nothing (a name it refuses,
+   :a;b): as written where format quotes, else folded."
   [s format]
   (if (quoted? format) s (folded s)))
 
@@ -812,17 +812,16 @@
    options format, as a column of :values or, alias? true, as an alias of a select item; name as
    PostgreSQL reads it: a quoted one as it is, else folded to lower case."
   (memoize (fn [k format alias?]
-             ;; an option the loaded HoneySQL does not take (a dialect of a later one) formats nothing
+             ;; a name the loaded HoneySQL refuses (:a;b) formats nothing
              (when-let [n (try (let [s (first (sql/format (if alias? {:select [[:a k]]} {:insert-into :t :values [{k 1}]}) (dissoc (or format {}) :params)))]
                                  (second (re-find (if alias? #" AS (.*)$" #"\((.*?)\)") s)))
                                (catch Exception _ nil))]
                (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" n)] [q true] [(str/lower-case n) false])))))
 
 (defn quoted?
-  "Whether sql/format's options quote a name, as the loaded HoneySQL writes one (:quoted where
-   it formats nothing, which options checks keep from happening)."
+  "Whether sql/format's options quote a name, as the loaded HoneySQL writes one."
   [format]
-  (if-let [[_ q?] (formatted-name :a format false)] q? (boolean (:quoted format))))
+  (boolean (second (formatted-name :a format false))))
 
 (defn- sql-word?
   "Whether HoneySQL writes keyword v as the SQL word w (lower-case; v of any case) where the

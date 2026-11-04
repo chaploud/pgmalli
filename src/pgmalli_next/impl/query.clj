@@ -125,13 +125,16 @@
     (some->> (seq (take 3 (distinct (concat same-name (error/suggestions table known 3))))) vec)))
 
 (defn unknown-table-text
-  "What an :unknown-table of table says: where a table of its name is, or what is spelled close."
-  [table did-you-mean]
+  "What an :unknown-table of table says: under :quoted (quoted?), what to write where its name
+   folded is a table; where a table of its name is; or what is spelled close."
+  [table did-you-mean quoted?]
   (let [elsewhere (first (filter #(= (syntax/table-name %) (syntax/table-name table)) did-you-mean))]
     (str "unknown table " table
-         (cond elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
+         (cond quoted? (str "; under :quoted, PostgreSQL looks the name up as written: for the table "
+                            (syntax/folded table) " write :" (syntax/folded (syntax/table-name table)))
+               elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
                               ", or name it :" elsewhere)
-               did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
+               did-you-mean (error/did-you-mean (str/join " or " (map #(str ":" %) did-you-mean)))
                :else "; check its name, or :schema when it is in another schema"))))
 
 (defn unknown-table!
@@ -185,8 +188,9 @@
       ;; a table named as HoneySQL names it: the :unknown-table sentence analyze gives
       (when (not= n name)
         (let [t (str/join "." (shape/schema-and-name n))
-              meant (table-suggestions registry t)]
-          (error/fail! :pgmalli.error/unknown-schema (str what ": " (unknown-table-text t meant))
+              meant (table-suggestions registry t)
+              quoted? (and (syntax/quoted? (:format opts)) (not= t (syntax/folded t)) (some #{(syntax/folded t)} meant))]
+          (error/fail! :pgmalli.error/unknown-schema (str what ": " (unknown-table-text t meant quoted?))
                        (cond-> {:given name} meant (assoc :did-you-mean meant))))))
     n))
 

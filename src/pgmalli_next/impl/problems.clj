@@ -43,11 +43,11 @@
         format (::query/format registry)
         output? (fn [s c stars?] (or (output-column? s c format) (and (nil? (first (syntax/split-column c format))) (untold-outputs? s stars?))))]
     (concat (for [c (syntax/vectorish (:group-by stmt))
-                  :when (and (syntax/column-keyword? c) (not (and (output? stmt c false) (empty? (query/column-hits registry sc c)))))]
+                  :when (and (syntax/column-keyword? c format) (not (and (output? stmt c false) (empty? (query/column-hits registry sc c)))))]
               c)
             (when out
               (for [o (syntax/vectorish (:order-by stmt)) :let [c (syntax/bare o)]
-                    :when (and (syntax/column-keyword? c) (not (output? out c (not= out stmt))))]
+                    :when (and (syntax/column-keyword? c format) (not (output? out c (not= out stmt))))]
                 c)))))
 
 (defn- whole-row?
@@ -92,6 +92,10 @@
                     [(keyword (str alias "." c)) d])]
         [a (some->> (seq meant) (sort-by second) (map first) distinct (take 3) vec)]))))
 
+(def ^:private sort-directions
+  "The directions HoneySQL writes after an ORDER BY item ([:score :desc])."
+  #{:asc :desc :nulls-first :nulls-last :asc-nulls-first :asc-nulls-last :desc-nulls-first :desc-nulls-last})
+
 (def ^:private expression-clauses
   "The clauses whose values are expressions, whose calls' arguments name columns."
   #{:select :select-distinct :select-distinct-on :where :having :group-by :order-by :set :values
@@ -102,7 +106,9 @@
         assigned (when (seq target) (concat (map #(or (syntax/field-column %) %) (filter syntax/column-keyword? (:columns (syntax/insert-parts stmt))))
                                             (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))
         ;; a target a.b as written (writes has it as its column a): field b of a column a to PostgreSQL
-        dotted (into {} (for [[clause ts] [[:columns (:columns (syntax/insert-parts stmt))] [:set (let [st (:set stmt)] (when (map? st) (keys st)))]
+        dotted (into {} (for [[clause ts] [[:columns (:columns (syntax/insert-parts stmt))]
+                                           [:values (let [v (:values stmt)] (when (vector? v) (mapcat keys (filter map? v))))]
+                                           [:set (let [st (:set stmt)] (when (map? st) (keys st)))]
                                            [:do-update-set (let [d (:do-update-set stmt)] (when (map? d) (keys d)))]]
                               t ts
                               :let [c (syntax/field-column t)] :when c]
@@ -118,7 +124,10 @@
                                         ;; an item of SELECT, ORDER BY or RETURNING is [expression alias|direction], no call
                                         (for [{:keys [x chain item? clause]} (syntax/expression-nodes ps)
                                               :when (and (expression-clauses clause) (not (and item? (#{:select :select-distinct :select-distinct-on :order-by :returning} clause))))
-                                              :let [[kind _ args] (when-not (syntax/comparison? x) (syntax/call-parts x))]
+                                              ;; [expr direction], an item of an ORDER BY inside OVER or an aggregate, is no
+                                              ;; call: its expression alone names a column
+                                              :let [ordered? (and (vector? x) (= 2 (count x)) (sort-directions (second x)))
+                                                    [kind _ args] (if ordered? [:order [] [(first x)]] (when-not (syntax/comparison? x) (syntax/call-parts x)))]
                                               :when kind
                                               a args
                                               :when (syntax/column-keyword? a format)]

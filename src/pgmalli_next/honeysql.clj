@@ -138,15 +138,17 @@
 
 (def ^:private sql-word-schema
   "[:fn] of what HoneySQL writes as NULL or DEFAULT (word) under format, one per format so that
-   the schemas of one call equal the next's."
+   the schemas of one call equal the next's; nil where the format writes neither spelling as it
+   (:null under :quoted is a column)."
   (memoize
    (fn [word format]
-     (let [[gen pred] (case word
-                        :null [:null #(and (keyword? %) (syntax/null-value? % format))]
-                        :default [(if (syntax/quoted? format) [:default] :default) #(syntax/default-value? % format)])]
-       [:fn {:error/message (str "should be " (str/upper-case (name word)) " as HoneySQL writes it (" (pr-str gen) ")")
-             :gen/elements [gen] :pgmalli/describe (pr-str gen)}
-        pred]))))
+     (let [pred (case word
+                  :null #(and (keyword? %) (syntax/null-value? % format))
+                  :default #(syntax/default-value? % format))]
+       (when-let [gen (first (filter pred [word [word]]))]
+         [:fn {:error/message (str "should be " (str/upper-case (name word)) " as HoneySQL writes it (" (pr-str gen) ")")
+               :gen/elements [gen] :pgmalli/describe (pr-str gen)}
+          pred])))))
 
 (defn- written-row*
   "The closed map of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
@@ -171,7 +173,7 @@
                                a (assigned (assoc opts ::args/keywords-columns true))
                                t (one-value a)
                                ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
-                               t (if (or (shape/maybe? c) triggered?) [:or t (sql-word-schema :null (:format opts))] t)
+                               t (if-let [n (when (or (shape/maybe? c) triggered?) (sql-word-schema :null (:format opts)))] [:or t n] t)
                                plain (if (fills k) [:or t default] t)
                                lifted (assigned opts)
                                labels (let [e (shape/domain-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]]
@@ -241,11 +243,7 @@
 
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
-  {:unknown-table (fn [{:keys [table did-you-mean quoted]}]
-                   (if quoted
-                     (str "unknown table " table "; under :quoted, PostgreSQL looks the name up as written: for the table "
-                          (syntax/folded table) " write :" (syntax/folded (syntax/table-name table)))
-                     (query/unknown-table-text table did-you-mean)))
+  {:unknown-table (fn [{:keys [table did-you-mean quoted]}] (query/unknown-table-text table did-you-mean quoted))
    :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint]}]
                      (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean))))]
                        (str "unknown column " (column-name column)

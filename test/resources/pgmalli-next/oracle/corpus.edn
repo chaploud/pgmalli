@@ -541,4 +541,8 @@
  [:is-not-true-arg {:select [:id] :from [:users] :where [:is-not :?x true]}]
  [:is-false-arg {:select [:id] :from [:users] :where [:or [:is :?x false] [:is-not :?y :unknown]]}]
  [:is-null-arg {:select [:id] :from [:users] :where [:is :?x nil]}]
+ ;; an ORDER BY item's direction inside OVER, an aggregate or WITHIN GROUP
+ [:window-order-desc {:select [:id [[:over [[:row_number] {:partition-by [:group_id] :order-by [[:score :desc]]} :rn]]]] :from [:users]}]
+ [:aggregate-order-desc {:select [[[:array_agg [:order-by :nick [:id :desc]]] :a] [[:string_agg :nick [:order-by "," [:score :desc-nulls-last]]] :b]] :from [:users]}]
+ [:within-group-desc {:select [[[:within-group [:percentile_cont 0.5] {:order-by [[:score :desc]]}] :p]] :from [:users]}]
 ]

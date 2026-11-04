@@ -183,9 +183,8 @@ An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one 
 (no use of it is one the table above types: an argument of a function the registry lacks, or of
 a polymorphic one under `:inline`, is one) and `:type` (it is compared with or cast to what pgmalli knows no type
 of: the result of a function the registry lacks, a column of a table it lacks, an extension's
-type). An argument where a value of a type pgmalli does not type goes, compared, assigned or as a
-function's argument,
-takes a `PGobject` where pgjdbc reads one (a geometric, network or timespan type: `inet`,
+type). An argument where a value of a type pgmalli does not type goes (compared, assigned, or a
+function's argument as above) takes a `PGobject` where pgjdbc reads one (a geometric, network or timespan type: `inet`,
 `interval`), which it sends as the type it names, and what converts to the type implicitly (a
 `LocalTime` to `interval`); otherwise (cast, `json`, `xml`, `money`) it is `[:any {:pg/type ...}]`,
 without `:pgmalli/untyped`:
@@ -267,8 +266,8 @@ column, read as a String, which pgjdbc sends as `varchar`: write its label as `[
 or a `PGobject`); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
-([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes HoneySQL's
-`:default` too; one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
+([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
+DEFAULT as HoneySQL writes it under `:format` too (`:default`, or `[:default]` where it quotes names); one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
 BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
 takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
@@ -678,7 +677,10 @@ Write the query so PostgreSQL's reading is explicit instead.
 
 - Values written in the query beyond NULL, enum literals and strings sent typed (`varchar`): an empty `[:in :id []]` is not reported (an argument in `:in` is
   typed non-empty).
-- An ON clause naming a table joined after it, which PostgreSQL rejects.
+- An ON clause naming a table joined after it, or an UPDATE's FROM joining on the target table
+  (invalid reference to FROM-clause entry), which PostgreSQL rejects.
+- A recursive CTE naming itself inside a subquery of its recursive term, which PostgreSQL
+  rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.
 - An argument schema with a regex CHECK (`[:and [:string] [:re ...]]`) does not generate with
   `mg/generate`; it validates only. It lacks the generation hint the registry's column schema

@@ -1822,7 +1822,7 @@
 
 (deftest an-unknown-table-names-the-one-meant
   (is (= [{:kind :unknown-table :table "sample.usres" :did-you-mean ["sample.users"]}] (check {:select [:id] :from [:usres]})))
-  (is (= ["unknown table sample.usres; did you mean: sample.users"] (h/humanize (check {:select [:id] :from [:usres]})))))
+  (is (= ["unknown table sample.usres; did you mean: :sample.users"] (h/humanize (check {:select [:id] :from [:usres]})))))
 
 (deftest a-misspelt-option-names-the-one-meant-in-its-data
   (let [d (ex-data (try (:problems (h/analyze registry {:select [:id] :from [:users]} {:jdcb {}})) (catch clojure.lang.ExceptionInfo e e)))]
@@ -2334,7 +2334,8 @@
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
-          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval takes not), or the argument cast in the query: [:cast ?x :interval]"})
+          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval takes not), or the argument cast in the query: [:cast <the argument> :interval]"
+                                                            :pgmalli/describe "PGobject of interval"})
                       :time/local-time]]
           :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
@@ -2728,7 +2729,7 @@
   (let [v (h/values-schema registry :users opts)]
     (is (m/validate v {:group_id 1 :score 1 :nick :null} {:registry registry}) "HoneySQL writes VALUES (..., null)")
     (is (= [] (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]}))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: sample.users$"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: :sample.users$"
                         (h/values-schema registry :usres opts))))
 
 (deftest an-sql-word-is-a-value-as-honeysql-writes-it-under-the-format
@@ -2739,3 +2740,15 @@
   (is (= [:unknown-column] (map :kind (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]} (assoc opts :format {:quoted-always #"^null$"}))))
       ":quoted-always matching it writes \"null\"")
   (is (= [:unknown-column] (map :kind (check {:insert-into :users :values [[1 1 :foo]]}))) "a positional row's keyword past any column list"))
+
+(deftest an-order-by-items-direction-inside-over-or-an-aggregate-is-no-column
+  (doseq [q [{:select [[[:over [[:row_number] {:partition-by [:group_id] :order-by [[:score :desc]]}]] :rn]] :from [:users]}
+             {:select [[[:array_agg [:order-by :nick [:id :desc]]] :a]] :from [:users]}
+             {:select [[[:string_agg :nick [:order-by "," [:score :desc-nulls-last]]] :a]] :from [:users]}
+             {:select [[[:within-group [:percentile_cont 0.5] {:order-by [[:score :desc]]}] :p]] :from [:users]}]]
+    (is (= [] (check q)) (pr-str q))))
+
+(deftest a-written-row-generates-what-it-takes-under-the-format
+  (doseq [f [{:quoted true} {:quoted-always #"^default$"}]
+          :let [v (h/values-schema registry :users (assoc opts :format f))]]
+    (is (every? #(m/validate v % {:registry registry}) (mg/sample v {:registry registry :size 20 :seed 3})) (pr-str f))))
