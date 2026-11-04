@@ -194,8 +194,7 @@
                    (error/fail! :pgmalli.error/invalid-options
                                 (str what " takes a table as :table or :schema.table; " (pr-str name) " names more")
                                 {:given name}))
-                 (or (some #(let [k (shape/table-key %)] (when (contains? registry k) k)) [t (syntax/folded t)])
-                     (shape/table-key t))))
+                 (shape/table-key (or (syntax/held-name #(contains? registry (shape/table-key %)) t) t))))
         _ (when-not (contains? registry name)
             (query/unknown-table! r (if (namespace name) (str/join "." (shape/schema-and-name name)) (clojure.core/name name))))
         s (shape/schema-of registry name)]

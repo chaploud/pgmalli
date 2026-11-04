@@ -4,7 +4,6 @@
   (:require [clojure.string :as str]
             [honey.sql :as sql]
             [pgmalli-next.impl.error :as error]
-            [pgmalli-next.impl.query :as-alias query]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -15,6 +14,12 @@
    and the case folded."
   [s]
   (some-> s (str/replace "-" "_") str/lower-case))
+
+(defn held-name
+  "n, or n folded, whichever held? holds first: a name PostgreSQL folds where the one as written
+   (a quoted mixed-case one) is not there."
+  [held? n]
+  (some #(when (held? %) %) [n (folded n)]))
 
 (defn- last-part
   "The last part of a dotted name (:public.users, \"pg_catalog.now\"), folded."
@@ -791,7 +796,7 @@
    nothing, which would otherwise have no problem, for a registry (the arguments swapped), and for
    code."
   [body]
-  (when (or (::query/schemas body) (some shape/generated-name? (when (map? body) (keys body))))
+  (when (some shape/generated-name? (when (map? body) (keys body)))
     (error/fail! :pgmalli.error/not-query-data
                  "pgmalli-next.honeysql takes the registry first, then the query: (analyze registry query)"
                  {:given (vec (take 5 (keys body)))}))

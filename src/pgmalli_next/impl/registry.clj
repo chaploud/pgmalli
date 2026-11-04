@@ -19,10 +19,12 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
+(defn- generated? [x] (and (map? x) (map? (:registry x))))
+
 (defn generated-data
   "x when it is generated data, a map with a :registry map; else an error saying what takes it."
   [x what]
-  (if (and (map? x) (map? (:registry x)))
+  (if (generated? x)
     x
     (error/fail! :pgmalli.error/invalid-options
                  (str what " takes generated data maps, such as (pgmalli-next.core/generated \"public\"); given "
@@ -37,7 +39,7 @@
                  (error/fail! :pgmalli.error/not-generated
                               (str f " is not a generated file (" (ex-message e) "); run pgmalli-next.main generate")
                               {:given (str f)} e)))]
-    (if (and (map? x) (map? (:registry x)))
+    (if (generated? x)
       x
       (error/fail! :pgmalli.error/not-generated
                    (str f " is not a generated file (no :registry map); run pgmalli-next.main generate")

@@ -195,5 +195,3 @@
              (do (io/make-parents path)
                  (spit path (edn-string data))
                  [schema path]))))
-
-

@@ -429,7 +429,7 @@
    a value goes where each use takes it; a use that types nothing takes any. nil where either
    takes it (an IS DISTINCT FROM, a nullable column it is assigned to)."
   [a b]
-  (let [nil? (or (shape/maybe? a) (shape/maybe? b))
+  (let [nullable? (or (shape/maybe? a) (shape/maybe? b))
         [a b] (map shape/non-null [a b])
         ;; every alternative of x is one of y's, but for the :pg/type it names
         within? (fn [x y] (every? (set (map unlabel (shape/alternatives y))) (map unlabel (shape/alternatives x))))
@@ -438,7 +438,7 @@
                 (within? b a) b
                 (within? a b) a
                 :else (into [:and] (sort-by pr-str [a b])))]
-    (cond-> t nil? query/nullable)))
+    (cond-> t nullable? query/nullable)))
 
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
@@ -456,7 +456,7 @@
         types (reduce (fn [acc [x t]] (if-let [k (syntax/param-key x)] (update acc k both-uses t) acc))
                       untyped typed)
         typed-keys (set (keep (comp syntax/param-key first) typed))
-        null-tested (set (for [[_ _ _ ps] (query/once registry query/statement-positions body opts), k (null-tested-args ps opts)] k))]
+        null-tested (set (for [[_ _ _ ps] sps, k (null-tested-args ps opts)] k))]
     (into {} (for [[k t] types]
                [k (if (= :any t)
                     [:any {:pgmalli/untyped (if (typed-keys k) :type :position)}]

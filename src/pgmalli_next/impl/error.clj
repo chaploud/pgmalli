@@ -17,7 +17,6 @@
    :pgmalli.error/psql-missing :cognitect.anomalies/unavailable
    :pgmalli.error/fault :cognitect.anomalies/fault})
 
-
 (defn fail!
   ([kind message] (fail! kind message {} nil))
   ([kind message data] (fail! kind message data nil))

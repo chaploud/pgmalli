@@ -164,7 +164,7 @@
                        :let [cte? (boolean (and written (not (targets r)) (ctes written)))
                              table (when table (catalog-table registry table written))
                              ;; an unquoted :USERS is PostgreSQL's users: the registry's name, which the driver returns
-                             table (if (and table (nil? (column-entries registry table)) (column-entries registry (syntax/folded table))) (syntax/folded table) table)
+                             table (when table (or (syntax/held-name #(column-entries registry %) table) table))
                              unknown? (boolean (and table (not cte?) (not (syntax/catalog? table)) (nil? (table-columns registry table))))
                              _ (when unknown? (unknown-table! registry table))]]
                    [alias (cond-> {:table table :cte? cte?
@@ -198,7 +198,7 @@
                              (and (syntax/column-keyword? a) (nil? (first (syntax/split-column a))))
                              (let [{:keys [table opaque?]} (some #(get % (syntax/folded (name a))) (filter map? (syntax/chain scopes)))]
                                (when-not opaque? table)))]
-        (when-let [table (some #(when (column-entries registry %) %) [table (syntax/folded table)])]
+        (when-let [table (syntax/held-name #(column-entries registry %) table)]
           {:table table :set? (str/ends-with? n "set") :type (if (str/starts-with? n "jsonb") "jsonb" "json") :json json
            :arg (cond (syntax/param-key json) json
                       (and (vector? json) (= :cast (first json)) (= 3 (count json)) (syntax/param-key (second json))
@@ -309,9 +309,9 @@
   [registry {:keys [table opaque? columns types all-listed?] :as entry} column]
   (cond columns (or (boolean (some #(or (= column %) (= (syntax/folded column) %)) columns))
                     (and (not all-listed?) (has-column? registry (dissoc entry :columns) column)))
-        types (or (contains? types column) (contains? types (syntax/folded column)))
+        types (boolean (syntax/held-name #(contains? types %) column))
         opaque? true
-        :else (let [cs (table-columns registry table)] (or (contains? cs column) (contains? cs (syntax/folded column))))))
+        :else (let [cs (table-columns registry table)] (boolean (syntax/held-name #(contains? cs %) column)))))
 
 (defn- own-hits
   "[[alias table opaque? nullable? types elements] ...] of the tables of one scope a column may belong to."
@@ -644,7 +644,7 @@
   (let [alias #(second (syntax/table-ref % schema))
         col-schema (fn [a column]
                      (when-let [{:keys [table opaque?]} (get sc a)]
-                       (when-not opaque? (let [cs (table-columns registry table)] (or (get cs column) (get cs (syntax/folded column)))))))
+                       (when-not opaque? (let [cs (table-columns registry table)] (some->> (syntax/held-name #(contains? cs %) column) (get cs))))))
         ;; the type without what does not change it (a default, constraints)
         type-of #(let [s (shape/non-null %)] (if (and (vector? s) (map? (second s))) (assoc s 1 (select-keys (second s) [:pg/type :pg/max-length :min :max])) s))
         table-side (fn [a column] (let [s (col-schema a column)] {:schema s :nullable? (boolean (or (nil? s) (shape/maybe? s) (:nullable? (get sc a))))}))
