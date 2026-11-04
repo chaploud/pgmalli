@@ -495,13 +495,20 @@
     k))
 
 (defn- meet
-  "The alternatives of a and b whose values the other takes too, each as it names them: one
-   within an alternative of the other (the same values, or those of its kind: [:int {:min 0}]
-   within :int), an array's of the elements both take; nil where an alternative of a and one of
-   b are of one kind and neither is within the other, whose common values cannot be told here."
+  "The alternatives of a and b whose values the other takes too, each keeping its own label: one
+   within an alternative of the other (equal, or of that kind: [:int {:min 0}] within :int); for
+   two arrays, an array of the elements both take. () where none are common; nil where two
+   alternatives are of one kind and neither is within the other, whose common values cannot be
+   told."
   [a b]
   (let [array? #(= :pg/array (shape/head %))
-        within? (fn [x y] (or (= (unlabel x) (unlabel y)) (and (keyword? y) (= y (shape/head x)))))
+        fn? #(= :fn (shape/head %))
+        within? (fn [x y] (let [y (unlabel y)]
+                            (or (= (unlabel x) y)
+                                (and (or (keyword? y) (symbol? y)) (= y (shape/kind x)))
+                                ;; a PGobject of any type holds one of a type (typed-pg-object)
+                                (and (fn? x) (fn? y) (= (:pg/class (shape/props x)) (:pg/class (shape/props y)))
+                                     (not (:pgmalli/describe (shape/props y)))))))
         elements (fn [x y]
                    (let [[ex ey] [(last x) (last y)]
                          m (cond (query/untyped? ey) [ex]
@@ -513,7 +520,10 @@
                 (cond (within? x y) x
                       (within? y x) y
                       (and (array? x) (array? y)) (elements x y)
-                      (= (shape/kind x) (shape/kind y)) ::untold))]
+                      ;; two predicates, or one of no class, may share any values
+                      (or (= (shape/kind x) (shape/kind y)) (and (fn? x) (fn? y))
+                          (some #(and (fn? %) (not (:pg/class (shape/props %)))) [x y]))
+                      ::untold))]
     (when-not (some #{::untold} pairs) (distinct (remove nil? pairs)))))
 
 (defn- both-uses

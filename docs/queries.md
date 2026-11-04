@@ -210,8 +210,9 @@ rounds it (a value at exactly half a unit past may round out of range):
 
 PostgreSQL types a parameter once, so an argument of several uses takes the values each of them
 takes: a cast and a comparison, what the comparison takes of what casts. It takes nil only where
-each of its uses does (one the query tests for NULL does); a use pgmalli does not type takes any
-value.
+every use does, a NULL test aside (below); a use pgmalli does not type takes any value. Where the
+values the uses have in common cannot be told, the schema is `[:and ...]` of the uses' (described
+`a & b`), which takes a value each of them takes.
 
 A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
 matches no row.
@@ -230,9 +231,10 @@ Compare NULL in the query body: `[:= :id nil]` (HoneySQL writes `IS NULL`), or
 ;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]]}
 ```
 
-Under `{:format {:inline true}}`, an argument the query also tests for NULL takes nil, as an
-optional filter does (`NULL IS NULL OR id = NULL`); sent as a parameter, it does not:
-PostgreSQL refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
+An argument the query also tests for NULL takes nil whatever its other uses, as an optional
+filter does (`NULL IS NULL OR id = NULL`): under `{:format {:inline true}}`, or where the test
+casts it (`[:= [:cast :?id :bigint] nil]`). Sent bare as a parameter it does not: PostgreSQL
+refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]} {:format {:inline true}}))
@@ -649,7 +651,6 @@ Write the query so PostgreSQL's reading is explicit instead.
   PostgreSQL stores as the value's JSON text (`1` as `"1"`, an object as `{"a": 1}`), or as that
   text's bytes: send a string, or the column a `jsonb` one.
 - An argument compared with a column does not take nil, unless the query also tests it for NULL
-  (`[:= :?id nil]`, `[:is :?id nil]`) under `:inline`
   ([compare NULL in the query body](#the-types-of-the-arguments)).
 - An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list
   (`CHECK (state IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`,
@@ -683,9 +684,10 @@ Write the query so PostgreSQL's reading is explicit instead.
 
 - Values written in the query beyond NULL, enum literals and strings sent typed (`varchar`): an empty `[:in :id []]` is not reported (an argument in `:in` is
   typed non-empty).
-- An ON clause naming a table joined after it (an ON inside a parenthesized join, which sees its
-  own tables alone, is checked), or an UPDATE's FROM joining on the target table (invalid
-  reference to FROM-clause entry), which PostgreSQL rejects.
+- An ON clause naming a table joined after it in its own join list, or an UPDATE's FROM joining
+  on the target table (invalid reference to FROM-clause entry), which PostgreSQL rejects. (An ON
+  inside a parenthesized join naming a table outside it is an `:unknown-column` with
+  `:outside-join`.)
 - A recursive CTE naming itself inside a subquery of its recursive term, which PostgreSQL
   rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.

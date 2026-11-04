@@ -395,10 +395,12 @@
                                          (apply concat (map-indexed (fn [i e] (walk e (conj path k i) outer (into base (keep #(syntax/cte-name % (:format opts))) (if (= :with-recursive k) w (take i w))) false true)) w))
                                          (walk w (conj path k) outer ctes false true))]
                              found)
-                           ;; a statement inside a parenthesized join (a LATERAL subquery) sees the
-                           ;; items left of the joins it is in, not its ONs' tables alone
-                           (for [[ks v sees] (syntax/clause-parts x)
-                                 found (walk v (into path ks) (syntax/part-chain (if (= :group sees) :own sees) v chain outer opts) ctes false true)]
+                           (for [[ks v sees] (letfn [(parts [ks v sees]
+                                                      (if (= :group sees)
+                                                        (mapcat (fn [[p part s]] (parts (into ks p) part s)) (syntax/group-parts v))
+                                                        [[ks v sees]]))]
+                                               (mapcat #(apply parts %) (syntax/clause-parts x)))
+                                 found (walk v (into path ks) (syntax/part-chain sees v chain outer opts) ctes false true)]
                              found))))
                   (syntax/branch? x) (apply concat (map-indexed (fn [i c] (walk c (conj path i) outer ctes (or in-vector? (vector? x)) under?)) (seq x)))))]
     (walk body [] outer #{} false false))))

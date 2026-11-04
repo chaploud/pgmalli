@@ -90,7 +90,12 @@
                         (str (or (type-label p) "enum") ": " (str/join " | " (shape/entries target)))
                         (or (type-label p) (describe schemas (last s)))))
       (= :and head) (let [n (some #(when (and (vector? %) (= :pg/numeric (first %))) (second %)) children)
-                          label (or (type-label p) (describe schemas (first children)))]
-                      ;; numeric(p,s) keeps its typmod in a [:pg/numeric ...] part, not in :pg/type
-                      (if (and n (= "numeric" label)) (str "numeric(" (:precision n) "," (:scale n) ")") label))
+                          label (or (type-label p) (describe schemas (first children)))
+                          ;; an argument's uses whose common values are not told: each use's
+                          uses? (and (nil? p) (every? #(and (vector? %) (#{:or :maybe :pg/array} (first %))) children))]
+                      (cond
+                        ;; numeric(p,s) keeps its typmod in a [:pg/numeric ...] part, not in :pg/type
+                        (and n (= "numeric" label)) (str "numeric(" (:precision n) "," (:scale n) ")")
+                        uses? (str/join " & " (map #(let [d (describe schemas %)] (if (string? d) (str "(" d ")") (pr-str d))) children))
+                        :else label))
       :else (or (type-label p) (leaf s)))))

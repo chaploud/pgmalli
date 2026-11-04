@@ -413,7 +413,7 @@
   [entry format]
   (let [tail (drop 2 entry)
         pairs (partition-all 2 (if (#{:materialized 'materialized :not-materialized 'not-materialized} (first tail)) (rest tail) tail))
-        by (into {} (map vec) pairs)
+        by (into {} (for [[k v] pairs :when (keyword? k)] [k v]))
         typed (fn [k t] (when (alias? (by k)) [(ident-name (by k) format) t]))]
     (remove nil? (cond (contains? by :search-depth-first-by) [(typed :set "record[]")]
                        (contains? by :search-breadth-first-by) [(typed :set "record")]
@@ -499,8 +499,8 @@
    statement's tables and the enclosing ones (its conditions, select, assignments); :outer, only
    the enclosing ones (INSERT ... SELECT, the rows of :values and a table item of :from or a
    join: none sees the statement's own tables); :lateral, those and the tables before it (a
-   LATERAL item, a function); :group, those and a parenthesized join's own tables (its ONs; a
-   statement inside it sees as :own)."
+   LATERAL item, a function); :group, those and a parenthesized join's own tables (its ONs; its
+   parts see as group-parts tells)."
   [x]
   (for [[k v] (clause-entries x) :when (not (some #{k} with-keys))
         :let [item-sees #(cond (join-group %) :group (lateral? %) :lateral :else :outer)]
@@ -519,11 +519,29 @@
                    :else [[[k] v :own]])]
     part))
 
+(defn group-parts
+  "[path part sees] of the parts of a parenthesized join t, path where each sits in t, as
+   clause-parts tells a statement's: its items :outer, :lateral or :group as a statement's
+   items are, an ON [:on-of t], seeing t's own tables."
+  [t]
+  (let [[_ base & inner] (first t)
+        item-sees #(cond (join-group %) :group (lateral? %) :lateral :else :outer)]
+    (concat [[[0 1] base (item-sees base)]]
+            (for [[i m] (map-indexed vector inner) :when (map? m)
+                  [k v] m
+                  part (cond (and (vector? v) (some #{k} join-keys))
+                             (map-indexed (fn [j x] [[0 (+ 2 i) k j] x (if (odd? j) [:on-of t] (item-sees x))]) v)
+                             (and (vector? v) (= :cross-join k))
+                             (map-indexed (fn [j x] [[0 (+ 2 i) k j] x (item-sees x)]) v)
+                             :else [[[0 (+ 2 i) k] v [:on-of t]]])]
+              part))))
+
 (defn part-chain
   "The chain of scopes a part (clause-parts) of a statement of chain sees, outer the chain of the
    statements enclosing it. A LATERAL item sees its statement's tables, but not itself."
   [sees part chain outer opts]
-  (case sees
+  (case (if (vector? sees) (first sees) sees)
+    :on-of (part-chain :group (second sees) chain outer opts)
     :own chain
     :outer outer
     :lateral (cons (dissoc (first chain) (second (table-ref part opts))) (rest chain))

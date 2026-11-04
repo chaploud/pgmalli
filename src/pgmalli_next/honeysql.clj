@@ -236,7 +236,7 @@
   ([registry name opts] (written-row registry name "update" "set-schema" opts)))
 
 (defn- column-name
-  "c as the SQL HoneySQL writes names it: :u/nick as u.nick."
+  "c as HoneySQL writes it in SQL: :u/nick as u.nick."
   [c]
   (cond (and (keyword? c) (namespace c)) (str (namespace c) "." (name c)) (keyword? c) (name c) :else (str c)))
 
@@ -262,10 +262,10 @@
   {:unknown-table (fn [{:keys [table did-you-mean quoted]}] (query/unknown-table-text table did-you-mean quoted))
    :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint outside-join]}]
                      (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean))))]
-                       (str "unknown column " (column-name column)
+                       (str (if outside-join "column " "unknown column ") (column-name column)
                             (when qualifier
                               (if outside-join
-                                (str ": " qualifier " is outside the parenthesized join, whose ONs see its own tables alone")
+                                (str " is out of reach: " qualifier " is outside the parenthesized join, whose ONs see its own tables alone")
                                 (str "; no table or alias " qualifier " in the statement")))
                             (case clause
                               :using (str " in USING: " (case side :left "no table before the join has it"

@@ -2795,7 +2795,9 @@
     (is (= [] (check {:select [:x.id] :from [[:groups :x]] :left-join [[[:join [:groups :g] {:join [[:users :u] [:= :u.group_id :name]]}]] [:= :g.id :x.id]]}))
         "an ON inside sees the tables inside alone: name is g's")
     (is (= [:unknown-column] (map :kind (check {:select [:x.id] :from [[:groups :x]] :left-join [[[:join [:groups :g] {:join [[:users :u] [:= :u.group_id :x.id]]}]] [:= :g.id :x.id]]})))
-        "invalid reference to FROM-clause entry for table x")))
+        "invalid reference to FROM-clause entry for table x")
+    (is (= [:unknown-column] (map :kind (check {:select [:x.id] :from [[:groups :x]] :join [[[:join [:users :u] {:join [[{:select [:y.id] :from [[:users :y]] :where [:= :y.group_id :x.id]} :s] [:= :s.id :u.id]]}]] [:= :u.group_id :x.id]]})))
+        "a subquery inside, not LATERAL, sees no item of the statement")))
 
 (deftest the-forms-honeysqls-tests-write-are-read-as-the-sql-they-are
   (doseq [q [{:select [:x.id] :from [[{:select [:id] :from [:users]} [[:raw "x"]]]]}
@@ -2830,7 +2832,14 @@
     (is (ok? (long-array [1 2])))
     (is (not (ok? (into-array String ["1"]))) "the cast reads a String, = ANY sends it as varchar[]")
     (is (ok? nil) "the query tests it for NULL")
-    (is (= [:maybe ["bigint | numeric | float8 | real"]] (pgmalli/describe registry ids)) "described as the common type")))
+    (is (= [:maybe ["bigint | numeric | float8 | real"]] (pgmalli/describe registry ids)) "described as the common type"))
+  (is (= "varchar(40) | keyword" (pgmalli/describe registry (:x (args {:update :users :set {:nick :?x} :where [:= :nick :?x]}))))
+      "an assignment's varchar(40) within a comparison's varchar")
+  (is (= "(varchar | keyword) & (date | timestamp | timestamptz)" (pgmalli/describe registry (:x (args {:select [:id] :from [:users] :where [:and [:= :nick :?x] [:= :born :?x]]}))))
+      "uses with no common value, each described")
+  (is (str/includes? (pgmalli/describe registry (:d (args {:select [:id] :from [:users] :where [:or [:< :closed_at [:- :current_timestamp :?d]] [:= [:cast :?d :text] "x"]]})))
+                     "PGobject of interval")
+      "a cast to text takes a PGobject of any type, one of interval too"))
 
 (deftest returning-old-and-new-are-null-where-the-statement-has-no-such-row
   (let [nullable #(shape/maybe? (last (second (row %))))]
