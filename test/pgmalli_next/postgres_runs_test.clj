@@ -138,6 +138,9 @@
                  {:select [[[:array_agg :a] :x]] :from [:dd]}
                  {:select [[[:array_agg :l] :x]] :from [:dd]}
                  {:select [[[:array [:l]] :x]] :from [:dd]}
+                 {:select [[[:array [:l :l]] :x]] :from [:dd]}
+                 {:select [[[:array_agg [:coalesce :l :l]] :x]] :from [:dd]}
+                 {:select [[[:array [[:case [:= :l 1] :l :else :l]]] :x]] :from [:dd]}
                  {:select [[[:array [:n]] :x]] :from [:dd]}
                  ;; array_agg of an array adds a dimension: {{1,NULL}}
                  {:select [[[:array_agg :xs] :x]] :from [:arr]}

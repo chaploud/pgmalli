@@ -410,6 +410,12 @@
   [registry s]
   (loose (beyond-list registry s)))
 
+(defn- computed-of-one-type
+  "computed, of a value whose inputs are all of s's type: a domain stays, as PostgreSQL types the
+   value (and its array, which pgjdbc reads as the domain's PGobjects)."
+  [registry s]
+  (if (= :ref (shape/head (shape/non-null s))) s (computed registry s)))
+
 (defn compared-schema
   "The schema a value op compares with a column of schema s must fit: under equality-ops, or
    for an enum type's labels, the column's; for a CHECK's list otherwise, the base type."
@@ -604,7 +610,7 @@
          ;; inputs all of one domain resolve to it (select_common_type); with another, to its base type
          :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %)))) typed))
                           (or (own-type? (first typed) (:type (first typed))) (= (count typed) (count ms))))
-                   (cond->> (:schema (first typed)) (next ms) (computed registry))
+                   (cond->> (:schema (first typed)) (next ms) (computed-of-one-type registry))
                    (result-schema registry t typed))}))))
 
 (def common-type-functions
@@ -826,7 +832,7 @@
                         vts (map sub values)]
                     ;; PostgreSQL takes the ELSE value first (transformCaseExpr)
                     (when-let [r (when (every? #(= 2 (count %)) parts) (common registry (cons (last vts) (butlast vts))))]
-                      (assoc r :schema (some->> (:schema r) (computed registry))
+                      (assoc r :schema (some->> (:schema r) (computed-of-one-type registry))
                              :nullable? (or (not else?) (boolean (some :nullable? vts))))))
       (common-type-functions (syntax/called x))
       (some-> (common registry (map sub (rest x)))
