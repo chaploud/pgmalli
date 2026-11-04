@@ -283,7 +283,7 @@
 
 (defn- dispatch-by-key
   "A :multi dispatching on a column whose key is a string: malli reads a string :dispatch as
-   code, so it gets a function, the key kept as :pg/dispatch (shape/dispatch-key)."
+   code, so it gets a function, the key kept as :pg/dispatch."
   [f]
   (if (and (vector? f) (= :multi (first f)) (string? (:dispatch (second f))))
     (let [k (:dispatch (second f))] (assoc f 1 (assoc (second f) :dispatch #(get % k) :pg/dispatch k)))

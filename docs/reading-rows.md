@@ -142,14 +142,7 @@ written. An override that types a JSON number takes what a JSON parser returns: 
 |---|---|
 | `:jdbc {...}` | the options you pass to next.jdbc: pgmalli reads `:return-keys` ([queries](queries.md#options)) |
 
-There is no option for how a value is read or sent. `:time`, `:read` and `:send` of earlier
-versions are an error that names the one reading or the one sending:
-
-```clojure
-(try (pgmalli/as-read registry :pg.public/users {:time :instant})
-     (catch clojure.lang.ExceptionInfo e (:pgmalli/error (ex-data e))))
-;; => :pgmalli.error/invalid-options
-```
+There is no option for how a value is read or sent.
 
 An option pgmalli does not know is an error that suggests the intended name:
 

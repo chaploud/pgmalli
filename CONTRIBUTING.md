@@ -100,9 +100,8 @@ and as LIMIT) and is sent a fixed list of values: one of each class of
 and the schema's labels. It fails where PostgreSQL takes a value the argument's schema refuses
 (or, set by UPDATE and INSERT, `set-schema`'s and `values-schema`'s row) and the rules of
 docs/queries.md#stricter-than-postgresql do not leave out, and where `accept/holds?` says a
-value goes and PostgreSQL refuses its type. It sends each value as pgjdbc's `setObject` does,
-and the java.time values as `next.jdbc.date-time` does with the `:send` that says so
-(`pgmalli-next.oracle/send-profiles`), whatever the JVM has loaded, and fails where `sent-type`
+value goes and PostgreSQL refuses its type. It sends each value as the one sending
+(docs/reading-rows.md) does, and fails where `sent-type`
 names a type other than PostgreSQL's `pg_typeof` of the value sent. Besides the oracle schema's
 columns, it creates the schema `matrix`, whose table `types` holds, for every type of
 `pgmalli-next.impl.types` (an extension's where the server has it) and the typmods numeric(10,2),

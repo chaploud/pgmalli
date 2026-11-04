@@ -758,36 +758,32 @@
              ;; one argument of two uses, which it goes through both
              [:compared-and-cast (where [:and [:= c :?x] [:= c [:cast :?x (keyword (str/replace declared " " "-"))]]])]])))
 
-(def send-profiles
-  "How an application sends a parameter: the one sending (docs/reading-rows.md, which
-   pgmalli-next.test-db installs)."
-  {:one {:set (fn [ps i v] (prep/set-parameter v ps i))}})
-
 (defn- send!
-  "Runs [sql & params] on conn, each parameter set as profile sets it."
-  [^java.sql.Connection conn [sql & params] {set-param :set}]
+  "Runs [sql & params] on conn, each parameter set as the one sending (docs/reading-rows.md, which
+   pgmalli-next.test-db installs) sets it."
+  [^java.sql.Connection conn [sql & params]]
   (with-open [ps (.prepareStatement conn sql)]
-    (doseq [[i v] (map-indexed vector params)] (set-param ps (inc i) v))
+    (doseq [[i v] (map-indexed vector params)] (prep/set-parameter v ps (inc i)))
     (.execute ps)))
 
 (defn- typeof
-  "The type PostgreSQL gets v as, set as profile sets it: :unknown for one sent untyped, nil
+  "The type PostgreSQL gets v as, set as send! sets it: :unknown for one sent untyped, nil
    where it cannot be set."
-  [^java.sql.Connection conn profile v]
+  [^java.sql.Connection conn v]
   (try (with-open [ps (.prepareStatement conn "SELECT pg_typeof(?)::text")]
-         (when (try ((:set profile) ps 1 v) true (catch java.sql.SQLException _ false))
+         (when (try (prep/set-parameter v ps 1) true (catch java.sql.SQLException _ false))
            (with-open [rs (.executeQuery ps)] (.next rs) (canonical {} (.getString rs 1)))))
        (catch PSQLException e
          (if (= "42P18" (.getSQLState e)) :unknown (throw e)))
        (finally (.rollback conn))))
 
 (defn- refusal
-  "PostgreSQL's refusal of sqlvec, sent as profile sends it, run and rolled back, {:state
+  "PostgreSQL's refusal of sqlvec, sent as send! sends it, run and rolled back, {:state
    :message}; nil where it takes the value. A write's foreign or unique key, and NULL in another
    NOT NULL column (which an INSERT leaves out) where the argument is no NULL in a NOT NULL
    column, are the rows', not the argument's. A timeout (57014) is no refusal: {:timeout? true}."
-  [^java.sql.Connection conn sqlvec profile column null-refused?]
-  (try (send! conn sqlvec profile) nil
+  [^java.sql.Connection conn sqlvec column null-refused?]
+  (try (send! conn sqlvec) nil
        (catch PSQLException e
          (let [state (.getSQLState e)]
            (when-not (or (#{"23503" "23505"} state)
@@ -830,13 +826,12 @@
   "Where pgjdbc/sent-type names a type other than pg_typeof's of the value sent so (typeof):
    :sent failures, of vs."
   [^java.sql.Connection conn vs]
-  (vec (for [[pname profile] send-profiles
-             v vs
+  (vec (for [v vs
              :let [sent (pjdbc/sent-type v {})]
              :when sent
-             :let [pg (typeof conn profile v)]
+             :let [pg (typeof conn v)]
              :when (not= sent pg)]
-         {:kind :sent :profile pname :value v :class (some-> v class .getName) :sent sent :pg pg})))
+         {:kind :sent :value v :class (some-> v class .getName) :sent sent :pg pg})))
 
 (def ^:private type-refusals
   "The SQLSTATEs of PostgreSQL refusing a parameter's type: no operator or function, a type
@@ -847,11 +842,11 @@
 (defn- own-refused?
   "Whether PostgreSQL refuses the type of place's column where the argument goes, its column in
    the argument's place (path <> path, of a type with = and no <>): no argument is taken there."
-  [conn {:keys [context query column quoted?]} sends]
+  [conn {:keys [context query column quoted?]}]
   (let [c (keyword column)]
     (boolean (when-let [own (case context (:= :<> :returning) c :in [c] nil)]
                (type-refusals (:state (refusal conn (sql/format (walk/postwalk-replace {:?x own} query) (if quoted? {:quoted true} {}))
-                                               sends column false)))))))
+                                               column false)))))))
 
 (defn- described?
   "Whether PostgreSQL parses sqlvec's statement, its parameters untyped: then a refusal of a value
@@ -894,14 +889,13 @@
             (sent-failures conn all-values))
           cat
           (in-parallel
-           db (for [p places profile (keys send-profiles)] (assoc p :profile profile))
-           (fn [conn {:keys [context query table column list notnull compared-type quoted? profile] t :type :as place}]
-             (let [sends (send-profiles profile)
-                   opts {:format (fmt quoted?)}
+           db places
+           (fn [conn {:keys [context query table column list notnull compared-type quoted?] t :type :as place}]
+             (let [opts {:format (fmt quoted?)}
                    s (try (or (some-> (:x (:args (h/analyze registry query opts))) (m/schema {:registry registry}))
                               "arg-types gives :x no schema")
                           (catch Exception e (str "arg-types throws: " (ex-message e))))
-                   failure #(merge (select-keys place [:table :column :context :type :profile]) %)]
+                   failure #(merge (select-keys place [:table :column :context :type]) %)]
                (if (string? s)
                  [(failure {:kind :untyped :sql (pr-str query) :schema s})]
                  (vec (for [v all-values
@@ -931,12 +925,12 @@
                                   rule? (and takes? (not cast?))]
                             :when (or rule? (and (or refused? row-refused?) (not explained?)))
                             :let [sqlvec (sql/format query (assoc (fmt quoted?) :params {:x arg}))
-                                  pg (refusal conn sqlvec sends column null-refused?)
+                                  pg (refusal conn sqlvec column null-refused?)
                                   taken? (and (nil? pg) (not explained?))
                                   kind (cond (:timeout? pg) :timeout
                                              (and refused? taken?) :refused
                                              (and row-refused? taken?) :written
-                                             (and rule? (type-refusals (:state pg)) (not (own-refused? conn place sends))
+                                             (and rule? (type-refusals (:state pg)) (not (own-refused? conn place))
                                                   (not (and (= :unknown sent) (described? conn sqlvec)))) :rule)]
                             :when kind]
                         (failure {:kind kind :sql (first sqlvec) :value v :class (some-> v class .getName) :sent sent
@@ -945,11 +939,11 @@
 
 (defn arg-failure-text
   "An arg-matrix failure as bb oracle and pgmalli-next.oracle-test print it."
-  [{:keys [kind profile table column context type sql value sent schema pg] cls :class}]
+  [{:keys [kind table column context type sql value sent schema pg] cls :class}]
   (if (= :sent kind)
-    (str kind " " cls " under " profile ": sent-type says " (pr-str sent) ", PostgreSQL gets " (pr-str pg)
+    (str kind " " cls ": sent-type says " (pr-str sent) ", PostgreSQL gets " (pr-str pg)
          "\n  value: " (pr-str (cond-> value (some-> value class .isArray) vec)))
-    (str kind " " table "." column " " context " under " profile " (column type " (pr-str type) ")"
+    (str kind " " table "." column " " context " (column type " (pr-str type) ")"
          "\n  SQL:        " sql
          "\n  value:      " (pr-str (cond-> value (some-> value class .isArray) vec)) " " cls " sent as " (pr-str sent)
          "\n  arg schema: " (pr-str (walk/postwalk #(if (fn? %) 'fn %) schema))
@@ -971,14 +965,14 @@
           (let [rs (filter (comp seq :return-rejections) results)]
             (println "return rejected" (count rs))
             (doseq [r rs]
-              (println "\n" (:id r) (or (:mutation r) "") (:format r) (or (:profile r) "") "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
+              (println "\n" (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
                        "\n  rows:" (:rows r))
               (doseq [x (:return-rejections r)]
                 (println "  " (:result x) (pr-str (dissoc x :result))))))
           (let [rs (filter (comp seq :column-mismatches) results)]
             (println "\ncolumns described otherwise" (count rs))
             (doseq [r rs]
-              (println (:id r) (or (:mutation r) "") (:format r) (or (:profile r) "") "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r))))
+              (println (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r))))
               (doseq [x (:column-mismatches r)] (println "  " (pr-str x)))))
           (let [fs (arg-matrix test-db/*db*)]
             (println "\nargument matrix failures" (count fs))
@@ -988,7 +982,7 @@
                   :when (seq rs)]
             (println "\n=====" o (count rs))
             (doseq [r rs]
-              (println (:id r) (or (:mutation r) "") (:format r) (or (:profile r) "") "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
+              (println (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
                        "\n  PostgreSQL:" (:pg r) (:state r) (some-> (:message r) (str/replace #"\n" " | ")) (or (:format-error r) "")
                        "\n  check:" (pr-str (:problems r))))))))
     (shutdown-agents)))

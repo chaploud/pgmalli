@@ -58,14 +58,14 @@
 
 (defn- arg-id [f]
   (if (= :sent (:kind f))
-    (str "sent " (:class f) " " (name (:profile f)))
-    (str (name (:kind f)) " " (:table f) "." (:column f) " " (name (:context f)) " " (name (:profile f)))))
+    (str "sent " (:class f))
+    (str (name (:kind f)) " " (:table f) "." (:column f) " " (name (:context f)))))
 
 (defn- failures
   "[test signature] of each failure of the run, pending or not. A signature: for
    :false-positive, case-id and the kinds check reports; for :return, case-id and the keys the
    return refuses; for :column, case-id and the column's label (error, keys); for :arg, the
-   kind, \"table.column\", the context and the send profile (\"sent class profile\" for :sent)."
+   kind, \"table.column\", and the context (\"sent class\" for :sent)."
   []
   (concat (for [r @results :when (= :false-positive (:outcome r))] [:false-positive (false-positive-id r)])
           (for [r @results x (:return-rejections r)] [:return (return-id r x)])

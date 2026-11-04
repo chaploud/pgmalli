@@ -273,12 +273,6 @@
       (let [ms (map match-columns (rest e))]
         (when (every? some? ms) (vec (apply concat ms)))))))
 
-(defn column-patterns
-  "The column patterns of an expression, every AND branch one, the columns as keywords; nil
-   when a branch matches none. types as normalize reads it."
-  [e types]
-  (some-> e (normalize types) match-columns))
-
 (defn- match-branches
   "CHECK whose alternatives each pin one column to literal values (or its nullness) and constrain
    other columns with column patterns. Returns {:dispatch col :branches [...] :default facts} or nil."
