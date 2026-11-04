@@ -126,3 +126,17 @@
               :let [theirs (get-in server [:relations n] []) ours (mine (get-in snapshot [:relations n]))]
               :when (not= (set theirs) ours)]
         (is false (differs (str "relation " n) theirs ours))))))
+
+(deftest every-types-typname-is-among-its-aliases
+  ;; :aliases names a type as pg_type's typname too (int4, float8, timestamptz), which casts and
+  ;; the problems' casts spell; the grammar's spellings (int, decimal, float) are by hand
+  (when *db*
+    (let [ds (datasource)
+          typnames (into {} (map (juxt :t :n))
+                         (jdbc/execute! ds ["SELECT format_type(oid, NULL) AS t, typname AS n FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace"]
+                                        {:builder-fn rs/as-unqualified-maps}))]
+      (doseq [[t {:keys [aliases]}] types/types
+              :let [n (typnames t)]
+              ;; but one the grammar reads as another type (char is character's, "char" quoted)
+              :when (and n (not= n t) (not-any? (fn [[t2 e]] (and (not= t t2) (some #{n} (:aliases e)))) types/types))]
+        (is (some #{n} aliases) (str t "'s typname " n " is not among its :aliases in pgmalli-next.impl.types"))))))
