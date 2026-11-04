@@ -2721,3 +2721,10 @@
   (is (= [:unknown-column] (map :kind (check {:update :users :set {:score [:+ :scroe 1]} :where [:= :id 1]}))))
   (is (= [] (check {:select [[:nick :n] [[:upper :nick] :u]] :from [:users] :group-by [[:upper :nick] :nick] :order-by [[[:lower :nick] :desc]]}))
       "a select list's [column alias] and ORDER BY's [expression direction] are no calls"))
+
+(deftest a-written-row-and-analyze-agree-on-null-and-name-a-table-as-written
+  (let [v (h/values-schema registry :users opts)]
+    (is (m/validate v {:group_id 1 :score 1 :nick :null} {:registry registry}) "HoneySQL writes VALUES (..., null)")
+    (is (= [] (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: :users$"
+                        (h/values-schema registry :usres opts))))

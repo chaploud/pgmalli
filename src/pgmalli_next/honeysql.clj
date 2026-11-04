@@ -136,6 +136,11 @@
         (= :or (shape/head t)) (some-> (seq (keep generated-values (shape/alternatives t))) (shape/either t))
         :else t))
 
+(def ^:private null-keyword
+  "A keyword HoneySQL writes as NULL where the format leaves it unquoted (:null, :NULL)."
+  [:fn {:error/message "should be NULL as HoneySQL writes it (:null)" :gen/elements [:null]}
+   (fn [x] (and (keyword? x) (nil? (namespace x)) (= "null" (str/lower-case (name x)))))])
+
 (defn- written-row*
   "The closed map of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
    of registry r as reading reads it: each column typed as an argument assigned to it, optional
@@ -158,6 +163,10 @@
                          :let [assigned #(cond-> (args/accepted-type r c :assign %) (or (shape/maybe? c) triggered?) query/nullable)
                                a (assigned (assoc opts ::args/keywords-columns true))
                                t (one-value a)
+                               ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
+                               t (if (and (or (shape/maybe? c) triggered?) (syntax/null-value? :null (:format opts)))
+                                   [:or t null-keyword]
+                                   t)
                                plain (if (fills k) [:or t default] t)
                                lifted (assigned opts)
                                labels (let [e (shape/domain-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]]

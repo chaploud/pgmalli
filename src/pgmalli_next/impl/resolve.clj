@@ -176,22 +176,26 @@
   [{:keys [decls]} ins]
   (count (filter (fn [[d in]] (and (not (unbound? in)) (= d in))) (map vector decls ins))))
 
+(defn- judged
+  "The viable candidates of cs for ins that are not doubtful."
+  [cs ins]
+  (filter #(viable? % ins) (remove #(doubtful? % ins) cs)))
+
 (defn- in-doubt?
   "Whether a doubtful candidate of cs may be the one PostgreSQL calls for ins: one matching as
    many known arguments exactly as the best viable other does; one matching fewer loses at step
    4.c, whatever casts make it viable."
   [cs ins]
   (let [ds (filter #(doubtful? % ins) cs)
-        best (reduce max -1 (map #(exact-matches % ins) (filter #(viable? % ins) (remove #(doubtful? % ins) cs))))]
+        best (reduce max -1 (map #(exact-matches % ins) (judged cs ins)))]
     (boolean (some #(>= (exact-matches % ins) best) ds))))
-
 
 (defn- contenders
   "The viable candidates of cs for ins pgmalli can judge (doubtful ones that lose at step 4.c
    left out); nil where a doubtful one may be the one called."
   [cs ins]
   (when-not (in-doubt? cs ins)
-    (filter #(viable? % ins) (remove #(doubtful? % ins) cs))))
+    (judged cs ins)))
 
 (defn- chosen
   "The candidate PostgreSQL calls for ins among overloads (of one version): an exact match, the
@@ -314,8 +318,7 @@
                (in-every-version
                 os
                 (fn [os]
-                  (and (seq (candidates os (count ins)))
-                       (not (in-doubt? (candidates os (count ins)) ins))
+                  (and (let [cs (candidates os (count ins))] (and (seq cs) (not (in-doubt? cs ins))))
                        (let [{:keys [decls] :as c} (chosen os ins (= :operators kind))]
                          (or (nil? c) (:ambiguous c)
                              (let [d (nth decls i)]

@@ -162,7 +162,18 @@
                              {:given name}))
               (shape/table-key t)))]
     (when-not (contains? (::schemas registry) n)
-      (unknown-table! registry (if (namespace n) (str/join "." (shape/schema-and-name n)) (clojure.core/name n))))
+      (unknown-table! registry (if (namespace n) (str/join "." (shape/schema-and-name n)) (clojure.core/name n)))
+      ;; a table named as HoneySQL names it: its error names tables as written so, not registry keys
+      (when (not= n name)
+        (let [qualified? (or (namespace name) (str/includes? (clojure.core/name name) "."))
+              known (for [[k v] (::schemas registry) :when (and (keyword? k) (shape/read-row? v))
+                          :let [[sch t] (shape/schema-and-name k)] :when (or qualified? (= sch (:schema opts syntax/default-schema)))]
+                      (if qualified? (str sch "." t) t))
+              meant (error/suggest (clojure.core/name name) known)]
+          (error/fail! :pgmalli.error/unknown-schema
+                       (str what ": unknown table " (str/join "." (shape/schema-and-name n))
+                            (if meant (error/did-you-mean (keyword meant)) "; check its name, or :schema when it is in another schema"))
+                       (cond-> {:given name} meant (assoc :did-you-mean [(keyword meant)]))))))
     n))
 
 
