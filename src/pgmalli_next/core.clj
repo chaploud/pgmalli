@@ -54,14 +54,20 @@
   (try (m/schema schema {:registry registry})
        schema
        (catch clojure.lang.ExceptionInfo e
-         (let [unknown (-> e ex-data :data :schema)]
-           (if (= ::m/invalid-schema (:type (ex-data e)))
+         (let [{:keys [schema ref]} (:data (ex-data e))
+               unknown (or ref schema)]
+           (cond
+             (not (#{::m/invalid-schema ::m/invalid-ref} (:type (ex-data e)))) (throw e)
+             (and (shape/generated-name? unknown) (not-any? shape/generated-name? (keys (shape/schemas-of registry))))
+             (error/fail! :pgmalli.error/invalid-options
+                          (str "describe: " (pr-str unknown) " is read through a registry: (describe registry schema)")
+                          {:given unknown})
+             :else
              (let [meant (when (keyword? unknown) (shape/meant unknown (filter keyword? (keys (shape/schemas-of registry)))))]
                (error/fail! :pgmalli.error/unknown-schema
                             (str "describe: " (pr-str unknown) " is no type malli or the registry knows"
                                  (error/did-you-mean (some->> meant (map pr-str) (str/join " or "))))
-                            (cond-> {:given unknown} meant (assoc :did-you-mean (vec meant)))))
-             (throw e))))))
+                            (cond-> {:given unknown} meant (assoc :did-you-mean (vec meant))))))))))
 
 (defn describe
   "A schema as short data for people and tools to read: a column as its PostgreSQL type

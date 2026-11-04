@@ -560,6 +560,23 @@
       (is (re-find says (str (ex-message e))) (pr-str o))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o)))))
 
+(deftest a-written-table-is-named-as-postgresql-reads-it
+  (is (= (h/values-schema registry :users opts) (h/values-schema registry :Users opts) (h/values-schema registry :sample.USERS opts))
+      "an unquoted name folded")
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes a table as :table or :schema.table; :sample.users.x names more"
+                                (h/set-schema registry :sample.users.x opts)))]
+    (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))))
+
+(deftest a-registry-where-the-query-goes-names-the-order
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes the registry first, then the query"
+                        (h/analyze {:select [:id] :from [:users]} registry))))
+
+(deftest schema-problems-names-what-it-takes
+  (doseq [o [{:ns "pgmalli-next.honeysql-test"} {:ns :x} {:namespace 'x} 'pgmalli-next.honeysql-test]]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo (h/schema-problems o)) (pr-str o))]
+      (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o))))
+  (is (= [:unknown-column] (map :kind (h/schema-problems {:ns #{'pgmalli-next.honeysql-test}}))) "a set of symbols"))
+
 (deftest an-option-the-function-does-not-read-is-an-error
   (doseq [[f o] [[#(pgmalli/as-read registry :pg.sample/users %) {:schema "sample"}]
                  [#(pgmalli/as-read registry :pg.sample/users %) {:result :one}]

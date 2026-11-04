@@ -1577,8 +1577,13 @@
 
 (defn- query!
   "body as HoneySQL query data (as-vectors); an error saying so for SQL already formatted, for
-   nothing, which would otherwise check clean, and for code."
+   nothing, which would otherwise check clean, for a registry (the arguments swapped), and for
+   code."
   [body]
+  (when (or (::schemas body) (some shape/generated-name? (when (map? body) (keys body))))
+    (error/fail! :pgmalli.error/not-query-data
+                 "pgmalli-next.honeysql takes the registry first, then the query: (analyze registry query)"
+                 {:given (vec (take 5 (keys body)))}))
   (when (or (nil? body) (string? body) (and (vector? body) (string? (first body))))
     (error/fail! :pgmalli.error/not-query-data
                  (str "pgmalli-next.honeysql reads HoneySQL query data (a map such as {:select ...}), not "
@@ -2919,12 +2924,19 @@
   (let [[r opts] (prepared registry opts option-keys)
         registry (::schemas r)
         ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
-        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
+        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema,
+        ;; and folded where only that is the registry's, as PostgreSQL reads an unquoted :Users
         name (if (str/starts-with? (subs (str name) 1) "pg.")
                name
-               (shape/table-key (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
-                                  (qualified name nil)
-                                  (qualified name (:schema (with-defaults r opts))))))
+               (let [t (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
+                         (qualified name nil)
+                         (qualified name (:schema (with-defaults r opts))))]
+                 (when (< 2 (count (str/split t #"\.")))
+                   (error/fail! :pgmalli.error/invalid-options
+                                (str what " takes a table as :table or :schema.table; " (pr-str name) " names more")
+                                {:given name}))
+                 (or (some #(let [k (shape/table-key %)] (when (contains? registry k) k)) [t (folded t)])
+                     (shape/table-key t))))
         _ (when-not (contains? registry name)
             (unknown-table! r (if (namespace name) (str/join "." (shape/schema-and-name name)) (clojure.core/name name))))
         s (shape/schema-of registry name)]
@@ -3020,11 +3032,16 @@
 
    (is (= [] (schema-problems)))"
   ([] (schema-problems {}))
-  ([{:keys [ns] :or {ns (all-ns)}}]
-   (vec (for [n (if (sequential? ns) ns [ns])
-              [_ v] (sort-by key (ns-interns (or (if (symbol? n) (find-ns n) n)
+  ([{:keys [ns] :or {ns (all-ns)} :as opts}]
+   (when-not (and (map? opts) (every? #{:ns} (keys opts)))
+     (error/fail! :pgmalli.error/invalid-options
+                  (str "schema-problems takes {:ns n}, n a namespace's symbol, a namespace or a collection of them; given " (pr-str opts))
+                  {:given opts}))
+   (vec (for [n (if (coll? ns) ns [ns])
+              [_ v] (sort-by key (ns-interns (or (cond (symbol? n) (find-ns n) (instance? clojure.lang.Namespace n) n)
                                                  (error/fail! :pgmalli.error/invalid-options
-                                                              (str "schema-problems reads loaded namespaces; " (pr-str n) " is none (require it first)")
+                                                              (str "schema-problems reads loaded namespaces, named by symbols; "
+                                                                   (pr-str n) " is none" (when (symbol? n) " (require it first)"))
                                                               {:given n}))))
               :let [s (:malli/schema (meta v))
                     props (cond (satisfies? malli.core/Schema s) (malli.core/properties s)
