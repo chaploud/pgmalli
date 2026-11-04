@@ -3,8 +3,8 @@
    statements, and the expression positions of a statement."
   (:require [clojure.string :as str]
             [honey.sql :as sql]
-            [pgmalli-next.honeysql :as-alias honeysql]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.query :as-alias query]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -784,7 +784,7 @@
    nothing, which would otherwise check clean, for a registry (the arguments swapped), and for
    code."
   [body]
-  (when (or (::honeysql/schemas body) (some shape/generated-name? (when (map? body) (keys body))))
+  (when (or (::query/schemas body) (some shape/generated-name? (when (map? body) (keys body))))
     (error/fail! :pgmalli.error/not-query-data
                  "pgmalli-next.honeysql takes the registry first, then the query: (analyze registry query)"
                  {:given (vec (take 5 (keys body)))}))

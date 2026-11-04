@@ -11,6 +11,7 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.jdbc :as jdbc]
+            [pgmalli-next.impl.query :as query]
             [pgmalli-next.sample :refer [registry]]))
 
 (def opts {:schema "sample"})
@@ -965,7 +966,7 @@
   (is (= [] (check {:select [[[:lower :nick]]] :from [:users] :order-by [:lower]})) "an expression's name is an output column"))
 
 (deftest a-right-join-nulls-the-tables-it-attaches-to
-  (let [nullable #(into {} (for [[a v] (#'h/scope (#'h/reading registry) % #{} opts)] [a (boolean (:nullable? v))]))]
+  (let [nullable #(into {} (for [[a v] (#'query/scope (query/reading registry) % #{} opts)] [a (boolean (:nullable? v))]))]
     (is (= {"u" false "x" true "g" false "i" false}
            (nullable {:select [:*] :from [[:users :u] [:groups :x]] :right-join [[:groups :g] [:= 1 1]] :inner-join [[:groups :i] [:= 1 1]]}))
         "a comma binds looser than JOIN: the right join attaches to the last FROM item; an inner join after it nulls nothing")))
