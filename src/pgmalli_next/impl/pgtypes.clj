@@ -1,12 +1,36 @@
 (ns pgmalli-next.impl.pgtypes
-  "The schema types pgmalli registers for PostgreSQL's own: the CHECK types, a bytea of bounded
+  "The schema types pgmalli registers for PostgreSQL's own: a bytea of bounded
    length, the bounded numbers (with the ranges the integer types hold) and the arrays the
    JDBC driver takes."
   (:require [clojure.test.check.generators :as gen]
             [malli.core :as m]
-            [pgmalli-next.impl.eval :as ev]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
+
+;; PostgreSQL counts and slices strings by character (code point), Java by UTF-16 unit
+(defn- char-length
+  "The length of v as PostgreSQL counts it: a string's in code points."
+  [v]
+  (if (string? v) (.codePointCount ^String v 0 (count v)) (count v)))
+
+;; A BigDecimal read from a request can be 1e100000000: setScale would spell out its digits
+(defn- integer-digits
+  "Digits before the point, read off precision and scale; 0 or less when |d| < 1, and fewer than
+   any bound for a zero (0E+30's precision and scale say 31)."
+  [^BigDecimal d]
+  (if (zero? (.signum d)) Integer/MIN_VALUE (- (.precision d) (.scale d))))
+
+(defn- rounded
+  "d at scale places, half up; a d too small to reach them is zero, without the division."
+  ^BigDecimal [^BigDecimal d scale]
+  (if (< (integer-digits d) (- scale)) (BigDecimal/valueOf 0 (int scale)) (.setScale d (int scale) java.math.RoundingMode/HALF_UP)))
+
+(defn- float4?
+  "Whether a double fits a real: single precision neither overflows to infinity nor
+   underflows to zero, where PostgreSQL rejects the value."
+  [d]
+  (let [f (unchecked-float d)]
+    (not (or (and (Float/isInfinite f) (not (Double/isInfinite d))) (and (zero? f) (not (zero? d)))))))
 
 (def string-schema
   ":string with :min and :max counting characters (code points), as PostgreSQL's length and
@@ -16,13 +40,13 @@
   (m/-simple-schema
    {:type :string :pred string?
     :property-pred (fn [props]
-                     (let [bounds ((m/-min-max-pred ev/char-length) props)
+                     (let [bounds ((m/-min-max-pred char-length) props)
                            n (:pg/max-length props)
                            bits? (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
                            bounds (if bits? (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s))))) bounds)]
                        (if n
                          (fn [^String s]
-                           (let [kept (if (<= (ev/char-length s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]
+                           (let [kept (if (<= (char-length s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]
                              (boolean (and (or (identical? kept s) (re-matches #" *" (subs s (count kept))))
                                            (or (nil? bounds) (bounds kept))))))
                          bounds)))}))
@@ -35,18 +59,8 @@
     :property-pred (fn [props]
                      (let [bounds ((m/-min-max-pred nil) props)]
                        (if (= "real" (:name (types/entry (shape/type-name props))))
-                         (fn [d] (and (ev/float4? d) (or (nil? bounds) (bounds d))))
+                         (fn [d] (and (float4? d) (or (nil? bounds) (bounds d))))
                          bounds)))}))
-
-(def check-schema
-  "[:pg/check expr]: a row passes when the CHECK expression data does (pgmalli-next.impl.eval).
-   A column missing from the row is NULL, or its value in the :pg/defaults property; the
-   :pg/types property holds the column types the evaluator reads (pgmalli-next.impl.eval/column-type)."
-  (m/-simple-schema
-   {:type :pg/check
-    :compile (fn [{:keys [pg/defaults pg/types]} [expr] _]
-               (let [pass? (ev/checker expr types)]
-                 {:pred (fn [row] (and (map? row) (pass? (merge defaults row)))) :min 1 :max 1}))}))
 
 (def ^:private bytes-schema
   "[:pg/bytes {:min n :max n}]: a byte array of bounded length, generated as such (malli's bytes?
@@ -111,8 +125,8 @@
                      scaled (fn [d] (.longValueExact (.setScale (.movePointRight (bigdec d) (int scale)) 0 java.math.RoundingMode/HALF_UP)))]
                  {:pred (fn [v] (and (decimal? v)
                                      ;; rounding adds a digit at most
-                                     (<= (ev/integer-digits v) (inc (- precision scale)))
-                                     (< (.abs (ev/rounded v scale)) limit)))
+                                     (<= (integer-digits v) (inc (- precision scale)))
+                                     (< (.abs (rounded v scale)) limit)))
                   :type-properties {:error/message (str "should fit numeric(" precision ", " scale ")")
                                     :gen/gen (gen/fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale))
                                                    (gen/large-integer* {:min (clojure.core/max (- bound) (if gen-min (scaled gen-min) (- bound)))
@@ -120,15 +134,6 @@
                   :min 0 :max 0}))}))
 
 (def integer-schema (bounded-int :pg/integer))
-
-(def check-value-schema
-  "[:pg/check-value expr]: a domain CHECK, the value standing for VALUE, whose type the
-   :pg/types property holds as :pg/check's does ({:VALUE :integer})."
-  (m/-simple-schema
-   {:type :pg/check-value
-    :compile (fn [{:keys [pg/types]} [expr] _]
-               (let [pass? (ev/checker expr types)]
-                 {:pred (fn [v] (pass? {:VALUE v})) :min 1 :max 1}))}))
 
 (def re-schema
   "[:re re] as malli's, except a value java.util.regex runs out of stack on fails instead of
@@ -146,5 +151,5 @@
 
 (def schemas
   "The schema types pgmalli registers, by name."
-  {:re re-schema :string string-schema :double double-schema :pg/check check-schema :pg/check-value check-value-schema :pg/bytes bytes-schema
+  {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
    :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema})

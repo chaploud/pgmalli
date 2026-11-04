@@ -27,8 +27,6 @@
   (is (= {:closed_at ["violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"]}
          (me/humanize (m/explain :pg.sample/users (assoc user :closed_at nil) opts)))
       "errors name the constraint")
-  (is (= ["violates check constraint score_check: CHECK (score >= 0 AND score <= total)"]
-         (me/humanize (m/explain :pg.sample/users (assoc user :score 3) opts))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope"))))
 
 (deftest a-map-of-no-schemas-is-not-a-registry
@@ -48,9 +46,6 @@
     (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :nick_upper "X"})) "nor a generated column")
     (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :seq 7 :total 9}) "serials and defaults may be given")
     (is (not (insert {:group_id 1 :mood "happy" :closed_at (java.time.Instant/now) :score 1})) "table constraints apply")
-    (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 5 :total 2})) ":pg/check too")
-    (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 5}) "score <= total holds with the default total 10")
-    (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 15})) "and fails against it, as the INSERT would")
     (is (not (insert {:group_id 1 :closed_at (java.time.Instant/now) :score 1})) "omitting mood means happy, which forbids closed_at")
     (is (insert {:group_id 1 :score 1}) "happy with no closed_at")
     (is (not (insert {:group_id 1 :mood "sad" :score 1})) "an omitted column without a default is NULL, which sad forbids"))
@@ -74,18 +69,12 @@
                                                           [:multi {:dispatch :status}
                                                            ["approved" [:map [:approver :string]]]
                                                            [:malli.core/default [:map [:approver :nil]]]]
-                                                          [:or [:map [:a [:int {:min 1}]]] [:map [:b [:int {:min 1}]]]]
-                                                          [:pg/check [:<= :a :b]]
-                                                          [:pg/check [:<= :a :c]]]}})
+                                                          [:or [:map [:a [:int {:min 1}]]] [:map [:b [:int {:min 1}]]]]]}})
           insert (fn [row] (m/validate :pg.public.t/insert row {:registry reg}))]
       (is (insert {:status "pending" :approver nil :a 0}) "a value without a branch of its own still takes the default branch")
       (is (not (insert {:approver nil :a 0})) "omitted status is approved, which needs an approver")
       (is (insert {:approver "x" :a 0}) "the default b satisfies the :or, so it may be omitted")
-      (is (insert {:approver "x" :a 5}) "a :pg/check sees the default b")
-      (is (not (insert {:approver "x" :a 6})))
-      (is (insert {:approver "x" :a 6 :b 9}))
-      (is (not (insert {:approver "x" :a 1 :b nil})) "an explicit NULL wins over the default")
-      (is (insert {:approver "x" :a 100 :b 200}) "an expression default is unknown, so the :pg/check on c cannot fail"))))
+      (is (not (insert {:approver "x" :a 0 :b nil})) "an explicit NULL wins over the default"))))
 
 (deftest what-an-update-may-set
   (is (= [:map {:pg/table "sample.users" :closed true}
@@ -121,13 +110,11 @@
              (files/assemble "public" "x"
                              (p/facts {:name "public"
                                        :types {"day" {:kind "DOMAIN" :base_type "date" :not_null false :constraints []}
-                                               "small" {:kind "DOMAIN" :base_type "numeric" :not_null false
-                                                        :constraints [{:name "small_check" :definition "CHECK (VALUE = ANY (ARRAY[1::numeric, 2::numeric, 5::numeric]))"}]}}
+                                               "small" {:kind "DOMAIN" :base_type "numeric" :not_null false :constraints []}}
                                        :tables {"t" {:columns [(col "n" "numeric") (col "sm" "small" :type_schema "public") (col "s" "text")
                                                                (col "tz" "time with time zone") (col "j" "jsonb") (col "d" "day" :type_schema "public")
                                                                (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric" :precision 6 :scale 2)]
-                                                     :constraints (into {} (remove nil?) [(check "n_check" "n = ANY (ARRAY[1::numeric, 2::numeric, 5::numeric])")
-                                                                            ;; babashka has no test.chuck: a regex is drawn and filtered there, which ^A defeats
+                                                     :constraints (into {} (remove nil?) [;; babashka has no test.chuck: a regex is drawn and filtered there, which ^A defeats
                                                                             (when @reg/regex-generation? (check "s_check" "s ~* '^A'::text"))
                                                                             (check "j_check" "jsonb_typeof(j) = 'array'::text")
                                                                             (check "p_check" "p > 0::numeric")])}}})
@@ -135,11 +122,6 @@
     {:registry reg :rows (try (vec (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})) (catch Exception e (ex-message e)))}))
 
 (defn- generated-values [k] (let [rows (:rows generated)] (if (string? rows) [rows] (map k rows))))
-
-(deftest a-numeric-in-a-list-generates-from-the-list-and-takes-any-scale
-  (is (every? #{1M 2M 5M} (map #(some-> % .stripTrailingZeros (.setScale 0)) (generated-values :n))) (pr-str (:rows generated)))
-  (is (every? #{1M 2M 5M} (map #(some-> % .stripTrailingZeros (.setScale 0)) (generated-values :sm))))
-  (is (m/validate :pg.public.t/insert (assoc (first (:rows generated)) :n 2.0M :sm 5.00M) {:registry (:registry generated)}) "2.0 = 2 in PostgreSQL"))
 
 (deftest a-case-insensitive-regex-generates-without-test-chuck-failing
   (when @reg/regex-generation?
@@ -188,28 +170,6 @@
                                                                         :constraints (into {} (for [[n c] checks] [n {:name n :type "CHECK" :check_clause (str "CHECK (" c ")")}]))}}})
                                     {})))
 
-(deftest a-char-n-column-generates-as-its-check-says-the-evaluator-holding-it
-  (let [col (fn [n len] {:name n :position 1 :data_type "character" :is_nullable false :max_length len})
-        reg (registry-of {} (cond-> [(col "cur" 4)] @reg/regex-generation? (conj (col "country" 2)))
-                         (cond-> [["cur_check" "cur = ANY (ARRAY['JPY'::bpchar, 'ab  '::bpchar])"]]
-                           @reg/regex-generation? (conj ["country_check" "country ~ '^[A-Z]{2}$'::text"])))
-        rows (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})]
-    (is (every? #{"JPY" "ab"} (map :cur rows)) "an IN's values, without their trailing spaces")
-    (when @reg/regex-generation?
-      (is (every? #(re-matches #"[A-Z]{2}" %) (map :country rows))))))
-
-(deftest a-char-n-column-whose-check-allows-null-generates-as-its-pattern-says
-  (when @reg/regex-generation?
-    (let [reg (registry-of {} [{:name "c" :position 1 :data_type "character" :is_nullable false :max_length 3}]
-                           [["c_check" "c IS NULL OR c ~* '^A'::text"]])]
-      (is (every? #(re-find #"^[aA]" %) (map :c (mg/sample :pg.public.t/insert {:registry reg :size 20 :seed 1})))))))
-
-(deftest a-domain-over-char-n-generates-as-its-check-says
-  (let [reg (registry-of {"cc" {:kind "DOMAIN" :base_type "character(3)" :not_null false
-                                :constraints [{:name "cc_check" :definition "CHECK (VALUE = ANY (ARRAY['JPY'::bpchar, 'USD'::bpchar]))"}]}}
-                         [{:name "c" :position 1 :data_type "cc" :type_schema "public" :is_nullable false}] [])]
-    (is (every? #{"JPY" "USD"} (map :c (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1}))))))
-
 (deftest an-in-on-a-domain-generates-from-its-values-not-from-the-domain
   (let [reg (registry-of {"dom" {:kind "DOMAIN" :base_type "integer" :not_null false :constraints [{:name "dom_check" :definition "CHECK (VALUE <> 3)"}]}
                           "o" {:kind "DOMAIN" :base_type "dom" :not_null false :constraints [{:name "o_check" :definition "CHECK (VALUE = ANY (ARRAY[1, 2, 5]))"}]}}
@@ -221,14 +181,10 @@
     (let [reg (registry-of {"dq" {:kind "DOMAIN" :base_type "character varying(5)" :not_null false
                                   :constraints [{:name "dq_check" :definition "CHECK (VALUE::text ~ '^[[:alpha:]]+$'::text)"}]}
                             "o" {:kind "DOMAIN" :base_type "dq" :not_null false
-                                 :constraints [{:name "o_check" :definition "CHECK (VALUE::text ~~* 'A%'::text)"}]}
-                            "c3" {:kind "DOMAIN" :base_type "character(3)" :not_null false
-                                  :constraints [{:name "c3_check" :definition "CHECK (VALUE ~ '^[a-z]+$'::text)"}]}}
-                           [{:name "o" :position 1 :data_type "o" :type_schema "public" :is_nullable false}
-                            {:name "c" :position 2 :data_type "c3" :type_schema "public" :is_nullable false}] [])
+                                 :constraints [{:name "o_check" :definition "CHECK (VALUE::text ~~* 'A%'::text)"}]}}
+                           [{:name "o" :position 1 :data_type "o" :type_schema "public" :is_nullable false}] [])
           rows (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})]
-      (is (every? #(re-matches #"[aA]\p{IsAlphabetic}{0,4}" %) (map :o rows)))
-      (is (every? #(re-matches #"[a-z]{3}" %) (map :c rows)) "char(3) pads: only three letters match"))))
+      (is (every? #(re-matches #"[aA]\p{IsAlphabetic}{0,4}" %) (map :o rows))))))
 
 (deftest a-text-column-with-two-likes-generates-strings-of-both
   (when @reg/regex-generation?

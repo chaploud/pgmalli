@@ -3,13 +3,12 @@
 
    rendered returns {:registry {name schema} :unrendered [fact] :skipped [fact]}; :registry is
    the file's :registry map (names to schemas), not a malli registry, and holds
-     :pg.<schema>/<type>     enum types and domains (a domain CHECK outside the patterns is
-                             [:pg/check-value expr], evaluated over the value as :VALUE)
+     :pg.<schema>/<type>     enum types and domains
      :pg.<schema>/<table>    a valid row as read from the database
      :pg.<schema>/<view>     a row of a view: columns and types, every column nullable, :pg/view on the map
    A row schema is [:map ...] alone, or [:and [:map ...] checks...] when the table has constraints
-   across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments,
-   and [:pg/check expr] for everything else pgmalli-next.impl.eval can evaluate; bytea columns with a
+   across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments.
+   A CHECK no pattern covers is in :unrendered, left to the database. bytea columns with a
    length CHECK are [:pg/bytes {:min :max}]. Insert and update schemas are
    derived from row schemas when a registry is loaded (pgmalli-next.impl.registry).
 
@@ -22,9 +21,8 @@
    Identifiers that are not plain names become string keys, keeping the output readable EDN.
    overrides is {:schema.table/column schema, constraint-name {:skip reason}}."
   (:require [clojure.string :as str]
-            [pgmalli-next.impl.eval :as ev]
             [pgmalli-next.impl.expr :as x]
-            [pgmalli-next.impl.pattern :as pattern]
+            [pgmalli-next.impl.regex :as regex]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -133,10 +131,7 @@
                        [:and schema [:pg/numeric {:precision (:precision f) :scale (or (:scale f) 0)}]]
                        schema))
       ;; a numeric equals one of another scale (2.0 = 2), which an :enum of BigDecimals refuses
-      :in-set (cond (and decimal-base? (every? number? (:values f)))
-                    (kept (conj (if (and (vector? schema) (= :and (first schema))) schema [:and schema])
-                                [:pg/check-value {:pg/constraint (:constraint f) :error/message (check-message f)} [:in :VALUE (vec (:values f))]]))
-                    (nil? members) as-is
+      :in-set (cond (or decimal-base? (nil? members)) as-is
                     ;; a second IN on the same column intersects
                     (= :enum base) (let [vs (filter (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
                     ;; the type stays: an INSERT casts to it, and a domain's CHECKs hold too
@@ -183,11 +178,11 @@
                      "array" (kept [:sequential :any])
                      as-is)
                    as-is)
-      :regex (if-let [re (when regex-base? (ev/java-regex (:re f)))]
-               (kept [:and schema [:re {:error/message (check-message f)} (cond-> re (:case-insensitive? f) ev/case-insensitive)]])
+      :regex (if-let [re (when regex-base? (regex/java-regex (:re f)))]
+               (kept [:and schema [:re {:error/message (check-message f)} (cond-> re (:case-insensitive? f) regex/case-insensitive)]])
                as-is)
       :like (if regex-base?
-              (kept [:and schema [:re {:error/message (check-message f)} (cond-> (ev/like-regex (:pattern f)) (:case-insensitive? f) ev/case-insensitive)]])
+              (kept [:and schema [:re {:error/message (check-message f)} (cond-> (regex/like-regex (:pattern f)) (:case-insensitive? f) regex/case-insensitive)]])
               as-is)
       :when-present (let [inner (apply-fact {:schema schema :unrendered unrendered :ref-base ref-base}
                                             (assoc (:fact-when-present f) :column (:column f) :constraint (:constraint f) :sql (:sql f))
@@ -296,9 +291,6 @@
   [fragment]
   (boolean (some #(let [[_ _ s] (shape/entry-parts %)] (and (not (shape/maybe? s)) (impossible? s))) (shape/entries fragment))))
 
-(defn- pg-check [{:keys [constraint expr] :as f}]
-  [:pg/check {:pg/constraint constraint :error/message (check-message f)} expr])
-
 (defn- between-symmetric?
   "Whether an expression is how PostgreSQL writes x BETWEEN SYMMETRIC a AND b, one of whose two
    alternatives is empty unless a = b."
@@ -308,14 +300,11 @@
 
 (defn- table-constraint
   "{:schema :unrendered :skipped} for a table-level check fact; :schema nil when it cannot be
-   rendered. A branch that lost a fact is never enforced partially: the CHECK is evaluated
-   whole, or reported whole."
-  [schema-name columns by-column {:keys [fact constraint] :as f} overrides types]
+   rendered. A branch that lost a fact is never enforced partially: the CHECK is reported whole."
+  [schema-name columns by-column {:keys [fact constraint] :as f} overrides]
   (let [message (check-message f)
         frag #(fragment schema-name columns by-column (map (partial merge (select-keys f [:schema :table :constraint :sql :expr])) %) message overrides)
-        whole (fn [r] (cond (empty? (:unrendered r)) r
-                            (ev/supported? (:expr f) types) {:schema (pg-check f) :skipped (:skipped r)}
-                            :else {:schema nil :unrendered [f] :skipped (:skipped r)}))]
+        whole (fn [r] (if (empty? (:unrendered r)) r {:schema nil :unrendered [f] :skipped (:skipped r)}))]
     (case fact
       :branch-check (let [{:keys [dispatch branches default]} f
                           ;; a branch on the column being NULL dispatches on nil
@@ -346,9 +335,8 @@
                                          :message (if partitions?
                                                     "a partition can take no row: its bounds and its parent's do not overlap"
                                                     (str "alternative " (inc i) " of " constraint " can match no row: its bounds cross"))})))
-      ;; NOT VALID: the database enforces it for new rows all the same, so it is enforced, marked
-      :table-check {:schema (when (ev/supported? (:expr f) types)
-                              (cond-> (pg-check f) (false? (:valid? f)) (assoc-in [1 :pg/not-valid] true)))}
+      ;; CHECK (false): an OR of no alternative
+      :table-check {:schema (when (false? (:expr f)) [:not {:pg/constraint constraint :error/message message} :any])}
       {})))
 
 (defn- order [f] [(or (:table f) (:type-name f) "") (or (:constraint f) "") (or (:column f) "")])
@@ -385,11 +373,11 @@
 
 (defn- table-checks
   "{:schemas :unrendered :skipped} of the constraints that span columns."
-  [schema-name columns by-column tfacts overrides types]
+  [schema-name columns by-column tfacts overrides]
   (let [results (for [f (sort-by order (filter #(and (#{:branch-check :or-check :table-check :unparsed} (:fact %)) (nil? (:column %))) tfacts))]
                   (if (skipped? overrides f)
                     {:skipped [f]}
-                    (let [r (table-constraint schema-name columns by-column f overrides types)]
+                    (let [r (table-constraint schema-name columns by-column f overrides)]
                       (if (or (:schema r) (seq (:unrendered r))) r (update r :unrendered conj f)))))]
     {:schemas (keep :schema results)
      :unrendered (mapcat :unrendered results)
@@ -401,19 +389,6 @@
     (into (sorted-map)
           (for [[col c] columns]
             [col (column-schema schema-name c (remove (comp #{:column} :fact) (by-column col)) overrides)]))))
-
-(defn- lost-checks
-  "Names of the CHECKs among unrendered facts that lost a column fact in rendering and that
-   the evaluator covers whole: their column facts give way to one :table-check each."
-  [unrendered types]
-  (set (keep #(when (and (:expr %) (ev/supported? (:expr %) types)) (:constraint %)) unrendered)))
-
-(defn- as-whole-checks
-  "The facts of the CHECKs named in lost replaced by one :table-check each."
-  [facts lost extra]
-  (concat (remove #(and (:expr %) (lost (:constraint %))) facts)
-          (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) facts)]]
-            (merge extra {:fact :table-check :constraint c :sql (:sql f) :expr (:expr f) :columns (pattern/referenced-columns (:expr f))}))))
 
 ;;; tables and domains
 
@@ -428,8 +403,8 @@
             (for [[col r] rendered :when (impossible? (:schema r))]
               {:kind :contradiction :severity :error :column col
                :message (str "no value fits column " col ": its CHECKs contradict each other")})
-            (for [s (:schemas checks) :when (and (vector? s) (= :pg/check (first s)) (false? (last s)))
-                  :let [c (:pg/constraint (second s)) partitions? (str/ends-with? (str c) " (partitions)")]]
+            (for [f tfacts :when (and (= :table-check (:fact f)) (false? (:expr f)))
+                  :let [c (:constraint f) partitions? (str/ends-with? (str c) " (partitions)")]]
               {:kind (if partitions? :no-partition :check-false) :severity :warning :constraint c
                :message (if partitions? "a partitioned table with no partition takes no row" (str c " is CHECK (false): the table takes no row"))})
             (for [f tfacts :when (false? (:valid? f))]
@@ -455,16 +430,12 @@
               {:kind :redundant-unique :severity :info :constraint (:constraint f)
                :message (str (:constraint f) " repeats a key on the same columns " (pr-str (:columns f)))}))))
 
-(defn- render-table [schema-name table tfacts overrides types]
+(defn- render-table [schema-name table tfacts overrides]
   (let [columns (into {} (map (juxt :column identity) (filter (comp #{:column} :fact) tfacts)))
-        ;; a first pass only tells which CHECKs lost a fact; those are re-folded as whole checks
-        first-pass (fold-columns schema-name columns tfacts overrides)
-        lost (lost-checks (mapcat (comp :unrendered val) first-pass) types)
-        tfacts (if (empty? lost) tfacts (as-whole-checks tfacts lost {:schema schema-name :table table}))
         by-column (group-by :column (filter :column tfacts))
-        rendered (if (empty? lost) first-pass (fold-columns schema-name columns tfacts overrides))
+        rendered (fold-columns schema-name columns tfacts overrides)
         row (into [:map (map-props schema-name table tfacts)] (for [[col r] rendered] [(shape/ident-key col) (:schema r)]))
-        checks (table-checks schema-name columns by-column tfacts overrides types)
+        checks (table-checks schema-name columns by-column tfacts overrides)
         qualified (str schema-name "." table)]
     {:entry [(shape/schema-key schema-name table) (if (seq (:schemas checks)) (into [:and row] (:schemas checks)) row)]
      :unrendered (concat (mapcat (comp :unrendered val) rendered) (:unrendered checks))
@@ -473,35 +444,16 @@
 
 (defn- render-domain
   "{:entry :unrendered :skipped} of a domain: its base type shaped by the CHECKs that matched
-   patterns, then [:pg/check-value expr] for the others the evaluator covers. As for tables,
-   a CHECK that lost a fact in rendering is evaluated whole."
-  [schema-name {:keys [type-name base facts value-type]} checks overrides types]
+   patterns; the others are :unrendered."
+  [schema-name {:keys [type-name base facts]} checks overrides]
   (let [;; the base's name, which says how the driver returns a value (citext and jsonb as a PGobject)
-        base-schema (with-props (base-type base) {:pg/type base})
-        first-pass (fold-facts schema-name base-schema facts overrides)
-        lost (lost-checks (:unrendered first-pass) types)
-        facts (if (empty? lost) facts (remove #(lost (:constraint %)) facts))
-        checks (concat checks (for [c (sort lost) :let [f (some #(when (= c (:constraint %)) %) (:unrendered first-pass))]]
-                                (assoc (select-keys f [:schema :type-name :constraint :sql :expr]) :fact :domain-check)))
-        {:keys [schema unrendered skipped]} (if (empty? lost) first-pass (fold-facts schema-name base-schema facts overrides))
-        results (for [c checks]
-                  (cond (skipped? overrides c) {:skipped [c]}
-                        ;; NOT VALID: enforced for every new value all the same, so enforced, marked
-                        (and (= :domain-check (:fact c)) (ev/supported? (:expr c) types))
-                        {:schema [:pg/check-value (cond-> {:pg/constraint (:constraint c) :error/message (check-message c)}
-                                                    value-type (assoc :pg/types {:VALUE value-type})
-                                                    (false? (:valid? c)) (assoc :pg/not-valid true))
-                                           (:expr c)]}
-                        :else {:unrendered [c]}))
-        extras (keep :schema results)
-        s (cond (empty? extras) schema
-                (and (vector? schema) (= :and (first schema)) (not (map? (second schema)))) (into schema extras)
-                :else (into [:and schema] extras))]
+        {:keys [schema unrendered skipped]} (fold-facts schema-name (with-props (base-type base) {:pg/type base}) facts overrides)
+        skip? #(skipped? overrides %)]
     ;; a domain is what a non-NULL value must be; whether NULL is allowed is the column's (a
     ;; domain's own NOT NULL reaches its columns as a fact)
-    {:entry [(shape/schema-key schema-name type-name) s]
-     :unrendered (concat unrendered (mapcat :unrendered results))
-     :skipped (concat skipped (mapcat :skipped results))}))
+    {:entry [(shape/schema-key schema-name type-name) schema]
+     :unrendered (concat unrendered (remove skip? checks))
+     :skipped (concat skipped (filter skip? checks))}))
 
 ;;; api
 
@@ -518,12 +470,10 @@
   ([facts] (rendered facts {}))
   ([facts overrides]
    (let [schema-name (:schema (first facts))
-         ;; literals of the schema's own types ('sad'::mood) are values as they are
-         types (set (keep #(when (#{:enum-type :domain} (:fact %)) (:type-name %)) facts))
          tables (for [[table tfacts] (sort-by key (group-by :table (filter :table facts)))]
-                  (render-table schema-name table tfacts overrides types))
+                  (render-table schema-name table tfacts overrides))
          domains (for [f facts :when (= :domain (:fact f))]
-                   (render-domain schema-name f (filter #(and (= (:type-name f) (:type-name %)) (#{:domain-check :unparsed} (:fact %))) facts) overrides types))
+                   (render-domain schema-name f (filter #(and (= (:type-name f) (:type-name %)) (#{:domain-check :unparsed} (:fact %))) facts) overrides))
          parts (concat domains tables)]
      {:registry (into (sorted-map-by #(compare (str %1) (str %2)))
                       (concat (for [f facts :when (= :enum-type (:fact f))] [(shape/schema-key schema-name (:type-name f)) (into [:enum] (:values f))])

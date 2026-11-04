@@ -17,9 +17,9 @@
       ;; the inlined target is converted here: prewalk walks its children, not the node itself
       (portable-node schemas (shape/merge-props (get schemas (last f)) p))
       (and (vector? f) (= :and t))
-      ;; without the CHECKs only pgmalli evaluates, and numeric(p,s)'s precision, which malli's
-      ;; types cannot say (decimal? in its place would refuse an integer a base also takes)
-      (let [parts (distinct (map #(portable-node schemas %) (remove #(and (vector? %) (#{:pg/check :pg/check-value :pg/numeric} (first %))) (shape/entries f))))]
+      ;; without numeric(p,s)'s precision, which malli's types cannot say (decimal? in its
+      ;; place would refuse an integer a base also takes)
+      (let [parts (distinct (map #(portable-node schemas %) (remove #(and (vector? %) (= :pg/numeric (first %))) (shape/entries f))))]
         (if (= 1 (count parts)) (shape/merge-props (first parts) p) (into (if p [:and p] [:and]) parts)))
       :else f)))
 
@@ -27,8 +27,7 @@
   "Schema data from the registry as data malli's default registry reads (with
    malli.experimental.time for the time types): references to the schema's own types inlined,
    :pg/smallint and :pg/integer as bounded :int, :pg/bytes as bytes?, generation hints dropped.
-   The CHECKs only pgmalli evaluates (:pg/check, :pg/check-value) and numeric(p,s)'s precision
-   (:pg/numeric) are left out."
+   numeric(p,s)'s precision (:pg/numeric) is left out."
   [registry schema]
   (let [schemas (shape/schemas-of registry)]
     (shape/without-gen (walk/prewalk #(portable-node schemas %) (shape/without-gen schema)))))

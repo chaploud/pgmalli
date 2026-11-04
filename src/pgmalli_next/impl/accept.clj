@@ -93,11 +93,11 @@
   [t]
   (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]) (string-type? t))))
 
-(def ^:private numbers (set (for [[t e] types/types :when (#{:integer :exact :float} (:eval e))] t)))
+(def ^:private numbers (set (for [[t e] types/types :when (#{:integer :exact :float} (:value e))] t)))
 
 (defn number-type? [t] (contains? numbers t))
 
-(defn integer-type? [t] (and (string? t) (= :integer (:eval (types/types t)))))
+(defn integer-type? [t] (and (string? t) (= :integer (:value (types/types t)))))
 
 (defn- converts?
   "Whether PostgreSQL converts a value of type from to type to in context (:assign or :cast), in
@@ -183,7 +183,7 @@
        (if (= :json context)
          (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
          (and (number-type? t) (number-type? sent) (types/implicit? sent t)
-              (not (and (= "numeric" sent) (= :float (:eval (types/types t)))))))
+              (not (and (= "numeric" sent) (= :float (:value (types/types t)))))))
        (and (string-type? t) (string-type? sent))
        (and (= :unknown sent)
             (or (not= :compare context)

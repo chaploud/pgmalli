@@ -59,15 +59,7 @@
       [:mood
        [:nil
         {:error/message
-         "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]]
-   [:pg/check
-    {:error/message "violates check constraint referrer_check: CHECK (referrer_id <> id)",
-     :pg/constraint "referrer_check"}
-    [:<> :referrer_id :id]]
-   [:pg/check
-    {:error/message "violates check constraint score_check: CHECK (score >= 0 AND score <= total)",
-     :pg/constraint "score_check"}
-    [:and [:>= :score 0] [:<= :score :total]]]]},
+         "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]]]},
  :functions
  {"double_it" [{:args ["integer"], :result "integer"}],
   "lower" [{:args ["text"], :result "integer"}],
@@ -81,5 +73,13 @@
     :result "record",
     :set true}]},
  :operators {"+" [{:args ["mood" "integer"], :result "mood"}]},
- :unrendered [],
+ :unrendered
+ [{:kind :check,
+   :table "sample.users",
+   :constraint "referrer_check",
+   :sql "CHECK (referrer_id <> id)"}
+  {:kind :check,
+   :table "sample.users",
+   :constraint "score_check",
+   :sql "CHECK (score >= 0 AND score <= total)"}],
  :skipped []}

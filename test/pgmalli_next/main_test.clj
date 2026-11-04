@@ -118,9 +118,11 @@
       (is (str/ends-with? (:out generated) (str "; commit them, and run `" (#'main/command "check" f) "` in CI\n")))
       (is (= 0 code))
       (is (= "" err))
-      (is (= ["public: unrendered (1), left out of the schemas:"
+      (is (= ["public: unrendered (2), left out of the schemas:"
               "  public.tags tags_slug_check: CHECK (is_slug(slug))"
               "    to silence it, add to pgmalli-next.edn :overrides {\"tags_slug_check\" {:skip \"<why>\"}}"
+              "  public.tags weight_positive: CHECK (weight > 0) NOT VALID"
+              "    to silence it, add to pgmalli-next.edn :overrides {\"weight_positive\" {:skip \"<why>\"}}"
               "public: diagnostics (1):"
               "  info public.tags: weight_positive is NOT VALID: rows from before it may violate it, new rows may not"
               "ok: the files of public match the database"]

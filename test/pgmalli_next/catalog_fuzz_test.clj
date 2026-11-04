@@ -64,8 +64,9 @@
 
 (def ^:private kinds
   "How CHECKs and values treat a type."
-  {:number #{:integer :smallint :bigint :numeric :numeric62}
-   :string #{:text :varchar5 :char3}
+  {:number #{:integer :smallint :bigint}
+   :decimal #{:numeric :numeric62}
+   :string #{:text :varchar5}
    :array #{:int-arr :text-arr}})
 
 (defn- kind [t] (some (fn [[k ts]] (when (ts t) k)) kinds))
@@ -73,18 +74,18 @@
 (def ^:private checks
   "CHECK patterns by kind, $c the column (VALUE in a domain)."
   {:number ["$c IN (1, 2, 5)" "$c BETWEEN 0 AND 10" "$c > 0" "$c >= 1 AND $c <= 100" "$c <> 3" "$c NOT IN (1, 2)"
-            "$c >= 0.5" "($c * 0.5)::integer <> 1"]
+            "$c >= 0.5"]
+   :decimal ["$c BETWEEN 0 AND 10" "$c > 0" "$c >= 1 AND $c <= 100" "$c >= 0.5"]
    :string ["$c IN ('a', 'bb')" "length($c) <= 3" "char_length($c) BETWEEN 1 AND 4" "length(btrim($c)) > 0" "$c <> ''"
             "$c ~ '^[a-z]+$'" "$c ~* '^A'" "$c LIKE 'a%'" "$c ILIKE 'A%'" "$c NOT IN ('x')"
             "$c ~ '^[[:alpha:]]+$'" "$c ~* '^é'" "$c ~ '^[A-Z]{2}'" "$c ~ '^\\w+$'"]
    :jsonb ["jsonb_typeof($c) = 'object'" "jsonb_typeof($c) = 'array'"]
    :array ["cardinality($c) <= 2" "array_length($c, 1) <= 2" "cardinality($c) > 0"]
    :bytea ["octet_length($c) <= 2"]
-   :date ["$c >= '2000-01-01'"]
    :enum ["$c <> $l" "$c IN ($l)"]
    :bits ["length($c) = 3"]})
 
-(defn- check-kind [t] (or (kind t) ({:jsonb :jsonb :bytea :bytea :date :date :varbit4 :bits} t)))
+(defn- check-kind [t] (or (kind t) ({:jsonb :jsonb :bytea :bytea :varbit4 :bits} t)))
 
 (def ^:private gen-column
   (tcg/hash-map :type (tcg/elements (concat (keys types) [:enum :enum :enum-arr :domain :domain :domain-arr]))
@@ -99,7 +100,7 @@
                 :pk tcg/boolean
                 :identity (tcg/elements [nil nil :always :default :serial])
                 :generated tcg/boolean
-                :table-check (tcg/elements [nil nil 0 1 2])
+                :table-check (tcg/elements [nil nil 1 2])
                 :partition (tcg/frequency [[6 (tcg/return nil)] [1 (tcg/elements [:list :list-default :range :range-default :hash :range-identity])]])
                 :fk tcg/boolean
                 :view tcg/boolean
@@ -181,7 +182,6 @@
   (let [[a b] (map (comp q :name) (integer-columns t))]
     (when (and a b (:table-check t))
       (case (int (:table-check t))
-        0 (str a " <= " b)
         1 (str a " > 5 OR " b " < 3")
         2 (str "(" a " = 1 AND " b " > 0) OR (" a " = 2 AND " b " < 0)")))))
 

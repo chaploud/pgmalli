@@ -5,7 +5,7 @@
      :aliases    other names of the type (pg_type's typname, a cast's spelling)
      :schema     the malli schema of a value; :any for a type the driver hands over as an
                  object of its own
-     :eval       the casts pgmalli-next.impl.eval computes: :integer (with :range), :exact, :float,
+     :value      the kind of value: :integer (with :range), :exact, :float,
                  :text, :json, :temporal (a date, time, timestamp or interval)
      :typmod     what the typmod n of a column bounds: :max-length (varchar(n), char(n)),
                  :bits (bit(n): exactly n), :max-bits (bit varying(n))
@@ -29,33 +29,33 @@
             [clojure.string :as str]))
 
 (def types
-  {"smallint" {:aliases ["int2"] :schema :pg/smallint :eval :integer :range [-32768 32767]}
-   "integer" {:aliases ["int4" "int"] :schema :pg/integer :eval :integer :range [-2147483648 2147483647]}
+  {"smallint" {:aliases ["int2"] :schema :pg/smallint :value :integer :range [-32768 32767]}
+   "integer" {:aliases ["int4" "int"] :schema :pg/integer :value :integer :range [-2147483648 2147483647]}
    ;; a bigint is exactly a long
-   "bigint" {:aliases ["int8"] :schema :int :eval :integer :range [Long/MIN_VALUE Long/MAX_VALUE]}
-   "oid" {:schema [:int {:min 0 :max 4294967295}] :eval :integer}
-   "numeric" {:aliases ["decimal"] :schema 'decimal? :eval :exact :read :or-double}
-   "real" {:aliases ["float4"] :schema :double :eval :float :read 'float?}
-   "double precision" {:aliases ["float8" "float"] :schema :double :eval :float}
-   "text" {:schema :string :eval :text}
-   "character varying" {:aliases ["varchar"] :schema :string :eval :text :typmod :max-length}
-   "character" {:aliases ["char" "bpchar"] :schema :string :eval :text :typmod :max-length :array-cast :bpchar}
-   "name" {:schema :string :eval :text}
+   "bigint" {:aliases ["int8"] :schema :int :value :integer :range [Long/MIN_VALUE Long/MAX_VALUE]}
+   "oid" {:schema [:int {:min 0 :max 4294967295}] :value :integer}
+   "numeric" {:aliases ["decimal"] :schema 'decimal? :value :exact :read :or-double}
+   "real" {:aliases ["float4"] :schema :double :value :float :read 'float?}
+   "double precision" {:aliases ["float8" "float"] :schema :double :value :float}
+   "text" {:schema :string :value :text}
+   "character varying" {:aliases ["varchar"] :schema :string :value :text :typmod :max-length}
+   "character" {:aliases ["char" "bpchar"] :schema :string :value :text :typmod :max-length :array-cast :bpchar}
+   "name" {:schema :string :value :text}
    "\"char\"" {:schema :string}
    "bit" {:schema :string :typmod :bits :gen :bits :cast :varbit :read :bit}
    "bit varying" {:aliases ["varbit"] :schema :string :typmod :max-bits :gen :bits :cast (keyword "bit varying") :read :any}
    "boolean" {:aliases ["bool"] :schema :boolean}
    "uuid" {:schema :uuid}
    "bytea" {:schema 'bytes?}
-   "date" {:schema :time/local-date :eval :temporal}
-   "time without time zone" {:aliases ["time"] :schema :time/local-time :eval :temporal}
+   "date" {:schema :time/local-date :value :temporal}
+   "time without time zone" {:aliases ["time"] :schema :time/local-time :value :temporal}
    "time with time zone" {:aliases ["timetz"] :schema :time/offset-time}
-   "timestamp without time zone" {:aliases ["timestamp"] :schema :time/local-date-time :eval :temporal}
-   "timestamp with time zone" {:aliases ["timestamptz"] :schema :time/instant :eval :temporal}
+   "timestamp without time zone" {:aliases ["timestamp"] :schema :time/local-date-time :value :temporal}
+   "timestamp with time zone" {:aliases ["timestamptz"] :schema :time/instant :value :temporal}
    ;; pgjdbc takes no Duration: it goes as text, in ISO 8601
-   "interval" {:schema :time/duration :cast :interval :eval :temporal}
-   "json" {:schema :any :eval :json}
-   "jsonb" {:schema :any :eval :json}
+   "interval" {:schema :time/duration :cast :interval :value :temporal}
+   "json" {:schema :any :value :json}
+   "jsonb" {:schema :any :value :json}
 
    "inet" {:schema :any :literals ["10.0.0.1" "192.168.1.0/24" "::1"] :cast :inet}
    "cidr" {:schema :any :literals ["10.0.0.0/8" "192.168.1.0/24" "2001:db8::/32"] :cast :cidr}
@@ -161,7 +161,7 @@
 (defn json?
   "Whether a column of the type holds a JSON document."
   [type-name]
-  (= :json (:eval (entry type-name))))
+  (= :json (:value (entry type-name))))
 
 (defn by-keyword
   "{name entry} of the types whose entry satisfies pred, every name and alias spelt as

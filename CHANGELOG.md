@@ -119,6 +119,16 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `x`); write tables and parameters as keywords (`:events_2026`, `:?id`).
 * `h/query-schema` takes the function's args as keywords alone (`[:db :id]`); a symbol, which
   matched only a symbol in code, is an error.
+* **A CHECK no pattern covers is left to the database,** listed in the file's `:unrendered`:
+  `[:pg/check expr]` and `[:pg/check-value expr]` are gone, with their evaluation of any CHECK
+  (`likes <= views`, arithmetic, `CASE`, a `char(n)` column's, a `NOT VALID` one, a `numeric`
+  `IN`). The schemas take a row such a CHECK refuses, and generate such rows. Regenerate the
+  files (`pgmalli-next.main generate`); a file holding `[:pg/check ...]` does not load. To keep
+  such a CHECK in a schema, skip it and override the column
+  ([Overrides](README.md#overrides)). A `double precision` range with an upper bound, and an
+  integer column's bound PostgreSQL writes through a cast to `numeric` (`(n)::numeric >= 0.5`),
+  are now patterns. [docs/types.md](docs/types.md#check-constraints) lists the
+  patterns.
 
 ### Added
 

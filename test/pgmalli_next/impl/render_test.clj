@@ -77,9 +77,8 @@
             ["happy" [:map [:closed_at [:nil {:error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]
             [:malli.core/default [:map [:mood [:nil {:error/message "violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}]]]]]
            (nth users 2)) "a branch check becomes :multi")
-    (is (empty? unrendered))
-    (is (= [:pg/check {:pg/constraint "score_check" :error/message "violates check constraint score_check: CHECK (score <= total)"} [:<= :score :total]] (nth users 3))
-        "a column comparison is a :pg/check over the expression data")
+    (is (= 3 (count users)))
+    (is (= [[:table-check "score_check"]] (map (juxt :fact :constraint) unrendered)) "a column comparison is left to the database")
     (testing "validation and generation through malli"
       (let [reg (registry-with registry)
             row {:id 1 :group_id 1 :mood "sad" :mail "a@b" :nick "n" :age 30 :title "t" :born (java.time.LocalDate/now)
@@ -88,8 +87,7 @@
         (is (m/validate :pg.public/users row {:registry reg}))
         (is (not (m/validate :pg.public/users (assoc row :closed_at nil) {:registry reg})) "sad needs closed_at")
         (is (not (m/validate :pg.public/users (assoc row :title "  ") {:registry reg})) "trimmed non-blank")
-        (is (not (m/validate :pg.public/users (assoc row :mail "nope") {:registry reg})) "domain check")
-        (is (not (m/validate :pg.public/users (assoc row :score 3) {:registry reg})) ":pg/check score <= total")))))
+        (is (not (m/validate :pg.public/users (assoc row :mail "nope") {:registry reg})) "domain check")))))
 
 (deftest only-rows-and-types-are-emitted
   (is (= [:pg.public/email :pg.public/groups :pg.public/mood :pg.public/users]
@@ -108,20 +106,15 @@
     (is (= #{"score_check" "title_check"} (set (map :constraint skipped))))
     (is (not-any? #(= "score_check" (:pg/constraint (second %))) (filter vector? (:pg.public/users registry))))))
 
-(deftest not-valid-checks-are-enforced-and-marked
+(deftest a-not-valid-check-is-left-to-the-database
   (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
-                                                            :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
-                                                                                    {:name "b" :position 2 :data_type "integer" :is_nullable false}]
-                                                                          :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a <= b)" :is_valid false}}}}}))
-        reg (registry-with registry)]
-    (is (= [:and [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]] [:b [:pg/integer {:pg/type "integer"}]]]
-            [:pg/check {:pg/constraint "k" :error/message "violates check constraint k: CHECK (a <= b)" :pg/not-valid true} [:<= :a :b]]]
-           (:pg.public/t registry))
-        "the database enforces it for new rows, so the schema does; rows from before it may not validate")
-    (is (not (m/validate :pg.public/t {:a 2 :b 1} {:registry reg})))
-    (is (empty? unrendered))))
+                                                            :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}]
+                                                                          :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (a > 0)" :is_valid false}}}}}))]
+    (is (= [:map {:pg/table "public.t"} [:a [:pg/integer {:pg/type "integer"}]]] (:pg.public/t registry))
+        "rows from before it may violate it, so it is no pattern")
+    (is (= ["k"] (map :constraint unrendered)))))
 
-(deftest checks-that-lose-a-fact-are-evaluated-whole
+(deftest checks-that-lose-a-fact-are-reported
   (let [table (fn [& checks] {:name "public" :types {}
                               :tables {"t" {:columns [{:name "kind" :position 1 :data_type "text" :is_nullable false}
                                                       {:name "tenant" :position 2 :data_type "uuid" :is_nullable true}
@@ -136,16 +129,11 @@
             [:malli.core/default [:map [:kind [:nil {:error/message "violates check constraint k0: CHECK (kind = 'a'::text AND tenant = '1f9d0c7e-2a1b-4c3d-8e5f-6a7b8c9d0e1f'::uuid OR kind = 'b'::text AND tenant IS NULL)"}]]]]]
            (nth (:pg.public/t registry) 2))
         "a uuid value set is an enum of uuids")
-    (is (= [:pg/check {:pg/constraint "k1" :error/message "violates check constraint k1: CHECK (kind = 'a'::text AND since = '2020-01-01'::date OR kind = 'b'::text AND since IS NULL)"}
-            [:or [:and [:= :kind [:cast "a" :text]] [:= :since [:cast "2020-01-01" :date]]] [:and [:= :kind [:cast "b" :text]] [:is :since nil]]]]
-           (nth (:pg.public/t registry) 3))
-        "a branch whose fact has no rendering is evaluated whole")
-    (is (= [:pg/check {:pg/constraint "k2" :error/message "violates check constraint k2: CHECK (since >= '2019-01-01'::date)"} [:>= :since [:cast "2019-01-01" :date]]]
-           (nth (:pg.public/t registry) 4))
-        "so is a column pattern that has none")
+    (is (= 3 (count (:pg.public/t registry))))
+    (is (= [[:branch-check "k1"] [:table-check "k2"]] (map (juxt :fact :constraint) unrendered))
+        "a branch whose fact has no rendering is reported whole")
     (is (= [:maybe [:time/local-date {:pg/type "date"}]] (get-in registry [:pg.public/t 1 3 1]))
-        "and the column keeps its bare type")
-    (is (empty? unrendered))))
+        "and the column keeps its bare type")))
 
 (deftest constraints-are-conjoined
   (let [t (fn [cols & checks] {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["a" "b" "c"]}}
@@ -179,9 +167,12 @@
            (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "cardinality(tags) BETWEEN 1 AND 3") :tags)))
     (is (= [:vector {:max 3 :pg/type "text[]" :pg/constraints ["k0"]} :string]
            (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) <= 3") :tags)))
-    (is (= [:pg/check {:pg/constraint "k0" :error/message "violates check constraint k0: CHECK (array_length(tags, 1) = 3)"} [:= [:array_length :tags 1] 3]]
-           (nth (:pg.public/t (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) = 3")) 2))
-        "array_length of an empty array is NULL, so an exact length is evaluated whole")))
+    (is (= [:double {:min 0.0 :max 1.0 :pg/type "double precision" :pg/constraints ["k0"]}]
+           (column (reg [{:name "w" :position 1 :data_type "double precision" :is_nullable false}] "w >= (0)::double precision AND w <= (1)::double precision") :w))
+        "a double precision range with an upper bound, which NaN fails as in PostgreSQL")
+    (is (= [:vector {:pg/type "text[]"} :string]
+           (column (reg [{:name "tags" :position 1 :data_type "text[]" :is_nullable false}] "array_length(tags, 1) = 3") :tags))
+        "array_length of an empty array is NULL, so an exact length is no bound")))
 
 (deftest domains
   (let [{:keys [registry unrendered]}
@@ -194,31 +185,18 @@
                               :tables {"t" {:columns [{:name "even" :position 1 :data_type "even_int" :type_schema "public" :is_nullable true}
                                                       {:name "label" :position 2 :data_type "mandatory" :type_schema "public" :is_nullable true}
                                                       {:name "code" :position 3 :data_type "opaque" :type_schema "public" :is_nullable true}]
-                                            :constraints {}}}}))
-        reg (registry-with registry)]
-    (is (= [:and [:pg/integer {:pg/type "integer"}] [:pg/check-value {:pg/constraint "even_int_check" :error/message "violates check constraint even_int_check: CHECK ((VALUE % 2) = 0)" :pg/types {:VALUE :integer}} [:= [:mod :VALUE 2] 0]]]
-           (:pg.public/even_int registry))
-        "a domain CHECK outside the patterns is evaluated over the value")
-    (is (m/validate :pg.public/even_int 4 {:registry reg}))
-    (is (not (m/validate :pg.public/even_int 3 {:registry reg})))
+                                            :constraints {}}}}))]
+    (is (= [:pg/integer {:pg/type "integer"}] (:pg.public/even_int registry)) "a domain CHECK outside the patterns is left to the database")
     (is (= [:string {:pg/type "text"}] (:pg.public/mandatory registry)) "a domain is never [:maybe]: NULL is the column's business")
     (is (= [:ref {:pg/type "mandatory" :pg/default "n/a" :default "n/a"} :pg.public/mandatory] (get-in registry [:pg.public/t 4 1]))
         "the domain's NOT NULL and DEFAULT reach its columns")
-    (is (= [:string {:pg/type "text"}] (:pg.public/opaque registry)) "a domain whose CHECK cannot be evaluated still exists")
-    (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"pos" {:kind "DOMAIN" :base_type "integer" :not_null false
-                                                                                            :constraints [{:name "pos_check" :definition "CHECK (VALUE > 0) NOT VALID" :is_valid false}]}}
-                                                              :tables {}}))]
-      (is (= [:and [:pg/integer {:pg/type "integer"}] [:pg/check-value {:pg/constraint "pos_check" :error/message "violates check constraint pos_check: CHECK (VALUE > 0) NOT VALID" :pg/types {:VALUE :integer} :pg/not-valid true} [:> :VALUE 0]]] (:pg.public/pos registry))
-        "a NOT VALID domain CHECK is enforced (the database enforces it for every new value), marked")
-      (is (empty? unrendered)))
+    (is (= [:string {:pg/type "text"}] (:pg.public/opaque registry)) "a domain whose CHECK is not rendered still exists")
     (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "date" :not_null false
                                                                                           :constraints [{:name "d_check" :definition "CHECK (VALUE >= '2020-01-01'::date)"}]}}
                                                               :tables {}}))]
-      (is (= [:and [:time/local-date {:pg/type "date"}] [:pg/check-value {:pg/constraint "d_check" :error/message "violates check constraint d_check: CHECK (VALUE >= '2020-01-01'::date)"} [:>= :VALUE [:cast "2020-01-01" :date]]]]
-             (:pg.public/d registry))
-          "a domain CHECK that loses its fact is evaluated whole too")
-      (is (empty? unrendered)))
-    (is (= [{:fact :domain-check :type-name "opaque" :constraint "opaque_check"}] (map #(select-keys % [:fact :type-name :constraint]) unrendered)))
+      (is (= [:time/local-date {:pg/type "date"}] (:pg.public/d registry)))
+      (is (= [[:domain-check "d_check"]] (map (juxt :fact :constraint) unrendered)) "a date bound is no pattern"))
+    (is (= [[:domain-check "even_int" "even_int_check"] [:domain-check "opaque" "opaque_check"]] (map (juxt :fact :type-name :constraint) unrendered)))
     (is (= [:string {:pg/type "text"}]
            (:pg.public/opaque (:registry (r/rendered (p/facts {:name "public" :types {"opaque" {:kind "DOMAIN" :base_type "text" :not_null false
                                                                                                     :constraints [{:name "opaque_check" :definition "CHECK (validate(VALUE))"}]}}
@@ -226,28 +204,13 @@
                                                      {"opaque_check" {:skip "x"}}))))
         "a domain CHECK is skipped by its name too")))
 
-(deftest a-domain-over-char-n-or-an-integer-holds-its-checks-as-postgresql-does
-  (let [domain (fn [base definition]
-                 (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type base :not_null false
-                                                                                            :constraints [{:name "d_check" :definition definition}]}}
-                                                                :tables {}}))]
-                   #(m/validate :pg.public/d % {:registry (registry-with registry)})))]
-    (let [valid? (domain "character(4)" "CHECK (char_length(VALUE) <= 2)")]
-      (is (valid? "ab  ") "char(n) measures without its trailing spaces")
-      (is (not (valid? "abc"))))
-    (let [valid? (domain "character(4)" "CHECK (VALUE ~ '^.{4}$'::text)")]
-      (is (valid? "ab") "a regex reads char(n) padded")
-      (is (valid? "abcd")))
-    (let [valid? (domain "integer" "CHECK ((VALUE * 2) > 0)")]
-      (is (valid? 5))
-      (is (not (valid? 2000000000)) "integer arithmetic overflows as the database's does"))))
 
 (deftest a-numeric-bound-on-an-integer-column-is-the-integers-past-it
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "n" :position 1 :data_type "integer" :is_nullable false}
                                                                          {:name "m" :position 2 :data_type "integer" :is_nullable false}]
                                                                :constraints {"n_check" {:name "n_check" :type "CHECK" :check_clause "CHECK (n >= 0.5 AND n < 2.5)"}
-                                                                             "m_check" {:name "m_check" :type "CHECK" :check_clause "CHECK (m > 1.5)"}}}}}))]
+                                                                             "m_check" {:name "m_check" :type "CHECK" :check_clause "CHECK ((m)::numeric > 1.5)"}}}}}))]
     (is (= [:pg/integer {:min 1 :max 2 :pg/type "integer" :pg/constraints ["n_check"]}] (get-in registry [:pg.public/t 3 1])))
     (is (= [:pg/integer {:min 2 :pg/type "integer" :pg/constraints ["m_check"]}] (get-in registry [:pg.public/t 2 1])))))
 
@@ -310,11 +273,9 @@
                                                               "CHECK (kind = 'a'::text AND nm ~ '\\mfoo'::text OR kind = 'b'::text AND nm IS NULL)"
                                                               "CHECK (mood = 'sad'::mood OR score > length(nm))")))
         row (:pg.public/t registry)]
-    (is (= [:string {:min 4 :pg/type "text" :pg/constraints ["k0"]}] (get-in row [1 4 1]))
-        "a CHECK the evaluator cannot take whole keeps its renderable part")
-    (is (= [:pg/check {:pg/constraint "k2" :error/message "violates check constraint k2: CHECK (mood = 'sad'::mood OR score > length(nm))"} [:or [:= :mood [:cast "sad" :mood]] [:> :score [:length :nm]]]] (nth row 2))
-        "an enum literal is a value the evaluator knows")
-    (is (= [[:regex "nm" "k0"] [:branch-check nil "k1"]] (map (juxt :fact :column :constraint) unrendered))
+    (is (= [:string {:min 4 :pg/type "text" :pg/constraints ["k0"]}] (get-in row [4 1]))
+        "a CHECK keeps its renderable part")
+    (is (= [[:regex "nm" "k0"] [:branch-check nil "k1"] [:table-check nil "k2"]] (map (juxt :fact :column :constraint) unrendered))
         "the lost regex is reported; the branch that lost it is reported whole, not enforced partially")
     (is (every? :expr unrendered))))
 
@@ -373,21 +334,14 @@
     (is (m/validate :pg.public/t {:status "done" :result {"a" 1}} {:registry reg}))
     (is (empty? unrendered))))
 
-(deftest a-generated-range-orders-its-bounds
+(deftest a-generated-range-column-is-opaque
   (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                             :tables {"t" {:columns [{:name "valid_from" :position 1 :data_type "timestamptz" :is_nullable false}
                                                                                     {:name "valid_until" :position 2 :data_type "timestamptz" :is_nullable true}
                                                                                     {:name "validity" :position 3 :data_type "tstzrange" :is_nullable true
                                                                                      :generated_expr "tstzrange(valid_from, valid_until)"}]
-                                                                          :constraints {}}}}))
-        reg (registry-with registry)
-        t1 (java.time.Instant/parse "2024-01-01T00:00:00Z") t2 (java.time.Instant/parse "2024-02-01T00:00:00Z")]
-    (is (= [:pg/check {:pg/constraint "validity_generated" :error/message "validity_generated"} [:<= :valid_from :valid_until]]
-           (nth (:pg.public/t registry) 2)))
-    (is (m/validate :pg.public/t {:valid_from t1 :valid_until t2 :validity nil} {:registry reg}))
-    (is (m/validate :pg.public/t {:valid_from t1 :valid_until nil :validity nil} {:registry reg}) "an open bound is fine")
-    (is (not (m/validate :pg.public/t {:valid_from t2 :valid_until t1 :validity nil} {:registry reg})) "the database would refuse to build the range")
-    (is (= [:maybe [:any {:pg/type "tstzrange" :pg/generated [:tstzrange :valid_from :valid_until]}]] (last (get-in registry [:pg.public/t 1 4]))) "the range column itself is opaque: :any with its type")
+                                                                          :constraints {}}}}))]
+    (is (= [:maybe [:any {:pg/type "tstzrange" :pg/generated [:tstzrange :valid_from :valid_until]}]] (last (get-in registry [:pg.public/t 4]))) ":any with its type")
     (is (empty? unrendered))))
 
 (deftest a-json-column-both-not-null-and-shaped
@@ -442,22 +396,19 @@
     (is (m/validate :pg.public/t {:o 1 :c "x" :b "0101" :vb "01" :ip "10.0.0.1" :tags ["abcde"]} {:registry reg}))
     (is (not (m/validate :pg.public/t {:o 1 :c "x" :b "01" :vb "01" :ip "10.0.0.1" :tags ["abcdef"]} {:registry reg})))))
 
-(deftest a-check-on-a-generated-column-checks-its-expression
+(deftest a-check-on-a-generated-column-is-on-its-expression
   (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"positive" {:kind "DOMAIN" :base_type "integer" :not_null false
                                                                                              :constraints [{:name "positive_check" :definition "CHECK (VALUE > 0)"}]}}
                                                             :tables {"t" {:columns [{:name "a" :position 1 :data_type "integer" :is_nullable false}
                                                                                     {:name "b" :position 2 :data_type "integer" :is_nullable true :generated_expr "(a * 2)"}
-                                                                                    {:name "p" :position 3 :data_type "positive" :type_schema "public" :is_nullable true :generated_expr "(a - 10)"}]
-                                                                          :constraints {"b_small" {:name "b_small" :type "CHECK" :check_clause "CHECK (b < 50)"}}}}}))
-        reg (registry-with registry)]
-    (is (= [:pg/check {:pg/constraint "b_small" :error/message "violates check constraint b_small: CHECK (b < 50)"} [:< [:* :a 2] 50]] (nth (:pg.public/t registry) 2))
-        "b is a * 2 to the database, so the CHECK is on a")
-    (is (= [:pg/check {:pg/constraint "p positive_check" :error/message "violates check constraint p positive_check: CHECK (VALUE > 0)"} [:> [:- :a 10] 0]] (nth (:pg.public/t registry) 3))
-        "the domain of a generated column checks the expression's value")
-    (is (m/validate :pg.public/t {:a 20 :b nil :p nil} {:registry reg}))
-    (is (not (m/validate :pg.public/t {:a 30 :b nil :p nil} {:registry reg})) "30 * 2 is not below 50")
-    (is (not (m/validate :pg.public/t {:a 5 :b nil :p nil} {:registry reg})) "5 - 10 is not positive")
-    (is (empty? unrendered))))
+                                                                                    {:name "c" :position 3 :data_type "integer" :is_nullable true :generated_expr "a"}
+                                                                                    {:name "p" :position 4 :data_type "positive" :type_schema "public" :is_nullable true :generated_expr "(a - 10)"}]
+                                                                          :constraints {"b_small" {:name "b_small" :type "CHECK" :check_clause "CHECK (b < 50)"}
+                                                                                        "c_small" {:name "c_small" :type "CHECK" :check_clause "CHECK (c < 50)"}}}}}))]
+    (is (= [:pg/integer {:max 49 :pg/type "integer" :pg/constraints ["c_small"]}] (get-in registry [:pg.public/t 2 1]))
+        "c is a to the database, so the CHECK bounds a")
+    (is (= [[:table-check "b_small"] [:table-check "p positive_check"]] (map (juxt :fact :constraint) unrendered))
+        "a * 2 and the domain of a - 10 are no patterns")))
 
 (deftest an-alternative-no-row-can-match-is-left-out
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}

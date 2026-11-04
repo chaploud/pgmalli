@@ -1,7 +1,7 @@
 (ns pgmalli-next.fuzz-test
   "Round trip of generated expressions: data -> HoneySQL -> CHECK constraint in PostgreSQL ->
    pg_get_constraintdef -> parse -> canonical, compared modulo the rewrites PostgreSQL makes;
-   and the evaluator's verdicts on generated rows compared with PostgreSQL's own.
+   and the Java regexes of PostgreSQL's classes compared with PostgreSQL's.
    PGMALLI_FUZZ_SEED changes the seed (default 42, fixed in CI)."
   (:require [babashka.process :as p]
             [clojure.string :as str]
@@ -9,11 +9,10 @@
             [clojure.walk :as walk]
             [honey.sql :as sql]
             [malli.generator :as mg]
-            [pgmalli-next.impl.eval :as ev]
             [pgmalli-next.impl.expr :as x]
             [pgmalli-next.impl.expr-test :refer [->honeysql]]
             [pgmalli-next.impl.ir :as ir]
-            [pgmalli-next.impl.json :as json]
+            [pgmalli-next.impl.regex :as regex]
             [pgmalli-next.test-db :as test-db :refer [*container* *db* exec-sql! with-postgres]]
             [pgmalli-next.test-seed :as ts]))
 
@@ -23,10 +22,7 @@
   "n integer, m integer, s text, t text, e mood, b boolean, d numeric(10,2), j jsonb, arr text[], dt date, ts timestamptz, u uuid, c char(4)")
 
 (def ^:private create-mood
-  ;; both tests in this namespace need the type, in either order
   "DO $$ BEGIN CREATE TYPE mood AS ENUM ('happy', 'sad'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;\n")
-
-(def ^:private uuids ["7c9e6679-7425-40de-944b-e07fc1f90ae7" "16fd2706-8baf-433b-82eb-8c7fada847da"])
 
 (def ^:private expr-schema
   [:schema {:registry
@@ -183,76 +179,6 @@
             (is (= (normalize e) (normalize (:expr parsed)))
                 (str "input " (pr-str e) "\npg    " clause "\n" (ts/rerun #'expression-roundtrip seed)))))))))
 
-(def ^:private row-schema
-  [:map [:n [:maybe [:int {:min -6 :max 101}]]] [:m [:maybe [:int {:min -6 :max 101}]]]
-   [:s [:maybe [:enum "a" "b" "c" "it's" " a " "" "a_b" "ab" "AB" "a\n" "😀😀" "😀a😁" "tr" "of" "o" " YE " "é" "É" "Éa"]]] [:t [:maybe [:enum "a" "b" "c" "it's" " a " ""]]]
-   [:e [:maybe [:enum "happy" "sad"]]] [:b [:maybe :boolean]]
-   ;; only values numeric(10,2) can hold, as BigDecimals, as rows read from the database would be
-   [:d [:maybe [:enum -1.0M 0.0M 0.01M 0.5M 2.25M 2.5M 9.99M]]]
-   ;; containers only: jsonb - on a scalar makes the whole SELECT fail
-   [:j [:maybe [:enum {} {"a" 1} {"a" "x" "b" [1 2]} {"a" {"b" 1}} {"a" nil "c" true} [1 "a"] [] [{"a" 1}] {"a" 1.50M} {"a" [1 2]} [[1]]]]]
-   [:arr [:maybe [:enum [] ["a"] ["a" "b"] ["b" "a" "a"] ["it's"]]]]
-   [:dt [:maybe [:enum (java.time.LocalDate/parse "2019-12-31") (java.time.LocalDate/parse "2020-01-01") (java.time.LocalDate/parse "2020-01-02") (java.time.LocalDate/parse "2020-06-15")]]]
-   [:ts [:maybe [:enum (java.time.Instant/parse "2019-12-31T23:30:00Z") (java.time.Instant/parse "2020-01-01T00:00:00Z") (java.time.Instant/parse "2020-01-02T01:30:00Z") (java.time.Instant/parse "2020-06-15T12:30:00Z")]]]
-   [:u [:maybe [:enum (java.util.UUID/fromString (first uuids)) (java.util.UUID/fromString (second uuids))]]]
-   ;; char(4) as pgjdbc reads it (padded) and as an application may write it
-   [:c [:maybe [:enum "ab" "ab  " "a" "abcd" "" " a" "é"]]]])
-
-
-(defn- sql-literal [column v]
-  (cond (nil? v) "NULL"
-        (= column :j) (str (test-db/sql-literal (json/write v)) "::jsonb")
-        (= column :arr) (if (empty? v) "'{}'::text[]" (str "ARRAY[" (str/join ", " (map test-db/sql-literal v)) "]::text[]"))
-        (= column :e) (str (test-db/sql-literal v) "::mood")
-        (instance? java.time.LocalDate v) (str (test-db/sql-literal v) "::date")
-        (instance? java.time.Instant v) (str (test-db/sql-literal v) "::timestamptz")
-        (instance? java.util.UUID v) (str (test-db/sql-literal v) "::uuid")
-        (string? v) (test-db/sql-literal v)
-        (double? v) (format "%.2f" v)
-        :else (str v)))
-
-(def ^:private column-types
-  "The types the evaluator reads for the columns, as a registry gives them."
-  {:n :integer :m :integer :c [:character 4]})
-
-(defn- postgres-verdicts
-  "For every row, whether each expression IS NOT FALSE according to PostgreSQL; an expression
-   that raises an error is false, as a CHECK that raises one rejects the row."
-  [exprs rows]
-  (let [cols [:n :m :s :t :e :b :d :j :arr :dt :ts :u :c]
-        values (str/join ",\n" (map (fn [r] (str "(" (str/join ", " (map #(sql-literal % (get r %)) cols)) ")")) rows))
-        selects (str/join ", " (map #(str "verdict($q$SELECT (" (to-sql %) ") IS NOT FALSE FROM judge WHERE id = $1$q$, id)") exprs))
-        sql (str create-mood "CREATE TABLE judge (id serial, " columns ");\n"
-                 "INSERT INTO judge (" (str/join ", " (map name cols)) ") VALUES\n" values ";\n"
-                 "CREATE FUNCTION verdict(q text, rid int) RETURNS boolean LANGUAGE plpgsql AS $f$\n"
-                 "DECLARE r boolean; BEGIN EXECUTE q INTO r USING rid; RETURN r; EXCEPTION WHEN OTHERS THEN RETURN false; END $f$;\n"
-                 "SELECT " selects " FROM judge ORDER BY id;")
-        {:keys [exit out err]} (p/sh ["docker" "exec" "-i" *container* "psql" "-X" "-q" "-A" "-t" "-F" "\t"
-                                      "-v" "ON_ERROR_STOP=1" "-U" "postgres" "-d" (:dbname *db*)]
-                                     {:in sql})]
-    (when-not (zero? exit) (throw (ex-info err {:sql sql})))
-    (mapv #(mapv (fn [v] (= "t" v)) (str/split % #"\t")) (str/split-lines (str/trim out)))))
-
-(deftest evaluated-checks-agree-with-postgres
-  (when *db*
-    (let [seed (ts/seed)
-          exprs (vec (distinct (mg/sample expr-schema {:size 240 :seed seed})))
-          rows (vec (distinct (mg/sample row-schema {:size 80 :seed seed})))
-          verdicts (postgres-verdicts exprs rows)]
-      (testing (str "seed " seed ", " (count exprs) " expressions x " (count rows) " rows")
-        (doseq [[j row] (map-indexed vector rows)
-                [i e] (map-indexed vector exprs)]
-          (is (let [pg (get-in verdicts [j i]) ours ((ev/checker e column-types) row)]
-                (or (= pg ours)
-                    ;; a verdict that depends on what pgmalli cannot know passes the row
-                    (ev/unknowable? e row column-types)
-                    ;; outside ASCII a class is the server's: pgmalli passes the row, unless
-                    ;; another arm fails it with an error PostgreSQL's evaluation order skips
-                    (and (re-find #"\\[wWdDsS]|\[:" (pr-str e)) (some #(and (string? %) (re-find #"[^\x00-\x7F]" %)) (vals row)))))
-              (str "CHECK " (to-sql e) "\n  data  " (pr-str e) "\n  row   " (pr-str row)
-                   "\n  PostgreSQL " (get-in verdicts [j i]) ", pgmalli " (not (get-in verdicts [j i]))
-                   "\n  " (ts/rerun #'evaluated-checks-agree-with-postgres seed))))))))
-
 (deftest classes-agree-with-postgres-in-ascii-and-never-reject-what-it-takes-outside
   (when *db*
     (let [patterns (vec (concat (for [c ["alpha" "digit" "alnum" "upper" "lower" "space" "punct" "xdigit" "cntrl" "print" "graph" "blank"]]
@@ -267,9 +193,8 @@
               :let [[i c v] (str/split line #"\t")
                     pattern (patterns (dec (parse-long i)))
                     s (Character/toString (int (parse-long c)))
-                    clause (x/check-clause (str "CHECK (s ~ " (test-db/sql-literal pattern) "::text)"))
                     pg? (= "t" v)
-                    accepted? ((ev/checker clause) {:s s})]]
+                    accepted? (some? (re-find (re-pattern (regex/java-regex pattern)) s))]]
         (if (< (parse-long c) 128)
-          (is (= pg? accepted? (some? (re-find (re-pattern (ev/java-regex pattern)) s))) (str pattern " on " (pr-str s)))
-          (when pg? (is (and accepted? (re-find (re-pattern (ev/java-regex pattern)) s)) (str pattern " on U+" (format "%04X" (parse-long c))))))))))
+          (is (= pg? accepted?) (str pattern " on " (pr-str s)))
+          (when pg? (is accepted? (str pattern " on U+" (format "%04X" (parse-long c))))))))))

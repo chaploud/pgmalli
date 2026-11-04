@@ -78,7 +78,7 @@
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
 
-(deftest char-varchar-and-integer-checks-hold-as-postgresql-holds-them
+(deftest char-n-and-arithmetic-checks-are-left-to-the-database-and-varchar-n-holds
   (when *db*
     (let [out-dir (str (doto (File/createTempFile "pgmalli-ch" "") .delete))
           config {:db *db* :out-dir out-dir}
@@ -87,13 +87,15 @@
                   CREATE TABLE ch.t (c char(4) CHECK (length(c) <= 2), k char(4) CHECK (k IN ('ab', 'cd')), v varchar(3),
                                      n integer, CONSTRAINT no_overflow CHECK (n + 2147483000 > 0));")
       (generate/generate! (assoc config :schemas ["ch"]))
-      (let [reg (pgmalli/registry (files/read-edn (files/path-for config "ch")))]
+      (let [data (files/read-edn (files/path-for config "ch"))
+            reg (pgmalli/registry data)]
+        (is (= ["no_overflow" "t_c_check" "t_k_check"] (sort (map :constraint (:unrendered data)))))
         (doseq [row [{:c "ab  " :k "ab  " :v "😀😀" :n 1} {:c "ab" :k "cd" :v "abc" :n 647}]]
           (is (m/validate :pg.ch/t row {:registry reg}) (pr-str row))
           (exec-sql! (sql-row row)))
-        (doseq [row [{:c "abc " :k "ab" :v "a" :n 1} {:c "a" :k "ef" :v "a" :n 1} {:c "a" :k "ab" :v "abcd" :n 1} {:c "a" :k "ab" :v "a" :n 648}]]
-          (is (not (m/validate :pg.ch/t row {:registry reg})) (pr-str row))
-          (is (thrown? clojure.lang.ExceptionInfo (exec-sql! (sql-row row))) (pr-str row)))))))
+        (let [row {:c "a" :k "ab" :v "abcd" :n 1}]
+          (is (not (m/validate :pg.ch/t row {:registry reg})))
+          (is (thrown? clojure.lang.ExceptionInfo (exec-sql! (sql-row row)))))))))
 
 (deftest column-checks-take-the-strings-postgresql-takes
   (when *db*
@@ -111,7 +113,7 @@
       (generate/generate! (assoc config :schemas ["cs"]))
       (let [reg (pgmalli/registry (files/read-edn (files/path-for config "cs")))
             cases (for [c (cons "v" (keys checks)), s strings] [c s (m/validate :pg.cs/t (assoc (zipmap (map keyword (cons "v" (keys checks))) (repeat nil)) (keyword c) s) {:registry reg})])]
-        (is (= :map (first (:pg.cs/t reg))) "the CHECKs are column schemas, not evaluated")
+        (is (= :map (first (:pg.cs/t reg))) "the CHECKs are column schemas")
         (exec-sql! (str "DO $$ BEGIN "
                         ;; outside ASCII a class is the server's: the schema takes what it may take
                         (apply str (for [[c s ok] cases :when (not (and ok (#{"z" "o"} c) (re-find #"[^\x00-\x7F]" s)))]
@@ -199,7 +201,7 @@
           verdicts (for [[col v] [[:r "ABC"] [:r "abc"] [:r "a1"] [:l "ABx"] [:l "xab"] [:c "red"] [:m "AB@X"] [:m "ab@y"]
                                   [:tr "ABC"] [:tr "abc"] [:tl "ABx"] [:tl "abx"] [:tm "AB@X"] [:tm "ab@x"]]]
                      [col v (m/validate :pg.ci/t (assoc {:id 1 :r nil :l nil :c nil :m nil :tr nil :tl nil :tm nil} col v) {:registry reg})])]
-      (is (= ["t_c_check"] (keep :constraint (:unrendered data))) "IN on citext compares ignoring case: not evaluated")
+      (is (= ["t_c_check"] (keep :constraint (:unrendered data))) "IN on citext compares ignoring case: not rendered")
       (exec-sql! (str "DO $$ BEGIN "
                       (apply str (for [[col v ok] verdicts]
                                    (str "IF ci.takes('" (name col) "', " (sql-literal v) ") <> " ok
@@ -229,7 +231,7 @@
              (:pg/exclude props)))
       (is (= [:exclude] (map :kind (:diagnostics g))) "the schemas do not check it, and say so"))))
 
-(deftest char-n-integer-and-domain-checks-hold-as-postgresql-holds-them
+(deftest char-n-integer-and-domain-checks-never-refuse-what-postgresql-takes
   (when *db*
     (let [[reg] (registry-of "cn" "CREATE SCHEMA cn;
                                    CREATE DOMAIN cn.d4 AS char(4) CHECK (char_length(VALUE) <= 2);
@@ -247,7 +249,7 @@
                                 (catch clojure.lang.ExceptionInfo _ false)))]
       (doseq [row [{:d "ab  "} {:d "abc"} {:r "ab"} {:i 5} {:i 2000000000} {:a 5 :b 3} {:a 5 :b 2} {:n 3} {:n 2}]
               :let [row (merge base row)]]
-        (is (= (takes? row) (m/validate :pg.cn.t/insert row {:registry reg})) (pr-str row))))))
+        (when (takes? row) (is (m/validate :pg.cn.t/insert row {:registry reg}) (pr-str row)))))))
 
 (deftest a-type-of-another-schema-says-its-schema-and-an-override-refers-to-it
   (when *db*

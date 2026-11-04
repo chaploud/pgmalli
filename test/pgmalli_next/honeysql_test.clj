@@ -961,7 +961,7 @@
       "none on a query that agrees"))
 
 (def checked
-  (pgmalli/registry {:registry {:pg.public/email [:and :string [:pg/check-value {:pg/constraint "email_check"} [:like :VALUE "%@%"]]]
+  (pgmalli/registry {:registry {:pg.public/email [:and :string [:re "@"]]
                                 :pg.public/roles [:map {:pg/table "public.roles"}
                                                   [:role_key [:and {:pg/constraints ["roles_role_key_format"] :pg/type "character varying"}
                                                               [:string {:max 255}] [:re "^[a-z_]+$"]]]

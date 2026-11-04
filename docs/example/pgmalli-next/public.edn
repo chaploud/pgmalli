@@ -26,28 +26,22 @@
        "violates check constraint groups_name_check: CHECK (length(TRIM(BOTH FROM name)) > 0)"}
       "[^ ]"]]]],
   :pg.public/posts
-  [:and
-   [:map
-    {:pg/foreign-keys [{:columns ["author_id"], :table "public.users", :to ["id"]}],
-     :pg/primary-key ["id"],
-     :pg/table "public.posts"}
-    [:author_id [:int {:pg/type "bigint"}]]
-    [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
-    [:likes
-     [:pg/integer
-      {:default 0,
-       :min 0,
-       :pg/constraints ["posts_likes_check"],
-       :pg/default 0,
-       :pg/type "integer"}]]
-    [:title [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]
-    [:title_upper
-     [:maybe [:string {:pg/generated [:upper [:cast :title :text]], :pg/type "text"}]]]
-    [:views [:pg/integer {:default 0, :pg/default 0, :pg/type "integer"}]]]
-   [:pg/check
-    {:error/message "violates check constraint likes_within_views: CHECK (likes <= views)",
-     :pg/constraint "likes_within_views"}
-    [:<= :likes :views]]],
+  [:map
+   {:pg/foreign-keys [{:columns ["author_id"], :table "public.users", :to ["id"]}],
+    :pg/primary-key ["id"],
+    :pg/table "public.posts"}
+   [:author_id [:int {:pg/type "bigint"}]]
+   [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
+   [:likes
+    [:pg/integer
+     {:default 0,
+      :min 0,
+      :pg/constraints ["posts_likes_check"],
+      :pg/default 0,
+      :pg/type "integer"}]]
+   [:title [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]
+   [:title_upper [:maybe [:string {:pg/generated [:upper [:cast :title :text]], :pg/type "text"}]]]
+   [:views [:pg/integer {:default 0, :pg/default 0, :pg/type "integer"}]]],
   :pg.public/user_status [:enum "active" "closed"],
   :pg.public/users
   [:and
@@ -91,5 +85,9 @@
          "violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"}]]]]]]},
  :functions {},
  :operators {},
- :unrendered [],
+ :unrendered
+ [{:kind :check,
+   :table "public.posts",
+   :constraint "likes_within_views",
+   :sql "CHECK (likes <= views)"}],
  :skipped []}

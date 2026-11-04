@@ -13,10 +13,9 @@
             [malli.experimental.time :as time]
             malli.experimental.time.generator
             [malli.util :as mu]
-            [pgmalli-next.impl.eval :as ev]
             [pgmalli-next.impl.error :as error]
-            [pgmalli-next.impl.pattern :as pattern]
             [pgmalli-next.impl.pgtypes :as pgtypes]
+            [pgmalli-next.impl.regex :as regex]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -59,8 +58,7 @@
 (defn- as-insert-sees-it
   "A table constraint with omitted columns standing for what the database stores in them:
    fragment keys are optional unless NULL (or the literal default) would violate them, a :multi
-   on a column with a literal default takes that value's branch when the column is absent, and
-   a :pg/check evaluates the literal defaults."
+   on a column with a literal default takes that value's branch when the column is absent."
   [schema {:keys [literal unknown]} registry]
   (letfn [(entry [e] (let [[k p s] (shape/entry-parts e)]
                        (if (or (unknown k) (m/validate s (get literal k) {:registry registry}))
@@ -70,8 +68,6 @@
             (if-not (vector? f)
               f
               (case (first f)
-                :pg/check (let [[_ p e] (if (map? (second f)) f [:pg/check {} (second f)])]
-                            [:pg/check (assoc p :pg/defaults literal) e])
                 :map (if (map? (second f)) f (into [:map] (map entry (rest f))))
                 ;; nil dispatches both a NULL and an absent column, which takes the default's branch
                 :multi (let [f (mapv go f)
@@ -118,13 +114,6 @@
 (def ^:private json-value
   "What a json or jsonb column with no CHECK to shape it generates: small JSON values."
   [:or :string :int :boolean [:map-of {:max 3} :string [:or :string :int]] [:vector {:max 3} [:or :string :int]]])
-
-(defn- in-values
-  "The numbers of a [:pg/check-value [:in :VALUE [...]]], nil for another part."
-  [part]
-  (when (and (vector? part) (= :pg/check-value (first part)))
-    (let [[op v vs] (last part)]
-      (when (and (= :in op) (= :VALUE v) (every? number? vs)) vs))))
 
 (defn- cannot-make
   "A generator of no values (malli leaves out an optional key of it, and a [:maybe] generates
@@ -187,9 +176,6 @@
         (assoc s i head*))
       (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
       (cond (not (vector? s)) [t hints] (map? (second s)) (assoc s 1 (merge p hints)) :else (into [t hints] (rest s)))
-      ;; a numeric IN (see render) generates one of its values
-      (and (= :and t) (some in-values (shape/entries s)))
-      (shape/merge-props s {:gen/elements (mapv bigdec (some in-values (shape/entries s)))})
       ;; an :and generates from its type, an array from its element's
       (and (= :and t) (seq (shape/entries s))) (let [i (if (map? (second s)) 2 1)] (assoc s i (gen-hints (nth s i) key? where)))
       (and (= :vector t) (vector? s)) (assoc s (dec (count s)) (gen-hints (last s) false where))
@@ -201,64 +187,15 @@
   (delay (boolean (try (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex) (catch Exception _ nil)))))
 
 (def ^:private generation-regex
-  "ev/generation-regex when test.chuck generates from it, nil otherwise (the strings are then
+  "regex/generation-regex when test.chuck generates from it, nil otherwise (the strings are then
    drawn and filtered). Memoized: a registry build asks it of every [:re]."
   (memoize
    (fn [re]
      (let [string-from-regex (requiring-resolve 'com.gfredericks.test.chuck.generators/string-from-regex)
-           g (ev/generation-regex re)]
+           g (regex/generation-regex re)]
        ;; malli drops the anchors before it calls test.chuck
        (when (try (string-from-regex (re-pattern (str/replace g #"^\^?(.*?)(\$?)$" "$1"))) true (catch Exception _ false))
          g)))))
-
-(defn- bpchar-hint
-  "Generation hints for the char(n) value k of a CHECK the :pg/check (or :pg/check-value)
-   evaluates, where a column pattern of it shapes the value: one of an IN's values without
-   their trailing spaces, or strings from a regex or LIKE, filtered by schema; nil otherwise."
-  [k expr schema]
-  (some (fn [{:keys [column fact values re pattern case-insensitive?]}]
-          (when (= (name column) (name k))
-            (case fact
-              :in-set (when (every? string? values) {:gen/elements (vec (distinct (map #(str/replace % #" +$" "") values)))})
-              (:regex :like) (when-let [j (and @regex-generation? (if (= :regex fact) (ev/java-regex re) (ev/like-regex pattern)))]
-                               (when-let [g (generation-regex (cond-> j case-insensitive? ev/case-insensitive))]
-                                 {:gen/schema [:and [:re g] schema]}))
-              nil)))
-        ;; col IS NULL OR <pattern>: a value that is there takes the pattern
-        (map #(if (= :when-present (:fact %)) (assoc (:fact-when-present %) :column (:column %)) %)
-             ;; a hint, filtered by schema: k's casts to text are taken as keeping its value
-             (pattern/column-patterns expr {(keyword (name k)) {:type "character" :keeps pattern/text-types}}))))
-
-(defn- bpchar-hints
-  "{k hints} of the char(n) values the checks among parts read (bpchar-hint), schema-of
-   giving the schema of k."
-  [parts schema-of]
-  (apply merge-with (fn [a _] a)
-         (for [f parts
-               :when (and (vector? f) (#{:pg/check :pg/check-value} (first f)) (map? (second f)))
-               [k t] (:pg/types (second f))
-               :when (vector? t)
-               :let [h (bpchar-hint k (last f) (schema-of k))]
-               :when h]
-           {k h})))
-
-(defn- with-domain-hints
-  "A domain over char(n) generated as its CHECKs' patterns say (bpchar-hint)."
-  [s]
-  (let [h (when (and (vector? s) (= :and (first s)))
-            (get (bpchar-hints (shape/entries s) (constantly s)) :VALUE))]
-    (if h (shape/merge-props s h) s)))
-
-(defn- with-column-types
-  "The row with its columns' types on its :pg/checks, as :pg/types: integer arithmetic
-   overflows and char(n) compares as in PostgreSQL there."
-  [row]
-  (let [[_ _ & entries] (shape/row-map row)
-        types (into {} (for [e entries :let [[k _ s] (shape/entry-parts e) t (ev/column-type (shape/column-props s))] :when t] [k t]))
-        typed (fn [f] (if (and (vector? f) (= :pg/check (first f)))
-                        (let [[_ p e] (if (map? (second f)) f [:pg/check {} (second f)])] [:pg/check (assoc p :pg/types types) e])
-                        f))]
-    (if (and (= :and (first row)) (seq types)) (into [:and (second row)] (map #(walk/postwalk typed %)) (drop 2 row)) row)))
 
 (defn- with-gen-hints
   "The row with generation hints on its columns, and on the columns of the :multi and :or
@@ -284,14 +221,7 @@
         pin (fn [[k & more :as e]] (if-let [vs (pinned k)]
                                      (let [s (last more)] (conj (pop e) (if (shape/maybe? s) [:maybe (shape/merge-props (last s) {:gen/elements vs})] (shape/merge-props s {:gen/elements vs}))))
                                      e))
-        ;; a char(n) column whose CHECK only the evaluator holds: generated as its patterns say
-        column-schemas (into {} (for [e entries :let [[k _ s] (shape/entry-parts e)]] [k (shape/non-null s)]))
-        bpchar (when (= :and (first row)) (bpchar-hints (drop 2 row) column-schemas))
-        shaped (fn [e] (let [[k p s] (shape/entry-parts e) h (get bpchar k)]
-                         (cond (or (nil? h) (some #(contains? (shape/column-props s) %) [:gen/schema :gen/elements :gen/gen])) e
-                               (shape/maybe? s) [k p [:maybe (shape/merge-props (last s) h)]]
-                               :else [k p (shape/merge-props s h)])))
-        m (into [:map props] (map (comp pin hinted shaped)) entries)
+        m (into [:map props] (map (comp pin hinted)) entries)
         fragment (fn [f] (if (and (vector? f) (= :map (first f)))
                            (let [[head entries] (if (map? (second f)) [(subvec f 0 2) (drop 2 f)] [[:map] (rest f)])]
                              (into head (map hinted) entries))
@@ -342,7 +272,7 @@
                                               ps))
           regex (when @regex-generation?
                   ;; several: strings of all of them at once, which one alone seldom makes
-                  (or (some->> (joined-regex (distinct (map (comp ev/backtracking-regex str last) (nested-res parts)))) generation-regex (vector :re))
+                  (or (some->> (joined-regex (distinct (map (comp regex/backtracking-regex str last) (nested-res parts)))) generation-regex (vector :re))
                       (some #(when-let [re (generation-regex (str (last %)))]
                                (if (= re (str (last %))) % [:re re]))
                             res)))
@@ -384,7 +314,7 @@
   "The registry pgmalli-next.core/registry documents."
   [& schemas]
   (let [data (map #(if (map? %) % (read-generated %)) schemas)
-        generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints (with-column-types s)) (gen-hints (with-domain-hints s) false (str k))))]))
+        generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k))))]))
                         (with-other-schemas-types (apply merge (map :registry data))))]
     (merge base
            (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))

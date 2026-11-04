@@ -144,29 +144,37 @@
                                                 :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (length(a::\"bit\") = 3)"}}}}})
                         (filter :constraint) (map :fact)))))
 
-(deftest a-comparison-of-a-float-column-matches-no-pattern-since-postgresql-orders-nan-above-numbers
+(deftest a-double-precision-range-is-a-pattern-with-an-upper-bound-since-postgresql-orders-nan-above-numbers
   (let [facts (fn [chk]
                 (->> (p/facts {:name "public" :types {}
-                               :tables {"t" {:columns [{:name "w" :position 1 :data_type "double precision" :is_nullable true}]
+                               :tables {"t" {:columns [{:name "w" :position 1 :data_type "double precision" :is_nullable true}
+                                                       {:name "r" :position 2 :data_type "real" :is_nullable true}]
                                              :constraints {"k" {:name "k" :type "CHECK" :check_clause (str "CHECK (" chk ")")}}}}})
-                     (filter :constraint) (map :fact)))]
-    (is (= [:table-check] (facts "w >= (0)::double precision")))
-    (is (= [:in-set] (facts "w = ANY (ARRAY[(1)::double precision, (2)::double precision])")))))
+                     (filter :constraint) (map #(select-keys % [:fact :min :max]))))]
+    (is (= [{:fact :table-check}] (facts "w >= (0)::double precision")))
+    (is (= [{:fact :range :min 0.0 :max 1.0}] (facts "w >= (0)::double precision AND w <= (1)::double precision")))
+    (is (= [{:fact :range :min 0 :max 1}] (facts "w BETWEEN 0 AND 1")))
+    (is (= [{:fact :when-present}] (facts "w IS NULL OR w <= 1")) "the pattern under IS NULL OR")
+    (is (= [{:fact :table-check}] (facts "r >= (0)::double precision AND r <= (1)::double precision")) "a real compares rounded to single precision")
+    (is (= [{:fact :in-set}] (facts "w = ANY (ARRAY[(1)::double precision, (2)::double precision])")))))
+
+(deftest check-true-is-no-fact
+  (is (= [] (check-facts "true"))))
+
+(deftest an-integer-column-cast-to-numeric-keeps-its-value
+  (is (= [{:fact :range :column "c" :min 0.5M :min-exclusive? false}] (check-facts "(c)::numeric >= 0.5"))))
 
 (deftest a-cast-of-a-number-literal-is-folded-as-postgresql-casts-it
   (is (= [{:fact :in-set :column "c" :values [3]}] (check-facts "c = (2.5)::integer"))))
 
-(deftest a-domain-over-char-n-or-an-integer-reads-value-as-its-type
+(deftest a-domain-over-char-n-takes-no-pattern-of-its-checks
   (let [domain (fn [base definition]
                  (first (p/facts {:name "public"
                                   :types {"d" {:kind "DOMAIN" :base_type base :not_null false
                                                :constraints [{:name "d_check" :definition definition}]}}
                                   :tables {}})))]
-    (is (= [:character 4] (:value-type (domain "character(4)" "CHECK (char_length(VALUE) <= 2)"))))
     (is (= [{:fact :max-length :max 4}] (map #(select-keys % [:fact :max]) (:facts (domain "character(4)" "CHECK (char_length(VALUE) <= 2)"))))
-        "its CHECKs are no patterns: those read text")
-    (is (= :integer (:value-type (domain "integer" "CHECK (VALUE * 2 > 0)"))))
-    (is (nil? (:value-type (domain "character varying(4)" "CHECK (VALUE <> '')"))))))
+        "its CHECKs are no patterns: those read text")))
 
 (deftest branch-checks
   (is (= [{:fact :branch-check :dispatch "m"

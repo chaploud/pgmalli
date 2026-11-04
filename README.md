@@ -38,7 +38,7 @@ $ psql -d pgmalli_example -f path/to/pgmalli-next/docs/example/schema.sql
 $ export PGDATABASE=pgmalli_example
 $ clojure -M -m pgmalli-next.main generate
 pgmalli-next: no pgmalli-next.edn here; using the defaults (schema public, files in resources/pgmalli-next)
-wrote resources/pgmalli-next/public.edn (schema public; tables: 4, views: 0, enums: 1, domains: 0; unrendered: 0, diagnostics: 0)
+wrote resources/pgmalli-next/public.edn (schema public; tables: 4, views: 0, enums: 1, domains: 0; unrendered: 1, diagnostics: 0)
 done: files written: 1; commit them, and run `clojure -M -m pgmalli-next.main check` in CI
 ```
 
@@ -68,15 +68,9 @@ The CHECKs are enforced. A closed user needs a `closed_at`:
 ;; => {:closed_at ["violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"]}
 ```
 
-A CHECK across columns too:
-
-```clojure
-(-> (m/explain :pg.public.posts/insert
-               {:author_id 1 :title "Hello" :likes 5 :views 3}
-               {:registry registry})
-    (me/humanize))
-;; => ["violates check constraint likes_within_views: CHECK (likes <= views)"]
-```
+A CHECK no pattern covers, such as `likes <= views` across two columns, is left to the
+database: the file lists it in `:unrendered`
+([docs/types.md](docs/types.md#check-constraints) lists the patterns).
 
 Generate rows that satisfy every constraint:
 
@@ -196,20 +190,20 @@ strings:
 ```
 
 humanize's messages are for developers: they name tables, columns, types and the CHECK's SQL.
-Before showing an error to the people using your application, word it yourself. A CHECK's
-schema names its constraint in `:pg/constraint`, which humanize's `:wrap` can read:
+Before showing an error to the people using your application, word it yourself. A column's
+schema names the CHECKs that shaped it in `:pg/constraints`, which humanize's `:wrap` can read:
 
 ```clojure
-(def user-messages {"likes_within_views" "A post cannot have more likes than views."})
+(def user-messages {"posts_likes_check" "Likes cannot be negative."})
 
 (defn for-people [{:keys [schema message]}]
-  (if-let [c (:pg/constraint (m/properties schema))]
+  (if-let [c (first (:pg/constraints (m/properties schema)))]
     (get user-messages c "Please check what you entered.")
     message))
 
-(-> (m/explain :pg.public.posts/insert {:author_id 1 :title "Hello" :likes 5 :views 3} {:registry registry})
+(-> (m/explain :pg.public.posts/insert {:author_id 1 :title "Hello" :likes -1} {:registry registry})
     (me/humanize {:wrap for-people}))
-;; => ["A post cannot have more likes than views."]
+;; => {:likes ["Likes cannot be negative."]}
 ```
 
 [docs/types.md](docs/types.md) lists what every type and CHECK becomes.
@@ -460,7 +454,7 @@ file and lists them all:
 
 ```clojure
 (select-keys (pgmalli/generated "public") [:unrendered :diagnostics])
-;; => {:unrendered [], :diagnostics []}
+;; => {:unrendered [{:kind :check, :table "public.posts", :constraint "likes_within_views", :sql "CHECK (likes <= views)"}], :diagnostics []}
 ```
 
 ## Overrides
@@ -535,8 +529,8 @@ and pgjdbc are yours to add.
 - `h/analyze` reads a query as the data `sql/format` takes: code in it (a quoted form) is an
   error, and each variant your code builds is analyzed on its own
   ([docs/queries.md](docs/queries.md)).
-- A CHECK whose result depends on what pgmalli cannot know passes
-  ([docs/types.md](docs/types.md#how-pgcheck-evaluates)).
+- A CHECK no pattern covers is left to the database: the schemas take a row it refuses
+  ([docs/types.md](docs/types.md#check-constraints)).
 
 ## Stability
 

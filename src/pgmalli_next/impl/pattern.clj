@@ -3,8 +3,8 @@
 
    A fact is a map with :fact (the kind), :schema, and :table / :column / :constraint where they
    apply. CHECK constraints are matched against a fixed set of patterns (column patterns, then
-   :branch-check and :or-check); anything else is kept as :table-check with the expression data,
-   never dropped.
+   :branch-check and :or-check), the CHECK forms docs/types.md lists; anything else is kept as
+   :table-check with the expression data, never dropped.
 
    Kinds:
      :enum-type    an enum type of the schema           {:type-name :values}
@@ -16,16 +16,14 @@
      :unknown-type type outside the mapping table (rendered as :any) {:type :type-schema (when not pg_catalog's or the schema's own)}
      :max-length   varchar(n)                            {:max}
      :numeric      numeric(p,s)                          {:precision :scale}
-     :in-set       col IN (...) / col = v                {:values}
-     :not-in-set   col NOT IN (...) / col <> v            {:values}
-     :range        col >= a AND col <= b, BETWEEN, ...   {:min :max :min-exclusive? :max-exclusive?}
-     :non-blank    length(trim(col)) > 0 / col <> ''     {:trim?}
-     :length       length(col) <= n, cardinality(col) > 0 {:fn :min :max :exact}
-     :json-type    jsonb_typeof(col) = 'object'          {:json-type}
-     :regex        col ~ 're'                            {:re :case-insensitive?}
-     :like         col LIKE 'p'                          {:pattern :case-insensitive?}
-     :not-null     col IS NOT NULL
-     :null         col IS NULL
+     :in-set :not-in-set                                 {:values}
+     :range                                              {:min :max :min-exclusive? :max-exclusive?}
+     :non-blank                                          {:trim?}
+     :length                                             {:fn :min :max :exact}
+     :json-type                                          {:json-type}
+     :regex                                              {:re :case-insensitive?}
+     :like                                               {:pattern :case-insensitive?}
+     :not-null :null
      :when-present col IS NULL OR <column pattern>       {:fact-when-present}
      :primary-key  table primary key                      {:columns}
      :exclude      EXCLUDE constraint                     {:method :partial? :elements [{:column :op}]}
@@ -34,15 +32,13 @@
                                                            :partial? (the index has a predicate)}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns} :valid? (false for NOT VALID)}
      :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE;
-                                                           :enum or :domain-ref for a base type of the schema)
-                                                           :value-type (what its CHECKs read VALUE as, pgmalli-next.impl.eval/column-type)}
+                                                           :enum or :domain-ref for a base type of the schema)}
      :domain-check CHECK of a domain that matched no pattern {:type-name :constraint :expr :valid?}
      :branch-check CHECK of the form col = v AND ... OR col = w AND ...
                                                           {:dispatch :branches [{:values :facts} or {:null true :facts}] :default}
      :or-check     CHECK whose OR alternatives are each an AND of column patterns
                                                           {:alternatives [[fact ...] ...]}
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
-                   (also lower <= upper for a generated range column, named <column>_generated)
      :not-enforced a NOT ENFORCED CHECK or FOREIGN KEY   {:constraint :input} (nothing to render)
      :trigger      a row-level trigger left enabled       {:name :before :insert :update :delete} (nothing to render)
      :unparsed     expression that could not be read     {:input :error}
@@ -56,7 +52,6 @@
    existing rows may violate them."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [pgmalli-next.impl.eval :as ev]
             [pgmalli-next.impl.expr :as x]
             [pgmalli-next.impl.types :as types]))
 
@@ -117,10 +112,14 @@
        (when (and (= :between op) (column-ref? a) (number? b) (number? c))
          {:column a :fact :range :min b :max c :min-exclusive? false :max-exclusive? false})
        (when (and (= :and op) (= 3 (count e)))
-         (let [[lo hi] (map bound (rest e))]
+         (let [[lo hi] (map #(bound (if (and (vector? %) (= ::float (first %))) (second %) %)) (rest e))]
            (when (and lo hi (= (:column lo) (:column hi)) (not= (contains? lo :min) (contains? hi :min)))
              (merge lo hi))))
        (bound e)
+       ;; a double precision bound: NaN, above every number in PostgreSQL, passes a lower bound
+       ;; alone, which malli's :min refuses
+       (when (= ::float op)
+         (let [m (match-column a)] (when (and (= :range (:fact m)) (contains? m :max)) m)))
 
        (when (and (= :> op) (= 0 b) (vector? a) (#{:length :char_length} (first a))
                   (vector? (second a)) (#{:trim :btrim} (first (second a))) (column-ref? (second (second a))))
@@ -197,14 +196,15 @@
 (defn- column-type-info
   "What normalize needs of a column of type t (under its domains): its type-key, the types a
    cast to keeps its value in (:keeps: text and varchar for a text, varchar, name, citext or enum
-   value; bit and varbit for a bit string), whether it is a float (:float?), and :not-null?."
+   value; bit and varbit for a bit string; numeric for an integer), :float (:real or :double for a float), and :not-null?."
   [t enum? not-null?]
   (let [e (types/entry t)]
     {:type (type-key t)
-     :keeps (cond (or enum? (= "citext" (:name e)) (and (= :text (:eval e)) (not= "character" (:name e)))) text-types
+     :keeps (cond (or enum? (= "citext" (:name e)) (and (= :text (:value e)) (not= "character" (:name e)))) text-types
                   (#{"bit" "bit varying"} (:name e)) #{"bit" "bit varying"}
+                  (= :integer (:value e)) #{"numeric"}
                   :else #{})
-     :float? (= :float (:eval e))
+     :float (when (= :float (:value e)) (if (= "real" (:name e)) :real :double))
      :not-null? (boolean not-null?)}))
 
 (defn- value-preserving-casts
@@ -224,14 +224,30 @@
                :else f))))
    e))
 
+(defn- number-casts
+  "The expression with a number literal's cast to an integer type, numeric or double precision
+   done: (2.5)::integer is 3, rounded away from zero as from a numeric. Another cast stays, so
+   the CHECK matches no pattern."
+  [e]
+  (walk/postwalk (fn [f]
+                   (if-let [[v t] (when (and (vector? f) (= :cast (first f)) (= 3 (count f)) (number? (second f)) (keyword? (nth f 2)))
+                                    [(second f) (types/entry (type-key (nth f 2)))])]
+                     (cond (= :integer (:value t)) (if (integer? v) v (long (.setScale (bigdec v) 0 java.math.RoundingMode/HALF_UP)))
+                           (= :exact (:value t)) (bigdec v)
+                           (= "double precision" (:name t)) (double v)
+                           :else f)
+                     f))
+                 e))
+
 (def ^:private pattern-ops #{:like :ilike :regex :iregex})
 
 (defn- normalize
   "The form the matchers read: PostgreSQL's rewrites undone, value-preserving casts removed,
    LIKE ... ESCAPE (like_escape) as a pattern escaped with a backslash, a pattern on a NOT NULL
-   column IS TRUE as the pattern. A comparison of a float column is left unmatchable: NaN, which
-   PostgreSQL orders above every number, is no bound of malli's. types is {column keyword
-   column-type-info}."
+   column IS TRUE as the pattern, a number literal's cast to a number type its value. A
+   comparison of a double precision column is marked ::float (match-column takes it with an
+   upper bound), of a real column left unmatchable: PostgreSQL compares the value rounded to
+   single precision. types is {column keyword column-type-info}."
   [e types]
   (walk/postwalk (fn [f]
                    (cond (and (vector? f) (= :like_escape (first f)) (string? (second f)) (string? (last f)) (= 3 (count f)))
@@ -242,11 +258,11 @@
                               (:not-null? (get types (second (second f)))))
                          (second f)
 
-                         (and (vector? f) (#{:< :> :<= :>= :between} (first f)) (some #(:float? (get types %)) (rest f)))
-                         [::float f]
+                         (and (vector? f) (#{:< :> :<= :>= :between} (first f)) (some #(:float (get types %)) (rest f)))
+                         [(if (some #(= :real (:float (get types %))) (rest f)) ::real ::float) f]
 
                          :else f))
-                 (value-preserving-casts (ev/fold-casts (x/canonical e)) types)))
+                 (value-preserving-casts (number-casts (x/canonical e)) types)))
 
 (defn- match-columns
   "All column facts of an expression, or nil if any AND branch matches nothing."
@@ -348,12 +364,7 @@
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
         default (cond default_value (parsed base default_value)
                       (contains? domain :default) {:expr (:default domain)})
-        generated (when generated_expr (parsed base generated_expr))
-        ;; a range built from two columns needs them ordered: the generated column's own CHECK
-        range-check (let [e (:expr generated) [f lo hi] (when (vector? e) e)]
-                      (when (and (#{:tsrange :tstzrange :daterange :int4range :int8range :numrange} f) (keyword? lo) (keyword? hi))
-                        (merge (dissoc base :column)
-                               {:fact :table-check :constraint (str cname "_generated") :expr [:<= lo hi] :columns [(name lo) (name hi)]})))]
+        generated (when generated_expr (parsed base generated_expr))]
     (cond-> [(merge base {:fact :column :type data_type :position position :nullable? (boolean (and is_nullable (not (:not-null? domain))))}
                     (when (contains? default :expr) {:default (:expr default)})
                     (cond identity {:identity ({"ALWAYS" :always "BY DEFAULT" :default} identity)}
@@ -362,7 +373,6 @@
                     (when generated_expr {:generated (if (contains? generated :expr) (:expr generated) true)}))]
       (:unparsed default) (conj (:unparsed default))
       (:unparsed generated) (conj (:unparsed generated))
-      range-check (conj range-check)
       ref-fact (conj ref-fact)
       ;; a type of another schema: each schema's file stands alone, so it cannot refer to it
       (not mapped?) (conj (cond-> (merge base {:fact :unknown-type :type data_type})
@@ -396,7 +406,7 @@
 
 (defn- citext-fact
   "A column pattern over a citext value as citext reads it: ~ and LIKE ignoring case; nil for
-   one citext compares otherwise (=, IN, a range), which pgmalli does not evaluate."
+   one citext compares otherwise (=, IN, a range), which pgmalli does not render."
   [f]
   (let [present? (= :when-present (:fact f))
         inner (if present? (:fact-when-present f) f)]
@@ -426,13 +436,13 @@
         over (let [[ident array?] (type-ident base_type)]
                (some-> (type-ref {} ident array? enums roots) (select-keys [:fact :type-name :base :array?])))
         root (:root (get roots tname))
-        value-type (ev/column-type {:pg/type (str/replace root #"\(.*\)$" "") :pg/max-length (some-> (re-find #"\((\d+)\)$" root) second parse-long)})
+        bpchar? (= "character" (:name (types/entry (str/replace root #"\(.*\)$" ""))))
         checks (for [{cname :name :keys [definition is_valid]} constraints
                      :let [{:keys [expr error]} (try-clause definition)
                            citext-value? (and (citext? root) (contains? (uncast-columns (some-> expr x/canonical)) :VALUE))
                            ;; NOT VALID: existing values may violate it, so it is reported, not applied;
                            ;; over char(n) the patterns, which read text, do not apply
-                           ms (when (and (not= false is_valid) (not (vector? value-type))) (some-> expr (normalize {:VALUE (column-type-info root (contains? enums (first (type-ident root))) not_null)}) match-columns))
+                           ms (when (and (not= false is_valid) (not bpchar?)) (some-> expr (normalize {:VALUE (column-type-info root (contains? enums (first (type-ident root))) not_null)}) match-columns))
                            ms (if citext-value? (let [cs (map citext-fact ms)] (when (every? some? cs) cs)) ms)
                            check (when expr (merge base {:constraint cname :sql definition :expr (x/canonical expr)}))]]
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
@@ -446,8 +456,7 @@
                  (cond p [(merge base {:fact :numeric :precision (parse-long p) :scale (if s (parse-long s) 0)})]
                        n [(merge base {:fact :max-length :max (parse-long n)})]))]
     (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (concat (some-> over vector) typmod (mapcat :facts checks)))})
-             (contains? dflt :expr) (assoc :default (:expr dflt))
-             value-type (assoc :value-type value-type))]
+             (contains? dflt :expr) (assoc :default (:expr dflt)))]
           (concat (keep :check checks) (some-> (:unparsed dflt) vector)))))
 
 (defn- substitute
@@ -463,7 +472,7 @@
   "The facts of a CHECK. One on a char(n) column (in bpchar) matches no pattern: the patterns
    read text, and char(n) compares and measures without its trailing spaces. On a citext
    column (in citext) read without a cast a regex or LIKE ignores case, and a CHECK comparing it otherwise is not
-   evaluated."
+   rendered."
   [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar citext types]
   (let [base (assoc base :constraint cname :sql check_clause)
         stringify (fn [m] (walk/postwalk #(if (and (map? %) (keyword? (:column %))) (update % :column name) %) m))
@@ -471,6 +480,8 @@
     (cond
       ;; NOT ENFORCED: the database never checks it, so nothing is rendered; it is noted
       (false? is_enforced) [(merge base {:fact :not-enforced :input check_clause})]
+      ;; CHECK (true), as a partitioned table with a DEFAULT partition alone has: every row holds it
+      (true? (:expr parsed)) []
       (contains? parsed :expr)
       (let [;; a generated column holds its expression's value: the CHECK is on that
             e (substitute (:expr parsed) generated)
