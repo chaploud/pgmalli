@@ -115,13 +115,16 @@
                  {:given table})))
 
 (defn with-defaults
-  "opts with :schema defaulted; one the registry (as reading reads it) holds nothing of is an
-   error, unless it holds no schema at all."
-  [registry opts]
-  (let [opts (merge {:schema syntax/default-schema} opts)
+  "opts with :schema defaulted; one given that the registry (as reading reads it) holds nothing
+   of is an error, unless it holds no schema at all. The default one it lacks is not: a query
+   naming every table with its schema needs none, and an unqualified one is an :unknown-table
+   saying which schema holds it; with needed?, where the default names a table, an error."
+  ([registry given] (with-defaults registry given false))
+  ([registry given needed?]
+  (let [opts (merge {:schema syntax/default-schema} given)
         s (:schema opts)
         held (::held registry)]
-    (when (and (seq held) (not (some #{s} held)) (not= "pg_catalog" s))
+    (when (and (or needed? (contains? given :schema)) (seq held) (not (some #{s} held)) (not= "pg_catalog" s))
       (let [meant (error/suggest s held)]
         (error/fail! :pgmalli.error/invalid-options
                      (str "the registry holds no schema " (pr-str s) "; "
@@ -129,7 +132,7 @@
                             (str "it holds " (str/join ", " (map pr-str held)) (error/did-you-mean (some-> meant pr-str)))
                             (str "pass {:schema " (pr-str (first held)) "}")))
                      (cond-> {:given s :known (vec held)} meant (assoc :did-you-mean [meant])))))
-    opts))
+    opts)))
 
 (defn- catalog-table
   "The table an unqualified name means: pg_catalog, implicitly first on the search path, holds

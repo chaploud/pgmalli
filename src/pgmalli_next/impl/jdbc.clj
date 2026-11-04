@@ -23,7 +23,13 @@
                                    (let [m {:error/message "should be true, false or a vector of column names ([\"id\"], [:id])"}]
                                      [:or [:boolean m] [:vector (assoc m :min 1) [:or :string :keyword]]])]]]
    :result [:result {:optional true} [:enum :one]]
-   :format [:format {:optional true} [:map {:error/message "should be the map of options you pass to sql/format"}]]})
+   :format [:format {:optional true} [:map {:error/message "should be the map of options you pass to sql/format"}
+                                      [:quoted {:optional true} [:maybe :boolean]] [:inline {:optional true} [:maybe :boolean]]
+                                      [:quoted-snake {:optional true} [:maybe :boolean]] [:dialect {:optional true} [:maybe :keyword]]]]})
+
+(def ^:private format-read
+  "The keys of sql/format's options pgmalli reads (docs/queries.md#options)."
+  [:values-default-columns :inline :quoted :dialect :quoted-snake :quoted-always])
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
@@ -134,6 +140,13 @@
               :when meant]
         (error/fail! :pgmalli.error/invalid-options
                      (str "pgmalli options: :jdbc's " (pr-str k) " is no next.jdbc option" (error/did-you-mean meant))
+                     {:given [k] :did-you-mean [meant]}))
+      ;; a key close to one pgmalli reads, misspelt, would change how names resolve without a word
+      (doseq [k (when (map? (:format opts)) (keys (:format opts)))
+              :let [meant (when-not (some #{k} format-read) (error/suggest k format-read))]
+              :when meant]
+        (error/fail! :pgmalli.error/invalid-options
+                     (str "pgmalli options: :format's " (pr-str k) " is no sql/format option pgmalli reads" (error/did-you-mean meant))
                      {:given [k] :did-you-mean [meant]}))
       (when-let [given (not-empty (select-keys (when (map? jdbc) jdbc) [:builder-fn :label-fn :qualifier-fn]))]
         (when-not (and (= [:builder-fn] (keys given)) (the-builder? (:builder-fn given)))

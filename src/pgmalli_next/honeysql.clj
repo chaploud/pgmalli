@@ -189,7 +189,7 @@
                name
                (let [t (syntax/qualified name (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
                                                 (select-keys opts [:format])
-                                                (query/with-defaults r opts)))]
+                                                (query/with-defaults r opts true)))]
                  (when (< 2 (count (str/split t #"\.")))
                    (error/fail! :pgmalli.error/invalid-options
                                 (str what " takes a table as :table or :schema.table; " (pr-str name) " names more")

@@ -41,8 +41,9 @@ naming where the symbol is (`:in`, as `get-in` reads it): analyze each variant y
   `group_id`); quoted (`:quoted`, a dialect), as written (`:Users` is `"Users"`). A string, which
   HoneySQL quotes, is as written.
 - A table is looked up in the `:schema` option (`"public"` by default); `:other.t` names its schema.
-  A `:schema` the registry holds no generated file, table or view of is an error naming the ones
-  it holds.
+  A `:schema` given that the registry holds no generated file, table or view of is an error
+  naming the ones it holds; where the default `"public"` is one it lacks, an unqualified table is an
+  `:unknown-table` naming the schema that holds it.
 - A `:with` entry is a table its later entries and the main statement see.
 - A subquery in `:from` or `:join` sees the outer query's tables, not its siblings; a LATERAL
   one sees the tables before it.

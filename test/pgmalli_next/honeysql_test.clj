@@ -1299,7 +1299,11 @@
 
 (deftest a-schema-the-registry-holds-nothing-of-is-an-error-naming-the-one-it-holds
   (let [q {:select [:id] :from [:users]}]
-    (doseq [f [#(h/analyze registry q %) #(h/query-schema registry [] q %) #(h/values-schema registry :users %) #(h/set-schema registry :users %)]]
+    (is (= ["unknown table public.users; sample.users exists; pass {:schema \"sample\"}, or name it :sample.users"]
+           (h/humanize (:problems (h/analyze registry q))))
+        "a query's unqualified table the default schema lacks is a problem")
+    (is (= [] (:problems (h/analyze registry {:select [:id] :from [:sample.users]}))) "every table qualified needs no :schema")
+    (doseq [f [#(h/values-schema registry :users %) #(h/set-schema registry :users %)]]
       (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^the registry holds no schema \"public\"; pass \{:schema \"sample\"\}$" (f {})))]
         (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e)))))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^the registry holds no schema \"other\"; it holds \"a\", \"b\"$"
