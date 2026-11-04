@@ -302,7 +302,7 @@ The problems it reports:
 | `:kind` | for |
 |---|---|
 | `:unknown-table` | a table the registry lacks; `:did-you-mean` lists a table of that name in another schema first |
-| `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`) |
+| `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`); with `:clause` where a clause names it: `:using` (`:side` `:left`, `:right` or `:both`, `:table` the joined one), `:on-conflict` (`:table`), `:values` (a keyword value, which HoneySQL writes as a column; `:target` its key), `:set` (a target qualified by its table: a field of a column to PostgreSQL); `:did-you-mean` where a column is spelled close |
 | `:ambiguous-column` | an unqualified column of two tables, with `:candidates` |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |

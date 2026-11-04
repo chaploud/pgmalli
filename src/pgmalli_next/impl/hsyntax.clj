@@ -7,7 +7,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare called cast-target formatted-name operator? param-key quoted? star?)
+(declare called cast-target formatted-name null-value? operator? param-key quoted? star?)
 
 (defn folded
   "An identifier as PostgreSQL reads what HoneySQL writes of it by default, unquoted: - is _,
@@ -105,6 +105,15 @@
    :default and [:default], or [:default] alone where the format quotes names (\"default\")."
   [format]
   (if (quoted? format) #{[:default]} #{:default [:default]}))
+
+(defn value-keyword?
+  "Whether HoneySQL writes keyword v as a value, not a column: a parameter, NULL, or DEFAULT,
+   which it writes as SQL in any case (:DEFAULT, :Null) where the format leaves it unquoted."
+  [v format]
+  (boolean (or (param-key v) (null-value? v format)
+               (contains? (default-values format) v)
+               (and (keyword? v) (contains? (default-values format) :default) (nil? (namespace v))
+                    (= "default" (str/lower-case (name v)))))))
 
 (defn branch?
   "Whether a walk of query data goes into x: a collection, but not a value HoneySQL passes as it

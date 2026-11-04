@@ -2607,14 +2607,14 @@
   (let [kinds #(set (map (juxt :kind :column) (check %)))]
     (is (contains? (kinds {:select [:*] :from [:users] :join [[:groups :g] [:using :nope]]}) [:unknown-column :nope])
         "column nope specified in USING clause does not exist")
-    (is (= [{:kind :unknown-column :column :name :using :left}] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :name]]}))
+    (is (= [{:kind :unknown-column :column :name :clause :using :side :left}] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :name]]}))
         "users lacks name")
     (is (= [] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :id]]})))
     (is (contains? (kinds {:insert-into :users :values [{:score 1 :group_id 1}] :on-conflict [:nope] :do-nothing true}) [:unknown-column :nope]))
     (is (contains? (kinds {:insert-into :users :values [{:score 1 :group_id 1 :mood :sad}]}) [:unknown-column :sad])
         "HoneySQL writes a keyword value as a column: VALUES (sad)")
     (is (= #{} (kinds {:insert-into :users :values [{:score 1 :group_id 1 :mood :default :nick :null :born :?b}]})))
-    (is (= [{:kind :unknown-column :column :users :assigned-field true}] (check {:update :users :set {:users.score 1} :where [:= :id 1]}))
+    (is (= [{:kind :unknown-column :column :users.score :clause :set :did-you-mean [:score]}] (check {:update :users :set {:users.score 1} :where [:= :id 1]}))
         "SET users.score is field score of a column users")))
 
 (deftest a-cast-to-float-of-a-precision-up-to-24-is-a-real-and-dec-is-numeric
@@ -2642,3 +2642,17 @@
     (is (m/validate d {:a [1 2]} {:registry reg}))
     (is (m/validate d {:a "{1,2}"} {:registry reg}) "jsonb_populate_record reads a JSON string through integer[]'s input")
     (is (not (m/validate d {:a 1} {:registry reg})))))
+
+(deftest an-unknown-column-a-clause-names-says-which-clause-and-what-was-meant
+  (is (= [{:kind :unknown-column :column :nmae :clause :using :side :both :table "sample.groups" :did-you-mean [:name]}]
+         (check {:select [:*] :from [:users] :join [[:groups :g] [:using :nmae]]}))
+      "one problem where both sides lack it")
+  (is (= [{:kind :unknown-column :column :scroe :clause :on-conflict :table "sample.users" :did-you-mean [:score]}]
+         (filter #(= :unknown-column (:kind %)) (check {:insert-into :users :values [{:score 1 :group_id 1}] :on-conflict [:scroe] :do-nothing true}))))
+  (is (= [{:kind :unknown-column :column :on-constraint :clause :on-conflict :table "sample.users" :constraint :users_pkey}]
+         (filter #(= :unknown-column (:kind %)) (check {:insert-into :users :values [{:score 1 :group_id 1}] :on-conflict [:on-constraint :users_pkey] :do-nothing true})))
+      "HoneySQL writes ON CONFLICT (on_constraint, users_pkey)")
+  (is (= [{:kind :unknown-column :column :sad :clause :values :table "sample.users" :target :mood}]
+         (check {:insert-into :users :values [{:score 1 :group_id 1 :mood :sad}]})))
+  (is (= [] (check {:insert-into :users :values [{:score 1 :group_id 1 :mood :DEFAULT :nick :Null}]}))
+      "HoneySQL writes :DEFAULT as DEFAULT, :Null as NULL"))

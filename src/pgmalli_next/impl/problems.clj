@@ -70,6 +70,11 @@
                           n))]
     (some->> (error/suggestions c names 3) (mapv #(keyword (if a (str a "." %) %))))))
 
+(defn- near-in
+  "Up to three columns of table spelled close to column name n."
+  [registry table n]
+  (some->> (error/suggestions n (remove query/system-columns (keys (query/table-columns registry table))) 3) (mapv keyword)))
+
 (defn- unknown-qualifier
   "[qualifier meant] when no table or alias in scope has col's qualifier, nil otherwise. meant
    is col's column qualified by the aliases in scope whose table has it and whose alias or table
@@ -90,7 +95,12 @@
 (defn- column-problems [registry sc stmt ps {:keys [format] :as opts}]
   (let [target (syntax/target-scope sc stmt opts)
         assigned (when (seq target) (concat (map #(or (syntax/field-column %) %) (filter syntax/column-keyword? (:columns (syntax/insert-parts stmt))))
-                                            (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))]
+                                            (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))
+        ;; a target a.b as written (writes has it as its column a): field b of a column a to PostgreSQL
+        dotted (into {} (for [t (concat (:columns (syntax/insert-parts stmt)) (let [st (:set stmt)] (when (map? st) (keys st)))
+                                        (let [d (:do-update-set stmt)] (when (map? d) (keys d))))
+                              :let [c (syntax/field-column t)] :when c]
+                          [c t]))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (syntax/select-parts % opts)) (syntax/selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c _ chain] (syntax/comparison-sides ps) :when (syntax/column-keyword? c)] [c chain])
@@ -117,8 +127,9 @@
           (cond-> {:kind :unknown-column :column col}
             qualifier (assoc :qualifier qualifier)
             near (assoc :did-you-mean near)
-            ;; a target a.b whose a is the table: field b of a column a to PostgreSQL
-            (and (identical? scope target) (whole-row? scope col format)) (assoc :assigned-field true)
+            ;; a target a.b whose a is the table or its alias: field b of a column a to PostgreSQL
+            (and (identical? scope target) (dotted col) (whole-row? scope col format)) (assoc :column (dotted col) :clause :set
+                                                                :did-you-mean [(keyword (last (str/split (name (dotted col)) #"\.")))])
             (and (syntax/quoted? format) (not= (syntax/split-column col format) (syntax/split-column col nil))
                  (some? (query/resolve-column registry scope (keyword (str/join "." (remove nil? (syntax/split-column col nil)))))))
             (assoc :quoted true)))))))
@@ -143,17 +154,23 @@
          (when (and (seq given) (not (query/filled-by-trigger? (query/table-props registry table) :insert)))
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column (keyword c)}))
-         ;; ON CONFLICT (col, ...) names columns of the target table
+         ;; ON CONFLICT (col, ...) names columns of the target table; a vector headed by :on-constraint
+         ;; is two columns to HoneySQL, ON CONFLICT (on_constraint, name)
          (when-let [cols (query/table-columns registry table)]
-           (for [k (syntax/vectorish (:on-conflict stmt))
-                 :when (and (keyword? k) (not (contains? cols (syntax/ident-name k format))))]
-             {:kind :unknown-column :column k :table table :on-conflict true}))
+           (let [oc (syntax/vectorish (:on-conflict stmt))]
+             (if (= :on-constraint (first oc))
+               [{:kind :unknown-column :column :on-constraint :clause :on-conflict :table table :constraint (second oc)}]
+               (for [k oc
+                     :let [n (when (keyword? k) (syntax/ident-name k format))]
+                     :when (and n (not (contains? cols n)))]
+                 (cond-> {:kind :unknown-column :column k :clause :on-conflict :table table}
+                   (near-in registry table n) (assoc :did-you-mean (near-in registry table n)))))))
          ;; HoneySQL writes a keyword value as a column, which a VALUES row has none of in scope
          (distinct (for [row rows
-                         v (cond (map? row) (vals row) (vector? row) row)
-                         :when (and (keyword? v) (not (syntax/param-key v)) (not (syntax/null-value? v format))
-                                    (not (contains? (set (syntax/default-values format)) v)))]
-                     {:kind :unknown-column :column v :values true})))))))
+                         [target v] (cond (map? row) row (vector? row) (map vector columns row))
+                         :when (and (keyword? v) (not (syntax/value-keyword? v format)))]
+                     (cond-> {:kind :unknown-column :column v :clause :values :table table}
+                       target (assoc :target target)))))))))
 
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
@@ -274,8 +291,14 @@
                      ;; the name folded is one the registry holds: what to write instead
                      (and quoted? (not= table (syntax/folded table)) (some #{(syntax/folded table)} known)) (assoc :quoted true)))
                  (column-problems registry scopes stmt ps opts)
-                 (for [{:keys [column side table]} (query/using-missing registry stmt (first scopes) opts)]
-                   (cond-> {:kind :unknown-column :column column :using side} table (assoc :table table)))
+                 ;; a column both sides lack is one problem
+                 (for [[column ms] (group-by :column (query/using-missing registry stmt (first scopes) opts))
+                       :let [right (some :table ms)
+                             meant (some->> right (#(near-in registry % (name column))))]]
+                   (cond-> {:kind :unknown-column :column column :clause :using
+                            :side (if (next ms) :both (:side (first ms)))}
+                     right (assoc :table right)
+                     meant (assoc :did-you-mean meant)))
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
                  (string-problems registry ps opts)))))

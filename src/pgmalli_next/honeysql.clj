@@ -227,19 +227,28 @@
                                                ", or name it :" elsewhere)
                                 did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
                                 :else "; check its name, or :schema when it is in another schema"))))
-   :unknown-column (fn [{:keys [column did-you-mean qualifier quoted values using table on-conflict assigned-field]}]
-                     (str "unknown column " (column-name column)
-                          (when qualifier (str "; no table or alias " qualifier " in the statement"))
-                          (cond assigned-field (str "; PostgreSQL reads an assigned " (column-name column)
-                                                    ".x as field x of a column " (column-name column) ": assign the column unqualified (:x)")
-                                on-conflict (str " in ON CONFLICT: " table " lacks it")
-                                using (str " in USING: " (if (= :left using) "no table before the join has it" (str table " lacks it")))
-                                values (str "; HoneySQL writes a keyword in :values as a column: for the value, write [:lift "
-                                            column "] or a string")
-                                quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
-                                            (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
-                                did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean)))
-                                (not qualifier) "; no table of the statement has it")))
+   :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint]}]
+                     (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean))))]
+                       (str "unknown column " (column-name column)
+                            (when qualifier (str "; no table or alias " qualifier " in the statement"))
+                            (case clause
+                              :using (str " in USING: " (case side :left "no table before the join has it"
+                                                              :right (str table " lacks it")
+                                                              :both (str "neither the tables before the join nor " table " has it"))
+                                          meant)
+                              :on-conflict (if constraint
+                                             (str " in ON CONFLICT: HoneySQL writes a vector as columns; for a constraint write {:on-constraint "
+                                                  (keyword (name constraint)) "}")
+                                             (str " in ON CONFLICT: " table " lacks it" meant))
+                              :values (str " in :values" (when target (str " for " (column-name target)))
+                                           ": HoneySQL writes a keyword there as a column; write the value itself"
+                                           " ([:lift " column "] for an enum label, a string for text)")
+                              :set (str ": PostgreSQL reads an assigned " (column-name column) " as a field of a column "
+                                        (first (str/split (column-name column) #"\.")) "; assign it unqualified: " (first did-you-mean))
+                              (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
+                                                (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
+                                    meant meant
+                                    (not qualifier) "; no table of the statement has it")))))
    :ambiguous-column (fn [{:keys [column candidates]}]
                        (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias"))
    :missing-required-column (fn [{:keys [table column]}]
