@@ -1808,6 +1808,8 @@
         all (concat (when labelled [labelled]) converted (when (nil? labelled) [jdbc/pg-object]))]
     (if (next all) (into [:or] all) (first all))))
 
+(declare cast-arrays named-type-schema)
+
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
    :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
@@ -1828,14 +1830,20 @@
                                                        (update % 1 (fn [p] (cond-> (dissoc p :pg/max-length) (= (:max p) (:pg/max-length p)) (dissoc :max))))
                                                        %))
                                      shape/without-gen))
-        t (slot-type registry s)
+        ;; cast to an array type, PostgreSQL casts an array element by element, NULL too, to the
+        ;; element type; a scalar through the array type's input alike for every element type
+        es (when (= :cast context) (some->> (types/element (:pg/type (shape/column-props s))) (named-type-schema registry opts)))
+        t (or (slot-type registry s) (when es "text[]"))
         takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t % context))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
-        ;; cast, an array as PostgreSQL casts it (to text, say), its elements any
         arrays (when (= :cast context)
-                 (for [[q schema] (arrays-sent opts #(and (takes? %) (not (accept/scalar-cast? t %))) :any)
-                       a (shape/alternatives schema)]
-                   [q a]))
+                 (for [a (shape/alternatives
+                          (if es
+                            (cast-arrays registry es (nullable (accepted-type registry es :cast opts)) opts)
+                            ;; to another type (text, say), its elements any
+                            (shape/either (map second (arrays-sent opts #(and (takes? %) (not (accept/scalar-cast? t %))) :any)) :any)))
+                       :when (not (untyped? a))]
+                   [nil a]))
         alts (concat
               (for [p sent
                     a (if (= :unknown p)
@@ -1848,10 +1856,10 @@
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
-      (or (nil? t) (untyped? own)) own
+      (or (nil? t) (and (untyped? own) (not es))) own
       (= :enum (shape/kind own)) (labelled-type own alts context (boolean (some #(or (= t %) (takes? %)) jdbc/string-sends)) (not (::keywords-columns opts)))
       :else
-      (let [own-alts (shape/alternatives own)
+      (let [own-alts (when-not (untyped? own) (shape/alternatives own))
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
             ;; a string's or a date's cannot be said of the value sent
             alts (for [[p a] alts] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))

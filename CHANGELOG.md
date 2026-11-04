@@ -115,7 +115,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 * A cast to `[:raw "bigint[]"]`, how an array cast is written in HoneySQL, has its type: its
   argument takes what PostgreSQL casts to it, and `unnest` of it, of several arrays too, has
-  columns of the elements' types.
+  columns of the elements' types. An argument cast to an array type, `jsonb[]` and an enum's
+  too, takes a Java array of what a cast to the element type takes, or nil.
 * `h/analyze` gives what one reading of a query tells, `{:args :row :rows :problems :tables}`:
   the arguments' types, the row, how many rows where the data tells (not where a UNIQUE column
   is compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows), the problems

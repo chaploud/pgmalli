@@ -257,3 +257,19 @@
           (is (some? (runs! q params {})))
           (is (accepted? reg q params {}))
           (is (returned? reg q params {})))))))
+
+(deftest an-array-cast-casts-each-element-as-a-cast-to-the-element-type
+  (when *db*
+    (let [reg (registry)
+          cast-to #(hash-map :select [[[:cast :?x [:raw %]] :x]])]
+      (doseq [[t x] [["bigint[]" (into-array Long [1 nil])] ["bigint[]" (into-array String ["1"])] ["bigint[]" (into-array Integer [(int 1)])]
+                     ["jsonb[]" (into-array String ["{}"])] ["jsonb[]" "{\"{}\"}"]
+                     ["status[]" (into-array String ["live" nil])] ["dpos[]" (into-array Integer [(int 9) nil])]]]
+        (testing (str t " " (pr-str (if (string? x) x (vec x))))
+          (is (some? (runs! (cast-to t) {:x x} {})))
+          (is (accepted? reg (cast-to t) {:x x} {}))))
+      (doseq [[t x] [["bigint[]" (into-array Boolean [true])] ["jsonb[]" (long-array [1])]
+                     ["status[]" (into-array String ["gone"])] ["dpos[]" (into-array Integer [(int 10)])]]]
+        (testing (str t " " (pr-str (vec x)))
+          (is (thrown? Exception (runs! (cast-to t) {:x x} {})))
+          (is (not (accepted? reg (cast-to t) {:x x} {}))))))))
