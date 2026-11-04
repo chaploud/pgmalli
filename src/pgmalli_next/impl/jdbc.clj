@@ -70,14 +70,10 @@
   [n pred]
   [:fn {:pg/class n :error/message (str "should be an " n)} pred])
 
-(defn- row-schema "The schema c's row in accept/classes names." [c] (some (fn [[k _ s]] (when (= k c) s)) accept/classes))
-
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
   (memoize (fn [^Class c]
-             (or (row-schema c)
-                 ;; java.sql's dates, times and timestamps are java.util.Dates
-                 (when (.isAssignableFrom java.util.Date c) 'inst?)
+             (or (get (accept/row-of c accept/classes) 2)
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
                  ;; column's, which array-type puts in
                  (when (and (.isArray c) (not= c accept/bytes-class)) [:pg/array :pgmalli/element])
@@ -202,8 +198,7 @@
   [value {:keys [format]}]
   (if (:inline format)
     :unknown
-    (or (get sends (class value))
-        (some (fn [[c t]] (when (and (contains? sends c) (instance? c value)) t)) accept/class-types))))
+    (some-> (class value) (accept/row-of (filter (comp sends first) accept/classes)) second)))
 
 (defn string-sends
   "The types a String is sent as."
@@ -296,7 +291,7 @@
         ;; t takes one): t without those; a Java array's are its component class's (a Time[]'s
         ;; java.sql.Times, inst?), which t takes too
         typed (fn [x ^Class c]
-                (let [cs (some-> c .getComponentType row-schema shape/alternatives)
+                (let [cs (some-> c .getComponentType (accept/row-of accept/classes) (get 2) shape/alternatives)
                       own (set (map shape/kind (or cs (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives))))
                       strip (fn [s]
                               (let [as (shape/alternatives s)

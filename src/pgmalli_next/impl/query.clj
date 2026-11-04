@@ -28,10 +28,12 @@
 
 (defn- in-versions
   "Overloads or columns xs of the catalog snapshot as of versions vs: one of none of them
-   left out, :in narrowed to vs, and left out where it holds them all."
+   left out, :in narrowed to vs, and left out where it holds them all; the versions as
+   :pgmalli/versions metadata, which pgmalli-next.impl.resolve reads them as of."
   [xs vs]
-  (for [x xs :let [in (when (:in x) (filter (set (:in x)) vs))] :when (or (nil? (:in x)) (seq in))]
-    (if (or (nil? (:in x)) (= (count in) (count vs))) (dissoc x :in) (assoc x :in (vec in)))))
+  (with-meta (vec (for [x xs :let [in (when (:in x) (filter (set (:in x)) vs))] :when (or (nil? (:in x)) (seq in))]
+                    (if (or (nil? (:in x)) (= (count in) (count vs))) (dissoc x :in) (assoc x :in (vec in)))))
+    {:pgmalli/versions vs}))
 
 (defn- catalog-columns
   "[[column-name schema props] ...] of a table or view of pg_catalog (\"pg_catalog.pg_class\"),

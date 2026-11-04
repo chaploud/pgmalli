@@ -52,6 +52,14 @@
    [clojure.lang.Keyword :unknown :keyword #{"S" "E"}]
    [clojure.lang.IPersistentMap "jsonb" [:map-of :any :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
+(defn row-of
+  "The row of rows (classes', json-classes') a value of class c is sent by: its class's, else the
+   first of a class it is one of, in their order (java.sql.Date's java.util.Date row); nil for
+   none."
+  [^Class c rows]
+  (or (some #(when (= c (first %)) %) rows)
+      (some #(when (.isAssignableFrom ^Class (first %) c) %) rows)))
+
 (def class-types
   "[class type] of classes, in its order."
   (mapv (fn [[c t]] [c t]) classes))
@@ -129,8 +137,7 @@
    (fn [t sent]
      (let [os (resolve/overloads :operators "=")
            [t sent] (map #(if (extension-string? %) "text" %) [t sent])]
-       (boolean (some (fn [v] (resolve/call :operators "=" [t sent] (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in))))
-                      (:versions @types/catalog)))))))
+       (boolean (some #(resolve/call :operators "=" [t sent] (resolve/of-version os %)) (:versions @types/catalog)))))))
 
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context (:compare,
@@ -157,7 +164,7 @@
    string type. The rest PostgreSQL reads through t's input is left out:
    docs/queries.md#stricter-than-postgresql."
   [t ^Class c context]
-  (let [ks (some (fn [[^Class x _ _ ks]] (when (.isAssignableFrom x c) ks)) (if (= :json context) json-classes classes))]
+  (let [ks (or (get (row-of c (if (= :json context) json-classes classes)) 3) #{})]
     (boolean (or (ks "*")
                  (ks (if (string-type? t) "S" (types/category t)))
                  (and (= :cast context) (or (ks "S") (string-type? t)))

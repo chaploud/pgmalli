@@ -67,3 +67,9 @@
     (is (r/untyped-refused? :functions [:free] 0 (os "num_nulls")) "\"any\"")
     (is (not (r/untyped-refused? :functions [:free] 0 (os "lower"))) "text's string category takes it")
     (is (not (r/untyped-refused? :functions [:free :free] 0 (os "lower"))) "no candidate of two arguments: not told")))
+
+(deftest a-call-resolves-as-of-the-versions-the-overloads-are-narrowed-to
+  (let [os [{:args ["integer"] :result "text" :in ["16"]} {:args ["integer"] :result "text" :in ["17"]}]]
+    (is (nil? (:result (r/call :functions "f" ["integer"] os))) "version 18 has neither")
+    (is (= "text" (:result (r/call :functions "f" ["integer"] (with-meta os {:pgmalli/versions ["16" "17"]}))))
+        "a registry of 16 and 17 files")))

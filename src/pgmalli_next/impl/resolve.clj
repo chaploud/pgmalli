@@ -210,12 +210,19 @@
       (when-let [r (bound (:result (:overload c)) b)]
         {:result r :args (mapv #(bound % b) (:decls c)) :overload (dissoc (:overload c) :in)}))))
 
+(defn of-version
+  "The overloads of os that version v has, as of it alone (without :in)."
+  [os v]
+  (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in)))
+
 (defn- in-every-version
-  "(f overloads) of each version's overloads, where all agree; nil otherwise."
+  "(f overloads) of each version's overloads, where all agree; nil otherwise. The versions are
+   the overloads' :pgmalli/versions metadata (a registry's), else every one the catalog holds."
   [overloads f]
   (if (not-any? :in overloads)
     (f overloads)
-    (let [rs (for [v (:versions @types/catalog)] (f (filter #(or (nil? (:in %)) (some #{v} (:in %))) overloads)))]
+    (let [rs (for [v (or (:pgmalli/versions (meta overloads)) (:versions @types/catalog))]
+               (f (of-version overloads v)))]
       (when (apply = rs) (first rs)))))
 
 (defn overloads
