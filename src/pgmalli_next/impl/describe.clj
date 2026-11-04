@@ -3,6 +3,7 @@
    labels, maps as {key description}."
   (:require [clojure.string :as str]
             [malli.core :as m]
+            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -18,12 +19,24 @@
 
 (defn- props-of [s] (when (and (vector? s) (map? (second s))) (second s)))
 
+(def ^:private class-names
+  "The name of the schema of each class the one sending sends (accept/classes), by its kind: the
+   type it is sent as, short (a Long's bigint, a byte[]'s bytea), or, one sent untyped, the type
+   whose values it is (a LocalDate's date); not a predicate's name, whose ? reads as NULL."
+  (reduce (fn [m [_ t s]]
+            (let [k (when s (shape/kind s))
+                  n (if (string? t)
+                      (types/short-name t)
+                      (some (fn [[n e]] (when (= k (shape/kind (:schema e))) (types/short-name n))) types/types))]
+              (cond-> m (and k n (not (contains? m k))) (assoc k n))))
+          {} accept/classes))
+
 (defn- leaf [s]
-  ;; a number class's predicate as the type PostgreSQL gets it as, not a name ending in ?, which reads as NULL
-  (cond (keyword? s) (get {:double "float8"} s (name s))
-        (symbol? s) (get '{decimal? "numeric" double? "float8" integer? "numeric" float? "real" inst? "inst"} s (str s))
+  (cond (keyword? s) (get class-names s (name s))
+        ;; a predicate no class is sent by as a type (inst?) by its name, without the ?
+        (symbol? s) (get class-names s (str/replace (str s) #"\?$" ""))
         (and (vector? s) (= :fn (first s)) (:pg/class (props-of s))) (:pg/class (props-of s))
-        (vector? s) (name (first s))
+        (vector? s) (get class-names (first s) (name (first s)))
         :else (pr-str s)))
 
 (def ^:private ^:dynamic *described* #{})

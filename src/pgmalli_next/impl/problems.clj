@@ -207,7 +207,6 @@
   [registry s]
   (let [p (shape/column-props s)
         e (types/entry (shape/type-name p))
-        ;; :bit-varying or :timestamp-with-time-zone is no type HoneySQL writes; its alias is
         spelt types/short-name]
     (or (query/enum-type registry s)
         (when e
@@ -303,9 +302,7 @@
                  (write-problems registry scopes stmt opts)
                  (string-problems registry ps opts)))))
 
-(def ^:private read-clauses syntax/read-clauses)
 
-(def ^:private ignored-clauses syntax/ignored-clauses)
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
@@ -326,9 +323,9 @@
            ;; the query itself is clauses, however unknown ({:selct [:id]})
            :when (and (map? m) (seq m) (not (rows m)) (or (identical? m body) (syntax/statement? m) (every? clauses (keys m))))
            k (keys m)
-           :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))
+           :when (and (keyword? k) (not (syntax/read-clauses k)) (not (syntax/ignored-clauses k)))
            :let [meant (when-not (contains? clauses k)
-                         (error/suggest k (concat read-clauses ignored-clauses clauses)))]]
+                         (error/suggest k (concat syntax/read-clauses syntax/ignored-clauses clauses)))]]
        (cond-> {:kind :unread-clause :clause k} meant (assoc :did-you-mean [meant]))))))
 
 (defn- return-key-problems

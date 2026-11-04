@@ -2,6 +2,7 @@
   "HoneySQL query data against the checked-in sample registry."
   (:refer-clojure :exclude [bigint])
   (:require [clojure.string :as str]
+            [honey.sql :as sql]
             [clojure.test :refer [deftest is testing]]
             [honey.sql.pg-ops]
             [malli.core :as m]
@@ -1183,6 +1184,8 @@
   (doseq [v [nil :null [:inline nil] [:lift nil]]]
     (is (= [] (check {:update :users :set {:nick v} :where [:= :id 1]})) (pr-str v))))
 
+(def ^:private nrql-registered? (try (sql/format {:select [:a]} {:dialect :nrql}) true (catch Exception _ false)))
+
 (deftest a-quoted-null-is-a-column
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                        [:id [:int {:pg/type "integer"}]]
@@ -1194,15 +1197,21 @@
                     {:dialect :ansi :quoted-always #"^id$"}
                     {:dialect :ansi :quoted false :quoted-always #"^null$"}
                     {:dialect :ansi :quoted nil :quoted-always #"^null$"}
-                    {:dialect :nrql :quoted true}]]
+                    {:dialect :nrql :quoted true}]
+            ;; a dialect the loaded HoneySQL lacks (:nrql before 2.6) is an error, as sql/format's
+            :let [nrql? (= :nrql (:dialect format))]
+            :when (or (not nrql?) nrql-registered?)]
       (is (= [] (:problems (h/analyze reg q {:format format}))) (pr-str format)))
     (doseq [format [{} {:quoted-always #"^id$"}
                     {:dialect :ansi :quoted false}
                     {:dialect :ansi :quoted nil}
                     {:dialect :ansi :quoted false :quoted-always #"^id$"}
-                    {:dialect :nrql}]]
+                    {:dialect :nrql}]
+            :when (or (not= :nrql (:dialect format)) nrql-registered?)]
       (is (= [{:kind :not-null-violation :table "public.t" :column :id :clause :set}]
-             (:problems (h/analyze reg q {:format format}))) (pr-str format)))))
+             (:problems (h/analyze reg q {:format format}))) (pr-str format)))
+    (when-not nrql-registered?
+      (is (thrown? clojure.lang.ExceptionInfo (h/analyze reg q {:format {:dialect :nrql}}))))))
 
 (deftest null-tests-read-their-column-in-every-condition
   (doseq [op [:is :is-not]

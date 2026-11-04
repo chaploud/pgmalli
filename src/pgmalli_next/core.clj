@@ -43,12 +43,16 @@
 
    (as-read registry :pg.public/users)
 
-   Options: :schema, and docs/reading-rows.md#options.
+   Options: docs/reading-rows.md#options.
 
    Throws when an option is unknown, or name is no table's or view's row schema."
   ([registry name] (as-read registry name {}))
   ([registry name opts]
    (let [opts (jdbc/options! opts [:schema :jdbc])]
+     (when (contains? (:jdbc opts) :return-keys)
+       (error/fail! :pgmalli.error/invalid-options
+                    "as-read reads no :return-keys, a write's RETURNING: the row it gives is the table's whole row"
+                    {:given (select-keys (:jdbc opts) [:return-keys])}))
      (jdbc/as-read registry (query/row-name (query/reading registry) name "as-read" opts) (dissoc opts :schema)))))
 
 (defn- schema!

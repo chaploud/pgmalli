@@ -443,7 +443,7 @@
 (defn chain [scope] (if (map? scope) [scope] scope))
 
 (def sql-value-types
-  "The type of an SQL word (docs 9.9.5, 9.27)."
+  "types/sql-words keyed as keywords, with TRUE and FALSE."
   (into {:true "boolean" :false "boolean"} (map (fn [[w t]] [(keyword w) t])) types/sql-words))
 
 (def nullable-sql-values
@@ -813,8 +813,7 @@
                (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" n)] [q true] [(str/lower-case n) false])))))
 
 (defn quoted?
-  "Whether sql/format's options quote a name, as the loaded HoneySQL writes one (a dialect set
-   with set-dialect! too); where it formats nothing under them (a dialect of a later HoneySQL),
+  "Whether sql/format's options quote a name, as the loaded HoneySQL writes one; where it formats nothing under them (a dialect of a later HoneySQL),
    under :quoted, or a :dialect other than :nrql unless :quoted false."
   [{:keys [quoted dialect] :as format}]
   (if-let [[_ q?] (formatted-name :a format false)]

@@ -117,7 +117,7 @@ An INSERT or UPDATE is checked against what PostgreSQL refuses to write:
 ```
 
 NULL is any of `nil`, `:null` (in any case), `[:inline nil]` and `[:lift nil]`; a `:null` the
-format quotes (`:quoted`, a `:dialect`, or the dialect `sql/set-dialect!` set) is a column named `null`. HoneySQL also writes NULL
+format quotes (`:quoted`, a `:dialect`) is a column named `null`. HoneySQL also writes NULL
 for a key one map of `:values` lacks and another has. `users.status`
 has a default, but the first row below gets NULL:
 
@@ -259,7 +259,8 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 is typed as an argument assigned to it (what your application sends, held to the column's range) and keyed
 by the column's name (`:group_id`), the one key a row is read with
 ([the builder](reading-rows.md#the-builder)), so a row read is written back as it is (but an enum
-column's String, which goes as `varchar`: `[:lift :happy]`, or a `PGobject`); another
+column, read as a String, which pgjdbc sends as `varchar`: write its label as `[:lift :happy]`
+or a `PGobject`); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes HoneySQL's
@@ -524,14 +525,15 @@ alias lists).
 
 `h/analyze`, `h/query-schema`, `h/values-schema` and `h/set-schema` take these options; an option a
 function does not read is an error. pgmalli reads what you pass to
-next.jdbc and `sql/format` as you pass it, and HoneySQL's global settings as far as
-`sql/format` reads them (a dialect `sql/set-dialect!` set); pass them in `:format`.
+next.jdbc and `sql/format` as you pass it. HoneySQL's global settings (`set-dialect!`,
+`set-options!`) are not reliably read: a name is read once as they stand then; pass them in
+`:format`.
 
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
 | `:jdbc` | the options you pass to next.jdbc ([reading-rows.md](reading-rows.md#options)); its `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
-| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them and the dialect `sql/set-dialect!` set |
+| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them |
 | `:result :one` | `h/query-schema`'s alone: the return is what `execute-one!` returns |
 
 ## Function schemas

@@ -8,7 +8,6 @@
             [honey.sql :as sql]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.hsyntax :as syntax]
-            [pgmalli-next.impl.problems :as problems]
             [pgmalli-next.test-db :as test-db]))
 
 (def ^:private honeysql (str "HoneySQL " (or (test-db/version "honeysql") "(version unknown)")))
@@ -23,8 +22,8 @@
     :qualify :facet :records :on-duplicate-key-update :with-data :since :until :compare-with :timeseries})
 
 (def ^:private clause-lists
-  [["read-clauses in src/pgmalli_next/impl/problems.clj" @#'problems/read-clauses]
-   ["ignored-clauses in src/pgmalli_next/impl/problems.clj" @#'problems/ignored-clauses]
+  [["read-clauses in src/pgmalli_next/impl/hsyntax.clj" syntax/read-clauses]
+   ["ignored-clauses in src/pgmalli_next/impl/hsyntax.clj" syntax/ignored-clauses]
    ["reported-clauses in test/pgmalli_next/honeysql_contract_test.clj" reported-clauses]])
 
 (defn- older-than-pinned?

@@ -3,6 +3,7 @@
    reading and sending (docs/reading-rows.md), and the row keys as-unqualified-maps gives.
    as-read and the query namespaces both read columns and key rows here."
   (:require [clojure.string :as str]
+            [honey.sql :as sql]
             [clojure.walk]
             [malli.core :as m]
             [malli.error :as me]
@@ -14,6 +15,19 @@
 
 ;;; the options
 
+(defn- registered-dialect?
+  "Whether sql/format takes dialect d."
+  [d]
+  (try (sql/format {:select [:a]} {:dialect d}) true (catch Exception _ false)))
+
+(def ^:private format-entries
+  "The keys of sql/format's options pgmalli reads (docs/queries.md#options), each with what
+   sql/format takes of it: a dialect it registers, a regex."
+  [[:quoted :boolean] [:inline :boolean] [:quoted-snake :boolean]
+   [:dialect [:and :keyword [:fn {:error/message "should be a dialect HoneySQL registers (:ansi, :mysql, :oracle ...)"} registered-dialect?]]]
+   [:quoted-always [:fn {:error/message "should be a regex (#\"^null$\")"} #(instance? java.util.regex.Pattern %)]]
+   [:values-default-columns [:or set? sequential?]]])
+
 (def ^:private option-entries
   "Each option pgmalli takes. :jdbc and :format are the maps an application passes to next.jdbc
    and sql/format, open: pgmalli reads the keys of them it names."
@@ -23,13 +37,10 @@
                                    (let [m {:error/message "should be true, false or a vector of column names ([\"id\"], [:id])"}]
                                      [:or [:boolean m] [:vector (assoc m :min 1) [:or :string :keyword]]])]]]
    :result [:result {:optional true} [:enum :one]]
-   :format [:format {:optional true} [:map {:error/message "should be the map of options you pass to sql/format"}
-                                      [:quoted {:optional true} [:maybe :boolean]] [:inline {:optional true} [:maybe :boolean]]
-                                      [:quoted-snake {:optional true} [:maybe :boolean]] [:dialect {:optional true} [:maybe :keyword]]]]})
+   :format [:format {:optional true} (into [:map {:error/message "should be the map of options you pass to sql/format"}]
+                                           (for [[k v] format-entries] [k {:optional true} [:maybe v]]))]})
 
-(def ^:private format-read
-  "The keys of sql/format's options pgmalli reads (docs/queries.md#options)."
-  [:values-default-columns :inline :quoted :dialect :quoted-snake :quoted-always])
+(def ^:private format-read (mapv first format-entries))
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
@@ -468,7 +479,6 @@
   "The [:map ...] of a row as next.jdbc's as-unqualified-maps builds it; the options are documented on
    pgmalli-next.core/as-read."
   [registry name opts]
-  (options! opts [:jdbc])
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         schemas (shape/schemas-of registry)

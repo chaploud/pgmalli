@@ -5,7 +5,7 @@
      :aliases    other names of the type (pg_type's typname, a cast's spelling)
      :schema     the malli schema of a value; :any for a type the driver hands over as an
                  object of its own
-     :value      the kind of value: :integer (with :range), :exact, :float, :json (a string type is its category, S)
+     :value      the kind of value: :integer (with :range), :exact, :float, :json; a string type has none (its category, S, says it)
      :typmod     what the typmod n of a column bounds: :max-length (varchar(n), char(n)),
                  :bits (bit(n): exactly n), :max-bits (bit varying(n))
      :gen        how a value is generated when the schema alone does not: :bits (0s and 1s)
@@ -122,6 +122,11 @@
    "issn" {:schema :any :literals ["0317-8471"] :extension "isn"}
    "upc" {:schema :any :literals ["012345678905"] :extension "isn"}})
 
+(defn number-entry?
+  "Whether types entry e is a number type's: an integer, exact or float :value."
+  [e]
+  (boolean (#{:integer :exact :float} (:value e))))
+
 (def sql-words
   "The type of each SQL value word PostgreSQL's grammar reads (docs 9.9.5, 9.27), lower-cased."
   {"current_timestamp" "timestamp with time zone" "current_date" "date" "current_time" "time with time zone"
@@ -219,8 +224,8 @@
       (:name (entry t) t))))
 
 (defn short-name
-  "The name of type n a cast and a description write: one of spaces (bit varying, timestamp with
-   time zone) as its first alias (varbit, timestamptz), which a keyword spells; n otherwise."
+  "The short name of type n a cast and a description write: one of spaces as its first alias
+   (bit varying as varbit); n otherwise."
   [n]
   (or (when (str/includes? n " ") (first (:aliases (entry n)))) n))
 

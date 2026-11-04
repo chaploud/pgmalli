@@ -142,7 +142,8 @@ written. An override that types a JSON number takes what a JSON parser returns: 
 
 | option | for |
 |---|---|
-| `:jdbc {...}` | the options you pass to next.jdbc: pgmalli reads `:return-keys` ([queries](queries.md#options)) |
+| `:schema "app"` | `pgmalli/as-read`'s: the schema of a table named without one (`:users`) |
+| `:jdbc {...}` | the options you pass to next.jdbc: the query functions read `:return-keys` ([queries](queries.md#options)), which `pgmalli/as-read` takes not |
 
 There is no option for how a value is read or sent.
 

@@ -352,7 +352,7 @@
     (parse inner)))
 
 (def ^:private numeric-types
-  (types/keywords #(or (:range %) (#{:exact :float} (:value %)))))
+  (types/keywords types/number-entry?))
 
 (defn strip-casts
   "An expression with its casts ([:cast x type]) replaced by what they cast."

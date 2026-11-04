@@ -179,8 +179,7 @@
       (shape/merge-props (non-empty row) {:gen/schema (non-empty generated)}))))
 
 (defn- written-row
-  "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
-   names it, in :schema); an error naming what was meant for another name."
+  "written-row* of the table query/row-name reads name as."
   [registry name derived what opts]
   (let [[r opts] (prepared registry opts option-keys)
         name (query/row-name r name what opts)
@@ -215,6 +214,16 @@
   ([registry name opts] (written-row registry name "update" "set-schema" opts)))
 
 (defn- column-name [c] (if (keyword? c) (subs (str c) 1) (str c)))
+
+(defn- cast-form
+  "[:cast x t] as HoneySQL writes a cast to type t: t by its short name, as a keyword where one
+   spells it (:timestamptz), else as [:raw t] (\"bigint[]\", \"timestamp(3)\", a quoted name)."
+  [x t]
+  ;; format_type writes a typmod inside the name: timestamp(3) without time zone
+  (let [typmod (re-find #"\([^)]*\)" t)
+        [_ base brackets] (re-matches #"(.*?)((?:\[\])*)" (str/trim (str/replace t #"\([^)]*\)" "")))
+        n (str (types/short-name base) typmod brackets)]
+    (str "[:cast " x " " (if (re-matches #"[a-z_][a-z0-9_]*" n) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
 
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
@@ -260,9 +269,7 @@
    :uncast-string (fn [{:keys [column value type]}]
                     (str (pr-str value) " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
                          " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar);"
-                         " write [:cast " (pr-str value) " "
-                         (if (types/element type) (str "[:raw " (pr-str type) "]") (str ":" type))
-                         "]"))
+                         " write " (cast-form (pr-str value) type)))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
@@ -276,10 +283,8 @@
                         (let [x (keyword (str "?" (name arg)))]
                           (str "argument " arg " goes to " function ", which takes its type from the value sent, but every value"
                                " its other uses take is sent untyped (a LocalDate, a keyword label) or is nil, which PostgreSQL"
-                               " cannot type there (could not determine data type); cast it in the query: "
-                               (cond (nil? type) (str "[:cast " x " <the type meant>]")
-                                     (str/ends-with? type "[]") (str "[:cast " x " [:raw " (pr-str type) "]]")
-                                     :else (str "[:cast " x " " (keyword (str/replace type " " "-")) "]")))))})
+                               " cannot type there (could not determine data type of parameter, or polymorphic type);"
+                               " cast it in the query: " (if type (cast-form x type) (str "[:cast " x " <the type meant>]")))))})
 
 (defn humanize
   "A sentence for each problem of analyze's :problems (or of query-schema's :pgmalli/problems):
@@ -289,9 +294,12 @@
   [problems]
   (when-not (and (sequential? problems) (every? #(and (map? %) (contains? % :kind)) problems))
     (error/fail! :pgmalli.error/invalid-options
-                 (str "humanize takes analyze's :problems or query-schema's :pgmalli/problems, a vector of problem maps; got "
-                      (pr-str (if (map? problems) problems (type problems))))
-                 {:given problems}))
+                 (str "humanize takes analyze's :problems or query-schema's :pgmalli/problems, a vector of problem maps; "
+                      (cond (and (map? problems) (contains? problems :problems)) "pass (:problems result), not analyze's result"
+                            (and (vector? problems) (= :=> (first problems))) "pass (:pgmalli/problems (m/properties schema)), not query-schema's schema"
+                            (map? problems) "got one map; pass a vector of them"
+                            :else (str "got " (type problems))))
+                 {:given (type problems)}))
   (mapv (fn [{:keys [kind in var] :as p}]
           (str (when var (str (symbol var) ": "))
                (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))

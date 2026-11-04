@@ -100,7 +100,7 @@
   [t]
   (boolean (or (vector? t) (get-in @types/catalog [:types (or (types/element t) t)]) (string-type? t))))
 
-(def ^:private numbers (set (for [[t e] types/types :when (#{:integer :exact :float} (:value e))] t)))
+(def ^:private numbers (set (for [[t e] types/types :when (types/number-entry? e)] t)))
 
 (defn number-type? [t] (contains? numbers t))
 
