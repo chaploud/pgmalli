@@ -1,7 +1,7 @@
 (ns pgmalli-next.impl.jdbc
-  "The JDBC side: what a column comes back as under the one reading (docs/reading-rows.md) and
-   what PostgreSQL takes for it under the one sending (docs/reading-rows.md); and the row shapes next.jdbc's as-unqualified-maps returns. as-read and
-   pgmalli-next.honeysql both read columns and key rows here."
+  "The JDBC side: what a column comes back as and what PostgreSQL takes for it under the one
+   reading and sending (docs/reading-rows.md), and the row keys as-unqualified-maps gives.
+   as-read and pgmalli-next.honeysql both read columns and key rows here."
   (:require [clojure.string :as str]
             [clojure.walk]
             [malli.core :as m]
@@ -93,17 +93,12 @@
   (str "pgmalli types rows as next.jdbc.result-set/as-unqualified-maps builds them, keyed by the columns' names;"
        " pass it to next.jdbc as {:builder-fn next.jdbc.result-set/as-unqualified-maps}"))
 
-(def ^:private one-reading
-  (str "pgmalli types rows as one reading makes them: timestamps as Instants, dates as LocalDates, times as LocalTimes,"
-       " arrays as vectors, json and jsonb parsed (keyword keys), enum values as strings, every other"
-       " type as pgjdbc returns it; the ReadableColumn extension that reads so is in"
-       " https://github.com/chaploud/pgmalli-next/blob/main/docs/reading-rows.md#the-one-reading-and-sending"))
+(def ^:private the-extension
+  "https://github.com/chaploud/pgmalli-next/blob/main/docs/reading-rows.md#the-one-reading-and-sending")
 
-(def ^:private one-sending
-  (str "pgmalli types arguments as one sending sends them: pgjdbc's setObject (a String as varchar),"
-       " next.jdbc.date-time (an Instant, a LocalDate, a LocalDateTime, a java.util.Date untyped), a keyword's"
-       " text untyped, a map and a vector as jsonb; the SettableParameter extension that sends so is in"
-       " https://github.com/chaploud/pgmalli-next/blob/main/docs/reading-rows.md#the-one-reading-and-sending"))
+(def ^:private one-reading (str "pgmalli types rows as the ReadableColumn extension of " the-extension " reads them"))
+
+(def ^:private one-sending (str "pgmalli types arguments as the SettableParameter extension of " the-extension " sends them"))
 
 (defn- the-builder?
   "Whether f is next.jdbc.result-set/as-unqualified-maps: the function, its var or its symbol,

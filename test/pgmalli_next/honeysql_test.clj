@@ -551,8 +551,8 @@
     (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number")))
 
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
-  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: pgmalli types arguments as one sending sends them"]
-                    [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as one sending sends them"]
+  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: pgmalli types arguments as the SettableParameter extension of .* sends them"]
+                    [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as the SettableParameter extension of .* sends them"]
                     [{:qualified? false} #":qualified\? false.* is no longer read: .*\{:builder-fn next.jdbc.result-set/as-unqualified-maps\}"]
                     [{:kebab? true} #":kebab\? true.* is no longer read"]
                     [{:return-keys true} #":return-keys is no longer read: pass it as \{:jdbc \{:return-keys ...\}\}; see https://github.com/chaploud/pgmalli-next/blob/main/CHANGELOG.md$"]]]

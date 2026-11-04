@@ -44,9 +44,7 @@
         (aset d (+ (* i w) j) (long v))))
     (at n m)))
 
-(defn- close-enough
-  "How many edits a name may be from the one meant: 2 for five letters or more, 1 below."
-  [s]
+(defn- close-enough [s]
   (if (<= 5 (count s)) 2 1))
 
 (defn suggestions

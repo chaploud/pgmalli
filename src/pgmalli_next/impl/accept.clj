@@ -20,12 +20,7 @@
   "[class type schema categories]: the one sending (docs/reading-rows.md#the-one-reading-and-sending), the
    type a value of class goes to PostgreSQL as, :unknown for one sent untyped, which PostgreSQL
    types from where it goes; schema is the malli schema of a value of class, nil for a Java
-   array. pgjdbc's setObject with its default stringtype (varchar): BigInt and BigInteger as
-   setNumber sends a Number, a Character with setString, a Java array as an array of its
-   elements' type; next.jdbc.date-time's setTimestamp (an Instant, a LocalDate, a LocalDateTime,
-   a java.util.Date) and setDate (a java.sql.Date), untyped; and the doc's extension: a
-   java.sql.Time with setTime, untyped, a keyword its text untyped, a map and a vector as jsonb.
-   A value goes as its class's row, else as the first row of a superclass or interface of it.
+   array. A value goes as its class's row, else as the first row of a superclass or interface of it.
    categories, of a class sent untyped, are the typcategories of the types it goes to as its text
    (reads?): a date's, a time's or a timestamp's (\"D\"); a keyword's a string type's and an
    enum's (\"S\", \"E\"), a label's name."

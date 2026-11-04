@@ -25,8 +25,7 @@
 
 (defn- folded
   "An identifier as PostgreSQL reads what HoneySQL writes of it by default, unquoted: - is _,
-   and the case folded. Only where the name as it is matches nothing (a quoted mixed-case one
-   matches as it is)."
+   and the case folded."
   [s]
   (some-> s (str/replace "-" "_") str/lower-case))
 
@@ -1469,14 +1468,8 @@
       p)))
 
 (defn- problems
-  "The problems of one statement: unknown tables; columns selected, returned, inserted, set
-   or compared that are unknown, or ambiguous (unqualified and in more than one known table in
-   scope, those under :candidates), in :select, :where, :having, join conditions, :set,
-   :values, ON CONFLICT DO UPDATE SET, :group-by and :order-by (bare columns there); required
-   INSERT columns missing, or a row of :values not as long as :columns; enum literals outside
-   the enum (compared with, or assigned to, the column). scope is the statement's (from scope)
-   or, for a nested statement, the chain of its own and the enclosing ones. Empty when the
-   statement agrees with the registry."
+  "The problems of one statement (README.md's table of :kind), scope the statement's (from
+   scope) or, for a nested statement, the chain of its own and the enclosing ones."
   [registry stmt scope ps {:keys [schema] :as opts}]
   (let [scopes (chain scope)
         known (for [[k v] (::schemas registry) :when (shape/read-row? v)]
@@ -1792,16 +1785,9 @@
 
 (defn- accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare,
-   :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
-   (jdbc/write-type), and the values of each type the one sending sends that the column holds as its own
-   (accept/holds?) or, cast, that PostgreSQL casts (accept/accepts?): for an untyped one, the
-   values whose text the type's input reads (accept/reads?); for a typed one, the values a
-   column of that type takes and the values sent as it; assigned or cast, a number held to a number column's range
-   (within). Compared, the values lose the bounds a
-   comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
-   labels as labelled-type sends them, a text label as a String where a String goes as a type
-   that takes it; untyped own values, or of a type pgmalli-next.impl.accept does not answer for,
-   are the type alone (:any under a cast)."
+   :assign, :cast or :json), as docs/queries.md#the-types-of-the-arguments says: its own values
+   (jdbc/write-type), and the values of each type sent that the column holds (accept/holds?)
+   or, cast, that PostgreSQL casts (accept/accepts?); labels as labelled-type sends them."
   [registry s context opts]
   (let [t (slot-type registry s)
         opts (cond-> opts (#{"character" "\"char\""} t) (assoc ::jdbc/characters true))
@@ -2953,8 +2939,9 @@
 (defn values-schema
   "The schema of one row an INSERT's :values may carry into a table, named as HoneySQL names
    it (:users in :schema) or by its row schema (:pg.public/users), typed as analyze types an
-   argument: each column as an argument assigned to it, keyed as a row is read
-   (:group_id), so a row read is written back (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
+   argument: each column as an argument assigned to it, keyed by the column's name (:group_id),
+   the one key a row is read with, so a row read is written back as it is
+   (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
    identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
    (generated, identity ALWAYS) taking :default alone. Where a BEFORE row trigger runs for the
    write, every column is optional and takes nil. Options: docs/queries.md#options.

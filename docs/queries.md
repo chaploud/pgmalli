@@ -249,8 +249,9 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 `h/values-schema` and `h/set-schema` type it. The table is a keyword, as HoneySQL names it
 (`:users` in `:schema`, `:app.users`) or as the registry does (`:pg.public/users`). Each column
 is typed as an argument assigned to it (what your application sends, held to the column's range) and keyed
-as a row is read ([the builder](reading-rows.md#the-builder)), by the column's name
-(`:group_id`), so a row read is written back as it is. Where HoneySQL would not write that
+by the column's name (`:group_id`), the one key a row is read with
+([the builder](reading-rows.md#the-builder)), so a row read is written back as it is; another
+spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string (a column with capitals
 where names are unquoted: PostgreSQL folds an unquoted name to lower case, and HoneySQL quotes a
 string key). A column the database may fill is optional and takes HoneySQL's
@@ -336,9 +337,7 @@ type compares with; under `unnest`, each element assigned to the column. Without
 
 An enum argument takes its labels as keywords, which go untyped, or as strings cast
 (`[:cast :?m :user_status]`): PostgreSQL neither compares a `varchar` with an enum nor assigns
-one to it. `:problems` reports a string literal there as `:uncast-string`. A row written into a
-table takes a keyword label as `[:lift :active]`, as HoneySQL writes a keyword in `:values` as
-a column.
+one to it. `:problems` reports a string literal there as `:uncast-string`.
 
 A parameter PostgreSQL takes the type of from the value alone, a function's `"any"` argument
 (`concat`, `format`, `jsonb_build_object`, `json_build_array`, `num_nulls`), takes a value sent
@@ -667,4 +666,4 @@ Write the query so PostgreSQL's reading is explicit instead.
   domain over `integer`), which PostgreSQL refuses; and an argument whose type `:args`
   leaves `:any` (an `inet` column's), which may be an object of the type.
 - Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
-  PostgreSQL folds it to lower case, and check takes it as written.
+  PostgreSQL folds it to lower case, and pgmalli takes it as written.

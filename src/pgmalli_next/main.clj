@@ -6,10 +6,7 @@
      clojure -M -m pgmalli-next.main check [--edn] [pgmalli-next.edn]
      bb -m pgmalli-next.main ...
 
-   Exit codes: 0 success (for check, the files match the database); 1 a file is stale or
-   missing (run generate); 2 a usage, config or other error; 3 the database or psql is
-   unavailable. Findings, and the usage --help asks for, go to stdout; warnings, errors and
-   the usage after a usage error to stderr (PGMALLI_DEBUG=1 adds the stack trace)."
+   Exit codes and output: README.md#keeping-the-files-current."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.string :as str]

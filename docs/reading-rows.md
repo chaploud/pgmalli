@@ -25,9 +25,11 @@ next.jdbc wherever your application reads rows:
 
 A row's keys are its columns' names as PostgreSQL labels them, unqualified (`:group_id`), and a
 NULL column keeps its key. A query's row has the keys of its labels likewise
-([queries](queries.md#the-row-a-query-returns)), and a row read is written back as it is
-([a row written into a table](queries.md#a-row-written-into-a-table)). Another spelling, such
-as kebab-case keys, is your application's to convert where it takes the row.
+([queries](queries.md#the-row-a-query-returns)). A row written into a table has the same keys
+([a row written into a table](queries.md#a-row-written-into-a-table)): a column has one key,
+read and written, so a row read is written back as it is. Another spelling, such as kebab-case
+keys (`:group-id`, which HoneySQL writes to the same column), is your application's to convert,
+both ways, where it takes and gives the row.
 
 ## The one reading and sending
 

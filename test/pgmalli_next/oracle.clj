@@ -1,5 +1,5 @@
 (ns pgmalli-next.oracle
-  "pgmalli-next.honeysql/check against PostgreSQL itself: the queries of oracle/corpus.edn, mutants
+  "h/analyze's :problems (check) against PostgreSQL itself: the queries of oracle/corpus.edn, mutants
    of them (a column, an alias or a table swapped, a qualifier dropped or added), and the
    queries generated-corpus builds from the catalog (each kind of column through ~25 shapes,
    each pair of kinds PostgreSQL unites through 6, each pg_catalog relation and column of it)
@@ -9,7 +9,7 @@
 
    Outcomes: :agree-ok, :agree-error, :false-positive (PostgreSQL takes it, check reports a
    problem: check's promise broken), :miss (PostgreSQL refuses it, check is silent: often a
-   part check does not judge by design, code or an opaque table), :mismatch (both refuse, for
+   part check does not judge by design, or an opaque table), :mismatch (both refuse, for
    different reasons), :other-silent / :other-flagged (PostgreSQL refuses it for something
    check does not judge, a type or syntax), :reported-by-design (PostgreSQL runs it, check
    reports a column compared with a literal outside its enum's or CHECK's list, which matches

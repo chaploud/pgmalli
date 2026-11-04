@@ -184,8 +184,7 @@
                 :vector (when (= :any (last s)) {:gen/elements [[]]})
                 (:any :some) (cond (types/json? (:pg/type p)) {:gen/schema json-value}
                                    (:literals (types/entry (shape/type-name p))) {:gen/elements (:literals (types/entry (shape/type-name p)))}
-                                   ;; NULL where the column takes it; a NOT NULL one has no value to
-                                   ;; generate, which leaves a dataset's table short with the reason
+                                   ;; NULL where the column takes it; a NOT NULL one has no value to generate
                                    (= :any t) (when (:pg/type p) {:gen/elements [nil]})
                                    (:pg/type p) {:gen/gen (cannot-make where (:pg/type p))})
                 nil)]

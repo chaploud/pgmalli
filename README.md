@@ -68,10 +68,6 @@ The CHECKs are enforced. A closed user needs a `closed_at`:
 ;; => {:closed_at ["violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"]}
 ```
 
-A CHECK no pattern covers, such as `likes <= views` across two columns, is left to the
-database: the file lists it in `:unrendered`
-([docs/types.md](docs/types.md#check-constraints) lists the patterns).
-
 Generate rows that satisfy every constraint:
 
 ```clojure
@@ -210,14 +206,10 @@ schema names the CHECKs that shaped it in `:pg/constraints`, which humanize's `:
 
 ## Rows read through next.jdbc
 
-pgjdbc does not return the registry's types. pgmalli types rows as one reading makes them:
-timestamps as `Instant`s, dates as `LocalDate`s, times as `LocalTime`s, arrays as vectors, json
-and jsonb parsed with keyword keys, enum values as strings, every other type as pgjdbc returns
-it; and arguments as one sending sends them: pgjdbc's `setObject` (a `String` as `varchar`),
-`next.jdbc.date-time` (an `Instant`, a `LocalDate`, a `LocalDateTime` untyped), a keyword's
-text untyped, a map and a vector as `jsonb`. Install the extension of
-[docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending) in your application; `as-read`
-gives the row as next.jdbc then builds it, to validate results as they come back:
+pgjdbc does not return the registry's types. pgmalli types rows and arguments as the extension
+of [docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending) reads and sends them;
+install it in your application. `as-read` gives the row as next.jdbc then builds it, to
+validate results as they come back:
 
 ```clojure
 (def user-row (pgmalli/as-read registry :pg.public/users))
@@ -229,10 +221,7 @@ gives the row as next.jdbc then builds it, to validate results as they come back
 ;; => true
 ```
 
-pgmalli types rows as next.jdbc's `as-unqualified-maps` builds them: keyed by the columns'
-names (`:group_id`), a NULL column's key kept. Read rows with it:
-`(jdbc/execute! ds sqlvec {:builder-fn next.jdbc.result-set/as-unqualified-maps})`. Another
-spelling of the keys is your application's to convert where it takes the row
+pgmalli types rows as next.jdbc's `as-unqualified-maps` builds them
 ([docs/reading-rows.md](docs/reading-rows.md#the-builder)).
 
 There are two ways to check a row read from the database:

@@ -15,11 +15,7 @@
    {:schema :database-version :registry {name schema} :functions {name [overload ...]}
     :operators {name [overload ...]} :unrendered [entry ...] :skipped [entry ...]
     :diagnostics [{:table :kind :severity :message ...} ...]},
-   its entries and diagnostics as docs/types.md#the-generated-file lists them.
-
-   :unrendered lists the constraints pgmalli cannot express in malli; :diagnostics what
-   deserves a look in the database (a NOT VALID constraint, an unreachable partition, a
-   row-level INSERT trigger ...)."
+   its entries and diagnostics as docs/types.md#the-generated-file lists them."
   [schema-name]
   (reg/read-generated schema-name))
 

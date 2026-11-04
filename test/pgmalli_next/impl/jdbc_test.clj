@@ -42,7 +42,7 @@
   (doseq [o [{:time :instant} {:read {:json :parsed}}]]
     (let [e (try (pgmalli/as-read registry :pg.sample/users o) (catch clojure.lang.ExceptionInfo e e))]
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))
-      (is (re-find #"no longer read: pgmalli types rows as one reading" (ex-message e))))))
+      (is (re-find #"no longer read: pgmalli types rows as the ReadableColumn extension of .* reads them" (ex-message e))))))
 
 (deftest a-comparison-is-strict-and-no-option
   (doseq [c [:strict :lenient]]

@@ -21,7 +21,7 @@ and `bb fixture` do not.
 | `bb test:docs` | the code blocks of README.md and docs/, each `;; =>` asserted |
 | `bb test:floor [main\|oracle]` | the suite on the JVM with the oldest versions README supports |
 | `bb test:all` | `bb lint`, `bb test`, `bb test:jvm`, `bb test:floor`, `bb oracle` and `bb test:docs` at once, each into `target/<task>.log` (`:` as `-`); prints each exit code |
-| `bb oracle [seed] [mutants]` | `pgmalli-next.honeysql/check` against PostgreSQL itself |
+| `bb oracle [seed] [mutants]` | `h/analyze` against PostgreSQL itself; exit 1 on what `pgmalli-next.oracle-test` fails on |
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
 | `bb test:stricter` | `test/resources/pgmalli-next/stricter.edn` rewritten: where PostgreSQL takes a parameter that `accept/holds?` leaves out |
@@ -82,17 +82,17 @@ the number of mutants per query `PGMALLI_ORACLE_MUTANTS` or 8. The queries are:
 Each query is sent twice: its values inlined, and as parameters as HoneySQL and pgjdbc send
 them. The oracle prints:
 
-- a false positive (PostgreSQL takes the query, `check` reports a problem) and a miss
-  (PostgreSQL refuses it, `check` passes it). A comparison with a literal outside an enum's or a
+- a false positive (PostgreSQL takes the query, `:problems` reports one) and a miss
+  (PostgreSQL refuses it, `:problems` is empty). A comparison with a literal outside an enum's or a
   CHECK's list is reported by design.
-- where PostgreSQL runs the query, a return `query-schema` refuses: by default it must take what
+- where PostgreSQL runs the query, a return `h/query-schema` refuses: by default it must take what
   `execute!` returned, under `{:result :one}` what `execute-one!` returned.
-- the same queries' keys: those of `row-schema`'s map must equal the keys next.jdbc's
+- the same queries' keys: those of `:row`'s map must equal the keys next.jdbc's
   `as-unqualified-maps` gives the result set's columns.
 - a `:pg/type` other than the type PostgreSQL describes (a
   domain as its base type); an untyped column passes.
 
-`pgmalli-next.oracle/arg-matrix` tests `arg-types` with values that do not come from `arg-types`.
+`pgmalli-next.oracle/arg-matrix` tests `:args` with values that do not come from `:args`.
 An argument goes beside each column of the oracle schema (compared with `=`, `<>`, `IN` and
 `= ANY`, set by UPDATE and INSERT, beside it in coalesce, CASE and greatest, cast to its type,
 and as LIMIT) and is sent a fixed list of values: one of each class of

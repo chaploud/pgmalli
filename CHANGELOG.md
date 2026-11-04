@@ -10,8 +10,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/check`, `h/arg-types`, `h/row-schema`, `h/tables` and `h/params-schema` are removed:
   `h/analyze` gives what they gave, under `:problems`, `:args`, `:row` and `:tables`
   (`(:problems (h/analyze registry q))`); the `[:map ...]` of `sql/format`'s `:params` is
-  `(into [:map] (:args (h/analyze registry q)))`. The entries below that name the removed
-  functions hold for these keys.
+  `(into [:map] (:args (h/analyze registry q)))`.
 * **Options.** Each removed option is an error that names its replacement. The error is
   raised when the schema is built, so a namespace whose `:malli/schema` passes one fails to
   load.
@@ -21,7 +20,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     ([docs/reading-rows.md](docs/reading-rows.md#the-builder)).
   * `:return-keys` moves into `:jdbc`: `{:jdbc {:return-keys true}}`.
 * **Rows are read with one builder,** next.jdbc's `as-unqualified-maps`: `as-read`,
-  `h/row-schema` and `h/query-schema`'s return key a row by its columns' names (`:group_id`), not
+  `h/analyze`'s `:row` and `h/query-schema`'s return key a row by its columns' names (`:group_id`), not
   `:users/group_id`, and a NULL column keeps its key. Read rows with
   `{:builder-fn next.jdbc.result-set/as-unqualified-maps}`; convert keys to another spelling in
   your application. A query selecting one name twice (`:u.id :g.id`) is one key, the last
@@ -48,7 +47,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   * An argument of a function's `"any"` parameter (`concat`, `format`, `jsonb_build_object`)
     takes a value sent typed alone, not a keyword, a date sent untyped or nil: PostgreSQL
     cannot type the parameter then.
-  * `:time`, `:read` and `:send` are removed: an error names the one reading or the one sending.
+  * `:time` and `:read` are removed: an error names the one reading or the one sending.
   * `pgmalli-next.core/transformer` is removed: read rows with the extension instead of decoding them.
 * `:compare` is removed: a comparison is strict, and an argument compared with a column takes
   no nil, as on 0.3.3 by default. `{:compare :lenient}` (or any `:compare`) is an
@@ -67,7 +66,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * pgmalli no longer depends on camel-snake-kebab.
 * `h/explain` is renamed `h/humanize`.
 * An error's ex-data lists the names probably meant under `:did-you-mean`, a vector, as
-  `h/check`'s problems do, instead of `:suggest`.
+  `:problems` do, instead of `:suggest`.
 * `h/query-schema`'s return states the row count where the data tells it
   (`[:sequential {:max 1} row]`): an instrumented function's return is checked against it, and
   code that reads the row by position (`(second ret)`) reads it with `last` or `m/children`.
@@ -86,15 +85,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
     an array of one, is typed too.
   * An argument of several uses takes what each of them takes, whatever their order, and nil
     where any of them does; on 0.3.3 its first use typed it.
-  * An instrumented function's return is checked against more: `h/row-schema` types what was
+  * An instrumented function's return is checked against more: `:row` types what was
     nullable `:any`, such as a call of a function or an operator or a CTE's or a subquery's
     column.
-  * `h/check` now reports a select or ORDER BY expression comparing an unknown column, or an
+  * `:problems` now reports a select or ORDER BY expression comparing an unknown column, or an
     enum with a literal outside its labels; a string literal assigned to a reg* column
     other than `regclass`; a CHECK's list of numbers compared with a value outside it; and a
     column a CTE or a subquery does not give.
-* `:overrides` takes two keys: a column, `:schema.table/column`, with its schema, and a
-  constraint name with `{:skip reason}`. The others are `:pgmalli.error/invalid-config` errors
+* `:overrides` takes two keys: a column, `:schema.table/column`, with its schema, read and
+  written ([Overrides](README.md#overrides)), and a constraint name with `{:skip reason}`. The others are `:pgmalli.error/invalid-config` errors
   saying what to write instead:
   * A type key (`{:inet s}`) names the columns of the type: give each its schema
     (`{:public.hosts/ip s}`).
@@ -113,9 +112,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * **A query is the data `sql/format` takes,** as the application has built it: a query holding
   code (a quoted form, any symbol: `'{:where (when x [...])}`, `'{:values rows}`, a table
   `'events_2026`, a parameter `'?id`) is a `:pgmalli.error/not-query-data` error whose `:in`
-  says where the symbol is. Before, code was left unread, the tables it brought in were taken
-  for any table, and an argument only code used was `[:any {:pgmalli/untyped :code}]`, which
-  is gone. Pass each variant your code builds (`(h/analyze registry (build-query x))` for each
+  says where the symbol is. Before, code was left unread, and the tables it brought in were
+  taken for any table. Pass each variant your code builds (`(h/analyze registry (build-query x))` for each
   `x`); write tables and parameters as keywords (`:events_2026`, `:?id`).
 * `h/query-schema` takes the function's args as keywords alone (`[:db :id]`); a symbol, which
   matched only a symbol in code, is an error.
@@ -148,10 +146,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `h/analyze` gives `:document-columns`: for each argument that is such a document, the columns
   of the row type the query uses of the call, nil where a use names none in particular (`r.*`,
   the whole row, `:raw`).
-* The one sending's `jsonb` writes a `LocalDate`, a `LocalDateTime`, a `LocalTime`, an
-  `OffsetDateTime` and an `OffsetTime` as their ISO-8601 text, in a map or a vector at any
-  depth: install the [extension](docs/reading-rows.md#the-one-reading-and-sending) again.
-
 * A cast to `[:raw "bigint[]"]`, how an array cast is written in HoneySQL, has its type: its
   argument takes what PostgreSQL casts to it, and `unnest` of it, of several arrays too, has
   columns of the elements' types. An argument cast to an array type, `jsonb[]` and an enum's
@@ -165,8 +159,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   is compared with `nil`, which HoneySQL writes `IS NULL` and matches many rows), the problems
   PostgreSQL would report and the tables it reads and writes
   ([docs/queries.md](docs/queries.md)). `h/query-schema` is built of it.
-* The one sending includes pgjdbc's boxed arrays (`Long[]`, `Integer[]` ...), `BigDecimal[]`,
-  `UUID[]` and the arrays of java.sql dates, times and timestamps.
 * `:jdbc` takes the options your application passes to next.jdbc
   ([docs/reading-rows.md](docs/reading-rows.md#the-options-of-nextjdbc)): `:return-keys` adds
   RETURNING to a write; `:builder-fn` is `as-unqualified-maps`, and another builder,
@@ -187,7 +179,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * Array arguments: a Java array, typed by its elements (`[:pg/array element]`), where it is
   compared with `= ANY(?)`, assigned to an array column, or passed to `unnest`, which takes
   only a typed array ([docs/queries.md](docs/queries.md#what-your-application-sends)).
-* `h/arg-types` types more arguments
+* `:args` types more arguments
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)): under a cast, with what
   PostgreSQL casts to the type, its CHECKs and ranges left out where every use of the cast is
   compared; an argument of `coalesce`, `greatest`, `least` or `nullif`; one
@@ -195,7 +187,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   type of where its column goes; one compared with `ANY(array)` as the array's element; an
   element of `[:array [...] :text]`, as cast; one of a function or an operator PostgreSQL may
   resolve several ways, the values of each (`generate_series(1, ?)`, `timezone(zone, ?)`).
-* `h/row-schema` types an expression as PostgreSQL resolves it
+* `:row` types an expression as PostgreSQL resolves it
   ([docs/queries.md](docs/queries.md#the-row-a-query-returns)): `CASE`, `coalesce`, `greatest`,
   `least`, `ARRAY[...]`, `VALUES` and a set operation's columns of their values' common type, and
   every function and operator of `pg_catalog` (aggregates, with `FILTER` too, window functions
@@ -242,10 +234,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `pgmalli-next.main`: `--help` prints the usage to stdout and exits 0; an unknown option is named
   before the usage, exit 2. The usage shows the command to run, the exit codes and
   `PGMALLI_DEBUG`.
-* `:overrides` takes one column, `:schema.table/column`: its schema replaces that column's
-  value, read and written, NULL-ability and CHECKs still the database's
-  ([Overrides](README.md#overrides)). A json or jsonb column's shape is the parsed value's:
-  read parsed, written for a map and a vector, which go as `jsonb`.
 * `pgmalli-next.main` suggests the column's `:overrides` key for an unrendered type, and
   `{:skip reason}` for an unrendered CHECK.
 
@@ -260,7 +248,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   [Stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql).
 * An array argument's elements are its Java array's component class's: a `String[]` holds no
   keyword, a `java.sql.Time[]` its `java.sql.Time`s.
-* `h/arg-types` gives an argument it cannot type as `[:any {:pgmalli/untyped why}]`, `why` saying
+* `:args` gives an argument it cannot type as `[:any {:pgmalli/untyped why}]`, `why` saying
   whether no use of it is typed or the type where it is used is unknown
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)). It validates as `:any` did.
 * `now()`, the functions that build json and a function call in general are nullable: the
@@ -271,7 +259,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   vector, not any value of the class.
 * A domain whose CHECK lists its values
   (`CREATE DOMAIN lbl AS text CHECK (VALUE IN ('a', 'b'))`) keeps its base type
-  (`[:enum {:pg/type "text"} "a" "b"]`). `h/check` no longer reads it as an enum type, so a
+  (`[:enum {:pg/type "text"} "a" "b"]`). `:problems` no longer reads it as an enum type, so a
   string sent as `varchar` to it is not `:uncast-string`.
 * A number is checked against a number column's CHECKs whatever its class. A keyword is not
   checked against the column's CHECKs on text: PostgreSQL checks the text sent of it.
@@ -281,7 +269,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   rounds it. An argument cast to a number domain with a CHECK list takes another
   number class or a boolean, which PostgreSQL converts (1.5 to 2) before the CHECK.
 * Where a BEFORE row trigger runs for the write, an argument assigned to a NOT NULL column takes
-  nil, as `h/check` already allowed: the trigger may fill it. The write is the value's own: a
+  nil, as `:problems` already allowed: the trigger may fill it. The write is the value's own: a
   value inserted under `ON CONFLICT DO UPDATE` takes nil for a BEFORE INSERT trigger alone, as
   PostgreSQL checks NOT NULL on the row proposed before it looks for a conflict.
 * An argument (or an `unnest`'s element) that `INSERT INTO t (cols) SELECT` assigns to a NOT NULL
@@ -290,7 +278,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `unnest` of arguments; it then takes a value beyond the column's CHECKs, length or range too,
   which PostgreSQL checks only on a row it writes. A SELECT of arguments alone, or from `unnest`
   of them, types it as `:values` does.
-* `h/check` and `h/arg-types` read a comparison in every clause, as in `WHERE`: in `SET`,
+* `:problems` and `:args` read a comparison in every clause, as in `WHERE`: in `SET`,
   `RETURNING` and the rows of `:values` too, which see the tables PostgreSQL lets them (the rows
   of `:values` not the table inserted into). The column of `unnest(?)` in `FROM` is read as its
   argument's elements wherever it goes, in a subquery too, and compared under `IS [NOT] DISTINCT
@@ -303,7 +291,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A domain over `bit`, `bit varying` or `numeric(p,s)` is read as the driver returns its base
   type: a Boolean for `bit(1)`, a PGobject for another bit string, a Double too for a
   `numeric`'s NaN.
-* `h/check` reads a literal against a CHECK's list of numbers as PostgreSQL does (an untyped
+* `:problems` reads a literal against a CHECK's list of numbers as PostgreSQL does (an untyped
   `"1"` is the label `1`), an alias's column list as renaming only the first columns
   (`AS u(a)` keeps the others' names), TRIM's column as `btrim`, and `coalesce` of a column with
   a CHECK's list as its base type.
@@ -315,8 +303,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An argument compared with a literal of no type (`[:= :?w [:inline "1"]]`) takes any value, as
   PostgreSQL reads the literal as the argument's type.
 * An override of a column of a type the driver reads as an object of its own (an `inet` a
-  PGobject, an `hstore` a `java.util.Map`) holds for writes; a read stays the driver's object (`:some` where the column is never NULL)
-  unless `:read` names the type: `{:read {"tstzrange" :string}}` for an extension reading a range as its text.
+  PGobject, an `hstore` a `java.util.Map`) holds for writes; a read stays the driver's object (`:some` where the column is never NULL).
 * A `:schema` the registry holds no generated file, table or view of is an
   `:pgmalli.error/invalid-options` error naming the ones it holds, in every function of
   `pgmalli-next.honeysql`; before, each did something of its own (an unknown table, `:any`, nil).
@@ -324,15 +311,14 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An alias, `:default`, `:null` and a key of `:values` are read as the loaded HoneySQL writes them
   under `:format` (`:quoted-snake` too) and the dialect `sql/set-dialect!` set.
 * An argument under `SOME` (`[:= :id [:some :?ids]]`) is typed as one under `ANY`.
-* `h/check` reads an assignment target `:a.b` as the field `b` of the composite column `a`,
+* `:problems` reads an assignment target `:a.b` as the field `b` of the composite column `a`,
   where it reported `:unknown-column`; the value is not checked.
 * A list or seq (a `:select` built with `map`) is read as a vector, as HoneySQL reads it;
   before, it was taken for code and not checked.
-* A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
-  folds it to (`:users/id`), as the driver returns it.
 * An invalid unique index (a failed `CREATE INDEX CONCURRENTLY`) is no longer in `:pg/unique`.
 * `pgmalli-next.core/describe` refuses a type neither malli nor the registry knows.
-* An option pgmalli does not take is an error whose data names it (`:unknown`) and the one
+* An option pgmalli does not take, or one the function does not read (`:schema` to `as-read`,
+  `:result` but to `h/query-schema`), is an error whose data names it (`:unknown`) and the one
   meant (`:did-you-mean`).
 * Messages name the one probably meant as `; did you mean: x`, which no longer doubles the `?`
   of a name ending in one (`:db?`). A misspelt option or config key reads
@@ -352,7 +338,6 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   `[:lift "s"]` too.
 * An expression of a `numeric(p,s)` column (`round`, `coalesce`, `-`) is typed as `numeric`: an
   argument compared with it takes an integer, and its value read a Double for NaN.
-* A `citext` column, or a domain over one, takes as an argument what a `text` column takes.
 * An argument cast where every use of the cast is compared (`[:= :mail [:cast :?m :email]]`)
   leaves out the CHECKs, lengths and ranges of the type cast to: PostgreSQL evaluates the cast
   only where its plan reaches it, for a row the other conditions keep or once ahead of the scan.

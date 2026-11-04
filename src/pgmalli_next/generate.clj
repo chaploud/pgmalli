@@ -1,14 +1,7 @@
 (ns pgmalli-next.generate
   "The generation side, which needs psql or a JDBC driver: the generated files, and whether they still match
-   the database. The application side (pgmalli-next.core) reads the files alone.
-
-   Config:
-     {:schemas [\"public\"]           ; default [\"public\"]
-      :out-dir \"resources/pgmalli-next\"  ; default; files are <out-dir>/<schema>.edn
-      :overrides {:schema.table/column schema, constraint-name {:skip reason}}
-      :db {:host :port :dbname :user :password :sslmode :psql}}  ; optional; psql's environment otherwise
-   or, with a PostgreSQL JDBC driver on the classpath and no psql needed,
-      :db {:jdbc-url \"jdbc:postgresql://host/db\" :user :password} or {:datasource ds}"
+   the database. The application side (pgmalli-next.core) reads the files alone. Config:
+   README.md#installation."
   (:require [pgmalli-next.impl.diff :as diff]
             [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.registry :as registry]))
