@@ -291,11 +291,12 @@
    what it does goes unjudged: in the query map and every statement, and in a map of
    HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). The rows of
    :values, :set and :do-update-set are maps of columns, not of clauses, though a subquery in
-   them is read."
+   them is read, as is the column definition list of an alias (syntax/defined-columns)."
   [body]
   (let [clauses (set (sql/clause-order))
         rows (set (for [st (syntax/statements body)
-                        r (concat (when (vector? (:values st)) (:values st)) [(:set st) (:do-update-set st)])
+                        r (concat (when (vector? (:values st)) (:values st)) [(:set st) (:do-update-set st)]
+                                  (for [item (syntax/table-items st) :when (syntax/defined-columns item nil)] (second (second item))))
                         :when (map? r)]
                     r))
         maps (tree-seq syntax/branch? seq body)]
