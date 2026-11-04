@@ -1,7 +1,8 @@
 (ns pgmalli-next.impl.accept
   "Which parameter goes where, in two steps: the type the one sending sends a value of a class as, and
    whether PostgreSQL takes a parameter of that type where a value of another goes: compared
-   with it (an operator), assigned to it (INSERT, UPDATE) or cast to it. Types are the names
+   with it (an operator), assigned to it (INSERT, UPDATE), passed to a function (:call), resolved
+   with it to one type (:common: coalesce, CASE), read from a JSON document (:json) or cast to it. Types are the names
    pgmalli-next.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
    a caller passes a domain as its base type. pgmalli-next.accept-test holds both against the one
    sending and PostgreSQL."
@@ -153,9 +154,8 @@
    type's \"*\"), t's
    input takes any text (any-text), or answers? does not answer for t (an extension's type); cast,
    as converts? casts a string, also a string's text (a keyword's) to any type and any text to a
-   string type. Assigned or compared, PostgreSQL reads more through t's input (:1 into a bigint,
-   a timestamp's text into a text column): taking it would put :keyword on every argument and
-   the dates on every string one (docs/queries.md, Stricter than PostgreSQL)."
+   string type. The rest PostgreSQL reads through t's input is left out:
+   docs/queries.md#stricter-than-postgresql."
   [t ^Class c context]
   (let [ks (some (fn [[^Class x _ _ ks]] (when (.isAssignableFrom x c) ks)) (if (= :json context) json-classes classes))]
     (boolean (or (ks "*")

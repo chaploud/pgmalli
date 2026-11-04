@@ -292,16 +292,17 @@
    os, in every version: the candidate it calls for an untyped value there declares \"any\"
    there, whose type it takes from the value alone (could not determine data type of
    parameter), or a polymorphic type the other arguments leave unbound (cardinality(?): could
-   not determine polymorphic type); or no candidate, or several, take it (unnest(?), anyarray's,
-   anymultirange's and tsvector's: not unique). Not where a candidate pgmalli cannot judge may be
-   the one."
+   not determine polymorphic type); or none of the candidates of that many arguments, or several,
+   take it (unnest(?), anyarray's, anymultirange's and tsvector's: not unique). Not where a
+   candidate pgmalli cannot judge may be the one, nor where none takes that many arguments."
   [kind ins i os]
   (let [ins (assoc ins i :unknown)]
     (boolean (when (and (seq os) (every? some? ins))
                (in-every-version
                 os
                 (fn [os]
-                  (and (not (in-doubt? (candidates os (count ins)) ins))
+                  (and (seq (candidates os (count ins)))
+                       (not (in-doubt? (candidates os (count ins)) ins))
                        (let [{:keys [decls] :as c} (chosen os ins (= :operators kind))]
                          (or (nil? c) (:ambiguous c)
                              (let [d (nth decls i)]

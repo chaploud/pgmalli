@@ -210,14 +210,9 @@
                        {:given dn})))))
 
 (defn values-schema
-  "The schema of one row an INSERT's :values may carry into a table, named as HoneySQL names
-   it (:users in :schema) or by its row schema (:pg.public/users), typed as analyze types an
-   argument: each column as an argument assigned to it, keyed by the column's name (:group_id),
-   the one key a row is read with, so a row read is written back as it is
-   (docs/queries.md#a-row-written-into-a-table); those the database may fill (a default,
-   identity BY DEFAULT, NULL) optional and taking HoneySQL's :default too, those it writes
-   (generated, identity ALWAYS) taking :default alone. Where a BEFORE row trigger runs for the
-   write, every column is optional and takes nil. Options: docs/queries.md#options.
+  "The schema of one row an INSERT's :values may carry into a table named as HoneySQL names it
+   (:users in :schema) or by its row schema (:pg.public/users):
+   docs/queries.md#a-row-written-into-a-table. Options: docs/queries.md#options.
 
    (values-schema registry :users)"
   ([registry name] (values-schema registry name {}))
@@ -274,11 +269,14 @@
                       (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))
                       (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand")))
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))
-   :untyped-argument (fn [{:keys [arg function]}]
-                       (str "argument " arg " goes to " function " where PostgreSQL takes its type from the value alone, and"
-                            " every value its other uses take is sent untyped (or nil), which PostgreSQL refuses there"
-                            " (could not determine polymorphic type); cast it in the query: [:cast " (keyword (str "?" (name arg)))
-                            " [:raw \"bigint[]\"]] with the type meant"))})
+   :undetermined-type (fn [{:keys [arg function type]}]
+                        (let [x (keyword (str "?" (name arg)))]
+                          (str "argument " arg " goes to " function ", which takes its type from the value sent, but every value"
+                               " its other uses take is sent untyped (a LocalDate, a keyword label) or is nil, which PostgreSQL"
+                               " cannot type there (could not determine data type); cast it in the query: "
+                               (cond (nil? type) (str "[:cast " x " <the type meant>]")
+                                     (str/ends-with? type "[]") (str "[:cast " x " [:raw " (pr-str type) "]]")
+                                     :else (str "[:cast " x " " (keyword (str/replace type " " "-")) "]")))))})
 
 (defn humanize
   "A sentence for each problem of analyze's :problems (or of query-schema's :pgmalli/problems):

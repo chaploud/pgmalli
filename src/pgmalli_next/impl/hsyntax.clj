@@ -859,18 +859,21 @@
           (and fname (not (and h (sql/registered-fn? h))))
           [:functions fname (vec (remove #{:*} args)) (some-> (if (keyword? x) (shorthand-fn x) (name h)) (str/split #"\.") butlast last folded)])))
 
+(defn- keyword-type [s] (str/lower-case (str/replace s "-" " ")))
+
 (defn cast-target
   "The name of the type a cast's t names: a keyword (:double-precision, :mood, :app.mood),
    [:varchar 10] with its typmod, or [:raw s], s one type's name with or without a typmod and []
    (\"bigint[]\", \"varchar(10)[]\", \"app.mood\"), as an array cast is written: the reader reads
-   :bigint[] as :bigint and []; nil for another t."
+   :bigint[] as :bigint and []; nil for another t. HoneySQL writes a keyword's name upper-case,
+   a dash as a space, never quoted (:my-type as MY TYPE), which PostgreSQL folds."
   [t]
-  (cond (ident? t) (name t)
+  (cond (ident? t) (keyword-type (name t))
         (and (vector? t) (= :raw (first t)) (= 2 (count t)) (string? (second t)))
         (let [n (-> (second t) str/trim str/lower-case (str/replace #"\(\s*\d+\s*(,\s*-?\d+\s*)?\)" "")
                     (str/replace #"\s+" " ") (str/replace #" ?\[ ?\]$" "[]") str/trim)]
           (when (re-matches #"[a-z_][\w$]*(\.[a-z_][\w$]*)?( [a-z_]\w*)*(\[\])?" n) n))
-        (and (vector? t) (keyword? (first t)) (not= :raw (first t))) (name (first t))))
+        (and (vector? t) (keyword? (first t)) (not= :raw (first t))) (keyword-type (name (first t)))))
 
 (defn constant?
   "Whether x is the same value on every row: an argument, a literal (NULL too), or a cast of one."

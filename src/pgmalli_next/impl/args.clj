@@ -11,7 +11,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare accepted-type cast-arrays)
+(declare accepted-type cast-arrays typed-only)
 
 (defn- array-arg
   "The argument x of [h x] with h one of heads, sent as one array: of array-comparisons by
@@ -94,10 +94,14 @@
                                      (when (kinds 'decimal?) [(bigdec l)])
                                      (when (kinds :double) [(double l)])))))
         sent (concat kept (remove (set kept) (distinct (mapcat as labels))))
+        ;; a default (malli's default-value transformer fills it) as one of the labels sent
+        props (if (and (contains? props :default) (not (some #{(:default props)} sent)))
+                (if-let [d (first (filter (set sent) (as (:default props))))] (assoc props :default d) (dissoc props :default))
+                props)
         labelled (cond (empty? sent) nil
                        (= sent labels) own
                        ;; a domain's checks stay around its labels; a CHECK's list takes a label as each is sent
-                       :else (let [l (shape/update-base own (constantly (into (cond-> [:enum] props (conj props)) sent)))
+                       :else (let [l (shape/update-base own (constantly (into (cond-> [:enum] (seq props) (conj props)) sent)))
                                    as-sent #(if (= :enum (shape/head %)) (into % (remove (set (shape/entries %)) (mapcat as (shape/entries %)))) %)]
                                (if (= :and (shape/head l))
                                  (into [(first l)] (map-indexed (fn [i x] (if (> i (if (map? (second l)) 1 0)) (as-sent x) x)) (rest l)))
@@ -396,6 +400,16 @@
     ;; the others' values join a CHECK's list: its base type
     [o (query/nullable (accepted-type registry (query/beyond-list registry (:schema r)) :common opts))]))
 
+(defn- untyped-type-values
+  "The values of a type whose own pgmalli does not type (interval, inet), s its schema: a PGobject,
+   and those of each type sent that PostgreSQL converts to it implicitly (a LocalTime to interval)."
+  [registry s opts]
+  (let [t (query/slot-type registry s)]
+    (distinct (cons jdbc/pg-object (for [[x p] (jdbc/write-rows opts false)
+                                         :when (and (string? p) (not= p t) (accept/holds? t p :call))
+                                         a (shape/alternatives x)]
+                                     (unlabel a))))))
+
 (defn- call-args
   "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve
    the call to take there, as a value of each type sent picks one; nil may go there too. Where
@@ -409,16 +423,25 @@
         :when (and kind (some syntax/param-key args))
         :let [ins (mapv #(:type (query/expression-type registry chain % opts)) args)
               os (query/reached registry opts parts)]
-        [i a] (map-indexed vector args)
+        [j a] (map-indexed vector args)
         :when (syntax/param-key a)
-        :let [ss (map types/type-schema (resolve/argument-types ins i os))
-              typed? (and (empty? ss) (not (:inline (:format opts))) (resolve/untyped-refused? kind ins i os))]
-        :when (or typed? (and (seq ss) (every? some? ss)))]
-    (cond typed? [a (jdbc/typed-where #(resolve/takes-at? ins i os %)) {:typed-only n}]
-          (next ss) [a (query/nullable
-                        ;; a value of each type, which a :pg/type of one would misname
-                        (shape/either (shape/distinct-kinds (mapcat #(map unlabel (shape/alternatives (accepted-type registry % :call opts))) ss)) :any))]
-          :else [a (query/nullable (accepted-type registry (first ss) :call opts))])))
+        ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
+        :let [[ins i] (if (and (= "unnest" n) (next args)) [[(nth ins j)] 0] [ins j])
+              ss (map types/type-schema (resolve/argument-types ins i os))
+              refused? (and (not (:inline (:format opts))) (resolve/untyped-refused? kind ins i os))
+              ;; a value of each type, which a :pg/type of one would misname; of a type whose values
+              ;; pgmalli does not type (inet beside numeric for +), a PGobject, not any value
+              t (cond (empty? ss) nil
+                      (next ss) (query/nullable
+                                 (shape/either (shape/distinct-kinds (for [s ss, x (shape/alternatives (accepted-type registry s :call opts))
+                                                                           y (if (= :any (shape/head x)) (untyped-type-values registry s opts) [(unlabel x)])]
+                                                                       y))
+                                               :any))
+                      :else (query/nullable (accepted-type registry (first ss) :call opts)))]
+        :when (or refused? (and t (every? some? ss)))]
+    (if refused?
+      [a (or (some-> t typed-only) (jdbc/typed-where #(resolve/takes-at? ins i os %))) {:typed-only n}]
+      [a t])))
 
 (defn- null-tested-args
   "The arguments a statement among positions ps tests for NULL ([:= :?x nil], which HoneySQL
@@ -442,8 +465,12 @@
   [a b]
   (let [nullable? (or (shape/maybe? a) (shape/maybe? b))
         [a b] (map shape/non-null [a b])
-        ;; every alternative of x is one of y's, but for the :pg/type it names
-        within? (fn [x y] (every? (set (map unlabel (shape/alternatives y))) (map unlabel (shape/alternatives x))))
+        ;; every alternative of x is one of y's, but for the :pg/type it names, or an array where y
+        ;; takes an array of any elements
+        within? (fn [x y]
+                  (let [ys (set (map unlabel (shape/alternatives y)))]
+                    (every? #(or (ys %) (and (ys [:pg/array :any]) (= :pg/array (shape/head %))))
+                            (map unlabel (shape/alternatives x)))))
         t (cond (query/untyped? a) b
                 (query/untyped? b) a
                 (within? b a) b
@@ -465,10 +492,10 @@
       (when-not (jdbc/untyped-kinds (shape/kind t)) t))))
 
 (defn- analysis
-  "{:args {arg schema} :untyped {arg function}} of arg-types, an argument at a position PostgreSQL
+  "{:args {arg schema} :untyped {arg {:function f :type t}}} of arg-types, an argument at a position PostgreSQL
    takes its type from the value alone (call-args' :typed-only) with :pgmalli/type-from-value,
    the function, on its schema; :untyped, such an argument whose other uses take no value sent
-   with a type."
+   with a type, and the type they name."
   [registry body opts]
   (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
         sps (query/once registry query/statement-positions body opts)
@@ -486,15 +513,17 @@
         left (into {} (for [[k t] types] [k (if (and (only-typed k) (not= :any t)) (typed-only t) t)]))]
     {:args (into {} (for [[k t] types
                           :let [only (only-typed k)
+                                ;; where it goes untyped elsewhere, the typed-only uses' values; else those of both
                                 t (cond (nil? only) t
-                                        (= :any t) (reduce both-uses (map second only))
-                                        :else (or (left k) t))]]
+                                        (or (= :any t) (nil? (left k))) (reduce both-uses (map second only))
+                                        :else (reduce both-uses (left k) (map second only)))]]
                       [k (cond-> (if (= :any t)
                                    [:any {:pgmalli/untyped (if (typed-keys k) :type :position)}]
                                    (cond-> t (and (null-tested k) (not only)) query/nullable))
                            only (shape/merge-props {:pgmalli/type-from-value (:typed-only (get (first only) 2))}))]))
      :untyped (into {} (for [[k uses] only-typed :when (nil? (left k))]
-                         [k (:typed-only (get (first uses) 2))]))}))
+                         [k {:function (:typed-only (get (first uses) 2))
+                             :type (some (comp :pg/type shape/props) (shape/alternatives (shape/non-null (types k))))}]))}))
 
 (defn arg-types
   "{arg schema} for the named parameters of a query (:?id, [:param :id]), keyed as sql/format's
@@ -504,9 +533,9 @@
   (:args (query/once registry analysis body opts)))
 
 (defn arg-problems
-  "An :untyped-argument problem of each argument at a position PostgreSQL takes its type from
+  "An :undetermined-type problem of each argument at a position PostgreSQL takes its type from
    the value alone (cardinality(?), concat(?)), whose other uses take only values sent untyped
    (a date sent as a LocalDate, a keyword label) or nil."
   [registry body opts]
-  (vec (for [[k f] (:untyped (query/once registry analysis body opts))]
-         {:kind :untyped-argument :arg k :function f})))
+  (vec (for [[k p] (:untyped (query/once registry analysis body opts))]
+         (into {:kind :undetermined-type :arg k} (remove (comp nil? val)) p))))

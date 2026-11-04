@@ -6,7 +6,8 @@
   {"app" {:functions {"lower" [{:args ["text"] :result "integer"}]
                       "round" [{:args ["integer"] :result "text"}]
                       "upper" [{:args ["pair"] :result "integer"}]
-                      "fresh" [{:args [] :result "bigint" :set true}]}
+                      "fresh" [{:args [] :result "bigint" :set true}]
+                      "regexp_replace" [{:args ["citext" "citext" "text"] :result "text"}]}
           :operators {"=" [{:args ["text" "text"] :result "integer"}]}}})
 
 (defn- in [m] #(get-in m [%1 %2 %3]))
@@ -51,3 +52,18 @@
 (deftest a-function-of-one-unknown-argument-finds-no-exact-match-as-an-operator-does
   ;; PostgreSQL: function pg_catalog.bit(unknown, integer) is not unique
   (is (nil? (call :functions "bit" [:unknown "integer"] ["pg_catalog"]))))
+
+(deftest an-overload-of-a-type-the-catalog-lacks-that-matches-fewer-known-arguments-exactly-loses-at-step-4c
+  (let [os (r/overloads :functions "regexp_replace" (in own) ["pg_catalog" "app"])]
+    (is (= #{"text"} (r/argument-types [:free "text" "text"] 0 os)) "citext's matches the last argument alone, text's both")
+    (is (= "text" (call :functions "regexp_replace" [:unknown "text" "text"] ["pg_catalog" "app"])))
+    (is (not (r/untyped-refused? :functions [:free "text" "text"] 0 os)))
+    (is (nil? (r/argument-types [:free "character varying" "text"] 0 os)) "matching as many (the last alone), it may be the one")))
+
+(deftest an-untyped-value-is-refused-where-the-call-leaves-its-type-open-or-finds-no-one-candidate
+  (let [os #(r/overloads :functions % (in own) ["pg_catalog"])]
+    (is (r/untyped-refused? :functions [:free] 0 (os "cardinality")) "anyarray, nothing else binding it")
+    (is (r/untyped-refused? :functions [:free] 0 (os "unnest")) "anyarray, anymultirange and tsvector: not unique")
+    (is (r/untyped-refused? :functions [:free] 0 (os "num_nulls")) "\"any\"")
+    (is (not (r/untyped-refused? :functions [:free] 0 (os "lower"))) "text's string category takes it")
+    (is (not (r/untyped-refused? :functions [:free :free] 0 (os "lower"))) "no candidate of two arguments: not told")))

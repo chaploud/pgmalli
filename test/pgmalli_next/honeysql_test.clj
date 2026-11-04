@@ -37,7 +37,7 @@
 (def text [:string {:pg/type "text"}])
 (def mood [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"])
 ;; an argument's: a keyword label goes untyped, a String as varchar, which an enum refuses
-(def mood-arg [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} :happy :sad])
+(def mood-arg [:enum {:pg/type "mood" :default :happy :pg/default "happy"} :happy :sad])
 (def pg-object jdbc/pg-object)
 (defn in-list [s] [:or [:sequential {:min 1} s] [:set {:min 1} s]])
 
@@ -821,7 +821,7 @@
       "a hand-written row schema has none"))
 
 (deftest an-untyped-value-is-a-text-or-enum-columns-own
-  (is (= {:x [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} :happy :sad]}
+  (is (= {:x [:enum {:default :happy :pg/default "happy" :pg/type "mood"} :happy :sad]}
          (args {:select [:id] :from [:users] :where [:= :mood :?x]} {:schema "sample"}))
       "a keyword sent untyped is an enum's label, a String sent as varchar is not")
   (is (= {:x [:any {:pg/type "json"}]}
@@ -1347,7 +1347,7 @@
 
 (deftest write-enum-names-what-an-extension-sends-for-an-enum
   (let [types #(update-vals (args % opts) m/form)]
-    (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} :happy :sad]
+    (is (= [:enum {:default :happy :pg/default "happy" :pg/type "mood"} :happy :sad]
            (:m (types {:select [:id] :from [:users] :where [:= :mood :?m]})))
         "the enum's labels kept, as keywords")
     (is (= [:enum {:pg/type "mood"} "happy" "sad" :happy :sad] (:m (types {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]})))
@@ -1722,8 +1722,8 @@
 
 (deftest an-argument-whose-type-postgresql-takes-from-the-value-alone-and-whose-other-uses-send-it-untyped-is-a-problem
   (let [q {:update :users :set {:born :?d} :where [:= :id 1] :returning [[[:concat :?d] :s]]}]
-    (is (= [{:kind :untyped-argument :arg :d :function "concat"}] (check q)) "a date column's LocalDate goes untyped, nil too")
-    (is (str/includes? (first (h/humanize (check q))) "[:cast :?d [:raw \"bigint[]\"]]")))
+    (is (= [{:kind :undetermined-type :arg :d :function "concat" :type "date"}] (check q)) "a date column's LocalDate goes untyped, nil too")
+    (is (str/ends-with? (first (h/humanize (check q))) "cast it in the query: [:cast :?d :date]")))
   (is (= [] (check {:update :users :set {:closed_at :?t} :where [:= :id 1] :returning [[[:concat :?t] :s]]}))
       "a timestamptz column's OffsetDateTime goes typed"))
 
@@ -1884,7 +1884,7 @@
     (is (not (ok? (:m (args q o)) "sad")) "pgjdbc sends a String as varchar, which PostgreSQL neither compares with nor assigns to an enum")
     (is (not (ok? (h/set-schema registry :users o) {:mood "sad"})))
     (is (= [] (check q o)) "an argument is arg-types'")
-    (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} :happy :sad]
+    (is (= [:enum {:default :happy :pg/default "happy" :pg/type "mood"} :happy :sad]
            (:m (args q o))) "a keyword sent untyped as the label it names")
     (is (ok? (:x (args {:select [[[:cast :?x :mood] :m]]} o)) "sad") "PostgreSQL casts a varchar to an enum")))
 
@@ -2537,3 +2537,33 @@
     (is (m/validate t (int-array [1]) {:registry reg}))
     (is (m/validate t (double-array [1.5]) {:registry reg}) "coalesce(integer[], double precision[]) is a double precision[]")
     (is (not (m/validate t (into-array String ["a"]) {:registry reg})) "text[] is of another category")))
+
+(deftest an-argument-where-every-candidate-type-refuses-an-untyped-value-takes-a-typed-one-alone
+  (let [ok? #(m/validate %1 %2 {:registry registry})
+        t (:x (args {:select [[[:date_trunc "day" :?x] :d]]}))]
+    (is (= "date_trunc" (:pgmalli/type-from-value (m/properties (m/schema t {:registry registry})))))
+    (is (ok? t (java.time.OffsetDateTime/now)) "sent as timestamptz")
+    (doseq [v [nil (java.time.LocalDateTime/now) (java.time.LocalDate/now) (java.time.Instant/now)]]
+      (is (not (ok? t v)) (str "date_trunc(varchar, unknown) is not unique: " (class v))))))
+
+(deftest a-type-pgmalli-does-not-type-among-a-calls-candidates-takes-a-pgobject-not-any-value
+  (let [t (:d (args {:update :users :set {:score [:+ :score :?d]} :where [:= :id 1]}))]
+    (doseq [v ["abc" :kw true]]
+      (is (not (m/validate t v {:registry registry})) (str "integer + inet and the like take no " (pr-str v))))
+    (is (m/validate t 1 {:registry registry}))))
+
+(deftest an-argument-whose-type-comes-from-the-value-alone-keeps-that-uses-values-beside-another
+  (let [ok? #(m/validate %1 %2 {:registry registry})
+        t (:x (args {:select [[[:cardinality :?x] :n]] :from [:users] :where [:= :?x :score]}))]
+    (is (not (ok? t 5)) "cardinality(integer) does not exist")
+    (is (not (ok? t (long-array [1]))) "nor is an array an integer column's")
+    (let [q {:update :users :set {:born :?d} :where [:= :id 1] :returning [[[:cardinality :?d] :n]]}]
+      (is (= [:undetermined-type] (map :kind (check q))))
+      (is (not (ok? (:d (args q)) (java.time.LocalDate/now))) "the date goes untyped, which cardinality refuses"))))
+
+(deftest a-cast-type-is-read-as-honeysql-writes-it-upper-case-a-dash-a-space-which-postgresql-folds
+  (let [q #(args {:select [:id] :from [:users] :where [:= :mood [:cast :?x %]]})]
+    (is (= [:enum {:pg/type "mood"} "happy" "sad" :happy :sad] (:x (q :mood)) (:x (q :MOOD))))
+    (is (= [:enum {:pg/type "sample.mood"} "happy" "sad" :happy :sad] (:x (q :sample.Mood)))))
+  (is (= [:any {:pgmalli/untyped :position}] (:x (args {:select [[[:cast :?x :my-mood] :m]]})))
+      "MY MOOD names no type"))

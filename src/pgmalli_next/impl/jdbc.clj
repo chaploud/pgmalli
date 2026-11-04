@@ -259,7 +259,7 @@
 
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
-   column; :common, beside an array column in coalesce or CASE; :unnest, unnest(?) assigned): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
+   column; :common, beside an array column in coalesce or CASE; :unnest, a column of unnest(?), assigned or compared): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
    element type is one of t's own (accept/holds?, assigned; under :common, as coalesce resolves it; compared, t is what a comparison takes already), its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
