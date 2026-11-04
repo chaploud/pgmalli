@@ -1890,13 +1890,13 @@
           :else s)))
 
 (defn- domain-array
-  "The schema of an array of values of column schema s where s is of a domain (but over an enum):
-   the domain's array, as PostgreSQL keeps it in ARRAY[...] and in a polymorphic function's
-   anyarray bound by anyelement (array_agg); nil otherwise."
+  "The schema of an array of values of column schema s where s is of a domain (a CHECK's list
+   too, but not an enum type): the domain's array, as PostgreSQL keeps it in ARRAY[...] and in a
+   polymorphic function's anyarray bound by anyelement (array_agg); nil otherwise."
   [registry s]
   (let [s (some-> s shape/non-null)
-        {:keys [refs enum?]} (shape/resolved (::schemas registry) s)]
-    (when (and (seq refs) (not enum?))
+        {:keys [base refs enum?]} (shape/resolved (::schemas registry) s)]
+    (when (and (seq refs) (not (and enum? (nil? (:pg/type (shape/props base))))))
       [:vector {:pg/type (types/array-of (:pg/type (shape/column-props s) (second (shape/schema-and-name (last s)))))} s])))
 
 (defn- canonical-type [{s :schema}] (some-> s shape/column-props :pg/type types/canonical-name))

@@ -951,15 +951,20 @@
 
 (defn -main
   "bb oracle [seed] [mutants-per-query]: the run on a throwaway PostgreSQL (docker, as the tests
-   start it), its counts and every case that does not agree. The seed defaults to
-   PGMALLI_FUZZ_SEED, then 42; the mutants to PGMALLI_ORACLE_MUTANTS, then 8."
+   start it), its counts and every case that does not agree, exiting 1 on what
+   pgmalli-next.oracle-test fails on. The seed defaults to PGMALLI_FUZZ_SEED, then 42; the
+   mutants to PGMALLI_ORACLE_MUTANTS, then 8."
   [& [seed per-query]]
   (let [seed (parse-long (or seed (System/getenv "PGMALLI_FUZZ_SEED") "42"))
         per-query (parse-long (or per-query (System/getenv "PGMALLI_ORACLE_MUTANTS") "8"))]
     (test-db/with-postgres
       (fn []
         (test-db/exec-sql! schema-sql)
-        (let [results (run test-db/*db* seed per-query)]
+        (let [results (run test-db/*db* seed per-query)
+              fs (arg-matrix test-db/*db*)
+              failed? (or (seq fs) (some (some-fn (comp seq :return-rejections) (comp seq :column-mismatches)
+                                                  (comp #{:false-positive :timeout} :outcome))
+                                         results))]
           (println "seed" seed "per query" per-query "cases" (count results))
           (pp/pprint (frequencies (map :outcome results)))
           (let [rs (filter (comp seq :return-rejections) results)]
@@ -974,9 +979,8 @@
             (doseq [r rs]
               (println (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r))))
               (doseq [x (:column-mismatches r)] (println "  " (pr-str x)))))
-          (let [fs (arg-matrix test-db/*db*)]
-            (println "\nargument matrix failures" (count fs))
-            (doseq [f fs] (println (arg-failure-text f))))
+          (println "\nargument matrix failures" (count fs))
+          (doseq [f fs] (println (arg-failure-text f)))
           (doseq [o [:false-positive :timeout :unformatted :mismatch :miss :other-flagged]
                   :let [rs (filter #(= o (:outcome %)) results)]
                   :when (seq rs)]
@@ -984,5 +988,6 @@
             (doseq [r rs]
               (println (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
                        "\n  PostgreSQL:" (:pg r) (:state r) (some-> (:message r) (str/replace #"\n" " | ")) (or (:format-error r) "")
-                       "\n  check:" (pr-str (:problems r))))))))
-    (shutdown-agents)))
+                       "\n  check:" (pr-str (:problems r)))))
+          (shutdown-agents)
+          (when failed? (System/exit 1)))))))

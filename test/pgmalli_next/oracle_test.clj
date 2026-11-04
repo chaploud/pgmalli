@@ -31,11 +31,7 @@
    (:false-positive, :return, :column, :arg), :id a pattern of the failure's signature (see
    failures). pending-entries-still-fail fails on an entry that no longer matches a failure, so
    a fix empties it."
-  [{:test :return
-    :id #"^gen-array-agg-(kinds\.(bigs|dbls|ints|nums|short_texts|texts)|lists\.[clw]|profiles\.(rank|tag)) "
-    :reason (str "array_agg of an array column returns a two-dimensional array, read as a vector of vectors; pgmalli types"
-                 " an array as one-dimensional, as PostgreSQL's type (bigint[]) does not say the dimensions")
-    :repro "(:row (h/analyze registry {:select [[[:array_agg :kinds.bigs] :x]] :from [:kinds]})) gives [:vector [:maybe :int]]; the row is {:x [[1]]}"}])
+  [])
 
 (defn- held
   "The pending entry of test that holds the failure of signature id, or nil."

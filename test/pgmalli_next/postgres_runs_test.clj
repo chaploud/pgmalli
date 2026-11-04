@@ -26,8 +26,9 @@
                          INSERT INTO accounts (email, mail, name, nick) VALUES ('a', 'a@x', 'n', 'k'), ('b', NULL, NULL, NULL);
                          CREATE DOMAIN d3 AS varchar(3);
                          CREATE DOMAIN dpos AS int CHECK (VALUE BETWEEN 1 AND 9);
-                         CREATE TABLE dd (a d3, n dpos);
-                         INSERT INTO dd VALUES ('abc', 1);
+                         CREATE DOMAIN dlist AS int CHECK (VALUE IN (1, 2));
+                         CREATE TABLE dd (a d3, n dpos, l dlist);
+                         INSERT INTO dd VALUES ('abc', 1, 2);
                          CREATE TABLE uq (id int PRIMARY KEY, code text UNIQUE, a int, b int, UNIQUE (a, b));
                          INSERT INTO uq VALUES (1, NULL, 1, NULL), (2, NULL, 1, NULL);
                          CREATE TABLE arr (xs int[], cs citext[]);
@@ -135,6 +136,8 @@
                  {:select [[[:array_agg :nick] :x]] :from [:accounts]}
                  {:select [[[:array_agg :n] :x]] :from [:dd]}
                  {:select [[[:array_agg :a] :x]] :from [:dd]}
+                 {:select [[[:array_agg :l] :x]] :from [:dd]}
+                 {:select [[[:array [:l]] :x]] :from [:dd]}
                  {:select [[[:array [:n]] :x]] :from [:dd]}
                  ;; array_agg of an array adds a dimension: {{1,NULL}}
                  {:select [[[:array_agg :xs] :x]] :from [:arr]}
