@@ -11,6 +11,7 @@
    take the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
+            [honey.sql :as sql]
             malli.core
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
@@ -592,9 +593,7 @@
                 (cond-> sc types (update alias assoc :types types :order (mapv first named)))))
             sc items)))
 
-(def ^:private clause-rank
-  (delay (let [order (some-> (honeysql 'honey.sql/clause-order) (apply []))]
-           (zipmap order (range)))))
+(def ^:private clause-rank (delay (zipmap (sql/clause-order) (range))))
 
 (defn- clause-entries
   "The entries of statement x in the order sql/format writes its clauses (others after, by
@@ -804,11 +803,8 @@
   [x]
   (if (vector? x) (first x) x))
 
-(def ^:private format-expr (delay (honeysql 'honey.sql/format-expr)))
-
 (def ^:private alone?
-  (memoize (fn [h] (boolean (when-let [f @format-expr]
-                              (= (f :operand) (try (f [h :operand]) (catch Exception _ nil))))))))
+  (memoize (fn [h] (= (sql/format-expr :operand) (try (sql/format-expr [h :operand]) (catch Exception _ nil))))))
 
 (defn- operand-alone
   "The operand of [op x] where the loaded HoneySQL writes it as x alone ([:and x], [:* x]),
@@ -1025,37 +1021,15 @@
 
 ;;; the name PostgreSQL gives an output column
 
-(defn- honeysql
-  "A var of the HoneySQL on the classpath, deref'd; nil when it is not there, or too old to
-   have it (registered-op? came in 2.4.1066)."
-  [sym]
-  (try (some-> (requiring-resolve sym) deref) (catch Exception _ nil)))
-
-(def ^:private operators
-  "HoneySQL's infix operators and the special syntax that is an operator in SQL: PostgreSQL
-   names their column ?column?. The operators of the HoneySQL loaded (register-op! included)
-   are read from it as well; this is what is known without it."
-  (into #{} (map keyword)
-        ["and" "or" "xor" "<>" "<=" ">=" "||" "<->" "like" "not-like" "regexp" "regex" "~" "&&" "ilike"
-         "not-ilike" "similar-to" "not-similar-to" "is" "is-not" "not=" "!=" "is-distinct-from"
-         "is-not-distinct-from" "+" "-" "*" "%" "|" "&" "^" "=" "<" ">" "/" "in" "not-in" "not"
-         "between" "not-between" "inline" "lift" "param" "with-ordinality"]))
-
-(def ^:private special-syntax
-  "HoneySQL's special syntax that is not a function call; a column it makes is not named here."
-  #{:entity :alias :at :at-time-zone :call :composite :distinct :escape :filter :get-in
-    :ignore-nulls :interval :join :lateral :nest :object :record :order-by :over :raw
-    :respect-nulls :within-group :xtql :default :foreign-key :references :unique
-    :primary-key :index :constraint})
-
-(def ^:private registered-op? (delay (honeysql 'honey.sql/registered-op?)))
+(def ^:private operator-syntax
+  "HoneySQL's special syntax that writes an SQL operator, whose column PostgreSQL names ?column?."
+  #{:in :not-in :not :between :not-between :inline :lift :param})
 
 (defn- operator?
-  "Whether HoneySQL writes [h ...] as an operator: a name not an identifier (:->, :@>), one of
-   operators, or one the loaded HoneySQL has registered."
+  "Whether HoneySQL writes [h ...] as an operator: a name not an identifier (:->, :@>), one
+   HoneySQL has registered (register-op! too), or operator-syntax."
   [h]
-  (boolean (or (operators h) (not (re-find #"^[A-Za-z_]" (name h)))
-               (some-> @registered-op? (#(% h))))))
+  (boolean (or (operator-syntax h) (not (re-find #"^[A-Za-z_]" (name h))) (sql/registered-op? h))))
 
 (defn- function-name
   "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it;
@@ -1091,7 +1065,7 @@
                       (= :array h) "array"
                       (= :cast h) (cond (column-keyword? a) (second (split-column a))
                                         (vector? a) (let [n (expression-name a)] (when-not (#{"?column?" "case"} n) n)))
-                      (special-syntax h) nil
+                      (sql/registered-fn? h) nil
                       :else (function-name (name h))))))
 
 (defn- item-expression
@@ -1320,19 +1294,18 @@
 (def ^:private formatted-name
   "[name quoted?] of k (a keyword, or a string) as the loaded HoneySQL writes it under sql/format's
    options format, as a column of :values or, alias? true, as an alias of a select item; name as
-   PostgreSQL reads it: a quoted one as it is, else folded to lower case. nil without HoneySQL."
+   PostgreSQL reads it: a quoted one as it is, else folded to lower case."
   (memoize (fn [k format alias?]
-             (when-let [f (honeysql 'honey.sql/format)]
-               ;; an option the loaded HoneySQL does not take (a dialect of a later one) formats nothing
-               (when-let [n (try (let [sql (first (f (if alias? {:select [[:a k]]} {:insert-into :t :values [{k 1}]}) (dissoc (or format {}) :params)))]
-                                   (second (re-find (if alias? #" AS (.*)$" #"\((.*?)\)") sql)))
-                                 (catch Exception _ nil))]
-                 (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" n)] [q true] [(str/lower-case n) false]))))))
+             ;; an option the loaded HoneySQL does not take (a dialect of a later one) formats nothing
+             (when-let [n (try (let [s (first (sql/format (if alias? {:select [[:a k]]} {:insert-into :t :values [{k 1}]}) (dissoc (or format {}) :params)))]
+                                 (second (re-find (if alias? #" AS (.*)$" #"\((.*?)\)") s)))
+                               (catch Exception _ nil))]
+               (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" n)] [q true] [(str/lower-case n) false])))))
 
 (defn- quoted?
   "Whether sql/format's options quote a name, as the loaded HoneySQL writes one (a dialect set
-   with set-dialect! too); without HoneySQL, under :quoted, or a :dialect other than :nrql unless
-   :quoted false."
+   with set-dialect! too); where it formats nothing under them (a dialect of a later HoneySQL),
+   under :quoted, or a :dialect other than :nrql unless :quoted false."
   [{:keys [quoted dialect] :as format}]
   (if-let [[_ q?] (formatted-name :a format false)]
     q?
@@ -1529,12 +1502,12 @@
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
-   what it does goes unjudged: in the query map and every statement, and, when HoneySQL is loaded, in a map of
+   what it does goes unjudged: in the query map and every statement, and in a map of
    HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). The rows of
    :values, :set and :do-update-set are maps of columns, not of clauses, though a subquery in
    them is read."
   [body]
-  (let [clauses (some-> (honeysql 'honey.sql/clause-order) (#(set (%))))
+  (let [clauses (set (sql/clause-order))
         rows (set (for [st (statements body)
                         r (concat (when (vector? (:values st)) (:values st)) [(:set st) (:do-update-set st)])
                         :when (map? r)]
@@ -1543,10 +1516,10 @@
     (distinct
      (for [m maps
            ;; the query itself is clauses, however unknown ({:selct [:id]})
-           :when (and (map? m) (seq m) (not (rows m)) (or (identical? m body) (statement? m) (and clauses (every? clauses (keys m)))))
+           :when (and (map? m) (seq m) (not (rows m)) (or (identical? m body) (statement? m) (every? clauses (keys m))))
            k (keys m)
            :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))
-           :let [meant (when-not (some-> clauses (contains? k))
+           :let [meant (when-not (contains? clauses k)
                          (error/suggest k (concat read-clauses ignored-clauses clauses)))]]
        (cond-> {:kind :unread-clause :clause k} meant (assoc :did-you-mean [meant]))))))
 
@@ -2274,15 +2247,12 @@
 
 (defn- operator-name
   "The SQL operator HoneySQL writes [h a b] with (:not= as <>, :like as ~~), or [h a] as a
-   prefix one (- a; [:@@ a] is a alone), as the loaded HoneySQL formats it; without HoneySQL,
-   h's own name where that is no identifier. nil for SQL syntax that is no operator (AND, IN,
+   prefix one (- a; [:@@ a] is a alone). nil for SQL syntax that is no operator (AND, IN,
    IS ...) or one PostgreSQL lacks (REGEXP)."
   [h arity]
-  (let [sql (if-let [f @format-expr]
-              (some->> (try (first (f (if (= 1 arity) [h ::r] [h ::l ::r]))) (catch Exception _ nil))
-                       (re-matches (if (= 1 arity) #"(?s)(.+) \S+" #"(?s)\S+ (.+) \S+")) second)
-              (get {:not= "<>" :!= "<>" :like "LIKE" :not-like "NOT LIKE" :ilike "ILIKE" :not-ilike "NOT ILIKE"} h (name h)))]
-    (or (grammar-operators sql) (when (and sql (re-matches #"[+\-*/<>=~!@#%^&|`?]+" sql)) sql))))
+  (let [s (some->> (try (first (sql/format-expr (if (= 1 arity) [h ::r] [h ::l ::r]))) (catch Exception _ nil))
+                   (re-matches (if (= 1 arity) #"(?s)(.+) \S+" #"(?s)\S+ (.+) \S+")) second)]
+    (or (grammar-operators s) (when (and s (re-matches #"[+\-*/<>=~!@#%^&|`?]+" s)) s))))
 
 (defn- call-parts
   "[kind name args schema] of x as pgmalli-next.impl.resolve/call takes it: a function (:functions),
@@ -2298,7 +2268,7 @@
           (= :at-time-zone h) (let [[_ v z] x] [:functions "timezone" [z v]])
           (and (keyword? h) (operator? h) (#{1 2} (count args)))
           (when-let [n (operator-name h (count args))] [:operators n (vec args)])
-          (and fname (not (special-syntax h)))
+          (and fname (not (and h (sql/registered-fn? h))))
           [:functions fname (vec (remove #{:*} args)) (some-> (if (keyword? x) (shorthand-fn x) (name h)) (str/split #"\.") butlast last folded)])))
 
 (defn- reached

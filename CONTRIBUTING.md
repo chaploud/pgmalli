@@ -144,7 +144,7 @@ ran. The tests that catch a change upstream, each naming the list to update:
 
 | test | catches |
 |---|---|
-| `pgmalli-next.honeysql-contract-test` | a clause, operator or special syntax HoneySQL adds or drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
+| `pgmalli-next.honeysql-contract-test` | a clause HoneySQL adds or drops, or special syntax of `operator-syntax` it drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
 | `pgmalli-next.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli_next/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops; a type, implicit cast, range, function, operator or relation of `pg_catalog` that differs from the catalog snapshot (`resources/pgmalli-next/impl/catalog.edn`, which `bb catalog` rewrites) |
 | `pgmalli-next.accept-test` | a type pgjdbc's `setObject` sends a class as that differs from `accept/class-types`; a type PostgreSQL takes or refuses where `accept/accepts?` says otherwise |
 | `pgmalli-next.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/analyze`'s `:row` gives (`pgmalli-next.impl.resolve` over the catalog snapshot, and the grammar `pgmalli-next.honeysql` types itself: `sql-value-types`, `grammar-operators`, `json-shapes`); a name PostgreSQL gives an unaliased expression that differs from `expression-name`'s |

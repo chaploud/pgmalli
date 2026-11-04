@@ -46,36 +46,11 @@
     (doseq [[place clauses] clause-lists, c (sort (set/difference clauses (set (sql/clause-order))))]
       (is (nil? c) (str honeysql " no longer has clause " c ": remove it from " place)))))
 
-(def ^:private word-operator? #(re-find #"^[A-Za-z_]" (name %)))
-
-(def ^:private honeysql-special (set (keys @@#'sql/special-syntax)))
-
-(deftest honeysqls-operators-are-known-without-it
-  ;; a name not an identifier (:->, :@>) is an operator by its shape; HoneySQL 2.4 wrote
-  ;; [:mod a b] infix, later ones as a function
-  (doseq [op (sort (set/difference (set (filter word-operator? @@#'sql/infix-ops)) @#'h/operators #{:mod}))]
-    (is (nil? op) (str honeysql " has infix operator " op " that pgmalli does not know: add it to operators in src/pgmalli_next/honeysql.clj"))))
-
-(deftest every-operator-pgmalli-lists-is-honeysqls
-  ;; HoneySQL writes :in and :not-in in format-expr, outside both tables
+(deftest operator-syntax-is-honeysqls-special-syntax
+  ;; HoneySQL writes :in and :not-in in format-expr, outside its table
   (when-not (older-than-pinned?)
-    (doseq [op (sort (set/difference @#'h/operators (set @@#'sql/infix-ops) honeysql-special #{:in :not-in}))]
-      (is (nil? op) (str honeysql " no longer has operator " op ": remove it from operators in src/pgmalli_next/honeysql.clj")))))
-
-(def ^:private named-by-expression-name
-  "HoneySQL's special syntax expression-name in src/pgmalli_next/honeysql.clj names itself, or that
-   is not PostgreSQL's."
-  #{:. :array :case :case-expr :cast :.:. :bigquery/array :bigquery/struct})
-
-(deftest honeysqls-special-syntax-is-known
-  (doseq [k (sort-by str (set/difference honeysql-special @#'h/special-syntax @#'h/operators named-by-expression-name))]
-    (is (nil? k) (str honeysql " has special syntax " k " that pgmalli does not know: add it to special-syntax in "
-                      "src/pgmalli_next/honeysql.clj (not a function call) or operators (an operator in SQL)"))))
-
-(deftest every-special-syntax-pgmalli-lists-is-honeysqls
-  (when-not (older-than-pinned?)
-    (doseq [k (sort (set/difference @#'h/special-syntax honeysql-special))]
-      (is (nil? k) (str honeysql " no longer has special syntax " k ": remove it from special-syntax in src/pgmalli_next/honeysql.clj")))))
+    (doseq [op (sort (set/difference @#'h/operator-syntax (set (keys @@#'sql/special-syntax)) #{:in :not-in}))]
+      (is (nil? op) (str honeysql " no longer has special syntax " op ": remove it from operator-syntax in src/pgmalli_next/honeysql.clj")))))
 
 (deftest sql-format-writes-what-pgmalli-reads
   (is (= ["SELECT a FROM t INNER JOIN j ON TRUE LEFT JOIN l ON TRUE RIGHT JOIN r ON TRUE INNER JOIN i ON TRUE FULL JOIN f ON TRUE"]
