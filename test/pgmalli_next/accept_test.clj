@@ -130,7 +130,7 @@
         ;; other way; a type it does not answer for (answers? false) types its arguments :any
         (when (and taken (accept/answers? accepted-t)) (is (accept/accepts? accepted-t sent-t context) (str "PostgreSQL takes " pair)))
         ;; a type with no = (json, point, xml) compares with nothing, its own type neither
-        (when (and (not= :cast context) (accept/holds? accepted-t sent-t) (not (and (= :compare context) (not (compares-itself t)))))
+        (when (and (not= :cast context) (accept/holds? accepted-t sent-t context) (not (and (= :compare context) (not (compares-itself t)))))
           (is taken (str "PostgreSQL refuses " pair))))
       ;; the other way, where holds? is stricter than PostgreSQL, pinned: a change of it is a choice
       (let [now (stricter vs)]

@@ -256,7 +256,7 @@ and writes (`:tables`) and the columns it uses of a `jsonb_populate_record` docu
 (require '[pgmalli-next.honeysql :as h])
 
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
+;; => {:args {:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
 ```
 
 `:problems` also reports a few queries that PostgreSQL runs but that can match no row
@@ -339,7 +339,7 @@ HoneySQL's named parameters (`:?id`), keyed as in `sql/format`'s `:params` (`:id
 (def find-user-q {:select [:id :email] :from [:users] :where [:= :id :?id]})
 
 (h/query-schema registry [:id] find-user-q)
-;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:sequential {:max 1} [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]] [:sequential {:max 1} [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 ```
 
 Put it on the function as a schema object over the registry. `malli.instrument` and
@@ -379,7 +379,7 @@ returns:
 
 ```clojure
 (pgmalli/describe (h/query-schema registry [:id] find-user-q {:result :one}))
-;; => {:args ["bigint"], :returns [:maybe {:id "bigint", :email "varchar(120)"}]}
+;; => {:args ["bigint | numeric | integer? | double | float?"], :returns [:maybe {:id "bigint", :email "varchar(120)"}]}
 ```
 
 The options of `pgmalli-next.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).

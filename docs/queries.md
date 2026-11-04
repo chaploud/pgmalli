@@ -24,7 +24,7 @@ naming where the symbol is (`:in`, as `get-in` reads it): analyze each variant y
 (def registry (pgmalli/registry "public"))
 
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
+;; => {:args {:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
 ```
 
 ## What a name refers to
@@ -159,7 +159,7 @@ keyed as in `sql/format`'s `:params`, as the one sending sends them
                             :from [:users]
                             :where [:and [:= :group_id :?group] [:in :status :?statuses]]
                             :limit :?n}))
-;; => {:group [:int #:pg{:type "integer"}], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed]]], :n [:maybe [:int {:pg/type "bigint", :min 0}]]}
+;; => {:group [:or [:int #:pg{:type "integer"}] decimal? integer? :double float?], :n [:maybe [:int {:pg/type "bigint", :min 0}]], :statuses [:or [:sequential {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed]] [:set {:min 1} [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed]]]}
 ```
 
 | where the argument is | its type |
@@ -191,7 +191,10 @@ type goes (json, inet, interval) is `[:any {:pg/type ...}]`, without `:pgmalli/u
 ```
 
 A column's type takes its own values, and what [your application sends](#what-your-application-sends)
-that PostgreSQL takes as the column's own. PostgreSQL takes more ([stricter than
+that PostgreSQL converts to the column's type implicitly (`pg_cast`'s implicit casts: a `Long` to
+`numeric`, a `LocalDate` to `timestamp`). Compared, it also takes what the column's type
+converts to implicitly, where PostgreSQL's `=` then compares the two (a `bigint` column with a
+`BigDecimal`, a `timestamptz` one with a `LocalDate`). PostgreSQL takes more ([stricter than
 PostgreSQL](#stricter-than-postgresql)). Assigned or cast, a number is held to a number column's
 range; cast to an integer type, a fraction is held to the range half a unit wider, as PostgreSQL
 rounds it (a value at exactly half a unit past may round out of range):
@@ -210,7 +213,7 @@ matches no row.
 
 ```clojure
 (:args (h/analyze registry {:update :users :set {:nick :?nick} :where [:= :id :?id]}))
-;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :id [:int #:pg{:type "bigint"}]}
+;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}
 ```
 
 A comparison with NULL is never true (it matches no row), so `:?id` above does not take nil.
@@ -219,7 +222,7 @@ Compare NULL in the query body: `[:= :id nil]` (HoneySQL writes `IS NULL`), or
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:is-not-distinct-from :id :?id]}))
-;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
+;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]]}
 ```
 
 Under `{:format {:inline true}}`, an argument the query also tests for NULL takes nil, as an
@@ -228,7 +231,7 @@ PostgreSQL refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]} {:format {:inline true}}))
-;; => {:id [:maybe [:int #:pg{:type "bigint"}]]}
+;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]]}
 ```
 
 ```clojure
@@ -244,7 +247,7 @@ The `[:map ...]` of `sql/format`'s `:params` is `:args` in a map. Every key is r
 
 ```clojure
 (into [:map] (sort-by key (:args (h/analyze registry {:update :users :set {:nick :?nick} :where [:= :id :?id]}))))
-;; => [:map [:id [:int #:pg{:type "bigint"}]] [:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]]]]
+;; => [:map [:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]] [:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]]]]
 ```
 
 ### A row written into a table
@@ -317,7 +320,7 @@ interfaces'.
 
 ```clojure
 (:args (h/analyze registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}))
-;; => {:status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed], :nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:pg/array [:int #:pg{:type "bigint"}]]}
+;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:pg/array [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]], :status [:enum {:default "active", :pg/default "active", :pg/type "user_status"} :active :closed]}
 ```
 
 A class adds to what a column takes where its type is the column's or one the column takes as
@@ -532,10 +535,10 @@ what `execute!` returns on a datasource or connection, `:any` where `:row` is ni
 
 ```clojure
 (h/query-schema registry [:id] {:select [:email] :from [:users] :where [:= :id :?id]} {:result :one})
-;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:maybe [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]] [:maybe [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]]]]
 
 (h/query-schema registry [:id] {:delete-from :users :where [:= :id :?id]} {:result :one})
-;; => [:=> #:pgmalli{:problems []} [:cat [:int #:pg{:type "bigint"}]] [:map [:next.jdbc/update-count :int]]]
+;; => [:=> #:pgmalli{:problems []} [:cat [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]] [:map [:next.jdbc/update-count :int]]]
 ```
 
 Where the data tells how many rows a statement returns, the return says so
@@ -593,7 +596,7 @@ A query schema's properties hold `:pgmalli/problems`, `[]` for none:
 ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]}]
 
 (m/form (first (m/children broken)))
-;; => [:cat [:int #:pg{:type "bigint"}]]
+;; => [:cat [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]]
 ```
 
 An argument of the query that the argument vector (`[:db :idd]`) lacks is `:missing-arg`,
@@ -620,12 +623,12 @@ naming its `:var`; `{:ns 'app.queries}` (or a list of namespaces) limits it to s
 pgmalli reports or refuses some of what PostgreSQL runs, where it is almost always a mistake.
 Write the query so PostgreSQL's reading is explicit instead.
 
-- An argument takes its column's own values, not all PostgreSQL converts: a `bigint` column
-  compared with a `numeric` argument, or a number assigned to a `text` column, PostgreSQL runs
-  by converting one side, which hides a mix-up the column's type would catch. Cast it in the
-  query (`[:cast :?n :numeric]`) where the conversion is meant. A number PostgreSQL converts
-  implicitly to the column's type (a `Long` to `numeric`, a `BigDecimal` to `double precision`)
-  is the column's own. A value of a `jsonb_populate_record` document likewise takes its column's own values, which
+- An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
+  PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
+  `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
+  time off), and a number assigned to a `text` column PostgreSQL converts through its text.
+  Cast it in the query (`[:cast :?n :bigint]`) where the conversion is meant. A value of a
+  `jsonb_populate_record` document likewise takes its column's own values, which
   PostgreSQL reads through the column type's input: no number to a `boolean` column (PostgreSQL
   reads `1` and `0`), and no `BigDecimal` to an integer column (it reads `1`, not `1.0`); send a
   `Boolean`, or a `Long`.

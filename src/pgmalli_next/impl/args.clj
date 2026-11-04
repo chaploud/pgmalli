@@ -77,7 +77,8 @@
    String goes as a type that takes the labels: a text label as a String only then, as a keyword
    where a row of keywords goes, unless keywords? is false (HoneySQL writes a keyword in :values
    as a column); a number as the number class of each number row (1.0 as 1 where a bigint goes
-   to a double precision). Where no label is sent (an enum's under pgjdbc's
+   to a double precision, 1 as 1.0 where a double is compared with an integer, as a Float in an
+   :enum of its own where a real is). Where no label is sent (an enum's under pgjdbc's
    default, which sends a String as varchar), a PGobject, which pgjdbc sends as the type it names."
   [own alts context strings? keywords?]
   (let [e (shape/domain-base own)
@@ -105,16 +106,21 @@
         ;; and checks the list after: those values are not held to the labels here
         converted (when (and (= :cast context) (every? number? labels))
                     (distinct (remove #(#{:int 'integer? :string} (shape/kind %)) (map second alts))))
-        all (concat (when labelled [labelled]) converted (when (nil? labelled) [jdbc/pg-object]))]
+        ;; a set holds 1.0 or a Float 1.0, which are =, not both: an :enum of its own
+        floats (when (and labelled (kinds 'float?)) (seq (distinct (map float (filter number? labels)))))
+        all (concat (when labelled [labelled]) (when floats [(into [:enum] floats)]) converted (when (nil? labelled) [jdbc/pg-object]))]
     (if (next all) (into [:or] all) (first all))))
 
 (defn accepted-type
-  "The type of an argument where a value of column schema s goes, in context (:compare,
-   :assign, :cast or :json), as docs/queries.md#the-types-of-the-arguments says: its own values
-   (jdbc/write-type), and the values of each type sent that the column holds (accept/holds?)
-   or, cast, that PostgreSQL casts (accept/accepts?); labels as labelled-type sends them."
-  [registry s context opts]
-  (let [t (query/slot-type registry s)
+  "The type of an argument where a value of column schema s goes, in context (:compare, :call,
+   :common, :assign, :cast or :json), as docs/queries.md#the-types-of-the-arguments says: its
+   own values (jdbc/write-type), and the values of each type sent that the column holds
+   (accept/holds?) or, cast, that PostgreSQL casts (accept/accepts?); labels as labelled-type
+   sends them. A function's argument (:call) and an operand resolved to the others' type
+   (:common) are compared but for the types they hold."
+  [registry s held-in opts]
+  (let [context (if (#{:call :common} held-in) :compare held-in)
+        t (query/slot-type registry s)
         opts (cond-> opts (#{"character" "\"char\""} t) (assoc ::jdbc/characters true))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) query/loose
@@ -127,7 +133,7 @@
         ;; element type; a scalar through the array type's input alike for every element type
         es (when (= :cast context) (some->> (types/element (:pg/type (shape/column-props s))) (query/named-type-schema registry opts)))
         t (or t (when es "text[]"))
-        takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t % context))
+        takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t % held-in))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
         arrays (when (= :cast context)
                  (for [a (shape/alternatives
@@ -385,7 +391,7 @@
         o operands
         :when (syntax/param-key o)]
     ;; the others' values join a CHECK's list: its base type
-    [o (query/nullable (accepted-type registry (query/beyond-list registry (:schema r)) :compare opts))]))
+    [o (query/nullable (accepted-type registry (query/beyond-list registry (:schema r)) :common opts))]))
 
 (defn- call-args
   "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve
@@ -406,8 +412,8 @@
     [a (cond any? jdbc/typed
              (next ss) (query/nullable
                         ;; a value of each type, which a :pg/type of one would misname
-                        (shape/either (shape/distinct-kinds (mapcat #(map unlabel (shape/alternatives (accepted-type registry % :compare opts))) ss)) :any))
-             :else (query/nullable (accepted-type registry (first ss) :compare opts)))]))
+                        (shape/either (shape/distinct-kinds (mapcat #(map unlabel (shape/alternatives (accepted-type registry % :call opts))) ss)) :any))
+             :else (query/nullable (accepted-type registry (first ss) :call opts)))]))
 
 (defn- null-tested-args
   "The arguments a statement among positions ps tests for NULL ([:= :?x nil], which HoneySQL

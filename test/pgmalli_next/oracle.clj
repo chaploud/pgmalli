@@ -908,11 +908,11 @@
                                   takes? (and sent (or (not= :unknown sent) (accept/reads? t (class v) (if cast? :cast :assign))) (if cast?
                                                      (accept/accepts? t sent :cast)
                                                      ;; an array assigned to an array column: element by element, as array-type reads it
-                                                     (let [assign? (#{:update :insert :insert-select :insert-select-dropped} context)
+                                                     (let [assign? (#{:update :insert :insert-select :insert-select-dropped :limit} context)
                                                            elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))]
                                                        (accept/holds? (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
                                                                       (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
-                                                                      (if assign? :assign :compare)))))
+                                                                      (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare)))))
                                   refused? (not (try (m/validate s arg) (catch Exception _ false)))
                                   row-refused? (written-refuses opts table column context v)
                                   ;; NULL in a NOT NULL column fails once a row is written; the table may have none
