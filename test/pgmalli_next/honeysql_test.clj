@@ -2590,3 +2590,10 @@
     (is (= (row-type :real) (row-type [:float 10]) (row-type [:raw "float(24)"])) "gram.y opt_float")
     (is (= (row-type :double-precision) (row-type [:float 25]) (row-type :float)))
     (is (= (row-type :numeric) (row-type :dec)))))
+
+(deftest a-table-has-system-columns-a-view-has-none
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]]
+                                          :pg.public/v [:map {:pg/view "public.v"} [:id [:int {:pg/type "integer"}]]]}})
+        problems #(:problems (h/analyze reg {:select [:ctid :tableoid] :from [%]}))]
+    (is (= [] (problems :t)))
+    (is (= [:ctid :tableoid] (map :column (problems :v))) "column ctid does not exist")))

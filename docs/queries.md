@@ -102,7 +102,7 @@ of `SELECT *`. A function of `pg_catalog` or of a generated schema in FROM
 has the columns it returns ([The row a query returns](#the-row-a-query-returns)). The columns of
 another table function (named by its alias, `WITH ORDINALITY` too) and of an
 `information_schema` view the registry lacks exist but have no type. Comparisons with them, or with an expression `:row` leaves untyped, are not
-checked. Every table has the system columns (`ctid`, `xmin`, ...).
+checked. Every table has the system columns (`ctid`, `xmin`, ...); a view has none.
 
 ## Writes
 

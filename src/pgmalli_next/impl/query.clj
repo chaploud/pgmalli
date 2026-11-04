@@ -58,9 +58,15 @@
       (catalog-columns table (::versions registry))))
 
 (def system-columns
-  "The columns every table has besides its own."
-  {"ctid" [:some {:pg/type "tid"}] "xmin" [:some {:pg/type "xid"}] "xmax" [:some {:pg/type "xid"}]
-   "cmin" [:some {:pg/type "cid"}] "cmax" [:some {:pg/type "cid"}] "tableoid" [:int {:pg/type "oid"}]})
+  "The columns every table (no view) has besides its own (pg_attribute's attnum < 0), typed as a
+   column of its type is."
+  (into {} (for [[c t] {"ctid" "tid" "xmin" "xid" "xmax" "xid" "cmin" "cid" "cmax" "cid" "tableoid" "oid"}]
+             [c (or (types/type-schema t) [:any {:pg/type t}])])))
+
+(defn- view?
+  "Whether the registry's row schema of table is a view's."
+  [registry table]
+  (boolean (some-> (get (::schemas registry) (shape/table-key table)) shape/row-props :pg/view)))
 
 (defn- held-schemas
   "The schemas a registry's schemas hold generated files, tables or views of, sorted."
@@ -88,7 +94,8 @@
                   r (assoc r
                            ::held (held-schemas schemas)
                            ::generated? (boolean (some shape/generated-name? (keys schemas)))
-                           ::table-columns (memoize #(some->> (column-entries r %) (map (fn [[c s]] [c s])) (into system-columns)))
+                           ::table-columns (memoize #(some->> (column-entries r %) (map (fn [[c s]] [c s]))
+                                                              (into (if (view? r %) {} system-columns))))
                            ::routines (memoize #(own-routines r %1 %2 %3)))]
               (reset! last-read [schemas r])
               r))]
