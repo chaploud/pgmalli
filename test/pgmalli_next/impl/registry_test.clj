@@ -204,3 +204,16 @@
     (is (thrown? StackOverflowError (re-find #"^([a-z0-9]|-)+$" long-value)) "the thread's own stack runs out")
     (is (m/validate s long-value))
     (is (not (m/validate s (str long-value "!"))))))
+
+(deftest a-default-pgmalli-cannot-parse-is-its-sql-and-the-column-optional-in-insert
+  (let [reg (registry-of {} [{:name "c" :position 1 :data_type "text" :is_nullable false :default_value "CASE WHEN"}] [])
+        c (some #(when (= :c (first %)) %) (m/children (m/deref (m/schema :pg.public/t {:registry reg}))))]
+    (is (= {:sql "CASE WHEN"} (:pg/default (m/properties (last c)))))
+    (is (m/validate :pg.public.t/insert {} {:registry reg}))))
+
+(deftest a-domains-default-expression-reaches-its-columns
+  (let [reg (registry-of {"stamp" {:kind "DOMAIN" :base_type "timestamp with time zone" :not_null true :default "now()" :constraints []}}
+                         [{:name "at" :position 1 :data_type "stamp" :type_schema "public" :is_nullable false}] [])
+        c (some #(when (= :at (first %)) %) (m/children (m/deref (m/schema :pg.public/t {:registry reg}))))]
+    (is (= {:sql "now()"} (:pg/default (m/properties (last c)))))
+    (is (m/validate :pg.public.t/insert {} {:registry reg}))))

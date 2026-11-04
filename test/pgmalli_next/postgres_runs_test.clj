@@ -33,7 +33,7 @@
                          INSERT INTO uq VALUES (1, NULL, 1, NULL), (2, NULL, 1, NULL);
                          CREATE TABLE arr (xs int[], cs citext[]);
                          INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
-                         CREATE TABLE typed (id int, i int, b bigint, n numeric, f double precision, u uuid, d date, ts timestamp, tz timestamptz,
+                         CREATE TABLE typed (id int, i int, b bigint, n numeric, f double precision, fs double precision[], u uuid, d date, ts timestamp, tz timestamptz,
                            ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[], c1 char(1));
                          INSERT INTO typed (id) VALUES (1);
                          CREATE TABLE ul (v varchar(5), n int CHECK (n BETWEEN 1 AND 9), j jsonb CHECK (jsonb_typeof(j) = 'object'), x numeric);
@@ -221,10 +221,12 @@
           (is (some? (runs! q {:x \a} {})))
           (is (= taken? (accepted? reg q {:x \a} {}))))))))
 
-(deftest a-big-decimal-goes-to-a-float-column-and-a-big-int-into-a-populated-integer
+(deftest a-big-decimal-or-its-array-goes-to-a-float-column-and-a-big-int-into-a-populated-integer
   (when *db*
     (let [reg (registry)]
       (doseq [[q x] [[{:update :typed :set {:f :?x} :where [:= :id 1]} 1.5M]
+                     [{:update :typed :set {:fs :?x} :where [:= :id 1]} (into-array BigDecimal [1.5M])]
+                     [{:update :typed :set {:fs :?x} :where [:= :id 1]} (into-array Double [1.5])]
                      [{:select [:r.i] :from [[[:jsonb_populate_record [:cast nil :typed] :?x] :r]]} {:i 2N}]]]
         (testing (pr-str q x)
           (is (some? (runs! q {:x x} {})))

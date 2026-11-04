@@ -51,7 +51,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry takes generated data maps" (pgmalli/registry x)))))
 
 (deftest a-file-that-is-not-generated-data-is-an-error-naming-it
-  (let [config {:schemas ["sample"] :out-dir (str "target/not-generated-" (System/nanoTime))}
+  (let [config {:schemas ["sample"] :out-dir (str (doto (java.io.File/createTempFile "pgmalli-not-generated" "") .delete))}
         path (files/path-for config "sample")]
     (doseq [text ["{:schema" "[1 2]"]]
       (spit (doto path (io/make-parents)) text)

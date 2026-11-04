@@ -2482,3 +2482,12 @@
       "a query schema's parts are where they are, problems or not")
   (is (= {:args [["bigint"]] :returns [{:id "bigint"}]}
          (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))
+
+(deftest special-syntax-writing-an-operator-names-its-column-?column?
+  (doseq [e [[:in :id [1 2]] [:not-in :id [1 2]] [:not true] [:between :id 1 2] [:not-between :id 1 2]
+             [:lift 1] [:param :x] [:inline 1]]]
+    (is (= [:?column?] (map first (rest (row {:select [[e]] :from [:users]})))) (pr-str e))))
+
+(deftest special-syntax-is-no-function-call
+  (is (= [:any #:pgmalli{:untyped :position}] (:x (args {:select [[[:interval :?x]]]})))
+      "INTERVAL ? is no call of a function or a cast named interval"))
