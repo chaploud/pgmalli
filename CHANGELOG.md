@@ -118,7 +118,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   jsonb_populate_record(p, ?::jsonb)`), is typed: a closed map of the table's columns as
   keyword keys (a vector of them for a recordset), each value what the column's type reads
   from the JSON the one sending writes, its length, range, CHECK, labels and jsonb shape kept.
-  A key of no column, which PostgreSQL ignores, is refused. Under `INSERT INTO t (cols) SELECT`
+  The keys are the columns the statement uses of the call (all of them under `r.*`, `SELECT *`
+  or its whole row). A key of no column, or of a column the statement does not use, which
+  PostgreSQL ignores, is refused. Under `INSERT INTO t (cols) SELECT`
   of the populated columns, a NOT NULL column's key is required. The function's columns are
   the table's, nullable.
 * The one sending's `jsonb` writes a `LocalDate`, a `LocalDateTime`, a `LocalTime`, an

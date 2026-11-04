@@ -2018,6 +2018,36 @@
       (is (ok? update :row {:nick "ann"}) "the whole row of the UPDATE's table, every key optional")
       (is (not (ok? update :row {:nick "ann" :scor 1}))))))
 
+(deftest a-populate-documents-keys-are-the-columns-the-statement-uses-of-it
+  (let [keys-of (fn [query k] (set (some #(when (and (vector? %) (= :map (first %)) (:closed (second %))) (map first (drop 2 %)))
+                                         (tree-seq vector? seq (k (args query))))))
+        insert (fn [select more] {:insert-into [[:users [:group_id :score]]
+                                                (merge {:select select :from [[[:jsonb_populate_recordset [:cast nil :users] :?rows] :r]]} more)]})
+        record (fn [select more] (merge {:select select :from [[[:jsonb_populate_record [:cast nil :users] :?doc] :r]]} more))]
+    (is (= #{:nick :score} (keys-of {:update [:users :p] :set {[:composite :nick :score] {:select [:r.nick :r.score] :from [[[:jsonb_populate_record :p [:cast :?row :jsonb]] :r]]}}
+                                     :where [:= :p.id 1]}
+                                    :row))
+        "an UPDATE's SET of a row takes the columns its subquery selects")
+    (is (= #{:group_id :score} (keys-of (insert [:r.group_id :r.score] {}) :rows)) "INSERT ... SELECT")
+    (is (= #{:group_id :score} (keys-of (insert [:group_id :score] {}) :rows)) "unqualified")
+    (is (= #{:group_id :score :mood} (keys-of (insert [:r.group_id :r.score] {:where [:= :r.mood "sad"]}) :rows)) "a column WHERE reads")
+    (is (= #{:nick :group_id} (keys-of (record [[[:upper :r.nick]]] {:order-by [:r.group_id]}) :doc)) "a column of an expression, and ORDER BY")
+    (is (= #{:nick :id} (keys-of (record [:r.nick] {:where [:exists {:select [1] :from [:groups] :where [:= :groups.id :r.id]}]}) :doc))
+        "a column a subquery reads")
+    (is (= #{:nick :born} (keys-of (record [:r.nick :j.k] {:from [[[:jsonb_populate_record [:cast nil :users] :?doc] :r] [[:lateral {:select [[:r.born :k]]}] :j]]}) :doc))
+        "a column a LATERAL subquery reads")
+    (is (= #{:nick} (keys-of (record [:r.nick] {:where [:exists {:select [1] :from [[:groups :r]] :where [:= :r.id 1]}]}) :doc))
+        "not a column of a nearer table of the alias's name")
+    (doseq [select [[:r.*] [:*] [[[:to_jsonb :r]]]]]
+      (is (contains? (keys-of (record select {}) :doc) :closed_at) (str "every column under " select)))
+    (is (contains? (keys-of (record [:r.nick] {:where [:= [:raw "r.score"] 1]}) :doc) :score) "every column under :raw")
+    (is (contains? (keys-of {:select [:r.nick :x] :from [[[:jsonb_populate_record [:cast nil :users] :?doc] [:r {:columns [:x]}]]]} :doc) :born)
+        "every column, an alias's list renaming them")
+    (is (not (m/validate (:rows (args (insert [:r.group_id :r.score] {}))) [{:group_id 1 :score 0 :nick "ann"}] {:registry registry}))
+        "a key of a column written nowhere")
+    (is (not (m/validate (:rows (args (insert [:r.group_id :r.score] {}))) [{:group_id 1}] {:registry registry}))
+        "a NOT NULL column's key still required")))
+
 (deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
   (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric(10,2)"} 'decimal? [:> 0]]
                                           :pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]

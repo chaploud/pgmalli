@@ -328,6 +328,12 @@
       (testing "a key of no column: PostgreSQL ignores it, pgmalli refuses it"
         (is (some? (runs! q {:rows [{:group_id 1 :name "a" :sortOrder 1}]} {})))
         (is (not (accepted? reg q {:rows [{:group_id 1 :name "a" :sortOrder 1}]} {}))))
+      (testing "a key of a column the statement does not use: PostgreSQL ignores it, pgmalli refuses it"
+        (let [q (insert :positions [:group_id :name])
+              rows [{:group_id 1 :name "a" :sort_order 1}]]
+          (is (some? (runs! q {:rows rows} {})))
+          (is (not (accepted? reg q {:rows rows} {})))
+          (is (accepted? reg q {:rows (mapv #(dissoc % :sort_order) rows)} {}))))
       (doseq [row [{:group_id 1 :name long-name} {:group_id 1 :name "a" :sort_order 3000000000} {:group_id 1 :name "a" :sort_order 1.5}
                    {:group_id 1}]]
         (testing (pr-str row)

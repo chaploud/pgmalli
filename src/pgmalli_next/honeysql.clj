@@ -2135,16 +2135,35 @@
    type's columns as keyword keys, closed, each a json-field-type or nil; for a recordset, a
    vector of them; in place of the collections a json or jsonb value of the parameter takes
    there (bare, a value sent as the function's json or jsonb; cast, what the cast takes), or
-   nil. A key is required, its value not nil, where an INSERT ... SELECT writes the column of
+   nil. The keys are the columns the statements reading the call's alias name of it (resolved
+   as a column of it, in the statement or one nested in it), or every column where a use names
+   none in particular: a star, its whole row, :raw, code, or a list of columns renaming them.
+   A key is required, its value not nil, where an INSERT ... SELECT writes the column of
    that name of the row type's table straight from it (positions not :may-drop?) and NULL
-   may not go there (assigned-column)."
-  [registry ps opts]
-  (for [{:keys [x chain]} (expression-nodes ps)
+   may not go there (assigned-column). sps are the query's statement-positions."
+  [registry sps opts]
+  (for [[_ c _ ps] sps
+        {:keys [x chain]} (expression-nodes ps)
         :let [{:keys [table set? type json arg]} (populate-call registry chain x opts)]
         :when arg
         :let [s (if (arg-key json) (types/type-schema type) (:schema (expression-type registry chain json opts)))
               base (accepted-type registry s (if (arg-key json) :compare :cast) opts)
-              alias (some (fn [{i :x}] (when (and (vector? i) (identical? x (first i))) (second (table-ref i (:schema opts))))) ps)
+              item (some (fn [{i :x}] (when (and (vector? i) (identical? x (first i))) i)) ps)
+              alias (when item (second (table-ref item (:schema opts))))
+              ;; whether alias names, in a chain, the call's item: not where a scope nearer has an
+              ;; alias of that name, nor in the item itself
+              sees? (fn [chain] (identical? (get (first c) alias) (some #(when (map? %) (get % alias)) chain)))
+              reads (for [[_ c' _ ps'] sps :when (and alias (sees? c')), n (expression-nodes ps')] n)
+              untold? (fn [{y :x chain :chain}]
+                        (or (seq? y) (and (vector? y) (= :raw (first y)))
+                            (and (keyword? y) (let [[a column] (split-column y)]
+                                                (or (and (star? y) (contains? #{nil alias} a))
+                                                    (and (nil? a) (= alias (folded column)) (sees? chain)))))))
+              used (when (and alias (not (vector? (second item))) (not-any? untold? reads))
+                     (set (for [{y :x chain :chain} reads :when (column-keyword? y)
+                                :let [{:keys [column opaque?] from :table} (resolve-column registry chain y)]
+                                :when (and opaque? (= alias from))]
+                            column)))
               required (set (for [{c :x :as a} (assignments ps)
                                   :when (and alias (not (:may-drop? a)) (column-keyword? c))
                                   :let [{:keys [column opaque?] from :table} (resolve-column registry (:chain a) c)
@@ -2153,6 +2172,7 @@
                               column))
               doc (into [:map {:closed true}]
                         (for [[c cs] (column-entries registry table)
+                              :when (or (nil? used) (contains? used c))
                               :let [req? (contains? required c)]]
                           (jdbc/row-entry (keyword c) (when-not req? {:optional true}) (json-field-type registry cs opts) (not req?))))
               [kept dropped] (if set? [:vector :map-of] [:map-of :vector])]]
@@ -2244,11 +2264,13 @@
    :params takes them (:id): every one of them, one pgmalli cannot type [:any {:pgmalli/untyped
    why}]. docs/queries.md#the-types-of-the-arguments says where an argument is typed and how."
   [registry body opts]
-  (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args populate-args]
-        typed (for [[_ _ _ ps] (once registry statement-positions body opts)
-                    f uses
-                    use (f registry ps opts)]
-                use)
+  (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
+        sps (once registry statement-positions body opts)
+        typed (concat (for [[_ _ _ ps] sps
+                            f uses
+                            use (f registry ps opts)]
+                        use)
+                      (populate-args registry sps opts))
         untyped (into {} (for [x (tree-seq branch? seq body) :let [k (param-key x)] :when k] [k :any]))
         types (reduce (fn [acc [x t]] (if-let [k (arg-key x)] (update acc k both-uses t) acc))
                       untyped typed)
