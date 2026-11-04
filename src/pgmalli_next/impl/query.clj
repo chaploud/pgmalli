@@ -260,7 +260,7 @@
         row (when target (assoc (get sc target) :qualifier-only? true))]
     (cond-> sc
       (and row (contains? stmt :on-conflict)) (assoc "excluded" row)
-      ;; an INSERT has no old row, a DELETE no new one
+      ;; old is NULL for a row an INSERT inserts (DO UPDATE's has one), new always in a DELETE
       (and row (contains? stmt :returning))
       (merge (into {} (for [[n absent?] [["old" (contains? stmt :insert-into)] ["new" (contains? stmt :delete-from)]] :when (not (contains? sc n))]
                         [n (cond-> row absent? (assoc :nullable? true))]))))))

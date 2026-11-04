@@ -75,14 +75,19 @@
   (when (and (vector? t) (vector? (first t)) (= :join (ffirst t)))
     (let [[_ base & inner] (first t)] [base (filter map? inner)])))
 
-(defn from-items
-  "The table items under the keys ks (:from, :using, :cross-join): one alone (a table, a
-   subquery) or a vector of them; of a parenthesized join, its first item (its joins are
-   joins')."
+(defn- written-items
+  "The items under the keys ks (:from, :using, :cross-join) as written: one alone (a table, a
+   subquery) or a vector of them."
   [stmt ks]
   (for [k ks :let [f (get stmt k)] :when f
         t (cond (or (keyword? f) (map? f)) [f] (vector? f) f)]
-    (if-let [[base] (join-group t)] base t)))
+    t))
+
+(defn from-items
+  "The table items under the keys ks (:from, :using, :cross-join); of a parenthesized join, its
+   first item (its joins are joins')."
+  [stmt ks]
+  (for [t (written-items stmt ks)] (if-let [[base] (join-group t)] base t)))
 
 (defn- join-by-entries
   "[join-key path clauses] of each join of :join-by v, as sql/format reads it (join types and
@@ -120,20 +125,25 @@
   [t]
   (if-let [[base js] (join-group t)] {:group [base (group-joins js)]} t))
 
-(defn- from-group-joins
-  "The group-joins of each parenthesized join of a statement's FROM, its first item a FROM item."
+(defn- from-groups
+  "[base entries last?] of each parenthesized join among a statement's FROM, USING and CROSS
+   JOIN items, entries its group-joins, last? where it is the item the joins attach to (join-base)."
   [stmt]
-  (mapcat #(when-let [[_ js] (join-group %)] (group-joins js))
-          (let [f (:from stmt)] (cond (vector? f) f (some? f) [f]))))
+  (let [attached (last (written-items stmt [:from :using]))]
+    (for [t (written-items stmt from-keys) :let [[base js] (join-group t)] :when base]
+      [base (group-joins js) (identical? t attached)])))
+
+(defn- flat-entry
+  "A join entry, of a parenthesized join its first item's and then those inside it."
+  [[k t c :as j]]
+  (if-let [[base js] (:group t)] (cons [k base c] (mapcat flat-entry js)) [j]))
 
 (defn joins
   "[join-key item condition] of every join of a statement, in the order sql/format writes them
    (:join-by's, then join-keys'; a cross join's condition nil), those inside a parenthesized join
-   of its FROM first; of a parenthesized join, its first item, then the joins inside it."
+   among its FROM items first; of a parenthesized join, its first item, then the joins inside it."
   [stmt]
-  (letfn [(flat [[k t c :as j]]
-            (if-let [[base js] (:group t)] (cons [k base c] (mapcat flat js)) [j]))]
-    (mapcat flat (concat (from-group-joins stmt) (join-entries stmt)))))
+  (mapcat flat-entry (concat (mapcat second (from-groups stmt)) (join-entries stmt))))
 
 (defn table-items
   "The table items of a statement's FROM (and USING, CROSS JOIN) and joins."
@@ -207,9 +217,12 @@
         [table alias] (if (vector? table) [(first table) (second table)] [table nil])
         [alias listed] (if (vector? more) [alias more] [more nil])]
     (when (keyword? table)
-      ;; HoneySQL writes :columns' :t/c as c, a column the target lists as t.c
-      {:table table :alias alias :select select
-       :columns (or listed (let [c (:columns stmt)] (when (vector? c) (mapv #(if (and (keyword? %) (namespace %)) (keyword (name %)) %) c))))})))
+      ;; HoneySQL writes :t/c as c in :columns, as t.c in the target's list
+      (let [unspaced (fn [f c] (mapv #(if (and (keyword? %) (namespace %)) (keyword (f %)) %) c))]
+        {:table table :alias alias :select select
+         :columns (if listed
+                    (unspaced #(str (namespace %) "." (name %)) listed)
+                    (let [c (:columns stmt)] (when (vector? c) (unspaced name c))))}))))
 
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
@@ -337,7 +350,14 @@
                                  (update :nullable into (:nullable inner))
                                  (update :before into as))))
                          acc entries))]
-    (:nullable (extend {:before (vec (join-base stmt opts)) :nullable #{}} (concat (from-group-joins stmt) (join-entries stmt))))))
+    ;; a parenthesized join among the FROM items extends its own tables; the joins after them
+    ;; see its tables where it is the item they attach to
+    (:nullable (extend (reduce (fn [acc [base js last?]]
+                                 (let [inner (extend {:before [(alias base)] :nullable #{}} js)]
+                                   (cond-> (update acc :nullable into (:nullable inner)) last? (assoc :before (:before inner)))))
+                               {:before (vec (join-base stmt opts)) :nullable #{}}
+                               (from-groups stmt))
+                       (join-entries stmt)))))
 
 (defn- array-cast-of-argument?
   "Whether x is an argument cast to an array type ([:cast :?ids [:raw \"bigint[]\"]])."
@@ -370,7 +390,7 @@
   "Whether a FROM or join item sees the items before it: LATERAL, or a function call, which is
    implicitly LATERAL."
   [item]
-  (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (keyword? (ffirst item))))))
+  (and (vector? item) (or (= :lateral (first item)) (and (vector? (first item)) (keyword? (ffirst item)) (not (join-group item))))))
 
 (defn- with-entries
   "[entries key index entry] of each entry of every :with and :with-recursive in query body."
@@ -473,18 +493,19 @@
    statement's tables and the enclosing ones (its conditions, select, assignments); :outer, only
    the enclosing ones (INSERT ... SELECT, the rows of :values and a table item of :from or a
    join: none sees the statement's own tables); :lateral, those and the tables before it (a
-   LATERAL item, a function)."
+   LATERAL item, a function); :group, those and a parenthesized join's own tables (its ONs)."
   [x]
   (for [[k v] (clause-entries x) :when (not (some #{k} with-keys))
+        :let [item-sees #(cond (join-group %) :group (lateral? %) :lateral :else :outer)]
         part (cond (#{:insert-into :values} k) [[[k] v :outer]]
                    (and (vector? v) (some #{k} from-keys))
-                   (map-indexed (fn [i t] [[k i] t (if (lateral? t) :lateral :outer)]) v)
+                   (map-indexed (fn [i t] [[k i] t (item-sees t)]) v)
                    (and (vector? v) (some #{k} join-keys))
-                   (map-indexed (fn [i t] [[k i] t (cond (odd? i) :own (lateral? t) :lateral :else :outer)]) v)
+                   (map-indexed (fn [i t] [[k i] t (if (odd? i) :own (item-sees t))]) v)
                    (and (= :join-by k) (seq (join-by-entries v)))
                    (for [[jk p c] (join-by-entries v)
                          part (if (vector? c)
-                                (map-indexed (fn [i t] [(into [k] (conj p i)) t (cond (and (odd? i) (not= :cross-join jk)) :own (lateral? t) :lateral :else :outer)]) c)
+                                (map-indexed (fn [i t] [(into [k] (conj p i)) t (if (and (odd? i) (not= :cross-join jk)) :own (item-sees t))]) c)
                                 [[(into [k] p) c :own]])]
                      part)
                    (some #{k} from-keys) [[[k] v :outer]]
@@ -498,7 +519,10 @@
   (case sees
     :own chain
     :outer outer
-    :lateral (cons (dissoc (first chain) (second (table-ref part opts))) (rest chain))))
+    :lateral (cons (dissoc (first chain) (second (table-ref part opts))) (rest chain))
+    :group (let [[base js] (join-group part)
+                 tables (cons base (map second (mapcat flat-entry (group-joins js))))]
+             (cons (select-keys (first chain) (map #(second (table-ref % opts)) tables)) outer))))
 
 (defn split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table (:schema.a.b too), :b does
@@ -584,13 +608,18 @@
     x))
 
 (def select-list-clauses
-  "The clauses of a select list, whose items are [expr alias]."
-  #{:select :select-distinct :select-distinct-on :returning})
+  "The clauses of a select list, whose items are [expr alias] (selected-items')."
+  #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top :returning})
+
+(defn- distinct-on-parts
+  "[expressions items] of a :select-distinct-on value: DISTINCT ON's, then the select list's."
+  [v]
+  (when (vector? v) [(vectorish (first v)) (rest v)]))
 
 (defn distinct-on-expressions
   "The expressions of :select-distinct-on's DISTINCT ON."
   [stmt]
-  (let [d (:select-distinct-on stmt)] (when (vector? d) (vectorish (first d)))))
+  (first (distinct-on-parts (:select-distinct-on stmt))))
 
 (defn selected-items
   "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
@@ -598,8 +627,9 @@
    operand."
   [stmt]
   (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))
-        after-first (or (:select-distinct-on stmt) (:select-top stmt) (:select-distinct-top stmt))]
+        after-first (or (:select-top stmt) (:select-distinct-top stmt))]
     (for [item (cond (or (vector? s) (keyword? s)) (vectorish s)
+                     (:select-distinct-on stmt) (second (distinct-on-parts (:select-distinct-on stmt)))
                      (vector? after-first) (rest after-first))]
       (if (and (vector? item) (<= 1 (count item) 2))
         (let [e (operand-alone (first item))] (if (and (= 1 (count item)) (keyword? e)) e (assoc item 0 e)))
@@ -768,7 +798,8 @@
                                    (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
                                      (if (and top? (= :select-distinct-on k) (vector? x))
                                        ;; DISTINCT ON's expressions, then the select list's items
-                                       (concat (mapcat #(walk % neg? false false) (vectorish (first x))) (mapcat #(walk % neg? false true) (rest x)))
+                                       (let [[es items] (distinct-on-parts x)]
+                                         (concat (mapcat #(walk % neg? false false) es) (mapcat #(walk % neg? false true) items)))
                                        ;; a window's :frame ([:rows :between :unbounded-preceding :current-row]) is its own clause
                                        (mapcat #(if (and (map? x) (= :frame (key %))) (nodes :frame (val %) c) (walk % neg? false top?))
                                                ;; [expr alias], an item of a select list: the alias (:%count.c too) is no expression
@@ -1035,10 +1066,14 @@
   [x]
   (let [h (when (vector? x) (first x))
         fname (or (called x) (shorthand-fn x))
-        ;; :%abs.1 is ABS(1); a word between the arguments (TRIM(LEADING FROM s)) is none
+        ;; :%abs.1 is ABS(1); a word between the arguments (TRIM(LEADING FROM s)) is none, and
+        ;; EXTRACT's field before it (:year) a name, no column
         args (remove keyword-word?
                      (cond (shorthand-fn x) (map #(if (re-matches #"\d+" %) [:inline (parse-long %)] (keyword %)) (rest (str/split (subs (str x) 2) #"\.")))
-                           (vector? x) (rest x)))]
+                           (vector? x) (rest x)))
+        args (if (and (= "extract" fname) (keyword? (first args)) (not (keyword-word? (first args))))
+               (cons [:inline (name (first args))] (rest args))
+               args)]
     (cond (not (or h fname)) nil
           ;; name => value, a named argument: no operator
           (= :=> h) nil

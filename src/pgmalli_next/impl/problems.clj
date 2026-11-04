@@ -130,8 +130,12 @@
                                           [(second x) chain])
                                         ;; a column a call's argument names ([:upper :email]), in a clause of expressions;
                                         ;; an item of SELECT, ORDER BY or RETURNING is [expression alias|direction], no call
-                                        (for [{:keys [x chain item? clause]} (syntax/expression-nodes ps)
-                                              :when (and (expression-clauses clause) (not (and item? (or (syntax/select-list-clauses clause) (= :order-by clause)))))
+                                        ;; the value of a list clause ([:a :b] of ORDER BY) is its items, no call
+                                        (for [{:keys [x chain item? top? clause]} (syntax/expression-nodes ps)
+                                              :let [items? (or (syntax/select-list-clauses clause) (= :order-by clause))]
+                                              :when (and (expression-clauses clause)
+                                                         (not (and top? (or items? (#{:group-by :partition-by} clause))))
+                                                         (not (and item? items?)))
                                               ;; [expr direction], an item of an ORDER BY inside OVER or an aggregate, is no
                                               ;; call: its expression alone names a column
                                               :let [ordered? (and (vector? x) (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x))))))

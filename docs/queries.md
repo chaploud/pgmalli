@@ -689,7 +689,7 @@ Write the query so PostgreSQL's reading is explicit instead.
 - RETURNING's `old` and `new` are taken on every version; PostgreSQL before 18 refuses them.
 - A bare keyword first in a window's PARTITION BY or ORDER BY vector (`{:partition-by [:a :b]}`'s
   `a`), the columns of a named `:window`, the columns of a frame's offsets, and the bare
-  keywords of an aggregate's ORDER BY or DISTINCT, its expression too
+  keywords of an aggregate's ORDER BY, the aggregated one included, or DISTINCT
   (`[:array_agg [:order-by :nick :id]]`'s `nick` and `id`, `[:distinct :nick]`'s and
   `{:distinct :nick ...}`'s `nick`).
 - An argument schema with a regex CHECK (`[:and [:string] [:re ...]]`) does not generate with

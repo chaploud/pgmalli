@@ -2784,7 +2784,15 @@
     (is (not (maybe? {:select [:g.id [:u.nick :un]] :from [[:groups :g]] :join [[[:join [:users :u] {:right-join [[:groups :h] [:= :h.id :u.group_id]]}]] [:= :u.group_id :g.id]]} :id))
         "a RIGHT JOIN inside extends the tables inside alone")
     (is (= [] (check {:select [:g.id :u.nick :h.name] :from [[:groups :g]] :left-join [[[:join [:users :u] {:cross-join [[:groups :h]]}]] [:= :u.group_id :g.id]]})))
-    (is (= [] (check {:select [:u.nick :g.name] :from [[[:join [:users :u] {:join [[:groups :g] [:= :g.id :u.group_id]]}]]]})) "in FROM too")))
+    (is (= [] (check {:select [:u.nick :g.name] :from [[[:join [:users :u] {:join [[:groups :g] [:= :g.id :u.group_id]]}]]]})) "in FROM too")
+    (is (not (maybe? {:select [[:x.name :xn]] :from [[[:join [:users :u] {:right-join [[:groups :h] [:= :h.id :u.group_id]]}]] [:groups :x]]} :xn))
+        "a RIGHT JOIN inside a FROM item extends no other FROM item")
+    (is (= [] (check {:delete-from :users :using [[[:join [:groups :g] {:join [[:groups :h] [:= :h.id :g.id]]}]]] :where [:= :h.id :users.group_id]})) "in USING")
+    (is (= [] (check {:select [:u.nick :g.name] :from [[:groups :x]] :cross-join [[[:join [:users :u] {:join [[:groups :g] [:= :g.id :u.group_id]]}]]]})) "in CROSS JOIN")
+    (is (= [] (check {:select [:x.id] :from [[:groups :x]] :left-join [[[:join [:groups :g] {:join [[:users :u] [:= :u.group_id :name]]}]] [:= :g.id :x.id]]}))
+        "an ON inside sees the tables inside alone: name is g's")
+    (is (= [:unknown-column] (map :kind (check {:select [:x.id] :from [[:groups :x]] :left-join [[[:join [:groups :g] {:join [[:users :u] [:= :u.group_id :x.id]]}]] [:= :g.id :x.id]]})))
+        "invalid reference to FROM-clause entry for table x")))
 
 (deftest the-forms-honeysqls-tests-write-are-read-as-the-sql-they-are
   (doseq [q [{:select [:x.id] :from [[{:select [:id] :from [:users]} [[:raw "x"]]]]}
@@ -2793,12 +2801,19 @@
              {:select [[:%abs.1 :a]] :from [:users]}
              {:insert-into [[:raw "groups"]] :values [{:id 1 :name "a"}]}
              {:insert-into :groups :columns [:x/id :x/name] :values [[1 "a"]]}
-             {:select [:u.* :g.name] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :order-by [:nick]}]]
+             {:select [:u.* :g.name] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :order-by [:nick]}
+             {:select [[:nick :a] [:score :b]] :from [:users] :order-by [:a :b]}
+             {:select [[:nick :a] [[:count :id] :n]] :from [:users] :group-by [:a] :order-by [:n :a]}
+             {:select [[[:extract :year :!from :closed_at] :y]] :from [:users]}]]
     (is (= [] (check q)) (pr-str q)))
   (is (= [] (check {:select [:Rec.a] :from [[[:jsonb_to_record [:cast "{}" :jsonb]] [[:raw "\"Rec\"(a int)"]]]]} (assoc opts :format {:quoted true}))))
   (is (= [:unknown-column] (map :kind (check {:select [:id] :from [:users] :where [:> :score :10]} (assoc opts :format {:quoted true})))) "quoted, :10 is a column \"10\"")
   (is (not (contains? (args {:select [[[:at-time-zone :closed_at :?z] :t]] :from [:users]}) :z)) "HoneySQL writes AT TIME ZONE '?z'")
+  (is (= [{:kind :unknown-column :column :groups.id :clause :columns :did-you-mean [:id]}]
+         (filter #(= :unknown-column (:kind %)) (check {:insert-into [:groups [:groups/id :name]] :values [[1 "a"]]})))
+      "HoneySQL writes the target's :groups/id as groups.id")
   (is (= [:nope] (map :column (check {:select-distinct-on [[:id :nope] :nick] :from [:users]}))) "DISTINCT ON's expressions are no [expr alias]")
+  (is (= [:nik] (map :column (check {:select [:id] :from [:users] :group-by [[:upper :nik]]}))) "a call in GROUP BY is checked")
   (let [q {:select [:id] :from [:users] :where [:in :id {:nest {:select [:nope] :from [:users]}}]}]
     (is (= {:select [:nope] :from [:users]} (get-in q (:in (first (check q))))) ":in reaches the statement through :nest")))
 
