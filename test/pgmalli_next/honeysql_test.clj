@@ -2068,8 +2068,9 @@
     (doseq [[v why] [[{:pattern "a"} "a map, which a recordset is not"]
                      [[{:patern "a"}] "a key of no column"]
                      [[{:hide 1}] "a number to a boolean column"]
-                     [[{:role_keys "x"}] "a string to an array column"]]]
+                     [[{:role_keys 1}] "a number to an array column"]]]
       (is (not (ok? q :words v)) why))
+    (is (ok? q :words [{:role_keys "{a,b}"}]) "a string, the array's text, which its type's input reads")
     (let [record {:select [:*] :from [[[:jsonb_to_record [:cast :?doc :jsonb]] [:r {:with-columns [[:n :int] [:x :nosuch]]}]]]}]
       (is (ok? record :doc {:n 1 :x [1]}) "a type not read, :any")
       (is (not (ok? record :doc {:n 1.5})) "a fraction, which an integer's input does not read")

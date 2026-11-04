@@ -306,7 +306,9 @@
     (cond (types/json? p) (query/driver-schema registry jdbc/column-read-type s opts)
           ;; a JSON array element by element; a JSON string through the array type's input ("{1,2}"),
           ;; as any type's input reads a String's text
-          (types/element p) [:or [:sequential (query/nullable (json-field-type registry (last s) opts))] :string]
+          ;; the array input's text is in braces, after its dimensions where it names them ([1:2]={1,2})
+          (types/element p) [:or [:sequential (query/nullable (json-field-type registry (last s) opts))]
+                             [:re {:error/message "should be an array's text, {1,2}"} #"(?s)^\s*(\[[^\]]*\]\s*=\s*)?\{.*\}\s*$"]]
           :else (let [t (accepted-type registry s :json opts)]
                   (shape/either (remove #{jdbc/pg-object} (shape/alternatives t)) t)))))
 
