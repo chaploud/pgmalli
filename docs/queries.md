@@ -375,8 +375,9 @@ array as untyped text, `'{1,2}'`) to tell. Where its other uses take only values
 ## The row a query returns
 
 `:row` is the `[:map ...]` of one row, as next.jdbc's `as-unqualified-maps` builds
-it ([the builder](reading-rows.md#the-builder)): keyed by the labels of its columns, a name
-selected twice one key, the last column's. A column an outer
+it ([the builder](reading-rows.md#the-builder)): keyed by the labels of its columns, a label
+of several columns one key, the last column's (a `:duplicate-column`, [stricter than
+PostgreSQL](#stricter-than-postgresql)). A column an outer
 join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
 names; each column is of the type PostgreSQL resolves its members' to, as for
 `CASE`. `SELECT *` of a subquery or a CTE lists the columns its SELECT gives:
@@ -669,6 +670,12 @@ Write the query so PostgreSQL's reading is explicit instead.
   written.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
+- Columns of one label in the row a query returns (`{:select [:q.id :s.id] ...}`, or `*` over
+  two tables that each have `id`): a `:duplicate-column`. PostgreSQL returns them all, but
+  next.jdbc's `as-unqualified-maps` reads them into one key, keeping the last column's value
+  without a word. Give each an alias of its own (`[:s.id :s_id]`). The row is a statement's,
+  a set operation's first member's (whose labels name its columns), or RETURNING's; a
+  subquery's or a CTE's columns count where `*` returns them.
 - A symbol in the query, which HoneySQL writes as a name (`[:cast :score integer]`): almost
   always code left unevaluated (a macro's form, whose `[:= :id id]` means a local `id`, or
   `'{:where (when x [:= :id :?id])}`), which read as a name would silently become a column. An

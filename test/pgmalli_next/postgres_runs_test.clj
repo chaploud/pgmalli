@@ -79,7 +79,7 @@
                           [{:select [:id] :from [:accounts] :where [:= [:round :amount] :?n]} {:n 1}]
                           [{:select [:id] :from [:accounts] :where [:= [:coalesce :amount 0] :?n]} {:n 1}]
                           [{:select [:id] :from [:accounts] :where [:= [:- :amount] :?n]} {:n 1}]
-                          [{:select [:a.id :b.id] :from [[:accounts :a]] :join-by [:left [[:accounts :b] [:= :b.id :a.id]]]} {}]
+                          [{:select [:a.id [:b.id :b_id]] :from [[:accounts :a]] :join-by [:left [[:accounts :b] [:= :b.id :a.id]]]} {}]
                           [{:table :accounts} {}]
                           [{:union [{:table :accounts} {:table :accounts}]} {}]]]
         (testing (pr-str q)
@@ -398,3 +398,17 @@
         (let [q {:select [:r.d] :from [[[:json_to_record [:cast :?doc :json]] [:r {:with-columns [[:d :date]]}]]]}]
           (is (= [{:d (java.time.LocalDate/of 2020 1 2)}] (runs! q {:doc {:d (java.time.LocalDate/of 2020 1 2)}} {})))
           (is (accepted? reg q {:doc {:d (java.time.LocalDate/of 2020 1 2)}} {})))))))
+
+(deftest columns-of-one-label-postgresql-returns-the-builder-reads-into-one-key
+  (when *db*
+    (let [reg (registry)
+          join {:from [[:accounts :a]] :join [[:uq :u] [:= :u.id :a.id]]}]
+      (doseq [[q label] [[(merge join {:select [:a.id :u.id]}) :id]
+                         [(merge join {:select [:*]}) :id]
+                         [{:select [[[:count :*]] [[:count :id]]] :from [:accounts]} :count]
+                         [{:union [(merge join {:select [:a.id :u.id]}) {:select [:id :a] :from [:uq]}]} :id]
+                         [{:with [[:t (merge join {:select [:a.id :u.id]})]] :select [:*] :from [:t]} :id]]]
+        (testing (pr-str q)
+          (is (= 2 (get (frequencies (first (jdbc/execute! (datasource) (sql/format q) {:builder-fn rs/as-unqualified-arrays}))) label)))
+          (is (= 1 (count (filter #{label} (keys (first (runs! q {} {})))))))
+          (is (= [[:duplicate-column label]] (map (juxt :kind :column) (:problems (h/analyze reg q))))))))))

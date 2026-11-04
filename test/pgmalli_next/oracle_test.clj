@@ -168,7 +168,8 @@
       (is (= (over 1) (over 3))))))
 
 (def ^:private wrappers
-  "Places a query keeps its problems in: a FROM subquery, a CTE body, EXISTS."
+  "Places a query keeps its problems in: a FROM subquery, a CTE body, EXISTS; but a
+   :duplicate-column, of the row the outer query returns."
   {:from #(hash-map :select [:*] :from [[% :sub]])
    :cte #(hash-map :with [[:w %]] :select [:*] :from [:w])
    :exists #(hash-map :select [1] :where [:exists %])})
@@ -176,7 +177,7 @@
 (deftest a-query-wrapped-keeps-its-problems
   (when *db*
     (let [registry (oracle/registry *db*)
-          problems (fn [q opts] (set (map (fn [p] (dissoc p :in)) (remove (comp #{:unread-clause} :kind) (:problems (h/analyze registry q opts))))))]
+          problems (fn [q opts] (set (map (fn [p] (dissoc p :in)) (remove (comp #{:unread-clause :duplicate-column} :kind) (:problems (h/analyze registry q opts))))))]
       (doseq [{:keys [id mutation query opts]} (oracle/cases (oracle/mutation-names *db*) seed mutants)
               :when (and (map? query) (some query [:select :union :union-all :intersect :except]))
               :let [opts (update opts :format merge {:inline true})

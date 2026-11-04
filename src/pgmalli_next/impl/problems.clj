@@ -392,4 +392,5 @@
                         ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
                         (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
                       chains)]
-    (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body)))))
+    (vec (concat found (query/duplicate-columns registry body opts) (return-key-problems registry body (second (first chains)) opts)
+                 (unread-clauses sent-body)))))

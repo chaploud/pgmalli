@@ -155,6 +155,13 @@
  [:join-on-later {:select [:users.id] :from [:users] :join [:posts [:= :posts.user_id :groups.id] :groups [:= :groups.id :users.group_id]]}]
  [:comma-then-join {:select [:users.id] :from [:users :groups] :join [:posts [:= :posts.user_id :users.id]]}]
  [:self-join {:select [:a.id :b.id] :from [[:users :a]] :join [[:users :b] [:= :a.group_id :b.group_id]]}]
+ ;; columns of one label, which as-unqualified-maps reads into one key: :duplicate-column by design
+ [:duplicate-star {:select [:*] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}]
+ [:duplicate-count {:select [[[:count :*]] [[:count :nick]]] :from [:users]}]
+ [:duplicate-alias {:select [:id [:group_id :id]] :from [:users]}]
+ [:duplicate-union-first {:union [{:select [:u.id :g.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]} {:select [:id :group_id] :from [:users]}]}]
+ [:duplicate-cte-star {:with [[:t {:select [:u.id :g.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}]] :select [:*] :from [:t]}]
+ [:duplicate-returning {:update :users :set {:nick "a"} :where [:= :id 0] :returning [:id [:group_id :id]]}]
  [:self-join-ambiguous {:select [:a.id :nick] :from [[:users :a]] :join [[:users :b] [:= :a.group_id :b.group_id]]}]
  [:same-table-twice {:select [:id] :from [:users :users]}]
  [:join-sub {:select [:u.id :c.n] :from [[:users :u]] :join [[{:select [:user_id [:%count.* :n]] :from [:posts] :group-by [:user_id]} :c] [:= :c.user_id :u.id]]}]

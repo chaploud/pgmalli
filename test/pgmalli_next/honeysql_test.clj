@@ -196,6 +196,32 @@
     (is (= [:map [:id [:maybe int4]]] (row {:select [:u.id :g.id] :left-join [[:groups :g] [:= :g.id :u.group_id]]}))
         "a name selected twice is one key, the last column's, as the builder keeps it")))
 
+(deftest columns-of-one-label-are-a-duplicate-column-as-the-builder-keeps-one
+  (let [join {:from [[:users :q]] :join [[:groups :s] [:= :s.id :q.group_id]]}]
+    (is (= [{:kind :duplicate-column :column :id :items [:q.id :s.id]}] (check (merge join {:select [:q.id :s.id]}))))
+    (is (= [":q.id and :s.id make several columns labelled id; next.jdbc's as-unqualified-maps reads them into one key :id, keeping the last one's value; give one an alias of its own: [:s.id :s_id]"]
+           (h/humanize (check (merge join {:select [:q.id :s.id]})))))
+    (is (= [] (check (merge join {:select [:q.id [:s.id :s_id]]}))))
+    (is (= [{:kind :duplicate-column :column :id :items [:*]}] (check (merge join {:select [:*]}))) "a star's columns")
+    (is (= [{:kind :duplicate-column :column :id :items [:q.* :s.id]}] (check (merge join {:select [:q.* :s.id]}))))
+    (is (= [] (check {:select [:*] :from [:users] :join [:groups [:using :id]]})) "USING lists its column once")
+    (is (= [{:kind :duplicate-column :column :count :items [[[:count :*]] [[:count :id]]]}] (check {:select [[[:count :*]] [[:count :id]]] :from [:users]}))
+        "an expression's label")
+    (is (= [{:kind :duplicate-column :column :id :items [:id [:nick :id]]}] (check {:select [:id [:nick :id]] :from [:users]})))
+    (is (= [{:kind :duplicate-column :column :id :items [:id [:group_id :id]]}] (check {:update :users :set {:nick "a"} :where [:= :id 1] :returning [:id [:group_id :id]]}))
+        "RETURNING")
+    (let [q {:insert-into :users :columns [:group_id :score] :select [[:?g] [:?s]] :returning [:id]}]
+      (is (= [] (check q)) "an INSERT's SELECT is not returned")
+      (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row q)) "its RETURNING is"))
+    (is (= [{:kind :duplicate-column :column :id :items [:q.id :s.id] :in [:union 0]}]
+           (check {:union [(merge join {:select [:q.id :s.id]}) {:select [:id :group_id] :from [:users]}]}))
+        "a set operation's first member names its columns")
+    (is (= [] (check {:union [{:select [:id :group_id] :from [:users]} (merge join {:select [:q.id :s.id]})]})) "the others none")
+    (is (= [{:kind :duplicate-column :column :id :items [:*]}] (check {:with [[:t (merge join {:select [:q.id :s.id]})]] :select [:*] :from [:t]}))
+        "a CTE's columns a star returns")
+    (is (= [] (check {:with [[:t (merge join {:select [:q.id :s.id]})]] :select [[[:count :*] :n]] :from [:t]})) "a CTE's columns not returned")
+    (is (= [] (check {:select [:id] :from [:users] :where [:exists {:select [:id :id] :from [:users]}]})) "a subquery's")))
+
 (def docs
   (pgmalli/registry {:registry {:pg.public/docs [:map {:pg/table "public.docs"}
                                                       [:id [:int {:pg/type "bigint"}]]
@@ -2633,7 +2659,7 @@
   (let [kinds #(set (map (juxt :kind :column) (check %)))]
     (is (contains? (kinds {:select [:*] :from [:users] :join [[:groups :g] [:using :nope]]}) [:unknown-column :nope])
         "column nope specified in USING clause does not exist")
-    (is (= [{:kind :unknown-column :column :name :clause :using :side :left :table "sample.groups"}] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :name]]}))
+    (is (= [{:kind :unknown-column :column :name :clause :using :side :left :table "sample.groups"}] (check {:select [:nick] :from [:users] :join [[:groups :g] [:using :name]]}))
         "users lacks name")
     (is (= [] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :id]]})))
     (is (contains? (kinds {:insert-into :users :values [{:score 1 :group_id 1}] :on-conflict [:nope] :do-nothing true}) [:unknown-column :nope]))
@@ -2673,7 +2699,7 @@
 
 (deftest an-unknown-column-a-clause-names-says-which-clause-and-what-was-meant
   (is (= [{:kind :unknown-column :column :nmae :clause :using :side :both :table "sample.groups" :did-you-mean [:name]}]
-         (check {:select [:*] :from [:users] :join [[:groups :g] [:using :nmae]]}))
+         (check {:select [:nick] :from [:users] :join [[:groups :g] [:using :nmae]]}))
       "one problem where both sides lack it")
   (is (= [{:kind :unknown-column :column :scroe :clause :on-conflict :table "sample.users" :did-you-mean [:score]}]
          (filter #(= :unknown-column (:kind %)) (check {:insert-into :users :values [{:score 1 :group_id 1}] :on-conflict [:scroe] :do-nothing true}))))
@@ -2708,7 +2734,7 @@
   (is (thrown? clojure.lang.ExceptionInfo (check {:select [1]} {:format {:quoted "yes"}}))))
 
 (deftest using-names-no-system-column
-  (is (= [:unknown-column] (distinct (map :kind (check {:select [:*] :from [:users] :join [:groups [:using :ctid]]}))))))
+  (is (= [:unknown-column] (distinct (map :kind (check {:select [:nick] :from [:users] :join [:groups [:using :ctid]]}))))))
 
 (deftest another-parameter-of-the-call-refuses-an-untyped-value-only-where-every-type-it-may-be-does
   (let [ok? #(m/validate %1 %2 {:registry registry})]
