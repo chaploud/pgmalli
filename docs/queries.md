@@ -638,7 +638,9 @@ Write the query so PostgreSQL's reading is explicit instead.
   `jsonb_populate_record` document likewise takes its column's own values, which
   PostgreSQL reads through the column type's input: no number to a `boolean` column (PostgreSQL
   reads `1` and `0`), and no `BigDecimal` to an integer column (it reads `1`, not `1.0`); send a
-  `Boolean`, or a `Long`; nor a number to a `text` column.
+  `Boolean`, or a `Long`. Nor a value other than a string to a `text` or a `bytea` column, which
+  PostgreSQL stores as the value's JSON text (`1` as `"1"`, an object as `{"a": 1}`), or as that
+  text's bytes: send a string, or the column a `jsonb` one.
 - An argument compared with a column does not take nil, unless the query also tests it for NULL
   (`[:= :?id nil]`, `[:is :?id nil]`) under `:inline`
   ([compare NULL in the query body](#the-types-of-the-arguments)).
