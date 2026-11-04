@@ -15,16 +15,30 @@
   [s]
   (some-> s (str/replace "-" "_") str/lower-case))
 
-(defn held-name
-  "n, or n folded, whichever held? holds first: a name PostgreSQL folds where the one as written
-   (a quoted mixed-case one) is not there."
-  [held? n]
-  (some #(when (held? %) %) [n (folded n)]))
+(defn pg-name
+  "The name PostgreSQL reads of identifier s (a keyword's text, or one dotted part of it) as
+   HoneySQL writes it under sql/format's options format: as written where HoneySQL quotes it,
+   else folded."
+  [s format]
+  (or (first (formatted-name (keyword s) format false)) (folded s)))
+
+(defn alias? [x] (or (keyword? x) (string? x)))
+
+(defn ident-name
+  "pg-name of x, a keyword; a string, which HoneySQL quotes, as written."
+  [x format]
+  (if (string? x) x (pg-name (name x) format)))
 
 (defn- last-part
-  "The last part of a dotted name (:public.users, \"pg_catalog.now\"), folded."
+  "The last part of a dotted name (:public.users, \"pg_catalog.now\"), folded: a function's,
+   which HoneySQL never quotes."
   [x]
   (folded (last (str/split (name x) #"\."))))
+
+(defn- table-part
+  "pg-name of the last part of a dotted table keyword (:public.Users)."
+  [x format]
+  (pg-name (last (str/split (name x) #"\.")) format))
 
 (defn table-name
   "The table's name of \"schema.table\"."
@@ -102,12 +116,10 @@
   [body]
   (into [] (filter statement?) (tree-seq branch? seq body)))
 
-(defn cte-name [entry]
+(defn cte-name [entry format]
   (when (vector? entry)
     (let [n (if (vector? (first entry)) (ffirst entry) (first entry))]
-      (cond (keyword? n) (folded (name n))
-            ;; HoneySQL quotes a string name: it is as written
-            (string? n) n))))
+      (when (alias? n) (ident-name n format)))))
 
 (defn cte-entries
   "The CTE entries of a statement: the items of :with and :with-recursive."
@@ -134,22 +146,23 @@
 
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
-  [body]
-  (set (keep cte-name (mapcat cte-entries (statements body)))))
+  [body format]
+  (set (keep #(cte-name % format) (mapcat cte-entries (statements body)))))
 
 (defn qualified
-  "\"schema.table\" of a table keyword: :schema/table, :schema.table, or :table in the default schema."
-  [k schema]
-  (cond (namespace k) (str (namespace k) "." (name k))
-        (str/includes? (name k) ".") (name k)
-        :else (str schema "." (name k))))
+  "\"schema.table\" of a table keyword: :schema/table, :schema.table, or :table in opts' :schema;
+   each part as PostgreSQL reads it (pg-name)."
+  [k {:keys [schema format]}]
+  (let [parts (cond (namespace k) [(namespace k) (name k)]
+                    (str/includes? (name k) ".") (str/split (name k) #"\." 2)
+                    :else [nil (name k)])
+        [s t] parts]
+    (str (if s (pg-name s format) schema) "." (str/join "." (map #(pg-name % format) (str/split t #"\."))))))
 
 (defn- unqualified-name
-  "The table name as written when it names no schema, the form a CTE may shadow."
-  [k]
-  (when-not (or (namespace k) (str/includes? (name k) ".")) (folded (name k))))
-
-(defn alias? [x] (or (keyword? x) (string? x)))
+  "The table name when it names no schema, the form a CTE may shadow."
+  [k format]
+  (when-not (or (namespace k) (str/includes? (name k) ".")) (pg-name (name k) format)))
 
 (defn listed-columns
   "The columns the options map of an alias lists ([:v {:columns [:id :n]}]), as written; nil for
@@ -162,11 +175,11 @@
   "[table alias written columns] of a :from / join / target item: the table's qualified name,
    its alias, the name as written (nil when qualified by a schema), and the columns an alias
    lists ([:v {:columns [:id :n]}] over a VALUES); an opaque item (subquery, function) has no
-   table."
-  [x schema]
+   table. opts: :schema, the default one, and sql/format's :format."
+  [x {:keys [format] :as opts}]
   (cond
     ;; FROM public.users is referred to as users
-    (keyword? x) [(qualified x schema) (last-part x) (unqualified-name x)]
+    (keyword? x) [(qualified x opts) (table-part x format) (unqualified-name x format)]
     ;; a subquery with no alias (PostgreSQL 16): nothing names it, so no query reaches it by name
     (map? x) [nil (str "(subquery " (hash x) ")") nil]
     (vector? x)
@@ -174,14 +187,13 @@
           ;; [:alias {:columns [...]}]; a column definition list ([:alias [:raw "(a int)"]]) names
           ;; no column read here
           [b listed] (if (and (vector? b) (alias? (first b)) (or (map? (second b)) (vector? (second b))))
-                       [(first b) (some->> (listed-columns (second b)) (mapv name))]
+                       [(first b) (some->> (listed-columns (second b)) (mapv #(ident-name % format)))]
                        [b nil])
-          ;; HoneySQL quotes a string alias: it is as written
-          alias-name #(if (string? %) % (folded (name %)))]
+          alias-name #(ident-name % format)]
       (cond
         ;; :t / [:t :alias] / INSERT INTO t (columns...)
-        (and (keyword? a) (or (nil? b) (alias? b) (vector? b))) [(qualified a schema) (if (alias? b) (alias-name b) (last-part a)) (unqualified-name a) listed]
-        (keyword? a) [nil (folded (name a)) nil listed]
+        (and (keyword? a) (or (nil? b) (alias? b) (vector? b))) [(qualified a opts) (if (alias? b) (alias-name b) (table-part a format)) (unqualified-name a format) listed]
+        (keyword? a) [nil (alias-name a) nil listed]
         ;; [[:unnest ...] [:t {:columns [:x]}]]: t.f reads as f(t), the function on a scalar result,
         ;; so a function's alias is not held to the columns it lists
         (alias? b) [nil (alias-name b) nil (when-not (vector? a) listed)]
@@ -196,7 +208,7 @@
         ;; [[:f args...]]: a table function, named after the function
         (and (nil? b) (vector? a) (keyword? (first a))) [nil (last-part (first a)) nil]
         ;; [subquery]: one with no alias
-        (and (nil? b) (map? a)) (table-ref a schema)))))
+        (and (nil? b) (map? a)) (table-ref a opts)))))
 
 (defn insert-target
   "The target of :insert-into as a :from item: the table, under its alias when it has one."
@@ -218,14 +230,14 @@
 (defn join-base
   "The alias of the item the joins attach to: the last FROM item, a comma binding looser than
    JOIN."
-  [stmt schema]
-  (take-last 1 (map #(second (table-ref % schema)) (from-items stmt [:from :using]))))
+  [stmt opts]
+  (take-last 1 (map #(second (table-ref % opts)) (from-items stmt [:from :using]))))
 
 (defn outer-aliases
   "The aliases an outer join may leave NULL: a LEFT JOIN's table, every table before a RIGHT
    JOIN's, both sides of a FULL (and :outer-join) one."
-  [stmt schema]
-  (let [alias #(second (table-ref % schema))]
+  [stmt opts]
+  (let [alias #(second (table-ref % opts))]
     (:nullable
      (reduce (fn [{:keys [before] :as acc} [k t]]
                (let [a (when t (alias t))]
@@ -235,7 +247,7 @@
                        (:outer-join :full-join) (update acc :nullable into (cond-> before a (conj a)))
                        acc)
                      (update :before conj a))))
-             {:before (vec (join-base stmt schema)) :nullable #{}}
+             {:before (vec (join-base stmt opts)) :nullable #{}}
              (joins stmt)))))
 
 (defn- array-cast-of-argument?
@@ -254,16 +266,16 @@
    argument's elements become (the argument as written, cast or not), by position in the
    columns its alias lists ([:x {:columns [:a]}]), or the alias itself of an unnest of one
    ([[:unnest :?ids] :id])."
-  [item]
+  [item format]
   (when (unnest-of-arguments? item)
     (let [ps (rest (first item))
           b (second item)
           cs (cond (and (vector? b) (map? (second b))) (listed-columns (second b))
                    (and (alias? b) (= 1 (count ps))) [b])]
       (when (and (seq ps) (sequential? cs))
-        (map (fn [p c] [(folded (name c)) p]) ps cs)))))
+        (map (fn [p c] [(ident-name c format) p]) ps cs)))))
 
-(defn unnest-elements [item] (some->> (unnest-columns item) (into {}) not-empty))
+(defn unnest-elements [item format] (some->> (unnest-columns item format) (into {}) not-empty))
 
 (defn lateral?
   "Whether a FROM or join item sees the items before it: LATERAL, or a function call, which is
@@ -285,13 +297,13 @@
    recursive one (a set operation under :with-recursive one of whose members reads the CTE
    itself), its first member, whose types PostgreSQL gives the columns. nil where the query defines name more than once, or the body is
    no statement."
-  [body name]
-  (let [found (for [[w k i e] (with-entries body) :when (= name (cte-name e))]
+  [body name {:keys [format] :as opts}]
+  (let [found (for [[w k i e] (with-entries body) :when (= name (cte-name e format))]
                 [(second e) (subvec w 0 i) (when (vector? (first e)) (listed-columns (second (first e)))) k])]
     (when-let [[[stmt before listed k]] (when (= 1 (count found)) found)]
       (let [set-op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
             ;; recursive when a member reads the CTE itself; otherwise its members resolve together
-            self? (some (fn [m] (some #(let [w (nth (table-ref % default-schema) 2)] (and w (= name (folded w))))
+            self? (some (fn [m] (some #(= name (nth (table-ref % opts) 2))
                                       (mapcat table-items (statements m))))
                         (when set-op (get stmt set-op)))
             op (when self? set-op)
@@ -301,10 +313,10 @@
             own (when (map? stmt) (some #(when (contains? stmt %) %) with-keys))
             stmt (cond (not (map? stmt)) nil
                        (or (empty? before) (nil? own)) (cond-> stmt (seq before) (assoc k before))
-                       (and (= k own) (vector? (get stmt own)) (not-any? (set (keep cte-name before)) (keep cte-name (get stmt own))))
+                       (and (= k own) (vector? (get stmt own)) (not-any? (set (keep #(cte-name % format) before)) (keep #(cte-name % format) (get stmt own))))
                        (assoc stmt k (into before (get stmt own))))]
         (when (and stmt (or (nil? listed) (sequential? listed)))
-          [stmt (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
+          [stmt (map #(ident-name % format) listed) (boolean op)])))))
 
 (def populate-name #"jsonb?_populate_record(set)?")
 
@@ -318,18 +330,17 @@
   "Statement inner as a query of its own: itself where it reads no CTE of ctes (those its place
    in query body sees), else under the entries of the one :with of body that define them, up to
    the last; nil where they are not there, or inner has a :with of its own."
-  [body inner ctes schema]
-  (let [defined (cte-names inner)
+  [body inner ctes {:keys [format] :as opts}]
+  (let [defined (cte-names inner format)
         read (set (for [i (mapcat table-items (statements inner))
-                        :let [[_ _ written] (table-ref i schema)]
-                        :when (and written (not (defined (folded written)))
-                                   (contains? ctes (folded written)))]
-                    (folded written)))]
+                        :let [[_ _ written] (table-ref i opts)]
+                        :when (and written (not (defined written)) (contains? ctes written))]
+                    written))]
     (if (empty? read)
       inner
-      (let [found (for [[w k i e] (with-entries body) :when (read (cte-name e))]
+      (let [found (for [[w k i e] (with-entries body) :when (read (cte-name e format))]
                     [w k i])]
-        (when (and (= (count read) (count found)) (= read (set (map (fn [[w _ i]] (cte-name (nth w i))) found)))
+        (when (and (= (count read) (count found)) (= read (set (map (fn [[w _ i]] (cte-name (nth w i) format)) found)))
                    (apply = (map first found)) (apply = (map second found))
                    (not-any? #(contains? inner %) with-keys))
           (let [[w k] (first found)]
@@ -370,23 +381,24 @@
 (defn part-chain
   "The chain of scopes a part (clause-parts) of a statement of chain sees, outer the chain of the
    statements enclosing it. A LATERAL item sees its statement's tables, but not itself."
-  [sees part chain outer schema]
+  [sees part chain outer opts]
   (case sees
     :own chain
     :outer outer
-    :lateral (cons (dissoc (first chain) (second (table-ref part schema))) (rest chain))))
+    :lateral (cons (dissoc (first chain) (second (table-ref part opts))) (rest chain))))
 
 (defn split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table (:schema.a.b too), :b does
-   not. The alias is folded as table-ref folds aliases."
-  [col]
+   not; each as PostgreSQL reads it (pg-name under sql/format's options format), * as it is."
+  [col format]
   (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))
-        ;; HoneySQL writes :'x as x, as it is
-        s (str/replace-first s #"^'" "")
-        parts (str/split s #"\.")]
+        ;; HoneySQL writes :'x as x, as it is, unquoted
+        raw? (str/starts-with? s "'")
+        parts (str/split (cond-> s raw? (subs 1)) #"\.")
+        named #(cond (= "*" %) % raw? (folded %) :else (pg-name % format))]
     (if (next parts)
-      [(folded (nth parts (- (count parts) 2))) (last parts)]
-      [nil s])))
+      [(named (nth parts (- (count parts) 2))) (named (last parts))]
+      [nil (named (first parts))])))
 
 (defn chain [scope] (if (map? scope) [scope] scope))
 
@@ -569,8 +581,8 @@
 
 (defn target-scope
   "The scope an assigned column is resolved in: the table of :update / :insert-into alone."
-  [scopes stmt schema]
-  (let [[_ alias] (some-> (or (:update stmt) (insert-target stmt)) (table-ref schema))]
+  [scopes stmt opts]
+  (let [[_ alias] (some-> (or (:update stmt) (insert-target stmt)) (table-ref opts))]
     (select-keys (first (chain scopes)) [alias])))
 
 (defn- may-drop-rows?
@@ -594,7 +606,7 @@
    (:insert, :update), scope the target table's, may-drop? where the row may not reach the
    column. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
    its items go to those columns by position."
-  [stmt chain outer feed {:keys [schema]}]
+  [stmt chain outer feed {:keys [format] :as opts}]
   (let [nodes (fn [k x c]
                 (letfn [(walk [x neg? top?]
                           (lazy-seq
@@ -603,14 +615,14 @@
                                    (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
                                      (mapcat #(walk % neg? false) (seq x)))))))]
                   (walk x false true)))
-        target (target-scope chain stmt schema)
+        target (target-scope chain stmt opts)
         written (group-by #(nth % 3) (writes stmt))
         assigned (fn [clause c]
                    (for [[col v event] (written clause) :when (not= ::untold v)]
                      {:x v :assign col :event event :target target :may-drop? false :chain c :clause clause}))]
     (concat
      (for [[[k] v sees] (clause-parts stmt)
-           :let [c (part-chain sees v chain outer schema)]
+           :let [c (part-chain sees v chain outer opts)]
            p (case k
                (:insert-into :columns) nil
                :values (concat (for [row (when (vector? v) v), x (cond (map? row) (vals row) (vector? row) row)] (nodes k x c))
@@ -625,9 +637,9 @@
      (let [items (map bare (selected-items stmt))
            [item & more] (table-items stmt)
            items (or (when (and (= 1 (count items)) (keyword? (first items)) (star? (first items)) (nil? more))
-                       (or (when-let [cs (unnest-columns item)] (when (= (count cs) (count (rest (first item)))) (map (comp keyword first) cs)))
+                       (or (when-let [cs (unnest-columns item format)] (when (= (count cs) (count (rest (first item)))) (map (comp keyword first) cs)))
                            (when (populate-item? item)
-                             (let [[_ alias] (table-ref item schema)]
+                             (let [[_ alias] (table-ref item opts)]
                                (some->> (:order (get (first chain) alias)) (map #(keyword alias %)))))))
                      items)]
        (when (and (:columns feed) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
@@ -682,8 +694,9 @@
    (its ELSE's name where that has one of its own), array, a cast column's or function's name,
    ?column? for a value or an operator (an infix one of HoneySQL's, or any whose name is not an
    identifier: :->, :@>, an op registered with register-op!). nil when this cannot tell (a cast
-   value or operation is named after its type, a subquery after its column, :raw anything)."
-  [x]
+   value or operation is named after its type, a subquery after its column, :raw anything). A
+   column's name as PostgreSQL reads it under sql/format's options format."
+  [x format]
   (cond (or (number? x) (string? x) (boolean? x) (nil? x) (param-key x) (#{:null :true :false} (sql-value x))) "?column?"
         (shorthand-fn x) (function-name (shorthand-fn x))
         (keyword? x) (some-> (sql-value x) name)
@@ -693,12 +706,12 @@
                       (operator? h) "?column?"
                       (#{:case :case-expr} h) (let [e (some #(when (= :else (first %)) (second %)) (partition-all 2 (if (= :case h) (rest x) (drop 2 x))))
                                                     n (cond (nil? e) "case"
-                                                            (column-keyword? e) (second (split-column e))
-                                                            :else (expression-name e))]
+                                                            (column-keyword? e) (second (split-column e format))
+                                                            :else (expression-name e format))]
                                                 (if (= "?column?" n) "case" n))
                       (= :array h) "array"
-                      (= :cast h) (cond (column-keyword? a) (second (split-column a))
-                                        (vector? a) (let [n (expression-name a)] (when-not (#{"?column?" "case"} n) n)))
+                      (= :cast h) (cond (column-keyword? a) (second (split-column a format))
+                                        (vector? a) (let [n (expression-name a format)] (when-not (#{"?column?" "case"} n) n)))
                       (sql/registered-fn? h) nil
                       :else (function-name (name h))))))
 
@@ -720,14 +733,13 @@
 (defn item-name
   "The name of the output column a select item makes: its alias, its column's name, or the name
    PostgreSQL gives the expression; nil when that cannot be told."
-  ([item] (item-name item {}))
-  ([item opts]
-   (let [[col alias] (select-parts item opts)]
-     (cond alias (alias-label alias opts)
-           col (second (split-column col))
-           :else (expression-name (item-expression item))))))
+  [item opts]
+  (let [[col alias] (select-parts item opts)]
+    (cond alias (alias-label alias opts)
+          col (second (split-column col (:format opts)))
+          :else (expression-name (item-expression item) (:format opts)))))
 
-(defn star? [col] (= "*" (second (split-column col))))
+(defn star? [col] (= "*" (second (split-column col nil))))
 
 (def formatted-name
   "[name quoted?] of k (a keyword, or a string) as the loaded HoneySQL writes it under sql/format's
@@ -740,7 +752,7 @@
                                (catch Exception _ nil))]
                (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" n)] [q true] [(str/lower-case n) false])))))
 
-(defn- quoted?
+(defn quoted?
   "Whether sql/format's options quote a name, as the loaded HoneySQL writes one (a dialect set
    with set-dialect! too); where it formats nothing under them (a dialect of a later HoneySQL),
    under :quoted, or a :dialect other than :nrql unless :quoted false."

@@ -2491,3 +2491,18 @@
 (deftest special-syntax-is-no-function-call
   (is (= [:any #:pgmalli{:untyped :position}] (:x (args {:select [[[:interval :?x]]]})))
       "INTERVAL ? is no call of a function or a cast named interval"))
+
+(deftest an-unquoted-name-is-the-folded-one-whatever-else-the-registry-holds
+  (let [reg (pgmalli/registry {:registry {:pg.public/Dup [:map {:pg/table "public.Dup"} [:v [:string {:pg/type "text"}]]]
+                                          :pg.public/dup [:map {:pg/table "public.dup"} [:v [:int {:pg/type "bigint"}]]]}})]
+    (is (= [:int {:pg/type "bigint"}] (:v (:args (h/analyze reg {:insert-into :Dup :values [{:v :?v}]})))) "INSERT INTO Dup is dup's")
+    (is (= [:or [:string {:pg/type "text"}] :keyword] (:v (:args (h/analyze reg {:insert-into :Dup :values [{:v :?v}]} {:format {:quoted true}})))) "quoted, \"Dup\"'s")))
+
+(deftest a-quoted-name-is-looked-up-as-written
+  (let [o (assoc opts :format {:quoted true})
+        ps (check {:select [:id] :from [:Users]} o)]
+    (is (= [{:kind :unknown-table :table "sample.Users" :did-you-mean ["sample.users"] :quoted true}] ps))
+    (is (= ["unknown table sample.Users; under :quoted, PostgreSQL looks the name up as written: for the table sample.users write :users"] (h/humanize ps)))
+    (is (= [{:kind :unknown-column :column :Nick :did-you-mean [:nick] :quoted true}] (check {:select [:Nick] :from [:users]} o)))
+    (is (= ["unknown column Nick; under :quoted, PostgreSQL looks the name up as written: for the column nick write :nick"]
+           (h/humanize (check {:select [:Nick] :from [:users]} o))))))

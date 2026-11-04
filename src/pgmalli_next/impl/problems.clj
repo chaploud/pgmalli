@@ -12,9 +12,9 @@
 
 (defn- output-column?
   "Whether a bare :col of :order-by or :group-by may mean an output column of stmt."
-  [stmt col]
-  (boolean (and (not (first (syntax/split-column col)))
-                (some #(= (syntax/folded (name col)) (syntax/item-name %)) (syntax/selected-items stmt)))))
+  [stmt col format]
+  (let [[a c] (syntax/split-column col format)]
+    (boolean (and (not a) (some #(= c (syntax/item-name % {:format format})) (syntax/selected-items stmt))))))
 
 (defn- output-statement
   "The statement whose select names a statement's output columns: itself, or the first member
@@ -40,7 +40,8 @@
    column first."
   [registry sc stmt]
   (let [out (output-statement stmt)
-        output? (fn [s c stars?] (or (output-column? s c) (and (nil? (first (syntax/split-column c))) (untold-outputs? s stars?))))]
+        format (::query/format registry)
+        output? (fn [s c stars?] (or (output-column? s c format) (and (nil? (first (syntax/split-column c format))) (untold-outputs? s stars?))))]
     (concat (for [c (syntax/vectorish (:group-by stmt))
                   :when (and (syntax/column-keyword? c) (not (and (output? stmt c false) (empty? (query/column-hits registry sc c)))))]
               c)
@@ -51,16 +52,15 @@
 
 (defn- whole-row?
   "Whether an unqualified :x names a table of the scope rather than a column: its whole row."
-  [scope col]
-  (let [[a column] (syntax/split-column col)]
-    (boolean (and (nil? a) (some #(and (map? %) (contains? % (syntax/folded column))) (syntax/chain scope))))))
+  [scope col format]
+  (let [[a column] (syntax/split-column col format)]
+    (boolean (and (nil? a) (some #(and (map? %) (contains? % column)) (syntax/chain scope))))))
 
 (defn- near-columns
   "Up to three columns of the scope's tables spelled close to col's name, qualified as col is:
    what it likely meant."
   [registry scope col]
-  (let [[a c] (syntax/split-column col)
-        c (syntax/folded c)
+  (let [[a c] (syntax/split-column col (::query/format registry))
         ;; a qualified name looks in the innermost table of its alias, which hides outer ones
         scopes (filter map? (syntax/chain scope))
         scopes (if a (take 1 (filter #(contains? % a) scopes)) scopes)
@@ -76,11 +76,10 @@
    name is the qualifier or two edits from it, closest first: an aliased table named by its
    name, as PostgreSQL's \"Perhaps you meant to reference the table alias\", or a misspelt alias."
   [registry scope col]
-  (let [[a c] (syntax/split-column col)
+  (let [[a c] (syntax/split-column col (::query/format registry))
         scopes (filter map? (syntax/chain scope))]
     (when (and a (not (some #{:open} (syntax/chain scope))) (not-any? #(contains? % a) scopes))
-      (let [c (syntax/folded c)
-            meant (for [sc scopes
+      (let [meant (for [sc scopes
                         [alias {:keys [table order]}] sc
                         :when (or (and table (contains? (query/table-columns registry table) c)) (some #{c} order))
                         :let [d (apply min (map #(error/edit-distance a %) (remove nil? [alias (some-> table syntax/table-name)])))]
@@ -88,8 +87,8 @@
                     [(keyword (str alias "." c)) d])]
         [a (some->> (seq meant) (sort-by second) (map first) distinct (take 3) vec)]))))
 
-(defn- column-problems [registry sc stmt ps {:keys [schema] :as opts}]
-  (let [target (syntax/target-scope sc stmt schema)
+(defn- column-problems [registry sc stmt ps {:keys [format] :as opts}]
+  (let [target (syntax/target-scope sc stmt opts)
         assigned (when (seq target) (concat (map #(or (syntax/field-column %) %) (filter syntax/column-keyword? (:columns (syntax/insert-parts stmt))))
                                             (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (syntax/select-parts % opts)) (syntax/selected-items stmt))] [c sc])
@@ -104,9 +103,9 @@
                                               :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x))]
                                           [x chain])
                                         (for [c assigned] [c target])))
-          :when (if (or (syntax/star? col) (whole-row? scope col))
+          :when (if (or (syntax/star? col) (whole-row? scope col format))
                   ;; :t.* names a table of the scope, unless the data does not show them all
-                  (let [[a] (syntax/split-column col)]
+                  (let [[a] (syntax/split-column col format)]
                     (and (syntax/star? col) a (not (some #{:open} (syntax/chain scope))) (not-any? #(and (map? %) (contains? % a)) (syntax/chain scope))))
                   (nil? (query/resolve-column registry scope col)))
           :let [hits (query/column-hits registry scope col)]]
@@ -116,19 +115,19 @@
               near (if qualifier meant (near-columns registry scope col))]
           (cond-> {:kind :unknown-column :column col}
             qualifier (assoc :qualifier qualifier)
-            near (assoc :did-you-mean near)))))))
+            near (assoc :did-you-mean near)
+            (and (syntax/quoted? format) (not= (syntax/split-column col format) (syntax/split-column col nil))) (assoc :quoted true)))))))
 
-(defn- insert-problems [registry stmt schema]
+(defn- insert-problems [registry stmt {:keys [format] :as opts}]
   (let [{:keys [table columns]} (syntax/insert-parts stmt)
-        [table] (some-> table (syntax/table-ref schema))]
+        [table] (some-> table (syntax/table-ref opts))]
     (when table
       (let [values (:values stmt)
             rows (when (vector? values) values)
             ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
             given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
             given (when (every? keyword? given) given)
-            ;; HoneySQL writes :group-id as group_id
-            given-names (into #{} (mapcat (fn [k] [(name k) (syntax/folded (name k))])) given)
+            given-names (into #{} (map #(syntax/ident-name % format)) given)
             required (set (for [[k p] (some-> (get (::query/schemas registry) (shape/derived-name (shape/table-key table) "insert")) shape/column-entries)
                                 :when (not (:optional p))]
                             (name k)))]
@@ -147,8 +146,8 @@
    lacks and another has is NULL, as HoneySQL writes it, DEFAULT under sql/format's
    :values-default-columns (in :format). Under a column list, which map keys reach which column
    depends on the HoneySQL version (2.8.85 follows the list): missing keys are not judged there."
-  [registry scopes stmt {:keys [schema format]}]
-  (let [target (syntax/target-scope scopes stmt schema)
+  [registry scopes stmt {:keys [format] :as opts}]
+  (let [target (syntax/target-scope scopes stmt opts)
         i (:insert-into stmt)
         overriding? (and (vector? i) (map? (first i)) (#{:system :user} (:overriding-value (first i))))
         defaults (set (:values-default-columns format))]
@@ -246,16 +245,19 @@
 (defn- problems
   "The problems of one statement (README.md's table of :kind), scope the statement's (from
    scope) or, for a nested statement, the chain of its own and the enclosing ones."
-  [registry stmt scope ps {:keys [schema] :as opts}]
+  [registry stmt scope ps opts]
   (let [scopes (syntax/chain scope)
         known (for [[k v] (::query/schemas registry) :when (shape/read-row? v)]
-                (str/join "." (shape/schema-and-name k)))]
+                (str/join "." (shape/schema-and-name k)))
+        quoted? (syntax/quoted? (:format opts))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
                        :let [same-name (sort (filter #(= (syntax/table-name %) (syntax/table-name table)) known))
                              meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
-                   (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
+                   (cond-> {:kind :unknown-table :table table}
+                     meant (assoc :did-you-mean (vec meant))
+                     (and quoted? (not= table (syntax/folded table))) (assoc :quoted true)))
                  (column-problems registry scopes stmt ps opts)
-                 (insert-problems registry stmt schema)
+                 (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
                  (string-problems registry ps opts)))))
 
@@ -295,9 +297,9 @@
 (defn- return-key-problems
   "pgjdbc quotes the names of :return-keys as written (its quoteReturningIdentifiers, true by
    default): one that is a column of the target only folded (:group-id for group_id) is none."
-  [registry stmt scopes {{:keys [return-keys]} :jdbc :keys [schema] :as opts}]
+  [registry stmt scopes {{:keys [return-keys]} :jdbc :as opts}]
   (when (and (sequential? return-keys) (map? stmt) (not= stmt (query/sent stmt opts)))
-    (let [[_ alias] (some-> (first (syntax/write-targets stmt)) (syntax/table-ref schema))
+    (let [[_ alias] (some-> (first (syntax/write-targets stmt)) (syntax/table-ref opts))
           {:keys [table opaque?]} (get (first (syntax/chain scopes)) alias)
           cs (when (and table (not opaque?)) (query/table-columns registry table))]
       (for [k return-keys :let [n (name k)]

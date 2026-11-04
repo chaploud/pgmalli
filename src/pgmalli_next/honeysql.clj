@@ -28,7 +28,8 @@
   ([registry opts ks]
    (if (::query/schemas registry)
      [registry opts]
-     [(query/reading registry) (jdbc/options! opts ks)]))
+     (let [opts (jdbc/options! opts ks)]
+       [(assoc (query/reading registry) ::query/format (:format opts)) opts])))
   ([registry body opts ks]
    (if (::query/schemas registry)
      [registry body opts]
@@ -183,18 +184,17 @@
         _ (when (contains? opts :schema) (query/with-defaults r opts))
         registry (::query/schemas r)
         ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
-        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema,
-        ;; and folded where only that is the registry's, as PostgreSQL reads an unquoted :Users
+        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
         name (if (str/starts-with? (subs (str name) 1) "pg.")
                name
-               (let [t (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
-                         (syntax/qualified name nil)
-                         (syntax/qualified name (:schema (query/with-defaults r opts))))]
+               (let [t (syntax/qualified name (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
+                                                (select-keys opts [:format])
+                                                (query/with-defaults r opts)))]
                  (when (< 2 (count (str/split t #"\.")))
                    (error/fail! :pgmalli.error/invalid-options
                                 (str what " takes a table as :table or :schema.table; " (pr-str name) " names more")
                                 {:given name}))
-                 (shape/table-key (or (syntax/held-name #(contains? registry (shape/table-key %)) t) t))))
+                 (shape/table-key t)))
         _ (when-not (contains? registry name)
             (query/unknown-table! r (if (namespace name) (str/join "." (shape/schema-and-name name)) (clojure.core/name name))))
         s (shape/schema-of registry name)]
@@ -235,17 +235,21 @@
 
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
-  {:unknown-table (fn [{:keys [table did-you-mean]}]
+  {:unknown-table (fn [{:keys [table did-you-mean quoted]}]
                    (let [elsewhere (first (filter #(= (syntax/table-name %) (syntax/table-name table)) did-you-mean))]
                      (str "unknown table " table
-                          (cond elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
+                          (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the table "
+                                            (syntax/folded table) " write :" (syntax/folded (syntax/table-name table)))
+                                elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
                                                ", or name it :" elsewhere)
                                 did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
                                 :else "; check its name, or :schema when it is in another schema"))))
-   :unknown-column (fn [{:keys [column did-you-mean qualifier]}]
+   :unknown-column (fn [{:keys [column did-you-mean qualifier quoted]}]
                      (str "unknown column " (column-name column)
                           (when qualifier (str "; no table or alias " qualifier " in the statement"))
-                          (cond did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean)))
+                          (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
+                                            (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
+                                did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean)))
                                 (not qualifier) "; no table of the statement has it")))
    :ambiguous-column (fn [{:keys [column candidates]}]
                        (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias"))

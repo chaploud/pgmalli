@@ -320,16 +320,16 @@
         :let [s (if (syntax/param-key json) (types/type-schema type) (:schema (query/expression-type registry chain json opts)))
               base (accepted-type registry s (if (syntax/param-key json) :compare :cast) opts)
               item (some (fn [{i :x}] (when (and (vector? i) (identical? x (first i))) i)) ps)
-              alias (when item (second (syntax/table-ref item (:schema opts))))
+              alias (when item (second (syntax/table-ref item opts)))
               ;; whether alias names, in a chain, the call's item: not where a scope nearer has an
               ;; alias of that name, nor in the item itself
               sees? (fn [chain] (identical? (get (first c) alias) (some #(when (map? %) (get % alias)) chain)))
               reads (for [[_ c' _ ps'] sps :when (and alias (sees? c')), n (syntax/expression-nodes ps')] n)
               untold? (fn [{y :x chain :chain}]
                         (or (and (vector? y) (= :raw (first y)))
-                            (and (keyword? y) (let [[a column] (syntax/split-column y)]
+                            (and (keyword? y) (let [[a column] (syntax/split-column y (:format opts))]
                                                 (or (and (syntax/star? y) (contains? #{nil alias} a))
-                                                    (and (nil? a) (= alias (syntax/folded column)) (sees? chain)))))))
+                                                    (and (nil? a) (= alias column) (sees? chain)))))))
               used (when (and alias (not (vector? (second item))) (not-any? untold? reads))
                      (set (for [{y :x chain :chain} reads :when (syntax/column-keyword? y)
                                 :let [{:keys [column opaque?] from :table} (query/resolve-column registry chain y)]

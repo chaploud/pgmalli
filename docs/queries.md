@@ -36,6 +36,10 @@ naming where the symbol is (`:in`, as `get-in` reads it): analyze each variant y
   their aliases; `{:table t}` is `SELECT * FROM t`.
 - `:email` is a column of one of those tables; `:u.email` and `:u/email` a column of the alias
   `u`. A column a subquery does not find is looked for in the enclosing statements.
+- A name (a table, an alias, a column, a CTE) is what PostgreSQL reads of what HoneySQL writes
+  under `:format`: unquoted, folded to lower case (`:Users` is `users`, `:group-id` is
+  `group_id`); quoted (`:quoted`, a dialect), as written (`:Users` is `"Users"`). A string, which
+  HoneySQL quotes, is as written.
 - A table is looked up in the `:schema` option (`"public"` by default); `:other.t` names its schema.
   A `:schema` the registry holds no generated file, table or view of is an error naming the ones
   it holds.
@@ -665,5 +669,3 @@ Write the query so PostgreSQL's reading is explicit instead.
 - A string sent as `varchar` to a column of a domain over a type other than an enum (a
   domain over `integer`), which PostgreSQL refuses; and an argument whose type `:args`
   leaves `:any` (an `inet` column's), which may be an object of the type.
-- Without `:quoted`, a mixed-case name the registry holds as written (`:wh.Warehouse`):
-  PostgreSQL folds it to lower case, and pgmalli takes it as written.
