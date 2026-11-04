@@ -1874,7 +1874,7 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be either :default or [:default]" "should be [:lift v], v as the column takes it"]}
+    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be either :default or [:default]" "should be [:lift v], v one of :happy :sad"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %)) (vals r)))
                   (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))

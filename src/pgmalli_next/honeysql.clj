@@ -158,9 +158,15 @@
                          :let [assigned #(cond-> (args/accepted-type r c :assign %) (or (shape/maybe? c) triggered?) query/nullable)
                                a (assigned (assoc opts ::args/keywords-columns true))
                                t (one-value a)
-                               plain (if (fills k) [:or t default] t)]]
+                               plain (if (fills k) [:or t default] t)
+                               lifted (assigned opts)
+                               labels (let [e (shape/domain-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]]
                      ;; [:lift v] sends v as one parameter, a keyword label too
-                     [(written-key k opts) (not (or (:optional props) triggered?)) [:or plain [:tuple {:error/message "should be [:lift v], v as the column takes it"} [:= :lift] (assigned opts)]] (generated-values plain)])
+                     [(written-key k opts) (not (or (:optional props) triggered?))
+                      [:or plain [:tuple {:error/message (str "should be [:lift v], v "
+                                                              (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
+                                  [:= :lift] lifted]]
+                      (generated-values plain)])
                    ;; one the database writes (generated, identity ALWAYS) takes it alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(written-key k opts) false default default]))

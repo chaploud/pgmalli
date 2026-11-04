@@ -56,6 +56,8 @@
       (= :=> head) (cond-> {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
                      (seq (:pgmalli/problems p)) (assoc :pgmalli/problems (:pgmalli/problems p)))
       (= :function head) (mapv #(describe schemas %) children)
+      ;; written-row's [:lift v], which sends v as one parameter
+      (and (= :tuple head) (= [:= :lift] (first children))) (let [d (describe schemas (second children))] (str "[:lift " (if (string? d) d (pr-str d)) "]"))
       (= :cat head) (mapv #(describe schemas %) children)
       ;; an argument of several collections (IN's)
       (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children))
