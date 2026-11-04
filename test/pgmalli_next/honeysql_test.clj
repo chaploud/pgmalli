@@ -543,6 +543,14 @@
     (is (every? #(m/validate t %) [nil 0 1]))
     (is (not (m/validate t -1)) "PostgreSQL refuses a negative LIMIT")))
 
+(deftest an-argument-is-true-false-or-unknown-tests-is-a-boolean-and-one-is-null-tests-untyped
+  (doseq [w [[:is-not :?x true] [:is :?x false] [:is-not :?x [:inline false]] [:is :?x :unknown] [:is :?x :TRUE]]]
+    (is (= {:x [:maybe [:boolean {:pg/type "boolean"}]]} (args {:select [:id] :from [:users] :where w})) (pr-str w)))
+  (doseq [w [[:is :?x nil] [:is-not :?x nil]]]
+    (is (= {:x [:any {:pgmalli/untyped :position}]} (args {:select [:id] :from [:users] :where w})) (pr-str w)))
+  (is (= {:x [:any {:pgmalli/untyped :position}]} (args {:select [:id] :from [:users] :where [:is :?x :true]} (assoc opts :format {:quoted true})))
+      "quoted, :true is a column"))
+
 (deftest an-alternative-is-held-to-its-columns-range
   (let [t (:x (args {:update :users :set {:score [:cast :?x :integer]} :where [:= :id 1]}))]
     (is (m/validate t 3M))

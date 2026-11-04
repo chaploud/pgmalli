@@ -809,13 +809,24 @@
     q?
     (if (contains? format :quoted) quoted (and (contains? format :dialect) (not= :nrql dialect)))))
 
+(defn- sql-word?
+  "Whether HoneySQL writes keyword v as the SQL word w (lower-case; v of any case) where the
+   format leaves it unquoted (quoted?), and :quoted-always does not match it."
+  [v w {:keys [quoted-always] :as format}]
+  (and (keyword? v) (nil? (namespace v)) (= w (str/lower-case (name v))) (not (quoted? format))
+       (not (some-> quoted-always (re-find (name v))))))
+
 (defn null-value?
-  "Whether HoneySQL writes v as NULL: nil, [:inline nil], [:lift nil], or :null (any case) where
-   the format leaves it unquoted (quoted?), and :quoted-always does not match it."
-  [v {:keys [quoted-always] :as format}]
-  (or (nil? v) (#{[:inline nil] [:lift nil]} v)
-      (and (= :null (sql-value v)) (not (quoted? format))
-           (not (some-> quoted-always (re-find (name v)))))))
+  "Whether HoneySQL writes v as NULL: nil, [:inline nil], [:lift nil], or :null."
+  [v format]
+  (or (nil? v) (#{[:inline nil] [:lift nil]} v) (sql-word? v "null" format)))
+
+(defn truth-value?
+  "Whether HoneySQL writes v as TRUE, FALSE or UNKNOWN, which IS [NOT] tests a boolean for:
+   true, false, [:inline b], or :true, :false or :unknown."
+  [v format]
+  (or (boolean? v) (and (vector? v) (= :inline (first v)) (boolean? (second v)))
+      (some #(sql-word? v % format) ["true" "false" "unknown"])))
 
 (def array-comparisons
   "ANY(a), SOME(a) and ALL(a), the right operand of an operator over a's elements (docs 9.24.3)."
