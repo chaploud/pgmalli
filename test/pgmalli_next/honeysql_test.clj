@@ -2714,3 +2714,10 @@
 (deftest a-call-of-a-types-name-is-a-cast-to-the-type-postgresql-folds
   (let [x #(:x (args {:select [:id] :from [:users] :where [:= :mood [% :?x]]}))]
     (is (= (x :mood) (x :MOOD)) "HoneySQL writes MOOD(?), mood to PostgreSQL")))
+
+(deftest a-column-a-call-names-is-checked
+  (is (= [{:kind :unknown-column :column :email}] (check {:select [[[:upper :email] :s]] :from [:users]})))
+  (is (= [:unknown-column] (map :kind (check {:select [:id] :from [:users] :where [:= [:+ :scroe 1] 2]}))))
+  (is (= [:unknown-column] (map :kind (check {:update :users :set {:score [:+ :scroe 1]} :where [:= :id 1]}))))
+  (is (= [] (check {:select [[:nick :n] [[:upper :nick] :u]] :from [:users] :group-by [[:upper :nick] :nick] :order-by [[[:lower :nick] :desc]]}))
+      "a select list's [column alias] and ORDER BY's [expression direction] are no calls"))

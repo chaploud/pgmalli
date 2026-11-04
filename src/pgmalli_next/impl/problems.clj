@@ -92,6 +92,11 @@
                     [(keyword (str alias "." c)) d])]
         [a (some->> (seq meant) (sort-by second) (map first) distinct (take 3) vec)]))))
 
+(def ^:private expression-clauses
+  "The clauses whose values are expressions, whose calls' arguments name columns."
+  #{:select :select-distinct :select-distinct-on :where :having :group-by :order-by :set :values
+    :do-update-set :returning :partition-by})
+
 (defn- column-problems [registry sc stmt ps {:keys [format] :as opts}]
   (let [target (syntax/target-scope sc stmt opts)
         assigned (when (seq target) (concat (map #(or (syntax/field-column %) %) (filter syntax/column-keyword? (:columns (syntax/insert-parts stmt))))
@@ -109,6 +114,19 @@
                                                          (syntax/column-keyword? (second x)))]
                                           [(second x) chain])
                                         ;; a keyword assigned in SET is a column the statement sees
+                                        ;; a column a function's or an operator's argument names ([:upper :email], [:+ :score 1])
+                                        ;; not an item of a list ([:nick :n] in :select is a column and its alias),
+                                        ;; but of GROUP BY and PARTITION BY, whose items are expressions
+                                        (for [{:keys [x chain item? clause]} (syntax/expression-nodes ps)
+                                              ;; in a clause of expressions (not FROM's [:users :u], ON CONFLICT's target,
+                                              ;; TRUNCATE's options), not an item of a list of [expression alias] or
+                                              ;; [expression direction]
+                                              :when (and (expression-clauses clause) (not (and item? (#{:select :select-distinct :select-distinct-on :order-by :returning} clause))))
+                                              :let [[kind _ args] (when-not (syntax/comparison? x) (syntax/call-parts x))]
+                                              :when kind
+                                              a args
+                                              :when (syntax/column-keyword? a)]
+                                          [a chain])
                                         (for [{:keys [x chain clause]} (syntax/assignments ps)
                                               :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x))]
                                           [x chain])

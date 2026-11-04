@@ -662,20 +662,21 @@
    its order, as a walk of each clause's value meets them, not descending into the statements nested in it, scopes the chain clause-parts says the node is read in,
    negated? under an odd number of :not through :and and :or alone ([:not [:= :a 1]] is a <> 1;
    CASE or a function's argument under NOT is not negated), top? for the clause's value itself
-   (one of :values, :set, an item of FROM or a join). A value written to a column is
+   (one of :values, :set, an item of FROM or a join), item? for a node right in it (an item of a
+   select list, [expr alias], or of ORDER BY, [expr direction], which is no call). A value written to a column is
    besides {:x value :assign column :event e :target scope :may-drop? bool}: e the write
    (:insert, :update), scope the target table's, may-drop? where the row may not reach the
    column. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
    its items go to those columns by position."
   [stmt chain outer feed {:keys [format] :as opts}]
   (let [nodes (fn [k x c]
-                (letfn [(walk [x neg? top?]
+                (letfn [(walk [x neg? top? item?]
                           (lazy-seq
-                           (cons {:x x :clause k :chain c :negated? neg? :top? top?}
+                           (cons {:x x :clause k :chain c :negated? neg? :top? top? :item? item?}
                                  (when (and (branch? x) (not (statement? x)))
                                    (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
-                                     (mapcat #(walk % neg? false) (seq x)))))))]
-                  (walk x false true)))
+                                     (mapcat #(walk % neg? false top?) (seq x)))))))]
+                  (walk x false true false)))
         target (target-scope chain stmt opts)
         written (group-by #(nth % 3) (writes stmt))
         assigned (fn [clause c]
