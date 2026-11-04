@@ -218,6 +218,12 @@
       (some-> (canonical-name e) array-of)
       (:name (entry t) t))))
 
+(defn short-name
+  "The name of type n a cast and a description write: one of spaces (bit varying, timestamp with
+   time zone) as its first alias (varbit, timestamptz), which a keyword spells; n otherwise."
+  [n]
+  (or (when (str/includes? n " ") (first (:aliases (entry n)))) n))
+
 (defn cast-name
   "canonical-name of the type a cast spells t (:double-precision, :TIMESTAMPTZ, \"bpchar\"):
    HoneySQL writes - as a space, and PostgreSQL folds the case."

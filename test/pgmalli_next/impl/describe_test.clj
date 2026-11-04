@@ -34,3 +34,7 @@
   (is (= "(date | inst)?" (pgmalli/describe registry [:maybe [:or [:time/local-date {:pg/type "date"}] 'inst?]])))
   (is (= "any[] | org.postgresql.util.PGobject" (pgmalli/describe registry [:or [:pg/array :any] [:fn {:pg/class "org.postgresql.util.PGobject"} any?]])))
   (is (= "real: 1.5 | 2.5" (pgmalli/describe registry [:enum {:pg/type "real"} 1.5 2.5 1.5M 2.5M]))))
+
+(deftest a-type-of-spaces-is-described-as-a-cast-writes-it
+  (is (= "varbit" (pgmalli/describe registry [:string {:pg/type "bit varying"}])))
+  (is (= "timestamptz" (pgmalli/describe registry [:time/instant {:pg/type "timestamp with time zone"}]))))

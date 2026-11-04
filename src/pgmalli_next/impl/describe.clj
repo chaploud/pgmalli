@@ -3,12 +3,8 @@
    labels, maps as {key description}."
   (:require [clojure.string :as str]
             [malli.core :as m]
-            [pgmalli-next.impl.shape :as shape]))
-
-(def ^:private short-names
-  {"timestamp with time zone" "timestamptz" "timestamp without time zone" "timestamp"
-   "time with time zone" "timetz" "time without time zone" "time"
-   "character varying" "varchar" "character" "char" "double precision" "float8"})
+            [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types]))
 
 (defn- type-label
   "The PostgreSQL type of props, short: \"varchar(40)\", \"timestamptz\"; nil without one."
@@ -16,7 +12,7 @@
   (when-let [t (:pg/type props)]
     (let [[_ base typmod brackets] (re-matches #"(.*?)(\(.*\))?((?:\[\])*)" t)
           n (:pg/max-length props)]
-      (str (get short-names base base) (or typmod (when n (str "(" n ")"))) brackets))))
+      (str (types/short-name base) (or typmod (when n (str "(" n ")"))) brackets))))
 
 (declare describe)
 

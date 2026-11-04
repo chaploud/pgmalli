@@ -191,7 +191,7 @@
   (let [p (shape/column-props s)
         e (types/entry (shape/type-name p))
         ;; :bit-varying or :timestamp-with-time-zone is no type HoneySQL writes; its alias is
-        spelt #(if (str/includes? % " ") (first (:aliases (types/entry %))) %)]
+        spelt types/short-name]
     (or (query/enum-type registry s)
         (when e
           (cond (types/element (:pg/type p)) (types/array-of (spelt (:name e)))
