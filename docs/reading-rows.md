@@ -88,7 +88,14 @@ before reading rows or sending arguments (it extends next.jdbc's protocols for t
 ;;; sending: next.jdbc.date-time, loaded above, sends an Instant, a LocalDate, a LocalDateTime
 ;;; and a java.util.Date untyped; pgjdbc's setObject the rest
 
-(defn- jsonb [x] (doto (PGobject.) (.setType "jsonb") (.setValue (json/write-str x))))
+;; data.json writes an Instant and a UUID as JSON strings; a LocalDate, a LocalDateTime, a
+;; LocalTime, an OffsetDateTime and an OffsetTime go as their ISO-8601 text here
+(defn- write-temporal [x ^java.io.Writer out _options]
+  (if (instance? java.time.temporal.Temporal x)
+    (json/write (str x) out)
+    (throw (Exception. (str "Don't know how to write JSON of " (class x))))))
+
+(defn- jsonb [x] (doto (PGobject.) (.setType "jsonb") (.setValue (json/write-str x :default-write-fn write-temporal))))
 
 (extend-protocol prepare/SettableParameter
   ;; next.jdbc.date-time sends it as a java.util.Date, whose toInstant a java.sql.Time throws on

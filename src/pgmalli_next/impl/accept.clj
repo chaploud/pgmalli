@@ -60,6 +60,19 @@
   "[class type] of classes, in its order."
   (mapv (fn [[c t]] [c t]) classes))
 
+(def json-classes
+  "classes as the one sending's jsonb writes a value of class into a JSON document (data.json, an
+   ISO-8601 string of a java.time value), which json_populate_record reads into a column through
+   its type's input: a String as a JSON string, whose text every type's input reads (\"*\");
+   a number, a boolean and a JSON string of another class as the one sending sends the class.
+   A Character, a byte[] and a java.sql.Time, which it does not write as a value of theirs, are
+   left out."
+  (vec (keep (fn [[c :as row]]
+               (cond (or (#{Character bytes-class} c) (= "java.sql.Time" (.getName ^Class c))) nil
+                     (= String c) [c :unknown :string #{"*"}]
+                     :else row))
+             classes)))
+
 ;;; what PostgreSQL takes
 
 (defn- extension-string?
@@ -137,16 +150,19 @@
   #{"bytea" "\"char\""})
 
 (defn reads?
-  "Whether a value of class c sent untyped goes to type t as its text, in context: where t's
-   category is one of c's row's categories (classes; a string type's \"S\", citext's too), t's
+  "Whether a value of class c sent untyped goes to type t as its text, in context (:json, a
+   value of a JSON document json_populate_record reads, by json-classes' categories): where t's
+   category is one of c's row's categories (classes; a string type's \"S\", citext's too, every
+   type's \"*\"), t's
    input takes any text (any-text), or answers? does not answer for t (an extension's type); cast,
    as converts? casts a string, also a string's text (a keyword's) to any type and any text to a
    string type. Assigned or compared, PostgreSQL reads more through t's input (:1 into a bigint,
    a timestamp's text into a text column): taking it would put :keyword on every argument and
    the dates on every string one (docs/queries.md, Stricter than PostgreSQL)."
   [t ^Class c context]
-  (let [ks (some (fn [[^Class x _ _ ks]] (when (.isAssignableFrom x c) ks)) classes)]
-    (boolean (or (ks (if (string-type? t) "S" (types/category t)))
+  (let [ks (some (fn [[^Class x _ _ ks]] (when (.isAssignableFrom x c) ks)) (if (= :json context) json-classes classes))]
+    (boolean (or (ks "*")
+                 (ks (if (string-type? t) "S" (types/category t)))
                  (and (= :cast context) (or (ks "S") (string-type? t)))
                  (contains? any-text t)
                  (not (answers? t))))))
@@ -158,12 +174,16 @@
    has an = of its own the catalog holds (json, point and an extension's type but citext have
    none here), not where t is a domain over an enum ([:enum name {:domain? true}]), which has no
    = for an untyped value. Stricter than accepts?: a numeric is not one of a real's or a
-   double precision's own, a decimal sent to a float column being the mix-up a type would catch."
+   double precision's own, a decimal sent to a float column being the mix-up a type would catch.
+   Under :json (a JSON number read through t's input), a number of any number type, but an
+   integer type's input reads no fraction."
   ([t sent] (holds? t sent :assign))
   ([t sent context]
    (or (= t sent)
-       (and (number-type? t) (number-type? sent) (types/implicit? sent t)
-            (not (and (= "numeric" sent) (= :float (:eval (types/types t))))))
+       (if (= :json context)
+         (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
+         (and (number-type? t) (number-type? sent) (types/implicit? sent t)
+              (not (and (= "numeric" sent) (= :float (:eval (types/types t)))))))
        (and (string-type? t) (string-type? sent))
        (and (= :unknown sent)
             (or (not= :compare context)

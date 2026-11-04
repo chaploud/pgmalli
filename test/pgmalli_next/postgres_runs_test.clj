@@ -36,6 +36,9 @@
                            ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[], c1 char(1));
                          INSERT INTO typed (id) VALUES (1);
                          CREATE TABLE ul (v varchar(5), n int CHECK (n BETWEEN 1 AND 9), j jsonb CHECK (jsonb_typeof(j) = 'object'), x numeric);
+                         CREATE TABLE positions (id bigserial PRIMARY KEY, group_id bigint NOT NULL, name varchar(100) NOT NULL,
+                           sort_order int, created_at timestamptz DEFAULT now());
+                         INSERT INTO positions (group_id, name) VALUES (1, 'a');
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
@@ -313,3 +316,39 @@
         (testing (pr-str q)
           (is (= rows (:rows (h/analyze reg q))))
           (is (= n (count (runs! q {} {})))))))))
+
+(deftest a-populate-recordsets-document-takes-the-row-types-columns-as-the-one-sending-writes-them
+  (when *db*
+    (let [reg (registry)
+          insert (fn [t cols] {:insert-into [[t cols] {:select cols :from [[[:jsonb_populate_recordset [:cast nil t] :?rows] :r]]}]})
+          q (insert :positions [:group_id :name :sort_order])
+          long-name (apply str (repeat 101 "a"))]
+      (is (some? (runs! q {:rows [{:group_id 1 :name "a" :sort_order 1} {:group_id 2 :name "b"}]} {})))
+      (is (accepted? reg q {:rows [{:group_id 1 :name "a" :sort_order 1} {:group_id 2 :name "b"}]} {}))
+      (testing "a key of no column: PostgreSQL ignores it, pgmalli refuses it"
+        (is (some? (runs! q {:rows [{:group_id 1 :name "a" :sortOrder 1}]} {})))
+        (is (not (accepted? reg q {:rows [{:group_id 1 :name "a" :sortOrder 1}]} {}))))
+      (doseq [row [{:group_id 1 :name long-name} {:group_id 1 :name "a" :sort_order 3000000000} {:group_id 1 :name "a" :sort_order 1.5}
+                   {:group_id 1}]]
+        (testing (pr-str row)
+          (is (thrown? Exception (runs! q {:rows [row]} {})))
+          (is (not (accepted? reg q {:rows [row]} {})))))
+      (testing "a jsonb column's CHECK shapes its value"
+        (let [q (insert :ul [:j])]
+          (is (some? (runs! q {:rows [{:j {:a 1}}]} {})))
+          (is (accepted? reg q {:rows [{:j {:a 1}}]} {}))
+          (is (thrown? Exception (runs! q {:rows [{:j [1]}]} {})))
+          (is (not (accepted? reg q {:rows [{:j [1]}]} {})))))
+      (testing "java.time values and a UUID, written as their text, read by the column type's input"
+        (let [q (insert :typed [:u :d :ts :tz :t])
+              row {:u (java.util.UUID/randomUUID) :d (java.time.LocalDate/now) :ts (java.time.LocalDateTime/now)
+                   :tz (java.time.Instant/now) :t (java.time.LocalTime/now)}]
+          (doseq [row [row (assoc row :tz (java.time.OffsetDateTime/now)) (assoc row :tz (java.time.LocalDate/now))]]
+            (is (some? (runs! q {:rows [row]} {})))
+            (is (accepted? reg q {:rows [row]} {})))))
+      (testing "the whole row of the UPDATE's table"
+        (let [q {:update [:positions :p] :set {:sort_order {:select [:r.sort_order] :from [[[:jsonb_populate_record :p [:cast :?row :jsonb]] :r]]}}
+                 :where [:= :p.id 1]}]
+          (is (= [{:next.jdbc/update-count 1}] (runs! q {:row {:sort_order 2}} {})))
+          (is (accepted? reg q {:row {:sort_order 2}} {}))
+          (is (not (accepted? reg q {:row {:sort-order 2}} {}))))))))

@@ -205,7 +205,8 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare cast-target insert-parts star? arg-key loose expression-type accepted-type quoted? call-parts reached own-type-schema type-call registry-type operator? formatted-name)
+(declare cast-target insert-parts star? arg-key loose expression-type accepted-type quoted? call-parts reached own-type-schema type-call registry-type operator? formatted-name
+         called sql-value column-keyword? split-column chain)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -525,31 +526,65 @@
         (when (and stmt (or (nil? listed) (sequential? listed)))
           [stmt (map #(folded (clojure.core/name %)) listed) (boolean op)])))))
 
+(def ^:private populate-name #"jsonb?_populate_record(set)?")
+
+(defn- populate-item?
+  "Whether a FROM item is a call of json_populate_record, jsonb_populate_record or their
+   recordset ([[:jsonb_populate_recordset t ?] :r])."
+  [item]
+  (boolean (and (vector? item) (some->> (called (first item)) (re-matches populate-name)))))
+
+(defn- populate-call
+  "{:table :set? :type :json :arg} of x, a call of pg_catalog's json_populate_record,
+   jsonb_populate_record or their recordset (set? true) of the row type of a table or view of
+   the registry (\"schema.table\"): NULL cast to it ([:cast nil :t]), or the whole row of a table
+   in scopes (:p, its alias). json is its argument of the document, of type (\"json\" or
+   \"jsonb\"); arg the argument there, bare or cast to json or jsonb, nil for another value. nil
+   for another x."
+  [registry scopes x {:keys [schema]}]
+  (let [[kind n [a json :as args] q] (call-parts x)]
+    (when (and (= :functions kind) (contains? #{nil "pg_catalog"} q) (= 2 (count args)) (re-matches populate-name n))
+      (when-let [table (cond (and (vector? a) (= :cast (first a)) (= 3 (count a)) (or (nil? (second a)) (= :null (sql-value (second a)))))
+                             (when-let [t (cast-target (nth a 2))] (when-not (types/element t) (first (table-ref (keyword t) schema))))
+                             (and (column-keyword? a) (nil? (first (split-column a))))
+                             (let [{:keys [table opaque?]} (some #(get % (folded (name a))) (filter map? (chain scopes)))]
+                               (when-not opaque? table)))]
+        (when-let [table (some #(when (column-entries registry %) %) [table (folded table)])]
+          {:table table :set? (str/ends-with? n "set") :type (if (str/starts-with? n "jsonb") "jsonb" "json") :json json
+           :arg (cond (arg-key json) json
+                      (and (vector? json) (= :cast (first json)) (= 3 (count json)) (arg-key (second json))
+                           (some->> (cast-target (nth json 2)) str/lower-case types/json?))
+                      (second json))})))))
+
 (defn- function-columns
   "[[column schema] ...] of a function of pg_catalog or of a generated schema in FROM
    ([[:f args] alias], [[:with-ordinality [:f args] alias]]): its OUT columns (a generated
    schema's: its composite type's too), or one of its result type named after
    the alias (the function without one), each nullable and of no table, renamed by the names the
-   alias lists; WITH ORDINALITY adds ordinality, a bigint. nil where that is not told."
+   alias lists; WITH ORDINALITY adds ordinality, a bigint; of a populate-call, its table's
+   columns, nullable. nil where that is not told."
   [registry item chain opts]
   (let [[a b] (if (vector? item) item [item])
         [f ordinality? al] (if (and (vector? a) (= :with-ordinality (first a))) [(second a) true (get a 2)] [a false b])
         [al listed] (if (and (vector? al) (map? (second al))) [(first al) (:columns (second al))] [al nil])
-        [kind n args :as parts] (when (vector? f) (call-parts f))]
-    (when (and (= :functions kind) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
-      ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)), its columns each named unnest
-      (when-let [rs (let [rs (for [as (if (and (= "unnest" n) (next args)) (map vector args) [args])]
-                               (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) as) (reached registry opts parts)))]
-                      (when (every? some? rs) rs))]
-        (let [label (if (and (alias? al) (nil? (next rs))) (alias-label al opts) n)
-              cs (mapcat (fn [{t :result o :overload}] (or (seq (:columns o)) (when-not (= "record" t) [[label t]]))) rs)
-              cs (cond-> (vec cs) ordinality? (conj ["ordinality" "bigint"]))
-              own #(own-type-schema registry % (:schema (:overload (first rs))))]
-          (when (and (seq cs) (every? #(or (types/category (second %)) (own (second %))) cs))
-            (vec (map-indexed (fn [i [c ct]]
-                                [(if (< i (count listed)) (folded (name (nth listed i))) c)
-                                 (when-let [s (or (when (string? ct) (types/type-schema ct)) (own ct))] (cond->> s (not= "ordinality" c) (vector :maybe)))])
-                              cs))))))))
+        [kind n args :as parts] (when (vector? f) (call-parts f))
+        renamed (fn [cs] (vec (map-indexed (fn [i [c s]] [(if (< i (count listed)) (folded (name (nth listed i))) c) s]) cs)))
+        populated (when (and (not ordinality?) (or (nil? listed) (sequential? listed))) (populate-call registry chain f opts))]
+    (if populated
+      ;; the columns of the row type, NULL where the document lacks a key
+      (renamed (for [[c s] (column-entries registry (:table populated))] [c (nullable s)]))
+      (when (and (= :functions kind) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
+        ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)), its columns each named unnest
+        (when-let [rs (let [rs (for [as (if (and (= "unnest" n) (next args)) (map vector args) [args])]
+                                 (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) as) (reached registry opts parts)))]
+                        (when (every? some? rs) rs))]
+          (let [label (if (and (alias? al) (nil? (next rs))) (alias-label al opts) n)
+                cs (mapcat (fn [{t :result o :overload}] (or (seq (:columns o)) (when-not (= "record" t) [[label t]]))) rs)
+                cs (cond-> (vec cs) ordinality? (conj ["ordinality" "bigint"]))
+                own #(own-type-schema registry % (:schema (:overload (first rs))))]
+            (when (and (seq cs) (every? #(or (types/category (second %)) (own (second %))) cs))
+              (renamed (for [[c ct] cs]
+                         [c (when-let [s (or (when (string? ct) (types/type-schema ct)) (own ct))] (cond->> s (not= "ordinality" c) (vector :maybe)))])))))))))
 
 (defn- standalone
   "Statement inner as a query of its own: itself where it reads no CTE of ctes (those its place
@@ -953,10 +988,12 @@
 (defn- may-drop-rows?
   "Whether SELECT stmt may return no row where its arguments make one: it filters, groups,
    limits, deduplicates or combines rows, or reads a table. unnest(?) of arguments drops none:
-   an empty array makes no row its other arguments go to."
+   an empty array makes no row its other arguments go to; nor does a populate-item alone."
   [stmt]
-  (not (and (every? #{:select :from :order-by} (keys stmt))
-            (every? unnest-of-arguments? (from-items stmt [:from])))))
+  (let [items (from-items stmt [:from])]
+    (not (and (every? #{:select :from :order-by} (keys stmt))
+              (or (every? unnest-of-arguments? items)
+                  (and (= 1 (count items)) (populate-item? (first items))))))))
 
 (defn- positions
   "The expression positions of statement stmt, one read for check and arg-types: {:x node
@@ -995,11 +1032,15 @@
                [(nodes k v c)])
            e p]
        e)
-     ;; a star or :raw makes columns the data does not count, but of unnest(?, ...) alone, a column of each argument
+     ;; a star or :raw makes columns the data does not count, but of unnest(?, ...) alone, a
+     ;; column of each argument, and of a populate-item alone, the columns of its row type
      (let [items (map bare (selected-items stmt))
            [item & more] (table-items stmt)
            items (or (when (and (= 1 (count items)) (keyword? (first items)) (star? (first items)) (nil? more))
-                       (when-let [cs (unnest-columns item)] (when (= (count cs) (count (rest (first item)))) (map (comp keyword first) cs))))
+                       (or (when-let [cs (unnest-columns item)] (when (= (count cs) (count (rest (first item)))) (map (comp keyword first) cs)))
+                           (when (populate-item? item)
+                             (let [[_ alias] (table-ref item schema)]
+                               (some->> (:order (get (first chain) alias)) (map #(keyword alias %)))))))
                      items)]
        (when (and (:columns feed) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
          (for [[col v] (map (comp to-field vector) (:columns feed) items)
@@ -1498,7 +1539,7 @@
                 values (cond (or strings? numbers?) (if (vector? value) value [value])
                              (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
                 allowed (when s (enum-values registry (if assigned? s (compared-schema registry s op))))
-                uncast (when (and s strings? (not (:inline (:format opts))) (not (takes-string? registry s assigned? jdbc/string-sends)))
+                uncast (when (and s strings? (not (:inline (:format opts))) (not (takes-string? registry s assigned? (jdbc/string-sends opts))))
                          (uncast-type registry s))]
           :when (seq values)
           v values
@@ -1871,7 +1912,7 @@
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
       (or (nil? t) (and (untyped? own) (not es))) own
-      (= :enum (shape/kind own)) (labelled-type own alts context (boolean (some #(or (= t %) (takes? %)) jdbc/string-sends)) (not (::keywords-columns opts)))
+      (= :enum (shape/kind own)) (labelled-type own alts context (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
       :else
       (let [own-alts (when-not (untyped? own) (shape/alternatives own))
             ;; a number held to a number column's range, which PostgreSQL checks after converting it;
@@ -2027,7 +2068,10 @@
    unnest's column: an array of that, typed."
   [registry ps opts]
   (let [nodes (expression-nodes ps)
+        ;; populate-args types these
+        populated (set (for [{:keys [x chain]} nodes :let [{:keys [json arg]} (populate-call registry chain x opts)] :when arg] json))
         casts (for [{:keys [x chain]} nodes
+                    :when (not (populated x))
                     ;; ARRAY[...]::t[] casts each element to t (transformArrayExpr)
                     x (cond (and (vector? x) (= :cast (first x)) (= 3 (count x))) [x]
                             (and (vector? x) (= :array (first x)) (= 3 (count x)) (sequential? (second x)) (keyword? (nth x 2)))
@@ -2071,6 +2115,51 @@
               [k elements?] (if u [u true] (value-arg registry chain x))]
         :when k]
     [k (if elements? (jdbc/array-type t opts :unnest) t)]))
+
+(defn- json-field-type
+  "The type of a value of a key of a JSON document json_populate_record reads into a column of
+   schema s, as the one sending's jsonb writes it (accept/json-classes): of a json or jsonb
+   column, as read back; of an array column, a sequential of its elements' (NULL too); of
+   another, what its type's input reads of a JSON number, boolean or string (accepted-type
+   under :json), no PGobject, which the document does not hold."
+  [registry s opts]
+  (let [s (shape/non-null s)
+        p (:pg/type (shape/column-props s))]
+    (cond (types/json? p) (driver-schema registry jdbc/column-read-type s opts)
+          (types/element p) [:sequential (nullable (json-field-type registry (last s) opts))]
+          :else (let [t (accepted-type registry s :json (assoc opts ::jdbc/json true))]
+                  (shape/either (remove #{jdbc/pg-object} (shape/alternatives t)) t)))))
+
+(defn- populate-args
+  "The argument of the document of a call populate-call tells: for a record, a map of the row
+   type's columns as keyword keys, closed, each a json-field-type or nil; for a recordset, a
+   vector of them; in place of the collections a json or jsonb value of the parameter takes
+   there (bare, a value sent as the function's json or jsonb; cast, what the cast takes), or
+   nil. A key is required, its value not nil, where an INSERT ... SELECT writes the column of
+   that name of the row type's table straight from it (positions not :may-drop?) and NULL
+   may not go there (assigned-column)."
+  [registry ps opts]
+  (for [{:keys [x chain]} (expression-nodes ps)
+        :let [{:keys [table set? type json arg]} (populate-call registry chain x opts)]
+        :when arg
+        :let [s (if (arg-key json) (types/type-schema type) (:schema (expression-type registry chain json opts)))
+              base (accepted-type registry s (if (arg-key json) :compare :cast) opts)
+              alias (some (fn [{i :x}] (when (and (vector? i) (identical? x (first i))) (second (table-ref i (:schema opts))))) ps)
+              required (set (for [{c :x :as a} (assignments ps)
+                                  :when (and alias (not (:may-drop? a)) (column-keyword? c))
+                                  :let [{:keys [column opaque?] from :table} (resolve-column registry (:chain a) c)
+                                        {written :column t :table :keys [nullable? schema]} (assigned-column registry a)]
+                                  :when (and opaque? (= alias from) (= table t) schema (not nullable?) (= column written))]
+                              column))
+              doc (into [:map {:closed true}]
+                        (for [[c cs] (column-entries registry table)
+                              :let [req? (contains? required c)]]
+                          (jdbc/row-entry (keyword c) (when-not req? {:optional true}) (json-field-type registry cs opts) (not req?))))
+              [kept dropped] (if set? [:vector :map-of] [:map-of :vector])]]
+    [arg (nullable (shape/either (for [a (shape/alternatives (shape/non-null base))
+                                       :when (not= dropped (shape/kind a))]
+                                   (if (= kept (shape/kind a)) (if set? [:vector doc] doc) a))
+                                 :any))]))
 
 (def ^:private common-type-functions
   "The functions whose arguments PostgreSQL resolves to one type, and that returns it."
@@ -2155,7 +2244,7 @@
    :params takes them (:id): every one of them, one pgmalli cannot type [:any {:pgmalli/untyped
    why}]. docs/queries.md#the-types-of-the-arguments says where an argument is typed and how."
   [registry body opts]
-  (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
+  (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args populate-args]
         typed (for [[_ _ _ ps] (once registry statement-positions body opts)
                     f uses
                     use (f registry ps opts)]

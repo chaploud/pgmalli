@@ -1976,6 +1976,48 @@
              :gs (long-array [Long/MAX_VALUE]))
         "into a column of another type, the cast's type")))
 
+(deftest a-populate-records-document-is-a-closed-map-of-the-row-types-columns-each-as-its-input-reads-it
+  (let [ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
+        record (fn [t doc] {:select [:r.*] :from [[[:jsonb_populate_record [:cast nil t] doc] :r]]})
+        q (record :users [:cast :?doc :jsonb])]
+    (doseq [doc [{} {:nick "ann" :group_id 1 :mood "sad"} {:mood :sad :nick nil} {:group_id "12"}
+                 {:closed_at (java.time.Instant/now) :born (java.time.LocalDate/now) :updated_at (java.time.LocalDateTime/now)}
+                 nil "{\"nick\": \"ann\"}"]]
+      (is (ok? q :doc doc) (pr-str doc)))
+    (doseq [[doc why] [[{:nik "ann"} "a key of no column, which PostgreSQL ignores"]
+                       [{"nick" "ann"} "a string key"]
+                       [{:nick (apply str (repeat 41 "a"))} "longer than the column's varchar(40)"]
+                       [{:group_id 3000000000} "beyond the integer's range"]
+                       [{:group_id 1.5} "a fraction, which an integer's input does not read"]
+                       [{:mood "angry"} "no label of the enum"]
+                       [{:nick 1} "a number to a string column, as assigned"]
+                       [{:nick \a} "a Character, which data.json does not write"]
+                       [[{:nick "ann"}] "an array, which a record is not"]]]
+      (is (not (ok? q :doc doc)) why))
+    (is (ok? (record :sample.users :?doc) :doc {:nick "ann"}) "a bare argument, the table schema-qualified")
+    (is (not (ok? (record :sample.users :?doc) :doc "{}")) "a String goes as varchar, which the function does not take")
+    (is (= [:maybe int4] (some (fn [[k s]] (when (= :group_id k) s)) (rest (row q))))
+        "the row's columns are the row type's, NULL where the document lacks a key")))
+
+(deftest a-populate-recordsets-document-is-a-vector-of-them-a-key-required-where-insert-writes-its-not-null-column
+  (let [ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
+        insert (fn [select more] {:insert-into [[:users [:group_id :score :nick]]
+                                                (merge {:select select :from [[[:jsonb_populate_recordset [:cast nil :users] :?rows] :r]]} more)]})]
+    (doseq [select [[:group_id :score :nick] [:r.group_id :r.score :r.nick]]]
+      (is (ok? (insert select {}) :rows [{:group_id 1 :score 0} {:group_id 2 :score 1 :nick "ann"}]))
+      (is (not (ok? (insert select {}) :rows [{:group_id 1 :nick "ann"}])) "score is NOT NULL")
+      (is (not (ok? (insert select {}) :rows [{:group_id 1 :score nil}])) "nil to a NOT NULL column")
+      (is (not (ok? (insert select {}) :rows {:group_id 1 :score 0})) "a map, which a recordset is not")
+      (is (ok? (insert select {:where [:> :r.score 0]}) :rows [{:group_id 1}]) "a row the WHERE may drop is not written"))
+    (is (ok? (insert [:r.group_id :r.score [:upper :r.nick]] {}) :rows [{:group_id 1 :score 0}]) "a column not written straight from the document")
+    (let [star {:insert-into [[:groups [:id :name]] {:select [:*] :from [[[:jsonb_populate_recordset [:cast nil :groups] :?rows] :r]]}]}]
+      (is (ok? star :rows [{:id 1 :name "a"}]))
+      (is (not (ok? star :rows [{:id 1}])) "SELECT * writes every column of the row type"))
+    (let [update {:update [:users :p] :set {[:composite :nick :score] {:select [:r.nick :r.score] :from [[[:jsonb_populate_record :p [:cast :?row :jsonb]] :r]]}}
+                  :where [:= :p.id 1]}]
+      (is (ok? update :row {:nick "ann"}) "the whole row of the UPDATE's table, every key optional")
+      (is (not (ok? update :row {:nick "ann" :scor 1}))))))
+
 (deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
   (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric(10,2)"} 'decimal? [:> 0]]
                                           :pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]

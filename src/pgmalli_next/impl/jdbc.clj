@@ -146,18 +146,26 @@
    every string argument would say nothing of."
   (dissoc (into {} accept/class-types) Character))
 
-(def ^:private sent-rows
-  "{array? [[schema type] ...]}: of sends, in accept/class-types' order, an array argument's (a
+(defn- rows-of
+  "{array? [[schema type class] ...]} of [class type] rows, in their order: an array argument's (a
    Java array but byte[]) and another's."
+  [rows]
   (group-by (fn [[s]] (= [:pg/array :pgmalli/element] s))
-            (for [[c t] accept/class-types :when (contains? sends c)] [(class-schema c) t c])))
+            (for [[c t] rows] [(class-schema c) t c])))
+
+(def ^:private sent-rows (rows-of (filter (comp sends first) accept/class-types)))
+
+(def ^:private json-rows (rows-of accept/json-classes))
 
 (defn write-rows
   "[schema type class] for each class the one sending sends, in accept/class-types' order, by array?
    an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
-   none under ::nothing-sent, where a type is taken as the driver reads it alone."
+   none under ::nothing-sent, where a type is taken as the driver reads it alone; under ::json,
+   a value of a JSON document as accept/json-classes writes it, no array."
   [opts array?]
-  (if (::nothing-sent opts) [] (get sent-rows array? [])))
+  (cond (::nothing-sent opts) []
+        (::json opts) (if array? [] (get json-rows false []))
+        :else (get sent-rows array? [])))
 
 (defn sent-as
   "The alternatives of the schemas of the classes, no array, the one sending sends as type t; with
@@ -178,9 +186,10 @@
     (or (get sends (class value))
         (some (fn [[c t]] (when (and (contains? sends c) (instance? c value)) t)) accept/class-types))))
 
-(def string-sends
+(defn string-sends
   "The types a String is sent as."
-  (vec (distinct (keep sends [String Character]))))
+  [opts]
+  (vec (distinct (for [[_ t c] (write-rows opts false) :when (= String c)] t))))
 
 (defn- pg-type [s] (:pg/type (shape/props s)))
 

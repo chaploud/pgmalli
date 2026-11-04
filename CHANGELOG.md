@@ -113,6 +113,18 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Added
 
+* The document of `jsonb_populate_record`, `json_populate_record` and their `recordset`, of a
+  table's row type (`NULL::t`, or an alias's whole row in `UPDATE t p ... FROM
+  jsonb_populate_record(p, ?::jsonb)`), is typed: a closed map of the table's columns as
+  keyword keys (a vector of them for a recordset), each value what the column's type reads
+  from the JSON the one sending writes, its length, range, CHECK, labels and jsonb shape kept.
+  A key of no column, which PostgreSQL ignores, is refused. Under `INSERT INTO t (cols) SELECT`
+  of the populated columns, a NOT NULL column's key is required. The function's columns are
+  the table's, nullable.
+* The one sending's `jsonb` writes a `LocalDate`, a `LocalDateTime`, a `LocalTime`, an
+  `OffsetDateTime` and an `OffsetTime` as their ISO-8601 text, in a map or a vector at any
+  depth: install the [extension](docs/reading-rows.md#the-one-reading-and-sending) again.
+
 * A cast to `[:raw "bigint[]"]`, how an array cast is written in HoneySQL, has its type: its
   argument takes what PostgreSQL casts to it, and `unnest` of it, of several arrays too, has
   columns of the elements' types. An argument cast to an array type, `jsonb[]` and an enum's
