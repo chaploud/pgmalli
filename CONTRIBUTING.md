@@ -7,15 +7,16 @@ Issues and pull requests are welcome.
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the image).
 `bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb test:all`, `bb oracle`, `bb docs:example`,
-`bb catalog`, `bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:docs`
-and `bb fixture` do not.
+`bb catalog`, `bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:nodb`,
+`bb test:docs` and `bb fixture` do not.
 
 ## Tests
 
 | command | runs |
 |---|---|
 | `bb lint` | clj-kondo |
-| `bb test` | the suite on babashka (`PGMALLI_SKIP_DB=1` skips the database tests) |
+| `bb test` | the suite on babashka |
+| `bb test:nodb` | `bb test` without the database tests (`PGMALLI_SKIP_DB=1`) |
 | `bb test:jvm [main\|oracle]` | the suite on the JVM; `main` all but `pgmalli-next.oracle-test`, `oracle` that alone |
 | `bb test:matrix` | the suite on every PostgreSQL version CI covers |
 | `bb test:docs` | the code blocks of README.md and docs/, each `;; =>` asserted |
@@ -29,7 +30,7 @@ and `bb fixture` do not.
 
 Before a pull request: `bb test:all`, then read the log of each task that did not exit 0. Each
 task starts its own PostgreSQL container. On a machine without docker, `bb lint`,
-`PGMALLI_SKIP_DB=1 bb test` and `bb test:docs` run. After `bb test:update` or `bb test:docs:update`,
+`bb test:nodb` and `bb test:docs` run. After `bb test:update` or `bb test:docs:update`,
 read the git diff: a rewritten expectation is a changed behaviour.
 
 `bb mutate` runs the bb suite unless told otherwise, which leaves out the tests that pin much

@@ -42,6 +42,8 @@
          fixture {:doc "Rewrite test/resources/pgmalli-next/{sample,other}.edn from dev/fixture.clj (no database)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/fixture.clj")}
+         test:nodb {:doc "bb test without the tests that need a database (no docker)"
+                    :task (shell {:extra-env {"PGMALLI_SKIP_DB" "1"}} "bb test")}
          test {:doc "Run the test suite with babashka (every test/**/*_test.clj but the ones that need next.jdbc)"
                :extra-paths ["dev"]
                :requires ([clojure.test :as t] [bb-suite])

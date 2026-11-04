@@ -53,7 +53,7 @@
   (loop [attempt 1]
     (let [port (free-port)
           name (str "pgmalli-test-" port)
-          {:keys [exit]} (p/sh ["docker" "run" "-d" "--rm" "--name" name
+          {:keys [exit err]} (p/sh ["docker" "run" "-d" "--rm" "--name" name
                                 "--label" (str run-label "=" @host ":" (.pid (ProcessHandle/current)))
                                 "-e" "POSTGRES_PASSWORD=pw" "-e" "POSTGRES_DB=t"
                                 ;; PGDATA off the image's VOLUME (/var/lib/postgresql/data up to 17),
@@ -64,7 +64,9 @@
                                 "-c" "fsync=off" "-c" "synchronous_commit=off" "-c" "full_page_writes=off"])]
       (cond (zero? exit) {:name name :port port}
             (< attempt 3) (recur (inc attempt))
-            :else (throw (ex-info "could not start the postgres container" {:port port :image image}))))))
+            :else (throw (ex-info (str "could not start the postgres container (" image "): " (str/trim (str err))
+                                       "; start docker, or set PGMALLI_SKIP_DB=1 to run without the database tests")
+                                  {:port port :image image}))))))
 
 (defn- wait-ready! [name]
   ;; the init-time temporary server only listens on a unix socket, so check over TCP
@@ -103,7 +105,7 @@
                            (str ", " label " " (or (version artifact) "absent")))))))
 
 (def ^:private said-skipped
-  (delay (println "PGMALLI_SKIP_DB is set: the tests that need a database are skipped")))
+  (delay (println "PGMALLI_SKIP_DB=1: the tests that need a database are skipped")))
 
 (def ^:private one-reading-and-sending
   ;; the doc's code itself, so what the tests read rows with is what the doc tells applications to install
@@ -116,10 +118,10 @@
 (defn with-postgres
   "clojure.test :once fixture. Binds *db* to an empty database for the namespace, and names the
    upstream versions that ran in every failure under it. On the JVM, rows are read as
-   docs/reading-rows.md#the-one-reading-and-sending reads and sends them. Set PGMALLI_SKIP_DB to run without docker;
+   docs/reading-rows.md#the-one-reading-and-sending reads and sends them. Set PGMALLI_SKIP_DB=1 to run without docker;
    *db* is then nil."
   [f]
-  (if (System/getenv "PGMALLI_SKIP_DB")
+  (if (= "1" (System/getenv "PGMALLI_SKIP_DB"))
     (do @said-skipped (f))
     (let [{:keys [name port]} @container
           _ (when-not (System/getProperty "babashka.version") @one-reading-and-sending)

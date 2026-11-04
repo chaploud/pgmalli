@@ -989,5 +989,8 @@
               (println (:id r) (or (:mutation r) "") (:format r) "\n  SQL:" (:sql r) (when (seq (:params r)) (pr-str (:params r)))
                        "\n  PostgreSQL:" (:pg r) (:state r) (some-> (:message r) (str/replace #"\n" " | ")) (or (:format-error r) "")
                        "\n  check:" (pr-str (:problems r)))))
+          (println (if failed?
+                     "\nFAIL: a return rejected, a column described otherwise, an argument matrix failure, a false positive or a timeout above"
+                     "\nPASS: no return rejected, column described otherwise, argument matrix failure, false positive or timeout"))
           (shutdown-agents)
           (when failed? (System/exit 1)))))))
