@@ -176,16 +176,15 @@
    domain over an enum ([:enum name {:domain? true}]), which has no = for an untyped value. Under
    :json (a JSON number read through t's input), a number of any number type, but an integer
    type's input reads no fraction."
-  ([t sent] (holds? t sent :assign))
-  ([t sent context]
-   (or (= t sent)
-       (case context
-         :json (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
-         :compare (and (string? t) (string? sent) (some #(contains? (apply types/cast-contexts %) "i") [[sent t] [t sent]]) (compares? t sent))
-         :common (and (string? t) (string? sent) (some? (resolve/common-type [t sent])))
-         (and (string? t) (string? sent) (types/implicit? sent t)))
-       (and (string-type? t) (string-type? sent))
-       (and (= :unknown sent)
-            (or (not (#{:compare :call :common} context))
-                (string-type? t)
-                (if (vector? t) (not (:domain? (get t 2))) (compares? t t)))))))
+  [t sent context]
+  (or (= t sent)
+      (case context
+        :json (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
+        :compare (and (string? t) (string? sent) (some #(contains? (apply types/cast-contexts %) "i") [[sent t] [t sent]]) (compares? t sent))
+        :common (and (string? t) (string? sent) (some? (resolve/common-type [t sent])))
+        (and (string? t) (string? sent) (types/implicit? sent t)))
+      (and (string-type? t) (string-type? sent))
+      (and (= :unknown sent)
+           (or (not (#{:compare :call :common} context))
+               (string-type? t)
+               (if (vector? t) (not (:domain? (get t 2))) (compares? t t))))))

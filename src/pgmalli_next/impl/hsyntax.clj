@@ -15,12 +15,18 @@
   [s]
   (some-> s (str/replace "-" "_") str/lower-case))
 
+(defn- unformatted-name
+  "The name PostgreSQL reads of s where the loaded HoneySQL formats nothing under format (a
+   dialect of a later HoneySQL): as written where format quotes, else folded."
+  [s format]
+  (if (quoted? format) s (folded s)))
+
 (defn pg-name
   "The name PostgreSQL reads of identifier s (a keyword's text, or one dotted part of it) as
    HoneySQL writes it under sql/format's options format: as written where HoneySQL quotes it,
    else folded."
   [s format]
-  (or (first (formatted-name (keyword s) format false)) (folded s)))
+  (or (first (formatted-name (keyword s) format false)) (unformatted-name s format)))
 
 (defn alias? [x] (or (keyword? x) (string? x)))
 
@@ -727,8 +733,7 @@
   [alias opts]
   (if (string? alias)
     alias
-    (or (first (formatted-name alias (:format opts) true))
-        (if (quoted? (:format opts)) (name alias) (folded (name alias))))))
+    (or (first (formatted-name alias (:format opts) true)) (unformatted-name (name alias) (:format opts)))))
 
 (defn item-name
   "The name of the output column a select item makes: its alias, its column's name, or the name

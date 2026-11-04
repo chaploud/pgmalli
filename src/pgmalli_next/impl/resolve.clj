@@ -235,7 +235,7 @@
 
 (defn call
   "{:result type :args [type ...] :overload o} (outcome) of calling function or operator n (kind
-   :functions or :operators) with arguments of types ins, among the overloads os it reaches (pg_catalog's by default); nil
+   :functions or :operators) with arguments of types ins, among the overloads os it reaches; nil
    where PostgreSQL refuses it, finds it ambiguous, or one of the versions resolves it otherwise.
    With a :free argument, the result every candidate it may resolve to agrees on."
   [kind n ins os]

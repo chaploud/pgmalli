@@ -76,35 +76,31 @@
    merges them on every lookup), the columns of a table memoized, since a column is looked for
    in every table in scope, and the schemas' own functions and operators read once, all of it
    kept for the next call with the same schemas; and, for one call of pgmalli-next.honeysql's
-   public functions, the rows of derived tables and the statements of a query (::calls). One
-   already read is left as it is."
+   public functions, the rows of derived tables and the statements of a query (::calls)."
   [registry]
-  (if (::schemas registry)
-    registry
-    (let [schemas (shape/schemas-of registry)
-          [read r] @last-read
-          r (if (and r (identical? read schemas))
-              r
-              (let [r {::schemas schemas ::versions (versions schemas)}
-                    r (assoc r
-                             ::held (held-schemas schemas)
-                             ::generated? (boolean (some shape/generated-name? (keys schemas)))
-                             ::table-columns (memoize #(some->> (column-entries r %) (map (fn [[c s]] [c s])) (into system-columns)))
-                             ::routines (memoize #(own-routines r %1 %2 %3)))]
-                (reset! last-read [schemas r])
-                r))]
-      (assoc r ::derived (atom {}) ::calls (atom {})))))
+  (let [schemas (shape/schemas-of registry)
+        [read r] @last-read
+        r (if (and r (identical? read schemas))
+            r
+            (let [r {::schemas schemas ::versions (versions schemas)}
+                  r (assoc r
+                           ::held (held-schemas schemas)
+                           ::generated? (boolean (some shape/generated-name? (keys schemas)))
+                           ::table-columns (memoize #(some->> (column-entries r %) (map (fn [[c s]] [c s])) (into system-columns)))
+                           ::routines (memoize #(own-routines r %1 %2 %3)))]
+              (reset! last-read [schemas r])
+              r))]
+    (assoc r ::derived (atom {}) ::calls (atom {}))))
 
 (defn once
   "(f registry & args), once per call of a pgmalli-next.honeysql public function (reading's ::calls): the functions a
    call makes of one another read the same statements."
   [registry f & args]
-  (if-let [memo (::calls registry)]
-    (let [k (into [f] args)]
-      (if (contains? @memo k)
-        (@memo k)
-        (let [v (apply f registry args)] (swap! memo assoc k v) v)))
-    (apply f registry args)))
+  (let [memo (::calls registry)
+        k (into [f] args)]
+    (if (contains? @memo k)
+      (@memo k)
+      (let [v (apply f registry args)] (swap! memo assoc k v) v))))
 
 (defn table-columns [registry table] ((::table-columns registry) table))
 
@@ -1016,13 +1012,12 @@
    when its row cannot be told, or is asked for again while it is read (a CTE read inside itself)."
   ([registry stmt opts] (derived-types registry stmt opts ()))
   ([registry stmt opts outer]
-   (if-let [memo (::derived registry)]
-     (let [k [stmt (dissoc opts :jdbc) outer]]
-       (if (contains? @memo k)
-         (@memo k)
-         (do (swap! memo assoc k nil)
-             (let [v (derived-types* registry stmt opts outer)] (swap! memo assoc k v) v))))
-     (derived-types* registry stmt opts outer))))
+   (let [memo (::derived registry)
+         k [stmt (dissoc opts :jdbc) outer]]
+     (if (contains? @memo k)
+       (@memo k)
+       (do (swap! memo assoc k nil)
+           (let [v (derived-types* registry stmt opts outer)] (swap! memo assoc k v) v))))))
 
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc's as-unqualified-maps builds it (for a write with no

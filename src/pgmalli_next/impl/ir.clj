@@ -123,13 +123,12 @@
 (defn from-db
   "Structure of the schema named by :schema (default \"public\"). :psql selects the binary;
    :jdbc-url (with :user and :password) or :datasource reads over JDBC instead."
-  ([] (from-db {}))
-  ([{:keys [schema] :or {schema "public"} :as db}]
-   (let [out (if (= :psql (via db)) (psql-out (assoc db :schema schema)) ((requiring-resolve 'pgmalli-next.impl.ir-jdbc/out) db (jdbc-sql schema)))
-         ir (keywordize (json/parse (str/trim out)) false)]
-     (when-not (:exists ir)
-       (let [meant (error/suggest schema (:schemas ir))]
-         (error/fail! :pgmalli.error/invalid-config (str "schema " (pr-str schema) " does not exist in the database; check :schemas in pgmalli-next.edn"
-                                                         (error/did-you-mean (some-> meant pr-str)))
-                      (cond-> {:given schema} meant (assoc :did-you-mean [meant])))))
-     (dissoc ir :exists :schemas))))
+  [{:keys [schema] :or {schema "public"} :as db}]
+  (let [out (if (= :psql (via db)) (psql-out (assoc db :schema schema)) ((requiring-resolve 'pgmalli-next.impl.ir-jdbc/out) db (jdbc-sql schema)))
+        ir (keywordize (json/parse (str/trim out)) false)]
+    (when-not (:exists ir)
+      (let [meant (error/suggest schema (:schemas ir))]
+        (error/fail! :pgmalli.error/invalid-config (str "schema " (pr-str schema) " does not exist in the database; check :schemas in pgmalli-next.edn"
+                                                        (error/did-you-mean (some-> meant pr-str)))
+                     (cond-> {:given schema} meant (assoc :did-you-mean [meant])))))
+    (dissoc ir :exists :schemas)))

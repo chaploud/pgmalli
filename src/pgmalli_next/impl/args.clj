@@ -123,7 +123,8 @@
         t (query/slot-type registry s)
         opts (cond-> opts
                (#{"character" "\"char\""} t) (assoc ::jdbc/characters true)
-               (= :common held-in) (assoc ::jdbc/array-use :common))
+               (= :common held-in) (assoc ::jdbc/array-use :common)
+               (= :json held-in) (assoc ::jdbc/json true))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) query/loose
               ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a CHECK's bounds hold after it
@@ -299,7 +300,7 @@
         p (:pg/type (shape/column-props s))]
     (cond (types/json? p) (query/driver-schema registry jdbc/column-read-type s opts)
           (types/element p) [:sequential (query/nullable (json-field-type registry (last s) opts))]
-          :else (let [t (accepted-type registry s :json (assoc opts ::jdbc/json true))]
+          :else (let [t (accepted-type registry s :json opts)]
                   (shape/either (remove #{jdbc/pg-object} (shape/alternatives t)) t)))))
 
 (defn- one-key-per-column?
