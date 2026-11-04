@@ -940,11 +940,13 @@
   "[:cast a f] of a call [:f a] PostgreSQL reads as a cast (func_get_detail): f names a type, of
    pg_catalog or of the registry, and no function f takes a's type as it is; nil for another x."
   [registry chain x opts]
-  (when-let [[kind n [a] :as parts] (when (and (vector? x) (= 2 (count x))) (syntax/call-parts x))]
-    (when (and (= :functions kind) (or (resolve/type-name? n) (registry-type registry (first x) opts)))
-      (let [in (:type (expression-type registry chain a opts))]
-        (when (not-any? #(= [in] (:args %)) (reached registry opts parts))
-          [:cast a (first x)])))))
+  (when-let [[kind n [a] q :as parts] (when (and (vector? x) (= 2 (count x))) (syntax/call-parts x))]
+    ;; the name as PostgreSQL reads a function's HoneySQL writes ([:MOOD a] is MOOD(a), mood)
+    (let [t (keyword (if q (str q "." n) n))]
+      (when (and (= :functions kind) (or (resolve/type-name? n) (registry-type registry t opts)))
+        (let [in (:type (expression-type registry chain a opts))]
+          (when (not-any? #(= [in] (:args %)) (reached registry opts parts))
+            [:cast a t]))))))
 
 (defn- output-type
   "The type of an output column of schema s (nil: not told), without NULL: as the driver reads it,

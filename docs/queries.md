@@ -183,8 +183,11 @@ An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one 
 (no use of it is one the table above types: an argument of a function the registry lacks, or of
 a polymorphic one under `:inline`, is one) and `:type` (it is compared with or cast to what pgmalli knows no type
 of: the result of a function the registry lacks, a column of a table it lacks, an extension's
-type). An argument where a value of a type pgmalli does not
-type goes (json, inet, interval) is `[:any {:pg/type ...}]`, without `:pgmalli/untyped`:
+type). An argument where a value of a type pgmalli does not type goes, compared or assigned,
+takes a `PGobject` where pgjdbc reads one (a geometric, network or timespan type: `inet`,
+`interval`), which it sends as the type it names, and what converts to the type implicitly (a
+`LocalTime` to `interval`); otherwise (cast, `json`, `xml`, `money`) it is `[:any {:pg/type ...}]`,
+without `:pgmalli/untyped`:
 
 ```clojure
 (:args (h/analyze registry {:select [[:?label :label]] :from [:users]}))
@@ -683,4 +686,4 @@ Write the query so PostgreSQL's reading is explicit instead.
   (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`.
 - A string sent as `varchar` to a column of a domain over a type other than an enum (a
   domain over `integer`), which PostgreSQL refuses; and an argument whose type `:args`
-  leaves `:any` (an `inet` column's), which may be an object of the type.
+  leaves `:any` (a cast to `inet`'s), which may be an object of the type.

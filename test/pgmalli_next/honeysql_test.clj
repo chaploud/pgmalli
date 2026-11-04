@@ -812,8 +812,9 @@
     (doseq [[o default] [[{} :default] [{:format {:quoted true}} [:default]]]
             [f row] [[h/values-schema {:id 1 :j "{}"}] [h/set-schema {}]]
             :let [ok? #(m/validate (f reg :t o) (merge row %) {:registry reg})]]
-      (is (every? ok? [{:j "{}"} {:ip "10.0.0.1"} {:ip nil}]))
+      (is (every? ok? [{:j "{}"} {:ip nil}]))
       (is (not-any? ok? [{:j :k} {:ip :k} {:j [1 2]} {:ip '("a")} {:j (list 1)}]) (pr-str f o))
+      (is (not (ok? {:ip "10.0.0.1"})) "a String goes as varchar, which an inet column takes not: a PGobject of inet")
       (is (ok? {:ip default}) "HoneySQL's DEFAULT where the database fills a column"))))
 
 (deftest a-number-label-is-read-from-a-string-sent-untyped
@@ -2332,7 +2333,7 @@
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
-          :d [:any {:pg/type "interval"}]
+          :d [:maybe [:or jdbc/pg-object :time/local-time]]
           :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
                             [:< [:+ :closed_at :?d] :current_timestamp]
@@ -2709,3 +2710,7 @@
   (is (= [] (check {:select [:id :users.nick] :from [[[:raw "ONLY users"]]]})) "FROM ONLY users is referred to as users")
   (is (= [:id :nick] (map first (rest (row {:select [:id :nick] :from [[[:raw "users *"]]]})))))
   (is (= [:unknown-column] (map :kind (check {:select [:nope.nick] :from [[[:raw "ONLY users"]]]})))))
+
+(deftest a-call-of-a-types-name-is-a-cast-to-the-type-postgresql-folds
+  (let [x #(:x (args {:select [:id] :from [:users] :where [:= :mood [% :?x]]}))]
+    (is (= (x :mood) (x :MOOD)) "HoneySQL writes MOOD(?), mood to PostgreSQL")))

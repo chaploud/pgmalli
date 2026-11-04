@@ -115,6 +115,16 @@
         all (concat (when labelled [labelled]) (when floats [(into [:enum] floats)]) converted (when (nil? labelled) [jdbc/pg-object]))]
     (if (next all) (into [:or] all) (first all))))
 
+(defn- untyped-type-values
+  "The values of a type whose own pgmalli does not type (interval, inet), s its schema, held in
+   context: a PGobject, and those of each type sent that holds? holds (a LocalTime to interval)."
+  [registry s context opts]
+  (let [t (query/slot-type registry s)]
+    (distinct (cons jdbc/pg-object (for [[x p] (jdbc/write-rows opts false)
+                                         :when (and (string? p) (not= p t) (accept/holds? t p context))
+                                         a (shape/alternatives x)]
+                                     (unlabel a))))))
+
 (defn accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare, :call,
    :common, :assign, :cast or :json), as docs/queries.md#the-types-of-the-arguments says: its
@@ -162,6 +172,10 @@
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
+      ;; of a type whose values pgmalli does not type and pgjdbc reads as a PGobject (a geometric, network
+      ;; or timespan one: inet, interval), that and what converts to it, not any value
+      (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T"} (types/category t)))
+      (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
       (= :enum (shape/kind own)) (labelled-type own alts context (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
       :else
@@ -417,16 +431,6 @@
     ;; the others' values join a CHECK's list: its base type
     [o (query/nullable (accepted-type registry (query/beyond-list registry (:schema r)) :common opts))]))
 
-(defn- untyped-type-values
-  "The values of a type whose own pgmalli does not type (interval, inet), s its schema: a PGobject,
-   and those of each type sent that PostgreSQL converts to it implicitly (a LocalTime to interval)."
-  [registry s opts]
-  (let [t (query/slot-type registry s)]
-    (distinct (cons jdbc/pg-object (for [[x p] (jdbc/write-rows opts false)
-                                         :when (and (string? p) (not= p t) (accept/holds? t p :call))
-                                         a (shape/alternatives x)]
-                                     (unlabel a))))))
-
 (defn- call-args
   "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve
    the call to take there, as a value of each type sent picks one; nil may go there too. Where
@@ -452,13 +456,12 @@
                                                  inss))
                                   [ins] (range (count ins)))
               refused? (and (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
-              ;; a value of each type, which a :pg/type of one would misname; of a type whose values
-              ;; pgmalli does not type (inet beside numeric for +), a PGobject, not any value
+              ;; a value of each type, which a :pg/type of one would misname
               t (cond (empty? ss) nil
                       (next ss) (query/nullable
-                                 (shape/either (shape/distinct-kinds (for [s ss, x (shape/alternatives (accepted-type registry s :call opts))
-                                                                           y (if (= :any (shape/head x)) (untyped-type-values registry s opts) [(unlabel x)])]
-                                                                       y))
+                                 ;; beside others, a type pgmalli does not type (pg_lsn for +) takes a PGobject, not any value
+                                 (shape/either (shape/distinct-kinds (for [s ss, x (shape/alternatives (accepted-type registry s :call opts))]
+                                                                       (if (= :any (shape/head x)) jdbc/pg-object (unlabel x))))
                                                :any))
                       :else (query/nullable (accepted-type registry (first ss) :call opts)))]
         :when (or refused? (and t (every? some? ss)))]
