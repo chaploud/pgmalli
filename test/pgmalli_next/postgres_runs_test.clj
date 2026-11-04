@@ -379,3 +379,22 @@
           (is (accepted? reg q {:row {:sort_order 2}} {}))
           (is (not (accepted? reg q {:row {:sort-order 2}} {})))
           (is (= {:row #{:sort_order}} (:document-columns (h/analyze reg q))) "the columns the statement uses of the document"))))))
+
+(deftest a-to-recordsets-document-takes-the-columns-its-alias-defines-as-the-one-sending-writes-them
+  (when *db*
+    (let [reg (registry)
+          q {:select [:w.pattern :w.role_keys :w.hide :w.n]
+             :from [[[:jsonb_to_recordset :?words] [:w {:with-columns [[:pattern :text] [:role_keys :text :array] [:hide :boolean] [:n :int]]}]]]}
+          ok [{:pattern "a" :role_keys ["x" nil] :hide true :n 1} {"pattern" "b"} {}]]
+      (is (= [{:pattern "a" :role_keys ["x" nil] :hide true :n 1} {:pattern "b" :role_keys nil :hide nil :n nil} {:pattern nil :role_keys nil :hide nil :n nil}]
+             (runs! q {:words ok} {})))
+      (is (accepted? reg q {:words ok} {}))
+      (is (returned? reg q {:words ok} {}))
+      (doseq [row [{:n 1.5} {:n 3000000000} {:role_keys "x"}]]
+        (testing (pr-str row)
+          (is (thrown? Exception (runs! q {:words [row]} {})))
+          (is (not (accepted? reg q {:words [row]} {})))))
+      (testing "a record, its document cast to json"
+        (let [q {:select [:r.d] :from [[[:json_to_record [:cast :?doc :json]] [:r {:with-columns [[:d :date]]}]]]}]
+          (is (= [{:d (java.time.LocalDate/of 2020 1 2)}] (runs! q {:doc {:d (java.time.LocalDate/of 2020 1 2)}} {})))
+          (is (accepted? reg q {:doc {:d (java.time.LocalDate/of 2020 1 2)}} {})))))))

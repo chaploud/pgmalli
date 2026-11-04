@@ -324,13 +324,24 @@
         (when (and stmt (or (nil? listed) (sequential? listed)))
           [stmt (map #(ident-name % format) listed) (boolean op)])))))
 
-(def populate-name #"jsonb?_populate_record(set)?")
+(def populate-name #"jsonb?_(populate|to)_record(set)?")
 
 (defn- populate-item?
-  "Whether a FROM item is a call of json_populate_record, jsonb_populate_record or their
-   recordset ([[:jsonb_populate_recordset t ?] :r])."
+  "Whether a FROM item is a call of json_populate_record, jsonb_populate_record, json_to_record,
+   jsonb_to_record or their recordset ([[:jsonb_populate_recordset t ?] :r])."
   [item]
   (boolean (and (vector? item) (some->> (called (first item)) (re-matches populate-name)))))
+
+(defn defined-columns
+  "[[column type] ...] of the column definition list the alias of a populate-item writes
+   ([[:jsonb_to_record ?] [:w {:with-columns [[:a :text] [:b :text :array]]}]]), each type as
+   cast-target reads it (:array makes \"text[]\"), nil where it reads none; nil for no list."
+  [item format]
+  (let [cs (when (populate-item? item) (let [b (second item)] (when (vector? b) (:with-columns (second b)))))]
+    (when (and (sequential? cs) (seq cs) (every? #(and (vector? %) (alias? (first %)) (<= 2 (count %) 3)) cs))
+      (for [[c t array] cs]
+        [(ident-name c format)
+         (when-let [n (cast-target t)] (case array nil n :array (types/array-of n) nil))]))))
 
 (defn standalone
   "Statement inner as a query of its own: itself where it reads no CTE of ctes (those its place

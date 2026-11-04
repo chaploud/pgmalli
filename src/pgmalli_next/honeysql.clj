@@ -52,7 +52,7 @@
    :tables    {:reads #{\"schema.table\" ...} :writes #{...}}, aliases and CTEs resolved
    :document-columns
               {arg #{column ...}} for every argument that is the document of a
-              jsonb_populate_record, json_populate_record or their recordset
+              jsonb_populate_record, jsonb_to_record and the like
               (docs/queries.md#document-columns)
 
    Names resolve as PostgreSQL resolves them. query-schema builds a function schema of it.

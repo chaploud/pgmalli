@@ -2049,6 +2049,37 @@
     (is (not (ok? q [{:group_id 1 :score 0 :nik "ann"}])) "a key of no column")
     (is (not (ok? q [{:group_id 1}])) "a NOT NULL column's key still required")))
 
+(deftest a-to-recordsets-alias-defines-its-columns-and-its-document-is-typed-as-a-populate-documents
+  (let [ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
+        words (fn [select more] (merge {:select select
+                                        :from [[[:jsonb_to_recordset :?words] [:w {:with-columns [[:pattern :text] [:role_keys :text :array] [:hide :boolean]]}]]]}
+                                       more))
+        q (words [:w.pattern :w.role_keys :w.hide] {})
+        {:keys [problems document-columns]} (h/analyze registry q opts)]
+    (is (= [] problems) "the column definition list is read")
+    (is (= [:map [:pattern [:maybe text]] [:role_keys [:maybe [:vector {:pg/type "text[]"} [:maybe :string]]]] [:hide [:maybe [:boolean {:pg/type "boolean"}]]]]
+           (row q))
+        "each column of the type written, [:x :text :array] text[]")
+    (is (= {:words #{:pattern :role_keys :hide}} document-columns))
+    (is (= {:words #{:pattern}} (:document-columns (h/analyze registry (words [:w.pattern] {}) opts))))
+    (is (= {:words nil} (:document-columns (h/analyze registry (words [:*] {}) opts))))
+    (doseq [v [[] [{}] [{:pattern "a" :role_keys ["x" nil] :hide true}] [{"pattern" "a"}] nil]]
+      (is (ok? q :words v) (pr-str v)))
+    (doseq [[v why] [[{:pattern "a"} "a map, which a recordset is not"]
+                     [[{:patern "a"}] "a key of no column"]
+                     [[{:hide 1}] "a number to a boolean column"]
+                     [[{:role_keys "x"}] "a string to an array column"]]]
+      (is (not (ok? q :words v)) why))
+    (let [record {:select [:*] :from [[[:jsonb_to_record [:cast :?doc :jsonb]] [:r {:with-columns [[:n :int] [:x :nosuch]]}]]]}]
+      (is (ok? record :doc {:n 1 :x [1]}) "a type not read, :any")
+      (is (not (ok? record :doc {:n 1.5})) "a fraction, which an integer's input does not read")
+      (is (not (ok? record :doc [{:n 1}])) "a vector, which a record is not")
+      (is (= [:maybe :any] (last (last (row record))))))
+    (let [insert {:insert-into [[:users [:group_id :score]]
+                                {:select [:r.group_id :r.score] :from [[[:jsonb_to_recordset :?rows] [:r {:with-columns [[:group_id :int] [:score :int]]}]]]}]}]
+      (is (ok? insert :rows [{:group_id 1 :score 0}]))
+      (is (not (ok? insert :rows [{:group_id 1}])) "score is NOT NULL"))))
+
 (deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
   (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric(10,2)"} 'decimal? [:> 0]]
                                           :pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]

@@ -14,7 +14,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare beyond-list derived-types expression-type loose nullable own-routines own-type-schema reached row-schema* type-call)
+(declare beyond-list derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-schema* type-call)
 
 (defn- versions
   "The versions of the catalog snapshot the registry's generated files are of: each file's
@@ -227,42 +227,57 @@
   "{:table :set? :type :json :arg} of x, a call of pg_catalog's json_populate_record,
    jsonb_populate_record or their recordset (set? true) of the row type of a table or view of
    the registry (\"schema.table\"): NULL cast to it ([:cast nil :t]), or the whole row of a table
-   in scopes (:p, its alias). json is its argument of the document, of type (\"json\" or
-   \"jsonb\"); arg the argument there, bare or cast to json or jsonb, nil for another value. nil
-   for another x."
+   in scopes (:p, its alias); or of json_to_record, jsonb_to_record or their recordset, whose
+   alias defines the row (populated-columns), table nil. json is its argument of the document,
+   of type (\"json\" or \"jsonb\"); arg the argument there, bare or cast to json or jsonb, nil
+   for another value. nil for another x."
   [registry scopes x {:keys [schema format]}]
-  (let [[kind n [a json :as args] q] (syntax/call-parts x)]
+  (let [[kind n args q] (syntax/call-parts x)
+        to? (some-> n (str/includes? "_to_"))
+        [a json :as args] (if to? (cons nil args) args)]
     (when (and (= :functions kind) (contains? #{nil "pg_catalog"} q) (= 2 (count args)) (re-matches syntax/populate-name n))
-      (when-let [table (cond (and (vector? a) (= :cast (first a)) (= 3 (count a)) (or (nil? (second a)) (= :null (syntax/sql-value (second a)))))
-                             ;; HoneySQL writes a cast's type unquoted
-                             (when-let [t (syntax/cast-target (nth a 2))] (when-not (types/element t) (first (syntax/table-ref (keyword t) {:schema schema}))))
-                             (and (syntax/column-keyword? a) (nil? (first (syntax/split-column a format))))
-                             (let [{:keys [table opaque?]} (some #(get % (syntax/ident-name a format)) (filter map? (syntax/chain scopes)))]
-                               (when-not opaque? table)))]
-        (when-let [table (when (column-entries registry table) table)]
+      (let [table (when-not to?
+                    (cond (and (vector? a) (= :cast (first a)) (= 3 (count a)) (or (nil? (second a)) (= :null (syntax/sql-value (second a)))))
+                          ;; HoneySQL writes a cast's type unquoted
+                          (when-let [t (syntax/cast-target (nth a 2))] (when-not (types/element t) (first (syntax/table-ref (keyword t) {:schema schema}))))
+                          (and (syntax/column-keyword? a) (nil? (first (syntax/split-column a format))))
+                          (let [{:keys [table opaque?]} (some #(get % (syntax/ident-name a format)) (filter map? (syntax/chain scopes)))]
+                            (when-not opaque? table))))]
+        (when (or to? (and table (column-entries registry table)))
           {:table table :set? (str/ends-with? n "set") :type (if (str/starts-with? n "jsonb") "jsonb" "json") :json json
            :arg (cond (syntax/param-key json) json
                       (and (vector? json) (= :cast (first json)) (= 3 (count json)) (syntax/param-key (second json))
                            (some->> (syntax/cast-target (nth json 2)) str/lower-case types/json?))
                       (second json))})))))
 
+(defn populated-columns
+  "[[column schema] ...] of the row populate-call p makes as FROM item: its table's columns, or
+   those its alias's column definition list defines, of the types it names (nil of a type
+   named-type-schema does not read); nil where it defines none."
+  [registry p item opts]
+  (if (:table p)
+    (column-entries registry (:table p))
+    (some->> (syntax/defined-columns item (:format opts))
+             (mapv (fn [[c t]] [c (some->> t (named-type-schema registry opts))])))))
+
 (defn- function-columns
   "[[column schema] ...] of a function of pg_catalog or of a generated schema in FROM
    ([[:f args] alias], [[:with-ordinality [:f args] alias]]): its OUT columns (a generated
    schema's: its composite type's too), or one of its result type named after
    the alias (the function without one), each nullable and of no table, renamed by the names the
-   alias lists; WITH ORDINALITY adds ordinality, a bigint; of a populate-call, its table's
-   columns, nullable. nil where that is not told."
+   alias lists; WITH ORDINALITY adds ordinality, a bigint; of a populate-call, its
+   populated-columns, nullable. nil where that is not told."
   [registry item chain opts]
   (let [[a b] (if (vector? item) item [item])
         [f ordinality? al] (if (and (vector? a) (= :with-ordinality (first a))) [(second a) true (get a 2)] [a false b])
         [al listed] (if (and (vector? al) (map? (second al))) [(first al) (syntax/listed-columns (second al))] [al nil])
         [kind n args :as parts] (when (vector? f) (syntax/call-parts f))
         renamed (fn [cs] (vec (map-indexed (fn [i [c s]] [(if (< i (count listed)) (syntax/ident-name (nth listed i) (:format opts)) c) s]) cs)))
-        populated (when (and (not ordinality?) (or (nil? listed) (sequential? listed))) (populate-call registry chain f opts))]
+        populated (when (and (not ordinality?) (or (nil? listed) (sequential? listed)))
+                    (when-let [p (populate-call registry chain f opts)] (populated-columns registry p item opts)))]
     (if populated
       ;; the columns of the row type, NULL where the document lacks a key
-      (renamed (for [[c s] (column-entries registry (:table populated))] [c (nullable s)]))
+      (renamed (for [[c s] populated] [c (some-> s nullable)]))
       (when (and (= :functions kind) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
         ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)), its columns each named unnest
         (when-let [rs (let [rs (for [as (if (and (= "unnest" n) (next args)) (map vector args) [args])]

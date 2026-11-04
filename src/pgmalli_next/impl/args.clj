@@ -314,8 +314,9 @@
 
 (defn- populate-documents
   "[{:arg :schema :columns} ...] of the documents of the calls populate-call tells. schema, of
-   arg: for a record, a closed map of the row type's columns, each keyed by its name as a
-   keyword or a string (not both), each a json-field-type or nil; for a recordset, a vector of
+   arg: for a record, a closed map of the row type's columns (populated-columns), each keyed by
+   its name as a keyword or a string (not both), each a json-field-type (:any of a type not
+   read) or nil; for a recordset, a vector of
    them; in place of the collections a json or jsonb value of the parameter takes there (bare, a
    value sent as the function's json or jsonb; cast, what the cast takes), or nil. A key is
    required, its value not nil, where an INSERT ... SELECT writes the column of that name of
@@ -328,11 +329,13 @@
   (for [sps [(query/once registry query/statement-positions body opts)]
         [_ c _ ps] sps
         {:keys [x chain]} (syntax/expression-nodes ps)
-        :let [{:keys [table set? type json arg]} (query/populate-call registry chain x opts)]
+        :let [{:keys [table set? type json arg] :as call} (query/populate-call registry chain x opts)]
         :when arg
+        :let [item (some (fn [{i :x}] (when (and (vector? i) (identical? x (first i))) i)) ps)
+              columns (query/populated-columns registry call item opts)]
+        :when columns
         :let [s (if (syntax/param-key json) (types/type-schema type) (:schema (query/expression-type registry chain json opts)))
               base (accepted-type registry s (if (syntax/param-key json) :compare :cast) opts)
-              item (some (fn [{i :x}] (when (and (vector? i) (identical? x (first i))) i)) ps)
               alias (when item (second (syntax/table-ref item opts)))
               ;; whether alias names, in a chain, the call's item: not where a scope nearer has an
               ;; alias of that name, nor in the item itself
@@ -343,7 +346,7 @@
                             (and (keyword? y) (let [[a column] (syntax/split-column y (:format opts))]
                                                 (or (and (syntax/star? y) (contains? #{nil alias} a))
                                                     (and (nil? a) (= alias column) (sees? chain)))))))
-              used (when (and alias (not (vector? (second item))) (not-any? untold? reads))
+              used (when (and alias (or (nil? table) (not (vector? (second item)))) (not-any? untold? reads))
                      (set (for [{y :x chain :chain} reads :when (syntax/column-keyword? y)
                                 :let [{:keys [column opaque?] from :table} (query/resolve-column registry chain y)]
                                 :when (and opaque? (= alias from))]
@@ -352,9 +355,9 @@
                                   :when (and alias (not (:may-drop? a)) (syntax/column-keyword? c))
                                   :let [{:keys [column opaque?] from :table} (query/resolve-column registry (:chain a) c)
                                         {written :column t :table :keys [nullable? schema]} (query/assigned-column registry a)]
-                                  :when (and opaque? (= alias from) (= table t) schema (not nullable?) (= column written))]
+                                  :when (and opaque? (= alias from) (or (nil? table) (= table t)) schema (not nullable?) (= column written))]
                               column))
-              fields (for [[c cs] (query/column-entries registry table)] [c (json-field-type registry cs opts) (contains? required c)])
+              fields (for [[c cs] columns] [c (if cs (json-field-type registry cs opts) :any) (contains? required c)])
               doc (-> [:and
                        (into [:map {:closed true}]
                              (for [[c t req?] fields, k [(keyword c) c]]
