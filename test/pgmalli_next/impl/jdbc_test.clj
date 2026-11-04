@@ -35,7 +35,7 @@
 (deftest as-read-takes-jdbc-alone
   (is (= (pgmalli-next.core/as-read registry :pg.sample/users)
          (pgmalli-next.core/as-read registry :pg.sample/users {:jdbc {:fetch-size 10}})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:result \[\"disallowed key\"\]\}; it takes :jdbc"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:result \[\"disallowed key\"\]\}; it takes :schema, :jdbc"
                         (pgmalli-next.core/as-read registry :pg.sample/users {:result :one}))))
 
 (deftest how-a-value-is-read-is-no-option

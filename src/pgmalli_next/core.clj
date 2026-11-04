@@ -4,9 +4,12 @@
    psql, are pgmalli-next.generate; HoneySQL queries checked and typed, pgmalli-next.honeysql."
   (:require [clojure.string :as str]
             [malli.core :as m]
+            [malli.error :as me]
+            [malli.experimental.time :as time]
             [pgmalli-next.impl.describe :as d]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.jdbc :as jdbc]
+            [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.registry :as reg]
             [pgmalli-next.impl.shape :as shape]))
 
@@ -34,15 +37,19 @@
 (defn as-read
   "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it under
    the one reading docs/reading-rows.md gives (the ReadableColumn extension your application
-   installs): keyed by the columns' names (:group_id). Validate with {:registry registry}.
+   installs): keyed by the columns' names (:group_id). Validate with {:registry registry}. name
+   is the row schema's (:pg.public/users) or the table as HoneySQL names it (:users in :schema,
+   :public.users), as pgmalli-next.honeysql/values-schema takes it.
 
    (as-read registry :pg.public/users)
 
-   Options: docs/reading-rows.md#options.
+   Options: :schema, and docs/reading-rows.md#options.
 
    Throws when an option is unknown, or name is no table's or view's row schema."
   ([registry name] (as-read registry name {}))
-  ([registry name opts] (jdbc/as-read registry name opts)))
+  ([registry name opts]
+   (let [opts (jdbc/options! opts [:schema :jdbc])]
+     (jdbc/as-read registry (query/row-name (query/reading registry) name "as-read" opts) (dissoc opts :schema)))))
 
 (defn- schema!
   "schema when malli reads it under registry; an error naming the type it does not know."
@@ -64,6 +71,14 @@
                             (str "describe: " (pr-str unknown) " is no type malli or the registry knows"
                                  (error/did-you-mean (some->> meant (map pr-str) (str/join " or "))))
                             (cond-> {:given unknown} meant (assoc :did-you-mean (vec meant))))))))))
+
+(def errors
+  "malli.error's :errors for the types of a registry malli has no message of (:time/local-date
+   and the rest of malli.experimental.time's): (me/humanize explanation {:errors (merge
+   me/default-errors pgmalli/errors)})."
+  (into {} (for [k (keys (time/schemas)) :when (not (contains? me/default-errors k))]
+             [k {:error/message (str "should be a java.time."
+                                     (str/join (map str/capitalize (str/split (name k) #"-"))))}])))
 
 (defn describe
   "A schema as short data for people and tools to read: a column as its PostgreSQL type

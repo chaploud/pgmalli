@@ -176,27 +176,9 @@
   "written-row* of the table name names (a registry row name, or a table keyword as HoneySQL
    names it, in :schema); an error naming what was meant for another name."
   [registry name derived what opts]
-  (when-not (keyword? name)
-    (error/fail! :pgmalli.error/invalid-options
-                 (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
-                 {:given name}))
   (let [[r opts] (prepared registry opts option-keys)
-        _ (when (contains? opts :schema) (query/with-defaults r opts))
+        name (query/row-name r name what opts)
         registry (::query/schemas r)
-        ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
-        ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema
-        name (if (str/starts-with? (subs (str name) 1) "pg.")
-               name
-               (let [t (syntax/qualified name (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
-                                                (select-keys opts [:format])
-                                                (query/with-defaults r opts true)))]
-                 (when (< 2 (count (str/split t #"\.")))
-                   (error/fail! :pgmalli.error/invalid-options
-                                (str what " takes a table as :table or :schema.table; " (pr-str name) " names more")
-                                {:given name}))
-                 (shape/table-key t)))
-        _ (when-not (contains? registry name)
-            (query/unknown-table! r (if (namespace name) (str/join "." (shape/schema-and-name name)) (clojure.core/name name))))
         s (shape/schema-of registry name)]
     (cond (shape/row-schema? s) nil
           (shape/read-row? s) (error/fail! :pgmalli.error/unknown-schema

@@ -319,8 +319,10 @@
 (deftest an-unqualified-name-means-the-generated-schema-of-that-name
   (let [registry (pgmalli/registry "sample")
         meant (fn [f] (try (f) (catch clojure.lang.ExceptionInfo e [(ex-message e) (:did-you-mean (ex-data e))])))]
-    (is (= ["the registry has no schema named :users; did you mean: :pg.sample/users" [:pg.sample/users]]
+    (is (= ["the registry holds no schema \"public\"; pass {:schema \"sample\"}" nil]
            (meant #(pgmalli/as-read registry :users))))
+    (is (= (pgmalli/as-read registry :pg.sample/users) (pgmalli/as-read registry :sample.users) (pgmalli/as-read registry :users {:schema "sample"}))
+        "as values-schema names a table")
     (is (= [:pg.sample/users] (second (meant #(pgmalli/describe registry :users)))))
     (is (= [:pg.sample/users] (second (meant #(pgmalli/as-read registry :pg.public/users))))
         "a name of another schema means the one of the registry")))

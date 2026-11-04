@@ -592,8 +592,7 @@
   (is (= [:unknown-column] (map :kind (h/schema-problems {:ns #{'pgmalli-next.honeysql-test}}))) "a set of symbols"))
 
 (deftest an-option-the-function-does-not-read-is-an-error
-  (doseq [[f o] [[#(pgmalli/as-read registry :pg.sample/users %) {:schema "sample"}]
-                 [#(pgmalli/as-read registry :pg.sample/users %) {:result :one}]
+  (doseq [[f o] [[#(pgmalli/as-read registry :pg.sample/users %) {:result :one}]
                  [#(h/analyze registry {:select [:id] :from [:users]} %) {:result :one}]
                  [#(h/values-schema registry :users %) {:result :one}]
                  [#(h/set-schema registry :users %) {:result :one}]]]

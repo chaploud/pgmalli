@@ -68,6 +68,16 @@ The CHECKs are enforced. A closed user needs a `closed_at`:
 ;; => {:closed_at ["violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"]}
 ```
 
+malli has no message of the `java.time` types; `pgmalli/errors` holds them, for `me/humanize`:
+
+```clojure
+(-> (m/explain :pg.public.users/insert
+               {:group_id 1 :email "ann@example.com" :closed_at 1}
+               {:registry registry})
+    (me/humanize {:errors (merge me/default-errors pgmalli/errors)}))
+;; => {:closed_at ["should be a java.time.Instant" "violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"]}
+```
+
 Generate rows that satisfy every constraint:
 
 ```clojure

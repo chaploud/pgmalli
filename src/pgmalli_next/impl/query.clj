@@ -134,6 +134,40 @@
                      (cond-> {:given s :known (vec held)} meant (assoc :did-you-mean [meant])))))
     opts)))
 
+(declare row-name*)
+
+(defn row-name
+  "The registry name of the row schema a public function (what) is given as name: a registry
+   name (:pg.app/users, or a string the registry keys a name no keyword spells by) as it is, a
+   table as HoneySQL names it (:users in :schema, :app.users);
+   an error for another name, or one the registry lacks, naming what was meant."
+  [registry name what opts]
+  (when (contains? opts :schema) (with-defaults registry opts))
+  ;; a name the registry holds as it is: a string where the table's is no keyword (t"q)
+  (if (contains? (::schemas registry) name)
+    name
+    (row-name* registry name what opts)))
+
+(defn- row-name* [registry name what opts]
+  (when-not (keyword? name)
+    (error/fail! :pgmalli.error/invalid-options
+                 (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
+                 {:given name}))
+  ;; a mistyped registry name (:pg.public.users) as it is, for schema-of to name the one meant
+  (let [n (if (str/starts-with? (subs (str name) 1) "pg.")
+            name
+            (let [t (syntax/qualified name (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
+                                             (select-keys opts [:format])
+                                             (with-defaults registry opts true)))]
+              (when (< 2 (count (str/split t #"\.")))
+                (error/fail! :pgmalli.error/invalid-options
+                             (str what " takes a table as :table or :schema.table; " (pr-str name) " names more")
+                             {:given name}))
+              (shape/table-key t)))]
+    (when-not (contains? (::schemas registry) n)
+      (unknown-table! registry (if (namespace n) (str/join "." (shape/schema-and-name n)) (clojure.core/name n))))
+    n))
+
 (defn- catalog-table
   "The table an unqualified name means: pg_catalog, implicitly first on the search path, holds
    the pg_ relations; one the registry lacks is \"pg_catalog.<name>\" all the same, opaque."
