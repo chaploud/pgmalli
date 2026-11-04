@@ -36,6 +36,11 @@
      (let [[r opts] (prepared registry opts ks)]
        [r (syntax/query! body) (query/with-defaults r opts)]))))
 
+(defn- as-written
+  "problems with each :in a path in written, the query as given."
+  [written problems]
+  (mapv #(cond-> % (:in %) (update :in (partial syntax/written-path written))) problems))
+
 (defn analyze
   "{:args :row :rows :problems :tables :document-columns} of a HoneySQL query against the registry, without a
    database:
@@ -61,12 +66,12 @@
 
    (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})"
   ([registry body] (analyze registry body {}))
-  ([registry body opts]
-   (let [[registry body opts] (prepared registry body opts option-keys)]
+  ([registry written opts]
+   (let [[registry body opts] (prepared registry written opts option-keys)]
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
-      :problems (into (problems/check registry body opts) (args/arg-problems registry body opts))
+      :problems (as-written written (concat (problems/check registry body opts) (args/arg-problems registry body opts)))
       :tables (query/tables registry body opts)
       :document-columns (args/document-columns registry body opts)})))
 
@@ -84,13 +89,14 @@
    {:result :one} what execute-one! returns. Options: docs/queries.md#options. Throws when args are
    not keywords."
   ([registry args body] (query-schema registry args body {}))
-  ([registry args body opts]
+  ([registry args written opts]
    (when-not (and (sequential? args) (every? keyword? args))
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords ([:db :id]), not " (pr-str args))
                   {:given args}))
-   (let [[registry body {:keys [result] :as opts}] (prepared registry body opts (conj option-keys :result))
+   (let [[registry body {:keys [result] :as opts}] (prepared registry written opts (conj option-keys :result))
          {types :args :keys [row rows problems]} (analyze registry body opts)
+         problems (as-written written problems)
          problems (into problems
                         (for [k (sort-by str (syntax/query-args body)) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))]
      (into [:=> {:pgmalli/problems problems}]
@@ -138,14 +144,14 @@
 
 (def ^:private sql-word-schema
   "[:fn] of what HoneySQL writes as NULL or DEFAULT (word) under format, one per format so that
-   the schemas of one call equal the next's; nil where the format writes neither spelling as it
-   (:null under :quoted is a column)."
+   the schemas of one call equal the next's: DEFAULT generated as [:default], which every format
+   writes so; nil for NULL where HoneySQL writes no keyword as NULL under format (:quoted)."
   (memoize
    (fn [word format]
-     (let [pred (case word
-                  :null #(and (keyword? %) (syntax/null-value? % format))
-                  :default #(syntax/default-value? % format))]
-       (when-let [gen (first (filter pred [word [word] (keyword (str/upper-case (name word)))]))]
+     (let [[pred candidates] (case word
+                               :null [#(and (keyword? %) (syntax/null-value? % format)) [:null :NULL]]
+                               :default [#(syntax/default-value? % format) [[:default]]])]
+       (when-let [gen (first (filter pred candidates))]
          [:fn {:error/message (str "should be " (str/upper-case (name word)) " as HoneySQL writes it (" (pr-str gen) ")")
                :gen/elements [gen] :pgmalli/describe (pr-str gen)}
           pred])))))
@@ -241,7 +247,7 @@
         n (str (types/short-name base) typmod brackets)]
     (str "[:cast " x " " (if (re-matches #"[a-z_][a-z0-9_]*" n) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
 
-(defn- assigned
+(defn- field-target-text
   "The sentence of an assigned target qualified by its table or alias, a field of a column to PostgreSQL."
   [column did-you-mean]
   (str ": PostgreSQL reads an assigned " (column-name column) " as a field of a column "
@@ -264,10 +270,10 @@
                                              (str " in ON CONFLICT: HoneySQL writes a vector as columns; for a constraint write {:on-constraint "
                                                   (keyword (name constraint)) "}")
                                              (str " in ON CONFLICT: " table " lacks it" meant))
-                              :values (if-not table (assigned column did-you-mean) (str " in :values" (when target (str " for " (column-name target)))
+                              :values (if-not table (field-target-text column did-you-mean) (str " in :values" (when target (str " for " (column-name target)))
                                            ": HoneySQL writes a keyword there as a column; write the value itself"
                                            " ([:lift " column "] for an enum label, a string for text)"))
-                              (:set :do-update-set :columns) (assigned column did-you-mean)
+                              (:set :do-update-set :columns) (field-target-text column did-you-mean)
                               (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
                                                 (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
                                     meant meant

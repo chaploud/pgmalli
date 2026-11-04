@@ -35,6 +35,7 @@
             [clojure.string :as str]
             [clojure.walk :as walk]
             [honey.sql :as sql]
+            honey.sql.pg-ops
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]

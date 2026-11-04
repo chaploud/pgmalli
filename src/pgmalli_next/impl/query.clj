@@ -260,7 +260,10 @@
         row (when target (assoc (get sc target) :qualifier-only? true))]
     (cond-> sc
       (and row (contains? stmt :on-conflict)) (assoc "excluded" row)
-      (and row (contains? stmt :returning)) (merge (into {} (for [n ["old" "new"] :when (not (contains? sc n))] [n (assoc row :nullable? true)]))))))
+      ;; an INSERT has no old row, a DELETE no new one
+      (and row (contains? stmt :returning))
+      (merge (into {} (for [[n absent?] [["old" (contains? stmt :insert-into)] ["new" (contains? stmt :delete-from)]] :when (not (contains? sc n))]
+                        [n (cond-> row absent? (assoc :nullable? true))]))))))
 
 (defn populate-call
   "{:table :set? :type :json :arg} of x, a call of pg_catalog's json_populate_record,

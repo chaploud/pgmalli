@@ -1893,7 +1893,7 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be an org.postgresql.util.PGobject" "should be DEFAULT as HoneySQL writes it (:default)" "should be [:lift v], v one of :happy :sad"]}
+    (is (= {:mood ["should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])" "should be [:lift v], v one of :happy :sad"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %)) (vals r)))
                   (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))
@@ -2334,7 +2334,7 @@
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
-          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval does not take), or the argument cast in the query: [:cast <the argument> :interval]"
+          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval does not take)"
                                                             :pgmalli/describe "PGobject of interval"})
                       :time/local-time]]
           :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
@@ -2774,6 +2774,40 @@
   (is (= [:unknown-column] (map :kind (check {:select [:u.nick] :from [[:groups :g]] :left-join [[[:join [:users :u] {:join [[:groups :h] [:= :h.id :u.grop_id]]}]] [:= :u.group_id :g.id]]})))
       "a column of the nested join's ON is checked")
   (is (= [:unknown-column] (map :kind (check {:update :users :set {:score 1} :where [:= :old.id 1]}))) "old is RETURNING's alone"))
+
+(deftest a-parenthesized-join-is-one-item-to-the-join-it-is-in
+  (let [maybe? #(shape/maybe? (get (into {} (map (juxt first last)) (rest (row %1))) %2))
+        group (fn [inner] {:select [:g.id [:u.nick :un] [:h.name :hn]] :from [[:groups :g]]
+                           :left-join [[[:join [:users :u] inner]] [:= :u.group_id :g.id]]})]
+    (is (maybe? (group {:right-join [[:groups :h] [:= :h.id :u.group_id]]}) :hn) "the outer LEFT JOIN extends the whole group")
+    (is (maybe? (group {:join [[:groups :h] [:= :h.id :u.group_id]]}) :un))
+    (is (not (maybe? {:select [:g.id [:u.nick :un]] :from [[:groups :g]] :join [[[:join [:users :u] {:right-join [[:groups :h] [:= :h.id :u.group_id]]}]] [:= :u.group_id :g.id]]} :id))
+        "a RIGHT JOIN inside extends the tables inside alone")
+    (is (= [] (check {:select [:g.id :u.nick :h.name] :from [[:groups :g]] :left-join [[[:join [:users :u] {:cross-join [[:groups :h]]}]] [:= :u.group_id :g.id]]})))
+    (is (= [] (check {:select [:u.nick :g.name] :from [[[:join [:users :u] {:join [[:groups :g] [:= :g.id :u.group_id]]}]]]})) "in FROM too")))
+
+(deftest the-forms-honeysqls-tests-write-are-read-as-the-sql-they-are
+  (doseq [q [{:select [:x.id] :from [[{:select [:id] :from [:users]} [[:raw "x"]]]]}
+             {:select [[[:trim :!leading :!from :nick] :t] [[:make_interval [:=> :secs 1]] :i]] :from [:users]}
+             {:delete-from :users :where [:> :score :10]}
+             {:select [[:%abs.1 :a]] :from [:users]}
+             {:insert-into [[:raw "groups"]] :values [{:id 1 :name "a"}]}
+             {:insert-into :groups :columns [:x/id :x/name] :values [[1 "a"]]}
+             {:select [:u.* :g.name] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :order-by [:nick]}]]
+    (is (= [] (check q)) (pr-str q)))
+  (is (= [] (check {:select [:Rec.a] :from [[[:jsonb_to_record [:cast "{}" :jsonb]] [[:raw "\"Rec\"(a int)"]]]]} (assoc opts :format {:quoted true}))))
+  (is (= [:unknown-column] (map :kind (check {:select [:id] :from [:users] :where [:> :score :10]} (assoc opts :format {:quoted true})))) "quoted, :10 is a column \"10\"")
+  (is (not (contains? (args {:select [[[:at-time-zone :closed_at :?z] :t]] :from [:users]}) :z)) "HoneySQL writes AT TIME ZONE '?z'")
+  (is (= [:nope] (map :column (check {:select-distinct-on [[:id :nope] :nick] :from [:users]}))) "DISTINCT ON's expressions are no [expr alias]")
+  (let [q {:select [:id] :from [:users] :where [:in :id {:nest {:select [:nope] :from [:users]}}]}]
+    (is (= {:select [:nope] :from [:users]} (get-in q (:in (first (check q))))) ":in reaches the statement through :nest")))
+
+(deftest returning-old-and-new-are-null-where-the-statement-has-no-such-row
+  (let [nullable #(shape/maybe? (last (second (row %))))]
+    (is (not (nullable {:update :users :set {:score 1} :where [:= :id 1] :returning [:new.score]})))
+    (is (not (nullable {:update :users :set {:score 1} :where [:= :id 1] :returning [:old.score]})))
+    (is (nullable {:insert-into :users :values [{:group_id 1 :score 1}] :returning [:old.score]}))
+    (is (nullable {:delete-from :users :where [:= :id 1] :returning [:new.score]}))))
 
 (deftest a-written-row-generates-what-it-takes-under-the-format
   (doseq [f [{:quoted true} {:quoted-always #"^default$"}]

@@ -46,9 +46,16 @@
                   :when (and (syntax/column-keyword? c format) (not (and (output? stmt c false) (empty? (query/column-hits registry sc c)))))]
               c)
             (when out
-              (for [o (syntax/vectorish (:order-by stmt)) :let [c (syntax/bare o)]
-                    :when (and (syntax/column-keyword? c format) (not (output? out c (not= out stmt))))]
-                c)))))
+              (let [;; t.* outputs each column of t under its name
+                    starred (for [i (syntax/selected-items out) :let [[col] (syntax/select-parts i)]
+                                  :when (and col (syntax/star? col))
+                                  :let [[a] (syntax/split-column col format)] :when a]
+                              a)
+                    star-output? (fn [c] (let [[a n] (syntax/split-column c format)]
+                                           (and (nil? a) (some #(query/resolve-column registry sc (keyword (str % "." n))) starred))))]
+                (for [o (syntax/vectorish (:order-by stmt)) :let [c (syntax/bare o)]
+                      :when (and (syntax/column-keyword? c format) (not (output? out c (not= out stmt))) (not (and (= out stmt) (star-output? c))))]
+                  c))))))
 
 (defn- whole-row?
   "Whether an unqualified :x names a table of the scope rather than a column: its whole row."
@@ -115,6 +122,7 @@
                           [c [t clause]]))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (syntax/select-parts % opts)) (syntax/selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
+                                        (for [c (syntax/distinct-on-expressions stmt) :when (syntax/column-keyword? c format)] [c sc])
                                         (for [[_ c _ chain] (syntax/comparison-sides ps) :when (syntax/column-keyword? c format)] [c chain])
                                         (for [{:keys [x chain]} (syntax/expression-nodes ps)
                                               :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
@@ -123,7 +131,7 @@
                                         ;; a column a call's argument names ([:upper :email]), in a clause of expressions;
                                         ;; an item of SELECT, ORDER BY or RETURNING is [expression alias|direction], no call
                                         (for [{:keys [x chain item? clause]} (syntax/expression-nodes ps)
-                                              :when (and (expression-clauses clause) (not (and item? (#{:select :select-distinct :select-distinct-on :order-by :returning} clause))))
+                                              :when (and (expression-clauses clause) (not (and item? (or (syntax/select-list-clauses clause) (= :order-by clause)))))
                                               ;; [expr direction], an item of an ORDER BY inside OVER or an aggregate, is no
                                               ;; call: its expression alone names a column
                                               :let [ordered? (and (vector? x) (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x))))))
@@ -311,7 +319,6 @@
                        :let [meant (query/table-suggestions registry table)]]
                    (cond-> {:kind :unknown-table :table table}
                      meant (assoc :did-you-mean meant)
-                     ;; the name folded is one the registry holds: what to write instead
                      (query/quoted-table? registry table (:format opts)) (assoc :quoted true)))
                  (column-problems registry scopes stmt ps opts)
                  ;; a column both sides lack is one problem

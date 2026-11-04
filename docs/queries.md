@@ -267,7 +267,7 @@ or a `PGobject`); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
-DEFAULT too: `[:default]`, or `:default` where the format writes it as the word (not under `:quoted`); one it writes (generated, identity ALWAYS) takes DEFAULT alone. Where a
+DEFAULT too: `[:default]`, or `:default` where the format writes it as the word (not where the format quotes it); one it writes (generated, identity ALWAYS) takes DEFAULT alone. Where a
 BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
 takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
@@ -683,9 +683,11 @@ Write the query so PostgreSQL's reading is explicit instead.
   rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.
 - RETURNING's `old` and `new` are taken on every version; PostgreSQL before 18 refuses them.
-- The first column of a window's PARTITION BY or ORDER BY (`{:partition-by [:a]}`'s `a`),
-  the columns of a named `:window`, and a sort column of an aggregate's ORDER BY
-  (`[:array_agg [:order-by :nick :id]]`'s `id`).
+- A bare keyword first in a window's PARTITION BY or ORDER BY vector (`{:partition-by [:a :b]}`'s
+  `a`), the columns of a named `:window`, the columns of a frame's offsets, and the bare
+  keywords of an aggregate's ORDER BY or DISTINCT, its expression too
+  (`[:array_agg [:order-by :nick :id]]`'s `nick` and `id`, `[:distinct :nick]`'s and
+  `{:distinct :nick ...}`'s `nick`).
 - An argument schema with a regex CHECK (`[:and [:string] [:re ...]]`) does not generate with
   `mg/generate`; it validates only. It lacks the generation hint the registry's column schema
   carries, and test.chuck refuses the regex's `\z`.

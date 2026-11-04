@@ -71,6 +71,14 @@
   (for [[schema q] (jdbc/write-rows opts true) :when (pred q)]
     [q (walk/postwalk-replace {:pgmalli/element element} schema)]))
 
+(defn- typed-pg-object
+  "jdbc/pg-object of type t: what it says where a value of t is refused."
+  [t]
+  (shape/merge-props jdbc/pg-object
+                     {:error/message (str "should be a PGobject of type " t " (a String goes as varchar, which " t
+                                          " does not take)")
+                      :pgmalli/describe (str "PGobject of " (types/short-name t))}))
+
 (defn- labelled-type
   "The type of an argument where a value of own values own, labels (an enum's, a CHECK's list),
    goes in context, alts the [type alternative] of each type sent it takes, strings? whether a
@@ -112,7 +120,7 @@
                     (distinct (remove #(#{:int 'integer? :string} (shape/kind %)) (map second alts))))
         ;; a set holds 1.0 or a Float 1.0, which are =, not both: an :enum of its own
         floats (when (and labelled (kinds 'float?)) (seq (distinct (map float (filter number? labels)))))
-        all (concat (when labelled [labelled]) (when floats [(into [:enum] floats)]) converted (when (nil? labelled) [jdbc/pg-object]))]
+        all (concat (when labelled [labelled]) (when floats [(into [:enum] floats)]) converted (when (nil? labelled) [(if-let [t (:pg/type props)] (typed-pg-object t) jdbc/pg-object)]))]
     (if (next all) (into [:or] all) (first all))))
 
 (defn- untyped-type-values
@@ -121,10 +129,7 @@
    (a LocalTime for interval)."
   [registry s context opts]
   (let [t (query/slot-type registry s)
-        pg-object (shape/merge-props jdbc/pg-object
-                                     {:error/message (str "should be a PGobject of type " t " (a String goes as varchar, which " t
-                                                          " does not take), or the argument cast in the query: [:cast <the argument> :" (types/short-name t) "]")
-                                      :pgmalli/describe (str "PGobject of " (types/short-name t))})]
+        pg-object (typed-pg-object t)]
     (distinct (cons pg-object (for [[x p] (jdbc/write-rows opts false)
                                          :when (and (string? p) (not= p t) (accept/holds? t p context))
                                          a (shape/alternatives x)]

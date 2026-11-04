@@ -686,4 +686,204 @@
  [:hdoc-group-cube {:select [:group_id :mood [:%count.* :n]] :from [:users] :group-by [[:cube :group_id :mood]]}]
  ;; GROUP BY GROUPING SETS of [:composite ..] (as above)
  [:hdoc-grouping-sets {:select [:group_id :mood [[:grouping :group_id :mood] :g] [:%count.* :n]] :from [:users] :group-by [[:grouping-sets [:composite :group_id :mood] [:composite :group_id] [:composite :mood]]]}]
+ ;; the forms of HoneySQL's tests, written over this schema
+ ;; sql_test.cljc expr-tests
+ [:htest-eq-true {:select [:id] :from [:kinds] :where [:or [:= :flag true] [:<> :flag false]]}]
+ ;; sql_test.cljc expr-tests
+ [:htest-not-eq-nil {:select [:id] :from [:users] :where [:and [:<> :nick nil] [:!= :name nil] [:not= :mood nil]]}]
+ ;; sql_test.cljc expr-tests
+ [:htest-nil-is-nil {:select [:id] :from [:users] :where [:or [:= nil nil] [:<> nil nil]]}]
+ ;; sql_test.cljc expr-tests, ops_test.cljc issue-454
+ [:htest-variadic-arith {:select [[[:+ 1 [:+ 1 :score]] :a] [[:+ 1 1 :score] :b] [[:- :score :id 1] :c]] :from [:users]}]
+ ;; sql_test.cljc expr-tests
+ [:htest-nested-calls {:select [[[:lower [:upper [:concat :nick [:md5 :name]]]] :x] [[:coalesce [:nullif :nick ""] :name] :y]] :from [:users]}]
+ ;; sql_test.cljc issue-455-null
+ [:htest-expr-is-null {:select [:id] :from [:users] :where [:= [:+ :score 1] nil]}]
+ ;; sql_test.cljc transform-null-equals-option
+ [:htest-null-equals-kept {:select [:id] :from [:users] :where [:and [:= :nick nil] [:<> :name nil]]} {:format {:transform-null-equals false}}]
+ ;; sql_test.cljc general-tests
+ [:htest-group-by-bare {:select [:mood [:%count.* :n]] :from [:users] :group-by :mood}]
+ ;; sql_test.cljc general-tests
+ [:htest-quoted-qualified-star {:select [:u.*] :from [[:users :u]] :where [:= :id 1] :order-by [[:nick :desc] :score]} {:format {:quoted true}}]
+ ;; sql_test.cljc subquery-alias-263
+ [:htest-sub-kebab-alias {:select [:sub_q.field_alias] :from [[{:select [[:nick :field-alias]] :from [:users]} :sub_q]]}]
+ ;; sql_test.cljc test-cte
+ [:htest-recursive-cycle-to-default {:with-recursive [[[:t {:columns [:n]}] {:union-all [{:select [[1]]} {:select [[[:+ :n 1]]] :from [:t] :where [:< :n 5]}]} :cycle [:n] :set :looped :to [:inline "Y"] :default [:inline "N"] :using :path]] :select [:n :looped] :from [:t]}]
+ ;; sql_test.cljc test-cte
+ [:htest-cte-values-ragged {:with [[[:s {:columns [:a :b :c]}] {:values [[1 2] [4 5 6]]}]] :select [:*] :from [:s]}]
+ ;; sql_test.cljc test-cte
+ [:htest-cte-two-cross {:with [[:q1 {:select [:id] :from [:users]}] [:q2 {:select [:name] :from [:groups]}]] :select [:q1.id :q2.name] :from [:q1 :q2]}]
+ ;; sql_test.cljc insert-into
+ [:htest-insert-select-no-columns {:insert-into [:tags {:select [[[:+ 100 :id]] [[:|| :title "-copy"]]] :from [:posts]}]}]
+ ;; sql_test.cljc insert-into-namespaced
+ [:htest-insert-columns-namespaced {:insert-into :tags :columns [:tags/name] :values [["ns2"]]}]
+ ;; sql_test.cljc insert-into-functions
+ [:htest-insert-raw-table {:insert-into [[:raw "tags"]] :values [{:tags/name "raw1"}]}]
+ ;; sql_test.cljc insert-into-functions
+ [:htest-insert-select-raw-table {:insert-into [[[:raw "tags"]] {:select [[[:+ 100 :id]] :title] :from [:posts]}]}]
+ ;; sql_test.cljc exists-test
+ [:htest-select-exists {:select [:id [[:exists {:select [1] :from [:posts] :where [:= :posts.user_id :users.id]}] :has_posts] [[:exists {:select [:id] :from [:tags]}]]] :from [:users]}]
+ ;; sql_test.cljc exists-test, helpers_test.cljc issue-322
+ [:htest-where-bare-boolean {:select [:id] :from [:kinds] :where :flag}]
+ ;; sql_test.cljc exists-test
+ [:htest-exists-bare-boolean {:select [:id] :from [:users] :where [:exists {:select [1] :from [:kinds] :where :flag}]}]
+ ;; sql_test.cljc array-test
+ [:htest-insert-array {:insert-into :kinds :columns [:ints :texts] :values [[[:array [1 2 3 4]] [:array ["one" "two"]]]]}]
+ ;; sql_test.cljc array-test
+ [:htest-array-verbatim-sub {:select [:id [[:'ARRAY {:select [:p.id] :from [[:posts :p]] :where [:= :p.user_id :users.id]}] :ids]] :from [:users]}]
+ ;; sql_test.cljc union-test, union-with-cte
+ [:htest-union-with-cte-values {:union [{:select [:spam] :from [:bar]} {:select [:id] :from [:users]}] :with [[[:bar {:columns [:spam :eggs]}] {:values [[1 2] [3 4]]}]]}]
+ ;; sql_test.cljc union-all-with-cte
+ [:htest-union-all-with-cte-values {:union-all [{:select [:eggs] :from [:bar]} {:select [:score] :from [:users]}] :with [[[:bar {:columns [:spam :eggs]}] {:values [[1 2] [3 4]]}]]}]
+ ;; sql_test.cljc inner-parts-test
+ [:htest-union-unaliased-sub {:union [{:select [:id :user_id :created_at] :from [:posts]} {:select [:id :user_id :created_at] :from [{:select [:id :user_id :created_at] :from [:posts] :order-by [[:id :desc]] :limit 5}]}] :order-by [[:id :asc]]}]
+ ;; sql_test.cljc compare-expressions-test
+ [:htest-compare-exprs {:select [:id] :from [:nums] :where [:and [:= [:% :i 4] [:+ :s 4]] [:= [:mod :i 2] [:mod :s 2]]]}]
+ ;; sql_test.cljc compare-expressions-test
+ [:htest-fn-dot-literal {:select [[:%abs.1 :a] [:%upper.nick :u]] :from [:users]}]
+ ;; sql_test.cljc compare-expressions-test
+ [:htest-subquery-left-compare {:select [:id] :from [:users] :where [:= {:select [[[:max :score]]] :from [:users]} :score]}]
+ ;; sql_test.cljc former-parameterizer-tests-where-and
+ [:htest-and-nil {:select [:id] :from [:users] :where [:and [:= :nick "a"] nil [:= :name "A"]]}]
+ ;; sql_test.cljc issue-385-test
+ [:htest-values-uuid {:values [[#uuid "6f1c1a52-0b3e-4c58-9a59-4b8a3b0e2f11"]]}]
+ ;; sql_test.cljc issue-385-test
+ [:htest-insert-uuid {:insert-into :kinds :values [{:uid #uuid "6f1c1a52-0b3e-4c58-9a59-4b8a3b0e2f11"}] :returning [:uid]}]
+ ;; sql_test.cljc set-before-from
+ [:htest-update-alias-from-sub-quoted {:update [:posts :p] :set {:title :c.nick} :from [[{:select [:u.nick :u.id] :from [[:users :u]] :where [:= :u.id 1]} :c]] :where [:= :p.user_id :c.id]} {:format {:quoted true}}]
+ ;; sql_test.cljc set-before-from
+ [:htest-update-alias-set-namespaced {:update [:posts :p] :set {:p/title :c.nick} :from [[{:select [:u.nick :u.id] :from [[:users :u]]} :c]] :where [:= :p.user_id :c.id]}]
+ ;; sql_test.cljc issue-590-set-array
+ [:htest-set-array-element {:update :kinds :set {[:at :kinds/ints 2] 42}}]
+ ;; sql_test.cljc inlined-values-are-stringified-correctly
+ [:htest-inline-literals {:select [[[:inline "foo"] :a] [[:inline "It's a quote!"] :b] [[:inline :nick] :c] [[:inline nil] :d]] :from [:users]}]
+ ;; sql_test.cljc locking-select-tests
+ [:htest-for-key-share {:select [:id] :from [:users] :for :key-share}]
+ ;; sql_test.cljc locking-select-tests
+ [:htest-for-update-subquery {:select [:*] :from [:posts] :where [:= :user_id {:select [:id] :from [:users] :where [:= :id 1] :for [:update]}] :for [:update]}]
+ ;; sql_test.cljc insert-example-tests
+ [:htest-insert-positional-default {:insert-into :posts :columns [:user_id :title :body :created_at] :values [[1 "t" "b" [:default]]]}]
+ ;; sql_test.cljc insert-example-tests
+ [:htest-insert-positional-all-default {:insert-into :groups :values [[[:default] "g3" [:default]]]}]
+ ;; sql_test.cljc issue-285
+ [:htest-order-by-compare {:select [:*] :from [:users] :where [:= :score 1] :order-by [[[:= :id 1] :desc]]}]
+ ;; sql_test.cljc issue-425-default-values-test
+ [:htest-insert-map-default {:insert-into :tickets :values [{:state [:default] :kind "bug"} {:state "closed" :kind [:default]}]}]
+ ;; sql_test.cljc issue-321-linting
+ [:htest-in-null {:select [:id] :from [:users] :where [:in :nick [nil]]}]
+ ;; sql_test.cljc issue-321-linting, helpers_test.cljc test-operators
+ [:htest-in-param {:select [:id] :from [:users] :where [:in :id :?ids]}]
+ ;; sql_test.cljc issue-321-linting
+ [:htest-delete-no-where {:delete-from :post_tags}]
+ ;; sql_test.cljc quoting-:%-syntax
+ [:htest-verbatim-count {:select [[[:'count :*] :n] [[:'max :score] :m]] :from [:users]}]
+ ;; sql_test.cljc issue-434-case-quoting
+ [:htest-array-verbatim-catalog {:select [[[:'ARRAY {:select :oid :from :pg_proc :where [:like :proname [:inline "bytea%"]]}] :oids]]} {:format {:quoted true}}]
+ ;; sql_test.cljc issue-461-unary-ops
+ [:htest-unary-ops {:select [[[:and true] :a] [[:or true :flag] :o] [[:* 2] :m] [[:+ 1] :p] [[:- 1] :n] [[:* 1 2 3] :t] [[:and true :flag [:not :flag]] :x]] :from [:kinds]}]
+ ;; sql_test.cljc issue-471-interspersed-kws
+ [:htest-interspersed-kws {:select [[[:overlay :nick :!placing "x" :!from [:inline 1] :!for [:inline 1]] :o] [[:position "a" :!in :nick] :p] [[:trim :!leading :!from :nick] :t] [[:trim :!leading-from :nick] :t2] [[:trim :!both "x" :!from :nick] :t3]] :from [:users]}]
+ ;; sql_test.cljc issue-471-interspersed-kws
+ [:htest-extract {:select [[[:extract :!epoch :!from :created_at] :e] [[:extract :!century :!from :!timestamp [:inline "2000-12-16 12:21:13"]] :c]] :from [:posts]}]
+ ;; sql_test.cljc issue-474-dot-selection
+ [:htest-dot-qualified {:select [[[:. :u :nick]] [[:. :u :id] :uid]] :from [[:users :u]]}]
+ ;; sql_test.cljc issue-474-dot-selection
+ [:htest-get-in-composite {:select [[[:get-in :p :a] :a] [[:get-in :p :*]]] :from [:shapes]}]
+ ;; sql_test.cljc issue-474-dot-selection
+ [:htest-dot-fn-composite {:select [[[:. [:nest [:all_groups]] :name] :n]]}]
+ ;; sql_test.cljc issue-570-snowflake-dot-selection
+ [:htest-subscript {:select [[[:at :doc [:inline "a"]] :a] [[:at :ints [:inline 1]] :i] [[:get-in :doc [:inline "b"]] :b]] :from [:hosts :kinds]}]
+ ;; sql_test.cljc issue-476-raw
+ [:htest-raw-multi {:select [:id] :from [:users] :where [:raw "score >= " [:abs -1] " AND nick IS NOT NULL"]}]
+ ;; sql_test.cljc issue-483-join
+ [:htest-nested-join-using {:select [:groups.name :users.nick :active_users.mood] :from [:groups] :left-join [[[:join :users {:join [:active_users [:using [:id]]]}]] [:= :users.group_id :groups.id]]}]
+ ;; sql_test.cljc issue-483-join
+ [:htest-nested-join-multi {:select [:groups.name :posts.title] :from [:groups] :left-join [[[:join :users {:join [:active_users [:using :id]]} {:right-join [:posts [:= :posts.user_id :users.id]]}]] [:= :users.group_id :groups.id]]}]
+ ;; sql_test.cljc issue-496-overriding
+ [:htest-overriding-three {:insert-into [{:overriding-value :system} :audits [:id :note]] :values [[1 "a"]]}]
+ ;; sql_test.cljc issue-497-alias
+ [:htest-order-alias-keyword {:select [[:nick :nick_alias]] :from [:users] :order-by [[[:alias :nick-alias]]]}]
+ ;; sql_test.cljc issue-497-alias
+ [:htest-order-raw-quoted-alias {:select [[:nick "nick-alias"]] :from [:users] :order-by [[[:raw "\"nick-alias\""]]]}]
+ ;; sql_test.cljc issue-497-alias
+ [:htest-order-alias-verbatim {:select [[:nick "nick-alias"]] :from [:users] :order-by [[[:alias :'nick-alias]]]}]
+ ;; sql_test.cljc at-time-zone-503
+ [:htest-at-time-zone-string {:select [[[:at-time-zone :created_at "UTC"] :a] [[:at-time-zone [:now] :UTC] :b]] :from [:posts]}]
+ ;; sql_test.cljc issue-512
+ [:htest-distinct-star {:select-distinct [:*] :from [:tags]}]
+ ;; sql_test.cljc issue-520
+ [:htest-inline-row {:select [:id] :from [:users] :where [:in :nick [:inline ["a" "b"]]]}]
+ ;; sql_test.cljc issue-527-composite
+ [:htest-row-compare {:select [:nick] :from [:users] :where [:= [:composite :id :group_id] [:composite 1 1]]}]
+ ;; sql_test.cljc issue-n-using
+ [:htest-namespaced-qualified {:select [:*] :from [:users] :join [:posts [:using :id]] :where [:= :users/id 1]}]
+ ;; sql_test.cljc issue-571
+ [:htest-empty-where-order {:select [:id] :from [:users] :where [] :order-by []}]
+ ;; sql_test.cljc window-frame-tests
+ [:htest-frame-exclusions {:select [:id [[:over [[:sum :score] {:order-by [:id] :frame [:rows [3 :preceding] :exclude-no-others]} :w] [[:sum :score] {:order-by [:id] :frame [:rows :current-row :exclude-current-row]} :w2] [[:sum :score] {:order-by [:id] :frame [:groups :between :current-row :unbounded-following :exclude-group]} :w3]]]] :from [:users]}]
+ ;; sql_test.cljc window-frame-tests
+ [:htest-frame-param {:select [:id [[:over [[:sum :score] {:order-by [:id] :frame [:rows :between [[:param :lo] :preceding] :current-row]} :w]]]] :from [:users]}]
+ ;; ops_test.cljc issue-566
+ [:htest-is-not-distinct {:select [:id] :from [:users] :where [:or [:is-not-distinct-from :nick :name] [:is-distinct-from :nick :name]]}]
+ ;; union_test.cljc issue-451
+ [:htest-union-nest-derived {:select [[:ids.id :id]] :from [[{:union [{:nest {:select [[:u.id :id]] :from [[:users :u]] :where [:and [:= :u.group_id 1] [:not= :u.nick nil]] :limit 1}} {:nest {:select [[:p.id :id]] :from [[:posts :p]] :left-join [[:users :u] [:= :p.user_id :u.id] [:groups :g] [:= :g.id :u.group_id]] :where [:and [:= :p.id 1] [:in :u.nick ["a"]] [:in :g.name ["g1"]]] :limit 1}}]} :ids]] :limit 1}]
+ ;; insert_columns_test.cljc issue-618
+ [:htest-insert-cols-map {:insert-into [:tags [:id :name]] :values [{:name "ic1" :id 500}]}]
+ ;; pg_ops_test.cljc pg-op-tests
+ [:htest-json-path-ops {:select [[[:#> :doc [:inline "{a,b}"]] :a] [[:#>> :doc [:inline "{a}"]] :b] [[:#- :doc [:inline "{a}"]] :c] [[:-> :doc "a" "b"] :d]] :from [:hosts]}]
+ ;; pg_ops_test.cljc pg-op-tests
+ [:htest-jsonb-exists-ops {:select [:id] :from [:hosts] :where [:or [:? :doc [:inline "a"]] [:?| :doc [:array [[:inline "a"] [:inline "b"]]]] [:?& :doc [:array [] :text]]]}]
+ ;; pg_ops_test.cljc pg-op-tests
+ [:htest-concat-variadic {:select [[[:|| :nick "-" :name] :x]] :from [:users]}]
+ ;; pg_ops_test.cljc pg-op-tests
+ [:htest-named-arg {:select [[[:make_interval [:=> :secs 10.5]] :a] [[:make_interval [:=> :secs 10.5] [:=> :mins [:inline 5]]] :b]]}]
+ ;; postgres_test.cljc upsert-test
+ [:htest-insert-select-on-constraint {:insert-into [[:tags [:id :name]] {:select [[[:+ 100 :id]] :title] :from [:posts]}] :on-conflict {:on-constraint :tags_name_key} :do-nothing true}]
+ ;; postgres_test.cljc returning-test
+ [:htest-numeric-keyword {:delete-from :post_tags :where [:> :tag_id :10] :returning [:*]}]
+ ;; postgres_test.cljc returning-test
+ [:htest-numeric-keyword-update {:update :tags :set {:name "q"} :where [:= :id :2] :returning [:id :name]}]
+ ;; postgres_test.cljc over-test
+ [:htest-window-bare {:select [[[:over [[:avg :score] :w]]]] :from :users :window [:w {:partition-by :group_id :order-by :score}]}]
+ ;; postgres_test.cljc select-distinct-on-test
+ [:htest-distinct-on-quoted {:select-distinct-on [[:group_id :mood] :nick] :from [:users]} {:format {:quoted true}}]
+ ;; postgres_test.cljc values-except-select
+ [:htest-values-except {:except [{:values [[4] [5] [6]]} {:select [:id] :from [:users]}]}]
+ ;; postgres_test.cljc values-except-all-select
+ [:htest-values-except-all {:except-all [{:values [[4] [1]]} {:select [:id] :from [:tags]}]}]
+ ;; postgres_test.cljc select-except-select
+ [:htest-select-except-no-from {:except [{:select [[[:inline 1] :id]]} {:select [:id] :from [:users]}]}]
+ ;; postgres_test.cljc insert-into-with-alias
+ [:htest-insert-alias-returning-star {:insert-into [:tags :t] :values [{:id 5 :name "Gizmo"} {:id 6 :name "Assoc"}] :on-conflict [:id] :do-update-set {:fields [:name] :where [:<> :t.name "21201"]} :returning [:t.*]}]
+ ;; helpers_test.cljc test-select
+ [:htest-big-joins {:with [[:cte {:select [:*] :from [:tags] :where [:= :id 0]}]]
+                    :select-distinct [:u.* :g.name :posts.title [:tags.name "tag-name"] :%now]
+                    :from [[:groups :g] [:users :u]]
+                    :join [:posts [:= :posts.user_id :u.id]]
+                    :left-join [[:post_tags :pt] [:= :pt.post_id :posts.id]]
+                    :right-join [:tags [:= :tags.id :pt.tag_id]]
+                    :full-join [[:active_users :a] [:= :a.id :u.id]]
+                    :where [:or [:and [:= :u.group_id :g.id] [:not= :u.nick :?param1]] [:and [:< 1 2] [:< 2 3]] [:in :posts.id [1 [:param :param2] 3]] [:between :u.score 10 20]]
+                    :group-by [:u.id :g.id :posts.id :tags.name]
+                    :having [:< 0 :u.score]
+                    :order-by [[:posts.title :desc] :g.name [:u.nick :nulls-first]]
+                    :limit 50 :offset 10}]
+ ;; helpers_test.cljc from-expression-tests
+ [:htest-lateral-fn-from {:select [:u.id :g] :from [[:users :u] [[:lateral [:generate_series 1 :u.score]] :g]]}]
+ ;; helpers_test.cljc from-expression-tests
+ [:htest-left-join-lateral-fn {:select [:u.nick] :from [[:users :u]] :left-join [[[:lateral [:generate_series 1 :u.score]] :g] true] :where [:= :g nil]}]
+ ;; helpers_test.cljc join-by-test
+ [:htest-join-by-maps {:select [:u.nick :p.title :g.name] :from [[:users :u]] :join-by [{:left-join [[:posts :p] [:= :p.user_id :u.id]]} {:join [[:groups :g] [:= :g.id :u.group_id]]}]}]
+ ;; helpers_test.cljc test-operators
+ [:htest-in-list {:select [:id] :from [:users] :where [:in :id (2 3)]}]
+ ;; helpers_test.cljc filter-within-order-by-test
+ [:htest-filter-two-pairs {:select [[[:filter :%count.* {:where [:> :score 5]}] :a] [[:filter [:string_agg :nick [:order-by "," [:id :desc]]] {:where [:< :score 10]} [:sum :score] {:where [:= :nick nil]}] :b] [[:within-group [:percentile_cont 0.5] {:order-by :score}]]] :from [:users]}]
+ ;; helpers_test.cljc merge-where-test
+ [:htest-where-bare-columns {:select [:id] :from [:kinds] :where [:and :flag [:not :flag]]}]
+ ;; helpers_test.cljc join-with-alias
+ [:htest-nested-join-namespaced {:select [:users.nick :pm.title] :from :users :left-join [[[:join [:posts :pm] {:join [[:post_tags :pc] [:and [:= :pm/id :pc/post-id] [:= :pm/user-id :pc/tag-id]]]}]] [:= :users/id :pm/user-id]]}]
+ ;; helpers_test.cljc issue-293-insert-into-data
+ [:htest-insert-alias-select {:insert-into [[:tags :t] {:select [[[:+ 100 :id]] :title] :from [:posts]}]}]
+ ;; helpers_test.cljc issue-293-insert-into-data
+ [:htest-insert-alias-columns-values {:insert-into [:tags :t] :columns [:id :name] :values [[300 "Car"] [301 "Boat"]]}]
 ]
