@@ -340,12 +340,15 @@
       (testing "a key of no column: PostgreSQL ignores it, pgmalli refuses it"
         (is (some? (runs! q {:rows [{:group_id 1 :name "a" :sortOrder 1}]} {})))
         (is (not (accepted? reg q {:rows [{:group_id 1 :name "a" :sortOrder 1}]} {}))))
-      (testing "a key of a column the statement does not use: PostgreSQL ignores it, pgmalli refuses it"
+      (testing "a key of a column the statement does not use: PostgreSQL ignores it, pgmalli takes it"
         (let [q (insert :positions [:group_id :name])
               rows [{:group_id 1 :name "a" :sort_order 1}]]
           (is (some? (runs! q {:rows rows} {})))
-          (is (not (accepted? reg q {:rows rows} {})))
-          (is (accepted? reg q {:rows (mapv #(dissoc % :sort_order) rows)} {}))))
+          (is (accepted? reg q {:rows rows} {}))))
+      (testing "string keys, which PostgreSQL matches as JSON's keys"
+        (let [rows [{"group_id" 1 "name" "a" "sort_order" 1}]]
+          (is (= [{:name "a" :sort_order 1}] (runs! (assoc q :returning [:name :sort_order]) {:rows rows} {})))
+          (is (accepted? reg q {:rows rows} {}))))
       (doseq [row [{:group_id 1 :name long-name} {:group_id 1 :name "a" :sort_order 3000000000} {:group_id 1 :name "a" :sort_order 1.5}
                    {:group_id 1}]]
         (testing (pr-str row)
@@ -369,4 +372,5 @@
                  :where [:= :p.id 1]}]
           (is (= [{:next.jdbc/update-count 1}] (runs! q {:row {:sort_order 2}} {})))
           (is (accepted? reg q {:row {:sort_order 2}} {}))
-          (is (not (accepted? reg q {:row {:sort-order 2}} {}))))))))
+          (is (not (accepted? reg q {:row {:sort-order 2}} {})))
+          (is (= {:row #{:sort_order}} (:document-columns (h/analyze reg q))) "the columns the statement uses of the document"))))))

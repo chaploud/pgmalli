@@ -134,14 +134,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 * The document of `jsonb_populate_record`, `json_populate_record` and their `recordset`, of a
   table's row type (`NULL::t`, or an alias's whole row in `UPDATE t p ... FROM
-  jsonb_populate_record(p, ?::jsonb)`), is typed: a closed map of the table's columns as
-  keyword keys (a vector of them for a recordset), each value what the column's type reads
-  from the JSON the one sending writes, its length, range, CHECK, labels and jsonb shape kept.
-  The keys are the columns the statement uses of the call (all of them under `r.*`, `SELECT *`
-  or its whole row). A key of no column, or of a column the statement does not use, which
-  PostgreSQL ignores, is refused. Under `INSERT INTO t (cols) SELECT`
-  of the populated columns, a NOT NULL column's key is required. The function's columns are
-  the table's, nullable.
+  jsonb_populate_record(p, ?::jsonb)`), is typed: a closed map of the table's columns, each
+  key a keyword or a string (not both for one column), a vector of them for a recordset, each
+  value what the column's type reads from the JSON the one sending writes, its length, range,
+  CHECK, labels and jsonb shape kept. A key of no column, which PostgreSQL ignores, is
+  refused. Under `INSERT INTO t (cols) SELECT` of the populated columns, a NOT NULL column's
+  key is required. The function's columns are the table's, nullable.
+* `h/analyze` gives `:document-columns`: for each argument that is such a document, the columns
+  of the row type the query uses of the call, nil where a use names none in particular (`r.*`,
+  the whole row, `:raw`).
 * The one sending's `jsonb` writes a `LocalDate`, a `LocalDateTime`, a `LocalTime`, an
   `OffsetDateTime` and an `OffsetTime` as their ISO-8601 text, in a map or a vector at any
   depth: install the [extension](docs/reading-rows.md#the-one-reading-and-sending) again.

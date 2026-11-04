@@ -6,7 +6,9 @@ Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-row
 types of the arguments (`:args`, [below](#the-types-of-the-arguments)), the row it returns
 (`:row`, [below](#the-row-a-query-returns)), how many rows where the data tells (`:rows`,
 [below](#function-schemas)), the problems PostgreSQL would report (`:problems`) and the tables it
-reads and writes (`:tables`, [below](#the-tables-a-query-uses)). The examples use
+reads and writes (`:tables`, [below](#the-tables-a-query-uses)), and the columns the query
+uses of a `jsonb_populate_record` document (`:document-columns`,
+[below](#document-columns)). The examples use
 [example/schema.sql](example/schema.sql).
 
 It reads the data you give `sql/format`, as your code has built it. Code in it (a quoted form,
@@ -22,7 +24,7 @@ naming where the symbol is (`:in`, as `get-in` reads it): analyze each variant y
 (def registry (pgmalli/registry "public"))
 
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
+;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
 ```
 
 ## What a name refers to
@@ -163,7 +165,7 @@ keyed as in `sql/format`'s `:params`, as the one sending sends them
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`, `[:cast :?ids [:raw "bigint[]"]]` to an array type), or an element of an array cast (`[:array [:?k] :text]`, `ARRAY[?]::text[]`) | what PostgreSQL casts to the type, of what [your application sends](#what-your-application-sends), without the type's CHECKs, lengths and ranges where every use of the cast is compared (PostgreSQL evaluates the cast only where its plan reaches it): a string too, to an array type a Java array of what a cast to its element type takes, or nil (to a domain over an array type any array), an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); no map or collection sent as `json` or `jsonb` to a type other than those and the string types (PostgreSQL casts a `jsonb` number or boolean, and errors at run time on an object or array); no collection sent untyped (`:unknown`) to a number or boolean type, whose input refuses an array literal (`{1}`; a date, time or `uuid` type reads `{2020-01-01}` past its braces); `:any` for a type whose values pgmalli does not type (json, inet) or an extension's type, whose casts `pg_catalog` does not hold; nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned where nil may not go (as assigned below) |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it (under `ON CONFLICT DO UPDATE`, an inserted value only for a BEFORE INSERT trigger, as PostgreSQL checks NOT NULL before the conflict), or the SELECT of `INSERT ... SELECT` may drop the row (`WHERE`, `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, a `FROM` item other than `unnest` of arguments, cast or not; then without the CHECKs, lengths and ranges, which PostgreSQL checks only on a row it writes): a `numeric(p,s)`'s precision is left out; under `[:unnest :?xs]`, an array of it, a Java array ([what your application sends](#what-your-application-sends)) |
-| the document of `jsonb_populate_record`, `json_populate_record` or their `recordset`, bare or cast to `jsonb` or `json`, of a table's or view's row type: `NULL` cast to it (`[[:jsonb_populate_recordset [:cast nil :positions] :?rows] :r]`) or an alias's whole row (`[:jsonb_populate_record :p [:cast :?row :jsonb]]`, `p` the alias of `UPDATE positions p`) | for a record a map, for a recordset a vector of them, in place of a map or vector the parameter takes there (bare, what goes where the function takes `jsonb` or `json`; cast, what the cast takes), or nil. The map is closed: its keys the names, as keywords, of the columns the statement reading the call's alias uses (`r.name`, or an unqualified `name` of it, anywhere in that statement or one nested in it: `UPDATE positions p SET (name, sort_order) = (SELECT r.name, r.sort_order FROM jsonb_populate_record(p, ?) r)` takes `:name` and `:sort_order`), or of every column where a use names none in particular (`r.*`, `SELECT *`, the whole row `r`, `:raw`, columns the alias lists), each optional, and each value nil or what the column's type's input reads of the JSON value the one sending writes: a `json` or `jsonb` column's value as read (its override or CHECK shape), an array column's a sequential of its elements' values; another column's a JSON number (an integer type's input reads no fraction), boolean or string: a `String` of any type, the column's length, range, CHECK and enum labels kept, the others where they go untyped or as their type (an `Instant`, a `LocalDate` or a `LocalDateTime` to a date or timestamp column, a `UUID` to a `uuid` one); no `Character` or `PGobject`, which the document does not hold. Where `INSERT INTO t (cols) SELECT` writes a column of `t` from the populated column of its name, a key whose column NULL may not go to is required, its value not nil, unless the SELECT may drop the row (as assigned above) |
+| the document of `jsonb_populate_record`, `json_populate_record` or their `recordset`, bare or cast to `jsonb` or `json`, of a table's or view's row type: `NULL` cast to it (`[[:jsonb_populate_recordset [:cast nil :positions] :?rows] :r]`) or an alias's whole row (`[:jsonb_populate_record :p [:cast :?row :jsonb]]`, `p` the alias of `UPDATE positions p`) | for a record a map, for a recordset a vector of them, in place of a map or vector the parameter takes there (bare, what goes where the function takes `jsonb` or `json`; cast, what the cast takes), or nil. The map is closed: its keys the names of the row type's columns, each as a keyword or a string (`:sort_order` or `"sort_order"`, not both), each optional, and each value nil or what the column's type's input reads of the JSON value the one sending writes: a `json` or `jsonb` column's value as read (its override or CHECK shape), an array column's a sequential of its elements' values; another column's a JSON number (an integer type's input reads no fraction), boolean or string: a `String` of any type, the column's length, range, CHECK and enum labels kept, the others where they go untyped or as their type (an `Instant`, a `LocalDate` or a `LocalDateTime` to a date or timestamp column, a `UUID` to a `uuid` one); no `Character` or `PGobject`, which the document does not hold. Where `INSERT INTO t (cols) SELECT` writes a column of `t` from the populated column of its name, a key whose column NULL may not go to is required, its value not nil, unless the SELECT may drop the row (as assigned above) |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | a Java array of where its column goes, as an argument there: compared, assigned, or cast (an array of what PostgreSQL casts to the type), in a subquery too. Cast to an array of a column's type (`[[:unnest [:cast :?ns [:raw "varchar[]"]]] [:x {:columns [:n]}]]`, its column assigned to a `varchar(50)` column, a domain over `varchar` too, by `SELECT *` or by name), each element as assigned there, or else as cast to the type (a String to a `bigint`); cast to another type, as cast |
 | an argument of `coalesce`, `greatest`, `least` or `nullif`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
 | an argument of a function or an operator of `pg_catalog` or of a generated schema (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the type each function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil: a value of each type picks its own (`generate_series(1, ?)` takes an integer, a bigint or a numeric); `:any` where one of them takes any type (a polymorphic one) |
@@ -482,6 +484,28 @@ with aliases and CTE names resolved. Use it to find the queries a change to a ta
 ;; => {:reads #{"public.groups"}, :writes #{"public.users"}}
 ```
 
+## Document columns
+
+`:document-columns` is, for each argument that is the document of `jsonb_populate_record`,
+`json_populate_record` or their `recordset` ([its type](#the-types-of-the-arguments)), the
+columns of the row type the query uses of the call: those named of its alias (`r.nick`, or an
+unqualified `nick` of it) anywhere in the statement that reads it or one nested in it. The
+document's type takes every column's key, as PostgreSQL ignores a key no column of the query
+reads; compare a document's keys with these where such a key is a mistake. It is nil where a
+use names no column in particular (`r.*`, `SELECT *`, the whole row `r`, `:raw`, columns the
+alias lists).
+
+```clojure
+(:document-columns (h/analyze registry {:update [:users :p]
+                                        :set {[:composite :nick :status] {:select [:r.nick :r.status]
+                                                                          :from [[[:jsonb_populate_record :p [:cast :?row :jsonb]] :r]]}}
+                                        :where [:= :p.id :?id]}))
+;; => {:row #{:nick :status}}
+
+(:document-columns (h/analyze registry {:select [:r.*] :from [[[:jsonb_populate_record [:cast nil :users] :?doc] :r]]}))
+;; => {:doc nil}
+```
+
 ## Options
 
 `h/analyze`, `h/query-schema`, `h/values-schema` and `h/set-schema` take these options; an option a
@@ -618,11 +642,8 @@ Write the query so PostgreSQL's reading is explicit instead.
 - A key of a `jsonb_populate_record` document (or of `json_populate_record` and their
   `recordset`) that names no column of the row type, which PostgreSQL ignores: almost always a
   misspelled or unconverted key (`:sort-order` for `sort_order`), whose value is then not
-  written. So is a key of a column the statement does not use (`:group_id` to an UPDATE whose
-  SET does not list it), which PostgreSQL ignores as silently: written nowhere, it is almost
-  always a mistake. The keys are the columns' names as keywords: a string key
-  (`"sort_order"`), which PostgreSQL matches, is refused too. Its value, as assigned, takes the
-  column's own values (no number to a `text` column).
+  written. Its value, as assigned, takes the column's own values (no number to a `text`
+  column).
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 

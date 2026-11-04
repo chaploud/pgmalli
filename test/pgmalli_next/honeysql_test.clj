@@ -1937,7 +1937,7 @@
                  nil "{\"nick\": \"ann\"}"]]
       (is (ok? q :doc doc) (pr-str doc)))
     (doseq [[doc why] [[{:nik "ann"} "a key of no column, which PostgreSQL ignores"]
-                       [{"nick" "ann"} "a string key"]
+                       [{:nick "ann" "nick" "bob"} "a column's key both as a keyword and as a string"]
                        [{:nick (apply str (repeat 41 "a"))} "longer than the column's varchar(40)"]
                        [{:group_id 3000000000} "beyond the integer's range"]
                        [{:group_id 1.5} "a fraction, which an integer's input does not read"]
@@ -1946,6 +1946,8 @@
                        [{:nick \a} "a Character, which data.json does not write"]
                        [[{:nick "ann"}] "an array, which a record is not"]]]
       (is (not (ok? q :doc doc)) why))
+    (is (ok? q :doc {"nick" "ann" :group_id 1}) "a string key equal to a column's name, as JSON's keys are")
+    (is (not (ok? q :doc {"nik" "ann"})) "a string key of no column")
     (is (ok? (record :sample.users :?doc) :doc {:nick "ann"}) "a bare argument, the table schema-qualified")
     (is (not (ok? (record :sample.users :?doc) :doc "{}")) "a String goes as varchar, which the function does not take")
     (is (= [:maybe int4] (some (fn [[k s]] (when (= :group_id k) s)) (rest (row q))))
@@ -1958,6 +1960,8 @@
     (doseq [select [[:group_id :score :nick] [:r.group_id :r.score :r.nick]]]
       (is (ok? (insert select {}) :rows [{:group_id 1 :score 0} {:group_id 2 :score 1 :nick "ann"}]))
       (is (not (ok? (insert select {}) :rows [{:group_id 1 :nick "ann"}])) "score is NOT NULL")
+      (is (ok? (insert select {}) :rows [{"group_id" 1 "score" 0}]) "a required key as a string")
+      (is (not (ok? (insert select {}) :rows [{"group_id" 1 "score" nil}])) "nil to a NOT NULL column, as a string key")
       (is (not (ok? (insert select {}) :rows [{:group_id 1 :score nil}])) "nil to a NOT NULL column")
       (is (not (ok? (insert select {}) :rows {:group_id 1 :score 0})) "a map, which a recordset is not")
       (is (ok? (insert select {:where [:> :r.score 0]}) :rows [{:group_id 1}]) "a row the WHERE may drop is not written"))
@@ -1970,35 +1974,41 @@
       (is (ok? update :row {:nick "ann"}) "the whole row of the UPDATE's table, every key optional")
       (is (not (ok? update :row {:nick "ann" :scor 1}))))))
 
-(deftest a-populate-documents-keys-are-the-columns-the-statement-uses-of-it
-  (let [keys-of (fn [query k] (set (some #(when (and (vector? %) (= :map (first %)) (:closed (second %))) (map first (drop 2 %)))
-                                         (tree-seq vector? seq (k (args query))))))
+(deftest a-populate-documents-columns-the-statement-uses-are-analyzes-document-columns-nil-where-a-use-names-none
+  (let [cols (fn [query k] (get (:document-columns (h/analyze registry query opts)) k ::absent))
         insert (fn [select more] {:insert-into [[:users [:group_id :score]]
                                                 (merge {:select select :from [[[:jsonb_populate_recordset [:cast nil :users] :?rows] :r]]} more)]})
         record (fn [select more] (merge {:select select :from [[[:jsonb_populate_record [:cast nil :users] :?doc] :r]]} more))]
-    (is (= #{:nick :score} (keys-of {:update [:users :p] :set {[:composite :nick :score] {:select [:r.nick :r.score] :from [[[:jsonb_populate_record :p [:cast :?row :jsonb]] :r]]}}
-                                     :where [:= :p.id 1]}
-                                    :row))
-        "an UPDATE's SET of a row takes the columns its subquery selects")
-    (is (= #{:group_id :score} (keys-of (insert [:r.group_id :r.score] {}) :rows)) "INSERT ... SELECT")
-    (is (= #{:group_id :score} (keys-of (insert [:group_id :score] {}) :rows)) "unqualified")
-    (is (= #{:group_id :score :mood} (keys-of (insert [:r.group_id :r.score] {:where [:= :r.mood "sad"]}) :rows)) "a column WHERE reads")
-    (is (= #{:nick :group_id} (keys-of (record [[[:upper :r.nick]]] {:order-by [:r.group_id]}) :doc)) "a column of an expression, and ORDER BY")
-    (is (= #{:nick :id} (keys-of (record [:r.nick] {:where [:exists {:select [1] :from [:groups] :where [:= :groups.id :r.id]}]}) :doc))
+    (is (= {:row #{:nick :score}}
+           (:document-columns (h/analyze registry {:update [:users :p] :set {[:composite :nick :score] {:select [:r.nick :r.score] :from [[[:jsonb_populate_record :p [:cast :?row :jsonb]] :r]]}}
+                                                   :where [:= :p.id :?id]}
+                                         opts)))
+        "an UPDATE's SET of a row: the columns its subquery selects; only the document's argument")
+    (is (= {} (:document-columns (h/analyze registry {:select [:id] :from [:users]} opts))) "no document")
+    (is (= #{:group_id :score} (cols (insert [:r.group_id :r.score] {}) :rows)) "INSERT ... SELECT")
+    (is (= #{:group_id :score} (cols (insert [:group_id :score] {}) :rows)) "unqualified")
+    (is (= #{:group_id :score :mood} (cols (insert [:r.group_id :r.score] {:where [:= :r.mood "sad"]}) :rows)) "a column WHERE reads")
+    (is (= #{:nick :group_id} (cols (record [[[:upper :r.nick]]] {:order-by [:r.group_id]}) :doc)) "a column of an expression, and ORDER BY")
+    (is (= #{:nick :id} (cols (record [:r.nick] {:where [:exists {:select [1] :from [:groups] :where [:= :groups.id :r.id]}]}) :doc))
         "a column a subquery reads")
-    (is (= #{:nick :born} (keys-of (record [:r.nick :j.k] {:from [[[:jsonb_populate_record [:cast nil :users] :?doc] :r] [[:lateral {:select [[:r.born :k]]}] :j]]}) :doc))
+    (is (= #{:nick :born} (cols (record [:r.nick :j.k] {:from [[[:jsonb_populate_record [:cast nil :users] :?doc] :r] [[:lateral {:select [[:r.born :k]]}] :j]]}) :doc))
         "a column a LATERAL subquery reads")
-    (is (= #{:nick} (keys-of (record [:r.nick] {:where [:exists {:select [1] :from [[:groups :r]] :where [:= :r.id 1]}]}) :doc))
+    (is (= #{:nick} (cols (record [:r.nick] {:where [:exists {:select [1] :from [[:groups :r]] :where [:= :r.id 1]}]}) :doc))
         "not a column of a nearer table of the alias's name")
     (doseq [select [[:r.*] [:*] [[[:to_jsonb :r]]]]]
-      (is (contains? (keys-of (record select {}) :doc) :closed_at) (str "every column under " select)))
-    (is (contains? (keys-of (record [:r.nick] {:where [:= [:raw "r.score"] 1]}) :doc) :score) "every column under :raw")
-    (is (contains? (keys-of {:select [:r.nick :x] :from [[[:jsonb_populate_record [:cast nil :users] :?doc] [:r {:columns [:x]}]]]} :doc) :born)
-        "every column, an alias's list renaming them")
-    (is (not (m/validate (:rows (args (insert [:r.group_id :r.score] {}))) [{:group_id 1 :score 0 :nick "ann"}] {:registry registry}))
-        "a key of a column written nowhere")
-    (is (not (m/validate (:rows (args (insert [:r.group_id :r.score] {}))) [{:group_id 1}] {:registry registry}))
-        "a NOT NULL column's key still required")))
+      (is (nil? (cols (record select {}) :doc)) (str "nil under " select)))
+    (is (nil? (cols (record [:r.nick] {:where [:= [:raw "r.score"] 1]}) :doc)) "nil under :raw")
+    (is (nil? (cols {:select [:r.nick :x] :from [[[:jsonb_populate_record [:cast nil :users] :?doc] [:r {:columns [:x]}]]]} :doc))
+        "nil where the alias's list renames them")
+    (is (nil? (cols {:select [[[:jsonb_populate_record [:cast nil :users] :?doc] :x]]} :doc)) "nil for a call in no FROM")))
+
+(deftest a-populate-documents-keys-are-every-column-of-the-row-type-a-key-of-no-column-refused
+  (let [ok? (fn [query v] (m/validate (:rows (args query)) v {:registry registry}))
+        q {:insert-into [[:users [:group_id :score]] {:select [:r.group_id :r.score] :from [[[:jsonb_populate_recordset [:cast nil :users] :?rows] :r]]}]}]
+    (is (ok? q [{:group_id 1 :score 0 :nick "ann"}]) "a column the statement does not use, which PostgreSQL ignores")
+    (is (ok? q [{"group_id" 1 "score" 0 "nick" "ann"}]) "string keys")
+    (is (not (ok? q [{:group_id 1 :score 0 :nik "ann"}])) "a key of no column")
+    (is (not (ok? q [{:group_id 1}])) "a NOT NULL column's key still required")))
 
 (deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
   (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric(10,2)"} 'decimal? [:> 0]]
@@ -2408,10 +2418,10 @@
 
 (deftest analyze-gives-what-check-arg-types-row-schema-and-tables-give-in-one-map
   (let [q {:select [:nick] :from [:users] :where [:= :id :?id]}]
-    (is (= {:args (args q) :row (row q) :rows {:min 0 :max 1} :problems [] :tables (:tables (h/analyze registry q opts))} (h/analyze registry q opts)))
+    (is (= {:args (args q) :row (row q) :rows {:min 0 :max 1} :problems [] :tables (:tables (h/analyze registry q opts)) :document-columns {}} (h/analyze registry q opts)))
     (is (= {:reads #{"sample.users"} :writes #{}} (:tables (h/analyze registry q opts)))))
   (let [q {:select [:nick_name] :from [:users] :where [:= :group_id :?g]}]
-    (is (= {:args (args q) :row nil :rows nil :problems (check q) :tables (:tables (h/analyze registry q opts))} (h/analyze registry q opts))))
+    (is (= {:args (args q) :row nil :rows nil :problems (check q) :tables (:tables (h/analyze registry q opts)) :document-columns {}} (h/analyze registry q opts))))
   (is (= {:min 1 :max 1} (:rows (h/analyze registry {:select [[[:count :*] :n]] :from [:users]} opts)))))
 
 (deftest an-argument-no-use-types-says-why

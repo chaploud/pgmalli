@@ -1989,7 +1989,7 @@
    unnest's column: an array of that, typed."
   [registry ps opts]
   (let [nodes (expression-nodes ps)
-        ;; populate-args types these
+        ;; populate-documents types these
         populated (set (for [{:keys [x chain]} nodes :let [{:keys [json arg]} (populate-call registry chain x opts)] :when arg] json))
         casts (for [{:keys [x chain]} nodes
                     :when (not (populated x))
@@ -2051,19 +2051,26 @@
           :else (let [t (accepted-type registry s :json (assoc opts ::jdbc/json true))]
                   (shape/either (remove #{jdbc/pg-object} (shape/alternatives t)) t)))))
 
-(defn- populate-args
-  "The argument of the document of a call populate-call tells: for a record, a map of the row
-   type's columns as keyword keys, closed, each a json-field-type or nil; for a recordset, a
-   vector of them; in place of the collections a json or jsonb value of the parameter takes
-   there (bare, a value sent as the function's json or jsonb; cast, what the cast takes), or
-   nil. The keys are the columns the statements reading the call's alias name of it (resolved
-   as a column of it, in the statement or one nested in it), or every column where a use names
-   none in particular: a star, its whole row, :raw, or a list of columns renaming them.
-   A key is required, its value not nil, where an INSERT ... SELECT writes the column of
-   that name of the row type's table straight from it (positions not :may-drop?) and NULL
-   may not go there (assigned-column). sps are the query's statement-positions."
-  [registry sps opts]
-  (for [[_ c _ ps] sps
+(defn- one-key-per-column?
+  "Whether document m holds no column's key both as a keyword and as a string."
+  [m]
+  (not-any? #(and (keyword? %) (contains? m (name %))) (keys m)))
+
+(defn- populate-documents
+  "[{:arg :schema :columns} ...] of the documents of the calls populate-call tells. schema, of
+   arg: for a record, a closed map of the row type's columns, each keyed by its name as a
+   keyword or a string (not both), each a json-field-type or nil; for a recordset, a vector of
+   them; in place of the collections a json or jsonb value of the parameter takes there (bare, a
+   value sent as the function's json or jsonb; cast, what the cast takes), or nil. A key is
+   required, its value not nil, where an INSERT ... SELECT writes the column of that name of
+   the row type's table straight from it (positions not :may-drop?) and NULL may not go there
+   (assigned-column). columns, the set of the columns the statements reading the call's alias
+   name of it (resolved as a column of it, in the statement or one nested in it); nil where a
+   use names none in particular: a star, its whole row, :raw, or a list of columns renaming
+   them."
+  [registry body opts]
+  (for [sps [(once registry statement-positions body opts)]
+        [_ c _ ps] sps
         {:keys [x chain]} (expression-nodes ps)
         :let [{:keys [table set? type json arg]} (populate-call registry chain x opts)]
         :when arg
@@ -2084,23 +2091,37 @@
                      (set (for [{y :x chain :chain} reads :when (column-keyword? y)
                                 :let [{:keys [column opaque?] from :table} (resolve-column registry chain y)]
                                 :when (and opaque? (= alias from))]
-                            column)))
+                            (keyword column))))
               required (set (for [{c :x :as a} (assignments ps)
                                   :when (and alias (not (:may-drop? a)) (column-keyword? c))
                                   :let [{:keys [column opaque?] from :table} (resolve-column registry (:chain a) c)
                                         {written :column t :table :keys [nullable? schema]} (assigned-column registry a)]
                                   :when (and opaque? (= alias from) (= table t) schema (not nullable?) (= column written))]
                               column))
-              doc (into [:map {:closed true}]
-                        (for [[c cs] (column-entries registry table)
-                              :when (or (nil? used) (contains? used c))
-                              :let [req? (contains? required c)]]
-                          (jdbc/row-entry (keyword c) (when-not req? {:optional true}) (json-field-type registry cs opts) (not req?))))
+              fields (for [[c cs] (column-entries registry table)] [c (json-field-type registry cs opts) (contains? required c)])
+              doc (-> [:and
+                       (into [:map {:closed true}]
+                             (for [[c t req?] fields, k [(keyword c) c]]
+                               (jdbc/row-entry k {:optional true} t (not req?))))
+                       [:fn {:error/message "should hold a column's key once, as a keyword or a string"} one-key-per-column?]]
+                      (into (for [[c t req?] fields :when req?]
+                              [:or [:map [(keyword c) t]] [:map [c t]]])))
               [kept dropped] (if set? [:vector :map-of] [:map-of :vector])]]
-    [arg (nullable (shape/either (for [a (shape/alternatives (shape/non-null base))
-                                       :when (not= dropped (shape/kind a))]
-                                   (if (= kept (shape/kind a)) (if set? [:vector doc] doc) a))
-                                 :any))]))
+    {:arg arg
+     :columns used
+     :schema (nullable (shape/either (for [a (shape/alternatives (shape/non-null base))
+                                           :when (not= dropped (shape/kind a))]
+                                       (if (= kept (shape/kind a)) (if set? [:vector doc] doc) a))
+                                     :any))}))
+
+(defn- document-columns
+  "{arg columns} of populate-documents, keyed as :params takes them; of an argument two calls
+   take, the columns of both, nil where either is nil."
+  [registry body opts]
+  (apply merge-with (fn [a b] (when (and a b) (into a b)))
+         {}
+         (for [{:keys [arg columns]} (once registry populate-documents body opts)]
+           {(param-key arg) columns})))
 
 (def ^:private common-type-functions
   "The functions whose arguments PostgreSQL resolves to one type, and that returns it."
@@ -2191,7 +2212,7 @@
                             f uses
                             use (f registry ps opts)]
                         use)
-                      (populate-args registry sps opts))
+                      (for [{:keys [arg schema]} (once registry populate-documents body opts)] [arg schema]))
         untyped (into {} (for [k (query-args body)] [k :any]))
         types (reduce (fn [acc [x t]] (if-let [k (param-key x)] (update acc k both-uses t) acc))
                       untyped typed)
@@ -2752,7 +2773,7 @@
       (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
 
 (defn analyze
-  "{:args :row :rows :problems :tables} of a HoneySQL query against the registry, without a
+  "{:args :row :rows :problems :tables :document-columns} of a HoneySQL query against the registry, without a
    database:
 
    :args      {arg schema} for every named parameter (:?id, [:param :id]), keyed as sql/format's
@@ -2765,13 +2786,18 @@
    :problems  [problem ...] PostgreSQL would report, [] when none; one in a nested statement
               carries :in, where it sits (get-in q (:in p)); humanize says each as a sentence
    :tables    {:reads #{\"schema.table\" ...} :writes #{...}}, aliases and CTEs resolved
+   :document-columns
+              {arg #{column ...}} for every argument that is the document of a
+              jsonb_populate_record, json_populate_record or their recordset: the columns of
+              the row type the statement uses of the call, as keywords; nil where a use names
+              none in particular (r.*, the whole row, :raw) (docs/queries.md#the-columns-a-document-fills)
 
    Names resolve as PostgreSQL resolves them. query-schema builds a function schema of it.
    Options: docs/queries.md#options. Throws when body is no HoneySQL data: SQL already
    formatted, or code (a symbol in it): pass the data the code builds.
 
    (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-   ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}}"
+   ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}, :document-columns {}}"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
    (let [[registry body opts] (prepared registry body opts option-keys)]
@@ -2779,7 +2805,8 @@
       :row (row-schema registry body opts)
       :rows (row-count registry body opts)
       :problems (check registry body opts)
-      :tables (tables registry body opts)})))
+      :tables (tables registry body opts)
+      :document-columns (document-columns registry body opts)})))
 
 (defn query-schema
   "[:=> {:pgmalli/problems [...]} [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
