@@ -858,6 +858,12 @@
 
 (defn- keyword-type [s] (str/lower-case (str/replace s "-" " ")))
 
+(defn- float-precision
+  "Type name n, a float(p) of p 1 to 24 a real: the grammar reads float(p) by its precision
+   (gram.y opt_float), 25 to 53 a double precision as float is."
+  [n p]
+  (if (and p (<= 1 p 24) (#{"float" "float[]"} n)) (str/replace n "float" "real") n))
+
 (defn cast-target
   "The name of the type a cast's t names: a keyword (:double-precision, :mood, :app.mood),
    [:varchar 10] with its typmod, or [:raw s], s one type's name with or without a typmod and []
@@ -867,10 +873,13 @@
   [t]
   (cond (ident? t) (keyword-type (name t))
         (and (vector? t) (= :raw (first t)) (= 2 (count t)) (string? (second t)))
-        (let [n (-> (second t) str/trim str/lower-case (str/replace #"\(\s*\d+\s*(,\s*-?\d+\s*)?\)" "")
-                    (str/replace #"\s+" " ") (str/replace #" ?\[ ?\]$" "[]") str/trim)]
-          (when (re-matches #"[a-z_][\w$]*(\.[a-z_][\w$]*)?( [a-z_]\w*)*(\[\])?" n) n))
-        (and (vector? t) (keyword? (first t)) (not= :raw (first t))) (keyword-type (name (first t)))))
+        (let [raw (-> (second t) str/trim str/lower-case)
+              n (-> raw (str/replace #"\(\s*\d+\s*(,\s*-?\d+\s*)?\)" "")
+                    (str/replace #"\s+" " ") (str/replace #" ?\[ ?\]$" "[]") str/trim)
+              p (some-> (re-find #"^float\s*\(\s*(\d+)\s*\)" raw) second parse-long)]
+          (when (re-matches #"[a-z_][\w$]*(\.[a-z_][\w$]*)?( [a-z_]\w*)*(\[\])?" n) (float-precision n p)))
+        (and (vector? t) (keyword? (first t)) (not= :raw (first t)))
+        (float-precision (keyword-type (name (first t))) (let [p (second t)] (when (integer? p) p)))))
 
 (defn constant?
   "Whether x is the same value on every row: an argument, a literal (NULL too), or a cast of one."

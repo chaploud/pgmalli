@@ -32,7 +32,7 @@
    ;; a bigint is exactly a long
    "bigint" {:aliases ["int8"] :schema :int :value :integer :range [Long/MIN_VALUE Long/MAX_VALUE]}
    "oid" {:schema [:int {:min 0 :max 4294967295}] :value :integer}
-   "numeric" {:aliases ["decimal"] :schema 'decimal? :value :exact :read :or-double}
+   "numeric" {:aliases ["decimal" "dec"] :schema 'decimal? :value :exact :read :or-double}
    "real" {:aliases ["float4"] :schema :double :value :float :read 'float?}
    "double precision" {:aliases ["float8" "float"] :schema :double :value :float}
    "text" {:schema :string}

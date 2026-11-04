@@ -2584,3 +2584,9 @@
     (is (= #{} (kinds {:insert-into :users :values [{:score 1 :group_id 1 :mood :default :nick :null :born :?b}]})))
     (is (= [{:kind :unknown-column :column :users :assigned-field true}] (check {:update :users :set {:users.score 1} :where [:= :id 1]}))
         "SET users.score is field score of a column users")))
+
+(deftest a-cast-to-float-of-a-precision-up-to-24-is-a-real-and-dec-is-numeric
+  (let [row-type #(second (second (row {:select [[[:cast 1 %] :x]]})))]
+    (is (= (row-type :real) (row-type [:float 10]) (row-type [:raw "float(24)"])) "gram.y opt_float")
+    (is (= (row-type :double-precision) (row-type [:float 25]) (row-type :float)))
+    (is (= (row-type :numeric) (row-type :dec)))))
