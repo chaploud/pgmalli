@@ -153,8 +153,8 @@
 (defn- written-row*
   "The closed map of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
    of registry r as reading reads it: each column typed as an argument assigned to it, optional
-   as the derived schema has it, keyed by written-key; one the database may fill takes :default too, and one
-   it writes :default alone. update takes a non-empty map: HoneySQL writes an empty :set as SET
+   as the derived schema has it, keyed by written-key; one the database may fill takes DEFAULT too, and one
+   it writes DEFAULT alone. update takes a non-empty map: HoneySQL writes an empty :set as SET
    alone, which PostgreSQL refuses. nil where r has no such schema."
   [r name derived opts]
   (when-let [d (get (::query/schemas r) (shape/derived-name name derived))]
@@ -167,7 +167,7 @@
           ;; [keys required? type generated] of each column, generated the values it takes that
           ;; malli generates (nil for none)
           columns (concat
-                   ;; one the database may fill takes HoneySQL's :default (DEFAULT) too
+                   ;; one the database may fill takes DEFAULT too
                    (for [[k props c] written
                          :let [assigned #(cond-> (args/accepted-type r c :assign %) (or (shape/maybe? c) triggered?) query/nullable)
                                a (assigned (assoc opts ::args/keywords-columns true))
@@ -183,7 +183,7 @@
                                                               (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
                                   [:= :lift] lifted]]
                       (generated-values plain)])
-                   ;; one the database writes (generated, identity ALWAYS) takes it alone
+                   ;; one the database writes (generated, identity ALWAYS) takes DEFAULT alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(written-key k opts) false default default]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
@@ -241,11 +241,18 @@
         n (str (types/short-name base) typmod brackets)]
     (str "[:cast " x " " (if (re-matches #"[a-z_][a-z0-9_]*" n) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
 
+(defn- assigned
+  "The sentence of an assigned target qualified by its table or alias, a field of a column to PostgreSQL."
+  [column did-you-mean]
+  (str ": PostgreSQL reads an assigned " (column-name column) " as a field of a column "
+       (first (str/split (column-name column) #"\.")) "; assign "
+       (if did-you-mean (str "it unqualified: :" (column-name (first did-you-mean))) "the column unqualified")))
+
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
   {:unknown-table (fn [{:keys [table did-you-mean quoted]}] (query/unknown-table-text table did-you-mean quoted))
    :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint]}]
-                     (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean))))]
+                     (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map #(str ":" (column-name %)) did-you-mean))))]
                        (str "unknown column " (column-name column)
                             (when qualifier (str "; no table or alias " qualifier " in the statement"))
                             (case clause
@@ -257,13 +264,10 @@
                                              (str " in ON CONFLICT: HoneySQL writes a vector as columns; for a constraint write {:on-constraint "
                                                   (keyword (name constraint)) "}")
                                              (str " in ON CONFLICT: " table " lacks it" meant))
-                              :values (str " in :values" (when target (str " for " (column-name target)))
+                              :values (if-not table (assigned column did-you-mean) (str " in :values" (when target (str " for " (column-name target)))
                                            ": HoneySQL writes a keyword there as a column; write the value itself"
-                                           " ([:lift " column "] for an enum label, a string for text)")
-                              (:set :do-update-set :columns)
-                              (str ": PostgreSQL reads an assigned " (column-name column) " as a field of a column "
-                                   (first (str/split (column-name column) #"\.")) "; assign "
-                                   (if did-you-mean (str "it unqualified: " (column-name (first did-you-mean))) "the column unqualified"))
+                                           " ([:lift " column "] for an enum label, a string for text)"))
+                              (:set :do-update-set :columns) (assigned column did-you-mean)
                               (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
                                                 (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
                                     meant meant
@@ -283,7 +287,7 @@
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
-                            " leave it out, or write :default"))
+                            " leave it out, or write [:default]"))
    :unread-clause (fn [{:keys [clause did-you-mean]}]
                     (if did-you-mean
                       (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))

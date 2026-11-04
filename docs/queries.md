@@ -267,7 +267,7 @@ or a `PGobject`); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
-DEFAULT as HoneySQL writes it under `:format` too (`:default`, or `[:default]` where it quotes names); one it writes (generated, identity ALWAYS) takes `:default` alone. Where a
+DEFAULT too: `[:default]`, or `:default` where the format writes it as the word (not under `:quoted`); one it writes (generated, identity ALWAYS) takes DEFAULT alone. Where a
 BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
 takes nil: the trigger may fill it. In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an

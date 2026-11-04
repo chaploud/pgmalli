@@ -36,8 +36,8 @@
   (cond (keyword? s) (get class-names s (name s))
         ;; a predicate no class is sent by as a type (inst?) by its name, without the ?
         (symbol? s) (get class-names s (str/replace (str s) #"\?$" ""))
-        (and (vector? s) (= :fn (first s)) (:pg/class (props-of s))) (:pg/class (props-of s))
         (and (vector? s) (= :fn (first s)) (:pgmalli/describe (props-of s))) (:pgmalli/describe (props-of s))
+        (and (vector? s) (= :fn (first s)) (:pg/class (props-of s))) (:pg/class (props-of s))
         (vector? s) (get class-names (first s) (name (first s)))
         :else (pr-str s)))
 

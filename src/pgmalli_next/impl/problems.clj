@@ -306,16 +306,13 @@
   "The problems of one statement (README.md's table of :kind), scope the statement's (from
    scope) or, for a nested statement, the chain of its own and the enclosing ones."
   [registry stmt scope ps opts]
-  (let [scopes (syntax/chain scope)
-        known (for [[k v] (::query/schemas registry) :when (shape/read-row? v)]
-                (str/join "." (shape/schema-and-name k)))
-        quoted? (syntax/quoted? (:format opts))]
+  (let [scopes (syntax/chain scope)]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
                        :let [meant (query/table-suggestions registry table)]]
                    (cond-> {:kind :unknown-table :table table}
                      meant (assoc :did-you-mean meant)
                      ;; the name folded is one the registry holds: what to write instead
-                     (and quoted? (not= table (syntax/folded table)) (some #{(syntax/folded table)} known)) (assoc :quoted true)))
+                     (query/quoted-table? registry table (:format opts)) (assoc :quoted true)))
                  (column-problems registry scopes stmt ps opts)
                  ;; a column both sides lack is one problem
                  (for [[column ms] (group-by :column (query/using-missing registry stmt (first scopes) opts))

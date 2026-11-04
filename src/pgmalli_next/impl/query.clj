@@ -115,12 +115,21 @@
 
 (defn table-columns [registry table] ((::table-columns registry) table))
 
+(defn- known-tables [registry]
+  (for [[k v] (::schemas registry) :when (and (keyword? k) (shape/read-row? v))]
+    (str/join "." (shape/schema-and-name k))))
+
+(defn quoted-table?
+  "Whether table, under a :quoted format, is a table of the registry once folded to lower case."
+  [registry table format]
+  (boolean (and (syntax/quoted? format) (not= table (syntax/folded table))
+                (some #{(syntax/folded table)} (known-tables registry)))))
+
 (defn table-suggestions
   "Up to three tables or views of the registry (\"schema.table\") a table it lacks may mean:
    one of its name in another schema first, then those spelled close."
   [registry table]
-  (let [known (for [[k v] (::schemas registry) :when (and (keyword? k) (shape/read-row? v))]
-                (str/join "." (shape/schema-and-name k)))
+  (let [known (known-tables registry)
         same-name (sort (filter #(= (syntax/table-name %) (syntax/table-name table)) known))]
     (some->> (seq (take 3 (distinct (concat same-name (error/suggestions table known 3))))) vec)))
 
@@ -131,7 +140,7 @@
   (let [elsewhere (first (filter #(= (syntax/table-name %) (syntax/table-name table)) did-you-mean))]
     (str "unknown table " table
          (cond quoted? (str "; under :quoted, PostgreSQL looks the name up as written: for the table "
-                            (syntax/folded table) " write :" (syntax/folded (syntax/table-name table)))
+                            (syntax/folded table) " write :" (syntax/folded table))
                elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
                               ", or name it :" elsewhere)
                did-you-mean (error/did-you-mean (str/join " or " (map #(str ":" %) did-you-mean)))
@@ -188,9 +197,8 @@
       ;; a table named as HoneySQL names it: the :unknown-table sentence analyze gives
       (when (not= n name)
         (let [t (str/join "." (shape/schema-and-name n))
-              meant (table-suggestions registry t)
-              quoted? (and (syntax/quoted? (:format opts)) (not= t (syntax/folded t)) (some #{(syntax/folded t)} meant))]
-          (error/fail! :pgmalli.error/unknown-schema (str what ": " (unknown-table-text t meant quoted?))
+              meant (table-suggestions registry t)]
+          (error/fail! :pgmalli.error/unknown-schema (str what ": " (unknown-table-text t meant (quoted-table? registry t (:format opts))))
                        (cond-> {:given name} meant (assoc :did-you-mean meant))))))
     n))
 

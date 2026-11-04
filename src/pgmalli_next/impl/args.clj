@@ -123,7 +123,7 @@
   (let [t (query/slot-type registry s)
         pg-object (shape/merge-props jdbc/pg-object
                                      {:error/message (str "should be a PGobject of type " t " (a String goes as varchar, which " t
-                                                          " takes not), or the argument cast in the query: [:cast <the argument> :" (types/short-name t) "]")
+                                                          " does not take), or the argument cast in the query: [:cast <the argument> :" (types/short-name t) "]")
                                       :pgmalli/describe (str "PGobject of " (types/short-name t))})]
     (distinct (cons pg-object (for [[x p] (jdbc/write-rows opts false)
                                          :when (and (string? p) (not= p t) (accept/holds? t p context))
@@ -177,7 +177,7 @@
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
-      ;; compared, assigned or a function's argument (accepted-type reads :call and :common as :compare), of a type whose values
+      ;; compared, assigned, a function's argument or a :common operand, of a type whose values
       ;; pgmalli does not type and pgjdbc reads as a PGobject (a geometric, network or timespan one:
       ;; inet, interval), that and what converts to it, not any value
       (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T"} (types/category t)))

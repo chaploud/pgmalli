@@ -815,7 +815,7 @@
             :let [ok? #(m/validate (f reg :t o) (merge row %) {:registry reg})]]
       (is (every? ok? [{:j "{}"} {:ip nil}]))
       (is (not-any? ok? [{:j :k} {:ip :k} {:j [1 2]} {:ip '("a")} {:j (list 1)}]) (pr-str f o))
-      (is (not (ok? {:ip "10.0.0.1"})) "a String goes as varchar, which an inet column takes not: a PGobject of inet")
+      (is (not (ok? {:ip "10.0.0.1"})) "a String goes as varchar, which an inet column does not take: a PGobject of inet")
       (is (ok? {:ip default}) "HoneySQL's DEFAULT where the database fills a column"))))
 
 (deftest a-number-label-is-read-from-a-string-sent-untyped
@@ -1334,13 +1334,13 @@
   (is (= [{:kind :unknown-column :column :users.id :qualifier "users" :did-you-mean [:u.id]}]
          (check {:select [:users.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}))
       "an aliased table named by its name, as PostgreSQL hints")
-  (is (= ["unknown column usr.id; no table or alias usr in the statement; did you mean: u.id"]
+  (is (= ["unknown column usr.id; no table or alias usr in the statement; did you mean: :u.id"]
          (h/humanize (check {:select [:usr.id] :from [[:users :u]]}))))
   (is (= [{:kind :unknown-column :column :x.id :qualifier "x"}] (check {:select [:x.id] :from [:users]}))
       "no alias close: nothing suggested"))
 
 (deftest each-problem-reads-as-what-to-do
-  (is (= ["unknown column nik; did you mean: nick"
+  (is (= ["unknown column nik; did you mean: :nick"
           "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:cast \"sad\" :mood]"]
          (h/humanize (check {:select [:nik] :from [:users] :where [:= :mood "sad"]} opts))))
   (is (every? string? (h/humanize [{:kind :something-new}])) "a kind with no sentence still prints"))
@@ -2334,13 +2334,15 @@
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
-          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval takes not), or the argument cast in the query: [:cast <the argument> :interval]"
+          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval does not take), or the argument cast in the query: [:cast <the argument> :interval]"
                                                             :pgmalli/describe "PGobject of interval"})
                       :time/local-time]]
           :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
                             [:< [:+ :closed_at :?d] :current_timestamp]
                             [:= :nick [:repeat "a" :?n]]]})))
+  (is (= "(PGobject of interval | time | timestamptz | inst | date | timestamp)?"
+         (:d (into {} (map vector [:now :d] (:args (pgmalli/describe registry (h/query-schema registry [:now :d] {:select [:id] :from [:users] :where [:> :?now [:- :current_timestamp :?d]]} opts))))))))
   (is (= {:x [:maybe integer-cmp]} (args {:select [[[:case [:= :id 1] :?x :else :score] :c]] :from [:users]}))
       "CASE's values resolve as coalesce's arguments"))
 
@@ -2581,7 +2583,7 @@
   (let [o (assoc opts :format {:quoted true})
         ps (check {:select [:id] :from [:Users]} o)]
     (is (= [{:kind :unknown-table :table "sample.Users" :did-you-mean ["sample.users"] :quoted true}] ps))
-    (is (= ["unknown table sample.Users; under :quoted, PostgreSQL looks the name up as written: for the table sample.users write :users"] (h/humanize ps)))
+    (is (= ["unknown table sample.Users; under :quoted, PostgreSQL looks the name up as written: for the table sample.users write :sample.users"] (h/humanize ps)))
     (is (= [{:kind :unknown-column :column :Nick :did-you-mean [:nick] :quoted true}] (check {:select [:Nick] :from [:users]} o)))
     (is (= ["unknown column Nick; under :quoted, PostgreSQL looks the name up as written: for the column nick write :nick"]
            (h/humanize (check {:select [:Nick] :from [:users]} o))))))
@@ -2636,7 +2638,9 @@
         "HoneySQL writes a keyword value as a column: VALUES (sad)")
     (is (= #{} (kinds {:insert-into :users :values [{:score 1 :group_id 1 :mood :default :nick :null :born :?b}]})))
     (is (= [{:kind :unknown-column :column :users.score :clause :set :did-you-mean [:score]}] (check {:update :users :set {:users.score 1} :where [:= :id 1]}))
-        "SET users.score is field score of a column users")))
+        "SET users.score is field score of a column users")
+    (is (= ["unknown column users.nick: PostgreSQL reads an assigned users.nick as a field of a column users; assign it unqualified: :nick"]
+           (h/humanize (check {:insert-into :users :values [{:group_id 1 :score 1 :users.nick "a"}]}))))))
 
 (deftest a-cast-to-float-of-a-precision-up-to-24-is-a-real-and-dec-is-numeric
   (let [row-type #(second (second (row {:select [[[:cast 1 %] :x]]})))]
