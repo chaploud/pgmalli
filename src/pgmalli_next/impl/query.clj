@@ -626,8 +626,9 @@
   "The functions whose arguments PostgreSQL resolves to one type, and that returns it."
   #{"coalesce" "greatest" "least"})
 
-(defn- using-merges
-  "{column {:tables [alias ...] :schema s :nullable? bool}} of a statement's JOIN ... USING, each
+(defn- using-joins
+  "{:merges {column {:tables [alias ...] :schema s :nullable? bool}} :missing [{:column c :table
+   t} ...]} of a statement's JOIN ... USING, each
    join merging its left side (a table's column, or what an earlier join merged) with the right
    table's in turn: :tables every table merged, :schema nil when the types differ.
    PostgreSQL takes the left column (INNER JOIN the right one when only the left is cast to
@@ -649,13 +650,18 @@
                         same? side
                         ;; one side cast to the merged type: which one, the registry does not say
                         :else {:schema nil :nullable? true})))]
-    (:merges
-     (reduce (fn [{:keys [before] :as acc} [k right c]]
+    (reduce (fn [{:keys [before] :as acc} [k right c]]
                (-> (if (and (vector? c) (= :using (first c)))
                      (reduce (fn [acc col]
                                (let [col (syntax/ident-name col (:format opts))
                                      earlier (get-in acc [:merges col])
                                      holders (filter #(when-let [e (get sc %)] (has-column? registry e col)) before)
+                                     ;; a column the left side or the right table lacks (column ... specified in USING clause does not exist)
+                                     acc (cond-> acc
+                                           (and (nil? earlier) (empty? holders) (every? #(get sc %) before))
+                                           (update :missing conj {:column (keyword col) :side :left})
+                                           (and (get sc right) (not (has-column? registry (get sc right) col)))
+                                           (update :missing conj {:column (keyword col) :side :right :table (:table (get sc right))}))
                                      l (cond earlier earlier
                                              (= 1 (count holders)) (table-side (first holders) col)
                                              :else {:schema nil :nullable? true})]
@@ -664,8 +670,16 @@
                              acc (filter keyword? (rest c)))
                      acc)
                    (update :before conj right)))
-             {:before (vec (syntax/join-base stmt opts)) :merges {}}
-             (for [[k t c] (syntax/joins stmt)] [k (alias t) c])))))
+             {:before (vec (syntax/join-base stmt opts)) :merges {} :missing []}
+             (for [[k t c] (syntax/joins stmt)] [k (alias t) c]))))
+
+(defn- using-merges [registry stmt sc opts] (:merges (using-joins registry stmt sc opts)))
+
+(defn using-missing
+  "The columns a statement's JOIN ... USING names that its left side or its right table lacks:
+   [{:column c :side :left|:right :table t}]."
+  [registry stmt sc opts]
+  (:missing (using-joins registry stmt sc opts)))
 
 (defn reached
   "The overloads a call (call-parts) reaches: those of the schema it names, else pg_catalog's and

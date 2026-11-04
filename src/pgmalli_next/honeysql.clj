@@ -239,10 +239,16 @@
                                                ", or name it :" elsewhere)
                                 did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
                                 :else "; check its name, or :schema when it is in another schema"))))
-   :unknown-column (fn [{:keys [column did-you-mean qualifier quoted]}]
+   :unknown-column (fn [{:keys [column did-you-mean qualifier quoted values using table on-conflict assigned-field]}]
                      (str "unknown column " (column-name column)
                           (when qualifier (str "; no table or alias " qualifier " in the statement"))
-                          (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
+                          (cond assigned-field (str "; PostgreSQL reads an assigned " (column-name column)
+                                                    ".x as field x of a column " (column-name column) ": assign the column unqualified (:x)")
+                                on-conflict (str " in ON CONFLICT: " table " lacks it")
+                                using (str " in USING: " (if (= :left using) "no table before the join has it" (str table " lacks it")))
+                                values (str "; HoneySQL writes a keyword in :values as a column: for the value, write [:lift "
+                                            column "] or a string")
+                                quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
                                             (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
                                 did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean)))
                                 (not qualifier) "; no table of the statement has it")))

@@ -2567,3 +2567,17 @@
     (is (= [:enum {:pg/type "sample.mood"} "happy" "sad" :happy :sad] (:x (q :sample.Mood)))))
   (is (= [:any {:pgmalli/untyped :position}] (:x (args {:select [[[:cast :?x :my-mood] :m]]})))
       "MY MOOD names no type"))
+
+(deftest clauses-naming-columns-postgresql-checks-are-checked
+  (let [kinds #(set (map (juxt :kind :column) (check %)))]
+    (is (contains? (kinds {:select [:*] :from [:users] :join [[:groups :g] [:using :nope]]}) [:unknown-column :nope])
+        "column nope specified in USING clause does not exist")
+    (is (= [{:kind :unknown-column :column :name :using :left}] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :name]]}))
+        "users lacks name")
+    (is (= [] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :id]]})))
+    (is (contains? (kinds {:insert-into :users :values [{:score 1 :group_id 1}] :on-conflict [:nope] :do-nothing true}) [:unknown-column :nope]))
+    (is (contains? (kinds {:insert-into :users :values [{:score 1 :group_id 1 :mood :sad}]}) [:unknown-column :sad])
+        "HoneySQL writes a keyword value as a column: VALUES (sad)")
+    (is (= #{} (kinds {:insert-into :users :values [{:score 1 :group_id 1 :mood :default :nick :null :born :?b}]})))
+    (is (= [{:kind :unknown-column :column :users :assigned-field true}] (check {:update :users :set {:users.score 1} :where [:= :id 1]}))
+        "SET users.score is field score of a column users")))

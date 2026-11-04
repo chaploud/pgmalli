@@ -103,7 +103,8 @@
                                               :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x))]
                                           [x chain])
                                         (for [c assigned] [c target])))
-          :when (if (or (syntax/star? col) (whole-row? scope col format))
+          ;; an assignment's target names a column, never a table: SET users.score is field score of a column users
+          :when (if (or (syntax/star? col) (and (not (identical? scope target)) (whole-row? scope col format)))
                   ;; :t.* names a table of the scope, unless the data does not show them all
                   (let [[a] (syntax/split-column col format)]
                     (and (syntax/star? col) a (not (some #{:open} (syntax/chain scope))) (not-any? #(and (map? %) (contains? % a)) (syntax/chain scope))))
@@ -116,6 +117,8 @@
           (cond-> {:kind :unknown-column :column col}
             qualifier (assoc :qualifier qualifier)
             near (assoc :did-you-mean near)
+            ;; a target a.b whose a is the table: field b of a column a to PostgreSQL
+            (and (identical? scope target) (whole-row? scope col format)) (assoc :assigned-field true)
             (and (syntax/quoted? format) (not= (syntax/split-column col format) (syntax/split-column col nil))) (assoc :quoted true)))))))
 
 (defn- insert-problems [registry stmt {:keys [format] :as opts}]
@@ -137,7 +140,18 @@
              {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
          (when (and (seq given) (not (query/filled-by-trigger? (query/table-props registry table) :insert)))
            (for [c required :when (not (given-names c))]
-             {:kind :missing-required-column :table table :column (keyword c)})))))))
+             {:kind :missing-required-column :table table :column (keyword c)}))
+         ;; ON CONFLICT (col, ...) names columns of the target table
+         (when-let [cols (query/table-columns registry table)]
+           (for [k (syntax/vectorish (:on-conflict stmt))
+                 :when (and (keyword? k) (not (contains? cols (syntax/ident-name k format))))]
+             {:kind :unknown-column :column k :table table :on-conflict true}))
+         ;; HoneySQL writes a keyword value as a column, which a VALUES row has none of in scope
+         (distinct (for [row rows
+                         v (cond (map? row) (vals row) (vector? row) row)
+                         :when (and (keyword? v) (not (syntax/param-key v)) (not (syntax/null-value? v format))
+                                    (not (contains? (set (syntax/default-values format)) v)))]
+                     {:kind :unknown-column :column v :values true})))))))
 
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
@@ -257,6 +271,8 @@
                      meant (assoc :did-you-mean (vec meant))
                      (and quoted? (not= table (syntax/folded table))) (assoc :quoted true)))
                  (column-problems registry scopes stmt ps opts)
+                 (for [{:keys [column side table]} (query/using-missing registry stmt (first scopes) opts)]
+                   (cond-> {:kind :unknown-column :column column :using side} table (assoc :table table)))
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
                  (string-problems registry ps opts)))))
