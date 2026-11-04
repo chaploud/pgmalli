@@ -184,6 +184,7 @@
                  (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
                  {:given name}))
   (let [[r opts] (prepared registry opts option-keys)
+        _ (when (contains? opts :schema) (query/with-defaults r opts))
         registry (::query/schemas r)
         ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
         ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema,

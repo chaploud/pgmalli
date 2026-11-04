@@ -1,6 +1,7 @@
 (ns pgmalli-next.honeysql-robust-test
   "pgmalli-next.honeysql on queries broken at random: the oracle corpus with a part replaced by
-   another shape. Every function returns data or throws ex-info, never another exception."
+   another shape. Every function returns data or throws pgmalli's own error (ex-info with
+   :pgmalli/error), never another exception."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
@@ -26,7 +27,9 @@
                gen/small-integer gen/string-alphanumeric
                (gen/vector (gen/elements [:id :nick nil 1 :users]) 0 3)
                (gen/map (gen/elements [:select :from :where :fields :columns :values]) (gen/elements [:id [:id] nil {} 1]))
-               (gen/return '(:id 1)) (gen/return {})]))
+               (gen/return '(:id 1)) (gen/return {})
+               ;; an alias's column list of no names
+               (gen/elements [[:c {:columns [nil]}] [:c {:columns [{}]}]])]))
 
 (def ^:private broken-query
   (gen/let [q (gen/elements corpus)
@@ -35,11 +38,11 @@
     (if (seq p) (assoc-in q (vec p) v) v)))
 
 (defn- crash
-  "The exception other than ex-info f throws on q, nil when there is none."
+  "The exception f throws on q but pgmalli's own error, nil when there is none."
   [f q]
-  (try (f q) nil (catch clojure.lang.ExceptionInfo _ nil) (catch Throwable e e)))
+  (try (f q) nil (catch Throwable e (when-not (:pgmalli/error (ex-data e)) e))))
 
-(deftest a-broken-query-returns-data-or-throws-ex-info
+(deftest a-broken-query-returns-data-or-throws-pgmallis-error
   (let [opts {:schema "sample"}
         keys-opts (assoc opts :jdbc {:return-keys ["id"]})
         fs {'check #(:problems (h/analyze registry % opts)) 'arg-types #(:args (h/analyze registry % opts))
@@ -52,7 +55,7 @@
           (str "seed " seed ", case " (:failing-size result) ", shrunk to\n  " (pr-str q) "\n"
                (apply str (for [[n f] fs :let [e (crash f q)] :when e]
                             (str "  h/" n ": " (.getName (class e)) " " (ex-message e) "\n    at " (or (first (filter #(.startsWith (.getClassName ^StackTraceElement %) "pgmalli") (.getStackTrace e))) (first (.getStackTrace e))) "\n")))
-               "  " (ts/rerun #'a-broken-query-returns-data-or-throws-ex-info seed))))))
+               "  " (ts/rerun #'a-broken-query-returns-data-or-throws-pgmallis-error seed))))))
 
 (deftest a-registry-that-is-none-is-said-so
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry" (:problems (h/analyze "public" {:select [:id] :from [:users]}))))

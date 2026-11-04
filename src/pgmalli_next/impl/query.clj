@@ -81,7 +81,7 @@
     registry
     (let [schemas (shape/schemas-of registry)
           [read r] @last-read
-          r (if (identical? read schemas)
+          r (if (and r (identical? read schemas))
               r
               (let [r {::schemas schemas ::versions (versions schemas)}
                     r (assoc r
@@ -213,7 +213,7 @@
   [registry item chain opts]
   (let [[a b] (if (vector? item) item [item])
         [f ordinality? al] (if (and (vector? a) (= :with-ordinality (first a))) [(second a) true (get a 2)] [a false b])
-        [al listed] (if (and (vector? al) (map? (second al))) [(first al) (:columns (second al))] [al nil])
+        [al listed] (if (and (vector? al) (map? (second al))) [(first al) (syntax/listed-columns (second al))] [al nil])
         [kind n args :as parts] (when (vector? f) (syntax/call-parts f))
         renamed (fn [cs] (vec (map-indexed (fn [i [c s]] [(if (< i (count listed)) (syntax/folded (name (nth listed i))) c) s]) cs)))
         populated (when (and (not ordinality?) (or (nil? listed) (sequential? listed))) (populate-call registry chain f opts))]

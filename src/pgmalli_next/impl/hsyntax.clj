@@ -146,6 +146,13 @@
 
 (defn alias? [x] (or (keyword? x) (string? x)))
 
+(defn listed-columns
+  "The columns the options map of an alias lists ([:v {:columns [:id :n]}]), as written; nil for
+   none, or a list of anything but names, which no SQL is written of."
+  [m]
+  (let [cs (when (map? m) (:columns m))]
+    (when (and (sequential? cs) (every? #(or (keyword? %) (string? %)) cs)) cs)))
+
 (defn table-ref
   "[table alias written columns] of a :from / join / target item: the table's qualified name,
    its alias, the name as written (nil when qualified by a schema), and the columns an alias
@@ -162,7 +169,7 @@
           ;; [:alias {:columns [...]}]; a column definition list ([:alias [:raw "(a int)"]]) names
           ;; no column read here
           [b listed] (if (and (vector? b) (alias? (first b)) (or (map? (second b)) (vector? (second b))))
-                       [(first b) (let [cs (:columns (second b))] (when (and (sequential? cs) (every? #(or (keyword? %) (string? %)) cs)) (mapv name cs)))]
+                       [(first b) (some->> (listed-columns (second b)) (mapv name))]
                        [b nil])
           ;; HoneySQL quotes a string alias: it is as written
           alias-name #(if (string? %) % (folded (name %)))]
@@ -246,7 +253,7 @@
   (when (unnest-of-arguments? item)
     (let [ps (rest (first item))
           b (second item)
-          cs (cond (and (vector? b) (map? (second b))) (:columns (second b))
+          cs (cond (and (vector? b) (map? (second b))) (listed-columns (second b))
                    (and (alias? b) (= 1 (count ps))) [b])]
       (when (and (seq ps) (sequential? cs))
         (map (fn [p c] [(folded (name c)) p]) ps cs)))))
@@ -275,7 +282,7 @@
    no statement."
   [body name]
   (let [found (for [[w k i e] (with-entries body) :when (= name (cte-name e))]
-                [(second e) (subvec w 0 i) (when (vector? (first e)) (:columns (second (first e)))) k])]
+                [(second e) (subvec w 0 i) (when (vector? (first e)) (listed-columns (second (first e)))) k])]
     (when-let [[[stmt before listed k]] (when (= 1 (count found)) found)]
       (let [set-op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
             ;; recursive when a member reads the CTE itself; otherwise its members resolve together

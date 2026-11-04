@@ -561,12 +561,21 @@
       (is (re-find says (str (ex-message e))) (pr-str o))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o)))))
 
+(deftest a-schema-the-registry-lacks-is-an-error-however-the-table-is-named
+  (doseq [t [:users :pg.sample/users]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"the registry holds no schema \"nope\"" (h/values-schema registry t {:schema "nope"})) (pr-str t))))
+
 (deftest a-written-table-is-named-as-postgresql-reads-it
   (is (= (h/values-schema registry :users opts) (h/values-schema registry :Users opts) (h/values-schema registry :sample.USERS opts))
       "an unquoted name folded")
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes a table as :table or :schema.table; :sample.users.x names more"
                                 (h/set-schema registry :sample.users.x opts)))]
     (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))))
+
+(deftest no-registry-is-said-so-whatever-was-read-before
+  (reset! @#'query/last-read nil)
+  (is (= :pgmalli.error/not-a-registry
+         (:pgmalli/error (ex-data (is (thrown? clojure.lang.ExceptionInfo (h/analyze nil {:select [:id] :from [:users]}))))))))
 
 (deftest a-registry-where-the-query-goes-names-the-order
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes the registry first, then the query"

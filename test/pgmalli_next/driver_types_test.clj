@@ -116,3 +116,10 @@
         (is (m/validate (h/set-schema registry :types o) {:c_jsonb v :c_json v} {:registry registry}))
         (is (m/validate (:v (:args (h/analyze registry {:update :types :set {:c_jsonb :?v} :where [:= :id 2]} o))) v {:registry registry}))))))
 
+
+(deftest a-schema-read-failing-over-jdbc-says-what-pgmalli-needs
+  (when *db*
+    (let [e (is (thrown? clojure.lang.ExceptionInfo
+                         ((requiring-resolve 'pgmalli-next.impl.ir-jdbc/out) {:datasource (datasource)} "SELECT no_such_column FROM pg_class")))]
+      (is (= :pgmalli.error/fault (:pgmalli/error (ex-data e))))
+      (is (re-find #"PostgreSQL 16 or later and a user that can read pg_catalog" (ex-message e))))))

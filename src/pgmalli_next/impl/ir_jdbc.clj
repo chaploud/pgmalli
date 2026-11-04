@@ -57,6 +57,11 @@
       (let [doc (try (with-open [st (.createStatement conn)] (document st sql))
                      (catch Throwable e
                        (try (restore) (catch Throwable x (.addSuppressed e x)))
-                       (throw e)))]
+                       (if (instance? java.sql.SQLException e)
+                         (error/fail! :pgmalli.error/fault
+                                      (str "reading the schema over JDBC failed: " (ex-message (without-urls e))
+                                           "; pgmalli needs PostgreSQL 16 or later and a user that can read pg_catalog")
+                                      {} (without-urls e))
+                         (throw e))))]
         (restore)
         doc))))
