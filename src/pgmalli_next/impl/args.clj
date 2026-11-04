@@ -116,11 +116,15 @@
     (if (next all) (into [:or] all) (first all))))
 
 (defn- untyped-type-values
-  "The values of a type whose own pgmalli does not type (interval, inet), s its schema, held in
-   context: a PGobject, and those of each type sent that holds? holds (a LocalTime to interval)."
+  "The values of a type whose own pgmalli does not type (interval, inet), s its schema: a
+   PGobject, and the values of each type sent that accept/holds? says the type holds in context
+   (a LocalTime for interval)."
   [registry s context opts]
-  (let [t (query/slot-type registry s)]
-    (distinct (cons jdbc/pg-object (for [[x p] (jdbc/write-rows opts false)
+  (let [t (query/slot-type registry s)
+        pg-object (shape/merge-props jdbc/pg-object
+                                     {:error/message (str "should be a PGobject of type " t " (a String goes as varchar, which " t
+                                                          " takes not), or the argument cast in the query: [:cast ?x :" (types/short-name t) "]")})]
+    (distinct (cons pg-object (for [[x p] (jdbc/write-rows opts false)
                                          :when (and (string? p) (not= p t) (accept/holds? t p context))
                                          a (shape/alternatives x)]
                                      (unlabel a))))))
@@ -172,8 +176,9 @@
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
-      ;; of a type whose values pgmalli does not type and pgjdbc reads as a PGobject (a geometric, network
-      ;; or timespan one: inet, interval), that and what converts to it, not any value
+      ;; compared, assigned or a function's argument (:call is :compare here), of a type whose values
+      ;; pgmalli does not type and pgjdbc reads as a PGobject (a geometric, network or timespan one:
+      ;; inet, interval), that and what converts to it, not any value
       (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T"} (types/category t)))
       (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
@@ -327,8 +332,6 @@
   (let [s (shape/non-null s)
         p (:pg/type (shape/column-props s))]
     (cond (types/json? p) (query/driver-schema registry jdbc/column-read-type s opts)
-          ;; a JSON array element by element; a JSON string through the array type's input ("{1,2}"),
-          ;; as any type's input reads a String's text
           ;; the array input's text is in braces, after its dimensions where it names them ([1:2]={1,2})
           (types/element p) [:or [:sequential (query/nullable (json-field-type registry (last s) opts))]
                              [:re {:error/message "should be an array's text, {1,2}"} #"(?s)^\s*(\[[^\]]*\]\s*=\s*)?\{.*\}\s*$"]]

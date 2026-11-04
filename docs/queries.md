@@ -117,7 +117,7 @@ An INSERT or UPDATE is checked against what PostgreSQL refuses to write:
 ```
 
 NULL is any of `nil`, `:null` (in any case), `[:inline nil]` and `[:lift nil]`; a `:null` the
-format quotes (`:quoted`, a `:dialect`) is a column named `null`. HoneySQL also writes NULL
+format quotes (`:quoted`, a `:dialect`, a `:quoted-always` matching it) is a column named `null`. HoneySQL also writes NULL
 for a key one map of `:values` lacks and another has. `users.status`
 has a default, but the first row below gets NULL:
 
@@ -183,7 +183,8 @@ An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one 
 (no use of it is one the table above types: an argument of a function the registry lacks, or of
 a polymorphic one under `:inline`, is one) and `:type` (it is compared with or cast to what pgmalli knows no type
 of: the result of a function the registry lacks, a column of a table it lacks, an extension's
-type). An argument where a value of a type pgmalli does not type goes, compared or assigned,
+type). An argument where a value of a type pgmalli does not type goes, compared, assigned or as a
+function's argument,
 takes a `PGobject` where pgjdbc reads one (a geometric, network or timespan type: `inet`,
 `interval`), which it sends as the type it names, and what converts to the type implicitly (a
 `LocalTime` to `interval`); otherwise (cast, `json`, `xml`, `money`) it is `[:any {:pg/type ...}]`,
@@ -528,9 +529,9 @@ alias lists).
 
 `h/analyze`, `h/query-schema`, `h/values-schema` and `h/set-schema` take these options; an option a
 function does not read is an error. pgmalli reads what you pass to
-next.jdbc and `sql/format` as you pass it. HoneySQL's global settings (`set-dialect!`,
-`set-options!`) are not reliably read: a name is read once as they stand then; pass them in
-`:format`.
+next.jdbc and `sql/format` as you pass it. pgmalli caches how HoneySQL writes a name for each
+`:format`, so a global setting (`set-dialect!`, `set-options!`) changed after the first analysis
+is not seen; pass them in `:format`.
 
 | option | for |
 |---|---|

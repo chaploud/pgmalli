@@ -642,14 +642,19 @@
   "Clauses that change no table, column or type analyze reads, whose expressions it reads all the same."
   #{:do-nothing :on-constraint :for :lock :fetch :window :partition-by :frame})
 
+(defn unread-clause?
+  "Whether analyze neither reads clause k nor ignores it (an :unread-clause)."
+  [k]
+  (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k))))
+
 (defn under-unread-clause?
   "Whether the statement at path of body (:in's: a clause's key, an index into a vector, or into
    a map's entries) sits in a clause analyze does not read (MERGE's :when-matched): a statement's
-   key checked against read-clauses, a clause's value (a :set map, a row) walked into."
+   key checked with unread-clause?, a clause's value (a :set map, a row) walked into."
   [body path]
   (loop [node body [i & more] path]
     ;; the body is a statement whatever its clauses (MERGE INTO's none pgmalli reads)
-    (let [clause? #(and (or (identical? node body) (statement? node)) (keyword? %) (not (read-clauses %)) (not (ignored-clauses %)))]
+    (let [clause? #(and (or (identical? node body) (statement? node)) (unread-clause? %))]
       (cond (nil? i) false
             (and (map? node) (keyword? i)) (if (clause? i) true (recur (get node i) more))
             (and (map? node) (int? i)) (let [[k :as e] (nth (seq node) i nil)] (if (clause? k) true (recur e more)))
@@ -658,7 +663,7 @@
 
 (defn positions
   "The expression positions of statement stmt, one read for the problems and the arguments' types: {:x node
-   :clause k :chain scopes :negated? bool :top? bool} for every node of every clause sql/format writes, in
+   :clause k :chain scopes :negated? bool :top? bool :item? bool} for every node of every clause sql/format writes, in
    its order, as a walk of each clause's value meets them, not descending into the statements nested in it, scopes the chain clause-parts says the node is read in,
    negated? under an odd number of :not through :and and :or alone ([:not [:= :a 1]] is a <> 1;
    CASE or a function's argument under NOT is not negated), top? for the clause's value itself
@@ -814,12 +819,10 @@
                (if-let [[_ q] (re-matches #"[\"`\[](.*)[\"`\]]" n)] [q true] [(str/lower-case n) false])))))
 
 (defn quoted?
-  "Whether sql/format's options quote a name, as the loaded HoneySQL writes one; where it formats nothing under them (a dialect of a later HoneySQL),
-   under :quoted, or a :dialect other than :nrql unless :quoted false."
-  [{:keys [quoted dialect] :as format}]
-  (if-let [[_ q?] (formatted-name :a format false)]
-    q?
-    (if (contains? format :quoted) quoted (and (contains? format :dialect) (not= :nrql dialect)))))
+  "Whether sql/format's options quote a name, as the loaded HoneySQL writes one (:quoted where
+   it formats nothing, which options checks keep from happening)."
+  [format]
+  (if-let [[_ q?] (formatted-name :a format false)] q? (boolean (:quoted format))))
 
 (defn- sql-word?
   "Whether HoneySQL writes keyword v as the SQL word w (lower-case; v of any case) where the

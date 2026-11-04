@@ -13,6 +13,7 @@
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
+            [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.sample :refer [registry]]))
 
 (def opts {:schema "sample"})
@@ -1464,8 +1465,8 @@
         check #(:problems (h/analyze reg %1 (merge {:schema "public"} %2)))]
     (testing "a type of types but the string ones"
       (is (= [{:kind :uncast-string :column :born :value "2020-01-01" :type "date"}] (check {:select [:id] :from [:hosts] :where [:= :born "2020-01-01"]} {})))
-      (is (= [{:kind :uncast-string :column :seen :value "2020-01-01" :type "timestamptz"}
-              {:kind :uncast-string :column :seen :value "2021-01-01" :type "timestamptz"}]
+      (is (= [{:kind :uncast-string :column :seen :value "2020-01-01" :type "timestamp with time zone"}
+              {:kind :uncast-string :column :seen :value "2021-01-01" :type "timestamp with time zone"}]
              (check {:select [:id] :from [:hosts] :where [:between :seen "2020-01-01" "2021-01-01"]} {})))
       (is (= [{:kind :uncast-string :column :id :value "1" :type "integer"}] (check {:update :hosts :set {:id "1"}} {})))
       (is (= [{:kind :uncast-string :column :paths :value "{a}" :type "text[]"}] (check {:update :hosts :set {:paths "{a}"}} {})) "an array")
@@ -2333,7 +2334,8 @@
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
-          :d [:maybe [:or jdbc/pg-object :time/local-time]]
+          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval takes not), or the argument cast in the query: [:cast ?x :interval]"})
+                      :time/local-time]]
           :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
                             [:< [:+ :closed_at :?d] :current_timestamp]
@@ -2625,7 +2627,7 @@
   (let [kinds #(set (map (juxt :kind :column) (check %)))]
     (is (contains? (kinds {:select [:*] :from [:users] :join [[:groups :g] [:using :nope]]}) [:unknown-column :nope])
         "column nope specified in USING clause does not exist")
-    (is (= [{:kind :unknown-column :column :name :clause :using :side :left}] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :name]]}))
+    (is (= [{:kind :unknown-column :column :name :clause :using :side :left :table "sample.groups"}] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :name]]}))
         "users lacks name")
     (is (= [] (check {:select [:*] :from [:users] :join [[:groups :g] [:using :id]]})))
     (is (contains? (kinds {:insert-into :users :values [{:score 1 :group_id 1}] :on-conflict [:nope] :do-nothing true}) [:unknown-column :nope]))
@@ -2726,7 +2728,7 @@
   (let [v (h/values-schema registry :users opts)]
     (is (m/validate v {:group_id 1 :score 1 :nick :null} {:registry registry}) "HoneySQL writes VALUES (..., null)")
     (is (= [] (check {:insert-into :users :values [{:group_id 1 :score 1 :nick :null}]}))))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: :users$"
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^values-schema: unknown table sample.usres; did you mean: sample.users$"
                         (h/values-schema registry :usres opts))))
 
 (deftest an-sql-word-is-a-value-as-honeysql-writes-it-under-the-format

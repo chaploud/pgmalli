@@ -115,6 +115,25 @@
 
 (defn table-columns [registry table] ((::table-columns registry) table))
 
+(defn table-suggestions
+  "Up to three tables or views of the registry (\"schema.table\") a table it lacks may mean:
+   one of its name in another schema first, then those spelled close."
+  [registry table]
+  (let [known (for [[k v] (::schemas registry) :when (and (keyword? k) (shape/read-row? v))]
+                (str/join "." (shape/schema-and-name k)))
+        same-name (sort (filter #(= (syntax/table-name %) (syntax/table-name table)) known))]
+    (some->> (seq (take 3 (distinct (concat same-name (error/suggestions table known 3))))) vec)))
+
+(defn unknown-table-text
+  "What an :unknown-table of table says: where a table of its name is, or what is spelled close."
+  [table did-you-mean]
+  (let [elsewhere (first (filter #(= (syntax/table-name %) (syntax/table-name table)) did-you-mean))]
+    (str "unknown table " table
+         (cond elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
+                              ", or name it :" elsewhere)
+               did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
+               :else "; check its name, or :schema when it is in another schema"))))
+
 (defn unknown-table!
   "The error for table, which a registry holding no schema pgmalli generates cannot know: it
    is no registry of pgmalli-next.core/registry."
@@ -163,19 +182,13 @@
               (shape/table-key t)))]
     (when-not (contains? (::schemas registry) n)
       (unknown-table! registry (if (namespace n) (str/join "." (shape/schema-and-name n)) (clojure.core/name n)))
-      ;; a table named as HoneySQL names it: its error names tables as written so, not registry keys
+      ;; a table named as HoneySQL names it: the :unknown-table sentence analyze gives
       (when (not= n name)
-        (let [qualified? (or (namespace name) (str/includes? (clojure.core/name name) "."))
-              known (for [[k v] (::schemas registry) :when (and (keyword? k) (shape/read-row? v))
-                          :let [[sch t] (shape/schema-and-name k)] :when (or qualified? (= sch (:schema opts syntax/default-schema)))]
-                      (if qualified? (str sch "." t) t))
-              meant (error/suggest (clojure.core/name name) known)]
-          (error/fail! :pgmalli.error/unknown-schema
-                       (str what ": unknown table " (str/join "." (shape/schema-and-name n))
-                            (if meant (error/did-you-mean (keyword meant)) "; check its name, or :schema when it is in another schema"))
-                       (cond-> {:given name} meant (assoc :did-you-mean [(keyword meant)]))))))
+        (let [t (str/join "." (shape/schema-and-name n))
+              meant (table-suggestions registry t)]
+          (error/fail! :pgmalli.error/unknown-schema (str what ": " (unknown-table-text t meant))
+                       (cond-> {:given name} meant (assoc :did-you-mean meant))))))
     n))
-
 
 (defn row-name
   "The registry name of the row schema a public function (what) is given as name: a registry
@@ -456,7 +469,7 @@
                 [select {:columns columns :target (syntax/target-scope c s opts)}])]
     (for [[s c path outer] chains
           :when (not (syntax/under-unread-clause? body path))]
-      [s c path (filter #(or (syntax/read-clauses (:clause %)) (syntax/ignored-clauses (:clause %)))
+      [s c path (remove (comp syntax/unread-clause? :clause)
                         (syntax/positions s c outer (some (fn [[select f]] (when (identical? select s) f)) feeds) opts))])))
 
 (defn- labels
@@ -735,7 +748,7 @@
                                      ;; a column the left side or the right table lacks (column ... specified in USING clause does not exist)
                                      acc (cond-> acc
                                            (and (nil? earlier) (empty? holders) (every? #(get sc %) before))
-                                           (update :missing conj {:column (keyword col) :side :left})
+                                           (update :missing conj {:column (keyword col) :side :left :table (:table (get sc right))})
                                            (and (get sc right) (or (system-columns col) (not (has-column? registry (get sc right) col))))
                                            (update :missing conj {:column (keyword col) :side :right :table (:table (get sc right))}))
                                      l (cond earlier earlier

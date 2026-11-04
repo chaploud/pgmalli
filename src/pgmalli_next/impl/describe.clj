@@ -24,7 +24,8 @@
    type it is sent as, short (a Long's bigint, a byte[]'s bytea), or, one sent untyped, the type
    whose values it is (a LocalDate's date); not a predicate's name, whose ? reads as NULL."
   (reduce (fn [m [_ t s]]
-            (let [k (when s (shape/kind s))
+            ;; a schema of a form ([:vector :any], a vector sent as jsonb) by the form, another by its kind
+            (let [k (when s (if (vector? s) s (shape/kind s)))
                   n (if (string? t)
                       (types/short-name t)
                       (some (fn [[n e]] (when (= k (shape/kind (:schema e))) (types/short-name n))) types/types))]
@@ -52,6 +53,8 @@
         head (when (vector? s) (first s))
         children (when (vector? s) (shape/entries s))]
     (cond
+      ;; a class's schema of a form ([:map-of :some :any], sent as jsonb)
+      (and (vector? s) (class-names s)) (class-names s)
       ;; a name the registry defines as data; malli's own types (:int, :any) are their names
       ;; a recursive schema: a name already being described is the name
       (and (or (keyword? s) (string? s)) (vector? (get schemas s)))

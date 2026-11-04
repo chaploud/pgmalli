@@ -102,10 +102,11 @@
         assigned (when (seq target) (concat (map #(or (syntax/field-column %) %) (filter syntax/column-keyword? (:columns (syntax/insert-parts stmt))))
                                             (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))
         ;; a target a.b as written (writes has it as its column a): field b of a column a to PostgreSQL
-        dotted (into {} (for [t (concat (:columns (syntax/insert-parts stmt)) (let [st (:set stmt)] (when (map? st) (keys st)))
-                                        (let [d (:do-update-set stmt)] (when (map? d) (keys d))))
+        dotted (into {} (for [[clause ts] [[:columns (:columns (syntax/insert-parts stmt))] [:set (let [st (:set stmt)] (when (map? st) (keys st)))]
+                                           [:do-update-set (let [d (:do-update-set stmt)] (when (map? d) (keys d)))]]
+                              t ts
                               :let [c (syntax/field-column t)] :when c]
-                          [c t]))]
+                          [c [t clause]]))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (syntax/select-parts % opts)) (syntax/selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
                                         (for [[_ c _ chain] (syntax/comparison-sides ps) :when (syntax/column-keyword? c format)] [c chain])
@@ -113,20 +114,16 @@
                                               :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
                                                          (syntax/column-keyword? (second x) format))]
                                           [(second x) chain])
-                                        ;; a keyword assigned in SET is a column the statement sees
-                                        ;; a column a function's or an operator's argument names ([:upper :email], [:+ :score 1])
-                                        ;; not an item of a list ([:nick :n] in :select is a column and its alias),
-                                        ;; but of GROUP BY and PARTITION BY, whose items are expressions
+                                        ;; a column a call's argument names ([:upper :email]), in a clause of expressions;
+                                        ;; an item of SELECT, ORDER BY or RETURNING is [expression alias|direction], no call
                                         (for [{:keys [x chain item? clause]} (syntax/expression-nodes ps)
-                                              ;; in a clause of expressions (not FROM's [:users :u], ON CONFLICT's target,
-                                              ;; TRUNCATE's options), not an item of a list of [expression alias] or
-                                              ;; [expression direction]
                                               :when (and (expression-clauses clause) (not (and item? (#{:select :select-distinct :select-distinct-on :order-by :returning} clause))))
                                               :let [[kind _ args] (when-not (syntax/comparison? x) (syntax/call-parts x))]
                                               :when kind
                                               a args
                                               :when (syntax/column-keyword? a format)]
                                           [a chain])
+                                        ;; a keyword assigned in SET is a column the statement sees
                                         (for [{:keys [x chain clause]} (syntax/assignments ps)
                                               :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x format))]
                                           [x chain])
@@ -146,8 +143,13 @@
             qualifier (assoc :qualifier qualifier)
             near (assoc :did-you-mean near)
             ;; a target a.b whose a is the table or its alias: field b of a column a to PostgreSQL
-            (and (identical? scope target) (dotted col) (whole-row? scope col format)) (assoc :column (dotted col) :clause :set
-                                                                :did-you-mean [(keyword (last (str/split (name (dotted col)) #"\.")))])
+            (and (identical? scope target) (dotted col) (whole-row? scope col format))
+            (-> (dissoc :did-you-mean)
+                (merge (let [[t clause] (dotted col)
+                             field (last (str/split (name t) #"\."))
+                             table (some #(when (map? %) (:table (get % (second (syntax/split-column col format))))) (syntax/chain scope))
+                             meant (if (contains? (query/table-columns registry table) field) [(keyword field)] (near-in registry table field))]
+                         (cond-> {:column t :clause clause} meant (assoc :did-you-mean meant)))))
             (and (syntax/quoted? format) (not= (syntax/split-column col format) (syntax/split-column col nil))
                  (some? (query/resolve-column registry scope (keyword (str/join "." (remove nil? (syntax/split-column col nil)))))))
             (assoc :quoted true)))))))
@@ -224,13 +226,12 @@
    domain over a base type among them)."
   [registry s]
   (let [p (shape/column-props s)
-        e (types/entry (shape/type-name p))
-        spelt types/short-name]
+        e (types/entry (shape/type-name p))]
     (or (query/enum-type registry s)
         (when e
-          (cond (types/element (:pg/type p)) (types/array-of (spelt (:name e)))
-                (:cast e) (spelt (name (:cast e)))
-                (not= :string (:schema e)) (spelt (:name e)))))))
+          (cond (types/element (:pg/type p)) (types/array-of (:name e))
+                (:cast e) (name (:cast e))
+                (not= :string (:schema e)) (:name e))))))
 
 (defn- takes-string?
   "Whether a column of schema s takes a string sent as one of types, compared or assigned; nil
@@ -301,26 +302,25 @@
                 (str/join "." (shape/schema-and-name k)))
         quoted? (syntax/quoted? (:format opts))]
     (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
-                       :let [same-name (sort (filter #(= (syntax/table-name %) (syntax/table-name table)) known))
-                             meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
+                       :let [meant (query/table-suggestions registry table)]]
                    (cond-> {:kind :unknown-table :table table}
-                     meant (assoc :did-you-mean (vec meant))
+                     meant (assoc :did-you-mean meant)
                      ;; the name folded is one the registry holds: what to write instead
                      (and quoted? (not= table (syntax/folded table)) (some #{(syntax/folded table)} known)) (assoc :quoted true)))
                  (column-problems registry scopes stmt ps opts)
                  ;; a column both sides lack is one problem
                  (for [[column ms] (group-by :column (query/using-missing registry stmt (first scopes) opts))
                        :let [right (some :table ms)
-                             meant (some->> right (#(near-in registry % (name column))))]]
-                   (cond-> {:kind :unknown-column :column column :clause :using
-                            :side (if (next ms) :both (:side (first ms)))}
+                             side (if (next ms) :both (:side (first ms)))
+                             left (for [[_ {:keys [table]}] (first scopes) :when (and table (not= table right))] table)
+                             meant (some->> (concat (when (not= :left side) [right]) (when (not= :right side) left))
+                                            (keep identity) (mapcat #(near-in registry % (name column))) distinct (take 3) seq vec)]]
+                   (cond-> {:kind :unknown-column :column column :clause :using :side side}
                      right (assoc :table right)
                      meant (assoc :did-you-mean meant)))
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
                  (string-problems registry ps opts)))))
-
-
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
@@ -341,7 +341,7 @@
            ;; the query itself is clauses, however unknown ({:selct [:id]})
            :when (and (map? m) (seq m) (not (rows m)) (or (identical? m body) (syntax/statement? m) (every? clauses (keys m))))
            k (keys m)
-           :when (and (keyword? k) (not (syntax/read-clauses k)) (not (syntax/ignored-clauses k)))
+           :when (syntax/unread-clause? k)
            :let [meant (when-not (contains? clauses k)
                          (error/suggest k (concat syntax/read-clauses syntax/ignored-clauses clauses)))]]
        (cond-> {:kind :unread-clause :clause k} meant (assoc :did-you-mean [meant]))))))

@@ -242,14 +242,10 @@
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
   {:unknown-table (fn [{:keys [table did-you-mean quoted]}]
-                   (let [elsewhere (first (filter #(= (syntax/table-name %) (syntax/table-name table)) did-you-mean))]
-                     (str "unknown table " table
-                          (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the table "
-                                            (syntax/folded table) " write :" (syntax/folded (syntax/table-name table)))
-                                elsewhere (str "; " elsewhere " exists; pass {:schema " (pr-str (subs elsewhere 0 (str/last-index-of elsewhere "."))) "}"
-                                               ", or name it :" elsewhere)
-                                did-you-mean (error/did-you-mean (str/join " or " did-you-mean))
-                                :else "; check its name, or :schema when it is in another schema"))))
+                   (if quoted
+                     (str "unknown table " table "; under :quoted, PostgreSQL looks the name up as written: for the table "
+                          (syntax/folded table) " write :" (syntax/folded (syntax/table-name table)))
+                     (query/unknown-table-text table did-you-mean)))
    :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint]}]
                      (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean))))]
                        (str "unknown column " (column-name column)
@@ -266,8 +262,10 @@
                               :values (str " in :values" (when target (str " for " (column-name target)))
                                            ": HoneySQL writes a keyword there as a column; write the value itself"
                                            " ([:lift " column "] for an enum label, a string for text)")
-                              :set (str ": PostgreSQL reads an assigned " (column-name column) " as a field of a column "
-                                        (first (str/split (column-name column) #"\.")) "; assign it unqualified: " (first did-you-mean))
+                              (:set :do-update-set :columns)
+                              (str ": PostgreSQL reads an assigned " (column-name column) " as a field of a column "
+                                   (first (str/split (column-name column) #"\.")) "; assign "
+                                   (if did-you-mean (str "it unqualified: " (column-name (first did-you-mean))) "the column unqualified"))
                               (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
                                                 (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
                                     meant meant
@@ -297,7 +295,7 @@
                         (let [x (keyword (str "?" (name arg)))]
                           (str "argument " arg " goes to " function ", which takes its type from the value sent, but every value"
                                " its other uses take is sent untyped (a LocalDate, a keyword label) or is nil, which PostgreSQL"
-                               " cannot type there (could not determine data type of parameter, or polymorphic type);"
+                               " cannot type there (could not determine data type of parameter $n, or could not determine polymorphic type);"
                                " cast it in the query: " (if type (cast-form x type) (str "[:cast " x " <the type meant>]")))))})
 
 (defn humanize
@@ -312,7 +310,7 @@
                       (cond (and (map? problems) (contains? problems :problems)) "pass (:problems result), not analyze's result"
                             (and (vector? problems) (= :=> (first problems))) "pass (:pgmalli/problems (m/properties schema)), not query-schema's schema"
                             (map? problems) "got one map; pass a vector of them"
-                            :else (str "got " (type problems))))
+                            :else (str "got " (pr-str (type problems)))))
                  {:given (type problems)}))
   (mapv (fn [{:keys [kind in var] :as p}]
           (str (when var (str (symbol var) ": "))
