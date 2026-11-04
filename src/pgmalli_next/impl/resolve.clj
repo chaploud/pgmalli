@@ -185,6 +185,14 @@
         best (reduce max -1 (map #(exact-matches % ins) (filter #(viable? % ins) (remove #(doubtful? % ins) cs))))]
     (boolean (some #(>= (exact-matches % ins) best) ds))))
 
+
+(defn- contenders
+  "The viable candidates of cs for ins pgmalli can judge (doubtful ones that lose at step 4.c
+   left out); nil where a doubtful one may be the one called."
+  [cs ins]
+  (when-not (in-doubt? cs ins)
+    (filter #(viable? % ins) (remove #(doubtful? % ins) cs))))
+
 (defn- chosen
   "The candidate PostgreSQL calls for ins among overloads (of one version): an exact match, the
    one viable candidate, or select's choice; for an operator of one unknown argument of two, an
@@ -196,9 +204,8 @@
                     ins)
         exact (when (not-any? unbound? exact-ins) (some #(when (= exact-ins (:decls %)) %) cs))]
     (or exact
-        (when-not (in-doubt? cs ins)
-          (let [vs (filter #(viable? % ins) (remove #(doubtful? % ins) cs))]
-            (if (next vs) (select vs ins) (first vs)))))))
+        (when-let [vs (contenders cs ins)]
+          (if (next vs) (select vs ins) (first vs))))))
 
 (defn- outcome
   "{:result type :args [type ...] :overload o} of candidate c for ins, :args the types its
@@ -253,8 +260,8 @@
        (fn [os]
          (if (some #{:free} ins)
            (let [cs (candidates os (count ins))
-                 rs (distinct (for [c (remove #(doubtful? % ins) cs) :when (viable? c ins)] (outcome c ins)))]
-             (when (and (= 1 (count rs)) (not (in-doubt? cs ins))) (first rs)))
+                 rs (distinct (map #(outcome % ins) (contenders cs ins)))]
+             (when (= 1 (count rs)) (first rs)))
            (let [c (chosen os ins operator?)]
              ;; f(x) of a type's name f, no f taking x as it is, is a cast to the type
              (when-not (and (not operator?) (= 1 (count ins)) (type-name? n) (not= ins (:decls c)))
@@ -287,10 +294,9 @@
      os
      (fn [os]
        (let [cs (candidates os (count ins))
-             ts (distinct (for [c (remove #(doubtful? % ins) cs) :when (viable? c ins)]
+             ts (distinct (for [c (contenders cs ins)]
                             (when-not (:ambiguous c) (bound (nth (:decls c) i) (bind (:decls c) ins)))))]
-         (when (and (seq ts) (every? #(and (string? %) (not (polymorphic %)) (not= "\"any\"" %)) ts)
-                    (not (in-doubt? cs ins)))
+         (when (and (seq ts) (every? #(and (string? %) (not (polymorphic %)) (not= "\"any\"" %)) ts))
            (set ts)))))))
 
 (defn untyped-refused?
