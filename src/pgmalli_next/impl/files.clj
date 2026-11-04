@@ -38,10 +38,10 @@
 
 ;; a case-insensitive file system (macOS, Windows) keeps one of "public" and "Public"
 (defn- distinct-files? [ss]
-  (apply distinct? (map str/lower-case ss)))
+  (or (not (sequential? ss)) (empty? ss) (apply distinct? (map str/lower-case ss))))
 
 (def config-schema
-  [:map {:closed true}
+  [:map {:closed true :pgmalli/not-a-map "should be a map, such as {:schemas [\"public\"]} (README.md#installation)"}
    [:schemas {:optional true}
     [:and
      [:sequential {:min 1 :error/message "should be a vector of schema names, such as [\"public\"]"}
@@ -49,7 +49,7 @@
      [:fn {:error/message "should not hold two names that differ only in case: their files would be one on a case-insensitive file system"} distinct-files?]]]
    [:out-dir {:optional true} :string]
    [:overrides {:optional true} [:map-of [:or :string :keyword] :any]]
-   [:db {:optional true} [:map-of :keyword :any]]])
+   [:db {:optional true} [:map-of {:error/message "should be a map: psql's keys (:host :port :dbname ...), {:jdbc-url ...} or {:datasource ds}"} :keyword :any]]])
 
 (defn config
   "Config with defaults applied. A key or value config-schema does not take is an error."

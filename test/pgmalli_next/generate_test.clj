@@ -60,6 +60,12 @@
         (is (= :pgmalli.error/not-generated (:pgmalli/error (ex-data e))) text)
         (is (re-find #"sample.edn" (ex-message e)) text)))))
 
+(deftest a-config-of-the-wrong-shape-says-the-shape
+  (doseq [[c says] [["pgmalli-next.edn" #"should be a map, such as \{:schemas"]
+                    [{:schemas []} #"\{:schemas \[\"should be a vector of schema names, such as \[\\\"public\\\"\]\"\]\}$"]
+                    [{:db "postgres://localhost/app"} #":db \[\"should be a map: psql's keys"]]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo says (files/config c)) (pr-str c))))
+
 (deftest a-schema-name-that-is-not-one-file-name-in-out-dir-is-an-error
   (doseq [schemas [["../esc"] ["a/b"] ["a\\b"] [".."] ["public" "Public"]]]
     (is (= :pgmalli.error/invalid-config

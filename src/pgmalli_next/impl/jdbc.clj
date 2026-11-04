@@ -34,8 +34,10 @@
   ([schema opts kind label]
    (if (m/validate schema (or opts {}))
      opts
-     (let [errors (clojure.walk/postwalk #(if (and (vector? %) (every? string? %)) (vec (distinct %)) %)
-                                         (me/humanize (m/explain schema opts)))
+     (let [errors (if-let [shape (when-not (or (nil? opts) (map? opts)) (:pgmalli/not-a-map (m/properties schema)))]
+                    [shape]
+                    (clojure.walk/postwalk #(if (and (vector? %) (every? string? %)) (vec (distinct %)) %)
+                                           (me/humanize (m/explain schema opts))))
            known (when (= :map (m/type schema)) (map first (m/children (m/schema schema))))
            stray (when (map? opts) (remove (set known) (keys opts)))
            suggest (some #(error/suggest % known) stray)]
@@ -53,7 +55,7 @@
 
 ;; compiled once per set of keys: malli keeps a schema's validator, and options are checked on every call
 (def ^:private options-schema
-  (memoize (fn [ks] (m/schema (into [:map {:closed true}] (map option-entries) ks)))))
+  (memoize (fn [ks] (m/schema (into [:map {:closed true :pgmalli/not-a-map "should be a map of options"}] (map option-entries) ks)))))
 
 ;;; what an application sends
 
