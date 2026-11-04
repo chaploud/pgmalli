@@ -297,3 +297,19 @@
       (is (= (get-in (h/analyze reg {:select [[[:cast :?xs [:raw "bigint[]"]] :x]]}) [:args :xs])
              (get-in (h/analyze reg (star :x "bigint[]")) [:args :xs]))
           "into a column of another type, the cast's type"))))
+
+(deftest an-aggregate-anywhere-in-a-select-without-group-by-makes-one-row-which-having-may-drop
+  (when *db*
+    (let [reg (registry)]
+      (doseq [[q rows n] [[{:select [[[:coalesce [:sum :amount] 0] :s]] :from [:accounts] :where [:= :group_id 1]} {:min 1 :max 1} 1]
+                          [{:select [[[:+ [:sum :amount] 1] :s]] :from [:accounts]} {:min 1 :max 1} 1]
+                          [{:select [[[:case [:> [:count :*] 0] "some" :else "none"] :c]] :from [:accounts]} {:min 1 :max 1} 1]
+                          [{:select [[[:cast [:count :*] :int] :n]] :from [:accounts]} {:min 1 :max 1} 1]
+                          [{:select [[[:count :*] :n]] :from [:accounts] :having [:> [:count :*] 5]} {:min 0 :max 1} 0]
+                          [{:select [[[:count :*] :n]] :from [:accounts] :having [:> [:count :*] 0]} {:min 0 :max 1} 1]
+                          [{:select [[[:over [[:count :*] {} :w]]]] :from [:accounts]} nil 2]
+                          [{:select [:id [{:select [[[:count :*]]] :from [:uq]} :c]] :from [:accounts]} nil 2]
+                          [{:select [[[:count :*] :n] [[:generate_series 1 3] :g]] :from [:accounts]} nil 3]]]
+        (testing (pr-str q)
+          (is (= rows (:rows (h/analyze reg q))))
+          (is (= n (count (runs! q {} {})))))))))

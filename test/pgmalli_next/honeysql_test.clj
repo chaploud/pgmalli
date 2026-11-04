@@ -1747,6 +1747,22 @@
            (row q))
         "parsed, an object or an array, which may be NULL: the catalog does not say when a function returns NULL")))
 
+(deftest an-aggregate-anywhere-in-a-select-without-group-by-makes-one-row-which-having-may-drop
+  (let [rows #(:rows (h/analyze registry % opts))]
+    (doseq [s [[[:coalesce [:sum :score] 0] :s] [[:+ [:sum :score] 1] :s] [[:case [:> [:count :*] 0] 1 :else 0] :c]
+               [[:cast [:count :*] :int] :n] [[:greatest [:max :score] 0] :m] [[:nullif :%count.* 0] :n]]]
+      (is (= {:min 1 :max 1} (rows {:select [s] :from [:users] :where [:= :group_id 1]})) (pr-str s)))
+    (is (= {:min 1 :max 1} (rows {:select [[1 :x]] :from [:users] :order-by [[[:count :*]]]})) "in ORDER BY too")
+    (is (= {:min 0 :max 1} (rows {:select [[[:count :*] :n]] :from [:users] :having [:> [:count :*] 1]})))
+    (is (= {:min 0 :max 1} (rows {:select [[1 :x]] :from [:users] :having true})) "HAVING alone makes one group")
+    (is (= {:min 0 :max 1} (rows {:select [[[:count :*] :n]] :from [:users] :offset 1})))
+    (is (= {:min 0 :max 0} (rows {:select [[[:coalesce [:sum :score] 0] :s]] :from [:users] :limit 0})))
+    (is (= {:min 0 :max 1} (rows {:insert-into [[:users [:score]]] :select [[[:count :*]]] :from [:groups] :returning [:id]}))
+        "a trigger, a rule or ON CONFLICT may skip the row a write's SELECT gives")
+    (is (nil? (rows {:select [[[:over [[:count :*] {} :w]]]] :from [:users]})) "a window call is no aggregate of the query")
+    (is (nil? (rows {:select [:id [{:select [[[:count :*]]] :from [:groups]} :c]] :from [:users]})) "nor one in a subquery")
+    (is (nil? (rows {:select [[[:count :*] :n] [[:generate_series 1 3] :g]] :from [:users]})) "a set-returning function repeats the row")))
+
 (deftest a-row-count-is-told-only-where-nothing-may-change-it
   (let [ret #(last (h/query-schema registry [:db] % (merge opts %2)))
         counted? #(map? (second (ret % {})))]

@@ -2638,18 +2638,29 @@
         join-keys))
 
 (defn- plain-value?
-  "Whether x yields one value per row: a column, a constant, DEFAULT, a subquery, EXISTS, a cast of one, or a call of
-   them to an operator or a function that returns no set, of pg_catalog or a generated schema
-   (generate_series and unnest return more rows; a function the registry has none of may)."
+  "Whether x yields one value per row: a column, a constant, DEFAULT, a subquery, EXISTS, a
+   cast, CASE, coalesce, greatest, least or nullif of them, or a call of them to an operator or a
+   function that returns no set, of pg_catalog or a generated schema (generate_series and unnest
+   return more rows; a function the registry has none of may)."
   [registry opts x]
   ;; :%f.a is HoneySQL's f(a)
   (or (and (keyword? x) (not (shorthand-fn x))) (constant? x) (nil? x) (= [:default] x)
       ;; a scalar subquery is one value, or an error where it gives more rows
       (map? x) (and (vector? x) (#{:exists :not-exists} (first x)) (map? (second x)))
       (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? registry opts (second x)))
+      ;; grammar, not functions of pg_catalog
+      (and (vector? x) (or (#{:case :case-expr} (first x)) (common-type-functions (called x)) (= "nullif" (called x)))
+           (every? #(plain-value? registry opts %) (rest x)))
       (boolean (when-let [[kind _ args :as parts] (call-parts x)]
                  (and (or (= :operators kind) (not (resolve/set-returning? (reached registry opts parts))))
                       (every? #(plain-value? registry opts %) args))))))
+
+(defn- aggregated?
+  "Whether x holds a call of an aggregate of its own level: one in a subquery, or in a window
+   call, whose own level is not told here, is not counted."
+  [registry opts x]
+  (boolean (or (when-let [parts (call-parts x)] (and (= :functions (first parts)) (resolve/aggregate? (reached registry opts parts))))
+               (and (vector? x) (not= :over (first x)) (some #(aggregated? registry opts %) x)))))
 
 (defn- unique-row?
   "Whether statement stmt on the one table of targets (no CTE of its name, no table inheriting it)
@@ -2678,40 +2689,40 @@
 
 (defn- row-count
   "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
-   any part may be a function that returns a set (plain-value?), it tells nothing. One of a SELECT of
-   aggregates of columns or constants alone (no GROUP BY, HAVING or OFFSET); at most one of a SELECT,
+   any part may be a function that returns a set (plain-value?), it tells nothing. One of a SELECT
+   with an aggregate of its level and no GROUP BY, at most one with HAVING; at most one of a SELECT,
    UPDATE or DELETE of one row (unique-row?), and of a SELECT without FROM; up to as many as
    :values has rows of an INSERT returning (a trigger, a rule or ON CONFLICT may skip one); at most
-   :limit, from none where a parameter or code gives the limit."
+   :limit, from none where a parameter or code gives the limit or OFFSET skips some."
   [registry stmt {:keys [schema] :as opts}]
   ;; a clause this does not read (:fetch, a set operation ...) may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)) (not (code-sources? stmt)))
     (let [write? (some #(contains? stmt %) write-keys)
           items (map bare (selected-items stmt))
           order (map bare (vectorish (:order-by stmt)))
-          aggregates-only? (every? #(when-let [parts (call-parts %)] (resolve/aggregate? (reached registry opts parts))) items)
           rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (insert-parts stmt)))) (:values stmt))
-          plain? (and (every? #(plain-value? registry opts %) (concat order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
-                      (or (every? #(plain-value? registry opts %) items)
-                          ;; aggregates over plain values
-                          (and aggregates-only? (every? (fn [i] (every? #(plain-value? registry opts %) (nth (call-parts i) 2))) items))))
+          plain? (every? #(plain-value? registry opts %) (concat items order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
           unique? (unique-row? registry stmt (if write? (write-targets stmt) (table-items stmt)) schema)
           limit (let [n (:limit stmt)] (when (and (integer? n) (<= 0 n)) n))
           ;; a limit only a parameter or code tells may be 0
           unbounded-limit? (and (contains? stmt :limit) (not limit))
-          aggregates? (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not-any? #(contains? stmt %) [:group-by :having :offset])
-                           aggregates-only?)
+          ;; HoneySQL writes no HAVING of []
+          having? (and (contains? stmt :having) (not= [] (:having stmt)))
+          ;; one group without GROUP BY: an aggregate of its level or HAVING makes it, which HAVING may drop
+          grouped? (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not (contains? stmt :group-by))
+                        (or having? (some #(aggregated? registry opts %) (concat items order))))
           ;; SELECT without FROM: one row, none where WHERE is false
-          fromless? (and (:select stmt) (seq items) (not-any? #(contains? stmt %) (concat [:from :group-by :having :offset] join-keys)))
+          fromless? (and (:select stmt) (seq items) (not-any? #(contains? stmt %) (concat [:from :group-by :having] join-keys)))
           counted (cond (not plain?) nil
-                        aggregates? {:min 1 :max 1}
+                        grouped? {:min (if having? 0 1) :max 1}
                         fromless? {:min (if (contains? stmt :where) 0 1) :max 1}
                         (and rows (:returning stmt)) {:min 0 :max (count rows)}
                         (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items)) {:min 0 :max 1})
           m (cond-> counted
               limit (update :max #(min (or % limit) limit))
               (and limit (not counted)) (assoc :min 0)
-              unbounded-limit? (assoc :min 0))]
+              ;; a trigger, a rule or ON CONFLICT may skip a row a write's SELECT gives
+              (or unbounded-limit? (contains? stmt :offset) (and write? (:returning stmt))) (assoc :min 0))]
       (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
 
 (defn analyze
