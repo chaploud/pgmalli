@@ -259,14 +259,15 @@ There are two ways to check a row read from the database:
 
 `h/analyze` reads HoneySQL query data against the registry, with no database. It returns the
 types of the query's arguments (`:args`), the row it returns (`:row`), how many rows where the
-data tells (`:rows`), the problems PostgreSQL would report (`:problems`) and the tables it reads
-and writes (`:tables`):
+data tells (`:rows`), the problems PostgreSQL would report (`:problems`), the tables it reads
+and writes (`:tables`) and the columns it uses of a `jsonb_populate_record` document
+(`:document-columns`, [queries](docs/queries.md#document-columns)):
 
 ```clojure
 (require '[pgmalli-next.honeysql :as h])
 
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
-;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}}
+;; => {:args {:id [:int #:pg{:type "bigint"}]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
 ```
 
 `:problems` also reports a few queries that PostgreSQL runs but that can match no row
