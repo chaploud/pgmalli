@@ -2597,3 +2597,8 @@
         problems #(:problems (h/analyze reg {:select [:ctid :tableoid] :from [%]}))]
     (is (= [] (problems :t)))
     (is (= [:ctid :tableoid] (map :column (problems :v))) "column ctid does not exist")))
+
+(deftest an-argument-in-a-clause-analyze-does-not-read-stays-untyped
+  (is (= {:n [:any {:pgmalli/untyped :position}]}
+         (args {:merge-into :users :using [[:groups :g]] :on [:= :users.group_id :g.id] :when-matched {:update {:set {:name :?n}}}}))
+      ":name is a column there, not a cast to the type name"))

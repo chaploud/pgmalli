@@ -280,11 +280,7 @@
                  (write-problems registry scopes stmt opts)
                  (string-problems registry ps opts)))))
 
-(def ^:private read-clauses
-  "The clauses analyze reads."
-  (into syntax/statement-keys (concat syntax/with-keys syntax/from-keys syntax/join-keys
-                               [:join-by :where :having :group-by :order-by :limit :offset :values :columns :set
-                                :on-conflict :do-update-set :returning])))
+(def ^:private read-clauses syntax/read-clauses)
 
 (def ^:private ignored-clauses
   "Clauses that change no table, column or type these read."

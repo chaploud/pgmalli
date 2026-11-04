@@ -491,6 +491,19 @@
               (when (seq ls) (into (vec (take (- (count t) (count (shape/entries t))) t)) ls)))
       (when-not (jdbc/untyped-kinds (shape/kind t)) t))))
 
+(defn- under-unread-clause?
+  "Whether the statement at path of body (:in's: a clause's key, an index into a vector, or into
+   a map's entries) sits in a clause analyze does not read (MERGE's :when-matched)."
+  [body path]
+  (loop [node body [i & more] path]
+    (cond (nil? i) false
+          ;; a clause by its key, or a map entry by its index where the walk met it inside a value
+          (and (map? node) (keyword? i)) (if (syntax/read-clauses i) (recur (get node i) more) true)
+          (and (map? node) (int? i)) (let [[k :as e] (nth (seq node) i nil)]
+                                       (if (and (keyword? k) (not (syntax/read-clauses k))) true (recur e more)))
+          (and (sequential? node) (int? i)) (recur (nth (vec node) i nil) more)
+          :else false)))
+
 (defn- analysis
   "{:args {arg schema} :untyped {arg {:function f :type t}}} of arg-types, an argument at a position PostgreSQL
    takes its type from the value alone (call-args' :typed-only) with :pgmalli/type-from-value,
@@ -499,7 +512,10 @@
   [registry body opts]
   (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
         sps (query/once registry query/statement-positions body opts)
-        typed (concat (for [[_ _ _ ps] sps
+        ;; an argument in a clause pgmalli does not read (an :unread-clause) is not typed by it
+        typed (concat (for [[_ _ path ps] sps
+                            :when (not (under-unread-clause? body path))
+                            :let [ps (filter (comp syntax/read-clauses :clause) ps)]
                             f uses
                             use (f registry ps opts)]
                         use)

@@ -598,6 +598,12 @@
               (or (every? unnest-of-arguments? items)
                   (and (= 1 (count items)) (populate-item? (first items))))))))
 
+(def read-clauses
+  "The clauses analyze reads."
+  (into statement-keys (concat with-keys from-keys join-keys
+                               [:join-by :where :having :group-by :order-by :limit :offset :values :columns :set
+                                :on-conflict :do-update-set :returning])))
+
 (defn positions
   "The expression positions of statement stmt, one read for the problems and the arguments' types: {:x node
    :clause k :chain scopes :negated? bool :top? bool} for every node of every clause sql/format writes, in
