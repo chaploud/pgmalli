@@ -111,8 +111,8 @@
     (is (= [] (:problems (h/analyze composite {:select [:id] :from [:groups]} {:schema "sample"}))))
     (is (= (portable/portable-data registry (shape/schema-of registry :pg.sample/users)) (portable/portable-data composite (shape/schema-of composite :pg.sample/users)))
         "portable-data inlines references through a composite registry")
-    (is (= (h/query-schema registry '[id] {:select [:id] :from [:groups]} {:schema "sample"})
-           (h/query-schema composite '[id] {:select [:id] :from [:groups]} {:schema "sample"})))))
+    (is (= (h/query-schema registry [:id] {:select [:id] :from [:groups]} {:schema "sample"})
+           (h/query-schema composite [:id] {:select [:id] :from [:groups]} {:schema "sample"})))))
 
 (def ^:private generated
   (let [col (fn [n t & {:as more}] (merge {:name n :position 1 :data_type t :is_nullable false} more))

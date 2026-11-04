@@ -37,23 +37,19 @@
 (defn in-list [s] [:or [:sequential {:min 1} s] [:set {:min 1} s]])
 
 (deftest queries-that-agree-have-no-problems
-  (is (= [] (check {:select [:id :nick] :from [:users] :where [:= :group_id 'g]})))
+  (is (= [] (check {:select [:id :nick] :from [:users] :where [:= :group_id :?g]})))
   (is (= [] (check {:select [:u.id [:g.name :group]] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]})))
-  (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :closed_at 'now}] :returning [:id]})))
+  (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :closed_at :?now}] :returning [:id]})))
   (is (= [] (check {:with [[:recent {:select [:id] :from [:users]}]] :select [:id] :from [:recent]})) "a CTE is an opaque table")
-  (is (= [] (check '(cond-> {:select [:id] :from [:tree]} deep? (assoc :with-recursive [[:tree {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:tree]}]}]]))))
-      "a CTE built up in code is one too")
   (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [:group_id :mood :score] :from [:users]}]}))
-      "INSERT INTO table (columns) SELECT")
-  (is (= [] (check '{:insert-into :users :values rows})) "rows passed in say nothing about the columns"))
+      "INSERT INTO table (columns) SELECT"))
 
 (deftest a-list-of-plain-items-is-read-as-honeysql-reads-a-vector
   (is (= [{:kind :unknown-column :column :nope}] (check {:select '(:id :nope) :from [:users]})))
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from '(:users) :where [:= :nope 1]})))
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from [:users] :where '(:= :nope 1)})))
   (is (= (row {:select [[:id :x]] :from [:users]}) (row {:select (list [:id :x]) :from (list :users)})))
-  (is (= (row {:select [:id] :from [:users]}) (row {:select (map keyword ["id"]) :from [:users]})) "a seq built at run time")
-  (is (= {} (args '{:select [:id] :from [:users] :where (:= :id ids)})) "a list holding a symbol is code"))
+  (is (= (row {:select [:id] :from [:users]}) (row {:select (map keyword ["id"]) :from [:users]})) "a seq built at run time"))
 
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
@@ -96,8 +92,8 @@
            (args {:update :users :set {:nick :?g/id} :where [:= :id 1]}))
         "a qualified one keeps its namespace, as sql/format's :params does")
     (is (= (args body)
-           (args '{:select [:id] :from [:users] :where [:and [:= :id [:param :id]] [:in :mood ?moods]] :limit ?n}))
-        "[:param :id] and ?id are the same parameters")
+           (args {:select [:id] :from [:users] :where [:and [:= :id [:param :id]] [:in :mood :?moods]] :limit :?n}))
+        "[:param :id] and :?id are the same parameter")
     (let [s (h/query-schema registry [:id :n] body opts)]
       (is (= [:cat bigint [:maybe [:int {:pg/type "bigint" :min 0}]]] (nth s 2)))
       (is (= {:pgmalli/problems [{:kind :missing-arg :arg :moods}]} (second s)) "the one left out of args"))))
@@ -121,23 +117,6 @@
   (is (= [] (check {:select [[:nick :n] [[:count :*] :c]] :from [:users] :group-by [:n]}))
       "in :group-by only when no input column has it"))
 
-(deftest a-symbol-where-a-table-goes-is-a-table-chosen-at-run-time
-  (is (= [] (check '{:select [:id] :from [table] :where [:= :group_id :?g] :for :update})))
-  (is (= [] (check '{:select [:t.id] :from [[table :t]]})))
-  (is (= [] (check '{:update table :set {:x :?x} :where [:= :id 1]})))
-  (is (= [] (check '{:delete-from table :where [:= :id 1]})))
-  (is (= [] (check '{:insert-into table :values [{:x 1}]})))
-  (is (= [] (check '{:insert-into [table [:x]] :values [[1]]}))))
-
-(deftest code-in-a-query-is-not-read-as-columns
-  (is (= [] (check '{:with [(recent-cte) [:x {:select [:id] :from [:users]}]] :select [:id] :from [:recent]}))
-      "a :with entry built by code may define any table")
-  (is (= [] (check '{:select [:id] :from [:users] :order-by (case sort :nick [[:nick :asc]] [[:id :desc]])})))
-  (is (= [] (check '{:select [:id] :from [:users] :group-by (if x [:nick] [:id])})))
-  (is (= [] (check '{:insert-into [[:users [:group_id (case k :a :mood :score)]] {:select [[:?g] [:?v]]}]}))
-      "a column built by code may be any one")
-  (is (= [] (check '{:update :users :set {(col-of k) 1} :where [:= :id 1]}))))
-
 (deftest a-table-function-without-an-alias-is-named-after-it
   (is (= [] (check {:select [:*] :from [[[:public.claim_token :?user-id :?token]]]})))
   (is (= [] (check {:select [:claim_token.x] :from [[[:claim_token 1]]]}))))
@@ -146,18 +125,16 @@
   (let [body {:union-all [{:select [[:id :uid] [0 :bucket]] :from [:users]} {:select [:id 1] :from [:groups]}]}]
     (is (= [] (check (assoc body :order-by [:bucket [:uid :desc]]))))
     (is (= [{:kind :unknown-column :column :nick}] (check (assoc body :order-by [:nick])))
-        "the tables' columns are not in scope there")
-    (is (= [] (check '{:union [(base) {:select [:id] :from [:users]}] :order-by [:x]})))))
+        "the tables' columns are not in scope there")))
 
-(deftest check-never-throws-on-code
-  (doseq [body '[{:insert-into [[:users [(f) "s" 1 nil]] {:select [(g)]}]}
-                 {:insert-into [:users [(f)]] :values [[1]]}
-                 {:select [(f) "s" 1] :from [(t) "u"] :where [:= (c) "x"] :order-by [(o)] :group-by [(g)]}
-                 {:update (t) :set {"a" 1 (k) 2} :returning [(r)]}
-                 {:select [:id] :from [:users] :join [(j) [:= (a) :id]] :with [(w)] :limit (n)}]]
-    (is (vector? (check body)) (pr-str body))
-    (is (map? (args body)) (pr-str body))
-    (is (vector? (h/query-schema registry '[] body opts)) (pr-str body))))
+(deftest code-in-a-query-is-an-error-naming-where-it-is
+  (doseq [[body path] ['[{:select [:id] :from [:users] :where (when x [:= :id :?id])} [:where 0]]
+                       '[{:insert-into :users :values rows} [:values]]
+                       '[{select [:id]} [select]]]
+          f [check #(h/query-schema registry [:db] % opts)]]
+    (let [e (try (f body) nil (catch clojure.lang.ExceptionInfo e e))]
+      (is (= [:pgmalli.error/not-query-data path] [(:pgmalli/error (ex-data e)) (:in (ex-data e))]) (pr-str body))
+      (is (str/includes? (ex-message e) "pass the data your code builds") (pr-str body)))))
 
 (deftest an-expression-with-no-alias-has-the-name-postgresql-gives-it
   (is (= [:map [:count bigint] [:?column? [:maybe bigint]] [:my_fn [:maybe :any]] [:nick [:maybe text]]
@@ -181,8 +158,7 @@
     (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:name [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
            (row body opts)))
     (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]] (row {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]}))
-        "of the members' type, NULL left out, nullable where one is")
-    (is (nil? (row {:union [{:select [:id] :from [:users]} '(other)]})))))
+        "of the members' type, NULL left out, nullable where one is")))
 
 (deftest an-in-argument-is-what-sql-format-expands
   (let [t (:ids (args {:select [:id] :from [:users] :where [:in :id :?ids]}))]
@@ -212,13 +188,6 @@
         "a table's * too")
     (is (= [:map [:id [:maybe int4]]] (row {:select [:u.id :g.id] :left-join [[:groups :g] [:= :g.id :u.group_id]]}))
         "a name selected twice is one key, the last column's, as the builder keeps it")))
-
-(deftest an-argument-only-code-uses-may-be-nil
-  (is (= {:g integer :from [:maybe bigint]}
-         (args '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when from [:>= :id :?from])]})))
-  (is (= {:g integer}
-         (args '{:select [:id] :from [:users] :where [:and [:= :group_id :?g] (when x [:= :group_id :?g])]}))
-      "one use in the data is enough"))
 
 (def docs
   (pgmalli/registry {:registry {:pg.public/docs [:map {:pg/table "public.docs"}
@@ -258,11 +227,11 @@
           ":pg/array is what the driver takes (Object[] it refuses); a vector goes as jsonb, no array"))))
 
 (deftest types-of-parameters-and-rows
-  (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id 'id] [:in :mood 'moods] [:> :score 'min]] :limit 'n}]
-    (is (= {'id bigint
-            'moods (in-list mood-arg)
-            'min integer
-            'n [:maybe [:int {:pg/type "bigint" :min 0}]]}
+  (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id :?id] [:in :mood :?moods] [:> :score :?min]] :limit :?n}]
+    (is (= {:id bigint
+            :moods (in-list mood-arg)
+            :min integer
+            :n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (args body)))
     (let [row (:row (h/analyze registry body opts))]
       (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]
@@ -278,16 +247,16 @@
         "an expression's column, or a set operation's (a recursive CTE's), comes from no table")
     (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row '{:select [:id] :from [[{:select [:id] :from [:users]} :sub]]})))
     (is (= [:map [:group_id int4]] (row '{:select [:group_id] :from [:users]} opts)))
-    (is (= {'x bigint} (args '{:select [:id] :from [:users] :where [:and [:= :nope x] [:= :id x]]}))
+    (is (= {:x bigint} (args {:select [:id] :from [:users] :where [:and [:= :nope :?x] [:= :id :?x]]}))
         "an untyped use never hides a typed one")
     (is (= [:=> {:pgmalli/problems []} [:cat bigint :any] [:sequential {:max 1 :min 1} [:map [:n bigint]]]]
-           (h/query-schema registry '[id extra] '{:select [[[:count :*] :n]] :from [:users] :where [:= :id id]} opts))
-        "a symbol used nowhere is :any")
+           (h/query-schema registry [:id :extra] {:select [[[:count :*] :n]] :from [:users] :where [:= :id :?id]} opts))
+        "an arg used nowhere is :any")
     (is (= [:sequential {:max 1} [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]]
-           (last (h/query-schema registry '[id] '{:select [:id] :from [:users] :where [:= :id id]} opts))))))
+           (last (h/query-schema registry [:id] {:select [:id] :from [:users] :where [:= :id :?id]} opts))))))
 
 (deftest scope-follows-the-statement
-  (is (= [] (check {:delete-from :users :where [:in :group_id {:select [:id] :from [:groups] :where [:= :name 'n]}]}))
+  (is (= [] (check {:delete-from :users :where [:in :group_id {:select [:id] :from [:groups] :where [:= :name :?n]}]}))
       "a nested statement's columns are judged in its own scope, not the outer one")
   (is (= [{:kind :unknown-column :column :nope :in [:where 2]}]
          (check {:select [:id] :from [:users] :where [:in :group_id {:select [:id] :from [:groups] :where [:= :nope 1]}]})))
@@ -303,11 +272,10 @@
   (is (= [{:kind :unknown-column :column :nope}
           {:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1 :nope 1}]}))
       "an unknown :values column is reported once")
-  (is (= [] (check '{:insert-into tbl :values rows})) "a target passed in says nothing")
   (let [with-interval (assoc registry :pg.sample/spans [:map {:pg/table "sample.spans"} [:id :int] [:span [:time/duration {:pg/type "interval"}]]])]
     (is (= [:map [:span [:any {:pg/type "interval"}]]] (:row (h/analyze with-interval {:select [:span] :from [:spans]} opts))) "an interval is a driver object"))
-  (is (= {'ids bigint}
-         (args '{:select [:id] :from [:users] :where [:and [:in :nope ids] [:= :id ids]]}))
+  (is (= {:ids bigint}
+         (args {:select [:id] :from [:users] :where [:and [:in :nope :?ids] [:= :id :?ids]]}))
       "an :in on an unknown column gives no type either"))
 
 (deftest nested-statements-see-the-enclosing-ones
@@ -327,7 +295,7 @@
   (is (nil? (row {:select [:*] :from [[[:public.my-fn 1 3] :r]]})) "an opaque table's * is unknown")
     (is (= [:map [:r [:maybe bigint]]] (row {:select [:*] :from [[[:generate_series 1 3] :r]]})) "a function's of pg_catalog is its columns")
   (is (= [] (check {:select [:cp.id] :from [[:users :cp]] :join [[:groups :c] [:= :c.id :cp.group_id]]
-                    :left-join [[{:select-distinct-on [[:group_id] :group_id :score] :from [:users] :where [:= :group_id 'g] :order-by [[:group_id :asc] [:id :desc]]} :latest]
+                    :left-join [[{:select-distinct-on [[:group_id] :group_id :score] :from [:users] :where [:= :group_id :?g] :order-by [[:group_id :asc] [:id :desc]]} :latest]
                                 [:= :latest.group_id :cp.group_id]]}))
       "a :select-distinct-on subquery is a statement of its own")
   (is (= [{:kind :unknown-column :column :nope}] (check {:select-distinct-on [[:group_id] :group_id :nope] :from [:users]}))))
@@ -368,9 +336,9 @@
     [{:select [:id :current_timestamp] :from [:users] :where [:> :closed_at :current_timestamp]}
      []
      "CURRENT_TIMESTAMP is a SQL word, not a column"]
-    [(cond-> {:select [:id] :from [:g]} true (assoc :with [[:f {:select [:id] :from [:users]} :materialized] [:g {:select [:id] :from [:f]}]]))
+    [{:with [[:f {:select [:id] :from [:users]} :materialized] [:g {:select [:id] :from [:f]}]] :select [:id] :from [:g]}
      []
-     "a CTE with a qualifier, built in code"]
+     "a CTE with a qualifier"]
     [{:insert-into [:groups {:select [:id :name] :from [:users]}]}
      [{:kind :unknown-column :column :name :in [:insert-into 1]}]
      "the SELECT of an INSERT ... SELECT does not see the table inserted into"]
@@ -395,34 +363,22 @@
     (testing note
       (is (= expected (check query)))))
   (testing "the types the same shapes give"
-    (is (= {'m mood-arg}
-           (args '{:insert-into :users :columns [:group_id :mood :score] :values [[1 m 2]]})))
-    (is (= {'gid integer}
-           (args '{:select [:id] :from [:users] :where [:= gid :group_id]}))
-        "a symbol on the left takes the column's type")))
+    (is (= {:m mood-arg}
+           (args {:insert-into :users :columns [:group_id :mood :score] :values [[1 :?m 2]]})))
+    (is (= {:gid integer}
+           (args {:select [:id] :from [:users] :where [:= :?gid :group_id]}))
+        "an argument on the left takes the column's type")))
 
-(deftest a-subquery-added-to-a-query-built-elsewhere
-  (is (= [] (check '(update query :select conj [[:exists {:select [1] :from [:groups] :where [:= :groups.id :skills/group_id]}] :flag])))
+(deftest an-expression-is-a-statement-the-data-does-not-show
+  (is (= [] (check [:exists {:select [1] :from [:groups] :where [:= :groups.id :skills/group_id]}]))
       "the enclosing statement is not in the data: its columns cannot be judged")
-  (is (= [{:kind :unknown-column :column :groups.nope :in [4 0 1]}]
-         (check '(update query :select conj [[:exists {:select [1] :from [:groups] :where [:= :groups.nope :skills/group_id]}] :flag])))
-      "its own columns still are")
-  (is (= [{:kind :unknown-column :column :nope :in [1]}] (check '(cond-> {:select [:nope] :from [:users]} deep? (assoc :limit 1))))
-      "a statement built in code at the top is still the statement"))
-
-(deftest a-cte-body-bound-apart-from-its-with
-  (is (= [] (check '(let [paged (cond-> {:select [:id] :from [[:f :user_skills]]} (:limit page) (assoc :limit (:limit page)))]
-                       {:with [[:f filtered-query :materialized] [:p paged]]
-                        :select [:total/n]
-                        :from [[{:select [[[:count :*] :n]] :from [:f]} :total]]})))
-      "a CTE body bound in a let sees its sibling CTEs")
-  (is (= [:map [:id [:maybe :any]]]
-         (:row (h/analyze registry '{:with [[:f (helper group-id) :materialized] [:p paged]] :select [:id] :from [:p]} opts)))
-      "a body that is code, after another CTE, is a table whose columns are not known"))
+  (is (= [{:kind :unknown-column :column :groups.nope :in [1]}]
+         (check [:exists {:select [1] :from [:groups] :where [:= :groups.nope :skills/group_id]}]))
+      "its own columns still are"))
 
 (deftest one-row-results
   (is (= [:=> {:pgmalli/problems []} [:cat bigint] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]
-         (h/query-schema registry '[id] '{:select [:nick] :from [:users] :where [:= :id id]} (assoc opts :result :one)))
+         (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
 (deftest a-write-without-returning-returns-its-update-count
@@ -456,7 +412,6 @@
         "pgjdbc adds no RETURNING to a statement that has one")
     (is (= (row {:select [:id] :from [:users]})
            (row {:select [:id] :from [:users]} (assoc-in opts [:jdbc :return-keys] true))))
-    (is (nil? (row '{:delete-from :users :returning ?cols})) "a RETURNING code builds may return rows")
     (is (= [{:kind :unknown-column :column :nmae :did-you-mean [:name]}]
            (check {:delete-from :groups} (assoc-in opts [:jdbc :return-keys] ["nmae"])))
         "check reads the RETURNING :return-keys adds")
@@ -962,16 +917,13 @@
   (is (= [] (check {:select [:*] :from {:select [:id] :from [:users]}})) "a subquery alone")
   (doseq [f [1 true "users"]] (is (vector? (check {:select [:id] :from f})) (pr-str f))))
 
-(deftest a-table-code-brings-in-has-the-columns-the-query-names
-  (is (= [] (check '{:select [:u.id :g.name] :from [[:users :u]] :left-join (when x [[:groups :g] [:= :g.id :u.group_id]])})))
-  (is (= [] (check '{:select [:u.id] :from (if x [[:users :u]] [[:users :u]])}))))
-
 (deftest an-opaque-table-beside-a-known-one-makes-no-column-ambiguous
-  (is (= [] (check '{:select [:nick] :from [:users] :join [t [:= :t.id :users.id]]})))
-  (is (= [:map [:nick [:maybe :any]]] (row '{:select [:nick] :from [:users] :join [t [:= :t.id :users.id]]}))
-      "untyped: which table PostgreSQL takes it from is not in the data")
-  (is (= [{:kind :unknown-column :column :u.nope}] (check '{:select [:u.nope] :from [[:users :u]] :join [t [:= 1 1]]}))
-      "a known table's unknown column is still one"))
+  (let [t [[:jsonb_to_record :?doc] [:t {:columns [[:raw "id bigint"]]}]]]
+    (is (= [] (check {:select [:nick] :from [:users] :join [t [:= :t.id :users.id]]})))
+    (is (= [:map [:nick [:maybe :any]]] (row {:select [:nick] :from [:users] :join [t [:= :t.id :users.id]]}))
+        "untyped: which table PostgreSQL takes it from is not in the data")
+    (is (= [{:kind :unknown-column :column :u.nope}] (check {:select [:u.nope] :from [[:users :u]] :join [t [:= 1 1]]}))
+        "a known table's unknown column is still one")))
 
 (deftest expression-names-follow-postgresql
   (let [row #(:row (h/analyze registry {:select [%] :from [:users]} opts))]
@@ -990,10 +942,6 @@
     (is (= {"u" false "x" true "g" false "i" false}
            (nullable {:select [:*] :from [[:users :u] [:groups :x]] :right-join [[:groups :g] [:= 1 1]] :inner-join [[:groups :i] [:= 1 1]]}))
         "a comma binds looser than JOIN: the right join attaches to the last FROM item; an inner join after it nulls nothing")))
-
-(deftest a-symbol-table-in-joins-and-from-alone
-  (is (= [] (check '{:select [:x] :from table})))
-  (is (= [] (check '{:select [:t.x :u.id] :from [[:users :u]] :left-join [t [:= :t.uid :u.id]]}))))
 
 (deftest a-typed-use-wins-over-a-driver-object
   (is (= {:x [:and bigint [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]]} (:args (h/analyze docs {:select [:id] :from [:docs] :where [:and [:= :meta :?x] [:= :id :?x]]})))
@@ -1032,9 +980,7 @@
       "longer than the column's 40"))
 
 (deftest insert-into-a-table-as-an-alias-with-columns
-  (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check '{:insert-into [[:users :u] [:group_id :mood :score]] :values [[?a "sad" ?c]] :returning [:u.id]})))
-  (is (= [] (check '{:insert-into (t) :values [{:a 1}]})) "a target code names: its columns are not judged")
-  (is (= [] (check '{:update (t) :set {:a 1} :where [:= :id 1]}))))
+  (is (= [{:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into [[:users :u] [:group_id :mood :score]] :values [[:?a "sad" :?c]] :returning [:u.id]}))))
 
 (deftest a-subquery-alone-in-from-is-opaque
   (is (= [] (check {:select [:id] :from [{:select [:id] :from [:users]}]}))))
@@ -1074,9 +1020,6 @@
 (deftest a-column-definition-list-is-read-or-left-alone
   (is (vector? (check {:select [:a] :from [[[:jsonb_to_record :x] [:r {:columns [[:raw "a int"]]}]]]}))))
 
-(deftest a-local-code-binds-is-no-missing-arg
-  (is (= {:pgmalli/problems []} (m/properties (m/schema (h/query-schema registry '[ids] '{:select [:id] :from [:users] :where (into [:or] (for [i ids] [:= :id i]))} opts))))))
-
 (deftest a-call-in-the-wrong-shape-is-an-error
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes the function's args first" (h/query-schema registry {:select [:id] :from [:users]} opts)))
   (doseq [body ["SELECT 1" ["SELECT 1"] nil]]
@@ -1084,12 +1027,6 @@
 
 (deftest a-row-of-a-table-the-registry-lacks-is-nil
   (is (nil? (:row (h/analyze (pgmalli/registry "sample" "other") {:select [:id] :from [:users]} {:schema "other"})))))
-
-(deftest a-cte-code-builds-may-be-any-unqualified-table
-  (is (= [:map [:id [:maybe :any]]] (row '{:with ctes :select [:id] :from :recent})))
-  (is (= [] (check '{:with ctes :select [:id] :from :recent})))
-  (is (= [{:kind :unknown-table :table "other.nope"}] (check '{:with ctes :select [:id] :from :other.nope}))
-      "a table qualified by a schema is no CTE"))
 
 (deftest a-ctes-visibility-is-one-judgment
   (let [body {:select [:id :mood] :from [:users] :where [:exists {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]}]
@@ -1107,10 +1044,6 @@
   (let [sub {:select [:id] :from [:groups] :join-by [:left [:users [:= 1 1]]]}]
     (is (= [{:kind :ambiguous-column :column :id :candidates ["sample.groups" "sample.users"] :in [:set 0 1]}]
            (check {:update :users :set {:group_id sub}})))))
-
-(deftest a-right-join-code-builds-nulls-the-tables-before-it
-  (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]]
-         (row '{:select [:users.id] :from [:users] :right-join (when x [[:groups :g] [:= 1 1]])}))))
 
 (deftest each-part-of-a-statement-sees-what-postgresql-lets-it
   (is (= [{:kind :unknown-column :column :nope :in [:from 0 0]}] (check {:select [:s.id] :from [[{:select [:id :nope] :from :users} :s]]}))
@@ -1133,11 +1066,6 @@
     ;; read in the CTE's scope, the first member would be a varchar, which a bigint does not resolve with
     (is (= [:map [:id [:int {:pg/type "bigint"}]]] (row {:union [q {:with [[:groups {:select [[:nick :id]] :from :users}]] :select [:id] :from :users :where [:in :id q]}]}))
         "the same statement twice, each in its own scope")))
-
-(deftest code-anywhere-leaves-its-part-unjudged
-  (is (= [{:kind :unread-clause :clause :frob :did-you-mean [:from]}] (check '(cond-> {:select [:id] :from [:users] :frob 1} x (assoc :limit 1)))))
-  (is (= [] (check '{:insert-into [(tbl) [:a]] :values [[1]] :returning [:a]})))
-  (is (= [] (check '{:with [[(nm) {:select [:id] :from :users}]] :select [:id] :from :c}))))
 
 (deftest a-star-names-a-table-of-the-scope
   (is (= [{:kind :unknown-column :column :x.* :qualifier "x"}] (check {:select [:x.*] :from :users})))
@@ -1169,7 +1097,7 @@
         ro (fn [col] {:kind :read-only-column :table "sample.users" :column col})]
     (testing "NULL into a NOT NULL column"
       (is (= [(nn :score :set)] (check {:update :users :set {:score nil} :where [:= :id 1]})))
-      (is (= [(nn :group_id :values)] (check {:insert-into :users :values [{:group_id nil :mood [:cast "sad" :mood] :score 1 :closed_at 'now}]})))
+      (is (= [(nn :group_id :values)] (check {:insert-into :users :values [{:group_id nil :mood [:cast "sad" :mood] :score 1 :closed_at :?now}]})))
       (is (= [(nn :group_id :values)] (check {:insert-into :users :columns [:group_id :mood :score] :values [[nil [:cast "happy" :mood] 1]]})))
       (is (= [(nn :score :do-update-set)] (check {:insert-into :users :values [{:group_id 1 :score 1}] :on-conflict [:id] :do-update-set {:score nil}})))
       (is (= [(nn :mood :values)] (check {:insert-into :users :values [{:group_id 1 :score 1} {:group_id 1 :score 1 :mood [:cast "happy" :mood]}]}))
@@ -1264,8 +1192,6 @@
       "a key the column list lacks is not written")
   (is (= [{:kind :unknown-column :column :nope}] (check {:update :users :set {:nick :nope} :where [:= :id 1]}))
       "a keyword assigned is a column")
-  (is (= [{:kind :unread-clause :clause 'select} {:kind :unread-clause :clause 'from}] (check '{select [nope] from [users]}))
-      "a statement keyed by symbols, as HoneySQL takes it, is said to be unread")
   (is (= [] (check {:update :users :set {:nick :group_name} :where [:= :id 1]}))))
 
 (deftest a-string-reaches-an-enum-column-as-varchar
@@ -1769,7 +1695,6 @@
     (is (not (counted? {:select [[[:generate_series 1 3] :x]] :from [:users] :where [:= :id 1]}))
         "a set-returning function in the select list repeats a keyed row")
     (is (not (counted? {:select [:users.nick] :from [:users] :join-by [:join [[:users :u2] [:= :u2.group_id :users.group_id]]] :where [:= :users.id 1]})))
-    (is (not (counted? '{:select [:groups.name] :from [:groups] :join (joins) :where [:= :groups.id 1]})) "code may join")
     (is (not (counted? {:with [[:users {:select [[:group_id :id]] :from [:sample.users]}]] :select [:id] :from [:users] :where [:= :id 1]}))
         "a CTE named as a table has none of its keys")
     (is (not (counted? {:select [:nick] :from [:users] :where [:= :id 1] :order-by [[[:generate_series 1 3]]]})) "in ORDER BY too")
@@ -2464,7 +2389,6 @@
 
 (deftest an-argument-no-use-types-says-why
   (is (= {:y [:any {:pgmalli/untyped :position}]} (args {:select [[:?y :y]] :from [:users]})))
-  (is (= [:any {:pgmalli/untyped :code}] (:x (args '{:select [:id] :from [:users] :where [:= :id (inc :?x)]}))))
   (is (= [:any {:pgmalli/untyped :type}] (:x (args {:update :users :set {:no_such :?x} :where [:= :id 1]}))))
   (is (= [:=> {:pgmalli/problems []} [:cat :any [:any {:pgmalli/untyped :position}]] [:sequential [:map [:y [:maybe :any]]]]]
          (h/query-schema registry [:db :y] {:select [[:?y :y]] :from [:users]} opts))

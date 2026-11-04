@@ -110,6 +110,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   unique constraint, an invalid unique index, or a domain whose CHECK lists its values. A
   function or operator that differs is reported by its name
   (`{:key :functions :name "f" :file ... :db ...}`).
+* **A query is the data `sql/format` takes,** as the application has built it: a query holding
+  code (a quoted form, any symbol: `'{:where (when x [...])}`, `'{:values rows}`, a table
+  `'events_2026`, a parameter `'?id`) is a `:pgmalli.error/not-query-data` error whose `:in`
+  says where the symbol is. Before, code was left unread, the tables it brought in were taken
+  for any table, and an argument only code used was `[:any {:pgmalli/untyped :code}]`, which
+  is gone. Pass each variant your code builds (`(h/analyze registry (build-query x))` for each
+  `x`); write tables and parameters as keywords (`:events_2026`, `:?id`).
+* `h/query-schema` takes the function's args as keywords alone (`[:db :id]`); a symbol, which
+  matched only a symbol in code, is an error.
 
 ### Added
 
@@ -236,7 +245,7 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An array argument's elements are its Java array's component class's: a `String[]` holds no
   keyword, a `java.sql.Time[]` its `java.sql.Time`s.
 * `h/arg-types` gives an argument it cannot type as `[:any {:pgmalli/untyped why}]`, `why` saying
-  whether no use of it is typed, the type where it is used is unknown, or only code uses it
+  whether no use of it is typed or the type where it is used is unknown
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)). It validates as `:any` did.
 * `now()`, the functions that build json and a function call in general are nullable: the
   catalog does not say when a function returns NULL. `current_timestamp` and the like (but
@@ -301,9 +310,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * An argument under `SOME` (`[:= :id [:some :?ids]]`) is typed as one under `ANY`.
 * `h/check` reads an assignment target `:a.b` as the field `b` of the composite column `a`,
   where it reported `:unknown-column`; the value is not checked.
-* A list or seq of keywords, vectors, maps and values alone (a `:select` built with `map`) is
-  read as a vector, as HoneySQL reads it; before, it was taken for code and not checked. A list
-  with a symbol in it is still code.
+* A list or seq (a `:select` built with `map`) is read as a vector, as HoneySQL reads it;
+  before, it was taken for code and not checked.
 * A table written in capitals without quoting (`:USERS`) keys a row by the name PostgreSQL
   folds it to (`:users/id`), as the driver returns it.
 * An invalid unique index (a failed `CREATE INDEX CONCURRENTLY`) is no longer in `:pg/unique`.

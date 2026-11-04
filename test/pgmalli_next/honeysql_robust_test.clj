@@ -23,10 +23,10 @@
 
 (def ^:private part
   (gen/one-of [(gen/return nil) gen/keyword (gen/elements [:users :id :nick :* :?x :select :from :fields :columns])
-               gen/small-integer gen/string-alphanumeric gen/symbol
+               gen/small-integer gen/string-alphanumeric
                (gen/vector (gen/elements [:id :nick nil 1 :users]) 0 3)
                (gen/map (gen/elements [:select :from :where :fields :columns :values]) (gen/elements [:id [:id] nil {} 1]))
-               (gen/return '(f x)) (gen/return {})]))
+               (gen/return '(:id 1)) (gen/return {})]))
 
 (def ^:private broken-query
   (gen/let [q (gen/elements corpus)

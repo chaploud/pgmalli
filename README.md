@@ -341,7 +341,7 @@ Check every query of a project in one test:
       (is (= [] problems) (str k ": " (h/humanize problems))))))
 ```
 
-[docs/queries.md](docs/queries.md) covers subqueries, CTEs, code in a query, the types of the
+[docs/queries.md](docs/queries.md) covers subqueries, CTEs, the types of the
 arguments and of the row, a row written into a table (`h/values-schema`, `h/set-schema`),
 the tables a query reads and writes (`:tables`), the `:params` map of `sql/format`, the
 options, and what pgmalli checks more strictly than PostgreSQL or not at all.
@@ -532,8 +532,9 @@ and pgjdbc are yours to add.
 - PRIMARY KEY, UNIQUE and foreign keys are not checked: a row schema holds for one row.
 - Triggers, EXCLUDE constraints and policies are not enforced
   ([docs/types.md](docs/types.md#what-is-read)).
-- `h/analyze` reads a query as data: of a query that code builds at run time, it checks only the
-  parts written as data ([docs/queries.md](docs/queries.md#not-checked)).
+- `h/analyze` reads a query as the data `sql/format` takes: code in it (a quoted form) is an
+  error, and each variant your code builds is analyzed on its own
+  ([docs/queries.md](docs/queries.md)).
 - A CHECK whose result depends on what pgmalli cannot know passes
   ([docs/types.md](docs/types.md#how-pgcheck-evaluates)).
 
@@ -556,7 +557,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
-| `:pgmalli.error/not-query-data` | a query that is no HoneySQL data |
+| `:pgmalli.error/not-query-data` | a query that is no HoneySQL data: SQL already formatted, or code (a symbol in it) |
 | `:pgmalli.error/not-generated` | a generated file missing from the classpath |
 | `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |
 | `:pgmalli.error/db-unavailable`, `psql-missing` | the database, or psql, out of reach |

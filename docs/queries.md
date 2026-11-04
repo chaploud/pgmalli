@@ -9,6 +9,10 @@ types of the arguments (`:args`, [below](#the-types-of-the-arguments)), the row 
 reads and writes (`:tables`, [below](#the-tables-a-query-uses)). The examples use
 [example/schema.sql](example/schema.sql).
 
+It reads the data you give `sql/format`, as your code has built it. Code in it (a quoted form,
+any symbol: `'{:where (when x [:= :id :?id])}`) is a `:pgmalli.error/not-query-data` error
+naming where the symbol is (`:in`, as `get-in` reads it): analyze each variant your code builds.
+
 ```clojure
 (require '[pgmalli-next.core :as pgmalli]
          '[pgmalli-next.honeysql :as h]
@@ -90,9 +94,8 @@ of the PostgreSQL versions the registry's files were generated on (each file's
 column whose type the versions disagree on is `:any`, and one a version lacks is an optional key
 of `SELECT *`. A function of `pg_catalog` or of a generated schema in FROM
 has the columns it returns ([The row a query returns](#the-row-a-query-returns)). The columns of
-another table function (named by its alias, `WITH ORDINALITY` too), of a table written as a symbol
-(`'events_2026`, a table chosen at run time) and of an `information_schema` view the registry
-lacks exist but have no type. Comparisons with them, or with an expression `:row` leaves untyped, are not
+another table function (named by its alias, `WITH ORDINALITY` too) and of an
+`information_schema` view the registry lacks exist but have no type. Comparisons with them, or with an expression `:row` leaves untyped, are not
 checked. Every table has the system columns (`ctid`, `xmin`, ...).
 
 ## Writes
@@ -160,21 +163,20 @@ keyed as in `sql/format`'s `:params`, as the one sending sends them
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`, `[:cast :?ids [:raw "bigint[]"]]` to an array type), or an element of an array cast (`[:array [:?k] :text]`, `ARRAY[?]::text[]`) | what PostgreSQL casts to the type, of what [your application sends](#what-your-application-sends), without the type's CHECKs, lengths and ranges where every use of the cast is compared (PostgreSQL evaluates the cast only where its plan reaches it): a string too, to an array type a Java array of what a cast to its element type takes, or nil (to a domain over an array type any array), an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); no map or collection sent as `json` or `jsonb` to a type other than those and the string types (PostgreSQL casts a `jsonb` number or boolean, and errors at run time on an object or array); no collection sent untyped (`:unknown`) to a number or boolean type, whose input refuses an array literal (`{1}`; a date, time or `uuid` type reads `{2020-01-01}` past its braces); `:any` for a type whose values pgmalli does not type (json, inet) or an extension's type, whose casts `pg_catalog` does not hold; nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned where nil may not go (as assigned below) |
 | assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it (under `ON CONFLICT DO UPDATE`, an inserted value only for a BEFORE INSERT trigger, as PostgreSQL checks NOT NULL before the conflict), or the SELECT of `INSERT ... SELECT` may drop the row (`WHERE`, `HAVING`, `GROUP BY`, `LIMIT`, `OFFSET`, `DISTINCT`, a join, a `FROM` item other than `unnest` of arguments, cast or not; then without the CHECKs, lengths and ranges, which PostgreSQL checks only on a row it writes): a `numeric(p,s)`'s precision and the CHECKs only pgmalli evaluates (`[:pg/check]`, a `char(n)` column's) are left out; under `[:unnest :?xs]`, an array of it, a Java array ([what your application sends](#what-your-application-sends)) |
-| the document of `jsonb_populate_record`, `json_populate_record` or their `recordset`, bare or cast to `jsonb` or `json`, of a table's or view's row type: `NULL` cast to it (`[[:jsonb_populate_recordset [:cast nil :positions] :?rows] :r]`) or an alias's whole row (`[:jsonb_populate_record :p [:cast :?row :jsonb]]`, `p` the alias of `UPDATE positions p`) | for a record a map, for a recordset a vector of them, in place of a map or vector the parameter takes there (bare, what goes where the function takes `jsonb` or `json`; cast, what the cast takes), or nil. The map is closed: its keys the names, as keywords, of the columns the statement reading the call's alias uses (`r.name`, or an unqualified `name` of it, anywhere in that statement or one nested in it: `UPDATE positions p SET (name, sort_order) = (SELECT r.name, r.sort_order FROM jsonb_populate_record(p, ?) r)` takes `:name` and `:sort_order`), or of every column where a use names none in particular (`r.*`, `SELECT *`, the whole row `r`, `:raw`, code, columns the alias lists), each optional, and each value nil or what the column's type's input reads of the JSON value the one sending writes: a `json` or `jsonb` column's value as read (its override or CHECK shape), an array column's a sequential of its elements' values; another column's a JSON number (an integer type's input reads no fraction), boolean or string: a `String` of any type, the column's length, range, CHECK and enum labels kept, the others where they go untyped or as their type (an `Instant`, a `LocalDate` or a `LocalDateTime` to a date or timestamp column, a `UUID` to a `uuid` one); no `Character` or `PGobject`, which the document does not hold. Where `INSERT INTO t (cols) SELECT` writes a column of `t` from the populated column of its name, a key whose column NULL may not go to is required, its value not nil, unless the SELECT may drop the row (as assigned above) |
+| the document of `jsonb_populate_record`, `json_populate_record` or their `recordset`, bare or cast to `jsonb` or `json`, of a table's or view's row type: `NULL` cast to it (`[[:jsonb_populate_recordset [:cast nil :positions] :?rows] :r]`) or an alias's whole row (`[:jsonb_populate_record :p [:cast :?row :jsonb]]`, `p` the alias of `UPDATE positions p`) | for a record a map, for a recordset a vector of them, in place of a map or vector the parameter takes there (bare, what goes where the function takes `jsonb` or `json`; cast, what the cast takes), or nil. The map is closed: its keys the names, as keywords, of the columns the statement reading the call's alias uses (`r.name`, or an unqualified `name` of it, anywhere in that statement or one nested in it: `UPDATE positions p SET (name, sort_order) = (SELECT r.name, r.sort_order FROM jsonb_populate_record(p, ?) r)` takes `:name` and `:sort_order`), or of every column where a use names none in particular (`r.*`, `SELECT *`, the whole row `r`, `:raw`, columns the alias lists), each optional, and each value nil or what the column's type's input reads of the JSON value the one sending writes: a `json` or `jsonb` column's value as read (its override or CHECK shape), an array column's a sequential of its elements' values; another column's a JSON number (an integer type's input reads no fraction), boolean or string: a `String` of any type, the column's length, range, CHECK and enum labels kept, the others where they go untyped or as their type (an `Instant`, a `LocalDate` or a `LocalDateTime` to a date or timestamp column, a `UUID` to a `uuid` one); no `Character` or `PGobject`, which the document does not hold. Where `INSERT INTO t (cols) SELECT` writes a column of `t` from the populated column of its name, a key whose column NULL may not go to is required, its value not nil, unless the SELECT may drop the row (as assigned above) |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | a Java array of where its column goes, as an argument there: compared, assigned, or cast (an array of what PostgreSQL casts to the type), in a subquery too. Cast to an array of a column's type (`[[:unnest [:cast :?ns [:raw "varchar[]"]]] [:x {:columns [:n]}]]`, its column assigned to a `varchar(50)` column, a domain over `varchar` too, by `SELECT *` or by name), each element as assigned there, or else as cast to the type (a String to a `bigint`); cast to another type, as cast |
 | an argument of `coalesce`, `greatest`, `least` or `nullif`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
 | an argument of a function or an operator of `pg_catalog` or of a generated schema (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the type each function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil: a value of each type picks its own (`generate_series(1, ?)` takes an integer, a bigint or a numeric); `:any` where one of them takes any type (a polymorphic one) |
 | compared with `ANY`, `SOME` or `ALL` of an array (`[:= :?tag [:any :tags]]`) | as with a column of the array's element type |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
-| used only inside code (`(when x ...)`) | its type or nil |
 | anywhere else | `:any` |
 
 An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one of `:position`
 (no use of it is one the table above types: an argument of a function the registry lacks, or of
-a polymorphic one, is one), `:type` (it is compared with or cast to what pgmalli knows no type
+a polymorphic one, is one) and `:type` (it is compared with or cast to what pgmalli knows no type
 of: the result of a function the registry lacks, a column of a table it lacks, an extension's
-type) and `:code` (only code uses it). An argument where a value of a type pgmalli does not
+type). An argument where a value of a type pgmalli does not
 type goes (json, inet, interval) is `[:any {:pg/type ...}]`, without `:pgmalli/untyped`:
 
 ```clojure
@@ -459,14 +461,11 @@ next.jdbc's `:return-keys` (in `:jdbc`), pgjdbc adds RETURNING to an INSERT, UPD
 ```
 
 `:row` is nil when a selected column cannot be resolved (`:problems` says which),
-when a whole row is selected, when code builds the RETURNING, and for a TRUNCATE under
+when a whole row is selected, and for a TRUNCATE under
 `:return-keys`, which returns no row:
 
 ```clojure
 (:row (h/analyze registry {:select [:u] :from [[:users :u]]}))
-;; => nil
-
-(:row (h/analyze registry '{:delete-from :posts :returning cols}))
 ;; => nil
 
 (:row (h/analyze registry {:truncate :posts} {:jdbc {:return-keys true}}))
@@ -636,12 +635,6 @@ Write the query so PostgreSQL's reading is explicit instead.
   (`CREATE CAST`), and an extension's type's category, are not read: a call whose argument is of
   an extension's type is untyped unless an overload takes the type exactly.
 
-- What code in the query (a list with a symbol in it) builds at run time: the vectors written
-  inside it are checked, but a column it computes (`(keyword c)`) is not. A list or seq of
-  keywords, vectors, maps and values alone (`(map keyword cols)` run) is read as a vector, as
-  HoneySQL reads it.
-- A statement keyed by symbols (`'{select [...]}`): symbols are values here, so it is
-  reported as `:unread-clause`.
 - Values written in the query beyond NULL, enum literals and strings sent typed (`varchar`): an empty `[:in :id []]` is not reported (an argument in `:in` is
   typed non-empty).
 - An ON clause naming a table joined after it, which PostgreSQL rejects.
@@ -650,8 +643,7 @@ Write the query so PostgreSQL's reading is explicit instead.
   `mg/generate`; it validates only. It lacks the generation hint the registry's column schema
   carries, and test.chuck refuses the regex's `\z`.
 - Partitions and sequences: the registry lists neither, so a query reading one by name
-  (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`. Write the name as a
-  symbol (`'events_2026`), a table chosen at run time, to leave it unjudged.
+  (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`.
 - A string sent as `varchar` to a column of a domain over a type other than an enum (a
   domain over `integer`), which PostgreSQL refuses; and an argument whose type `:args`
   leaves `:any` (an `inet` column's), which may be an object of the type.
