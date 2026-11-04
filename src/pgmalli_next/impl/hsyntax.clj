@@ -1010,7 +1010,7 @@
   (when-let [[path sym] (code-at body [])]
     (error/fail! :pgmalli.error/not-query-data
                  (str "pgmalli-next.honeysql reads HoneySQL query data, not code: " (pr-str sym) " at " (pr-str path)
-                      " is a symbol; pass the data your code builds, as you give it to sql/format, each variant separately")
+                      " is a symbol; write a name as a keyword ([:cast :score :integer]), or, for code, pass the data it builds, as you give it to sql/format, each variant separately")
                  {:given body :in path}))
   (as-vectors body))
 

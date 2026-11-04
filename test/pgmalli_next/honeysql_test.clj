@@ -141,7 +141,7 @@
           f [check #(h/query-schema registry [:db] % opts)]]
     (let [e (try (f body) nil (catch clojure.lang.ExceptionInfo e e))]
       (is (= [:pgmalli.error/not-query-data path] [(:pgmalli/error (ex-data e)) (:in (ex-data e))]) (pr-str body))
-      (is (str/includes? (ex-message e) "pass the data your code builds") (pr-str body)))))
+      (is (str/includes? (ex-message e) "write a name as a keyword ([:cast :score :integer]), or, for code, pass the data it builds") (pr-str body)))))
 
 (deftest an-expression-with-no-alias-has-the-name-postgresql-gives-it
   (is (= [:map [:count bigint] [:?column? [:maybe bigint]] [:my_fn [:maybe :any]] [:nick [:maybe text]]

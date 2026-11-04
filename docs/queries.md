@@ -667,6 +667,10 @@ Write the query so PostgreSQL's reading is explicit instead.
   written.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
+- A symbol in the query, which HoneySQL writes as a name (`[:cast :score integer]`): almost
+  always code not evaluated (a macro's form, whose `[:= :id id]` names a local `id`), which
+  read as a name would be typed as a column without a word. An error; write the name as a
+  keyword (`[:cast :score :integer]`), or pass the data the code builds.
 
 ## Not checked
 
