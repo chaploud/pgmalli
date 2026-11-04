@@ -1861,10 +1861,13 @@
     (is (not (m/validate s {:group_id 1 :score 1 :mood "sad"} {:registry registry})) "a String goes as varchar, which an enum column refuses")
     (is (m/validate s {:group_id 1 :score 1 :mood [:lift :sad]} {:registry registry}) "a keyword label as one parameter, untyped")))
 
-(deftest an-argument-takes-nil-where-any-use-does
-  (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:= :id :?v] [:is-distinct-from :id :?v]]})))
-  (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:= :id :?v]]}))
-      "whatever the order"))
+(deftest an-argument-takes-nil-where-every-use-does
+  (is (= {:v bigint-cmp} (args {:select [:id] :from [:users] :where [:or [:= :id :?v] [:is-distinct-from :id :?v]]}))
+      "= NULL matches no row")
+  (is (= {:v bigint-cmp} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:= :id :?v]]}))
+      "whatever the order")
+  (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:not [:is-distinct-from :id :?v]]]}))
+      "nil where both take it"))
 
 (deftest an-enum-arrays-argument-is-an-array-of-the-enum-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/feel [:enum "a" "b"]
@@ -2492,15 +2495,15 @@
 
 (deftest an-argument-of-several-uses-takes-what-each-takes
   (let [native opts]
-    (is (= {:id [:maybe integer-cmp]}
+    (is (= {:id integer-cmp}
            (args {:select [[[:cast :?id :bigint] :a]] :from [:groups] :where [:= :id :?id]} native))
-        "a cast takes what converts to a bigint, a comparison an integer column's values; the selected cast nil")
+        "a cast takes what converts to a bigint, a comparison an integer column's values; nil neither, = NULL matching no row")
     (is (= (args {:select [:id] :from [:groups] :where [:and [:= :id :?id] [:= :id [:cast :?id :bigint]]]} native)
            (args {:select [:id] :from [:groups] :where [:and [:= :id [:cast :?id :bigint]] [:= :id :?id]]} native))
         "whatever the order")
-    (is (= {:id [:maybe integer-cmp]}
+    (is (= {:id integer-cmp}
            (args {:select [:id] :from [:groups] :where [:and [:= :id :?id] [:is-distinct-from :name [:cast :?id :text]]]} native))
-        "nil where any use takes it")))
+        "nil only where every use takes it")))
 
 (deftest a-pg-catalog-relation-has-the-columns-of-the-catalog-snapshot
   (is (= {:names [:pg/array [:string {:pg/type "name"}]]}
@@ -2804,18 +2807,30 @@
              {:select [:u.* :g.name] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :order-by [:nick]}
              {:select [[:nick :a] [:score :b]] :from [:users] :order-by [:a :b]}
              {:select [[:nick :a] [[:count :id] :n]] :from [:users] :group-by [:a] :order-by [:n :a]}
-             {:select [[[:extract :year :!from :closed_at] :y]] :from [:users]}]]
+             {:select [[[:extract :year :!from :closed_at] :y]] :from [:users]}
+             {:select [:id [[:over [[:rank] {:order-by [[:score :desc]]} :r]]]] :from [:users] :order-by [:r :id]}
+             {:select [:g.name :lp.nick] :from [[:groups :g]]
+              :join [[[:join [:users :u] {:cross-join [[[:lateral {:select [:nick] :from [:users] :where [:> :users.id :g.id] :limit 1}] :lp]]}]] [:= :u.group_id :g.id]]}]]
     (is (= [] (check q)) (pr-str q)))
   (is (= [] (check {:select [:Rec.a] :from [[[:jsonb_to_record [:cast "{}" :jsonb]] [[:raw "\"Rec\"(a int)"]]]]} (assoc opts :format {:quoted true}))))
   (is (= [:unknown-column] (map :kind (check {:select [:id] :from [:users] :where [:> :score :10]} (assoc opts :format {:quoted true})))) "quoted, :10 is a column \"10\"")
   (is (not (contains? (args {:select [[[:at-time-zone :closed_at :?z] :t]] :from [:users]}) :z)) "HoneySQL writes AT TIME ZONE '?z'")
-  (is (= [{:kind :unknown-column :column :groups.id :clause :columns :did-you-mean [:id]}]
+  (is (= [{:kind :unknown-column :column :groups/id :clause :columns :did-you-mean [:id]}]
          (filter #(= :unknown-column (:kind %)) (check {:insert-into [:groups [:groups/id :name]] :values [[1 "a"]]})))
       "HoneySQL writes the target's :groups/id as groups.id")
   (is (= [:nope] (map :column (check {:select-distinct-on [[:id :nope] :nick] :from [:users]}))) "DISTINCT ON's expressions are no [expr alias]")
   (is (= [:nik] (map :column (check {:select [:id] :from [:users] :group-by [[:upper :nik]]}))) "a call in GROUP BY is checked")
   (let [q {:select [:id] :from [:users] :where [:in :id {:nest {:select [:nope] :from [:users]}}]}]
     (is (= {:select [:nope] :from [:users]} (get-in q (:in (first (check q))))) ":in reaches the statement through :nest")))
+
+(deftest an-argument-used-twice-takes-what-both-uses-take
+  (let [t (args {:select [:id] :from [:users] :where [:or [:= [:cast :?ids [:raw "bigint[]"]] nil] [:= :id [:any :?ids]]]})
+        ids (:ids t)
+        ok? #(m/validate ids % {:registry registry})]
+    (is (ok? (long-array [1 2])))
+    (is (not (ok? (into-array String ["1"]))) "the cast reads a String, = ANY sends it as varchar[]")
+    (is (ok? nil) "the query tests it for NULL")
+    (is (= [:maybe ["bigint | numeric | float8 | real"]] (pgmalli/describe registry ids)) "described as the common type")))
 
 (deftest returning-old-and-new-are-null-where-the-statement-has-no-such-row
   (let [nullable #(shape/maybe? (last (second (row %))))]

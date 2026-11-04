@@ -13,8 +13,10 @@
 (defn- output-column?
   "Whether a bare :col of :order-by or :group-by may mean an output column of stmt."
   [stmt col format]
-  (let [[a c] (syntax/split-column col format)]
-    (boolean (and (not a) (some #(= c (syntax/item-name % {:format format})) (syntax/selected-items stmt))))))
+  (let [[a c] (syntax/split-column col format)
+        opts {:format format}]
+    (boolean (and (not a) (some #(or (= c (syntax/item-name % opts)) (some (comp #{c} first) (syntax/over-columns (syntax/item-expression %) opts)))
+                                (syntax/selected-items stmt))))))
 
 (defn- output-statement
   "The statement whose select names a statement's output columns: itself, or the first member
@@ -106,13 +108,14 @@
 (def ^:private expression-clauses
   "The clauses whose values are expressions, whose calls' arguments name columns."
   #{:select :select-distinct :select-distinct-on :where :having :group-by :order-by :set :values
-    :do-update-set :returning :partition-by})
+    :do-update-set :returning})
 
 (defn- column-problems [registry sc stmt ps {:keys [format] :as opts}]
   (let [target (syntax/target-scope sc stmt opts)
         assigned (when (seq target) (concat (map #(or (syntax/field-column %) %) (filter syntax/column-keyword? (:columns (syntax/insert-parts stmt))))
                                             (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))
         ;; a target a.b as written (writes has it as its column a): field b of a column a to PostgreSQL
+        written (:written (syntax/insert-parts stmt))
         dotted (into {} (for [[clause ts] [[:columns (:columns (syntax/insert-parts stmt))]
                                            [:values (let [v (:values stmt)] (when (vector? v) (mapcat keys (filter map? v))))]
                                            [:set (let [st (:set stmt)] (when (map? st) (keys st)))]
@@ -134,7 +137,7 @@
                                         (for [{:keys [x chain item? top? clause]} (syntax/expression-nodes ps)
                                               :let [items? (or (syntax/select-list-clauses clause) (= :order-by clause))]
                                               :when (and (expression-clauses clause)
-                                                         (not (and top? (or items? (#{:group-by :partition-by} clause))))
+                                                         (not (and top? (or items? (= :group-by clause))))
                                                          (not (and item? items?)))
                                               ;; [expr direction], an item of an ORDER BY inside OVER or an aggregate, is no
                                               ;; call: its expression alone names a column
@@ -159,9 +162,12 @@
       (if (< 1 (count hits))
         {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
         (let [[qualifier meant] (unknown-qualifier registry scope col)
-              near (if qualifier meant (near-columns registry scope col))]
+              ;; a table of the statement an ON inside a parenthesized join does not see
+              outside? (and qualifier (contains? (first sc) qualifier) (not (contains? (first scope) qualifier)))
+              near (cond outside? nil qualifier meant :else (near-columns registry scope col))]
           (cond-> {:kind :unknown-column :column col}
             qualifier (assoc :qualifier qualifier)
+            outside? (assoc :outside-join true)
             near (assoc :did-you-mean near)
             ;; a target a.b whose a is the table or its alias: field b of a column a to PostgreSQL
             (and (identical? scope target) (dotted col) (whole-row? scope col format))
@@ -170,7 +176,7 @@
                              field (last (str/split (name t) #"\."))
                              table (some #(when (map? %) (:table (get % (second (syntax/split-column col format))))) (syntax/chain scope))
                              meant (if (contains? (query/table-columns registry table) field) [(keyword field)] (near-in registry table field))]
-                         (cond-> {:column t :clause clause} meant (assoc :did-you-mean meant)))))
+                         (cond-> {:column (get written t t) :clause clause} meant (assoc :did-you-mean meant)))))
             (and (syntax/quoted? format) (not= (syntax/split-column col format) (syntax/split-column col nil))
                  (some? (query/resolve-column registry scope (keyword (str/join "." (remove nil? (syntax/split-column col nil)))))))
             (assoc :quoted true)))))))

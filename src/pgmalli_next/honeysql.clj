@@ -62,7 +62,7 @@
 
    Names resolve as PostgreSQL resolves them. query-schema builds a function schema of it.
    Options: docs/queries.md#options. Throws when body is no HoneySQL data: SQL already
-   formatted, or code (a symbol in it): pass the data the code builds.
+   formatted, or code (a symbol in it): docs/queries.md#stricter-than-postgresql.
 
    (analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})"
   ([registry body] (analyze registry body {}))
@@ -235,7 +235,10 @@
   ([registry name] (set-schema registry name {}))
   ([registry name opts] (written-row registry name "update" "set-schema" opts)))
 
-(defn- column-name [c] (if (keyword? c) (subs (str c) 1) (str c)))
+(defn- column-name
+  "c as the SQL HoneySQL writes names it: :u/nick as u.nick."
+  [c]
+  (cond (and (keyword? c) (namespace c)) (str (namespace c) "." (name c)) (keyword? c) (name c) :else (str c)))
 
 (defn- cast-form
   "[:cast x t] as HoneySQL writes a cast to type t: t by its short name, as a keyword where one
@@ -257,10 +260,13 @@
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
   {:unknown-table (fn [{:keys [table did-you-mean quoted]}] (query/unknown-table-text table did-you-mean quoted))
-   :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint]}]
+   :unknown-column (fn [{:keys [column did-you-mean qualifier quoted clause side table target constraint outside-join]}]
                      (let [meant (when did-you-mean (error/did-you-mean (str/join " or " (map column-name did-you-mean))))]
                        (str "unknown column " (column-name column)
-                            (when qualifier (str "; no table or alias " qualifier " in the statement"))
+                            (when qualifier
+                              (if outside-join
+                                (str ": " qualifier " is outside the parenthesized join, whose ONs see its own tables alone")
+                                (str "; no table or alias " qualifier " in the statement")))
                             (case clause
                               :using (str " in USING: " (case side :left "no table before the join has it"
                                                               :right (str table " lacks it")

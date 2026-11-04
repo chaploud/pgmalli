@@ -11,9 +11,9 @@ uses of a `jsonb_populate_record` document (`:document-columns`,
 [below](#document-columns)). The examples use
 [example/schema.sql](example/schema.sql).
 
-It reads the data you give `sql/format`, as your code has built it. Code in it (a quoted form,
-any symbol: `'{:where (when x [:= :id :?id])}`) is a `:pgmalli.error/not-query-data` error
-naming where the symbol is (`:in`, as `get-in` reads it): analyze each variant your code builds.
+It reads the data you give `sql/format`, as your code has built it. Code in it is a
+`:pgmalli.error/not-query-data` error ([stricter than PostgreSQL](#stricter-than-postgresql)),
+whose `:in` says where the symbol is, as `get-in` reads it.
 
 ```clojure
 (require '[pgmalli-next.core :as pgmalli]
@@ -209,8 +209,9 @@ rounds it (a value at exactly half a unit past may round out of range):
 ```
 
 PostgreSQL types a parameter once, so an argument of several uses takes the values each of them
-takes: a cast and a comparison, what the comparison takes of what casts. It takes nil where any
-of its uses does.
+takes: a cast and a comparison, what the comparison takes of what casts. It takes nil only where
+each of its uses does (one the query tests for NULL does); a use pgmalli does not type takes any
+value.
 
 A comparison leaves out CHECKs and lengths: PostgreSQL compares a value beyond them and
 matches no row.
@@ -535,7 +536,7 @@ is not seen; pass them in `:format`.
 | option | for |
 |---|---|
 | `:schema "app"` | the schema of unqualified tables |
-| `:jdbc` | the options you pass to next.jdbc ([reading-rows.md](reading-rows.md#options)); its `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
+| `:jdbc` | the options you pass to next.jdbc ([reading-rows.md](reading-rows.md#the-options-of-nextjdbc)); its `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them |
 | `:result :one` | `h/query-schema`'s alone: the return is what `execute-one!` returns |
 
@@ -668,9 +669,10 @@ Write the query so PostgreSQL's reading is explicit instead.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 - A symbol in the query, which HoneySQL writes as a name (`[:cast :score integer]`): almost
-  always code not evaluated (a macro's form, whose `[:= :id id]` names a local `id`), which
-  read as a name would be typed as a column without a word. An error; write the name as a
-  keyword (`[:cast :score :integer]`), or pass the data the code builds.
+  always code left unevaluated (a macro's form, whose `[:= :id id]` means a local `id`, or
+  `'{:where (when x [:= :id :?id])}`), which read as a name would silently become a column. An
+  error: write the name as a keyword (`[:cast :score :integer]`), or analyze the data the code
+  builds, each variant separately.
 
 ## Not checked
 
@@ -681,8 +683,9 @@ Write the query so PostgreSQL's reading is explicit instead.
 
 - Values written in the query beyond NULL, enum literals and strings sent typed (`varchar`): an empty `[:in :id []]` is not reported (an argument in `:in` is
   typed non-empty).
-- An ON clause naming a table joined after it, or an UPDATE's FROM joining on the target table
-  (invalid reference to FROM-clause entry), which PostgreSQL rejects.
+- An ON clause naming a table joined after it (an ON inside a parenthesized join, which sees its
+  own tables alone, is checked), or an UPDATE's FROM joining on the target table (invalid
+  reference to FROM-clause entry), which PostgreSQL rejects.
 - A recursive CTE naming itself inside a subquery of its recursive term, which PostgreSQL
   rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.

@@ -125,11 +125,16 @@
   [t]
   (if-let [[base js] (join-group t)] {:group [base (group-joins js)]} t))
 
+(defn- attached-item
+  "The item the joins attach to, as written: the last FROM item, a comma binding looser than JOIN."
+  [stmt]
+  (last (written-items stmt [:from :using])))
+
 (defn- from-groups
   "[base entries last?] of each parenthesized join among a statement's FROM, USING and CROSS
-   JOIN items, entries its group-joins, last? where it is the item the joins attach to (join-base)."
+   JOIN items, entries its group-joins, last? where it is attached-item."
   [stmt]
-  (let [attached (last (written-items stmt [:from :using]))]
+  (let [attached (attached-item stmt)]
     (for [t (written-items stmt from-keys) :let [[base js] (join-group t)] :when base]
       [base (group-joins js) (identical? t attached)])))
 
@@ -218,11 +223,12 @@
         [alias listed] (if (vector? more) [alias more] [more nil])]
     (when (keyword? table)
       ;; HoneySQL writes :t/c as c in :columns, as t.c in the target's list
-      (let [unspaced (fn [f c] (mapv #(if (and (keyword? %) (namespace %)) (keyword (f %)) %) c))]
+      (let [unspaced (fn [f c] (mapv #(if (and (keyword? %) (namespace %)) (keyword (f %)) %) c))
+            dotted (when listed (unspaced #(str (namespace %) "." (name %)) listed))]
         {:table table :alias alias :select select
-         :columns (if listed
-                    (unspaced #(str (namespace %) "." (name %)) listed)
-                    (let [c (:columns stmt)] (when (vector? c) (unspaced name c))))}))))
+         :columns (or dotted (let [c (:columns stmt)] (when (vector? c) (unspaced name c))))
+         ;; each listed column read, to the keyword written
+         :written (when listed (zipmap dotted listed))}))))
 
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
@@ -325,10 +331,10 @@
 (defn catalog? [table] (boolean (re-find #"^(pg_catalog|information_schema)\." table)))
 
 (defn join-base
-  "The alias of the item the joins attach to: the last FROM item, a comma binding looser than
-   JOIN."
+  "The alias of attached-item (of a parenthesized join, its first item's)."
   [stmt opts]
-  (take-last 1 (map #(second (table-ref % opts)) (from-items stmt [:from :using]))))
+  (when-let [t (attached-item stmt)]
+    [(second (table-ref (if-let [[base] (join-group t)] base t) opts))]))
 
 (defn outer-aliases
   "The aliases an outer join may leave NULL: a LEFT JOIN's table, every table before a RIGHT
@@ -493,7 +499,8 @@
    statement's tables and the enclosing ones (its conditions, select, assignments); :outer, only
    the enclosing ones (INSERT ... SELECT, the rows of :values and a table item of :from or a
    join: none sees the statement's own tables); :lateral, those and the tables before it (a
-   LATERAL item, a function); :group, those and a parenthesized join's own tables (its ONs)."
+   LATERAL item, a function); :group, those and a parenthesized join's own tables (its ONs; a
+   statement inside it sees as :own)."
   [x]
   (for [[k v] (clause-entries x) :when (not (some #{k} with-keys))
         :let [item-sees #(cond (join-group %) :group (lateral? %) :lateral :else :outer)]
@@ -929,6 +936,15 @@
     (cond alias (alias-label alias opts)
           col (second (split-column col (:format opts)))
           :else (expression-name (item-expression item) (:format opts)))))
+
+(defn over-columns
+  "[[name expression] ...] of the columns [:over [f window alias] ...], an item of a select list,
+   makes: one of each window function, named by its alias or as PostgreSQL names f (nil when that
+   cannot be told); nil for another x."
+  [x opts]
+  (when (and (vector? x) (= :over (first x)))
+    (for [w (rest x) :let [[e _ a] (when (vector? w) w)]]
+      [(if (alias? a) (alias-label a opts) (expression-name e (:format opts))) e])))
 
 (defn star? [col] (= "*" (second (split-column col nil))))
 

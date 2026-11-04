@@ -143,7 +143,7 @@ written. An override that types a JSON number takes what a JSON parser returns: 
 | option | for |
 |---|---|
 | `:schema "app"` | `pgmalli/as-read`'s: the schema of a table named without one (`:users`) |
-| `:jdbc {...}` | the options you pass to next.jdbc, checked as the query functions check them ([queries](queries.md#options)); `:return-keys`, a write's RETURNING, is an error here |
+| `:jdbc {...}` | the options you pass to next.jdbc ([below](#the-options-of-nextjdbc)); `:return-keys`, a write's RETURNING, is an error here |
 
 There is no option for how a value is read or sent.
 

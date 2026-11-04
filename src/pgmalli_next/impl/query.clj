@@ -395,8 +395,10 @@
                                          (apply concat (map-indexed (fn [i e] (walk e (conj path k i) outer (into base (keep #(syntax/cte-name % (:format opts))) (if (= :with-recursive k) w (take i w))) false true)) w))
                                          (walk w (conj path k) outer ctes false true))]
                              found)
+                           ;; a statement inside a parenthesized join (a LATERAL subquery) sees the
+                           ;; items left of the joins it is in, not its ONs' tables alone
                            (for [[ks v sees] (syntax/clause-parts x)
-                                 found (walk v (into path ks) (syntax/part-chain sees v chain outer opts) ctes false true)]
+                                 found (walk v (into path ks) (syntax/part-chain (if (= :group sees) :own sees) v chain outer opts) ctes false true)]
                              found))))
                   (syntax/branch? x) (apply concat (map-indexed (fn [i c] (walk c (conj path i) outer ctes (or in-vector? (vector? x)) under?)) (seq x)))))]
     (walk body [] outer #{} false false))))
@@ -1032,9 +1034,8 @@
                           x (syntax/item-expression item)]]
                 (cond
                   ;; [:over [f window alias] ...]: a column of each window function
-                  (and (nil? col) (nil? alias) (vector? x) (= :over (first x)))
-                  (let [cs (for [w (rest x) :let [[e _ a] (when (vector? w) w)
-                                                  n (if (syntax/alias? a) (syntax/alias-label a opts) (syntax/expression-name e (:format opts)))]]
+                  (and (nil? col) (nil? alias) (syntax/over-columns x opts))
+                  (let [cs (for [[n e] (syntax/over-columns x opts)]
                              (when n (let [{s :schema :keys [nullable?]} (expression-type registry chain e opts)] (entry n s nullable? nil))))]
                     (when (and (seq cs) (every? some? cs)) cs))
                   (nil? col) (when-let [n (syntax/item-name item opts)]

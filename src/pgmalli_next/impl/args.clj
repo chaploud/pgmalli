@@ -480,25 +480,47 @@
 
 (defn- null-tested-args
   "The arguments a statement among positions ps tests for NULL ([:= :?x nil], which HoneySQL
-   writes ? IS NULL, and [:is :?x nil], IS NOT NULL alike) under sql/format's :inline: NULL IS
-   NULL OR id = NULL runs, whatever the other uses. Sent as a parameter, NULL there has no type,
-   which PostgreSQL refuses (42P18)."
+   writes ? IS NULL, and [:is :?x nil], IS NOT NULL alike): NULL IS NULL OR id = NULL runs,
+   whatever the other uses. Sent as a parameter, NULL there has no type, which PostgreSQL
+   refuses (42P18): tested so under sql/format's :inline alone, or cast ([:= [:cast :?x t] nil])."
   [ps {:keys [format]}]
-  (for [{:keys [x]} (when (:inline format) (syntax/expression-nodes ps))
+  (for [{:keys [x]} (syntax/expression-nodes ps)
         :when (and (vector? x) (= 3 (count x)) (#{:= :<> :not= :!= :is :is-not} (first x)))
         :let [[_ a b] x]
         [v other] [[a b] [b a]]
         :when (syntax/null-value? other format)
-        :let [k (syntax/param-key v)]
-        :when k]
+        :let [cast? (and (vector? v) (= :cast (first v)) (= 3 (count v)))
+              k (syntax/param-key (if cast? (second v) v))]
+        :when (and k (or cast? (:inline format)))]
     k))
+
+(defn- meet
+  "The alternatives of a and b whose values the other takes too, each as it names them: one
+   within an alternative of the other (the same values, or those of its kind: [:int {:min 0}]
+   within :int), an array's of the elements both take; nil where an alternative of a and one of
+   b are of one kind and neither is within the other, whose common values cannot be told here."
+  [a b]
+  (let [array? #(= :pg/array (shape/head %))
+        within? (fn [x y] (or (= (unlabel x) (unlabel y)) (and (keyword? y) (= y (shape/head x)))))
+        elements (fn [x y]
+                   (let [[ex ey] [(last x) (last y)]
+                         m (cond (query/untyped? ey) [ex]
+                                 (query/untyped? ex) [ey]
+                                 :else (meet (shape/non-null ex) (shape/non-null ey)))]
+                     (cond (nil? m) ::untold
+                           (seq m) (assoc x (dec (count x)) (cond-> (shape/either m nil) (and (shape/maybe? ex) (shape/maybe? ey)) query/nullable)))))
+        pairs (for [x (shape/alternatives a), y (shape/alternatives b)]
+                (cond (within? x y) x
+                      (within? y x) y
+                      (and (array? x) (array? y)) (elements x y)
+                      (= (shape/kind x) (shape/kind y)) ::untold))]
+    (when-not (some #{::untold} pairs) (distinct (remove nil? pairs)))))
 
 (defn- both-uses
   "The type of an argument two of its uses type a and b: PostgreSQL types a parameter once, so
-   a value goes where each use takes it; a use that types nothing takes any. nil where either
-   takes it (an IS DISTINCT FROM, a nullable column it is assigned to)."
+   a value goes where each use takes it; a use that types nothing takes any, nil too."
   [a b]
-  (let [nullable? (or (shape/maybe? a) (shape/maybe? b))
+  (let [nullable? (every? #(or (query/untyped? %) (shape/maybe? %)) [a b])
         [a b] (map shape/non-null [a b])
         ;; every alternative of x is one of y's, but for the :pg/type it names, or an array where y
         ;; takes an array of any elements
@@ -510,7 +532,7 @@
                 (query/untyped? b) a
                 (within? b a) b
                 (within? a b) a
-                :else (into [:and] (sort-by pr-str [a b])))]
+                :else (if-let [m (seq (meet a b))] (shape/either m nil) (into [:and] (sort-by pr-str [a b]))))]
     (cond-> t nullable? query/nullable)))
 
 (defn- typed-only

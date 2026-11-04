@@ -302,7 +302,7 @@ The problems it reports:
 | `:kind` | for |
 |---|---|
 | `:unknown-table` | a table the registry lacks; `:did-you-mean` lists a table of that name in another schema first; `:quoted` true where, under `:quoted`, the name folded to lower case is a table of the registry |
-| `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`); with `:clause` where a clause names it: `:using` (`:side` `:left`, `:right` or `:both`, `:table` the joined one), `:on-conflict` (`:table`; `:constraint` where a vector headed by `:on-constraint` names one), `:values` (a keyword value, which HoneySQL writes as a column; `:table` the table written, `:target` the value's key, absent past a positional row's columns), `:set`, `:do-update-set`, `:columns` or `:values` without `:table` (an assigned target qualified by its table or alias: a field of a column to PostgreSQL); `:did-you-mean` where a column is spelled close; `:quoted` true where, under `:quoted`, the name folded to lower case is a column |
+| `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`); with `:clause` where a clause names it: `:using` (`:side` `:left`, `:right` or `:both`, `:table` the joined one), `:on-conflict` (`:table`; `:constraint` where a vector headed by `:on-constraint` names one), `:values` (a keyword value, which HoneySQL writes as a column; `:table` the table written, `:target` the value's key, absent past a positional row's columns), `:set`, `:do-update-set`, `:columns` or `:values` without `:table` (an assigned target qualified by its table or alias: a field of a column to PostgreSQL); `:outside-join` true where an ON inside a parenthesized join names a table of the statement outside it; `:did-you-mean` where a column is spelled close; `:quoted` true where, under `:quoted`, the name folded to lower case is a column |
 | `:ambiguous-column` | an unqualified column of two tables, with `:candidates` |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |
@@ -527,9 +527,9 @@ and pgjdbc are yours to add.
 - PRIMARY KEY, UNIQUE and foreign keys are not checked: a row schema holds for one row.
 - Triggers, EXCLUDE constraints and policies are not enforced
   ([docs/types.md](docs/types.md#what-is-read)).
-- `h/analyze` reads a query as the data `sql/format` takes: code in it (a quoted form) is an
-  error, and each variant your code builds is analyzed on its own
-  ([docs/queries.md](docs/queries.md)).
+- `h/analyze` reads a query as the data `sql/format` takes: code in it is an error, and each
+  variant your code builds is analyzed on its own
+  ([docs/queries.md](docs/queries.md#stricter-than-postgresql)).
 - A CHECK no pattern covers is left to the database: the schemas take a row it refuses
   ([docs/types.md](docs/types.md#check-constraints)).
 
