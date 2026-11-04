@@ -234,7 +234,7 @@
         populated (set (for [{:keys [x chain]} nodes :let [{:keys [json arg]} (query/populate-call registry chain x opts)] :when arg] json))
         casts (for [{:keys [x chain]} nodes
                     :when (not (populated x))
-                    ;; ARRAY[...]::query/t[] casts each element to t (transformArrayExpr)
+                    ;; ARRAY[...]::t[] casts each element to t (transformArrayExpr)
                     x (cond (and (vector? x) (= :cast (first x)) (= 3 (count x))) [x]
                             (and (vector? x) (= :array (first x)) (= 3 (count x)) (sequential? (second x)) (keyword? (nth x 2)))
                             (for [e (second x)] [:cast e (nth x 2)])

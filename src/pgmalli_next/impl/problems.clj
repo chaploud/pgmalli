@@ -1,0 +1,333 @@
+(ns pgmalli-next.impl.problems
+  "The problems analyze reports of a query (README.md's table of :kind) and the tables it reads
+   and writes."
+  (:require [clojure.string :as str]
+            [honey.sql :as sql]
+            [pgmalli-next.impl.accept :as accept]
+            [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.hsyntax :as syntax]
+            [pgmalli-next.impl.jdbc :as jdbc]
+            [pgmalli-next.impl.query :as query]
+            [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types]))
+
+(defn- output-column?
+  "Whether a bare :col of :order-by or :group-by may mean an output column of stmt."
+  [stmt col]
+  (boolean (and (not (first (syntax/split-column col)))
+                (some #(= (syntax/folded (name col)) (syntax/item-name %)) (syntax/selected-items stmt)))))
+
+(defn- output-statement
+  "The statement whose select names a statement's output columns: itself, or the first member
+   of a set operation (UNION ...)."
+  [stmt]
+  (if-let [members (some stmt syntax/set-operation-keys)]
+    (when (and (vector? members) (map? (first members))) (output-statement (first members)))
+    stmt))
+
+(defn- untold-outputs?
+  "Whether stmt's select may make output names not read here: a :raw item, or, when stars?
+   (the first member of a set operation, whose output names are all ORDER BY sees), a star."
+  [stmt stars?]
+  (boolean (some #(let [e (syntax/item-expression %)]
+                    (or (and (vector? e) (= :raw (first e)))
+                        (and stars? (some-> (first (syntax/select-parts %)) syntax/star?))))
+                 (syntax/selected-items stmt))))
+
+(defn- ordering-columns
+  "The input columns :order-by and :group-by name as they are (:col, or [:col :asc]);
+   expressions there are not read. As PostgreSQL reads them, a bare name in :order-by is an
+   output column first (of a set operation, its first member's), one in :group-by an input
+   column first."
+  [registry sc stmt]
+  (let [out (output-statement stmt)
+        output? (fn [s c stars?] (or (output-column? s c) (and (nil? (first (syntax/split-column c))) (untold-outputs? s stars?))))]
+    (concat (for [c (syntax/vectorish (:group-by stmt))
+                  :when (and (syntax/column-keyword? c) (not (and (output? stmt c false) (empty? (query/column-hits registry sc c)))))]
+              c)
+            (when out
+              (for [o (syntax/vectorish (:order-by stmt)) :let [c (syntax/bare o)]
+                    :when (and (syntax/column-keyword? c) (not (output? out c (not= out stmt))))]
+                c)))))
+
+(defn- whole-row?
+  "Whether an unqualified :x names a table of the scope rather than a column: its whole row."
+  [scope col]
+  (let [[a column] (syntax/split-column col)]
+    (boolean (and (nil? a) (some #(and (map? %) (contains? % (syntax/folded column))) (syntax/chain scope))))))
+
+(defn- near-columns
+  "Up to three columns of the scope's tables spelled close to col's name, qualified as col is:
+   what it likely meant."
+  [registry scope col]
+  (let [[a c] (syntax/split-column col)
+        c (syntax/folded c)
+        ;; a qualified name looks in the innermost table of its alias, which hides outer ones
+        scopes (filter map? (syntax/chain scope))
+        scopes (if a (take 1 (filter #(contains? % a) scopes)) scopes)
+        names (distinct (for [sc scopes
+                              [alias {:keys [table]}] sc :when (and table (or (nil? a) (= a alias)))
+                              n (keys (query/table-columns registry table)) :when (not (query/system-columns n))]
+                          n))]
+    (some->> (error/suggestions c names 3) (mapv #(keyword (if a (str a "." %) %))))))
+
+(defn- unknown-qualifier
+  "[qualifier meant] when no table or alias in scope has col's qualifier, nil otherwise. meant
+   is col's column qualified by the aliases in scope whose table has it and whose alias or table
+   name is the qualifier or two edits from it, closest first: an aliased table named by its
+   name, as PostgreSQL's \"Perhaps you meant to reference the table alias\", or a misspelt alias."
+  [registry scope col]
+  (let [[a c] (syntax/split-column col)
+        scopes (filter map? (syntax/chain scope))]
+    (when (and a (not (some #{:open} (syntax/chain scope))) (not-any? #(contains? % a) scopes))
+      (let [c (syntax/folded c)
+            meant (for [sc scopes
+                        [alias {:keys [table order]}] sc
+                        :when (or (and table (contains? (query/table-columns registry table) c)) (some #{c} order))
+                        :let [d (apply min (map #(error/edit-distance a %) (remove nil? [alias (some-> table syntax/table-name)])))]
+                        :when (<= d 2)]
+                    [(keyword (str alias "." c)) d])]
+        [a (some->> (seq meant) (sort-by second) (map first) distinct (take 3) vec)]))))
+
+(defn- column-problems [registry sc stmt ps {:keys [schema] :as opts}]
+  (let [target (syntax/target-scope sc stmt schema)
+        assigned (when (seq target) (concat (map #(or (syntax/field-column %) %) (filter syntax/column-keyword? (:columns (syntax/insert-parts stmt))))
+                                            (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))]
+    (for [[col scope] (distinct (concat (for [c (keep #(first (syntax/select-parts % opts)) (syntax/selected-items stmt))] [c sc])
+                                        (for [c (ordering-columns registry sc stmt)] [c sc])
+                                        (for [[_ c _ chain] (syntax/comparison-sides ps) :when (syntax/column-keyword? c)] [c chain])
+                                        (for [{:keys [x chain]} (syntax/expression-nodes ps)
+                                              :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
+                                                         (syntax/column-keyword? (second x)))]
+                                          [(second x) chain])
+                                        ;; a keyword assigned in SET is a column the statement sees
+                                        (for [{:keys [x chain clause]} (syntax/assignments ps)
+                                              :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x))]
+                                          [x chain])
+                                        (for [c assigned] [c target])))
+          :when (if (or (syntax/star? col) (whole-row? scope col))
+                  ;; :t.* names a table of the scope, unless the data does not show them all
+                  (let [[a] (syntax/split-column col)]
+                    (and (syntax/star? col) a (not (some #{:open} (syntax/chain scope))) (not-any? #(and (map? %) (contains? % a)) (syntax/chain scope))))
+                  (nil? (query/resolve-column registry scope col)))
+          :let [hits (query/column-hits registry scope col)]]
+      (if (< 1 (count hits))
+        {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
+        (let [[qualifier meant] (unknown-qualifier registry scope col)
+              near (if qualifier meant (near-columns registry scope col))]
+          (cond-> {:kind :unknown-column :column col}
+            qualifier (assoc :qualifier qualifier)
+            near (assoc :did-you-mean near)))))))
+
+(defn- insert-problems [registry stmt schema]
+  (let [{:keys [table columns]} (syntax/insert-parts stmt)
+        [table] (some-> table (syntax/table-ref schema))]
+    (when table
+      (let [values (:values stmt)
+            rows (when (vector? values) values)
+            ;; HoneySQL inserts the union of the columns of all value maps, NULL where a row lacks one
+            given (or columns (when (map? (first rows)) (distinct (mapcat keys (filter map? rows)))))
+            given (when (every? keyword? given) given)
+            ;; HoneySQL writes :group-id as group_id
+            given-names (into #{} (mapcat (fn [k] [(name k) (syntax/folded (name k))])) given)
+            required (set (for [[k p] (some-> (get (::query/schemas registry) (shape/derived-name (shape/table-key table) "insert")) shape/column-entries)
+                                :when (not (:optional p))]
+                            (name k)))]
+        (concat
+         (when columns
+           (for [[i row] (map-indexed vector (filter vector? rows)) :when (not= (count row) (count columns))]
+             {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
+         (when (and (seq given) (not (query/filled-by-trigger? (query/table-props registry table) :insert)))
+           (for [c required :when (not (given-names c))]
+             {:kind :missing-required-column :table table :column (keyword c)})))))))
+
+(defn- write-problems
+  "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
+   a column only the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
+   or USER VALUE, which the first writes and the second ignores). A column one map of :values
+   lacks and another has is NULL, as HoneySQL writes it, DEFAULT under sql/format's
+   :values-default-columns (in :format). Under a column list, which map keys reach which column
+   depends on the HoneySQL version (2.8.85 follows the list): missing keys are not judged there."
+  [registry scopes stmt {:keys [schema format]}]
+  (let [target (syntax/target-scope scopes stmt schema)
+        i (:insert-into stmt)
+        overriding? (and (vector? i) (map? (first i)) (#{:system :user} (:overriding-value (first i))))
+        defaults (set (:values-default-columns format))]
+    (when (seq target)
+      (distinct
+       (for [[col v how clause] (syntax/writes stmt #(when (defaults %) [:default]))
+             :when (syntax/column-keyword? col)
+             :let [{:keys [table] s :schema} (query/resolve-column registry target col)
+                   cp (some-> s shape/column-props)
+                   p (cond (or (nil? s) ((syntax/default-values format) v)) nil
+                           (and (shape/written-by-database? cp)
+                                (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
+                           {:kind :read-only-column :table table :column col}
+                           (and (syntax/null-value? v format) (not (shape/maybe? s)) (not (query/filled-by-trigger? (query/table-props registry table) how)))
+                           {:kind :not-null-violation :table table :column col :clause clause})]
+             :when p]
+         p)))))
+
+(defn- uncast-type
+  "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
+   type of types' :cast (bit takes varbit, which keeps its length), or any other type types
+   has; nil for a string type (text, varchar, char, name, citext) or a type types lacks (a
+   domain over a base type among them)."
+  [registry s]
+  (let [p (shape/column-props s)
+        e (types/entry (shape/type-name p))
+        ;; :bit-varying or :timestamp-with-time-zone is no type HoneySQL writes; its alias is
+        spelt #(if (str/includes? % " ") (first (:aliases (types/entry %))) %)]
+    (or (query/enum-type registry s)
+        (when e
+          (cond (types/element (:pg/type p)) (types/array-of (spelt (:name e)))
+                (:cast e) (spelt (name (:cast e)))
+                (not= :string (:schema e)) (spelt (:name e)))))))
+
+(defn- takes-string?
+  "Whether a column of schema s takes a string sent as one of types, compared or assigned; nil
+   where pgmalli-next.impl.accept does not answer."
+  [registry s assigned? types]
+  (when-let [t (query/slot-type registry s)] (boolean (some #(accept/accepts? t % (if assigned? :assign :compare)) types))))
+
+(defn- parse-number
+  "The number string v is as PostgreSQL reads a numeric input: spaces around it, PostgreSQL 16's
+   underscores between digits or after a base prefix, and 0x, 0o and 0b integers; nil for none."
+  [v]
+  (let [t (str/replace (str/trim v) #"(?<=[0-9a-fA-FxXoObB])_(?=[0-9a-fA-F])" "")
+        [_ sign base digits] (re-matches #"([+-]?)0([xXoObB])([0-9a-fA-F]+)" t)]
+    (try (if base
+           (cond-> (bigint (BigInteger. ^String digits (int (case (str/lower-case base) "x" 16 "o" 8 "b" 2)))) (= "-" sign) -)
+           (bigdec t))
+         (catch NumberFormatException _ nil))))
+
+(defn- label=
+  "Whether literal v is label l as PostgreSQL reads it: a number of the same value, or a string,
+   which it reads as a number label's type ('1' is 1)."
+  [l v]
+  (or (= l v)
+      (and (number? l) (number? v) (== l v))
+      (and (number? l) (string? v) (some-> (parse-number v) (== l)))))
+
+(defn- string-problems
+  "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
+   assigned or under equality-ops; and a string literal HoneySQL sends as a parameter (not
+   inlined, not cast; [:lift s] too), which the one sending sends as varchar, to a column
+   PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar). A
+   named argument is arg-types', which types it by the class sent."
+  [registry ps opts]
+  (let [uses (concat (for [[op side value chain] (syntax/comparison-sides ps)
+                           :when (not (syntax/like-ops op))
+                           :let [s (query/side-schema registry chain side opts)]
+                           :when (or s (syntax/column-keyword? side))]
+                       {:col side :value value :op op :schema s})
+                     (for [{:keys [assign x target] :as a} (syntax/assignments ps) :when (seq target)
+                           :let [{s :schema} (query/assigned-column registry a)]]
+                       {:col assign :value x :assigned? true :schema s}))]
+    (for [{:keys [col assigned? op] s :schema :as use} uses
+          :let [lifted? #(and (vector? %) (= :lift (first %)) (string? (second %)))
+                unlift #(if (lifted? %) (second %) %)
+                value (let [v (:value use)] (if (and (vector? v) (not (keyword? (first v)))) (mapv unlift v) (unlift v)))
+                strings? (or (string? value) (and (vector? value) (every? string? value)))
+                numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
+                values (cond (or strings? numbers?) (if (vector? value) value [value])
+                             (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
+                allowed (when s (query/enum-values registry (if assigned? s (query/compared-schema registry s op))))
+                uncast (when (and s strings? (not (:inline (:format opts))) (not (takes-string? registry s assigned? (jdbc/string-sends opts))))
+                         (uncast-type registry s))]
+          :when (seq values)
+          v values
+          :let [invalid? (and allowed (not (some #(label= % v) allowed)))]
+          p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
+             ;; a value outside the enum fails however it is sent
+             (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
+          :when p]
+      p)))
+
+(defn- problems
+  "The problems of one statement (README.md's table of :kind), scope the statement's (from
+   scope) or, for a nested statement, the chain of its own and the enclosing ones."
+  [registry stmt scope ps {:keys [schema] :as opts}]
+  (let [scopes (syntax/chain scope)
+        known (for [[k v] (::query/schemas registry) :when (shape/read-row? v)]
+                (str/join "." (shape/schema-and-name k)))]
+    (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
+                       :let [same-name (sort (filter #(= (syntax/table-name %) (syntax/table-name table)) known))
+                             meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
+                   (cond-> {:kind :unknown-table :table table} meant (assoc :did-you-mean (vec meant))))
+                 (column-problems registry scopes stmt ps opts)
+                 (insert-problems registry stmt schema)
+                 (write-problems registry scopes stmt opts)
+                 (string-problems registry ps opts)))))
+
+(def ^:private read-clauses
+  "The clauses check, arg-types and row-schema read."
+  (into syntax/statement-keys (concat syntax/with-keys syntax/from-keys syntax/join-keys
+                               [:join-by :where :having :group-by :order-by :limit :offset :values :columns :set
+                                :on-conflict :do-update-set :returning])))
+
+(def ^:private ignored-clauses
+  "Clauses that change no table, column or type these read."
+  #{:do-nothing :on-constraint :for :lock :fetch :window :partition-by :frame})
+
+(defn- unread-clauses
+  "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
+   what it does goes unjudged: in the query map and every statement, and in a map of
+   HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). The rows of
+   :values, :set and :do-update-set are maps of columns, not of clauses, though a subquery in
+   them is read."
+  [body]
+  (let [clauses (set (sql/clause-order))
+        rows (set (for [st (syntax/statements body)
+                        r (concat (when (vector? (:values st)) (:values st)) [(:set st) (:do-update-set st)])
+                        :when (map? r)]
+                    r))
+        maps (tree-seq syntax/branch? seq body)]
+    (distinct
+     (for [m maps
+           ;; the query itself is clauses, however unknown ({:selct [:id]})
+           :when (and (map? m) (seq m) (not (rows m)) (or (identical? m body) (syntax/statement? m) (every? clauses (keys m))))
+           k (keys m)
+           :when (and (keyword? k) (not (read-clauses k)) (not (ignored-clauses k)))
+           :let [meant (when-not (contains? clauses k)
+                         (error/suggest k (concat read-clauses ignored-clauses clauses)))]]
+       (cond-> {:kind :unread-clause :clause k} meant (assoc :did-you-mean [meant]))))))
+
+(defn- return-key-problems
+  "pgjdbc quotes the names of :return-keys as written (its quoteReturningIdentifiers, true by
+   default): one that is a column of the target only folded (:group-id for group_id) is none."
+  [registry stmt scopes {{:keys [return-keys]} :jdbc :keys [schema] :as opts}]
+  (when (and (sequential? return-keys) (map? stmt) (not= stmt (query/sent stmt opts)))
+    (let [[_ alias] (some-> (first (syntax/write-targets stmt)) (syntax/table-ref schema))
+          {:keys [table opaque?]} (get (first (syntax/chain scopes)) alias)
+          cs (when (and table (not opaque?)) (query/table-columns registry table))]
+      (for [k return-keys :let [n (name k)]
+            :when (and cs (not (contains? cs n)) (contains? cs (syntax/folded n)))]
+        {:kind :unknown-column :column (keyword n) :did-you-mean [(keyword (syntax/folded n))]}))))
+
+(defn check
+  "[problem ...] of a query against the registry; [] when there are none. A problem in a nested
+   statement (a subquery, a CTE) carries :in, where the statement sits: (get-in q (:in p)) for
+   data. A clause pgmalli does not read is an :unread-clause problem."
+  [registry body opts]
+  (let [sent-body (or (query/sent body opts) body)
+        chains (query/once registry query/statement-positions sent-body opts)
+        found (mapcat (fn [[stmt scopes path ps]]
+                        ;; :in, where a nested statement sits, as get-in reads it (malli's :in)
+                        (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
+                      chains)]
+    (vec (concat found (return-key-problems registry body (second (first chains)) opts) (unread-clauses sent-body)))))
+
+(defn tables
+  "{:reads #{\"schema.table\" ...} :writes #{...}}: the tables and views a query reads (FROM,
+   joins, USING, in every subquery and CTE) and writes (INSERT INTO, UPDATE, DELETE FROM,
+   TRUNCATE), aliases and CTE names resolved."
+  [registry body {:keys [schema] :as opts}]
+  (let [found (for [[stmt scopes] (query/once registry query/statement-chains body opts)
+                    :let [own (first scopes)
+                          targets (set (keep #(some-> % (syntax/table-ref schema) second) (syntax/write-targets stmt)))]
+                    [alias {:keys [table cte? excluded?]}] (when (map? own) own)
+                    :when (and table (not cte?) (not excluded?))]
+                [(if (targets alias) :writes :reads) table])]
+    (merge {:reads #{} :writes #{}}
+           (update-vals (group-by first found) #(set (map second %))))))

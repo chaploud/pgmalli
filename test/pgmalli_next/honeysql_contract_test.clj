@@ -8,6 +8,7 @@
             [honey.sql :as sql]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.hsyntax :as syntax]
+            [pgmalli-next.impl.problems :as problems]
             [pgmalli-next.test-db :as test-db]))
 
 (def ^:private honeysql (str "HoneySQL " (or (test-db/version "honeysql") "(version unknown)")))
@@ -22,8 +23,8 @@
     :qualify :facet :records :on-duplicate-key-update :with-data :since :until :compare-with :timeseries})
 
 (def ^:private clause-lists
-  [["read-clauses in src/pgmalli_next/honeysql.clj" @#'h/read-clauses]
-   ["ignored-clauses in src/pgmalli_next/honeysql.clj" @#'h/ignored-clauses]
+  [["read-clauses in src/pgmalli_next/impl/problems.clj" @#'problems/read-clauses]
+   ["ignored-clauses in src/pgmalli_next/impl/problems.clj" @#'problems/ignored-clauses]
    ["reported-clauses in test/pgmalli_next/honeysql_contract_test.clj" reported-clauses]])
 
 (defn- older-than-pinned?
@@ -39,7 +40,7 @@
   (let [known (apply set/union (map second clause-lists))]
     (doseq [c (sort (disj (set/difference (set (sql/clause-order)) known) ::mine))]
       (is (nil? c) (str honeysql " registers clause " c " that pgmalli neither reads, ignores nor reports: add it to "
-                        "read-clauses or ignored-clauses in src/pgmalli_next/honeysql.clj, or reported-clauses in "
+                        "read-clauses or ignored-clauses in src/pgmalli_next/impl/problems.clj, or reported-clauses in "
                         "test/pgmalli_next/honeysql_contract_test.clj")))))
 
 (deftest every-clause-pgmalli-lists-is-honeysqls
@@ -77,7 +78,7 @@
   (is (= ["INSERT INTO t AS u (a) VALUES (?)" 1] (sql/format {:insert-into [[:t :u] [:a]] :values [[1]]}))))
 
 (deftest sql-format-writes-values-maps-as-write-problems-reads-them
-  (let [message (str honeysql " writes :values maps differently: update write-problems in src/pgmalli_next/honeysql.clj, "
+  (let [message (str honeysql " writes :values maps differently: update write-problems in src/pgmalli_next/impl/problems.clj, "
                      "which takes a key one map lacks and another has as NULL, DEFAULT under :values-default-columns")]
     (is (= ["INSERT INTO t (b, a) VALUES (NULL, ?), (?, NULL)" 1 2] (sql/format {:insert-into :t :values [{:a 1} {:b 2}]}))
         message)
