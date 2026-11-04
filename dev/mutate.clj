@@ -2,9 +2,11 @@
   "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn name ...] [--limit N] [--jvm] [--db]
    [--timeout secs] [--out report.edn]: mutation testing. Each mutant of a source file (an element
    left out of a literal collection in a def; and/or, when/when-not, true/false, =/not= swapped)
-   is written over the file, the tests run, and the file is written back. A mutant the tests pass
-   on survived: a test that pins it is missing, or the element does nothing."
+   is written over the file in a temporary copy of the working tree, where the tests run; the tree
+   itself is never written. A mutant the tests pass on survived: a test that pins it is missing,
+   or the element does nothing."
   (:require [babashka.cli :as cli]
+            [babashka.fs :as fs]
             [babashka.process :as p]
             [bb-suite]
             [clojure.pprint :as pp]
@@ -86,11 +88,11 @@
                     " (System/exit (if (pos? (+ fail error)) 1 0)))")]))
 
 (defn- run-tests
-  "{:passed? :timeout? :secs :output}; a run past timeout is killed. Without db?, the tests that
-   need a database are skipped (PGMALLI_SKIP_DB=1)."
-  [cmd timeout db?]
+  "{:passed? :timeout? :secs :output} of cmd run in dir; a run past timeout is killed. Without
+   db?, the tests that need a database are skipped (PGMALLI_SKIP_DB=1)."
+  [cmd dir timeout db?]
   (let [start (System/currentTimeMillis)
-        proc (p/process cmd (cond-> {:out :string :err :string} (not db?) (assoc :extra-env {"PGMALLI_SKIP_DB" "1"})))
+        proc (p/process cmd (cond-> {:out :string :err :string :dir dir} (not db?) (assoc :extra-env {"PGMALLI_SKIP_DB" "1"})))
         result (deref proc (* 1000 timeout) ::timeout)]
     (when (= ::timeout result) (p/destroy-tree proc))
     {:passed? (and (not= ::timeout result) (zero? (:exit result)))
@@ -98,8 +100,22 @@
      :secs (/ (- (System/currentTimeMillis) start) 1000.0)
      :output (when (map? result) (str (:out result) (:err result)))}))
 
-(defn- dirty [files]
-  (not-empty (str/trim (:out (p/sh (into ["git" "status" "--porcelain" "--"] files))))))
+(defn- copy-of-the-tree
+  "A temporary copy of the working tree's files, git's tracked and untracked ones as they are
+   now: the mutants are written there, so the tree itself is never touched, whatever happens to
+   the run."
+  []
+  (let [dir (fs/create-temp-dir {:prefix "pgmalli-mutate-"})
+        files (str/split-lines (:out (p/sh ["git" "ls-files" "--cached" "--others" "--exclude-standard"])))]
+    (doseq [f files :when (fs/regular-file? f)]
+      (fs/create-dirs (fs/parent (fs/path dir f)))
+      (fs/copy f (fs/path dir f)))
+    (str dir)))
+
+(def ^:private tree
+  (delay (let [t (copy-of-the-tree)]
+           (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable #(fs/delete-tree t)))
+           t)))
 
 (defn -main [& args]
   (let [opts (cli/parse-opts args {:coerce {:file [] :ns [] :fn [] :limit :long :timeout :long :jvm :boolean :db :boolean}
@@ -109,11 +125,8 @@
         cmd (test-command (assoc opts :ns nss))
         all (cond->> (mapcat #(mutants % (set (str/split kind #",")) (set (:fn opts))) file) limit (take limit))]
     (when (empty? file) (binding [*out* *err*] (println "--file is required")) (System/exit 2))
-    (when-let [d (dirty file)]
-      (binding [*out* *err*] (println "uncommitted changes; commit or stash them first:\n" d))
-      (System/exit 2))
     (println (count all) "mutants;" (str/join " " nss))
-    (let [baseline (run-tests cmd timeout (:db opts))]
+    (let [baseline (run-tests cmd @tree timeout (:db opts))]
       (when-not (:passed? baseline)
         (binding [*out* *err*]
           (println (str/join "\n" (take-last 30 (str/split-lines (str (:output baseline))))))
@@ -121,12 +134,11 @@
         (System/exit 2))
       (println "baseline" (:secs baseline) "s"))
     (let [originals (into {} (map (juxt identity slurp)) file)
-          restore #(doseq [[f s] originals] (spit f s))
-          _ (.addShutdownHook (Runtime/getRuntime) (Thread. ^Runnable restore))
+          in-tree #(str (fs/path @tree %))
           results (vec (for [[i m] (map-indexed vector all)]
-                         (let [r (try (spit (:file m) (:source m))
-                                      (run-tests cmd timeout (:db opts))
-                                      (finally (restore)))
+                         (let [r (try (spit (in-tree (:file m)) (:source m))
+                                      (run-tests cmd @tree timeout (:db opts))
+                                      (finally (spit (in-tree (:file m)) (originals (:file m)))))
                                m (-> (dissoc m :source)
                                      (assoc :status (cond (:timeout? r) :timeout (:passed? r) :survived :else :killed)
                                             :secs (:secs r)))]
@@ -134,9 +146,6 @@
                                             (:file m) (:line m) (:def m) (:mutation m)))
                            m)))
           survived (filter #(= :survived (:status %)) results)]
-      (when-let [d (dirty file)]
-        (binding [*out* *err*] (println "NOT RESTORED:" d))
-        (System/exit 3))
       (some-> (java.io.File. ^String out) .getParentFile .mkdirs)
       (spit out (with-out-str (pp/pprint {:command cmd :results results})))
       (println (format "\n%d killed, %d survived, %d timed out; report %s"
