@@ -14,17 +14,16 @@
 
 ;;; the options
 
-(def options-schema
-  "The options pgmalli takes, closed: a misspelt key or value is an error rather than a check
-   silently weakened. :jdbc and :format are the maps an application passes to next.jdbc and
-   sql/format, open: pgmalli reads the keys of them it names."
-  [:map {:closed true}
-   [:schema {:optional true} :string]
-   [:jdbc {:optional true} [:map
-                            [:return-keys {:optional true} (let [m {:error/message "should be true, false or a vector of column names ([\"id\"], [:id])"}]
-                                                             [:or [:boolean m] [:vector (assoc m :min 1) [:or :string :keyword]]])]]]
-   [:result {:optional true} [:enum :one]]
-   [:format {:optional true} :map]])
+(def ^:private option-entries
+  "Each option pgmalli takes. :jdbc and :format are the maps an application passes to next.jdbc
+   and sql/format, open: pgmalli reads the keys of them it names."
+  {:schema [:schema {:optional true} :string]
+   :jdbc [:jdbc {:optional true} [:map
+                                  [:return-keys {:optional true}
+                                   (let [m {:error/message "should be true, false or a vector of column names ([\"id\"], [:id])"}]
+                                     [:or [:boolean m] [:vector (assoc m :min 1) [:or :string :keyword]]])]]]
+   :result [:result {:optional true} [:enum :one]]
+   :format [:format {:optional true} :map]})
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
@@ -35,7 +34,8 @@
   ([schema opts kind label]
    (if (m/validate schema (or opts {}))
      opts
-     (let [errors (me/humanize (m/explain schema opts))
+     (let [errors (clojure.walk/postwalk #(if (and (vector? %) (every? string? %)) (vec (distinct %)) %)
+                                         (me/humanize (m/explain schema opts)))
            known (when (= :map (m/type schema)) (map first (m/children (m/schema schema))))
            stray (when (map? opts) (remove (set known) (keys opts)))
            suggest (some #(error/suggest % known) stray)]
@@ -51,8 +51,9 @@
                       (seq stray) (assoc :unknown (vec stray))
                       suggest (assoc :did-you-mean [suggest])))))))
 
-;; compiled once: malli keeps a schema's validator, and these are checked on every call
-(def ^:private options (delay (m/schema options-schema)))
+;; compiled once per set of keys: malli keeps a schema's validator, and options are checked on every call
+(def ^:private options-schema
+  (memoize (fn [ks] (m/schema (into [:map {:closed true}] (map option-entries) ks)))))
 
 ;;; what an application sends
 
@@ -111,11 +112,13 @@
     (or (= sym f) (and v (or (= v f) (= @v f))))))
 
 (defn options!
-  "opts when pgmalli takes them: their keys and values. An error names what it does not take,
-   with the one meant; an option of an earlier version what replaced it."
-  [opts]
+  "opts when the function they go to takes them, the options of ks (option-entries' keys, in
+   order) closed: a misspelt key or value is an error rather than a check silently weakened. An
+   error names what it does not take, with the one meant; an option of an earlier version what
+   replaced it."
+  [opts ks]
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
-    (when-let [old (not-empty (select-keys opts [:send :write :stringtype]))]
+    (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
       (fail! (str (pr-str old) " is no longer read: " one-sending "; see " error/changelog) old))
     (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns]))]
       (fail! (str (pr-str old) " is no longer read: " builder-only "; see " error/changelog) old))
@@ -136,9 +139,9 @@
                      {:given [k] :did-you-mean [meant]}))
       (when-let [given (not-empty (select-keys (when (map? jdbc) jdbc) [:builder-fn :label-fn :qualifier-fn]))]
         (when-not (and (= [:builder-fn] (keys given)) (the-builder? (:builder-fn given)))
-          (fail! (str ":jdbc's " (str/join ", " (keys given)) " is no longer read: " builder-only "; see " error/changelog)
+          (fail! (str ":jdbc's " (str/join ", " (keys given)) " is not read: " builder-only)
                  given))))
-    (checked! @options opts)
+    (checked! (options-schema ks) opts)
     opts))
 
 (def ^:private sends
@@ -446,7 +449,7 @@
   "The [:map ...] of a row as next.jdbc's as-unqualified-maps builds it; the options are documented on
    pgmalli-next.core/as-read."
   [registry name opts]
-  (options! opts)
+  (options! opts [:jdbc])
   (let [m (shape/without-gen (data-columns registry name))
         props (when (map? (second m)) (second m))
         schemas (shape/schemas-of registry)

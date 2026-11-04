@@ -1591,19 +1591,23 @@
                  {:given body :in path}))
   (as-vectors body))
 
+(def ^:private option-keys
+  "The options of analyze, values-schema and set-schema; query-schema's add :result."
+  [:schema :jdbc :format])
+
 (defn- prepared
   "[registry body opts] as a public function reads them: the registry as reading reads it, body
-   as query! reads it, opts checked (jdbc/options!) and with-defaults'. Without a body, opts
-   without with-defaults: a table named with its schema needs none. A public function another
-   one calls with what it read (a registry reading made) reads them as they are."
-  ([registry opts]
+   as query! reads it, opts checked (jdbc/options!, of ks) and with-defaults'. Without a body,
+   opts without with-defaults: a table named with its schema needs none. A public function
+   another one calls with what it read (a registry reading made) reads them as they are."
+  ([registry opts ks]
    (if (::schemas registry)
      [registry opts]
-     [(reading registry) (jdbc/options! opts)]))
-  ([registry body opts]
+     [(reading registry) (jdbc/options! opts ks)]))
+  ([registry body opts ks]
    (if (::schemas registry)
      [registry body opts]
-     (let [[r opts] (prepared registry opts)]
+     (let [[r opts] (prepared registry opts ks)]
        [r (query! body) (with-defaults r opts)]))))
 
 (def ^:private update-count
@@ -2793,7 +2797,7 @@
    ;; => {:args {:id [:int #:pg{:type \"bigint\"}]}, :row [:map [:email ...]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{\"public.users\"}, :writes #{}}}"
   ([registry body] (analyze registry body {}))
   ([registry body opts]
-   (let [[registry body opts] (prepared registry body opts)]
+   (let [[registry body opts] (prepared registry body opts option-keys)]
      {:args (arg-types registry body opts)
       :row (row-schema registry body opts)
       :rows (row-count registry body opts)
@@ -2819,7 +2823,7 @@
      (error/fail! :pgmalli.error/invalid-options
                   (str "query-schema takes the function's args first, keywords ([:db :id]), not " (pr-str args))
                   {:given args}))
-   (let [[registry body {:keys [result] :as opts}] (prepared registry body opts)
+   (let [[registry body {:keys [result] :as opts}] (prepared registry body opts (conj option-keys :result))
          {types :args :keys [row rows problems]} (analyze registry body opts)
          problems (into problems
                         (for [k (sort-by str (query-args body)) :when (and (contains? types k) (not (some #{k} args)))] {:kind :missing-arg :arg k}))]
@@ -2912,7 +2916,7 @@
     (error/fail! :pgmalli.error/invalid-options
                  (str what " takes a table as a keyword, as HoneySQL names it (:users, :app.users) or its row schema (:pg.public/users); got " (pr-str name))
                  {:given name}))
-  (let [[r opts] (prepared registry opts)
+  (let [[r opts] (prepared registry opts option-keys)
         registry (::schemas r)
         ;; a registry name (:pg.app/users), or a mistyped one (:pg.public.users) as it is, for schema-of to
         ;; name the one meant; a table as HoneySQL names it (:users, :app.users) qualified in :schema

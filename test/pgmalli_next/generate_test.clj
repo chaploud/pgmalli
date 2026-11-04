@@ -44,9 +44,21 @@
             :diagnostics {"sample" [{:table "sample.users" :kind :row-trigger}]}}
            (generate/check config {:db? false})))))
 
-(deftest diff-takes-generated-data-maps
-  (doseq [x [42 "x" [nil] nil]]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"generated data map" (generate/diff x {:registry {}})) (pr-str x))))
+(deftest diff-and-registry-take-generated-data-maps
+  (doseq [x [42 "x" [nil] nil {} {:registry 1}]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"generated data map" (generate/diff x {:registry {}})) (pr-str x)))
+  (doseq [x [{} {:registry 1} (pgmalli/registry "sample")]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry takes generated data maps" (pgmalli/registry x)))))
+
+(deftest a-file-that-is-not-generated-data-is-an-error-naming-it
+  (let [config {:schemas ["sample"] :out-dir (str "target/not-generated-" (System/nanoTime))}
+        path (files/path-for config "sample")]
+    (doseq [text ["{:schema" "[1 2]"]]
+      (spit (doto path (io/make-parents)) text)
+      (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not a generated file.*run pgmalli-next.main generate"
+                                    (generate/check config {:db? false})))]
+        (is (= :pgmalli.error/not-generated (:pgmalli/error (ex-data e))) text)
+        (is (re-find #"sample.edn" (ex-message e)) text)))))
 
 (deftest a-schema-name-that-is-not-one-file-name-in-out-dir-is-an-error
   (doseq [schemas [["../esc"] ["a/b"] ["a\\b"] [".."] ["public" "Public"]]]

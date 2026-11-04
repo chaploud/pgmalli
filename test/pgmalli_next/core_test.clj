@@ -7,6 +7,7 @@
             [pgmalli-next.generate :as generate]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.files :as files]
+            [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.test-db :refer [*db* exec-sql! sql-literal with-postgres]])
@@ -39,7 +40,7 @@
         (is (every? (comp nil? :file) (get (:stale (generate/check config)) "public"))))
       (testing "generate, read back, validate"
         (is (= {"public" out} (generate/generate! config)))
-        (let [data (files/read-edn out)]
+        (let [data (registry/read-generated-file out)]
           (is (= data (get-in (files/generated-all config) ["public" :data])))
           (is (= (slurp out) (do (generate/generate! config) (slurp out))) "byte-for-byte deterministic")
           (is (empty? (:unrendered data)) "the table CHECK is a :multi")
@@ -71,7 +72,7 @@
                   "the file says what deserves a look")))))
       (testing "stale and unrendered"
         (is (nil? (:stale (generate/check config))))
-        (is (empty? (:unrendered (files/read-edn out))))
+        (is (empty? (:unrendered (registry/read-generated-file out))))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
         (let [diffs (get (:stale (generate/check config)) "public")]
           (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
@@ -87,7 +88,7 @@
                   CREATE TABLE ch.t (c char(4) CHECK (length(c) <= 2), k char(4) CHECK (k IN ('ab', 'cd')), v varchar(3),
                                      n integer, CONSTRAINT no_overflow CHECK (n + 2147483000 > 0));")
       (generate/generate! (assoc config :schemas ["ch"]))
-      (let [data (files/read-edn (files/path-for config "ch"))
+      (let [data (registry/read-generated-file (files/path-for config "ch"))
             reg (pgmalli/registry data)]
         (is (= ["no_overflow" "t_c_check" "t_k_check"] (sort (map :constraint (:unrendered data)))))
         (doseq [row [{:c "ab  " :k "ab  " :v "😀😀" :n 1} {:c "ab" :k "cd" :v "abc" :n 647}]]
@@ -111,7 +112,7 @@
                        BEGIN EXECUTE format('INSERT INTO cs.t (%I) VALUES (%L)', col, val); RETURN true;
                        EXCEPTION WHEN check_violation OR string_data_right_truncation THEN RETURN false; END $$;"))
       (generate/generate! (assoc config :schemas ["cs"]))
-      (let [reg (pgmalli/registry (files/read-edn (files/path-for config "cs")))
+      (let [reg (pgmalli/registry (registry/read-generated-file (files/path-for config "cs")))
             cases (for [c (cons "v" (keys checks)), s strings] [c s (m/validate :pg.cs/t (assoc (zipmap (map keyword (cons "v" (keys checks))) (repeat nil)) (keyword c) s) {:registry reg})])]
         (is (= :map (first (:pg.cs/t reg))) "the CHECKs are column schemas")
         (exec-sql! (str "DO $$ BEGIN "
@@ -134,7 +135,7 @@
         (is (= [:no-partition] (map :kind (get diagnostics "chk")))))
       (is (not (contains? (generate/check config {:db? false}) :stale)) "without the database, only the files")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (generate/check config {:db false})) "a misspelt option is an error")
-      (let [data (files/read-edn (files/path-for config "chk"))]
+      (let [data (registry/read-generated-file (files/path-for config "chk"))]
         (is (= [:schema :database-version :diagnostics :registry :functions :operators :unrendered :skipped] (keys data)) "read from the top: what it is, what deserves a look, the schemas")))))
 
 (defn- registry-of [schema ddl]

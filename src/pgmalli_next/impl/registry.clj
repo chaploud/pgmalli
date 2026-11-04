@@ -19,16 +19,40 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
+(defn generated-data
+  "x when it is generated data, a map with a :registry map; else an error saying what takes it."
+  [x what]
+  (if (and (map? x) (map? (:registry x)))
+    x
+    (error/fail! :pgmalli.error/invalid-options
+                 (str what " takes generated data maps, such as (pgmalli-next.core/generated \"public\"); given "
+                      (if (map? x) "a map without :registry (a registry?)" (pr-str x)))
+                 {:given (if (map? x) (vec (take 5 (keys x))) x)})))
+
+(defn read-generated-file
+  "The generated data in the text of file f (a path or a URL); an error naming f where it is none."
+  [f]
+  (let [x (try (edn/read-string (slurp f))
+               (catch RuntimeException e
+                 (error/fail! :pgmalli.error/not-generated
+                              (str f " is not a generated file (" (ex-message e) "); run pgmalli-next.main generate")
+                              {:given (str f)} e)))]
+    (if (and (map? x) (map? (:registry x)))
+      x
+      (error/fail! :pgmalli.error/not-generated
+                   (str f " is not a generated file (no :registry map); run pgmalli-next.main generate")
+                   {:given (str f)}))))
+
 (defn read-generated
   "The generated data for a schema name, from the classpath (pgmalli-next/<schema>.edn)."
   [schema]
   (when-not (string? schema)
     (error/fail! :pgmalli.error/invalid-options (str "a schema name is a string, such as \"public\"; given " (pr-str schema)) {:given schema}))
   (let [path (str "pgmalli-next/" schema ".edn")]
-    (edn/read-string (slurp (or (io/resource path)
-                                (error/fail! :pgmalli.error/not-generated
-                                             (str path " is not on the classpath; run pgmalli-next.main generate, and put its :out-dir's parent on :paths")
-                                             {:given schema}))))))
+    (read-generated-file (or (io/resource path)
+                             (error/fail! :pgmalli.error/not-generated
+                                          (str path " is not on the classpath; run pgmalli-next.main generate, and put its :out-dir's parent on :paths")
+                                          {:given schema})))))
 
 (defn- insert-entry
   "A column of an INSERT: optional when the database fills it, unless with a literal default
@@ -313,7 +337,7 @@
 (defn registry
   "The registry pgmalli-next.core/registry documents."
   [& schemas]
-  (let [data (map #(if (map? %) % (read-generated %)) schemas)
+  (let [data (map #(if (map? %) (generated-data % "registry") (read-generated %)) schemas)
         generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k))))]))
                         (with-other-schemas-types (apply merge (map :registry data))))]
     (merge base

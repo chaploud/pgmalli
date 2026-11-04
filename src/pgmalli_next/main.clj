@@ -16,6 +16,7 @@
             [pgmalli-next.generate :as generate]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.files :as files]
+            [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -95,9 +96,9 @@
         out-dir (:out-dir (files/config config))]
     (when-not (= "pgmalli-next" (last (str/split (str/replace out-dir #"/+$" "") #"/")))
       (warn (str ":out-dir " out-dir " does not end in pgmalli-next: pgmalli-next.core/registry reads pgmalli-next/<schema>.edn from the classpath")))
-    (when-let [w (some-> written vals first files/read-edn :database-version version-warning)] (warn w))
+    (when-let [w (some-> written vals first registry/read-generated-file :database-version version-warning)] (warn w))
     (doseq [[schema out] written
-            :let [data (files/read-edn out)]]
+            :let [data (registry/read-generated-file out)]]
       (println "wrote" out (str "(schema " schema "; " (counts data) ")"))
       (print-diagnostics schema (:diagnostics data))
       (print-unrendered schema (:unrendered data)))

@@ -208,7 +208,4 @@
                  (spit path (edn-string data))
                  [schema path]))))
 
-(defn read-edn
-  "The generated data in a file, by path (pgmalli-next.impl.registry reads the classpath instead)."
-  [path]
-  (edn/read-string (slurp path)))
+

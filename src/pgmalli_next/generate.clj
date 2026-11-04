@@ -11,7 +11,7 @@
       :db {:jdbc-url \"jdbc:postgresql://host/db\" :user :password} or {:datasource ds}"
   (:require [pgmalli-next.impl.diff :as diff]
             [pgmalli-next.impl.files :as files]
-            [pgmalli-next.impl.error :as error]))
+            [pgmalli-next.impl.registry :as registry]))
 
 (defn generate!
   "Writes the generated file for every schema in the config. Returns {schema path}."
@@ -23,12 +23,7 @@
    (:file the first, :db the second): a migration's effect on the schemas, read from the files
    alone."
   [before after]
-  (doseq [x [before after] :when (not (and (map? x) (map? (:registry x))))]
-    (error/fail! :pgmalli.error/invalid-options
-                 (str "diff takes two generated data maps, such as (pgmalli-next.core/generated \"public\"); given "
-                      (if (map? x) "a map without :registry (a registry?)" (pr-str x)))
-                 {:given (if (map? x) (vec (take 5 (keys x))) x)}))
-  (diff/diff before after))
+  (diff/diff (registry/generated-data before "diff") (registry/generated-data after "diff")))
 
 (defn check
   "What CI checks, for the config's schemas, reading the database once:

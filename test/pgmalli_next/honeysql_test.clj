@@ -553,7 +553,6 @@
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
   (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: pgmalli types arguments as one sending sends them"]
                     [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as one sending sends them"]
-                    [{:send {String :unknown}} #":send.* is no longer read: pgmalli types arguments as one sending sends them: .*docs/reading-rows.md#the-one-reading-and-sending"]
                     [{:qualified? false} #":qualified\? false.* is no longer read: .*\{:builder-fn next.jdbc.result-set/as-unqualified-maps\}"]
                     [{:kebab? true} #":kebab\? true.* is no longer read"]
                     [{:return-keys true} #":return-keys is no longer read: pass it as \{:jdbc \{:return-keys ...\}\}; see https://github.com/chaploud/pgmalli-next/blob/main/CHANGELOG.md$"]]]
@@ -561,10 +560,21 @@
       (is (re-find says (str (ex-message e))) (pr-str o))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o)))))
 
+(deftest an-option-the-function-does-not-read-is-an-error
+  (doseq [[f o] [[#(pgmalli/as-read registry :pg.sample/users %) {:schema "sample"}]
+                 [#(pgmalli/as-read registry :pg.sample/users %) {:result :one}]
+                 [#(h/analyze registry {:select [:id] :from [:users]} %) {:result :one}]
+                 [#(h/values-schema registry :users %) {:result :one}]
+                 [#(h/set-schema registry :users %) {:result :one}]]]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo (f o)) (pr-str o))]
+      (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o))
+      (is (re-find #"disallowed key" (ex-message e)) (pr-str o))))
+  (is (= :any (last (h/query-schema registry [] {:select [:id] :from [:nope]} (assoc opts :result :one)))) "query-schema takes :result"))
+
 (deftest a-builder-other-than-as-unqualified-maps-is-an-error-naming-it
   (doseq [jdbc [{:builder-fn 'next.jdbc.result-set/as-unqualified-kebab-maps} {:builder-fn (fn [_ _])} {:label-fn str/lower-case} {:qualifier-fn str/lower-case}]]
     (let [e (try (row {:select [:id] :from [:users]} (assoc opts :jdbc jdbc)) nil (catch clojure.lang.ExceptionInfo e e))]
-      (is (re-find #"is no longer read: pgmalli types rows as next.jdbc.result-set/as-unqualified-maps builds them" (str (ex-message e))) (pr-str jdbc))
+      (is (re-find #"is not read: pgmalli types rows as next.jdbc.result-set/as-unqualified-maps builds them" (str (ex-message e))) (pr-str jdbc))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))))
   (is (= (row {:select [:id] :from [:users]})
          (row {:select [:id] :from [:users]} (assoc opts :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps})))
@@ -1011,7 +1021,7 @@
          (m/properties (m/schema (h/query-schema registry [:db :iid] {:select [:id] :from [:users] :where [:= :id :?id]} opts))))))
 
 (deftest a-misspelt-option-names-the-one-meant
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:reslt \[\"disallowed key\"\]\}; did you mean: :result" (check {} {:reslt :one}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:reslt \[\"disallowed key\"\]\}; did you mean: :result" (h/query-schema registry [] {} {:reslt :one}))))
 
 (deftest a-lifted-value-is-data
   (is (= [] (check {:select [:id] :from [:users] :where [:= :id [:lift {:select true :update true :delete false}]]})))

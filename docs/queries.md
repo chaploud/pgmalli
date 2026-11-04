@@ -484,7 +484,8 @@ with aliases and CTE names resolved. Use it to find the queries a change to a ta
 
 ## Options
 
-`h/analyze`, `h/query-schema`, `h/values-schema` and `h/set-schema` take the same options map. pgmalli reads what you pass to
+`h/analyze`, `h/query-schema`, `h/values-schema` and `h/set-schema` take these options; an option a
+function does not read is an error. pgmalli reads what you pass to
 next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dialect!`,
 `set-options!`) are not read, so pass them in `:format`.
 
@@ -493,7 +494,7 @@ next.jdbc and `sql/format` as you pass it; HoneySQL's global settings (`set-dial
 | `:schema "app"` | the schema of unqualified tables |
 | `:jdbc` | the options you pass to next.jdbc ([reading-rows.md](reading-rows.md#options)); its `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them and the dialect `sql/set-dialect!` set |
-| `:result :one` | `h/query-schema` only: the return is what `execute-one!` returns |
+| `:result :one` | `h/query-schema`'s alone: the return is what `execute-one!` returns |
 
 ## Function schemas
 

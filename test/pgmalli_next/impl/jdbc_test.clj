@@ -32,11 +32,11 @@
   (is (= [:born [:maybe [:time/local-date {:pg/type "date"}]]] (nth (pgmalli/as-read registry :pg.sample/users) 2))
       "a NULL column keeps its key"))
 
-(deftest as-read-takes-the-options-map-every-function-shares
+(deftest as-read-takes-jdbc-alone
   (is (= (pgmalli-next.core/as-read registry :pg.sample/users)
-         (pgmalli-next.core/as-read registry :pg.sample/users {:result :one})))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"result"
-                        (pgmalli-next.core/as-read registry :pg.sample/users {:result :sometimes}))))
+         (pgmalli-next.core/as-read registry :pg.sample/users {:jdbc {:fetch-size 10}})))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:result \[\"disallowed key\"\]\}; it takes :jdbc"
+                        (pgmalli-next.core/as-read registry :pg.sample/users {:result :one}))))
 
 (deftest how-a-value-is-read-is-no-option
   (doseq [o [{:time :instant} {:read {:json :parsed}}]]

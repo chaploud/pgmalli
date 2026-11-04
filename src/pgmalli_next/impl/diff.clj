@@ -3,6 +3,7 @@
   (:require [clojure.java.io :as io]
             [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.jdbc :as jdbc]
+            [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.shape :as shape]))
 
 (defn- row-parts
@@ -60,7 +61,7 @@
   (into {} (for [schema (:schemas (files/config config))
                  :let [p (files/path-for config schema)]
                  :when (.exists (io/file p))]
-             [schema (files/read-edn p)])))
+             [schema (registry/read-generated-file p)])))
 
 (defn- stale* [config files]
   (let [diffs (for [[schema {:keys [data]}] (files/generated-all config)
