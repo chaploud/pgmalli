@@ -57,9 +57,9 @@
             [:age [:maybe [:pg/integer {:min 0 :max 150 :pg/type "integer" :pg/constraints ["age_check"]}]]]
             [:born [:maybe [:time/local-date {:pg/type "date"}]]]
             [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
-            [:created_at [:time/instant {:pg/type "timestamptz" :pg/default [:now]}]]
+            [:created_at [:time/instant {:pg/type "timestamptz" :pg/default {:sql "now()"}}]]
             [:flag [:boolean {:pg/type "boolean" :pg/default false :default false}]]
-            [:full_name [:maybe [:string {:pg/type "text" :pg/generated [:|| :nick [:cast "x" :text]]}]]]
+            [:full_name [:maybe [:string {:pg/type "text" :pg/generated {:sql "(nick || 'x'::text)"}}]]]
             [:group_id [:pg/integer {:pg/type "integer"}]]
             [:id [:int {:pg/type "bigint" :pg/identity :always}]]
             [:mail [:maybe [:ref {:pg/type "email"} :pg.public/email]]]
@@ -67,7 +67,7 @@
             [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]
             [:price ['decimal? {:pg/type "numeric" :pg/default 0 :default 0M}]]
             [:score [:pg/integer {:pg/type "integer"}]]
-            [:seq [:pg/integer {:pg/type "integer" :pg/default [:nextval [:cast "users_seq_seq" :regclass]] :pg/identity :serial}]]
+            [:seq [:pg/integer {:pg/type "integer" :pg/default {:sql "nextval('users_seq_seq'::regclass)"} :pg/identity :serial}]]
             [:since [:time/local-date {:pg/type "date" :pg/default "2020-01-01"}]]
             [:title [:and {:pg/type "text" :pg/constraints ["title_check"]} [:string {:min 1}] [:re {:error/message "violates check constraint title_check: CHECK (length(TRIM(BOTH FROM title)) > 0)"} "[^ ]"]]]
             [:total [:pg/integer {:pg/type "integer"}]]]
@@ -341,7 +341,7 @@
                                                                                     {:name "validity" :position 3 :data_type "tstzrange" :is_nullable true
                                                                                      :generated_expr "tstzrange(valid_from, valid_until)"}]
                                                                           :constraints {}}}}))]
-    (is (= [:maybe [:any {:pg/type "tstzrange" :pg/generated [:tstzrange :valid_from :valid_until]}]] (last (get-in registry [:pg.public/t 4]))) ":any with its type")
+    (is (= [:maybe [:any {:pg/type "tstzrange" :pg/generated {:sql "tstzrange(valid_from, valid_until)"}}]] (last (get-in registry [:pg.public/t 4]))) ":any with its type")
     (is (empty? unrendered))))
 
 (deftest a-json-column-both-not-null-and-shaped
@@ -515,7 +515,7 @@
     (is (m/validate :pg.public/t {:email "a@b" :price 1M :nick nil :total nil} {:registry reg}))
     (is (= [:and ['decimal? {:pg/type "numeric(12,2)"}] [:pg/numeric {:precision 12 :scale 2}] [:>= 0M]] (:pg.public/money_amount registry)) "the domain's numeric(12,2) is kept")
     (is (= [:string {:pg/type "character varying(8)" :max 8 :pg/max-length 8}] (:pg.public/short_name registry)) "and a varchar(8) domain's length")
-    (is (= [:* :price [:cast 2 :numeric]] (:pg/generated (second (last (last (get-in registry [:pg.public/t 5])))))) "a generated column carries its expression")
+    (is (= {:sql "(price * (2)::numeric)"} (:pg/generated (second (last (last (get-in registry [:pg.public/t 5])))))) "a generated column carries its expression")
     (is (= [{:columns ["email"]} {:columns ["nick"] :index true}] (:pg/unique (second (:pg.public/t registry)))) "a unique index is marked")))
 
 (deftest a-typmod-inside-a-type-name-is-no-other-type

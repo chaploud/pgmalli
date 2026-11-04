@@ -3,14 +3,15 @@
 
    A fact is a map with :fact (the kind), :schema, and :table / :column / :constraint where they
    apply. CHECK constraints are matched against a fixed set of patterns (column patterns, then
-   :branch-check and :or-check), the CHECK forms docs/types.md lists; anything else is kept as
-   :table-check with the expression data, never dropped.
+   :branch-check and :or-check), the CHECK forms docs/types.md lists; anything else is a
+   :table-check, which render lists in :unrendered.
 
    Kinds:
      :enum-type    an enum type of the schema           {:type-name :values}
      :view         a view or materialized view          {:materialized?}; its columns follow, all nullable
-     :column       a column                              {:type :position :nullable? :default :identity :generated}
-                   :identity is :always, :default or :serial (a nextval default); :generated is the expression
+     :column       a column                              {:type :position :nullable? :default :default-sql :identity :generated}
+                   :default is the default parsed, :default-sql its SQL; :identity is :always, :default or
+                   :serial (a nextval default); :generated is the SQL of the expression
      :enum         column of an enum type (or an array of it) {:type-name :values :array?}
      :domain-ref   column of a domain type (or an array of it) {:type-name :base (the type under its domains) :array?}
      :unknown-type type outside the mapping table (rendered as :any) {:type :type-schema (when not pg_catalog's or the schema's own)}
@@ -356,17 +357,15 @@
         mapped? (or ref-fact (types/known? elem-type type_schema))
         typmod (:typmod (types/entry elem-type))
         ;; a domain's NOT NULL and DEFAULT reach the columns of that type
+        default-sql (or default_value (:default-sql domain))
         default (cond default_value (parsed base default_value)
-                      (contains? domain :default) {:expr (:default domain)})
-        generated (when generated_expr (parsed base generated_expr))]
+                      (contains? domain :default) {:expr (:default domain)})]
     (cond-> [(merge base {:fact :column :type data_type :position position :nullable? (boolean (and is_nullable (not (:not-null? domain))))}
+                    (when default-sql {:default-sql default-sql})
                     (when (contains? default :expr) {:default (:expr default)})
                     (cond identity {:identity ({"ALWAYS" :always "BY DEFAULT" :default} identity)}
                           (and (vector? (:expr default)) (= :nextval (first (:expr default)))) {:identity :serial})
-                    ;; the expression as data, or true when it could not be read: the column is generated either way
-                    (when generated_expr {:generated (if (contains? generated :expr) (:expr generated) true)}))]
-      (:unparsed default) (conj (:unparsed default))
-      (:unparsed generated) (conj (:unparsed generated))
+                    (when generated_expr {:generated generated_expr}))]
       ref-fact (conj ref-fact)
       ;; a type of another schema: each schema's file stands alone, so it cannot refer to it
       (not mapped?) (conj (cond-> (merge base {:fact :unknown-type :type data_type})
@@ -450,8 +449,9 @@
                  (cond p [(merge base {:fact :numeric :precision (parse-long p) :scale (if s (parse-long s) 0)})]
                        n [(merge base {:fact :max-length :max (parse-long n)})]))]
     (into [(cond-> (merge base {:fact :domain :base base_type :not-null? (boolean not_null) :facts (vec (concat (some-> over vector) typmod (mapcat :facts checks)))})
-             (contains? dflt :expr) (assoc :default (:expr dflt)))]
-          (concat (keep :check checks) (some-> (:unparsed dflt) vector)))))
+             (contains? dflt :expr) (assoc :default (:expr dflt))
+             default (assoc :default-sql default))]
+          (keep :check checks))))
 
 (defn- substitute
   "The expression with the columns of subst (keyword -> expression) replaced by their
@@ -526,7 +526,7 @@
                          [n {:root (loop [b (get-in schema [:types n :base_type])]
                                      (let [[i] (type-ident b)] (if (= "DOMAIN" (get-in schema [:types i :kind])) (recur (get-in schema [:types i :base_type])) b)))}]))
         domain-facts* (mapcat #(domain-facts schema-name enums roots %) domain-types)
-        declared (into {} (for [f domain-facts* :when (= :domain (:fact f))] [(:type-name f) (merge (select-keys f [:base :not-null? :default]) (get roots (:type-name f)))]))
+        declared (into {} (for [f domain-facts* :when (= :domain (:fact f))] [(:type-name f) (merge (select-keys f [:base :not-null? :default :default-sql]) (get roots (:type-name f)))]))
         ;; a domain over a domain is NOT NULL when a domain under it is
         domains (update-vals declared (fn [d] (assoc d :not-null? (boolean (some :not-null? (take-while some? (iterate #(get declared (first (type-ident (:base %)))) d)))))))]
     (vec

@@ -18,19 +18,19 @@
 (deftest facts-from-types-and-columns
   (is (= [{:fact :enum-type :schema "public" :type-name "mood" :values ["happy" "sad"]}
           {:fact :column :schema "public" :table "t" :column "c" :type "integer" :position 1 :nullable? true}
-          {:fact :column :schema "public" :table "t" :column "m" :type "mood" :position 2 :nullable? false :default [:cast "happy" :mood]}
+          {:fact :column :schema "public" :table "t" :column "m" :type "mood" :position 2 :nullable? false :default [:cast "happy" :mood] :default-sql "'happy'::mood"}
           {:fact :enum :schema "public" :table "t" :column "m" :type-name "mood" :values ["happy" "sad"]}
           {:fact :column :schema "public" :table "t" :column "v" :type "character varying" :position 3 :nullable? true}
           {:fact :max-length :schema "public" :table "t" :column "v" :max 40}]
          (p/facts (schema-with-checks)))))
 
-(deftest unknown-types-and-unreadable-defaults-are-kept
+(deftest unknown-types-are-kept-and-a-default-as-its-sql
   (let [fs (p/facts {:name "public" :types {}
                      :tables {"t" {:columns [{:name "e" :position 1 :data_type "email" :type_schema "public" :is_nullable false :default_value "CASE WHEN"}
                                              {:name "x" :position 2 :data_type "text" :type_schema "other" :is_nullable true}]
                                    :constraints {}}}})]
-    (is (= [:column :unparsed :unknown-type :column :unknown-type] (map :fact fs)))
-    (is (= "CASE WHEN" (:input (second fs))))))
+    (is (= [:column :unknown-type :column :unknown-type] (map :fact fs)))
+    (is (= "CASE WHEN" (:default-sql (first fs))) "an unreadable default is kept as its SQL")))
 
 (deftest an-extension-type-is-known-in-its-schema-a-pg-catalog-name-only-in-pg-catalog
   (let [fs (p/facts {:name "public" :types {}

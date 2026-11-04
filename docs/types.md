@@ -45,10 +45,10 @@ Column schemas carry where they came from:
 | property | value |
 |---|---|
 | `:pg/type` | the column's type, as PostgreSQL prints it (`"character varying"`) |
-| `:pg/default` | a literal, or the default expression as data |
+| `:pg/default` | a literal, or `{:sql "now()"}`, the default expression's SQL as the database prints it |
 | `:default` | malli's default, for a literal default |
 | `:pg/identity` | `:always`, `:default` or `:serial` |
-| `:pg/generated` | the expression the database computes the column from |
+| `:pg/generated` | `{:sql "..."}`, the SQL of the expression the database computes the column from |
 | `:pg/constraints` | the names of the CHECKs that shaped the column (a CHECK's own schema carries `:pg/constraint`, its name) |
 
 The table's map carries:

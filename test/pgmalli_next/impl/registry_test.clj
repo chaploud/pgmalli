@@ -65,7 +65,7 @@
                                                                 [:approver [:maybe [:string {:pg/type "text"}]]]
                                                                 [:a [:pg/integer {:pg/type "integer"}]]
                                                                 [:b [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]
-                                                                [:c [:pg/integer {:pg/type "integer" :pg/default [:nextval "s"]}]]]
+                                                                [:c [:pg/integer {:pg/type "integer" :pg/default {:sql "nextval('s'::regclass)"}}]]]
                                                           [:multi {:dispatch :status}
                                                            ["approved" [:map [:approver :string]]]
                                                            [:malli.core/default [:map [:approver :nil]]]]

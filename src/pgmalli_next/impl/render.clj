@@ -236,18 +236,17 @@
 
 (defn- column-schema
   "Schema of one column with provenance properties; nullable columns wrapped in [:maybe ...]."
-  [schema-name {:keys [type nullable? default identity generated] :as c} facts overrides]
+  [schema-name {:keys [type nullable? default default-sql identity generated] :as c} facts overrides]
   (let [[base facts] (column-base-and-facts c facts overrides)
         {:keys [schema unrendered skipped applied]} (fold-facts schema-name base facts overrides)
         lit (some-> default literal)
         schema (with-props schema {:pg/type type
-                                   :pg/default (if (some? lit) lit default)
+                                   :pg/default (cond (some? lit) lit default-sql {:sql default-sql})
                                    ;; a column override's schema is the user's: the SQL literal is no value known of it
                                    :default (when (and (some? lit) (not (get overrides (column-override-key (:schema c) (:table c) (:column c)))))
                                               (default-value (if-let [d (some #(when (= :domain-ref (:fact %)) %) facts)] (base-type (:base d)) schema) lit))
                                    :pg/identity identity
-                                   ;; the expression the database computes it from (true when it could not be read)
-                                   :pg/generated generated
+                                   :pg/generated (some->> generated (hash-map :sql))
                                    :pg/constraints (when (seq applied) (vec (sort (distinct applied))))})
         not-null-check? (some (comp #{:not-null} :fact) facts)]
     {:schema (if (and nullable? (not not-null-check?)) [:maybe schema] (rejecting-nil schema))

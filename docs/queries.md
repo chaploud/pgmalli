@@ -448,7 +448,7 @@ Its columns are read as `pgmalli-next.core/as-read` reads them ([the one reading
 
 ```clojure
 (:row (h/analyze registry {:select [:id :created_at] :from [:users]}))
-;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:created_at [:time/instant #:pg{:default [:now], :type "timestamp with time zone"}]]]
+;; => [:map [:id [:int #:pg{:identity :always, :type "bigint"}]] [:created_at [:time/instant #:pg{:default {:sql "now()"}, :type "timestamp with time zone"}]]]
 ```
 
 A write with no RETURNING returns the map next.jdbc builds of the driver's update count. Under

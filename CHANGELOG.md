@@ -129,6 +129,11 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   integer column's bound PostgreSQL writes through a cast to `numeric` (`(n)::numeric >= 0.5`),
   are now patterns. [docs/types.md](docs/types.md#check-constraints) lists the
   patterns.
+* A column's `:pg/generated`, and a `:pg/default` that is an expression, are its SQL as the
+  database prints it, `{:sql "now()"}`, not HoneySQL-like data, which named operators as
+  HoneySQL does not write them (`[:contains ...]` for `@>`). A literal default stays the value
+  (`:pg/default "active"`). A default pgmalli could not parse is no longer `:unparsed` in
+  `:unrendered`, and its column is optional in the insert schema. Regenerate the files.
 
 ### Added
 

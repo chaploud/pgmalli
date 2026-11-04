@@ -27,12 +27,12 @@
     [:id [:int {:pg/identity :always, :pg/type "bigint"}]]
     [:mood [:ref {:default "happy", :pg/default "happy", :pg/type "mood"} :pg.sample/mood]]
     [:nick [:maybe [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]
-    [:nick_upper [:maybe [:string {:pg/generated [:upper [:cast :nick :text]], :pg/type "text"}]]]
+    [:nick_upper [:maybe [:string {:pg/generated {:sql "upper((nick)::text)"}, :pg/type "text"}]]]
     [:referrer_id [:maybe [:int {:pg/type "bigint"}]]]
     [:score [:pg/integer {:pg/type "integer"}]]
     [:seq
      [:pg/integer
-      {:pg/default [:nextval [:cast "users_seq_seq" :regclass]],
+      {:pg/default {:sql "nextval('users_seq_seq'::regclass)"},
        :pg/identity :serial,
        :pg/type "integer"}]]
     [:total [:pg/integer {:default 10, :pg/default 10, :pg/type "integer"}]]
