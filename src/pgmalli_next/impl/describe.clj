@@ -23,8 +23,9 @@
 (defn- props-of [s] (when (and (vector? s) (map? (second s))) (second s)))
 
 (defn- leaf [s]
-  (cond (keyword? s) (name s)
-        (symbol? s) (get '{decimal? "numeric" double? "float8"} s (str s))
+  ;; a number class's predicate as the type PostgreSQL gets it as, not a name ending in ?, which reads as NULL
+  (cond (keyword? s) (get {:double "float8"} s (name s))
+        (symbol? s) (get '{decimal? "numeric" double? "float8" integer? "numeric" float? "real" inst? "inst"} s (str s))
         (and (vector? s) (= :fn (first s)) (:pg/class (props-of s))) (:pg/class (props-of s))
         (vector? s) (name (first s))
         :else (pr-str s)))
@@ -45,13 +46,17 @@
       ;; a recursive schema: a name already being described is the name
       (and (or (keyword? s) (string? s)) (vector? (get schemas s)))
       (if (*described* s) s (binding [*described* (conj *described* s)] (describe schemas (get schemas s))))
-      (= :maybe head) (let [d (describe schemas (first children))] (if (string? d) (str d "?") [:maybe d]))
+      (= :maybe head) (let [d (describe schemas (first children))]
+                        (cond (not (string? d)) [:maybe d]
+                              (str/includes? d " | ") (str "(" d ")?")
+                              :else (str d "?")))
       (= :map head) (ordered (for [[k ep v] (map shape/entry-parts children)]
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))
       ;; a table with CHECKs: its columns
       (and (= :and head) (vector? (first children)) (= :map (ffirst children))) (describe schemas (first children))
       (#{:sequential :vector :set :pg/array} head) (or (type-label p) [(describe schemas (first children))])
-      (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " children))
+      ;; 1.5 and 1.5M, 1.0 and a Float 1.0, a label as each class sends it, print alike
+      (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " (distinct (map str children))))
       (= :=> head) (cond-> {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
                      (seq (:pgmalli/problems p)) (assoc :pgmalli/problems (:pgmalli/problems p)))
       (= :function head) (mapv #(describe schemas %) children)
@@ -60,7 +65,11 @@
       (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children))
       (let [elem (describe schemas (last (first children)))]
         (str elem "[] (" (str/join ", " (map #(name (first %)) children)) ")"))
-      (= :or head) (str/join " | " (distinct (map #(let [d (describe schemas %)] (if (string? d) d (pr-str d))) children)))
+      (= :or head) (str/join " | " (distinct (map #(let [d (describe schemas %)]
+                                                     (cond (string? d) d
+                                                           (and (vector? d) (string? (first d))) (str (first d) "[]")
+                                                           :else (pr-str d)))
+                                                  children)))
       (= :ref head) (let [target (get schemas (last s))]
                       (if (and (vector? target) (= :enum (first target)))
                         (str (or (type-label p) "enum") ": " (str/join " | " (shape/entries target)))

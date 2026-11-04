@@ -290,6 +290,11 @@
 
    (let [{:keys [problems]} (analyze registry q)] (is (= [] problems) (humanize problems)))"
   [problems]
+  (when-not (and (sequential? problems) (every? #(and (map? %) (contains? % :kind)) problems))
+    (error/fail! :pgmalli.error/invalid-options
+                 (str "humanize takes analyze's :problems or query-schema's :pgmalli/problems, a vector of problem maps; got "
+                      (pr-str (if (map? problems) problems (type problems))))
+                 {:given problems}))
   (mapv (fn [{:keys [kind in var] :as p}]
           (str (when var (str (symbol var) ": "))
                (if-let [f (explanations kind)] (f p) (pr-str p)) (when in (str " (in the statement at " in ")"))))

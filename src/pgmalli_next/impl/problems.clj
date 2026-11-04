@@ -119,7 +119,9 @@
             near (assoc :did-you-mean near)
             ;; a target a.b whose a is the table: field b of a column a to PostgreSQL
             (and (identical? scope target) (whole-row? scope col format)) (assoc :assigned-field true)
-            (and (syntax/quoted? format) (not= (syntax/split-column col format) (syntax/split-column col nil))) (assoc :quoted true)))))))
+            (and (syntax/quoted? format) (not= (syntax/split-column col format) (syntax/split-column col nil))
+                 (some? (query/resolve-column registry scope (keyword (str/join "." (remove nil? (syntax/split-column col nil)))))))
+            (assoc :quoted true)))))))
 
 (defn- insert-problems [registry stmt {:keys [format] :as opts}]
   (let [{:keys [table columns]} (syntax/insert-parts stmt)
@@ -269,7 +271,8 @@
                              meant (seq (take 3 (distinct (concat same-name (error/suggestions table known 3)))))]]
                    (cond-> {:kind :unknown-table :table table}
                      meant (assoc :did-you-mean (vec meant))
-                     (and quoted? (not= table (syntax/folded table))) (assoc :quoted true)))
+                     ;; the name folded is one the registry holds: what to write instead
+                     (and quoted? (not= table (syntax/folded table)) (some #{(syntax/folded table)} known)) (assoc :quoted true)))
                  (column-problems registry scopes stmt ps opts)
                  (for [{:keys [column side table]} (query/using-missing registry stmt (first scopes) opts)]
                    (cond-> {:kind :unknown-column :column column :using side} table (assoc :table table)))

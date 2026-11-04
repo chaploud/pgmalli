@@ -2503,7 +2503,7 @@
       "schema-problems' :var first")
   (is (= {:pgmalli/problems []} (second (h/query-schema registry [] {:select [:id] :from [:users]} opts)))
       "a query schema's parts are where they are, problems or not")
-  (is (= {:args [["bigint | numeric | integer? | double | float?"]] :returns [{:id "bigint"}]}
+  (is (= {:args [["bigint | numeric | float8 | real"]] :returns [{:id "bigint"}]}
          (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))
 
 (deftest special-syntax-writing-an-operator-names-its-column-?column?

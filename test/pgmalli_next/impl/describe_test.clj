@@ -28,3 +28,9 @@
     (is (= :pgmalli.error/unknown-schema (:pgmalli/error (ex-data e)))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is no type malli or the registry knows" (pgmalli/describe registry [:map [:id :pg.sample/nope]]))
       "a reference inside a schema too"))
+
+(deftest a-number-classs-predicate-reads-as-its-type-and-null-of-a-union-marks-the-union
+  (is (= "bigint | numeric | float8 | real" (pgmalli/describe registry [:or [:int {:pg/type "bigint"}] 'decimal? 'integer? :double 'float?])))
+  (is (= "(date | inst)?" (pgmalli/describe registry [:maybe [:or [:time/local-date {:pg/type "date"}] 'inst?]])))
+  (is (= "any[] | org.postgresql.util.PGobject" (pgmalli/describe registry [:or [:pg/array :any] [:fn {:pg/class "org.postgresql.util.PGobject"} any?]])))
+  (is (= "real: 1.5 | 2.5" (pgmalli/describe registry [:enum {:pg/type "real"} 1.5 2.5 1.5M 2.5M]))))

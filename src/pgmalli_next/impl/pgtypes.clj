@@ -88,7 +88,7 @@
                  {:pred (fn [v] (or (sql-array? v)
                                     (let [c (class v)]
                                       (boolean (and c (.isArray ^Class c) (not= Object (.getComponentType ^Class c)) (every? valid? v))))))
-                  :type-properties {:error/message "a typed Java array or a java.sql.Array"}
+                  :type-properties {:error/message "should be a typed Java array (long-array, (into-array String [...])) or a java.sql.Array of such elements; a vector goes as jsonb"}
                   :min 1 :max 1}))}))
 
 (def int-ranges

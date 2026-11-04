@@ -380,7 +380,7 @@ returns:
 
 ```clojure
 (pgmalli/describe (h/query-schema registry [:id] find-user-q {:result :one}))
-;; => {:args ["bigint | numeric | integer? | double | float?"], :returns [:maybe {:id "bigint", :email "varchar(120)"}]}
+;; => {:args ["bigint | numeric | float8 | real"], :returns [:maybe {:id "bigint", :email "varchar(120)"}]}
 ```
 
 The options of `pgmalli-next.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
