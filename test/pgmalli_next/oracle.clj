@@ -307,8 +307,8 @@
   "Whether check reports problem p by design (docs/queries.md \"Stricter than PostgreSQL\"): a
    comparison of a column with a literal outside the list its enum or CHECK allows, false on
    every row, which the CHECK guarantees (the statement may still return rows through OR or
-   CASE); NULL set into a NOT NULL column by ON CONFLICT DO UPDATE, which fails once a row
-   conflicts. listed: listed of the schema; the column is one of a relation query names."
+   CASE); NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails
+   once a row is touched or conflicts. listed: listed of the schema; the column is one of a relation query names."
   [listed id query p]
   (case (:kind p)
     :enum-literal (or (enum-literal-by-design id)
@@ -318,7 +318,8 @@
                              (some (fn [[[rel col] ls]]
                                      (and (= col (last (str/split (name c) #"\."))) (named rel) (contains? ls (set (map str (:allowed p))))))
                                    listed))))
-    :not-null-violation (= :do-update-set (:clause p))
+    ;; an UPDATE's SET or ON CONFLICT DO UPDATE's, even where it touches no row or none conflicts
+    :not-null-violation (contains? #{:set :do-update-set} (:clause p))
     false))
 
 (defn- outcome [{:keys [pg]} problems by-design?]
