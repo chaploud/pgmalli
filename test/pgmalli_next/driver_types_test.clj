@@ -49,7 +49,7 @@
       (doseq [:let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))]
               table [:types :v]
               :let [read (into [] (remove #(and (vector? %) (unreadable (first %))))
-                               (pgmalli/as-read registry (keyword "pg.matrix" (name table)) {:schema "matrix"}))
+                               (pgmalli/as-read registry (keyword "pg.matrix" (name table))))
                     q {:select (map first (filter vector? (rest read)))
                        :from [(keyword (str "matrix." (name table)))] :order-by [:id]}
                     rows (jdbc/execute! con (sql/format q) {:builder-fn rs/as-unqualified-maps})
@@ -68,7 +68,7 @@
       (with-open [con (jdbc/get-connection ds)]
         (.setAutoCommit con false)
         (let [;; as the one reading reads it, sent as the one sending sends it
-              cols (remove unreadable (map first (filter vector? (rest (pgmalli/as-read registry :pg.matrix/types o)))))
+              cols (remove unreadable (map first (filter vector? (rest (pgmalli/as-read registry :pg.matrix/types)))))
               row (jdbc/execute-one! con (sql/format {:select cols :from [:matrix.types] :where [:= :id 1]}) {:builder-fn rs/as-unqualified-maps})
               taken? (fn [k v] (with-open [ps (.prepareStatement con (str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2"))]
                                  (try (prepare/set-parameter v ps 1) (.executeUpdate ps) true
