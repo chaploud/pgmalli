@@ -205,7 +205,7 @@
   [stmt]
   (concat (from-items stmt from-keys) (map second (joins stmt))))
 
-(declare insert-parts star? arg-key loose expression-type accepted-type quoted? call-parts reached own-type-schema type-call registry-type operator? formatted-name)
+(declare cast-target insert-parts star? arg-key loose expression-type accepted-type quoted? call-parts reached own-type-schema type-call registry-type operator? formatted-name)
 
 (defn- default-values
   "How HoneySQL writes DEFAULT under sql/format's opts, the value a column's default fills:
@@ -417,15 +417,22 @@
              (concat (joins stmt)
                      (for [k [:right-join :full-join :outer-join] :when (seq? (get stmt k))] [k nil]))))))
 
-(defn- unnest-of-arguments?
-  "Whether a FROM item is unnest(?, ...) of arguments alone."
-  [item]
-  (boolean (and (vector? item) (vector? (first item)) (= :unnest (ffirst item)) (every? arg-key (rest (first item))))))
+(defn- array-cast-of-argument?
+  "Whether x is an argument cast to an array type ([:cast :?ids [:raw \"bigint[]\"]])."
+  [x]
+  (and (vector? x) (= :cast (first x)) (= 3 (count x)) (arg-key (second x)) (some-> (cast-target (nth x 2)) types/element)))
 
-(defn- unnest-elements
-  "{column argument} of a FROM item unnest(?, ...) of arguments: the column each argument's
-   elements become, by position in the columns its alias lists ([:x {:columns [:a]}]), or the
-   alias itself of an unnest of one ([[:unnest :?ids] :id])."
+(defn- unnest-of-arguments?
+  "Whether a FROM item is unnest(?, ...) of arguments alone, each maybe cast to an array type."
+  [item]
+  (boolean (and (vector? item) (vector? (first item)) (= :unnest (ffirst item))
+                (every? #(or (arg-key %) (array-cast-of-argument? %)) (rest (first item))))))
+
+(defn- unnest-columns
+  "[[column argument] ...] of a FROM item unnest(?, ...) of arguments, in order: the column each
+   argument's elements become (the argument as written, cast or not), by position in the
+   columns its alias lists ([:x {:columns [:a]}]), or the alias itself of an unnest of one
+   ([[:unnest :?ids] :id])."
   [item]
   (when (unnest-of-arguments? item)
     (let [ps (rest (first item))
@@ -433,7 +440,9 @@
           cs (cond (and (vector? b) (map? (second b))) (:columns (second b))
                    (and (alias? b) (= 1 (count ps))) [b])]
       (when (and (seq ps) (sequential? cs))
-        (not-empty (into {} (map (fn [p c] [(folded (name c)) p]) ps cs)))))))
+        (map (fn [p c] [(folded (name c)) p]) ps cs)))))
+
+(defn- unnest-elements [item] (some->> (unnest-columns item) (into {}) not-empty))
 
 (defn- scope
   "{alias {:table \"schema.table\" :opaque? bool :cte? bool :nullable? bool}} of one statement;
@@ -735,7 +744,7 @@
    scopes of a nested statement), :table the alias for an opaque table, :schema the type a
    subquery's or CTE's SELECT gives the column (nil for an opaque table without one),
    :nullable? when an outer join may leave the table NULL, :element the argument whose elements
-   an unnest's column is; nil when the column resolves to no
+   an unnest's column is, cast or not; nil when the column resolves to no
    table or to several known ones. A column an opaque table may hold besides one known table is
    the opaque one's, untyped: which of them PostgreSQL takes is not in the data."
   [registry scope col]
@@ -986,8 +995,12 @@
                [(nodes k v c)])
            e p]
        e)
-     ;; a star or :raw makes columns the data does not count
-     (let [items (map bare (selected-items stmt))]
+     ;; a star or :raw makes columns the data does not count, but of unnest(?, ...) alone, a column of each argument
+     (let [items (map bare (selected-items stmt))
+           [item & more] (table-items stmt)
+           items (or (when (and (= 1 (count items)) (keyword? (first items)) (star? (first items)) (nil? more))
+                       (when-let [cs (unnest-columns item)] (when (= (count cs) (count (rest (first item)))) (map (comp keyword first) cs))))
+                     items)]
        (when (and (:columns feed) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
          (for [[col v] (map (comp to-field vector) (:columns feed) items)
                :when (not= ::untold v)]
@@ -1689,13 +1702,14 @@
   ([v heads] (when (and (vector? v) (= 2 (count v)) (heads (first v)) (arg-key (second v))) (second v))))
 
 (defn- assigned-type
-  "The type of an argument assignment a (positions) writes to its column: NULL where
-   assigned-column says it may go. Where the row may not reach the column, without the CHECKs,
-   lengths and ranges PostgreSQL checks only on a row it writes."
-  [registry {:keys [may-drop?] :as a} opts]
+  "The type of an argument assignment a (positions) writes to its column, in context (:assign,
+   or :cast where it is cast to the column's type first): NULL where assigned-column says it
+   may go. Where the row may not reach the column, without the CHECKs, lengths and ranges
+   PostgreSQL checks only on a row it writes."
+  [registry {:keys [may-drop?] :as a} context opts]
   (let [{s :schema :keys [nullable?]} (assigned-column registry a)]
     (if s
-      (let [inner (cond-> (accepted-type registry (cond->> s may-drop? (beyond-list registry)) :assign opts) may-drop? loose)]
+      (let [inner (cond-> (accepted-type registry (cond->> s may-drop? (beyond-list registry)) context opts) may-drop? loose)]
         (if nullable? [:maybe inner] inner))
       :any)))
 
@@ -1839,7 +1853,7 @@
         arrays (when (= :cast context)
                  (for [a (shape/alternatives
                           (if es
-                            (cast-arrays registry es (nullable (accepted-type registry es :cast opts)) opts)
+                            (cast-arrays registry es (or (::cast-element opts) (nullable (accepted-type registry es :cast opts))) opts)
                             ;; to another type (text, say), its elements any
                             (shape/either (map second (arrays-sent opts #(and (takes? %) (not (accept/scalar-cast? t %))) :any)) :any)))
                        :when (not (untyped? a))]
@@ -1959,7 +1973,7 @@
    unnest(?) of arguments (array? true: the argument's elements go there); nil for any other."
   [registry chain x]
   (cond (arg-key x) [x false]
-        (column-keyword? x) (some-> (:element (resolve-column registry chain x)) (vector true))))
+        (column-keyword? x) (let [e (:element (resolve-column registry chain x))] (when (arg-key e) [e true]))))
 
 (defn- comparison-args
   "An argument compared with a column or a typed expression, as compared-type types it; an
@@ -1987,6 +2001,24 @@
   (let [t (slot-type registry s)]
     (shape/either (distinct (map second (arrays-sent opts #(and t (string? %) (accept/accepts? t (types/element %) :cast)) element)))
                   :any)))
+
+(defn- unnest-cast-element
+  "The type of an element of x, an argument cast to an array of T in unnest(?, ...), whose
+   column goes to one column of type T or a domain over it: as assigned there (assigned-type),
+   or else as cast to T, which converts a value assignment does not (a String to a bigint);
+   nil where its column goes elsewhere."
+  [registry ps x opts]
+  (let [as (for [{c :x :keys [chain] :as a} (assignments ps)
+                 :when (and (column-keyword? c) (= x (:element (resolve-column registry chain c))))]
+             a)]
+    (when (= 1 (count as))
+      (let [a (first as)
+            es (some->> (cast-target (nth x 2)) types/element (named-type-schema registry opts))
+            r (resolver-type registry es)]
+        (when (and r (own-type? {:type r :schema es} r) (= r (resolver-type registry (:schema (assigned-column registry a)))))
+          (let [[assigned cast] (map #(assigned-type registry a % opts) [:assign :cast])]
+            (cond-> (shape/either (shape/distinct-kinds (mapcat (comp shape/alternatives shape/non-null) [assigned cast])) :any)
+              (shape/maybe? assigned) nullable)))))))
 
 (defn- cast-args
   "[:cast :?x :timestamptz]: what PostgreSQL casts to the type, its CHECKs, lengths and ranges
@@ -2021,7 +2053,8 @@
     (for [[x chain k elements?] (distinct casts)
           :let [s (:schema (expression-type registry chain x opts))]
           :when s
-          :let [t (cond-> (accepted-type registry s :cast opts)
+          :let [e (when-not elements? (unnest-cast-element registry ps x opts))
+                t (cond-> (accepted-type registry s :cast (cond-> opts e (assoc ::cast-element e)))
                     ;; compared, PostgreSQL evaluates the cast only where its plan reaches it (a row
                     ;; the other conditions keep, or once ahead of the scan), so its CHECKs and ranges may never run
                     (= (get compared x 0) (uses x)) loose
@@ -2033,7 +2066,7 @@
    or an unnest's column, each element assigned to it."
   [registry ps opts]
   (for [{:keys [x chain] :as a} (assignments ps)
-        :let [t (assigned-type registry a opts)
+        :let [t (assigned-type registry a :assign opts)
               u (array-arg x #{:unnest})
               [k elements?] (if u [u true] (value-arg registry chain x))]
         :when k]

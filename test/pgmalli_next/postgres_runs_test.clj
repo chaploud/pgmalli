@@ -35,6 +35,7 @@
                          CREATE TABLE typed (id int, i int, b bigint, n numeric, u uuid, d date, ts timestamp, tz timestamptz,
                            ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[], c1 char(1));
                          INSERT INTO typed (id) VALUES (1);
+                         CREATE TABLE ul (v varchar(5), n int CHECK (n BETWEEN 1 AND 9), j jsonb CHECK (jsonb_typeof(j) = 'object'), x numeric);
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
@@ -273,3 +274,26 @@
         (testing (str t " " (pr-str (vec x)))
           (is (thrown? Exception (runs! (cast-to t) {:x x} {})))
           (is (not (accepted? reg (cast-to t) {:x x} {}))))))))
+
+(deftest an-unnest-of-an-array-cast-to-the-columns-type-holds-each-element-to-the-column
+  (when *db*
+    (let [reg (registry)
+          star (fn [c t] {:insert-into [[:ul [c]] {:select [:*] :from [[[:unnest [:cast :?xs [:raw t]]] [:r {:columns [c]}]]]}]})
+          items (fn [c t] {:insert-into [[:ul [c]] {:select [(keyword (str "r." (name c)))] :from [[[:unnest [:cast :?xs [:raw t]]] [:r {:columns [c]}]]]}]})]
+      (doseq [q [star items]
+              [c t ok bad] [[:v "varchar[]" (into-array String ["abc" nil]) (into-array String ["abcdef"])]
+                            [:n "int[]" (into-array Integer [(int 9)]) (into-array Integer [(int 10)])]
+                            [:j "jsonb[]" (into-array String ["{}"]) (long-array [1])]]]
+        (testing (pr-str (q c t))
+          (is (some? (runs! (q c t) {:xs ok} {})))
+          (is (accepted? reg (q c t) {:xs ok} {}))
+          (is (thrown? Exception (runs! (q c t) {:xs bad} {})))
+          (is (not (accepted? reg (q c t) {:xs bad} {})))))
+      (let [heads (set (keep #(when (vector? %) (first %)) (tree-seq vector? seq (get-in (h/analyze reg (star :j "jsonb[]")) [:args :xs]))))]
+        (is (and (heads :map) (not (heads :map-of))) "the column's CHECK shapes a map element"))
+      (let [dropping (assoc-in (star :v "varchar[]") [:insert-into 1 :where] [:= :r.v "abc"])]
+        (is (some? (runs! dropping {:xs (into-array String ["abcdef"])} {})))
+        (is (accepted? reg dropping {:xs (into-array String ["abcdef"])} {}) "a row the WHERE may drop is not held to the length"))
+      (is (= (get-in (h/analyze reg {:select [[[:cast :?xs [:raw "bigint[]"]] :x]]}) [:args :xs])
+             (get-in (h/analyze reg (star :x "bigint[]")) [:args :xs]))
+          "into a column of another type, the cast's type"))))

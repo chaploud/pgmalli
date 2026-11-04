@@ -1947,6 +1947,19 @@
                   (into-array String ["a"]) {:registry registry})
       "an array of what casts to the type"))
 
+(deftest an-unnest-of-an-array-cast-to-the-columns-type-holds-each-element-to-the-column
+  (let [q (fn [select more] {:insert-into [[:users [:group_id :nick]] (merge {:select select :from [[[:unnest [:cast :?gs [:raw "integer[]"]] [:cast :?ns [:raw "varchar[]"]]] [:r {:columns [:group_id :nick]}]]]} more)]})
+        ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
+        long-nick (into-array String [(apply str (repeat 41 "a"))])]
+    (doseq [select [[:*] [:r.group_id :r.nick]]]
+      (is (not (ok? (q select {}) :ns long-nick)) "longer than the column's varchar(40)")
+      (is (ok? (q select {}) :ns (into-array String ["a" nil])))
+      (is (not (ok? (q select {}) :gs (into-array Integer [nil]))) "NULL into a NOT NULL column")
+      (is (ok? (q select {:where [:= :r.group_id 1]}) :ns long-nick) "a row the WHERE may drop is not written"))
+    (is (ok? {:insert-into [[:users [:group_id]] {:select [:*] :from [[[:unnest [:cast :?gs [:raw "bigint[]"]]] [:r {:columns [:group_id]}]]]}]}
+             :gs (long-array [Long/MAX_VALUE]))
+        "into a column of another type, the cast's type")))
+
 (deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
   (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric(10,2)"} 'decimal? [:> 0]]
                                           :pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
