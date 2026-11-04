@@ -64,12 +64,14 @@
   "classes as the one sending's jsonb writes a value of class into a JSON document (data.json, an
    ISO-8601 string of a java.time value), which json_populate_record reads into a column through
    its type's input: a String as a JSON string, whose text every type's input reads (\"*\");
-   a number, a boolean and a JSON string of another class as the one sending sends the class.
+   a BigInt and a BigInteger as the integer data.json writes; a number, a boolean and a JSON
+   string of another class as the one sending sends the class.
    A Character, a byte[] and a java.sql.Time, which it does not write as a value of theirs, are
    left out."
   (vec (keep (fn [[c :as row]]
                (cond (or (#{Character bytes-class} c) (= "java.sql.Time" (.getName ^Class c))) nil
                      (= String c) [c :unknown :string #{"*"}]
+                     (#{clojure.lang.BigInt java.math.BigInteger} c) (assoc row 1 "bigint")
                      :else row))
              classes)))
 
@@ -173,17 +175,14 @@
    which PostgreSQL reads through t's input function, which every type has; compared, where t
    has an = of its own the catalog holds (json, point and an extension's type but citext have
    none here), not where t is a domain over an enum ([:enum name {:domain? true}]), which has no
-   = for an untyped value. Stricter than accepts?: a numeric is not one of a real's or a
-   double precision's own, a decimal sent to a float column being the mix-up a type would catch.
-   Under :json (a JSON number read through t's input), a number of any number type, but an
+   = for an untyped value. Under :json (a JSON number read through t's input), a number of any number type, but an
    integer type's input reads no fraction."
   ([t sent] (holds? t sent :assign))
   ([t sent context]
    (or (= t sent)
        (if (= :json context)
          (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
-         (and (number-type? t) (number-type? sent) (types/implicit? sent t)
-              (not (and (= "numeric" sent) (= :float (:value (types/types t)))))))
+         (and (number-type? t) (number-type? sent) (types/implicit? sent t)))
        (and (string-type? t) (string-type? sent))
        (and (= :unknown sent)
             (or (not= :compare context)

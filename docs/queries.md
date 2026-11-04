@@ -596,15 +596,12 @@ Write the query so PostgreSQL's reading is explicit instead.
 - An argument takes its column's own values, not all PostgreSQL converts: a `bigint` column
   compared with a `numeric` argument, or a number assigned to a `text` column, PostgreSQL runs
   by converting one side, which hides a mix-up the column's type would catch. Cast it in the
-  query (`[:cast :?n :numeric]`) where the conversion is meant. A `numeric` (a `BigDecimal`)
-  is not a `real` or `double precision` column's own either, though PostgreSQL converts it
-  implicitly. `:problems` reports only what PostgreSQL refuses, read from its catalog (`pg_cast`,
-  and the operator `=` resolved for the two types, in any version pgmalli covers), so a
-  `BigDecimal` sent to a `double precision` column passes `:problems` but not the argument's type
-  `:args` gives. The same holds for a value of a `jsonb_populate_record` document, which
+  query (`[:cast :?n :numeric]`) where the conversion is meant. A number PostgreSQL converts
+  implicitly to the column's type (a `Long` to `numeric`, a `BigDecimal` to `double precision`)
+  is the column's own. The same holds for a value of a `jsonb_populate_record` document, which
   PostgreSQL reads through the column type's input: no number to a `boolean` column (PostgreSQL
-  reads `1` and `0`), and no `BigDecimal` or `BigInt` to an integer column (it reads `1`, not
-  `1.0`); send a `Boolean`, or a `Long`.
+  reads `1` and `0`), and no `BigDecimal` to an integer column (it reads `1`, not `1.0`); send a
+  `Boolean`, or a `Long`.
 - An argument compared with a column does not take nil, unless the query also tests it for NULL
   (`[:= :?id nil]`, `[:is :?id nil]`) under `:inline`
   ([compare NULL in the query body](#the-types-of-the-arguments)).
@@ -616,8 +613,8 @@ Write the query so PostgreSQL's reading is explicit instead.
   a time to a `text` or `varchar` column, which PostgreSQL reads through the type's input.
   Taking them would put `:keyword` on every argument and four date schemas on every string
   argument. Send the value of the column's type (`1`, `(str inst)`), or cast it in the query.
-- A `Character` argument, which pgjdbc sends as `varchar`: taking it would put `char?` on every
-  string argument. Send `(str c)`.
+- A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
+  or `"char"` one: taking it would put `char?` on every string argument. Send `(str c)`.
 - A key of a `jsonb_populate_record` document (or of `json_populate_record` and their
   `recordset`) that names no column of the row type, which PostgreSQL ignores: almost always a
   misspelled or unconverted key (`:sort-order` for `sort_order`), whose value is then not

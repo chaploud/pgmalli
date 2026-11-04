@@ -258,11 +258,11 @@
 (defn distinct-kinds
   "Alternatives ts, the first of each kind, in their order (an argument's own values come
    first, with their :pg/type and bounds); collections of different contents (two shapes of a
-   json column) are each kept."
+   json column, the Java arrays of two element classes) are each kept."
   [ts]
   (first (reduce (fn [[out seen] t]
                    (let [k (kind t)
-                         k (if (and (collection-kinds k) (vector? t)) [k (vec (entries t))] k)]
+                         k (if (and (or (collection-kinds k) (= :pg/array k)) (vector? t)) [k (vec (entries t))] k)]
                      (if (seen k) [out seen] [(conj out t) (conj seen k)])))
                  [[] #{}] ts)))
 

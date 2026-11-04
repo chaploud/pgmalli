@@ -1803,7 +1803,9 @@
    that takes it; untyped own values, or of a type pgmalli-next.impl.accept does not answer for,
    are the type alone (:any under a cast)."
   [registry s context opts]
-  (let [own (cond-> (driver-schema registry jdbc/column-write-type s opts)
+  (let [t (slot-type registry s)
+        opts (cond-> opts (#{"character" "\"char\""} t) (assoc ::jdbc/characters true))
+        own (cond-> (driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) loose
               ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a CHECK's bounds hold after it
               (= :cast context) (->> (walk/postwalk #(if (and (vector? %) (= :string (first %)) (:pg/max-length (second %)))
@@ -1813,7 +1815,7 @@
         ;; cast to an array type, PostgreSQL casts an array element by element, NULL too, to the
         ;; element type; a scalar through the array type's input alike for every element type
         es (when (= :cast context) (some->> (types/element (:pg/type (shape/column-props s))) (named-type-schema registry opts)))
-        t (or (slot-type registry s) (when es "text[]"))
+        t (or t (when es "text[]"))
         takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t % context))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
         arrays (when (= :cast context)

@@ -33,7 +33,7 @@
                          INSERT INTO uq VALUES (1, NULL, 1, NULL), (2, NULL, 1, NULL);
                          CREATE TABLE arr (xs int[], cs citext[]);
                          INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
-                         CREATE TABLE typed (id int, i int, b bigint, n numeric, u uuid, d date, ts timestamp, tz timestamptz,
+                         CREATE TABLE typed (id int, i int, b bigint, n numeric, f double precision, u uuid, d date, ts timestamp, tz timestamptz,
                            ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[], c1 char(1));
                          INSERT INTO typed (id) VALUES (1);
                          CREATE TABLE ul (v varchar(5), n int CHECK (n BETWEEN 1 AND 9), j jsonb CHECK (jsonb_typeof(j) = 'object'), x numeric);
@@ -207,16 +207,25 @@
           (is (some? (runs! q params {})))
           (is (accepted? reg q params {})))))))
 
-(deftest a-character-is-refused-though-pgjdbc-sends-it-as-varchar
+(deftest a-character-goes-to-a-character-column-alone
   (when *db*
     (let [reg (registry)]
-      (doseq [q [{:select [:id] :from [:typed] :where [:= :c1 :?x]}
-                 {:select [:id] :from [:accounts] :where [:= :email :?x]}
-                 {:update :typed :set {:c1 :?x} :where [:= :id 1]}
-                 {:update :accounts :set {:email :?x} :where [:= :id 1]}]]
+      (doseq [[q taken?] [[{:select [:id] :from [:typed] :where [:= :c1 :?x]} true]
+                          [{:update :typed :set {:c1 :?x} :where [:= :id 1]} true]
+                          [{:select [:id] :from [:accounts] :where [:= :email :?x]} false]
+                          [{:update :accounts :set {:email :?x} :where [:= :id 1]} false]]]
         (testing (pr-str q)
           (is (some? (runs! q {:x \a} {})))
-          (is (not (accepted? reg q {:x \a} {}))))))))
+          (is (= taken? (accepted? reg q {:x \a} {}))))))))
+
+(deftest a-big-decimal-goes-to-a-float-column-and-a-big-int-into-a-populated-integer
+  (when *db*
+    (let [reg (registry)]
+      (doseq [[q x] [[{:update :typed :set {:f :?x} :where [:= :id 1]} 1.5M]
+                     [{:select [:r.i] :from [[[:jsonb_populate_record [:cast nil :typed] :?x] :r]]} {:i 2N}]]]
+        (testing (pr-str q x)
+          (is (some? (runs! q {:x x} {})))
+          (is (accepted? reg q {:x x} {})))))))
 
 (deftest a-date-or-time-sent-untyped-to-a-text-column-is-refused-though-postgresql-takes-it
   (when *db*

@@ -148,7 +148,8 @@
 
 (def ^:private sends
   "{class type} the one sending sends (accept/class-types) but a Character, which a char? on
-   every string argument would say nothing of."
+   every string argument would say nothing of: it is taken by a character or \"char\" column
+   alone (::characters)."
   (dissoc (into {} accept/class-types) Character))
 
 (defn- rows-of
@@ -160,16 +161,20 @@
 
 (def ^:private sent-rows (rows-of (filter (comp sends first) accept/class-types)))
 
+(def ^:private character-rows (rows-of accept/class-types))
+
 (def ^:private json-rows (rows-of accept/json-classes))
 
 (defn write-rows
   "[schema type class] for each class the one sending sends, in accept/class-types' order, by array?
    an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
    none under ::nothing-sent, where a type is taken as the driver reads it alone; under ::json,
-   a value of a JSON document as accept/json-classes writes it, no array."
+   a value of a JSON document as accept/json-classes writes it, no array; a Character under
+   ::characters alone (sends)."
   [opts array?]
   (cond (::nothing-sent opts) []
         (::json opts) (if array? [] (get json-rows false []))
+        (::characters opts) (get character-rows array? [])
         :else (get sent-rows array? [])))
 
 (defn sent-as
