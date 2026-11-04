@@ -122,10 +122,10 @@
     (when-let [old (not-empty (select-keys opts [:time :read]))]
       (fail! (str (pr-str old) " is no longer read: " one-reading) old))
     (when (contains? opts :compare)
-      (fail! (str ":compare is no longer read: a compared argument takes no nil; compare NULL with [:= :x nil] or IS NULL in the query body")
+      (fail! ":compare is no longer read: a compared argument takes no nil; compare NULL with [:= :x nil] or IS NULL in the query body"
              (select-keys opts [:compare])))
     (when (contains? opts :return-keys)
-      (fail! (str ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}")
+      (fail! ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}"
              (select-keys opts [:return-keys])))
     (let [jdbc (:jdbc opts)]
       (doseq [k (when (map? jdbc) (keys jdbc))
