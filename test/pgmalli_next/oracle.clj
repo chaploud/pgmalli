@@ -624,22 +624,15 @@
 ;;; the argument matrix
 
 (def values
-  "A value of each class that is no array: each accept/class-types lists, and others an
-   application may hand to setObject."
-  {Long 1 Integer (int 1) Short (short 1) Byte (byte 1) java.math.BigDecimal 1M clojure.lang.BigInt 1N
-   java.math.BigInteger (biginteger 1) Double 1.0 Float (float 1) Boolean true String "a" Character \a
-   java.util.UUID (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
-   java.time.LocalDate (java.time.LocalDate/of 2026 1 1) java.time.LocalTime (java.time.LocalTime/of 1 0)
-   java.time.OffsetTime (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
-   java.time.LocalDateTime (java.time.LocalDateTime/of 2026 1 1 0 0)
-   java.time.OffsetDateTime (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
-   java.time.ZonedDateTime (java.time.ZonedDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC) java.time.Instant java.time.Instant/EPOCH
-   java.time.Duration (java.time.Duration/ofSeconds 1) java.time.Period (java.time.Period/ofDays 1)
-   java.sql.Date (java.sql.Date/valueOf "2026-01-01") java.sql.Time (java.sql.Time/valueOf "01:00:00")
-   java.sql.Timestamp (java.sql.Timestamp/valueOf "2026-01-01 00:00:00") java.util.Date (java.util.Date. 0)
-   clojure.lang.PersistentArrayMap {"a" "b"} clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1]
-   clojure.lang.Keyword :a
-   org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))})
+  "A value of each class that is no array: accept/values', and others an application may hand
+   to setObject."
+  (merge accept/values
+         {java.time.ZonedDateTime (java.time.ZonedDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
+          java.time.Duration (java.time.Duration/ofSeconds 1) java.time.Period (java.time.Period/ofDays 1)
+          java.sql.Date (java.sql.Date/valueOf "2026-01-01") java.sql.Time (java.sql.Time/valueOf "01:00:00")
+          java.sql.Timestamp (java.sql.Timestamp/valueOf "2026-01-01 00:00:00")
+          clojure.lang.PersistentArrayMap {"a" "b"}
+          org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))}))
 
 (def boxed
   "The boxed class of each primitive one."
@@ -953,10 +946,62 @@
                                   :schema (if (= :written kind) (str (if (= :update context) "set-schema" "values-schema") " refuses it") (m/form s))
                                   :pg (or pg :ok)}))))))))))
 
+(defn- each-use
+  "q with each place of an argument of several uses its own argument, :?k__i of the i-th, and
+   {k [k__i ...]} of those arguments."
+  [q]
+  (let [n (atom {})
+        own (fn [k] (let [i (get (swap! n update k (fnil inc -1)) k)] (keyword (str (name k) "__" i))))
+        q' (walk/prewalk (fn [x] (cond (and (keyword? x) (str/starts-with? (name x) "?") (nil? (namespace x)))
+                                       (keyword (str "?" (name (own (keyword (subs (name x) 1))))))
+                                       (and (vector? x) (= :param (first x)) (keyword? (second x))) [:param (own (second x))]
+                                       :else x))
+                         q)]
+    [q' (into {} (for [[k c] @n :when (pos? c)] [k (mapv #(keyword (str (name k) "__" %)) (range (inc c)))]))]))
+
+(defn shared-args
+  "Each argument of several uses in a corpus query, sent each of matrix-values: :shared where
+   every use's own schema (each-use's, which arg-matrix holds to PostgreSQL) takes the value, the
+   argument's schema refuses it, and PostgreSQL takes it. nil is left out: it is taken only where
+   every use takes it, or the query tests it for NULL."
+  [db]
+  (let [registry (registry db)
+        pg (fn [t v] (doto (org.postgresql.util.PGobject.) (.setType t) (.setValue v)))
+        ;; a PGobject of each type pgmalli does not type that pgjdbc reads as one, beside values' json
+        vs (concat (remove nil? (matrix-values (with-open [conn (jdbc/get-connection (test-db/datasource db))]
+                                                 (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified)))))
+                   [(pg "interval" "1 day") (pg "inet" "127.0.0.1")])
+        ok? (fn [s v] (try (m/validate s v {:registry registry}) (catch Exception _ false)))]
+    (with-open [conn (jdbc/get-connection (test-db/datasource db))]
+      (.setAutoCommit conn false)
+      (vec (for [[id q opts] corpus
+                 :let [[q' uses] (each-use q)]
+                 :when (seq uses)
+                 :let [opts (merge {:schema "public"} opts)
+                       args (try (:args (h/analyze registry q opts)) (catch Exception _ nil))
+                       own (try (:args (h/analyze registry q' opts)) (catch Exception _ nil))]
+                 :when (and args own)
+                 [k ks] uses
+                 :let [s (get args k)]
+                 :when (and s (every? own ks))
+                 v vs
+                 :when (and (every? #(ok? (own %) v) ks) (not (ok? s v)))
+                 :let [params (into {k v} (for [[a t] args :when (not= a k)] [a (generated t registry 42)]))
+                       sqlvec (try (sql/format q (assoc (:format opts) :params params)) (catch Exception _ nil))]
+                 :when (and sqlvec (nil? (refusal conn sqlvec nil false)))]
+             {:kind :shared :id id :arg k :sql (first sqlvec) :value v :class (some-> v class .getName)
+              :schema (m/form (m/schema s {:registry registry}))})))))
+
 (defn arg-failure-text
   "An arg-matrix failure as bb oracle and pgmalli-next.oracle-test print it."
-  [{:keys [kind table column context type sql value sent schema pg] cls :class}]
-  (if (= :sent kind)
+  [{:keys [kind table column context type sql value sent schema pg id arg] cls :class}]
+  (case kind
+    :shared
+    (str kind " " id " argument " arg ": every use takes it, the argument's schema refuses it, PostgreSQL takes it"
+         "\n  SQL:        " sql
+         "\n  value:      " (pr-str (cond-> value (some-> value class .isArray) vec)) " " cls
+         "\n  arg schema: " (pr-str (walk/postwalk #(if (fn? %) 'fn %) schema)))
+    :sent
     (str kind " " cls ": sent-type says " (pr-str sent) ", PostgreSQL gets " (pr-str pg)
          "\n  value: " (pr-str (cond-> value (some-> value class .isArray) vec)))
     (str kind " " table "." column " " context " (column type " (pr-str type) ")"
@@ -977,7 +1022,7 @@
       (fn []
         (test-db/exec-sql! schema-sql)
         (let [results (run test-db/*db* seed per-query)
-              fs (arg-matrix test-db/*db*)
+              fs (into (arg-matrix test-db/*db*) (shared-args test-db/*db*))
               failed? (or (seq fs) (some (some-fn (comp seq :return-rejections) (comp seq :column-mismatches)
                                                   (comp #{:false-positive :timeout} :outcome))
                                          results))]

@@ -23,7 +23,7 @@
        " PGMALLI_ORACLE_MUTANTS=" mutants " clojure -M:test -n pgmalli-next.oracle-test"))
 
 (def ^:private results (delay (oracle/run *db* seed mutants)))
-(def ^:private arg-failures (delay (oracle/arg-matrix *db*)))
+(def ^:private arg-failures (delay (into (oracle/arg-matrix *db*) (oracle/shared-args *db*))))
 
 (def pending
   "False rejections the oracle finds in src that src does not fix yet, held out of the failing
@@ -53,8 +53,9 @@
 (defn- column-id [r x] (str (case-id r) " " (cond (:label x) (:label x) (:error x) "error" :else "keys")))
 
 (defn- arg-id [f]
-  (if (= :sent (:kind f))
-    (str "sent " (:class f))
+  (case (:kind f)
+    :sent (str "sent " (:class f))
+    :shared (str "shared " (name (:id f)) " " (name (:arg f)) " " (:class f))
     (str (name (:kind f)) " " (:table f) "." (:column f) " " (name (:context f)))))
 
 (defn- failures

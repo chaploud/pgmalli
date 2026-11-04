@@ -3,10 +3,12 @@
    of an argument where a value of a column goes (accepted-type), which values-schema and
    set-schema type a row's columns with."
   (:require [clojure.walk :as walk]
+            [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
+            [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
@@ -494,21 +496,45 @@
         :when (and k (or cast? (:inline format)))]
     k))
 
+(defn- bare
+  "The kind of alternative x as a schema of its own, its checks and properties left out: the
+   values of the classes of that kind; nil for a kind whose values cannot be told so."
+  [x]
+  (let [k (shape/kind x)]
+    (cond (#{:map-of} k) [:map-of :any :any]
+          (#{:sequential :vector :set} k) [k :any]
+          (= :tuple k) [:fn vector?]
+          (vector? k) (when (= :fn (first k)) k)
+          (or (keyword? k) (symbol? k)) k)))
+
+(def ^:private classes-of
+  "The classes of accept/values whose value alternative x's kind takes, by name; of a PGobject
+   predicate, its class; of an enum, its labels' classes; ::untold where they cannot be told."
+  (memoize
+   (fn [x]
+     (let [x (unlabel x)
+           props (shape/props x)]
+       (cond (= :pg/array (shape/head x)) #{::array}
+             (= :enum (shape/kind x)) (set (map #(.getName (class %)) (shape/entries (shape/domain-base x))))
+             (and (= :fn (shape/head x)) (:pg/class props)) #{(:pg/class props)}
+             :else (if-let [b (bare x)]
+                     (try (set (for [[c v] accept/values :when (m/validate b v {:registry registry/base})] (.getName ^Class c)))
+                          (catch Exception _ ::untold))
+                     ::untold))))))
+
 (defn- meet
-  "The alternatives of a and b whose values the other takes too, each keeping its own label: one
-   within an alternative of the other (equal, or of that kind: [:int {:min 0}] within :int); for
-   two arrays, an array of the elements both take. () where none are common; nil where two
-   alternatives are of one kind and neither is within the other, whose common values cannot be
-   told."
+  "The alternatives of a and b whose values the other takes too, each keeping its own label: of
+   two that share a class of accept/values, the one within the other (its classes among the
+   other's, which checks nothing beyond its kind), an enum's labels the other takes, else both
+   ([:and x y]); for two arrays, an array of the elements both take. () where none share a class; nil where the classes of one
+   cannot be told."
   [a b]
   (let [array? #(= :pg/array (shape/head %))
-        fn? #(= :fn (shape/head %))
-        within? (fn [x y] (let [y (unlabel y)]
-                            (or (= (unlabel x) y)
-                                (and (or (keyword? y) (symbol? y)) (= y (shape/kind x)))
-                                ;; a PGobject of any type holds one of a type (typed-pg-object)
-                                (and (fn? x) (fn? y) (= (:pg/class (shape/props x)) (:pg/class (shape/props y)))
-                                     (not (:pgmalli/describe (shape/props y)))))))
+        plain? #(let [u (unlabel %)] (or (keyword? u) (symbol? u) (= u (bare u))))
+        within? (fn [y cx cy] (and (every? cy cx) (plain? y)))
+        enum? #(and (vector? %) (= :enum (first %)))
+        ;; an enum's labels the other takes: of its classes (cy), or among its labels
+        labels (fn [x keep?] (let [ls (filter keep? (shape/entries x))] (when (seq ls) (into (subvec x 0 (if (map? (second x)) 2 1)) ls))))
         elements (fn [x y]
                    (let [[ex ey] [(last x) (last y)]
                          m (cond (query/untyped? ey) [ex]
@@ -516,15 +542,26 @@
                                  :else (meet (shape/non-null ex) (shape/non-null ey)))]
                      (cond (nil? m) ::untold
                            (seq m) (assoc x (dec (count x)) (cond-> (shape/either m nil) (and (shape/maybe? ex) (shape/maybe? ey)) query/nullable)))))
-        pairs (for [x (shape/alternatives a), y (shape/alternatives b)]
-                (cond (within? x y) x
-                      (within? y x) y
+        pairs (for [x (shape/alternatives a), y (shape/alternatives b)
+                    :let [cx (classes-of x) cy (classes-of y)]]
+                (cond (or (= ::untold cx) (= ::untold cy)) ::untold
+                      (not-any? cy cx) nil
                       (and (array? x) (array? y)) (elements x y)
-                      ;; two predicates, or one of no class, may share any values
-                      (or (= (shape/kind x) (shape/kind y)) (and (fn? x) (fn? y))
-                          (some #(and (fn? %) (not (:pg/class (shape/props %)))) [x y]))
-                      ::untold))]
-    (when-not (some #{::untold} pairs) (distinct (remove nil? pairs)))))
+                      (= (unlabel x) (unlabel y)) x
+                      ;; of two of the same classes, the one that tells more (a PGobject of interval)
+                      (and (within? y cx cy) (within? x cy cx)) (max-key #(count (shape/props %)) y x)
+                      (within? y cx cy) x
+                      (within? x cy cx) y
+                      (and (enum? x) (enum? y)) (labels x (set (shape/entries y)))
+                      (and (enum? x) (plain? y)) (labels x #(cy (.getName (class %))))
+                      (and (enum? y) (plain? x)) (labels y #(cx (.getName (class %))))
+                      :else [:and x y]))]
+    (when-not (some #{::untold} pairs)
+      ;; an enum's labels kept of two alternatives are one enum
+      (let [ps (distinct (remove nil? pairs))
+            head #(subvec % 0 (if (map? (second %)) 2 1))
+            enums (group-by head (filter enum? ps))]
+        (distinct (for [p ps] (if (enum? p) (into (head p) (distinct (mapcat shape/entries (enums (head p))))) p)))))))
 
 (defn- both-uses
   "The type of an argument two of its uses type a and b: PostgreSQL types a parameter once, so

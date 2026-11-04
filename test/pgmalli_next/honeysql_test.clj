@@ -2839,7 +2839,9 @@
       "uses with no common value, each described")
   (is (str/includes? (pgmalli/describe registry (:d (args {:select [:id] :from [:users] :where [:or [:< :closed_at [:- :current_timestamp :?d]] [:= [:cast :?d :text] "x"]]})))
                      "PGobject of interval")
-      "a cast to text takes a PGobject of any type, one of interval too"))
+      "a cast to text takes a PGobject of any type, one of interval too")
+  (is (= "(mood: :happy | :sad)?" (pgmalli/describe registry (:m (args {:select [:id] :from [:users] :where [:or [:= [:cast :?m :mood] nil] [:= :mood :?m]]}))))
+      "a cast to mood reads a String, compared with an enum column it goes as varchar: the labels as keywords alone"))
 
 (deftest returning-old-and-new-are-null-where-the-statement-has-no-such-row
   (let [nullable #(shape/maybe? (last (second (row %))))]

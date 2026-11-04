@@ -240,3 +240,6 @@
     (doseq [[classes sent] rows
             [c t] (map vector classes (if (next sent) sent (repeat (first sent))))]
       (is (= (types/canonical-name t) (types/canonical-name (by-name c))) (str c " in docs/queries.md")))))
+
+(deftest every-class-sent-but-an-array-has-a-value
+  (is (= [] (remove (set (keys accept/values)) (keep (fn [[c _ s]] (when s c)) accept/classes)))))

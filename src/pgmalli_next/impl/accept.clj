@@ -53,6 +53,21 @@
    ;; the one sending's jsonb writes a key by its name or text: no nil key
    [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
+(def values
+  "A value of each class of classes that is no array, by class."
+  (into {} (filter (comp some? key))
+        {Long 1 Integer (int 1) Short (short 1) Byte (byte 1) java.math.BigDecimal 1M clojure.lang.BigInt 1N
+         java.math.BigInteger (biginteger 1) Double 1.0 Float (float 1) Boolean true String "a" Character \a
+         java.util.UUID (java.util.UUID/fromString "00000000-0000-0000-0000-000000000001")
+         java.time.LocalDate (java.time.LocalDate/of 2026 1 1) java.time.LocalTime (java.time.LocalTime/of 1 0)
+         java.time.OffsetTime (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
+         java.time.LocalDateTime (java.time.LocalDateTime/of 2026 1 1 0 0)
+         java.time.OffsetDateTime (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
+         java.time.Instant java.time.Instant/EPOCH java.util.Date (java.util.Date. 0)
+         (named "java.sql.Time") (some-> (named "java.sql.Time") (.getConstructor (into-array Class [Long/TYPE])) (.newInstance (object-array [0])))
+         bytes-class (.getBytes "a") clojure.lang.Keyword :a
+         clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1]}))
+
 (defn row-of
   "The row of rows (classes', json-classes') a value of class c is sent by: its class's, else the
    first of a class it is one of, in their order (java.sql.Date's java.util.Date row); nil for
