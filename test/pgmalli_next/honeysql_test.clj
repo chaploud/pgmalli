@@ -486,7 +486,7 @@
   (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
     (is (= {:g int4
             :m [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]
-            :s [:pg/array int4]
+            :s [:pg/array {:pgmalli/type-from-value "unnest"} int4]
             :n [:maybe [:or [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] :keyword]]}
            (args q opts))
         "by position: an argument takes its column's type, an unnest one an array of it")
@@ -1701,17 +1701,21 @@
 
 (deftest an-unnest-tables-argument-is-an-array-of-where-its-column-goes
   (let [o opts
-        ids [:pg/array bigint-cmp]]
+        ids [:pg/array {:pgmalli/type-from-value "unnest"} bigint-cmp]]
     (is (= {:ids ids} (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]} o))
         "an unnest of one, named by its alias")
     (is (= {:ids ids} (args {:update :users :set {:nick "x"} :from [[[:unnest :?ids] [:x {:columns [:i]}]]] :where [:= :users.id :x.i]} o))
         "a column its alias lists")
-    (is (= {:ids [:any {:pgmalli/untyped :position}]} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o)) "a column that goes nowhere typed")))
+    (is (= {:ids [:or {:pgmalli/type-from-value "unnest"} [:pg/array :any] pg-object]} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o))
+        "a column that goes nowhere typed: an array sent typed, unnest(unknown) being not unique (anyarray, anymultirange, tsvector)")))
 
 (deftest an-argument-whose-type-postgresql-takes-from-the-value-alone-takes-a-value-sent-typed
-  (is (= {:ids [:or [:pg/array :any] pg-object]} (args {:select [[[:cardinality :?ids] :n]]}))
+  (is (= {:ids [:or {:pgmalli/type-from-value "cardinality"} [:pg/array :any] pg-object]} (args {:select [[[:cardinality :?ids] :n]]}))
       "cardinality(anyarray): an array of a type, no keyword or date sent untyped, no nil")
-  (is (= {:ids [:pg/array bigint-cmp] :n [:or [:pg/array :any] pg-object]}
+  (is (= {:ids [:pg/array {:pgmalli/type-from-value "cardinality"} bigint-cmp]}
+         (args {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:>= [:cardinality :?ids] 0]]}))
+      "another use's own type, the position told")
+  (is (= {:ids [:pg/array bigint-cmp] :n [:or {:pgmalli/type-from-value "cardinality"} [:pg/array :any] pg-object]}
          (args {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:= :id [:cardinality :?n]]]}))
       "another use's own type where it has one")
   (is (= [] (check {:select [:id] :from [:users] :where [:= 2 [:cardinality :?ids]]}))))
@@ -1941,7 +1945,7 @@
   (is (= [:case] (map first (rest (row {:select [[[:case [:= :id 1] "a" :else "b"]]] :from [:users]}))))))
 
 (deftest an-unnest-tables-column-assigned-by-update-or-cast-types-its-argument
-  (is (= {:ids [:pg/array bigint-cmp] :ss [:pg/array int4]}
+  (is (= {:ids [:pg/array {:pgmalli/type-from-value "unnest"} bigint-cmp] :ss [:pg/array {:pgmalli/type-from-value "unnest"} int4]}
          (args {:update :users :set {:score :r.s} :from [[[:unnest :?ids :?ss] [:r {:columns [:i :s]}]]] :where [:= :users.id :r.i]} opts)))
   (is (m/validate (:ns (args {:update :users :set {:nick [:cast :r.n :text]} :from [[[:unnest :?ids :?ns] [:r {:columns [:i :n]}]]] :where [:= :users.id :r.i]} opts))
                   (into-array String ["a"]) {:registry registry})

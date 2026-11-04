@@ -745,7 +745,8 @@
    ANY, in RETURNING, an element of unnest(?) joined), assigned (UPDATE SET, INSERT VALUES,
    INSERT ... SELECT of a row it keeps or one it drops), beside it (coalesce, CASE, greatest),
    cast to its type, compared and cast at once, compared and passed where PostgreSQL takes its
-   type from the value alone (concat's \"any\", cardinality's anyarray); and LIMIT."
+   type from the value alone (concat's \"any\", cardinality's anyarray), compared and passed to
+   a function an extension overloads (regexp_replace); and LIMIT."
   [{:keys [table column declared writable]}]
   (let [t (keyword table) c (keyword column) where #(hash-map :select [:*] :from [t] :where %)]
     (remove nil? (concat [[:= (where [:= c :?x])] [:<> (where [:<> c :?x])] [:in (where [:in c :?x])] [:any (where [:= c [:any :?x]])]
@@ -762,7 +763,9 @@
              [:compared-and-cast (where [:and [:= c :?x] [:= c [:cast :?x (keyword (str/replace declared " " "-"))]]])]
              ;; compared, and where PostgreSQL takes its type from the value alone: "any", a polymorphic type
              [:compared-and-any (where [:and [:= c :?x] [:is-not [:concat :?x] nil]])]
-             (when (str/ends-with? declared "[]") [:compared-and-polymorphic (where [:and [:= c :?x] [:>= [:cardinality :?x] 0]])])]))))
+             (when (str/ends-with? declared "[]") [:compared-and-polymorphic (where [:and [:= c :?x] [:>= [:cardinality :?x] 0]])])
+             ;; compared, and passed to a function an extension overloads (citext's regexp_replace beside text's)
+             (when (#{"text" "citext" "character varying"} declared) [:compared-and-overloaded (where [:and [:= c :?x] [:is-not [:regexp_replace :?x "a" "b"] nil]])])]))))
 
 (defn- send!
   "Runs [sql & params] on conn, each parameter set as the one sending (docs/reading-rows.md, which
@@ -799,7 +802,7 @@
                {:state (.getSQLState (refused e)) :message (first (str/split-lines (.getMessage e)))}))))
        (finally (.rollback conn))))
 
-(def ^:private compared-contexts #{:= :<> :in :any :returning :unnest :compared-and-cast :compared-and-any :compared-and-polymorphic})
+(def ^:private compared-contexts #{:= :<> :in :any :returning :unnest :compared-and-cast :compared-and-any :compared-and-polymorphic :compared-and-overloaded})
 
 (defn- outside?
   "Whether v (an array's every element) is outside a CHECK's list."

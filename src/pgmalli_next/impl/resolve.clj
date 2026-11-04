@@ -171,6 +171,20 @@
           (let [as (vec (repeat (count ins) (first same)))]
             (one (filter #(viable? % as) cs)))))))
 
+(defn- exact-matches
+  "How many of ins' known arguments candidate c declares as they are (docs 10.3 step 4.c)."
+  [{:keys [decls]} ins]
+  (count (filter (fn [[d in]] (and (not (unbound? in)) (= d in))) (map vector decls ins))))
+
+(defn- in-doubt?
+  "Whether a doubtful candidate of cs may be the one PostgreSQL calls for ins: one matching as
+   many known arguments exactly as the best viable other does; one matching fewer loses at step
+   4.c, whatever casts make it viable."
+  [cs ins]
+  (let [ds (filter #(doubtful? % ins) cs)
+        best (reduce max -1 (map #(exact-matches % ins) (filter #(viable? % ins) (remove #(doubtful? % ins) cs))))]
+    (boolean (some #(>= (exact-matches % ins) best) ds))))
+
 (defn- chosen
   "The candidate PostgreSQL calls for ins among overloads (of one version): an exact match, the
    one viable candidate, or select's choice; for an operator of one unknown argument of two, an
@@ -182,8 +196,8 @@
                     ins)
         exact (when (not-any? unbound? exact-ins) (some #(when (= exact-ins (:decls %)) %) cs))]
     (or exact
-        (when-not (some #(doubtful? % ins) cs)
-          (let [vs (filter #(viable? % ins) cs)]
+        (when-not (in-doubt? cs ins)
+          (let [vs (filter #(viable? % ins) (remove #(doubtful? % ins) cs))]
             (if (next vs) (select vs ins) (first vs)))))))
 
 (defn- outcome
@@ -232,8 +246,8 @@
        (fn [os]
          (if (some #{:free} ins)
            (let [cs (candidates os (count ins))
-                 rs (distinct (for [c cs :when (viable? c ins)] (outcome c ins)))]
-             (when (and (= 1 (count rs)) (not-any? #(doubtful? % ins) cs)) (first rs)))
+                 rs (distinct (for [c (remove #(doubtful? % ins) cs) :when (viable? c ins)] (outcome c ins)))]
+             (when (and (= 1 (count rs)) (not (in-doubt? cs ins))) (first rs)))
            (let [c (chosen os ins operator?)]
              ;; f(x) of a type's name f, no f taking x as it is, is a cast to the type
              (when-not (and (not operator?) (= 1 (count ins)) (type-name? n) (not= ins (:decls c)))
@@ -266,32 +280,32 @@
      os
      (fn [os]
        (let [cs (candidates os (count ins))
-             ts (distinct (for [c cs :when (viable? c ins)]
+             ts (distinct (for [c (remove #(doubtful? % ins) cs) :when (viable? c ins)]
                             (when-not (:ambiguous c) (bound (nth (:decls c) i) (bind (:decls c) ins)))))]
          (when (and (seq ts) (every? #(and (string? %) (not (polymorphic %)) (not= "\"any\"" %)) ts)
-                    (not-any? #(doubtful? % ins) cs))
+                    (not (in-doubt? cs ins)))
            (set ts)))))))
 
-(defn- open?
-  "Whether candidate c declares at position i \"any\", or a polymorphic type the other
-   arguments of types ins leave unbound."
-  [{:keys [decls]} ins i]
-  (let [d (nth decls i)]
-    (or (= "\"any\"" d) (and (polymorphic d) (nil? (bound d (bind decls ins)))))))
-
 (defn untyped-refused?
-  "Whether every candidate a call with arguments of types ins (as call takes them, :free there)
-   among overloads os may be resolved to declares at position i \"any\", or a polymorphic type
-   the other arguments leave unbound (cardinality(?)), in every version: PostgreSQL takes a
-   parameter's type there from the value alone, and refuses one sent untyped (could not
-   determine data type of parameter, or polymorphic type)."
-  [ins i os]
-  (boolean (when (and (seq os) (every? some? ins))
-             (in-every-version
-              os
-              (fn [os]
-                (let [cs (filter #(viable? % ins) (candidates os (count ins)))]
-                  (and (seq cs) (every? #(open? % ins i) cs))))))))
+  "Whether PostgreSQL refuses a parameter sent untyped at position i of a call of a function or
+   operator (kind) with arguments of types ins (as call takes them, :free there) among overloads
+   os, in every version: the candidate it calls for an untyped value there declares \"any\"
+   there, whose type it takes from the value alone (could not determine data type of
+   parameter), or a polymorphic type the other arguments leave unbound (cardinality(?): could
+   not determine polymorphic type); or no candidate, or several, take it (unnest(?), anyarray's,
+   anymultirange's and tsvector's: not unique). Not where a candidate pgmalli cannot judge may be
+   the one."
+  [kind ins i os]
+  (let [ins (assoc ins i :unknown)]
+    (boolean (when (and (seq os) (every? some? ins))
+               (in-every-version
+                os
+                (fn [os]
+                  (and (not (in-doubt? (candidates os (count ins)) ins))
+                       (let [{:keys [decls] :as c} (chosen os ins (= :operators kind))]
+                         (or (nil? c) (:ambiguous c)
+                             (let [d (nth decls i)]
+                               (or (= "\"any\"" d) (nil? (bound d (bind decls ins))))))))))))))
 
 (defn takes-at?
   "Whether a candidate of a call with arguments of types ins among overloads os, in some

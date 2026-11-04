@@ -239,7 +239,7 @@ PostgreSQL refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 ;; => {:id [:or [:string #:pg{:type "text"}] :keyword]}
 
 (:args (h/analyze registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]}))
-;; => {:author [:int #:pg{:type "bigint"}], :titles [:pg/array [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]}
+;; => {:titles [:pg/array #:pgmalli{:type-from-value "unnest"} [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]], :author [:int #:pg{:type "bigint"}]}
 ```
 
 The `[:map ...]` of `sql/format`'s `:params` is `:args` in a map. Every key is required, as
@@ -348,11 +348,13 @@ one to it. `:problems` reports a string literal there as `:uncast-string`.
 
 A parameter PostgreSQL takes the type of from the value alone, a function's `"any"` argument
 (`concat`, `format`, `jsonb_build_object`, `json_build_array`, `num_nulls`) or a polymorphic one
-nothing else binds (`cardinality(?)`, `array_to_string(?, ',')`), takes a value sent
+nothing else binds (`cardinality(?)`, `array_to_string(?, ',')`), or one among candidates that take no one type there (`unnest(?)`: `anyarray`, `anymultirange`, `tsvector`), takes a value sent
 typed alone, of a type the call resolves with: PostgreSQL cannot type one sent untyped there
 (`could not determine data type of parameter`, `could not determine polymorphic type`), nor
-NULL. Where its other uses take only values sent untyped (a `date` column's `LocalDate`), it is
-an `:untyped-argument` problem: cast it in the query (`[:cast :?ids [:raw "bigint[]"]]`).
+NULL. Its schema carries `:pgmalli/type-from-value`, the function's name, for a sender of its
+own (one sending an array as untyped text, `'{1,2}'`) to tell. Where its other uses take only
+values sent untyped (a `date` column's `LocalDate`), it is an `:untyped-argument` problem: cast
+it in the query (`[:cast :?ids [:raw "bigint[]"]]`).
 
 ```clojure
 (let [t (:suffix (:args (h/analyze registry {:select [[[:concat :email :?suffix] :s]] :from [:users]})))]

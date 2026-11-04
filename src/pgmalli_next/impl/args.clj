@@ -411,7 +411,7 @@
         [i a] (map-indexed vector args)
         :when (syntax/param-key a)
         :let [ss (map types/type-schema (resolve/argument-types ins i os))
-              typed? (and (empty? ss) (not (:inline (:format opts))) (resolve/untyped-refused? ins i os))]
+              typed? (and (empty? ss) (not (:inline (:format opts))) (resolve/untyped-refused? kind ins i os))]
         :when (or typed? (and (seq ss) (every? some? ss)))]
     (cond typed? [a (jdbc/typed-where #(resolve/takes-at? ins i os %)) {:typed-only n}]
           (next ss) [a (query/nullable
@@ -464,9 +464,10 @@
       (when-not (jdbc/untyped-kinds (shape/kind t)) t))))
 
 (defn- analysis
-  "{:args {arg schema} :untyped {arg function}} of arg-types: :untyped, an argument at a position
-   PostgreSQL takes its type from the value alone (call-args' :typed-only) whose other uses take
-   no value sent with a type."
+  "{:args {arg schema} :untyped {arg function}} of arg-types, an argument at a position PostgreSQL
+   takes its type from the value alone (call-args' :typed-only) with :pgmalli/type-from-value,
+   the function, on its schema; :untyped, such an argument whose other uses take no value sent
+   with a type."
   [registry body opts]
   (let [uses [comparison-args limit-args cast-args assignment-args resolving-args call-args]
         sps (query/once registry query/statement-positions body opts)
@@ -487,9 +488,10 @@
                                 t (cond (nil? only) t
                                         (= :any t) (reduce both-uses (map second only))
                                         :else (or (left k) t))]]
-                      [k (if (= :any t)
-                           [:any {:pgmalli/untyped (if (typed-keys k) :type :position)}]
-                           (cond-> t (and (null-tested k) (not only)) query/nullable))]))
+                      [k (cond-> (if (= :any t)
+                                   [:any {:pgmalli/untyped (if (typed-keys k) :type :position)}]
+                                   (cond-> t (and (null-tested k) (not only)) query/nullable))
+                           only (shape/merge-props {:pgmalli/type-from-value (:typed-only (get (first only) 2))}))]))
      :untyped (into {} (for [[k uses] only-typed :when (nil? (left k))]
                          [k (:typed-only (get (first uses) 2))]))}))
 
