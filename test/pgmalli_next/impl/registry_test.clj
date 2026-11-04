@@ -197,3 +197,10 @@
   (let [reg (pgmalli/registry {:registry {}})
         s (m/schema [:map [:a [:re {:error/message "m"} "x+"]]] {:registry reg})]
     (is (= (m/form s) (m/form (m/from-ast (m/ast s) {:registry reg}))))))
+
+(deftest a-regex-running-out-of-the-threads-stack-matches-on-a-larger-one
+  (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
+        long-value (apply str (repeat 200000 "a"))]
+    (is (thrown? StackOverflowError (re-find #"^([a-z0-9]|-)+$" long-value)) "the thread's own stack runs out")
+    (is (m/validate s long-value))
+    (is (not (m/validate s (str long-value "!"))))))

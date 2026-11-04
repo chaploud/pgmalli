@@ -587,7 +587,10 @@
     (let [e (is (thrown? clojure.lang.ExceptionInfo (f o)) (pr-str o))]
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o))
       (is (re-find #"disallowed key" (ex-message e)) (pr-str o))))
-  (is (= :any (last (h/query-schema registry [] {:select [:id] :from [:nope]} (assoc opts :result :one)))) "query-schema takes :result"))
+  (is (= :any (last (h/query-schema registry [] {:select [:id] :from [:nope]} (assoc opts :result :one)))) "query-schema takes :result")
+  (doseq [o ["sample" [:schema "sample"] #{:schema}]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be a map of options" (h/analyze registry {:select [:id] :from [:users]} o)) (pr-str o)))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be the map of options you pass to next.jdbc" (h/analyze registry {:select [:id] :from [:users]} {:jdbc []}))))
 
 (deftest a-builder-other-than-as-unqualified-maps-is-an-error-naming-it
   (doseq [jdbc [{:builder-fn 'next.jdbc.result-set/as-unqualified-kebab-maps} {:builder-fn (fn [_ _])} {:label-fn str/lower-case} {:qualifier-fn str/lower-case}]]

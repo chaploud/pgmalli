@@ -36,7 +36,8 @@ allowed. A domain's NOT NULL and DEFAULT apply to every column of the domain.
 pgmalli's own schema types are in the registry too: `:pg/bytes`, `:pg/smallint`,
 `:pg/integer`, `:pg/numeric` and `:pg/array`. Three of malli's
 are replaced: `:string` counts characters, `:double` with `:pg/type "real"` keeps to a real's
-range, and `:re` fails a value its regex runs out of stack on, where malli's throws.
+range, and `:re` matches a value its regex runs out of the thread's stack on (a long one) on a larger
+stack, where malli's throws.
 
 ## Properties
 

@@ -135,18 +135,29 @@
 
 (def integer-schema (bounded-int :pg/integer))
 
+(defn- found-on-a-large-stack
+  "(re-find p x) on a thread whose stack holds it: java.util.regex recurses once per character
+   for a regex such as ^([a-z0-9]|-)+$, past a thread's default stack on a long value that
+   PostgreSQL's regex engine matches. false where even that stack runs out."
+  [p x]
+  (let [result (promise)
+        t (Thread. nil #(deliver result (try (some? (re-find p x)) (catch StackOverflowError _ false)))
+                   "pgmalli-re" (* 512 1024 1024))]
+    (.start t)
+    (.join t)
+    @result))
+
 (def re-schema
-  "[:re re] as malli's, except a value java.util.regex runs out of stack on fails instead of
-   throwing StackOverflowError (a regex such as ^([a-z0-9]|-)+$ recurses once per character, and
-   malli catches Exception alone). It fails rather than passes since the registry holds the
-   application's own :re schemas too, which no database CHECK may stand behind."
+  "[:re re] as malli's, except a value java.util.regex runs out of stack on is matched on a
+   larger stack (found-on-a-large-stack) instead of throwing StackOverflowError, which malli,
+   catching Exception alone, lets through."
   (m/-simple-schema
    {:type :re
     :to-ast m/-to-value-ast
     :compile (fn [_ [re] _]
                (let [p (re-pattern re)]
                  {:pred (fn [x] (and (instance? CharSequence x)
-                                     (try (some? (re-find p x)) (catch StackOverflowError _ false))))
+                                     (try (some? (re-find p x)) (catch StackOverflowError _ (found-on-a-large-stack p x)))))
                   :min 1 :max 1}))}))
 
 (def schemas

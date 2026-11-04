@@ -18,12 +18,12 @@
   "Each option pgmalli takes. :jdbc and :format are the maps an application passes to next.jdbc
    and sql/format, open: pgmalli reads the keys of them it names."
   {:schema [:schema {:optional true} :string]
-   :jdbc [:jdbc {:optional true} [:map
+   :jdbc [:jdbc {:optional true} [:map {:error/message "should be the map of options you pass to next.jdbc"}
                                   [:return-keys {:optional true}
                                    (let [m {:error/message "should be true, false or a vector of column names ([\"id\"], [:id])"}]
                                      [:or [:boolean m] [:vector (assoc m :min 1) [:or :string :keyword]]])]]]
    :result [:result {:optional true} [:enum :one]]
-   :format [:format {:optional true} :map]})
+   :format [:format {:optional true} [:map {:error/message "should be the map of options you pass to sql/format"}]]})
 
 (defn checked!
   "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
@@ -114,6 +114,7 @@
    error names what it does not take, with the one meant; an option of an earlier version what
    replaced it."
   [opts ks]
+  (when-not (or (nil? opts) (map? opts)) (checked! (options-schema ks) opts))
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
     (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
       (fail! (str (pr-str old) " is no longer read: " one-sending) old))
