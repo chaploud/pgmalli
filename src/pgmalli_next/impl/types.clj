@@ -5,7 +5,7 @@
      :aliases    other names of the type (pg_type's typname, a cast's spelling)
      :schema     the malli schema of a value; :any for a type the driver hands over as an
                  object of its own
-     :value      the kind of value: :integer (with :range), :exact, :float, :text, :json
+     :value      the kind of value: :integer (with :range), :exact, :float, :json (a string type is its category, S)
      :typmod     what the typmod n of a column bounds: :max-length (varchar(n), char(n)),
                  :bits (bit(n): exactly n), :max-bits (bit varying(n))
      :gen        how a value is generated when the schema alone does not: :bits (0s and 1s)
@@ -35,10 +35,10 @@
    "numeric" {:aliases ["decimal"] :schema 'decimal? :value :exact :read :or-double}
    "real" {:aliases ["float4"] :schema :double :value :float :read 'float?}
    "double precision" {:aliases ["float8" "float"] :schema :double :value :float}
-   "text" {:schema :string :value :text}
-   "character varying" {:aliases ["varchar"] :schema :string :value :text :typmod :max-length}
-   "character" {:aliases ["char" "bpchar"] :schema :string :value :text :typmod :max-length}
-   "name" {:schema :string :value :text}
+   "text" {:schema :string}
+   "character varying" {:aliases ["varchar"] :schema :string :typmod :max-length}
+   "character" {:aliases ["char" "bpchar"] :schema :string :typmod :max-length}
+   "name" {:schema :string}
    "\"char\"" {:schema :string}
    "bit" {:schema :string :typmod :bits :gen :bits :cast :varbit :read :bit}
    "bit varying" {:aliases ["varbit"] :schema :string :typmod :max-bits :gen :bits :cast (keyword "bit varying") :read :any}
@@ -121,6 +121,13 @@
    "issn13" {:schema :any :literals ["9770317847001"] :extension "isn"}
    "issn" {:schema :any :literals ["0317-8471"] :extension "isn"}
    "upc" {:schema :any :literals ["012345678905"] :extension "isn"}})
+
+(def sql-words
+  "The type of each SQL value word PostgreSQL's grammar reads (docs 9.9.5, 9.27), lower-cased."
+  {"current_timestamp" "timestamp with time zone" "current_date" "date" "current_time" "time with time zone"
+   "localtimestamp" "timestamp without time zone" "localtime" "time without time zone"
+   "current_user" "name" "session_user" "name" "current_role" "name" "user" "name"
+   "current_schema" "name" "current_catalog" "name" "system_user" "text"})
 
 (def unsupported
   "The types of pg_catalog and of the extensions PostgreSQL ships that have no entry yet, with

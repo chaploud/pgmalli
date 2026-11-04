@@ -410,10 +410,7 @@
 
 (def sql-value-types
   "The type of an SQL word (docs 9.9.5, 9.27)."
-  {:true "boolean" :false "boolean" :current_timestamp "timestamp with time zone" :current_date "date"
-   :current_time "time with time zone" :localtimestamp "timestamp without time zone"
-   :localtime "time without time zone" :current_user "name" :session_user "name" :current_role "name"
-   :user "name" :current_schema "name" :current_catalog "name" :system_user "text"})
+  (into {:true "boolean" :false "boolean"} (map (fn [[w t]] [(keyword w) t])) types/sql-words))
 
 (def nullable-sql-values
   "The SQL words that may be NULL: CURRENT_SCHEMA under a search_path of no existing schema,

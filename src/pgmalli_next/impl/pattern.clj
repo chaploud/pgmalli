@@ -201,7 +201,7 @@
   [t enum? not-null?]
   (let [e (types/entry t)]
     {:type (type-key t)
-     :keeps (cond (or enum? (= "citext" (:name e)) (and (= :text (:value e)) (not= "character" (:name e)))) text-types
+     :keeps (cond (or enum? (= "citext" (:name e)) (and (= "S" (types/category (:name e))) (not= "character" (:name e)))) text-types
                   (#{"bit" "bit varying"} (:name e)) #{"bit" "bit varying"}
                   (= :integer (:value e)) #{"numeric"}
                   :else #{})

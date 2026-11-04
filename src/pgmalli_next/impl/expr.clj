@@ -17,11 +17,10 @@
 ;;; tokens
 
 (def ^:private keywords
-  #{"AND" "OR" "NOT" "IS" "NULL" "IN" "ANY" "ALL" "SOME" "ARRAY" "CASE" "WHEN" "THEN" "ELSE" "END" "COLLATE"
+  (into #{"AND" "OR" "NOT" "IS" "NULL" "IN" "ANY" "ALL" "SOME" "ARRAY" "CASE" "WHEN" "THEN" "ELSE" "END" "COLLATE"
     "TRUE" "FALSE" "LIKE" "ILIKE" "BETWEEN" "SIMILAR" "TO" "FROM" "BOTH" "LEADING" "TRAILING"
-    "DISTINCT" "ESCAPE" "SYMMETRIC" "AT" "TIME" "ZONE"
-    "CURRENT_TIMESTAMP" "CURRENT_DATE" "CURRENT_TIME" "LOCALTIMESTAMP" "LOCALTIME"
-    "CURRENT_USER" "SESSION_USER" "CURRENT_ROLE"})
+    "DISTINCT" "ESCAPE" "SYMMETRIC" "AT" "TIME" "ZONE"}
+  (map str/upper-case (keys types/sql-words))))
 
 (def ^:private ops
   ;; longest first
@@ -206,18 +205,18 @@
       :op (if (= "-" (:v t))
             (let [e (parse-expr st prec-unary-minus)] (if (number? e) (- e) [:- e]))
             (throw (ex-info (str "operator at start of expression: " (:v t)) {:input (:input @st)})))
-      :kw (case (:v t)
+      :kw (if (types/sql-words (str/lower-case (:v t)))
+            [:raw (:v t)]
+            (case (:v t)
             "NULL" nil "TRUE" true "FALSE" false
             "NOT" [:not (parse-expr st prec-not)]
-            ("CURRENT_TIMESTAMP" "CURRENT_DATE" "CURRENT_TIME" "LOCALTIMESTAMP" "LOCALTIME"
-             "CURRENT_USER" "SESSION_USER" "CURRENT_ROLE") [:raw (:v t)]
             "ARRAY" (do (expect! st #(= :lbracket (:t %)) "'['") [:array (parse-list st :rbracket)])
             ("ANY" "ALL" "SOME") (do (expect! st #(= :lparen (:t %)) "'('")
                                      (let [e (parse-expr st 0)]
                                        (expect! st #(= :rparen (:t %)) "')'")
                                        [(if (= "ALL" (:v t)) :all :any) e]))
             "CASE" (parse-case st)
-            (throw (ex-info (str "unexpected keyword: " (:v t)) {:input (:input @st)})))
+            (throw (ex-info (str "unexpected keyword: " (:v t)) {:input (:input @st)}))))
       :ident (let [name (ident-name st t)]
                (if (= :lparen (:t (peek-tok st)))
                  (do (next-tok! st) (parse-call st name))

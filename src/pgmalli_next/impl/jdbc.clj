@@ -326,8 +326,10 @@
   (some #(shape/type-name (shape/column-props %)) [schema (shape/domain-base schema)]))
 
 (def ^:private numbers
-  "The kinds of the number classes a CHECK on a number column reads."
-  #{:int :double 'decimal? 'integer? 'float? :pg/integer :pg/smallint})
+  "The kinds of the number classes a CHECK on a number column reads: the number types' schemas'
+   and the number classes'."
+  (into (set (for [[t e] types/types :when (accept/number-type? t)] (shape/kind (:schema e))))
+        (for [[_ t s] accept/classes :when (accept/number-type? t)] (shape/kind s))))
 
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's

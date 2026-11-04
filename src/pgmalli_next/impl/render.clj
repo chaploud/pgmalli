@@ -83,13 +83,17 @@
         b (head schema)]
     (if (and (= :and b) (not (map? (second schema)))) (head (second schema)) b)))
 
+(def ^:private integer-kinds
+  "The schema kinds of the integer types."
+  (set (for [[_ e] types/types :when (= :integer (:value e))] (shape/kind (:schema e)))))
+
 (defn- default-value
   "A literal default as a value of the column's schema (malli's :default), or nil when the
    literal is not one (a date as a string)."
   [schema lit]
   (let [base (schema-base schema)]
     (cond
-      (and (#{:int :pg/integer :pg/smallint} base) (integer? lit)) lit
+      (and (integer-kinds base) (integer? lit)) lit
       (and (= :double base) (number? lit)) (double lit)
       (and (= 'decimal? base) (number? lit)) (bigdec lit)
       (and (#{:string :ref :enum} base) (string? lit)) lit

@@ -129,3 +129,7 @@
   (is (= [:= :b [:cast "abc" :text]] (x/check-clause "CHECK (b = 'abc'::text COLLATE case_insensitive)")))
   (is (= [:= [:cast :c :text] [:any [:array [[:cast "a" :text] [:cast "b" :text]]]]]
          (x/check-clause "CHECK ((c)::text = ANY (ARRAY['a'::text COLLATE \"C\", 'b'::text COLLATE \"C\"]))"))))
+
+(deftest every-sql-value-word-a-query-reads-a-check-reads-too
+  (doseq [w ["CURRENT_SCHEMA" "CURRENT_CATALOG" "USER" "SYSTEM_USER" "CURRENT_USER" "LOCALTIME"]]
+    (is (= [:raw w] (pgmalli-next.impl.expr/parse w)) w)))
