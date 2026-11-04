@@ -307,24 +307,28 @@
       (report "functions and operators" 16000 cs))))
 
 (defn- refused?
-  "Whether PostgreSQL refuses q, :params params, as pgjdbc sends them: run on the one row of u,
-   rolled back."
+  "Whether PostgreSQL refuses q, :params params, as the one sending sends them: run on the one
+   row of u, rolled back."
   [^java.sql.Connection con q params]
   (try (jdbc/execute! con (sql/format q {:params params})) false
        (catch java.sql.SQLException e (some? (oracle/refused e)))
        (finally (.rollback con))))
 
+(defn- compared-holds?
+  "Whether a value of class c sent as type sent is one of type t's own, compared."
+  [t sent c]
+  (and (accept/holds? t sent :compare) (or (not= :unknown sent) (accept/reads? t c :compare))))
+
 (defn- argument-failures
   "[query class] of each value of pgmalli.oracle/values sent as :?x of query q of places [q
    held?] that PostgreSQL takes but arg-types refuses, where held? says a value sent as that
-   type is one the places of :?x hold as their own (otherwise refused by design)."
+   type, of that class, is one the places of :?x hold as their own (otherwise refused by design)."
   [registry ds places]
   (let [refusals (doall (pmap (fn [[q held?]]
                                 (let [s (m/schema (:x (:args (h/analyze registry q opts))) {:registry registry})]
                                   [q (for [v (vals oracle/values)
                                            :let [sent (pjdbc/sent-type v {})]
-                                           ;; a date or time sent untyped is its type's own value alone, by design (accept/text-untyped)
-                                           :when (and sent (or (not= :unknown sent) (accept/text-untyped (class v))) (held? sent) (not (m/validate s v)))]
+                                           :when (and sent (held? sent (class v)) (not (m/validate s v)))]
                                        v)]))
                               places))]
     (with-open [con (jdbc/get-connection ds)]
@@ -356,8 +360,8 @@
                     ;; column is of its type)
                     [{:select [[(into [(keyword n)] (assoc (vec cs) i :?x)) :e]] :from [:u]}
                      (if (= :operators kind)
-                       (fn [sent] (every? #(accept/holds? % sent :compare) args))
-                       (fn [sent] (some #(accept/holds? % sent :compare) ts)))]))
+                       (fn [sent c] (every? #(compared-holds? % sent c) args))
+                       (fn [sent c] (some #(compared-holds? % sent c) ts)))]))
           fails (argument-failures registry ds places)]
       (is (< 4600 (count places)) (str (count places) " calls"))
       (is (empty? fails) (str "PostgreSQL takes these, arg-types does not (query, class)\n  " (str/join "\n  " (map pr-str fails)))))))
@@ -369,7 +373,7 @@
           plain (for [[n t] matrix] [(keyword (str "c_" n)) (str/replace t #"\(.*\)$" "")])
           places (for [[a ta] plain [b tb] plain
                        e [[:and [:= a :?x] [:= b :?x]] [:and [:= a :?x] [:= [:coalesce b :?x] b]]]]
-                   [{:select [:*] :from [:u] :where e} (fn [sent] (every? #(accept/holds? % sent :compare) [ta tb]))])
+                   [{:select [:*] :from [:u] :where e} (fn [sent c] (every? #(compared-holds? % sent c) [ta tb]))])
           fails (argument-failures registry (datasource) places)]
       (is (empty? fails) (str "PostgreSQL takes these, arg-types does not (query, class)\n  " (str/join "\n  " (map pr-str fails)))))))
 

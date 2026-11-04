@@ -49,3 +49,12 @@
     (let [e (try (pgmalli/as-read registry :pg.sample/users {:compare c}) (catch clojure.lang.ExceptionInfo e e))]
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))
       (is (re-find #":compare is no longer read: a compared argument takes no nil" (ex-message e))))))
+
+
+(deftest a-typed-arrays-elements-keep-what-its-element-type-takes-untyped-too
+  ;; babashka has no java.sql.Time[]
+  (when-not (System/getProperty "babashka.version")
+    (is (= [:pg/array [:or :time/offset-time 'inst?]] (jdbc/write-type [:vector {:pg/type "time with time zone[]"} :time/offset-time] {}))
+        "a Time[] is a time with time zone[], whose elements a java.sql.Time sent untyped also is"))
+  (is (= [:pg/array [:int {:pg/type "bigint"}]] (jdbc/array-type [:or [:int {:pg/type "bigint"}] :keyword 'inst?] {} :compare))
+      "a Long[]'s elements are bigints, never what goes untyped"))

@@ -838,6 +838,30 @@
              :when (not= sent pg)]
          {:kind :sent :profile pname :value v :class (some-> v class .getName) :sent sent :pg pg})))
 
+(def ^:private type-refusals
+  "The SQLSTATEs of PostgreSQL refusing a parameter's type: no operator or function, a type
+   mismatch, no coercion, ambiguity. A type's input function refusing an untyped value's text
+   (tsvector's and ltree's 42601, regclass's 42602) is the value's, which pgmalli does not read."
+  #{"42883" "42804" "42846" "42725"})
+
+(defn- own-refused?
+  "Whether PostgreSQL refuses the type of place's column where the argument goes, its column in
+   the argument's place (path <> path, of a type with = and no <>): no argument is taken there."
+  [conn {:keys [context query column quoted?]} sends]
+  (let [c (keyword column)]
+    (boolean (when-let [own (case context (:= :<> :returning) c :in [c] nil)]
+               (type-refusals (:state (refusal conn (sql/format (walk/postwalk-replace {:?x own} query) (if quoted? {:quoted true} {}))
+                                               sends column false)))))))
+
+(defn- described?
+  "Whether PostgreSQL parses sqlvec's statement, its parameters untyped: then a refusal of a value
+   sent untyped is its text's, which a type's input function refuses (regproc's 42883), not its
+   type's."
+  [^java.sql.Connection conn [sql]]
+  (try (with-open [ps (.prepareStatement conn sql)] (.getParameterMetaData ps) true)
+       (catch PSQLException _ false)
+       (finally (.rollback conn))))
+
 (defn arg-matrix
   "Each argument of the queries of matrix-queries, over every column of the oracle schema and
    of matrix.types (matrix-schema!, which it creates first), sent each of matrix-values as
@@ -847,7 +871,7 @@
    PostgreSQL does not cast, accept/accepts?), a comparison with a value outside a CHECK's list
    or with NULL. :written: as :refused, the schema of the row an UPDATE's :set or an INSERT's
    :values carries (set-schema, values-schema). :rule: holds? (accepts? under a cast) says
-   PostgreSQL takes a value there, and PostgreSQL refuses its type (SQLSTATE class 42).
+   PostgreSQL takes a value there, and PostgreSQL refuses its type (type-refusals).
    :untyped: arg-types throws or gives the argument no schema (:schema says which). :timeout:
    PostgreSQL ran out of time, which says neither. :sent: sent-failures."
   [db]
@@ -885,8 +909,7 @@
                                   arg (if (= :in context) [v] v)
                                   sent (pjdbc/sent-type v opts)
                                   cast? (= :cast context)
-                                  ;; a date or time sent untyped is its type's own value alone, by design (accept/text-untyped)
-                                  takes? (and sent (or (not= :unknown sent) (accept/text-untyped (class v)) (and cast? (string? t) (= "D" (types/category t)))) (if cast?
+                                  takes? (and sent (or (not= :unknown sent) (accept/reads? t (class v) (if cast? :cast :assign))) (if cast?
                                                      (accept/accepts? t sent :cast)
                                                      ;; an array assigned to an array column: element by element, as array-type reads it
                                                      (let [assign? (#{:update :insert :insert-select :insert-select-dropped} context)
@@ -913,7 +936,8 @@
                                   kind (cond (:timeout? pg) :timeout
                                              (and refused? taken?) :refused
                                              (and row-refused? taken?) :written
-                                             (and rule? (some-> (:state pg) (str/starts-with? "42"))) :rule)]
+                                             (and rule? (type-refusals (:state pg)) (not (own-refused? conn place sends))
+                                                  (not (and (= :unknown sent) (described? conn sqlvec)))) :rule)]
                             :when kind]
                         (failure {:kind kind :sql (first sqlvec) :value v :class (some-> v class .getName) :sent sent
                                   :schema (if (= :written kind) (str (if (= :update context) "set-schema" "values-schema") " refuses it") (m/form s))

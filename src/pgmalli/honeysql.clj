@@ -1809,9 +1809,8 @@
    :assign or :cast), as docs/queries.md#the-types-of-the-arguments says: its own values
    (jdbc/write-type), and the values of each type the one sending sends that the column holds as its own
    (accept/holds?) or, cast, that PostgreSQL casts (accept/accepts?): for an untyped one, the
-   values sent untyped whose text is any text (a keyword), cast to a date or time type a date's
-   or a time's too; for a typed one, the values a column of that type takes (:time's too,
-   and the values sent as it); assigned or cast, a number held to a number column's range
+   values whose text the type's input reads (accept/reads?); for a typed one, the values a
+   column of that type takes and the values sent as it; assigned or cast, a number held to a number column's range
    (within). Compared, the values lose the bounds a
    comparison need not keep (loose). Own values with labels (an enum's, a CHECK's list) are the
    labels as labelled-type sends them, a text label as a String where a String goes as a type
@@ -1836,11 +1835,7 @@
         alts (concat
               (for [p sent
                     a (if (= :unknown p)
-                        ;; a value sent untyped whose text is any text (a keyword); a date's or a time's
-                        ;; (a timestamp's text) is a date or time type's value, its own or cast
-                        (mapcat (fn [[schema q c]] (when (and (= :unknown q) (or (accept/text-untyped c) (and (= :cast context) (string? t) (= "D" (types/category t)))))
-                                                     (shape/alternatives schema)))
-                                (jdbc/write-rows opts false))
+                        (jdbc/sent-as opts :unknown #(accept/reads? t % context))
                         (shape/alternatives (unlabel (loose (driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
                     :when (and (not (untyped? a))
                                (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a)))))]

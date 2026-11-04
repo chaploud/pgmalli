@@ -2167,7 +2167,9 @@
   (is (= {:now [:or
                 [:time/instant {:pg/type "timestamptz"}]
                 ['inst? {:pg/type "timestamptz"}]
-                :time/offset-date-time]
+                :time/offset-date-time
+                :time/local-date
+                :time/local-date-time]
           :d [:any {:pg/type "interval"}]
           :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
@@ -2314,7 +2316,7 @@
   (is (= {:n [:maybe [:or 'decimal? 'integer? :int]]} (args {:select [:*] :from [[[:generate_series 1 :?n] :g]]}))
       "an int, an int8 or a numeric each picks its overload")
   (is (= {:at [:maybe
-               [:or :time/local-date-time 'inst? :time/offset-time :time/instant :time/offset-date-time]]}
+               [:or :time/local-date-time 'inst? :time/local-date :time/instant :time/offset-time :time/offset-date-time]]}
          (args {:select [[[:timezone :nick :?at] :t]] :from [:users]}))))
 
 (deftest an-array-cast-casts-each-element
@@ -2333,7 +2335,7 @@
         "nil where any use takes it")))
 
 (deftest a-pg-catalog-relation-has-the-columns-of-the-catalog-snapshot
-  (is (= {:names [:pg/array [:or [:string {:pg/type "name"}] :keyword]]}
+  (is (= {:names [:pg/array [:string {:pg/type "name"}]]}
          (args {:select [:c.oid] :from [[:pg_class :c]] :where [:= :c.relname [:any :?names]]})))
   (is (= [:map [:relname [:string {:pg/type "name"}]]]
          (row {:select [:c.relname] :from [[:pg_class :c]]} opts)))

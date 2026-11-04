@@ -61,10 +61,12 @@
   [n pred]
   [:fn {:pg/class n :error/message (str "should be an " n)} pred])
 
+(defn- row-schema "The schema c's row in accept/classes names." [c] (some (fn [[k _ s]] (when (= k c) s)) accept/classes))
+
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
   (memoize (fn [^Class c]
-             (or (some (fn [[k _ s]] (when (= k c) s)) accept/classes)
+             (or (row-schema c)
                  ;; java.sql's dates, times and timestamps are java.util.Dates
                  (when (.isAssignableFrom java.util.Date c) 'inst?)
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
@@ -156,6 +158,15 @@
    none under ::nothing-sent, where a type is taken as the driver reads it alone."
   [opts array?]
   (if (::nothing-sent opts) [] (get sent-rows array? [])))
+
+(defn sent-as
+  "The alternatives of the schemas of the classes, no array, the one sending sends as type t; with
+   keep?, of those classes keep? takes (accept/reads?)."
+  ([opts t] (sent-as opts t (constantly true)))
+  ([opts t keep?]
+   (distinct (for [[s q c] (write-rows opts false) :when (and (= t q) (keep? c))
+                   a (shape/alternatives s)]
+               a))))
 
 (defn sent-type
   "The type a literal value goes to PostgreSQL as: :unknown under sql/format's :inline, which
@@ -252,10 +263,25 @@
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
                          (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
+        untyped (set (sent-as opts :unknown))
+        ;; a typed array's elements are its type's, never a scalar sent untyped (a String's, where
+        ;; t takes one): t without those; a Java array's are its component class's (a Time[]'s
+        ;; java.sql.Times, inst?), which t takes too
+        typed (fn [x ^Class c]
+                (let [cs (some-> c .getComponentType row-schema shape/alternatives)
+                      own (set (map shape/kind (or cs (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives))))
+                      strip (fn [s]
+                              (let [as (shape/alternatives s)
+                                    kinds (set (map shape/kind as))]
+                                (shape/either (concat (remove (fn [a] (and (untyped a) (not (own (shape/kind a))))) as)
+                                                      (remove (comp kinds shape/kind) cs))
+                                              s)))]
+                  (if (shape/maybe? t) [:maybe (strip (shape/non-null t))] (strip t))))
         ;; a typed array's elements are also the values of its element type, where the column
         ;; takes them as its own (a bigint[]'s Longs to a numeric[] column)
-        element (fn [sent]
+        element (fn [sent c]
                   (let [x (when (string? sent) (types/element sent))
+                        t (if (= :unknown sent) t (typed x c))
                         ;; an element of no known type (an opaque column's) stays so
                         e (when (and x elem (not= x elem)) (types/entry x))]
                     (if e
@@ -265,9 +291,9 @@
                             more (remove #(own (kind %)) (shape/alternatives (write-type (types/type-schema (:name e)) opts)))]
                         (shape/either (distinct (concat (shape/alternatives t) more)) t))
                       t)))
-        alts (distinct (for [[s sent] (write-rows opts true) :when (takes? sent)
+        alts (distinct (for [[s sent c] (write-rows opts true) :when (takes? sent)
                              a (shape/alternatives s)]
-                         (clojure.walk/postwalk-replace {:pgmalli/element (element sent)} a)))]
+                         (clojure.walk/postwalk-replace {:pgmalli/element (element sent c)} a)))]
     (shape/either (cond-> alts (and (seq alts) (some #{pg-object} (shape/alternatives (shape/non-null t)))) (concat [pg-object])) :any)))
 
 (defn- base-type-name
@@ -299,9 +325,7 @@
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
           ;; keeps those a class sent goes as (pgmalli.honeysql's labelled-type)
-          sent (for [[s sent] (write-rows opts false) :when (and (= n sent) (not= :enum (shape/kind t)))
-                     a (shape/alternatives s)]
-                 a)]
+          sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))]
       (cond (empty? sent) t
             ;; a json column an override or a CHECK shapes: what is sent as its type is held to that shape
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema

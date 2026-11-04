@@ -227,7 +227,7 @@ PostgreSQL refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 ;; => {:id [:or [:string #:pg{:type "text"}] :keyword]}
 
 (:args (h/analyze registry {:insert-into [[:posts [:author_id :title]] {:select [[:?author] [[:unnest :?titles]]]}]}))
-;; => {:author [:int #:pg{:type "bigint"}], :titles [:pg/array [:or [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}] :keyword]]}
+;; => {:author [:int #:pg{:type "bigint"}], :titles [:pg/array [:string {:max 200, :pg/max-length 200, :pg/type "character varying"}]]}
 ```
 
 The `[:map ...]` of `sql/format`'s `:params` is `:args` in a map. Every key is required, as
@@ -312,10 +312,14 @@ interfaces'.
 
 A class adds to what a column takes where its type is the column's or one the column takes as
 its own (a narrower number, another string type), and in a cast wherever PostgreSQL casts it. A
-keyword, sent untyped, is any text: a text or varchar column takes it as a string, an enum or a
-text column's CHECK list as its labels. A date or a time sent untyped is a date or time
-column's own value alone: a `LocalDate` a `date`'s, a `LocalDateTime` a `timestamp`'s, an
-`Instant` or a `java.util.Date` any date's or timestamp's. A jsonb column takes a map and a
+value sent untyped goes where its text is of the column's type's category: a keyword to a
+string column as a string, to an enum or a text column's CHECK list as its labels; a date or a
+time (an `Instant`, a `LocalDate`, a `LocalDateTime`, a `java.util.Date`, java.sql's) to a
+date, time or timestamp column of any of these types. Either goes to a `bytea` or `"char"`
+column, whose input takes any text, and to an extension's type pgmalli does not type (compared,
+one whose `=` pgmalli's catalog holds, `citext`). Cast, a keyword goes to any type, as a string
+does, and a date or time to a string type too. Text a type's input refuses (a `java.sql.Time`'s
+to a `date`) fails when the query runs. A jsonb column takes a map and a
 vector, held to the shape a CHECK (`jsonb_typeof`) or an [override](../README.md#overrides)
 gives it; a json or interval column, where pgmalli knows only the driver's object, takes a
 `PGobject`.
@@ -585,8 +589,7 @@ pgmalli reports or refuses some of what PostgreSQL runs, where it is almost alwa
 Write the query so PostgreSQL's reading is explicit instead.
 
 - An argument takes its column's own values, not all PostgreSQL converts: a `bigint` column
-  compared with a `numeric` argument, a `timestamptz` column with a `date` (a `LocalDate`), or a
-  number assigned to a `text` column, PostgreSQL runs
+  compared with a `numeric` argument, or a number assigned to a `text` column, PostgreSQL runs
   by converting one side, which hides a mix-up the column's type would catch. Cast it in the
   query (`[:cast :?n :numeric]`) where the conversion is meant. A `numeric` (a `BigDecimal`)
   is not a `real` or `double precision` column's own either, though PostgreSQL converts it
@@ -600,6 +603,13 @@ Write the query so PostgreSQL's reading is explicit instead.
 - An `=`, `IN` or `IS NOT DISTINCT FROM` of a column a CHECK narrows to a list
   (`CHECK (state IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`,
   `NOT IN` and `<` match rows and are not reported; nor is `NOT (state = ...)`.
+- A value sent untyped, assigned or compared, where its text is not of the column's type's
+  category: a keyword to a `bigint`, `uuid` or `date` column (`:1`, `:2020-01-01`), a date or
+  a time to a `text` or `varchar` column, which PostgreSQL reads through the type's input.
+  Taking them would put `:keyword` on every argument and four date schemas on every string
+  argument. Send the value of the column's type (`1`, `(str inst)`), or cast it in the query.
+- A `Character` argument, which pgjdbc sends as `varchar`: taking it would put `char?` on every
+  string argument. Send `(str c)`.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 

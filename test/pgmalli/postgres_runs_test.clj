@@ -32,6 +32,9 @@
                          INSERT INTO uq VALUES (1, NULL, 1, NULL), (2, NULL, 1, NULL);
                          CREATE TABLE arr (xs int[], cs citext[]);
                          INSERT INTO arr VALUES ('{1,NULL}', '{a,NULL}');
+                         CREATE TABLE typed (id int, i int, b bigint, n numeric, u uuid, d date, ts timestamp, tz timestamptz,
+                           ok boolean, j jsonb, s status, p dpos, xs int[], ip inet, t time, tt timetz, tts timetz[], c1 char(1));
+                         INSERT INTO typed (id) VALUES (1);
                          CREATE SCHEMA app;
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
@@ -172,3 +175,68 @@
       (is (accepted? reg q {:m "a"} {}))
       (is (thrown? Exception (runs! {:select [[[:cast :?m :mail] :v]]} {:m "a"} {})))
       (is (not (m/validate (:m (:args (h/analyze reg {:select [[[:cast :?m :mail] :v]]}))) "a" {:registry reg}))))))
+
+(deftest a-date-time-or-timestamp-goes-to-a-date-time-or-timestamp
+  (when *db*
+    (let [reg (registry)
+          ts (java.sql.Timestamp. 0)
+          sd (java.sql.Date/valueOf "1990-01-02")
+          st (java.sql.Time/valueOf "10:00:00")
+          ld (java.time.LocalDate/of 1990 1 2)]
+      (doseq [[q params] [[{:select [:id] :from [:typed] :where [:>= :tz :?x]} {:x ts}]
+                          [{:select [:id] :from [:typed] :where [:< :ts :?x]} {:x ts}]
+                          [{:select [:id] :from [:typed] :where [:= :d :?x]} {:x sd}]
+                          [{:select [:id] :from [:typed] :where [:< :t :?x]} {:x st}]
+                          [{:select [:id] :from [:typed] :where [:= :tt :?x]} {:x st}]
+                          [{:select [:id] :from [:typed] :where [:< :tz :?x]} {:x ld}]
+                          [{:update :typed :set {:tz :?x :ts :?x} :where [:= :id 1]} {:x ts}]
+                          [{:update :typed :set {:d :?x :ts :?x} :where [:= :id 1]} {:x ld}]
+                          [{:update :typed :set {:d :?x} :where [:= :id 1]} {:x sd}]
+                          [{:update :typed :set {:t :?x :tt :?x} :where [:= :id 1]} {:x st}]
+                          [{:update :typed :set {:tts :?x} :where [:= :id 1]} {:x (into-array java.sql.Time [st])}]
+                          [{:insert-into :typed :values [{:tts :?x}]} {:x (into-array java.sql.Time [st])}]
+                          [{:select [:id] :from [:typed] :where [:< [:composite :tz :id] [:composite :?c :?i]]} {:c ts :i 1}]]]
+        (testing (pr-str q params)
+          (is (some? (runs! q params {})))
+          (is (accepted? reg q params {})))))))
+
+(deftest a-character-is-refused-though-pgjdbc-sends-it-as-varchar
+  (when *db*
+    (let [reg (registry)]
+      (doseq [q [{:select [:id] :from [:typed] :where [:= :c1 :?x]}
+                 {:select [:id] :from [:accounts] :where [:= :email :?x]}
+                 {:update :typed :set {:c1 :?x} :where [:= :id 1]}
+                 {:update :accounts :set {:email :?x} :where [:= :id 1]}]]
+        (testing (pr-str q)
+          (is (some? (runs! q {:x \a} {})))
+          (is (not (accepted? reg q {:x \a} {}))))))))
+
+(deftest a-date-or-time-sent-untyped-to-a-text-column-is-refused-though-postgresql-takes-it
+  (when *db*
+    (let [reg (registry)]
+      (doseq [v [(java.sql.Timestamp. 0) (java.sql.Date/valueOf "1990-01-02") (java.sql.Time/valueOf "10:00:00")
+                 (java.time.Instant/ofEpochSecond 0) (java.time.LocalDate/of 1990 1 2) (java.time.LocalDateTime/of 1990 1 2 3 4)
+                 (java.util.Date. 0)]
+              q [{:select [:id] :from [:accounts] :where [:= :email :?x]}
+                 {:update :accounts :set {:email :?x} :where [:= :id 1]}
+                 {:insert-into :accounts :values [{:email :?x}]}]]
+        (testing (pr-str q v)
+          (is (some? (runs! q {:x v} {})))
+          (is (not (accepted? reg q {:x v} {}))))))))
+
+(deftest a-keyword-goes-where-a-labels-text-is-read-not-where-a-number-or-dates-is
+  (when *db*
+    (let [reg (registry)]
+      (doseq [[c v] {:s :live :c1 :a}
+              q [{:select [:id] :from [:typed] :where [:= c :?x]}
+                 {:update :typed :set {c :?x} :where [:= :id 1]}]]
+        (testing (pr-str q v)
+          (is (some? (runs! q {:x v} {})))
+          (is (accepted? reg q {:x v} {}))))
+      (doseq [[c text] {:i "1" :b "1" :n "1.5" :d "2020-01-01" :u "00000000-0000-0000-0000-000000000000" :ok "true"}
+              :let [v (keyword text)]
+              q [{:select [:id] :from [:typed] :where [:= c :?x]}
+                 {:update :typed :set {c :?x} :where [:= :id 1]}]]
+        (testing (str "stricter than PostgreSQL: " (pr-str q v))
+          (is (some? (runs! q {:x v} {})))
+          (is (not (accepted? reg q {:x v} {}))))))))

@@ -17,7 +17,7 @@
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
 
 (def classes
-  "[class type schema]: the one sending (docs/reading-rows.md#the-one-reading-and-sending), the
+  "[class type schema categories]: the one sending (docs/reading-rows.md#the-one-reading-and-sending), the
    type a value of class goes to PostgreSQL as, :unknown for one sent untyped, which PostgreSQL
    types from where it goes; schema is the malli schema of a value of class, nil for a Java
    array. pgjdbc's setObject with its default stringtype (varchar): BigInt and BigInteger as
@@ -25,14 +25,17 @@
    elements' type; next.jdbc.date-time's setTimestamp (an Instant, a LocalDate, a LocalDateTime,
    a java.util.Date) and setDate (a java.sql.Date), untyped; and the doc's extension: a
    java.sql.Time with setTime, untyped, a keyword its text untyped, a map and a vector as jsonb.
-   A value goes as its class's row, else as the first row of a superclass or interface of it."
+   A value goes as its class's row, else as the first row of a superclass or interface of it.
+   categories, of a class sent untyped, are the typcategories of the types it goes to as its text
+   (reads?): a date's, a time's or a timestamp's (\"D\"); a keyword's a string type's and an
+   enum's (\"S\", \"E\"), a label's name."
   (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
    [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
    [Double "double precision" :double] [Float "real" 'float?]
    [Boolean "boolean" :boolean] [String "character varying" :string] [Character "character varying" 'char?]
-   [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate :unknown :time/local-date]
+   [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate :unknown :time/local-date #{"D"}]
    [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]
-   [java.time.LocalDateTime :unknown :time/local-date-time]
+   [java.time.LocalDateTime :unknown :time/local-date-time #{"D"}]
    [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
    [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
@@ -46,22 +49,16 @@
    (some-> (named "java.sql.Date") array-of (vector "date[]"))
    (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
    (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))
-   [java.time.Instant :unknown :time/instant]
+   [java.time.Instant :unknown :time/instant #{"D"}]
    ;; before java.util.Date, its superclass
-   (some-> (named "java.sql.Time") (vector :unknown 'inst?))
-   [java.util.Date :unknown 'inst?]
-   [clojure.lang.Keyword :unknown :keyword]
+   (some-> (named "java.sql.Time") (vector :unknown 'inst? #{"D"}))
+   [java.util.Date :unknown 'inst? #{"D"}]
+   [clojure.lang.Keyword :unknown :keyword #{"S" "E"}]
    [clojure.lang.IPersistentMap "jsonb" [:map-of :any :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
 (def class-types
   "[class type] of classes, in its order."
   (mapv (fn [[c t]] [c t]) classes))
-
-(def text-untyped
-  "The classes sent untyped whose text is any text, which PostgreSQL reads as a value of a string
-   type or an enum's label; the others sent untyped are dates and times, a column's own values
-   where it is of their type (pgmalli.impl.jdbc's write-type)."
-  #{clojure.lang.Keyword})
 
 ;;; what PostgreSQL takes
 
@@ -134,12 +131,33 @@
         (= :compare context) (or (and (string-type? t) (string-type? sent)) (compares? t sent))
         :else (or (= :unknown sent) (converts? t sent context))))
 
+(def ^:private any-text
+  "The types outside the string category whose input takes any text: bytea's escape format,
+   \"char\"'s first byte."
+  #{"bytea" "\"char\""})
+
+(defn reads?
+  "Whether a value of class c sent untyped goes to type t as its text, in context: where t's
+   category is one of c's row's categories (classes; a string type's \"S\", citext's too), t's
+   input takes any text (any-text), or answers? does not answer for t (an extension's type); cast,
+   as converts? casts a string, also a string's text (a keyword's) to any type and any text to a
+   string type. Assigned or compared, PostgreSQL reads more through t's input (:1 into a bigint,
+   a timestamp's text into a text column): taking it would put :keyword on every argument and
+   the dates on every string one (docs/queries.md, Stricter than PostgreSQL)."
+  [t ^Class c context]
+  (let [ks (some (fn [[^Class x _ _ ks]] (when (.isAssignableFrom x c) ks)) classes)]
+    (boolean (or (ks (if (string-type? t) "S" (types/category t)))
+                 (and (= :cast context) (or (ks "S") (string-type? t)))
+                 (contains? any-text t)
+                 (not (answers? t))))))
+
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type, a number of a type
-   PostgreSQL converts to t implicitly, a string of another string type, or one sent untyped
-   where t's values are text (a string type, an enum), which PostgreSQL reads as the value
-   itself; compared, not where t is a domain over an enum ([:enum name {:domain? true}]), which
-   has no = for an untyped value. Stricter than accepts?: a numeric is not one of a real's or a
+   PostgreSQL converts to t implicitly, a string of another string type, or one sent untyped,
+   which PostgreSQL reads through t's input function, which every type has; compared, where t
+   has an = of its own the catalog holds (json, point and an extension's type but citext have
+   none here), not where t is a domain over an enum ([:enum name {:domain? true}]), which has no
+   = for an untyped value. Stricter than accepts?: a numeric is not one of a real's or a
    double precision's own, a decimal sent to a float column being the mix-up a type would catch."
   ([t sent] (holds? t sent :assign))
   ([t sent context]
@@ -148,5 +166,6 @@
             (not (and (= "numeric" sent) (= :float (:eval (types/types t))))))
        (and (string-type? t) (string-type? sent))
        (and (= :unknown sent)
-            (or (string-type? t)
-                (and (vector? t) (not (and (= :compare context) (:domain? (get t 2))))))))))
+            (or (not= :compare context)
+                (string-type? t)
+                (if (vector? t) (not (:domain? (get t 2))) (compares? t t)))))))

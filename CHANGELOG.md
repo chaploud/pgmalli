@@ -204,6 +204,15 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 
 ### Changed
 
+* A value sent untyped goes where its text is of the column's type's category: a date or a time
+  (an `Instant`, a `LocalDate`, a `LocalDateTime`, a `java.util.Date`, java.sql's) to a date,
+  time or timestamp column of any of these types, not only its own (a `LocalDate` to a
+  `timestamptz` too); a keyword, as before, to a string or enum column; either to a `bytea` or
+  `"char"` column and to an extension's type. Cast, a date or a time goes to a string type too.
+  A keyword to a `bigint` column and a date to a `text` one stay refused, listed under
+  [Stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql).
+* An array argument's elements are its Java array's component class's: a `String[]` holds no
+  keyword, a `java.sql.Time[]` its `java.sql.Time`s.
 * `h/arg-types` gives an argument it cannot type as `[:any {:pgmalli/untyped why}]`, `why` saying
   whether no use of it is typed, the type where it is used is unknown, or only code uses it
   ([docs/queries.md](docs/queries.md#the-types-of-the-arguments)). It validates as `:any` did.
