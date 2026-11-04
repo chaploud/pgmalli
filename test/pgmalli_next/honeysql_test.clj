@@ -1708,6 +1708,21 @@
         "a column its alias lists")
     (is (= {:ids [:any {:pgmalli/untyped :position}]} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o)) "a column that goes nowhere typed")))
 
+(deftest an-argument-whose-type-postgresql-takes-from-the-value-alone-takes-a-value-sent-typed
+  (is (= {:ids [:or [:pg/array :any] pg-object]} (args {:select [[[:cardinality :?ids] :n]]}))
+      "cardinality(anyarray): an array of a type, no keyword or date sent untyped, no nil")
+  (is (= {:ids [:pg/array bigint-cmp] :n [:or [:pg/array :any] pg-object]}
+         (args {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:= :id [:cardinality :?n]]]}))
+      "another use's own type where it has one")
+  (is (= [] (check {:select [:id] :from [:users] :where [:= 2 [:cardinality :?ids]]}))))
+
+(deftest an-argument-whose-type-postgresql-takes-from-the-value-alone-and-whose-other-uses-send-it-untyped-is-a-problem
+  (let [q {:update :users :set {:born :?d} :where [:= :id 1] :returning [[[:concat :?d] :s]]}]
+    (is (= [{:kind :untyped-argument :arg :d :function "concat"}] (check q)) "a date column's LocalDate goes untyped, nil too")
+    (is (str/includes? (first (h/humanize (check q))) "[:cast :?d [:raw \"bigint[]\"]]")))
+  (is (= [] (check {:update :users :set {:closed_at :?t} :where [:= :id 1] :returning [[[:concat :?t] :s]]}))
+      "a timestamptz column's OffsetDateTime goes typed"))
+
 (deftest a-json-builder-is-json-as-its-type-is-read
   (let [q {:select [[[:jsonb_build_object "a" :id] :o] [[:jsonb_agg :id] :a] [[:json_build_array :id] :b]] :from [:users]}]
     (is (= [:map

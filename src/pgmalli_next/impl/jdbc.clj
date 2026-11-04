@@ -427,11 +427,17 @@
         s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
     (write-type (through-domain schemas s #(write-type % (assoc opts ::nothing-sent true))) opts)))
 
-(def typed
+(def untyped-kinds
+  "The kinds of the values the one sending sends untyped (a keyword, an Instant ...)."
+  (set (for [rows (vals sent-rows) [s t] rows :when (= :unknown t)] (shape/kind s))))
+
+(defn typed-where
   "The values the one sending sends with a type of their own (nil and a value sent untyped are
-   not): what a parameter PostgreSQL takes the type of from the value alone takes (a function's
-   \"any\" argument)."
-  (shape/either (distinct (concat (for [rows (vals sent-rows) [s t] rows :when (not= :unknown t)]
+   not) whose type takes? takes, an array's elements any, and a PGobject, which names its own:
+   what a parameter PostgreSQL takes the type of from the value alone takes (a function's
+   \"any\" or unbound polymorphic argument)."
+  [takes?]
+  (shape/either (distinct (concat (for [rows (vals sent-rows) [s t] rows :when (and (not= :unknown t) (takes? t))]
                                     (clojure.walk/postwalk-replace {:pgmalli/element :any} s))
                                   [pg-object]))
                 :any))

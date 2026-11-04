@@ -66,7 +66,7 @@
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
-      :problems (problems/check registry body opts)
+      :problems (into (problems/check registry body opts) (args/arg-problems registry body opts))
       :tables (query/tables registry body opts)
       :document-columns (args/document-columns registry body opts)})))
 
@@ -273,7 +273,12 @@
                     (if did-you-mean
                       (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))
                       (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand")))
-   :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))})
+   :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))
+   :untyped-argument (fn [{:keys [arg function]}]
+                       (str "argument " arg " goes to " function " where PostgreSQL takes its type from the value alone, and"
+                            " every value its other uses take is sent untyped (or nil), which PostgreSQL refuses there"
+                            " (could not determine polymorphic type); cast it in the query: [:cast " (keyword (str "?" (name arg)))
+                            " [:raw \"bigint[]\"]] with the type meant"))})
 
 (defn humanize
   "A sentence for each problem of analyze's :problems (or of query-schema's :pgmalli/problems):

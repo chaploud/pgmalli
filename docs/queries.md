@@ -172,7 +172,7 @@ keyed as in `sql/format`'s `:params`, as the one sending sends them
 | the document of `jsonb_populate_record`, `json_populate_record` or their `recordset`, bare or cast to `jsonb` or `json`, of a table's or view's row type: `NULL` cast to it (`[[:jsonb_populate_recordset [:cast nil :positions] :?rows] :r]`) or an alias's whole row (`[:jsonb_populate_record :p [:cast :?row :jsonb]]`, `p` the alias of `UPDATE positions p`) | for a record a map, for a recordset a vector of them, in place of a map or vector the parameter takes there (bare, what goes where the function takes `jsonb` or `json`; cast, what the cast takes), or nil. The map is closed: its keys the names of the row type's columns, each as a keyword or a string (`:sort_order` or `"sort_order"`, not both), each optional, and each value nil or what the column's type's input reads of the JSON value the one sending writes: a `json` or `jsonb` column's value as read (its override or CHECK shape), an array column's a sequential of its elements' values; another column's a JSON number (an integer type's input reads no fraction), boolean or string: a `String` of any type, the column's length, range, CHECK and enum labels kept, the others where they go untyped or as their type (an `Instant`, a `LocalDate` or a `LocalDateTime` to a date or timestamp column, a `UUID` to a `uuid` one); no `Character` or `PGobject`, which the document does not hold. Where `INSERT INTO t (cols) SELECT` writes a column of `t` from the populated column of its name, a key whose column NULL may not go to is required, its value not nil, unless the SELECT may drop the row (as assigned above) |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | a Java array of where its column goes, as an argument there: compared, assigned, or cast (an array of what PostgreSQL casts to the type), in a subquery too. Cast to an array of a column's type (`[[:unnest [:cast :?ns [:raw "varchar[]"]]] [:x {:columns [:n]}]]`, its column assigned to a `varchar(50)` column, a domain over `varchar` too, by `SELECT *` or by name), each element as assigned there, or else as cast to the type (a String to a `bigint`); cast to another type, as cast |
 | an argument of `coalesce`, `greatest`, `least` or `nullif`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, as a comparison types it, or nil |
-| an argument of a function or an operator of `pg_catalog` or of a generated schema (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the type each function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil: a value of each type picks its own (`generate_series(1, ?)` takes an integer, a bigint or a numeric); `:any` where one of them takes any type (a polymorphic one) |
+| an argument of a function or an operator of `pg_catalog` or of a generated schema (`[:+ :created_at :?d]`, `[:repeat "a" :?n]`) | the type each function or operator PostgreSQL may resolve the call to takes there, as a comparison types it, or nil: a value of each type picks its own (`generate_series(1, ?)` takes an integer, a bigint or a numeric); where PostgreSQL takes the type from the value alone, a value sent typed alone (below); `:any` where one of them takes any type (a polymorphic one) |
 | compared with `ANY`, `SOME` or `ALL` of an array (`[:= :?tag [:any :tags]]`) | as with a column of the array's element type |
 | a `LIKE` pattern | the column's kind (`:string`) |
 | in `:limit`, `:offset` | an integer of at least 0, or nil for none |
@@ -347,9 +347,12 @@ An enum argument takes its labels as keywords, which go untyped, or as strings c
 one to it. `:problems` reports a string literal there as `:uncast-string`.
 
 A parameter PostgreSQL takes the type of from the value alone, a function's `"any"` argument
-(`concat`, `format`, `jsonb_build_object`, `json_build_array`, `num_nulls`), takes a value sent
-typed alone: PostgreSQL cannot type one sent untyped there (`could not determine data type of
-parameter`), nor NULL:
+(`concat`, `format`, `jsonb_build_object`, `json_build_array`, `num_nulls`) or a polymorphic one
+nothing else binds (`cardinality(?)`, `array_to_string(?, ',')`), takes a value sent
+typed alone, of a type the call resolves with: PostgreSQL cannot type one sent untyped there
+(`could not determine data type of parameter`, `could not determine polymorphic type`), nor
+NULL. Where its other uses take only values sent untyped (a `date` column's `LocalDate`), it is
+an `:untyped-argument` problem: cast it in the query (`[:cast :?ids [:raw "bigint[]"]]`).
 
 ```clojure
 (let [t (:suffix (:args (h/analyze registry {:select [[[:concat :email :?suffix] :s]] :from [:users]})))]

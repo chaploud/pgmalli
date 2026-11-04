@@ -272,18 +272,33 @@
                     (not-any? #(doubtful? % ins) cs))
            (set ts)))))))
 
-(defn any-position?
+(defn- open?
+  "Whether candidate c declares at position i \"any\", or a polymorphic type the other
+   arguments of types ins leave unbound."
+  [{:keys [decls]} ins i]
+  (let [d (nth decls i)]
+    (or (= "\"any\"" d) (and (polymorphic d) (nil? (bound d (bind decls ins)))))))
+
+(defn untyped-refused?
   "Whether every candidate a call with arguments of types ins (as call takes them, :free there)
-   among overloads os may be resolved to declares \"any\" at position i, in every version:
-   PostgreSQL takes a parameter's type there from the value alone, and cannot type one sent
-   untyped (could not determine data type of parameter)."
+   among overloads os may be resolved to declares at position i \"any\", or a polymorphic type
+   the other arguments leave unbound (cardinality(?)), in every version: PostgreSQL takes a
+   parameter's type there from the value alone, and refuses one sent untyped (could not
+   determine data type of parameter, or polymorphic type)."
   [ins i os]
   (boolean (when (and (seq os) (every? some? ins))
              (in-every-version
               os
               (fn [os]
                 (let [cs (filter #(viable? % ins) (candidates os (count ins)))]
-                  (and (seq cs) (every? #(= "\"any\"" (nth (:decls %) i)) cs))))))))
+                  (and (seq cs) (every? #(open? % ins i) cs))))))))
+
+(defn takes-at?
+  "Whether a candidate of a call with arguments of types ins among overloads os, in some
+   version, takes a value of type t at position i."
+  [ins i os t]
+  (let [ins (assoc ins i t)]
+    (boolean (some #(viable? % ins) (candidates os (count ins))))))
 
 (defn set-returning?
   "Whether a function of overloads os may return a set: one of them does, or there is none."

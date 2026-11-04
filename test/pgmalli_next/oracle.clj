@@ -744,10 +744,11 @@
   "[context query] for each place an argument :?x goes with column c: compared (=, <>, IN, =
    ANY, in RETURNING, an element of unnest(?) joined), assigned (UPDATE SET, INSERT VALUES,
    INSERT ... SELECT of a row it keeps or one it drops), beside it (coalesce, CASE, greatest),
-   cast to its type, compared and cast at once; and LIMIT."
+   cast to its type, compared and cast at once, compared and passed where PostgreSQL takes its
+   type from the value alone (concat's \"any\", cardinality's anyarray); and LIMIT."
   [{:keys [table column declared writable]}]
   (let [t (keyword table) c (keyword column) where #(hash-map :select [:*] :from [t] :where %)]
-    (concat [[:= (where [:= c :?x])] [:<> (where [:<> c :?x])] [:in (where [:in c :?x])] [:any (where [:= c [:any :?x]])]
+    (remove nil? (concat [[:= (where [:= c :?x])] [:<> (where [:<> c :?x])] [:in (where [:in c :?x])] [:any (where [:= c [:any :?x]])]
              [:returning {:delete-from t :returning [[[:= c :?x] :v]]}]
              [:unnest {:select [:*] :from [t] :join [[[:unnest :?x] [:u {:columns [:e]}]] [:= c :u.e]]}]]
             (when writable [[:update {:update t :set {c :?x}}] [:insert {:insert-into t :values [{c :?x}]}]
@@ -758,7 +759,10 @@
              [:greatest {:select [[[:greatest c :?x] :v]] :from [t]}]
              [:cast {:select [[[:cast :?x (keyword (str/replace declared " " "-"))] :v]]}]
              ;; one argument of two uses, which it goes through both
-             [:compared-and-cast (where [:and [:= c :?x] [:= c [:cast :?x (keyword (str/replace declared " " "-"))]]])]])))
+             [:compared-and-cast (where [:and [:= c :?x] [:= c [:cast :?x (keyword (str/replace declared " " "-"))]]])]
+             ;; compared, and where PostgreSQL takes its type from the value alone: "any", a polymorphic type
+             [:compared-and-any (where [:and [:= c :?x] [:is-not [:concat :?x] nil]])]
+             (when (str/ends-with? declared "[]") [:compared-and-polymorphic (where [:and [:= c :?x] [:>= [:cardinality :?x] 0]])])]))))
 
 (defn- send!
   "Runs [sql & params] on conn, each parameter set as the one sending (docs/reading-rows.md, which
@@ -795,7 +799,7 @@
                {:state (.getSQLState (refused e)) :message (first (str/split-lines (.getMessage e)))}))))
        (finally (.rollback conn))))
 
-(def ^:private compared-contexts #{:= :<> :in :any :returning :unnest :compared-and-cast})
+(def ^:private compared-contexts #{:= :<> :in :any :returning :unnest :compared-and-cast :compared-and-any :compared-and-polymorphic})
 
 (defn- outside?
   "Whether v (an array's every element) is outside a CHECK's list."
@@ -919,12 +923,15 @@
                                   null-refused? (and (nil? v) notnull (#{:update :insert :insert-select} context))
                                   ;; a keyword in a written row is a column to HoneySQL, a vector a row of parameters
                                   honeysql? (or (keyword? v) (and (vector? v) (not (keyword? (first v)))))
+                                  ;; sent untyped, or nil, where PostgreSQL takes the type from the value
+                                  untyped-there? (and (#{:compared-and-any :compared-and-polymorphic} context) (or (nil? v) (= :unknown sent)))
                                   explained? (or (and (some? v) (not takes?))
+                                                 untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (or (nil? v) (and list (outside? list v))))
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
-                                  rule? (and takes? (not cast?))]
+                                  rule? (and takes? (not cast?) (not untyped-there?))]
                             :when (or rule? (and (or refused? row-refused?) (not explained?)))
                             :let [sqlvec (sql/format query (assoc (fmt quoted?) :params {:x arg}))
                                   pg (refusal conn sqlvec column null-refused?)
