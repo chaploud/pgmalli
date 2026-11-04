@@ -601,7 +601,10 @@ Write the query so PostgreSQL's reading is explicit instead.
   implicitly. `:problems` reports only what PostgreSQL refuses, read from its catalog (`pg_cast`,
   and the operator `=` resolved for the two types, in any version pgmalli covers), so a
   `BigDecimal` sent to a `double precision` column passes `:problems` but not the argument's type
-  `:args` gives.
+  `:args` gives. The same holds for a value of a `jsonb_populate_record` document, which
+  PostgreSQL reads through the column type's input: no number to a `boolean` column (PostgreSQL
+  reads `1` and `0`), and no `BigDecimal` or `BigInt` to an integer column (it reads `1`, not
+  `1.0`); send a `Boolean`, or a `Long`.
 - An argument compared with a column does not take nil, unless the query also tests it for NULL
   (`[:= :?id nil]`, `[:is :?id nil]`) under `:inline`
   ([compare NULL in the query body](#the-types-of-the-arguments)).
@@ -618,7 +621,9 @@ Write the query so PostgreSQL's reading is explicit instead.
 - A key of a `jsonb_populate_record` document (or of `json_populate_record` and their
   `recordset`) that names no column of the row type, which PostgreSQL ignores: almost always a
   misspelled or unconverted key (`:sort-order` for `sort_order`), whose value is then not
-  written. Its value, as assigned, takes the column's own values (no number to a `text` column).
+  written. The keys are the columns' names as keywords: a string key (`"sort_order"`), which
+  PostgreSQL matches, is refused too. Its value, as assigned, takes the column's own values (no
+  number to a `text` column).
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 
