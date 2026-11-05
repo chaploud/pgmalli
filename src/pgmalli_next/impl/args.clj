@@ -135,11 +135,13 @@
 (defn- classes-joined
   "Alternatives as of several candidates' types, a kind held to classes (class-held) in one held
    to theirs together, or free where one is free (generate_series(1, ?) takes an Integer as
-   integer, a Long as bigint)."
+   integer, a Long as bigint); arrays and other collections each kept, as their elements differ
+   (int[] || ? takes a double[] as well as an int[])."
   [as]
   (let [by-kind (group-by shape/kind as)]
-    (distinct (for [a as :let [same (by-kind (shape/kind a))]]
-                (cond (not-every? class-names same) (first (remove class-names same))
+    (distinct (for [a as :let [k (shape/kind a) same (by-kind k)]]
+                (cond (or (shape/collection-kinds k) (= :pg/array k)) a
+                      (not-every? class-names same) (first (remove class-names same))
                       :else (let [[b c] (shape/entries (first same))
                                   cs (distinct (mapcat class-names same))]
                               [:and {:gen/schema (into [:pg/class] cs)} b (into [:pg/class (shape/props c)] cs)]))))))
@@ -532,7 +534,10 @@
                      ;; beside others, a type pgmalli does not type (pg_lsn for +) takes a PGobject, not any value
                      (shape/either (shape/distinct-kinds
                                     (classes-joined (for [s ss, x (shape/alternatives (accepted-type registry s held-in opts))]
-                                                      (if (= :any (shape/head x)) jdbc/pg-object (unlabel x)))))
+                                                      ;; an array of such a type takes the Java arrays sent as it
+                                                      (if (and (= :any (shape/head x)) (not (types/element (:pg/type (shape/column-props s)))))
+                                                        jdbc/pg-object
+                                                        (unlabel x)))))
                                    :any))
           :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 

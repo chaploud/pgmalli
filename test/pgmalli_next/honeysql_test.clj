@@ -171,6 +171,8 @@
     (is (m/validate (x {:select [[[:array_append :ints :?x] :a]] :from [:t]}) 1.5 {:registry reg})
         "array_append(int[], 1.5) resolves to double precision[]")
     (is (= [] (:problems (h/analyze reg {:select [[[:array_append :ints 1.5] :a]] :from [:t]}))))
+    (is (m/validate (x {:select [[[:|| :ints :?x] :a]] :from [:t]}) (double-array [1.5]) {:registry reg})
+        "int[] || double[] resolves to double precision[], as array_cat does: || has several candidates")
     (is (m/validate (x {:select [[[:nullif :iv :?x] :n]] :from [:t]}) (java.time.LocalTime/of 1 0) {:registry reg})
         "nullif(interval, time) is interval = time, which resolves")))
 
