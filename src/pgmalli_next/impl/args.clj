@@ -203,9 +203,12 @@
       (= :enum (shape/kind own)) (labelled-type own alts context (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
       :else
       (let [own-alts (when-not (query/untyped? own) (shape/alternatives own))
-            ;; a number held to a number column's range, which PostgreSQL checks after converting it;
-            ;; a string's or a date's cannot be said of the value sent
-            alts (for [[p a] alts] (cond-> a (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
+            ;; a number held to a number column's range, which PostgreSQL checks after converting it, a
+            ;; keyword or a Character to a string column's through its text (jdbc/text-held); a
+            ;; date's cannot be said of the value sent
+            alts (for [[p a] alts] (cond-> a
+                                     (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)
+                                     (not= :compare context) (jdbc/text-held own)))
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             all (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))]

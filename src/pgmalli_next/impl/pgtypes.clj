@@ -180,7 +180,21 @@
                                      (try (some? (re-find p x)) (catch StackOverflowError _ (found-on-a-large-stack p x)))))
                   :min 1 :max 1}))}))
 
+(def ^:private text-schema
+  "[:pg/text t]: a keyword or a Character whose text t takes (a keyword's name, :ns/a's ns/a; a
+   Character's one-character string), the text the one sending sends it as and PostgreSQL checks."
+  (m/-simple-schema
+   {:type :pg/text
+    :compile (fn [_ [t] options]
+               (let [valid? (m/validator t options)]
+                 {:pred (fn [v] (cond (keyword? v) (valid? (subs (str v) 1))
+                                      (char? v) (valid? (str v))
+                                      :else false))
+                  :type-properties {:error/message "should go as a text the column takes (its length, its CHECKs)"}
+                  :min 1 :max 1}))}))
+
 (def schemas
   "The schema types pgmalli registers, by name."
   {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
-   :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema})
+   :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema
+   :pg/text text-schema})

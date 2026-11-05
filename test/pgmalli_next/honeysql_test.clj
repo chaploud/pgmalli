@@ -34,6 +34,8 @@
 (def int4 [:int {:pg/type "integer" :min -2147483648 :max 2147483647}])
 ;; compared, = takes a number of any number type: PostgreSQL converts one side implicitly
 (defn- compared [t] [:or t 'decimal? 'integer? :double 'float?])
+(def nick-assigned
+  (let [s [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]] [:maybe [:or s (jdbc/text-held :keyword s)]]))
 (def bigint-cmp (compared bigint))
 (def integer-cmp (compared integer))
 (def text [:string {:pg/type "text"}])
@@ -92,10 +94,7 @@
             :moods (in-list mood-arg)
             :n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (args body)))
-    (is (= {:g/id [:maybe
-                   [:or
-                    [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]
-                    :keyword]]}
+    (is (= {:g/id nick-assigned}
            (args {:update :users :set {:nick :?g/id} :where [:= :id 1]}))
         "a qualified one keeps its namespace, as sql/format's :params does")
     (is (= (args body)
@@ -176,7 +175,7 @@
   (let [o opts
         n [:or [:string {:pg/type "character varying"}] :keyword]]
     (is (= {:n n :ns (in-list n)
-            :v [:maybe [:or [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] :keyword]]}
+            :v nick-assigned}
            (args {:update :users :set {:nick :?v} :where [:and [:= :nick :?n] [:in :nick :?ns]]} o)))
     (is (= {:id bigint-cmp} (args {:select [:id] :from [:users] :where [:= :id :?id]} o))
         "a keyword sent untyped is no bigint's own value")))
@@ -543,7 +542,7 @@
     (is (= {:g int4
             :m [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]
             :s [:pg/array {:pgmalli/type-from-value "unnest"} int4]
-            :n [:maybe [:or [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}] :keyword]]}
+            :n nick-assigned}
            (args q opts))
         "by position: an argument takes its column's type, an unnest one an array of it")
     (is (= [] (check q opts)))
@@ -1662,6 +1661,14 @@
     (is (m/validate s :open {:registry check-list-registry}))
     (is (not (m/validate s :archived {:registry check-list-registry})))))
 
+(deftest a-keyword-assigned-to-a-checked-string-column-is-held-to-its-text
+  (let [s (:v (args {:update :users :set {:nick :?v} :where [:= :id 1]}))]
+    (is (m/validate s :a {:registry registry}))
+    (is (not (m/validate s (keyword (apply str (repeat 41 "a"))) {:registry registry})))
+    (is (not (m/validate (h/values-schema registry :users opts)
+                         {:nick [:lift (keyword (apply str (repeat 41 "a")))] :group_id 1 :score 1} {:registry registry}))
+        "a row written too")))
+
 (def ^:private kinds-registry
   (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:>= 1]]
                                 :pg.public/t [:map {:pg/table "public.t"}
@@ -2216,6 +2223,17 @@
     (is (m/validate (pgmalli/as-read reg :pg.public/t)
                     {:ps [(Object.)]} {:registry reg})
         "pgjdbc returns a domain's elements as PGobjects")))
+
+(deftest an-array-assigneds-elements-are-held-to-the-element-types-range-and-checks
+  (let [reg (pgmalli/registry {:registry {:pg.public/posint [:int {:pg/type "integer" :min 1}]
+                                          :pg.public/t [:map {:pg/table "public.t"}
+                                                        [:ps [:vector {:pg/type "posint[]"} [:ref {:pg/type "posint"} :pg.public/posint]]]
+                                                        [:is [:vector {:pg/type "integer[]"} :pg/integer]]]}})
+        ok? (fn [c v] (m/validate (:x (:args (h/analyze reg {:update :t :set {c :?x}}))) v {:registry reg}))]
+    (is (ok? :ps (long-array [1])))
+    (is (not (ok? :ps (long-array [0]))))
+    (is (ok? :is (long-array [2147483647])))
+    (is (not (ok? :is (long-array [3000000000]))))))
 
 (deftest a-with-ordinality-table-function-is-named-by-its-alias
   (is (= [] (check {:select [:r.value :r.ordinality] :from [:users [[:with-ordinality [:jsonb_array_elements :users.nick] :r]]]}))))

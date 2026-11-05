@@ -219,7 +219,7 @@ matches no row.
 
 ```clojure
 (:args (h/analyze registry {:update :users :set {:nick :?nick} :where [:= :id :?id]}))
-;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}
+;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] [:and :keyword [:pg/text [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]]], :id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}
 ```
 
 A comparison with NULL is never true (it matches no row), so `:?id` above does not take nil.
@@ -254,7 +254,7 @@ The `[:map ...]` of `sql/format`'s `:params` is `:args` in a map. Every key is r
 
 ```clojure
 (into [:map] (sort-by key (:args (h/analyze registry {:update :users :set {:nick :?nick} :where [:= :id :?id]}))))
-;; => [:map [:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]] [:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]]]]
+;; => [:map [:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]] [:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] [:and :keyword [:pg/text [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]]]]]
 ```
 
 ### A row written into a table
@@ -329,13 +329,15 @@ interfaces'.
 
 ```clojure
 (:args (h/analyze registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}))
-;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] :keyword]], :ids [:pg/array [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]], :status [:enum {:default :active, :pg/default "active", :pg/type "user_status"} :active :closed]}
+;; => {:nick [:maybe [:or [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}] [:and :keyword [:pg/text [:string {:max 40, :pg/max-length 40, :pg/type "character varying"}]]]]], :ids [:pg/array [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]], :status [:enum {:default :active, :pg/default "active", :pg/type "user_status"} :active :closed]}
 ```
 
 A class adds to what a column takes where its type is the column's or one it takes
 ([above](#the-types-of-the-arguments)), and in a cast wherever PostgreSQL casts it. A
 value sent untyped goes where its text is of the column's type's category: a keyword to a
-string column as a string, to an enum or a text column's CHECK list as its labels. It goes to a
+string column as a string, to an enum or a text column's CHECK list as its labels. Assigned to a
+string column, its text (`:ns/a`'s `ns/a`) is held to the column's length and CHECKs, as a
+`String`'s is (`[:and :keyword [:pg/text t]]`). It goes to a
 `bytea` or `"char"` column, whose input takes any text, and to an extension's type pgmalli does
 not type (compared, one whose `=` pgmalli's catalog holds, `citext`). Cast, a keyword goes to
 any type, as a string does. A jsonb column takes a map and a

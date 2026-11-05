@@ -276,6 +276,22 @@
   (class-fn "org.postgresql.util.PGobject"
             (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
+(defn- int-bounds
+  "{:min :max} of the integer alternative of t: its type's range (pgtypes/int-ranges) narrowed
+   by its properties, a domain's CHECK's; nil for none."
+  [t]
+  (some (fn [a]
+          (let [k (shape/kind a) p (shape/props a)]
+            (cond (pgtypes/int-ranges k) (let [[lo hi] (pgtypes/int-ranges k)] {:min (max lo (:min p lo)) :max (min hi (:max p hi))})
+                  (= :int k) (not-empty (select-keys p [:min :max])))))
+        (shape/alternatives (shape/non-null t))))
+
+(defn- held-to
+  "Alternatives as, their integer ones held to bounds (int-bounds), as PostgreSQL checks an element
+   it converts against its type and CHECKs."
+  [as bounds]
+  (if bounds (map #(if (#{:int} (shape/kind %)) (shape/merge-props % bounds) %) as) as))
+
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :whole, compared with an
    array column; :assign, to an array column; :common, beside an array column in coalesce or
@@ -300,7 +316,7 @@
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
                          (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
-        untyped (set (sent-as opts :unknown))
+        untyped (set (map shape/kind (sent-as opts :unknown)))
         ;; a typed array's elements are its type's, never a scalar sent untyped (a String's, where
         ;; t takes one): t without those; a Java array's are its component class's (a Time[]'s
         ;; java.sql.Times, inst?), which t takes too
@@ -310,8 +326,8 @@
                       strip (fn [s]
                               (let [as (shape/alternatives s)
                                     kinds (set (map shape/kind as))]
-                                (shape/either (concat (remove (fn [a] (and (untyped a) (not (own (shape/kind a))))) as)
-                                                      (remove (comp kinds shape/kind) cs))
+                                (shape/either (concat (remove (fn [a] (and (untyped (shape/kind a)) (not (own (shape/kind a))))) as)
+                                                      (held-to (remove (comp kinds shape/kind) cs) (int-bounds s)))
                                               s)))]
                   (if (shape/maybe? t) [:maybe (strip (shape/non-null t))] (strip t))))
         ;; a typed array's elements are also the values of its element type, where the column
@@ -325,7 +341,10 @@
                       (let [;; pgmalli's integer types are integers, as :int is
                             kind #(let [k (shape/kind %)] (if (pgtypes/int-ranges k) :int k))
                             own (set (map kind (shape/alternatives (shape/non-null t))))
-                            more (remove #(own (kind %)) (shape/alternatives (write-type (types/type-schema (:name e)) opts)))]
+                            more (held-to (for [a (shape/alternatives (write-type (types/type-schema (:name e)) opts))
+                                                :when (not (own (kind a)))]
+                                            a)
+                                          (int-bounds t))]
                         (shape/either (distinct (concat (shape/alternatives t) more)) t))
                       t)))
         alts (distinct (for [[s sent c] (write-rows opts true) :when (takes? sent)
@@ -361,6 +380,18 @@
   (into (set (for [[t e] types/types :when (accept/number-type? t)] (shape/kind (:schema e))))
         (for [[_ t s] accept/classes :when (accept/number-type? t)] (shape/kind s))))
 
+(defn text-held
+  "Alternative a of a keyword or a Character, held to string column schema t (its length, a
+   CHECK's) through the text it goes as (:pg/text); a as it is for another a, or a t that checks
+   nothing beyond being a string."
+  [a t]
+  (let [k (shape/kind a)]
+    (if (and (#{:keyword 'char?} k)
+             (= :string (shape/kind (shape/domain-base t)))
+             (or (not= t (shape/domain-base t)) (some #{:max :min} (keys (shape/props t)))))
+      [:and a [:pg/text t]]
+      a)))
+
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's
    argument is an array of its elements' (array-type, used as ::array-use, :assign by default); otherwise the types read-type shares
@@ -389,10 +420,13 @@
             (let [base (shape/domain-base t)
                   ;; a kind the base has already takes its bounds (a varchar(n)'s length)
                   more (remove #(= (shape/kind %) (shape/kind base)) sent)
-                  ;; a CHECK reads a number as the number it is (a BigInt's > 0); another class goes
-                  ;; as the text an application makes of it (a keyword's), which no check here reads
-                  [held free] ((juxt filter remove) #(and (numbers (shape/kind base)) (numbers (shape/kind %))) more)]
-              (shape/either (concat (shape/alternatives (shape/update-base t #(shape/either (distinct (cons % held)) %))) free) t))))))
+                  ;; a CHECK reads a number as the number it is (a BigInt's > 0), the base's bounds too;
+                  ;; a keyword or a Character as the text it goes as (text-held)
+                  [held free] ((juxt filter remove) #(and (numbers (shape/kind base)) (numbers (shape/kind %))) more)
+                  held (held-to held (int-bounds base))]
+              (shape/either (concat (shape/alternatives (shape/update-base t #(shape/either (distinct (cons % held)) %)))
+                                    (map #(text-held % t) free))
+                            t))))))
 
 ;;; rows as next.jdbc builds them
 
