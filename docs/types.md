@@ -194,6 +194,7 @@ Generate a version's rows from its own schema, so the generator need not guess t
 | CHECK | malli |
 |---|---|
 | `col IN (...)`, `col = 'x'` | `[:enum ...]`; `[:and [:ref ...] [:enum ...]]` on an enum or domain; none on a `numeric`, which equals `2.0` to `2` |
+| `col IN (...)`, `col = 'x'` on a `char(n)` column or a domain over `char(n)` | `[:and <type> [:re "^(?:x|y) *$"]]`: the labels without their trailing spaces, any trailing spaces after, as `char(n)` compares |
 | `col NOT IN (...)`, `col <> 'x'` | `[:and <type> [:not [:enum ...]]]` |
 | `col >= a AND col <= b`, `BETWEEN`, one-sided bounds | `{:min a :max b}`; an exclusive bound as `[:> a]` on a `numeric`, the next integer on an integer type (`{:min 2}` for `> 1`); on `double precision` only with an upper bound, as NaN passes a lower bound alone; none on `real`, which compares rounded to single precision |
 | `length(trim(col)) > 0` | `[:and [:string {:min 1}] [:re "[^ ]"]]` |
@@ -229,8 +230,8 @@ A NULL makes a pattern NULL, not false: in `[:multi ...]` and `[:or ...]` a null
 
 Several CHECKs on one column only tighten it.
 
-A CHECK on a `char(n)` column, or on a domain over `char(n)`, is `:unrendered`: `char(n)`
-compares and measures without its trailing spaces.
+A CHECK on a `char(n)` column, or on a domain over `char(n)`, other than a list (the table
+above) is `:unrendered`: `char(n)` compares and measures without its trailing spaces.
 
 Generating from a regex needs test.chuck ([README](../README.md#installation)). It generates
 without the flags and `\z`, which test.chuck refuses, and with only the ASCII members of a

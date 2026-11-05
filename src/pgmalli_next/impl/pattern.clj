@@ -407,6 +407,20 @@
       (let [inner (cond-> inner (#{:regex :like} (:fact inner)) (assoc :case-insensitive? true))]
         (if present? (assoc f :fact-when-present inner) inner)))))
 
+(defn- bpchar-fact
+  "A column pattern over a char(n) value as char(n) compares it, without trailing spaces: a list
+   of strings as a regex of them, trailing spaces after; nil for another, which reads the text
+   otherwise (a length, a regex over the text cast) and pgmalli does not render."
+  [f]
+  (let [present? (= :when-present (:fact f))
+        inner (if present? (:fact-when-present f) f)]
+    (cond (#{:not-null :null} (:fact inner)) f
+          (and (= :in-set (:fact inner)) (every? string? (:values inner)))
+          (let [inner (-> (dissoc inner :values)
+                          (assoc :fact :regex
+                                 :re (str "^(?:" (str/join "|" (map #(str/replace (str/replace % #" +$" "") #"[\\^$.|?*+()\[\]{}]" "\\\\$0") (distinct (:values inner)))) ") *$")))]
+            (if present? (assoc f :fact-when-present inner) inner)))))
+
 (defn- uncast-columns
   "The columns an expression reads other than through a cast to another type: a citext column
    cast to text compares as text (PostgreSQL also writes the cast when citext's operators were
@@ -433,10 +447,11 @@
         checks (for [{cname :name :keys [definition is_valid]} constraints
                      :let [{:keys [expr error]} (try-clause definition)
                            citext-value? (and (citext? root) (contains? (uncast-columns (some-> expr x/canonical)) :VALUE))
-                           ;; NOT VALID: existing values may violate it, so it is reported, not applied;
-                           ;; over char(n) the patterns, which read text, do not apply
-                           ms (when (and (not= false is_valid) (not bpchar?)) (some-> expr (normalize {:VALUE (column-type-info root (contains? enums (first (type-ident root))) not_null)}) match-columns))
-                           ms (if citext-value? (let [cs (map citext-fact ms)] (when (every? some? cs) cs)) ms)
+                           ;; NOT VALID: existing values may violate it, so it is reported, not applied
+                           ms (when (not= false is_valid) (some-> expr (normalize {:VALUE (column-type-info root (contains? enums (first (type-ident root))) not_null)}) match-columns))
+                           ms (cond citext-value? (let [cs (map citext-fact ms)] (when (every? some? cs) cs))
+                                    bpchar? (let [cs (map bpchar-fact ms)] (when (every? some? cs) cs))
+                                    :else ms)
                            check (when expr (merge base {:constraint cname :sql definition :expr (x/canonical expr)}))]]
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
                        (and expr citext-value?) {:check (merge base {:fact :unparsed :constraint cname :input definition :error citext-error})}
@@ -463,8 +478,8 @@
         :else e))
 
 (defn- check-facts
-  "The facts of a CHECK. One on a char(n) column (in bpchar) matches no pattern: the patterns
-   read text, and char(n) compares and measures without its trailing spaces. On a citext
+  "The facts of a CHECK. One on a char(n) column (in bpchar) is read as char(n) compares, without
+   trailing spaces (bpchar-fact). On a citext
    column (in citext) read without a cast a regex or LIKE ignores case, and a CHECK comparing it otherwise is not
    rendered."
   [base {cname :name :keys [check_clause is_valid is_enforced]} generated bpchar citext types]
@@ -480,15 +495,18 @@
       (let [;; a generated column holds its expression's value: the CHECK is on that
             e (substitute (:expr parsed) generated)
             citext (set (filter (comp (uncast-columns (x/canonical e)) keyword) citext))
-            n (when (and (not= false is_valid) (not-any? bpchar (referenced-columns e))) (normalize e types))
+            n (when (not= false is_valid) (normalize e types))
+            bpchar? (some bpchar (referenced-columns e))
             base (assoc base :expr (x/canonical e))]
         (if-let [ms (some->> (some-> n match-columns)
-                             (map #(if (citext (name (:column %))) (citext-fact %) %))
+                             (map #(cond (citext (name (:column %))) (citext-fact %)
+                                         (bpchar (name (:column %))) (bpchar-fact %)
+                                         :else %))
                              (#(when (every? some? %) %)))]
           (mapv #(merge base (stringify %)) ms)
-          (if-let [b (when-not (some citext (referenced-columns e)) (some-> n match-branches))]
+          (if-let [b (when-not (or bpchar? (some citext (referenced-columns e))) (some-> n match-branches))]
             [(merge base {:fact :branch-check} (stringify b) {:dispatch (name (:dispatch b))})]
-            (if-let [alts (some-> n match-alternatives)]
+            (if-let [alts (when-not bpchar? (some-> n match-alternatives))]
               [(merge base {:fact :or-check :alternatives (stringify alts)})]
               (if (some citext (referenced-columns e))
                 [(merge base {:fact :unparsed :input check_clause :error citext-error})]

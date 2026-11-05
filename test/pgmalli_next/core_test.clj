@@ -79,7 +79,7 @@
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
 
-(deftest char-n-and-arithmetic-checks-are-left-to-the-database-and-varchar-n-holds
+(deftest a-char-n-list-holds-without-trailing-spaces-other-char-n-and-arithmetic-checks-are-left-to-the-database
   (when *db*
     (let [out-dir (str (doto (File/createTempFile "pgmalli-ch" "") .delete))
           config {:db *db* :out-dir out-dir}
@@ -90,12 +90,12 @@
       (generate/generate! (assoc config :schemas ["ch"]))
       (let [data (registry/read-generated-file (files/path-for config "ch"))
             reg (pgmalli/registry data)]
-        (is (= ["no_overflow" "t_c_check" "t_k_check"] (sort (map :constraint (:unrendered data)))))
-        (doseq [row [{:c "ab  " :k "ab  " :v "😀😀" :n 1} {:c "ab" :k "cd" :v "abc" :n 647}]]
+        (is (= ["no_overflow" "t_c_check"] (sort (map :constraint (:unrendered data)))))
+        (doseq [row [{:c "ab  " :k "ab  " :v "😀😀" :n 1} {:c "ab" :k "cd" :v "abc" :n 647} {:c "ab" :k "cd " :v "a" :n 1}]]
           (is (m/validate :pg.ch/t row {:registry reg}) (pr-str row))
           (exec-sql! (sql-row row)))
-        (let [row {:c "a" :k "ab" :v "abcd" :n 1}]
-          (is (not (m/validate :pg.ch/t row {:registry reg})))
+        (doseq [row [{:c "a" :k "ab" :v "abcd" :n 1} {:c "a" :k " ab" :v "a" :n 1} {:c "a" :k "a" :v "a" :n 1}]]
+          (is (not (m/validate :pg.ch/t row {:registry reg})) (pr-str row))
           (is (thrown? clojure.lang.ExceptionInfo (exec-sql! (sql-row row)))))))))
 
 (deftest column-checks-take-the-strings-postgresql-takes
