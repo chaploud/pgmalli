@@ -293,13 +293,9 @@
 
 (defn read-time
   "Schema data with the time types as a driver returns them: :instant as the one reading
-   reads them (timestamps Instants, the others as the registry types them), :inst as pgjdbc
-   does (java.sql's, inst?)."
+   reads them (as the registry types them), :inst as pgjdbc does (java.sql's, inst?)."
   [time schema]
-  (walk/postwalk (fn [f] (case [time f]
-                           [:instant :time/local-date-time] :time/instant
-                           (if (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst? f)))
-                 schema))
+  (walk/postwalk (fn [f] (if (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst? f)) schema))
 
 (defn type-name
   "The type of a column schema without its typmod or array brackets: \"bit(8)[]\" -> \"bit\"."

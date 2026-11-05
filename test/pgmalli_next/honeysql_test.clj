@@ -1784,11 +1784,13 @@
   (is (= [] (check {:select [:id] :from [:users] :where [:= 2 [:cardinality :?ids]]}))))
 
 (deftest an-argument-whose-type-postgresql-takes-from-the-value-alone-and-whose-other-uses-send-it-untyped-is-a-problem
-  (let [q {:update :users :set {:born :?d} :where [:= :id 1] :returning [[[:concat :?d] :s]]}]
-    (is (= [{:kind :undetermined-type :arg :d :function "concat" :type "date"}] (check q)) "a date column's LocalDate goes untyped, nil too")
-    (is (str/ends-with? (first (h/humanize (check q))) "cast it in the query: [:cast :?d :date]")))
+  (let [q {:update :users :set {:mood :?d} :where [:= :id 1] :returning [[[:concat :?d] :s]]}]
+    (is (= [{:kind :undetermined-type :arg :d :function "concat" :type "mood"}] (check q)) "an enum column's keyword label goes untyped, nil too")
+    (is (str/ends-with? (first (h/humanize (check q))) "cast it in the query: [:cast :?d :mood]")))
   (is (= [] (check {:update :users :set {:closed_at :?t} :where [:= :id 1] :returning [[[:concat :?t] :s]]}))
-      "a timestamptz column's OffsetDateTime goes typed"))
+      "a timestamptz column's Instant goes typed")
+  (is (= [] (check {:update :users :set {:born :?d} :where [:= :id 1] :returning [[[:concat :?d] :s]]}))
+      "a date column's LocalDate goes typed"))
 
 (deftest a-json-builder-is-json-as-its-type-is-read
   (let [q {:select [[[:jsonb_build_object "a" :id] :o] [[:jsonb_agg :id] :a] [[:json_build_array :id] :b]] :from [:users]}]
@@ -2557,7 +2559,7 @@
   (is (= {:n [:maybe [:or 'decimal? 'integer? :int]]} (args {:select [:*] :from [[[:generate_series 1 :?n] :g]]}))
       "an int, an int8 or a numeric each picks its overload")
   (is (= {:at [:maybe
-               [:or :time/local-date-time 'inst? :time/local-date :time/instant :time/offset-time :time/local-time :time/offset-date-time]]}
+               [:or :time/local-date-time 'inst? :time/local-date :time/offset-time :time/local-time :time/instant :time/offset-date-time]]}
          (args {:select [[[:timezone :nick :?at] :t]] :from [:users]}))))
 
 (deftest an-array-cast-casts-each-element
@@ -2673,9 +2675,9 @@
   (let [ok? #(m/validate %1 %2 {:registry registry})
         t (:x (args {:select [[[:date_trunc "day" :?x] :d]]}))]
     (is (= "date_trunc" (:pgmalli/type-from-value (m/properties (m/schema t {:registry registry})))))
-    (is (ok? t (java.time.OffsetDateTime/now)) "sent as timestamptz")
-    (doseq [v [nil (java.time.LocalDateTime/now) (java.time.LocalDate/now) (java.time.Instant/now)]]
-      (is (not (ok? t v)) (str "date_trunc(varchar, unknown) is not unique: " (class v))))))
+    (doseq [v [(java.time.OffsetDateTime/now) (java.time.LocalDateTime/now) (java.time.LocalDate/now) (java.time.Instant/now)]]
+      (is (ok? t v) (str "sent typed: " (class v))))
+    (is (not (ok? t nil)) "date_trunc(varchar, unknown) is not unique")))
 
 (deftest a-type-pgmalli-does-not-type-among-a-calls-candidates-takes-a-pgobject-not-any-value
   (let [t (:d (args {:update :users :set {:score [:+ :score :?d]} :where [:= :id 1]}))]
@@ -2688,9 +2690,9 @@
         t (:x (args {:select [[[:cardinality :?x] :n]] :from [:users] :where [:= :?x :score]}))]
     (is (not (ok? t 5)) "cardinality(integer) does not exist")
     (is (not (ok? t (long-array [1]))) "nor is an array an integer column's")
-    (let [q {:update :users :set {:born :?d} :where [:= :id 1] :returning [[[:cardinality :?d] :n]]}]
+    (let [q {:update :users :set {:mood :?d} :where [:= :id 1] :returning [[[:cardinality :?d] :n]]}]
       (is (= [:undetermined-type] (map :kind (check q))))
-      (is (not (ok? (:d (args q)) (java.time.LocalDate/now))) "the date goes untyped, which cardinality refuses"))))
+      (is (not (ok? (:d (args q)) :happy)) "the label goes untyped, which cardinality refuses"))))
 
 (deftest a-cast-type-is-read-as-honeysql-writes-it-upper-case-a-dash-a-space-which-postgresql-folds
   (let [q #(args {:select [:id] :from [:users] :where [:= :mood [:cast :?x %]]})]
@@ -2784,7 +2786,7 @@
   (let [ok? #(m/validate %1 %2 {:registry registry})]
     (is (ok? (:unit (args {:select [[[:date_trunc :?unit :?ts] :d]]})) :day) "date_trunc(unknown, timestamptz) resolves to (text, timestamptz)")
     (is (ok? (:fmt (args {:select [[[:to_char :?ts :?fmt] :d]]})) nil))
-    (is (not (ok? (:x (args {:select [[[:date_trunc "day" :?x] :d]]})) (java.time.LocalDateTime/now))) "date_trunc(varchar, unknown) is not unique")))
+    (is (ok? (:x (args {:select [[[:date_trunc "day" :?x] :d]]})) (java.time.LocalDateTime/now)) "sent as timestamp")))
 
 (deftest a-raw-from-item-of-only-a-table-is-that-table
   (is (= [] (check {:select [:id :users.nick] :from [[[:raw "ONLY users"]]]})) "FROM ONLY users is referred to as users")

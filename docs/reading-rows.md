@@ -39,10 +39,10 @@ before reading rows or sending arguments (it extends next.jdbc's protocols for t
 
 ```clojure
 (require '[clojure.data.json :as json]
-         '[next.jdbc.date-time]
          '[next.jdbc.prepare :as prepare]
          '[next.jdbc.result-set :as rs])
 (import '(java.sql PreparedStatement ResultSetMetaData Types)
+        '(java.time Instant OffsetDateTime ZoneOffset)
         '(org.postgresql.util PGobject))
 
 ;;; reading
@@ -70,10 +70,15 @@ before reading rows or sending arguments (it extends next.jdbc's protocols for t
   ;; pgjdbc returns a time and a timetz alike, the timetz's offset taken off: the column's type tells them
   (if (contains? #{"time" "_time"} (.getColumnTypeName rsmeta i)) (.toLocalTime v) v))
 
+(defn- read-timestamp [^java.sql.Timestamp v ^ResultSetMetaData rsmeta i]
+  ;; pgjdbc returns a timestamp and a timestamptz alike: a timestamptz's instant, a timestamp's
+  ;; date and time taken in the JVM's time zone, which toLocalDateTime gives back
+  (if (contains? #{"timestamp" "_timestamp"} (.getColumnTypeName rsmeta i)) (.toLocalDateTime v) (.toInstant v)))
+
 (extend-protocol rs/ReadableColumn
   java.sql.Timestamp
-  (read-column-by-label [v _] (.toInstant v))
-  (read-column-by-index [v _ _] (.toInstant v))
+  (read-column-by-label [v _] v)
+  (read-column-by-index [v rsmeta i] (read-timestamp v rsmeta i))
   java.sql.Date
   (read-column-by-label [v _] (.toLocalDate v))
   (read-column-by-index [v _ _] (.toLocalDate v))
@@ -87,8 +92,9 @@ before reading rows or sending arguments (it extends next.jdbc's protocols for t
   (read-column-by-label [v _] (read-pgobject v))
   (read-column-by-index [v _ _] (read-pgobject v)))
 
-;;; sending: next.jdbc.date-time, loaded above, sends an Instant, a LocalDate, a LocalDateTime
-;;; and a java.util.Date untyped; pgjdbc's setObject the rest
+;;; sending: pgjdbc's setObject, which sends java.time's types typed (a LocalDateTime as a
+;;; timestamp, a LocalDate as a date, an OffsetDateTime as a timestamptz), an Instant as an
+;;; OffsetDateTime in UTC
 
 ;; data.json writes an Instant and a UUID as JSON strings; a LocalDate, a LocalDateTime, a
 ;; LocalTime, an OffsetDateTime and an OffsetTime go as their ISO-8601 text here
@@ -100,9 +106,8 @@ before reading rows or sending arguments (it extends next.jdbc's protocols for t
 (defn- jsonb [x] (doto (PGobject.) (.setType "jsonb") (.setValue (json/write-str x :default-write-fn write-temporal))))
 
 (extend-protocol prepare/SettableParameter
-  ;; next.jdbc.date-time sends it as a java.util.Date, whose toInstant a java.sql.Time throws on
-  java.sql.Time
-  (set-parameter [v ^PreparedStatement s ^long i] (.setTime s i v))
+  Instant
+  (set-parameter [v ^PreparedStatement s ^long i] (.setObject s i (OffsetDateTime/ofInstant v ZoneOffset/UTC)))
   clojure.lang.Keyword
   (set-parameter [k ^PreparedStatement s ^long i] (.setObject s i (subs (str k) 1) Types/OTHER))
   clojure.lang.IPersistentMap
@@ -115,7 +120,8 @@ What each type comes back as:
 
 | type | value |
 |---|---|
-| `timestamp`, `timestamptz` | `java.time.Instant` (a `timestamp`'s date and time taken in the JVM's time zone, as pgjdbc does) |
+| `timestamp` | `java.time.LocalDateTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Timestamp`) |
+| `timestamptz` | `java.time.Instant` (read by index too) |
 | `date` | `java.time.LocalDate` |
 | `time` | `java.time.LocalTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Time`) |
 | `timetz` | `java.sql.Time` (`inst?`), as pgjdbc returns it: pgjdbc takes the offset off, and the extension cannot put it back |

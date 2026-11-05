@@ -23,15 +23,16 @@
    types from where it goes; schema is the malli schema of a value of class, nil for a Java
    array. A value goes as its class's row, else as the first row of a superclass or interface of it.
    categories, of a class sent untyped, are the typcategories of the types it goes to as its text
-   (reads?): a date's, a time's or a timestamp's (\"D\"); a keyword's a string type's and an
-   enum's (\"S\", \"E\"), a label's name."
+   (reads?): a keyword's a string type's and an enum's (\"S\", \"E\"), a label's name. A date
+   and time goes typed, java.time's alone: pgjdbc sends a java.sql value untyped, its text in the
+   JVM's time zone."
   (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
    [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
    [Double "double precision" :double] [Float "real" 'float?]
    [Boolean "boolean" :boolean] [String "character varying" :string] [Character "character varying" 'char?]
-   [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate :unknown :time/local-date #{"D"}]
+   [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate "date" :time/local-date]
    [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]
-   [java.time.LocalDateTime :unknown :time/local-date-time #{"D"}]
+   [java.time.LocalDateTime "timestamp without time zone" :time/local-date-time]
    [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
    [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
@@ -45,10 +46,8 @@
    (some-> (named "java.sql.Date") array-of (vector "date[]"))
    (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
    (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))
-   [java.time.Instant :unknown :time/instant #{"D"}]
-   ;; before java.util.Date, its superclass
-   (some-> (named "java.sql.Time") (vector :unknown 'inst? #{"D"}))
-   [java.util.Date :unknown 'inst? #{"D"}]
+   ;; as an OffsetDateTime in UTC, which pgjdbc sends as a timestamptz: an Instant pgjdbc refuses alone
+   [java.time.Instant "timestamp with time zone" :time/instant]
    [clojure.lang.Keyword :unknown :keyword #{"S" "E"}]
    ;; the one sending's jsonb writes a key by its name or text: no nil key
    [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
@@ -63,8 +62,7 @@
          java.time.OffsetTime (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
          java.time.LocalDateTime (java.time.LocalDateTime/of 2026 1 1 0 0)
          java.time.OffsetDateTime (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
-         java.time.Instant java.time.Instant/EPOCH java.util.Date (java.util.Date. 0)
-         (named "java.sql.Time") (some-> (named "java.sql.Time") (.getConstructor (into-array Class [Long/TYPE])) (.newInstance (object-array [0])))
+         java.time.Instant java.time.Instant/EPOCH
          bytes-class (.getBytes "a") clojure.lang.Keyword :a
          clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1]}))
 

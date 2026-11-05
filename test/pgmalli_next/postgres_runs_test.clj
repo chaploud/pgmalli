@@ -447,3 +447,26 @@
         (testing (pr-str q)
           (is (= rows (:rows (h/analyze reg q))))
           (is (= n (count (runs! q {} {})))))))))
+
+(deftest a-date-and-time-sent-and-read-is-the-same-whatever-the-jvms-time-zone
+  (when *db*
+    (let [instant (java.time.Instant/parse "2026-03-08T07:30:00Z")
+          local (java.time.LocalDateTime/of 2026 1 1 0 30)
+          day (java.time.LocalDate/of 2026 1 1)
+          time (java.time.LocalTime/of 1 30)
+          saved (java.util.TimeZone/getDefault)]
+      (try
+        (doseq [zone ["UTC" "Asia/Tokyo" "America/New_York"]]
+          ;; pgjdbc sets the session's time zone to the JVM's when it connects
+          (java.util.TimeZone/setDefault (java.util.TimeZone/getTimeZone zone))
+          (with-open [c (jdbc/get-connection (datasource *db*))]
+            (jdbc/execute! c ["CREATE TEMP TABLE when_ (tz timestamptz, ts timestamp, d date, t time)"])
+            (jdbc/execute! c ["INSERT INTO when_ VALUES (?, ?, ?, ?)" instant local day time])
+            (is (= {:tz instant :ts local :d day :t time}
+                   (jdbc/execute-one! c ["SELECT * FROM when_"] {:builder-fn rs/as-unqualified-maps}))
+                zone)
+            (is (= {:tz "2026-03-08 07:30:00" :ts "2026-01-01 00:30:00" :d "2026-01-01"}
+                   (jdbc/execute-one! c ["SELECT (tz AT TIME ZONE 'UTC')::text AS tz, ts::text AS ts, d::text AS d FROM when_"]
+                                      {:builder-fn rs/as-unqualified-maps}))
+                (str zone ": the values PostgreSQL holds"))))
+        (finally (java.util.TimeZone/setDefault saved))))))

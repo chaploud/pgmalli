@@ -249,7 +249,7 @@
 
 (defn read-type
   "A column's schema (without NULL) as the one reading (docs/reading-rows.md) makes it: dates a
-   LocalDate, times a LocalTime, timestamps (with and without time zone) an Instant, an array a vector of its
+   LocalDate, times a LocalTime, a timestamp a LocalDateTime, a timestamptz an Instant, an array a vector of its
    elements so read, json and jsonb parsed as the registry shapes them; or, pgjdbc?, as pgjdbc
    returns them with no extension (dates and timestamps inst?, an array a java.sql.Array, json a
    PGobject, time a java.sql.Time). Either way: timetz a java.sql.Time, an interval a PGInterval, citext,

@@ -315,14 +315,15 @@ by the one sending, which your application installs
 | `BigDecimal`, `BigInt`, `BigInteger` | `numeric` |
 | `Double`, `Float` | `double precision`, `real` |
 | `Boolean`, `String`, `Character`, `UUID`, `byte[]` | `boolean`, `varchar`, `varchar`, `uuid`, `bytea` |
-| `LocalTime`, `OffsetTime`, `OffsetDateTime` | `time`, `timetz`, `timestamptz` |
-| `Instant`, `LocalDate`, `LocalDateTime`, `java.util.Date` (`java.sql.Date`, `java.sql.Timestamp`, `java.sql.Time`) | untyped, a timestamp's (a date's, a time's) text (`next.jdbc.date-time`) |
+| `LocalDate`, `LocalTime`, `LocalDateTime` | `date`, `time`, `timestamp` |
+| `OffsetTime`, `OffsetDateTime`, `Instant` | `timetz`, `timestamptz`, `timestamptz` (an `Instant` as an `OffsetDateTime` in UTC) |
 | a keyword | untyped, its text (`:ns/a` as `ns/a`) |
 | a map, a vector | `jsonb` |
 | a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`); a `java.sql.Time[]` a `timetz[]`, a `java.sql.Date[]` a `date[]`, a `java.sql.Timestamp[]` a `timestamptz[]` |
 | a `PGobject` | the type it names |
 
-Another class (a set, a list, a symbol) is sent nowhere. `pgmalli-next.impl.accept/classes` holds
+Another class (a set, a list, a symbol; a `java.util.Date`, which pgjdbc refuses, and java.sql's
+`Date`, `Time` and `Timestamp`, whose text pgjdbc writes in the JVM's time zone) is sent nowhere. `pgmalli-next.impl.accept/classes` holds
 this table. A value reaches an argument through its class's row or one of its superclasses' or
 interfaces'.
 
@@ -334,13 +335,10 @@ interfaces'.
 A class adds to what a column takes where its type is the column's or one it takes
 ([above](#the-types-of-the-arguments)), and in a cast wherever PostgreSQL casts it. A
 value sent untyped goes where its text is of the column's type's category: a keyword to a
-string column as a string, to an enum or a text column's CHECK list as its labels; a date or a
-time (an `Instant`, a `LocalDate`, a `LocalDateTime`, a `java.util.Date`, java.sql's) to a
-date, time or timestamp column of any of these types. Either goes to a `bytea` or `"char"`
-column, whose input takes any text, and to an extension's type pgmalli does not type (compared,
-one whose `=` pgmalli's catalog holds, `citext`). Cast, a keyword goes to any type, as a string
-does, and a date or time to a string type too. Text a type's input refuses (a `java.sql.Time`'s
-to a `date`) fails when the query runs. A jsonb column takes a map and a
+string column as a string, to an enum or a text column's CHECK list as its labels. It goes to a
+`bytea` or `"char"` column, whose input takes any text, and to an extension's type pgmalli does
+not type (compared, one whose `=` pgmalli's catalog holds, `citext`). Cast, a keyword goes to
+any type, as a string does. A jsonb column takes a map and a
 vector, held to the shape a CHECK (`jsonb_typeof`) or an [override](../README.md#overrides)
 gives it; a json or interval column, where pgmalli knows only the driver's object, takes a
 `PGobject`.
@@ -367,8 +365,8 @@ unique`). That is a function's `"any"` argument (`concat`, `format`, `jsonb_buil
 (`unnest(?)`: `anyarray`, `anymultirange`, `tsvector`; `date_trunc('day', ?)`). Its schema
 carries `:pgmalli/type-from-value`, the function's name, for a sender of its own (one sending an
 array as untyped text, `'{1,2}'`) to tell. Where its other uses take only values sent untyped
-(a `date` column's `LocalDate`), it is an `:undetermined-type` problem: cast it in the query
-(`[:cast :?d :date]`, `[:cast :?ids [:raw "bigint[]"]]`).
+(an enum column's keyword label), it is an `:undetermined-type` problem: cast it in the query
+(`[:cast :?m :mood]`, `[:cast :?ids [:raw "bigint[]"]]`).
 
 ```clojure
 (let [t (:suffix (:args (h/analyze registry {:select [[[:concat :email :?suffix] :s]] :from [:users]})))]
@@ -665,10 +663,15 @@ Write the query so PostgreSQL's reading is explicit instead.
   (`CHECK (state IN ('open', 'closed'))`) with a value outside it: an `:enum-literal`. `<>`,
   `NOT IN` and `<` match rows and are not reported; nor is `NOT (state = ...)`.
 - A value sent untyped, assigned or compared, where its text is not of the column's type's
-  category: a keyword to a `bigint`, `uuid` or `date` column (`:1`, `:2020-01-01`), a date or
-  a time to a `text` or `varchar` column, which PostgreSQL reads through the type's input.
-  Taking them would put `:keyword` on every argument and four date schemas on every string
-  argument. Send the value of the column's type (`1`, `(str inst)`), or cast it in the query.
+  category: a keyword to a `bigint`, `uuid` or `date` column (`:1`, `:2020-01-01`), which
+  PostgreSQL reads through the type's input. Taking them would put `:keyword` on every argument.
+  Send the value of the column's type (`1`), or cast it in the query.
+- An `Instant` (a `timestamptz`) assigned to a `timestamp` or a `date` column, and a
+  `LocalDateTime` (a `timestamp`) to a `date` one: PostgreSQL converts it on assignment alone,
+  in the session's time zone, which pgjdbc sets to the JVM's, so the value written changes with
+  the JVM's time zone without a word. Send the column's own (`LocalDateTime`, `LocalDate`), or
+  cast it in the query where the conversion is meant. Compared, a `timestamptz` and a
+  `timestamp` or a `date` convert implicitly, in that time zone too.
 - A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
   one: taking it would put `char?` on every string argument (a `"char"` column takes a `varchar`
   on assignment alone, cut to its first byte). Send `(str c)`.
