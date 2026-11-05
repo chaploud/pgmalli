@@ -45,6 +45,12 @@ jobs:
         pg: ["16", "17", "18"]
         # pgmalli-next.oracle-test takes as long as the rest: a job of its own (bb.edn's suite)
         suite: [main, oracle]
+        # the oracle's mutants and generated values by seed; main's fuzzing keeps 42
+        seed: ["42", "1", "7", "24"]
+        exclude:
+          - {suite: main, seed: "1"}
+          - {suite: main, seed: "7"}
+          - {suite: main, seed: "24"}
         # by digest, which Renovate updates: a new image runs in a pull request of its own
         include:
           - pg: "16"
@@ -56,6 +62,7 @@ jobs:
     env:
       PGMALLI_PG_IMAGE: ${{ matrix.image }}
       SUITE: ${{ matrix.suite }}
+      PGMALLI_FUZZ_SEED: ${{ matrix.seed }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
