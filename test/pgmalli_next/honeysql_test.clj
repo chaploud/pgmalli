@@ -2494,6 +2494,13 @@
     (is (m/validate :pg.public/pairs {:a nil} {:registry reg}))
     (is (not (m/validate :pg.public/pairs {:a 4} {:registry reg})))))
 
+(deftest a-calls-column-in-a-join-condition-limit-or-offset-is-checked-as-in-where
+  (doseq [[q c] [[{:select [:u.id] :from [[:users :u]] :join [[:groups :g] [:= [:upper :g.nmae] "x"]]} :g.nmae]
+                 [{:select [:id] :from [:users] :limit [:abs :nikc]} :nikc]
+                 [{:select [:id] :from [:users] :offset [:abs :nikc]} :nikc]]]
+    (is (= [[:unknown-column c]] (map (juxt :kind :column) (check q))) (pr-str q)))
+  (is (= [] (check {:select [:u.id] :from [[:users :u]] :left-join [[:groups :g] [:= [:upper :g.name] "x"]]}))))
+
 (deftest a-number-keyword-is-a-number-not-a-column
   (is (= [] (check {:select [[:10 :n]] :from [:users]}))))
 

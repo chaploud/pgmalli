@@ -108,7 +108,7 @@
 (def ^:private expression-clauses
   "The clauses whose values are expressions, whose calls' arguments name columns."
   #{:select :select-distinct :select-distinct-on :where :having :group-by :order-by :set :values
-    :do-update-set :returning :window :frame})
+    :do-update-set :returning :window :frame :limit :offset})
 
 (defn- listed-expressions
   "The expressions x lists where HoneySQL writes a list of ORDER BY's items, each expr or [expr
@@ -148,9 +148,9 @@
                                         ;; a column a call's argument names ([:upper :email]), in a clause of expressions;
                                         ;; an item of SELECT, ORDER BY or RETURNING is [expression alias|direction], no call
                                         ;; the value of a list clause ([:a :b] of ORDER BY) is its items, no call
-                                        (for [{:keys [x chain item? top? clause]} (syntax/expression-nodes ps)
+                                        (for [{:keys [x chain item? top? clause condition?]} (syntax/expression-nodes ps)
                                               :let [items? (or (syntax/select-list-clauses clause) (= :order-by clause))]
-                                              :when (and (expression-clauses clause)
+                                              :when (and (or (expression-clauses clause) (and condition? (not (and top? (vector? x) (= :using (first x))))))
                                                          (not (and top? (or items? (#{:group-by :window :frame} clause))))
                                                          (not (and item? items?)))
                                               :let [listed (listed-expressions x clause)

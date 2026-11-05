@@ -805,7 +805,7 @@
 
 (defn positions
   "The expression positions of statement stmt, one read for the problems and the arguments' types: {:x node
-   :clause k :chain scopes :negated? bool :top? bool :item? bool} for every node of every clause sql/format writes, in
+   :clause k :chain scopes :negated? bool :top? bool :item? bool :condition? bool} for every node of every clause sql/format writes, in
    its order, as a walk of each clause's value meets them, not descending into the statements nested in it, scopes the chain clause-parts says the node is read in,
    negated? under an odd number of :not through :and and :or alone ([:not [:= :a 1]] is a <> 1;
    CASE or a function's argument under NOT is not negated), top? for the clause's value itself
@@ -838,15 +838,18 @@
                    (for [[col v event] (written clause) :when (not= ::untold v)]
                      {:x v :assign col :event event :target target :chain c :clause clause}))]
     (concat
-     (for [[[k] v sees] (clause-parts stmt)
+     (for [[[k i] v sees] (clause-parts stmt)
            :let [c (part-chain sees v chain outer opts)]
-           p (case k
+           p (if (some #{k} join-keys)
+               ;; a join's condition, after its table item
+               [(cond->> (nodes k v c) (and (int? i) (odd? i)) (map #(assoc % :condition? true)))]
+               (case k
                (:insert-into :columns) nil
                :values (concat (for [row (when (vector? v) v), x (cond (map? row) (vals row) (vector? row) row)] (nodes k x c))
                                [(assigned :values c)])
                :set (concat (map #(nodes k % c) (when (map? v) (vals v))) [(assigned :set c)])
                :do-update-set (concat (map #(nodes k % c) (second (do-update-parts v))) [(assigned :do-update-set c)])
-               [(nodes k v c)])
+               [(nodes k v c)]))
            e p]
        e)
      ;; a star or :raw makes columns the data does not count, but of unnest(?, ...) alone, a
