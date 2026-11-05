@@ -373,12 +373,42 @@
    CHECK's) through the text it goes as (:pg/text); a as it is for another a, or a t that checks
    nothing beyond being a string."
   [a t]
-  (let [k (shape/kind a)]
+  (let [k (shape/kind a)
+        u (if (= :pg/held (shape/head t)) (last t) t)]
     (if (and (#{:keyword 'char?} k)
-             (= :string (shape/kind (shape/domain-base t)))
-             (or (not= t (shape/domain-base t)) (some #{:max :min} (keys (shape/props t)))))
+             (= :string (shape/kind (shape/domain-base u)))
+             (or (not= u (shape/domain-base u)) (some #{:max :min} (keys (shape/props u)))))
       [:and a [:pg/text t]]
       a)))
+
+(defn- typmod-of
+  "{:pg/max-length n :pg/scale s :pg/precision p} of column schema t's typmod, as :pg/held reads
+   it: a varchar(n)'s or char(n)'s length, a numeric(p,s)'s precision and scale; :pg/cut? under
+   cut? (a cast, which cuts a string to n); nil for none."
+  [t cut?]
+  (let [nodes (filter #(and (vector? %) (map? (second %))) (tree-seq vector? seq t))
+        n (some #(when (#{:string :enum} (first %)) (:pg/max-length (second %))) nodes)
+        num (some #(when (= :pg/numeric (first %)) (second %)) nodes)]
+    (cond num {:pg/precision (:precision num) :pg/scale (:scale num 0)}
+          n (cond-> {:pg/max-length n} cut? (assoc :pg/cut? true)))))
+
+(defn typmod-held
+  "Argument schema t (alternatives) of a column of typmod (typmod-of), each alternative a value
+   of that typmod reads otherwise once the column holds it in [:pg/held typmod a]: a number
+   under a scale; a string, under a length, where a CHECK reads it or a cast cuts it (a plain
+   varchar(n)'s :pg/max-length cuts its spaces already)."
+  [t typmod]
+  (if-not typmod
+    t
+    (let [number? (fn [a] (every? (comp numbers shape/kind) (shape/alternatives (shape/domain-base a))))
+          checked? (fn [a] (or (= :enum (shape/kind a)) (and (= :and (shape/head a)) (next (shape/entries a)))))
+          held (fn [a] (cond (= :pg/held (shape/head a)) a
+                             (and (:pg/scale typmod) (number? a)) [:pg/held typmod a]
+                             (and (:pg/max-length typmod) (#{:string :enum} (shape/kind a)) (or (:pg/cut? typmod) (checked? a))) [:pg/held typmod a]
+                             :else a))]
+      (if (shape/maybe? t)
+        [:maybe (shape/either (map held (shape/alternatives (shape/non-null t))) (shape/non-null t))]
+        (shape/either (map held (shape/alternatives t)) t)))))
 
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's
@@ -399,8 +429,10 @@
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
           ;; keeps those a class sent goes as (pgmalli-next.impl.args/labelled-type)
-          sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))]
-      (cond (empty? sent) t
+          sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))
+          typmod (when-not (= :none (::typmod opts)) (typmod-of schema (= :cut (::typmod opts))))]
+      (typmod-held
+       (cond (empty? sent) t
             ;; a json column an override or a CHECK shapes: what is sent as its type is held to that shape
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema
             (= :any (shape/head t)) (shape/either sent t)
@@ -413,7 +445,8 @@
                   [held free] ((juxt filter remove) #(and (numbers (shape/kind base)) (numbers (shape/kind %))) more)]
               (shape/either (concat (shape/alternatives (shape/update-base t #(shape/either (distinct (cons % held)) %)))
                                     (map #(text-held % t) free))
-                            t))))))
+                            t)))
+       typmod))))
 
 ;;; rows as next.jdbc builds them
 
@@ -485,10 +518,12 @@
         ;; domain's checks, its definition in place of the reference
         d (shape/ref-target schemas (shape/non-null s))
         ;; (a number domain's: its checks read the number; a date and time one's, of a type more than
-        ;; one class goes as (a timestamptz an Instant and an OffsetDateTime); another's may hold
-        ;; code only the registry runs)
+        ;; one class goes as (a timestamptz an Instant and an OffsetDateTime); one of a typmod's, which
+        ;; holds the value before its checks read it (typmod-held); another's may hold code only the
+        ;; registry runs)
         s (if (and d (or (some-> (base-type-name d) types/entry :name accept/number-type?)
-                         (some-> (shape/kind (shape/domain-base d)) (#(and (keyword? %) (= "time" (namespace %)))))))
+                         (some-> (shape/kind (shape/domain-base d)) (#(and (keyword? %) (= "time" (namespace %)))))
+                         (and (not= :none (::typmod opts)) (typmod-of d false))))
             d s)]
     (write-type (through-domain schemas s #(write-type % (assoc opts ::nothing-sent true))) opts)))
 

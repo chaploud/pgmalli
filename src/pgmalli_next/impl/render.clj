@@ -140,8 +140,9 @@
                     (= :enum base) (let [vs (filter (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
                     ;; the type stays: an INSERT casts to it, and a domain's CHECKs hold too
                     (= :ref base) (kept [:and schema (into [:enum] members)])
-                    ;; the base type stays named: a domain's list is its base type's values, no enum type
-                    :else (kept (into (if-let [t (:pg/type (shape/column-props schema))] [:enum {:pg/type t}] [:enum]) members)))
+                    ;; the base type stays named: a domain's list is its base type's values, no enum type;
+                    ;; a varchar(n)'s length too, which cuts a value's spaces past n before the list reads it
+                    :else (kept (into (if-let [p (not-empty (select-keys (shape/column-props schema) [:pg/type :pg/max-length]))] [:enum p] [:enum]) members)))
       :not-in-set (cond (nil? members) as-is
                         (= :enum base) (let [vs (remove (set members) (shape/entries schema))] (if (seq vs) (kept (into [:enum] vs)) as-is))
                         :else (kept [:and schema [:not (into [:enum] members)]]))

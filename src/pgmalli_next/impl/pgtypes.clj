@@ -2,7 +2,7 @@
   "The schema types pgmalli registers for PostgreSQL's own: a bytea of bounded
    length, the bounded numbers (with the ranges the integer types hold), the arrays the
    JDBC driver takes, a keyword's or a Character's text a column takes (:pg/text) and the values
-   of some classes of one schema (:pg/class), a string a cast cuts (:pg/cut)."
+   of some classes of one schema (:pg/class), a value as a column's typmod holds it (:pg/held)."
   (:require [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [malli.core :as m]
@@ -197,17 +197,34 @@
                   :type-properties {:error/message "should be a keyword or a character whose text the column takes (its length and CHECKs)"}
                   :min 1 :max 1}))}))
 
-(def ^:private cut-schema
-  "[:pg/cut n t]: a string t takes cut to its first n characters, as a cast to char(n) or
-   varchar(n) cuts it before the type's CHECKs read it."
+(defn held-value
+  "v as a column of typmod {:pg/max-length n :pg/cut? :pg/scale} holds it, which its CHECKs then
+   read: a string past n cut to n where the rest is spaces (assigned) or always (pg/cut?, cast);
+   a number rounded to scale places (half up, away from zero); v as it is otherwise, or nil
+   where the type holds no such value."
+  [{n :pg/max-length cut? :pg/cut? sc :pg/scale} v]
+  (cond (and n (string? v) (> (char-length v) n))
+        (let [kept (subs v 0 (.offsetByCodePoints ^String v 0 (int n)))]
+          (if (or cut? (re-matches #" *" (subs v (count kept)))) kept v))
+        (and sc (number? v) (not (and (double? v) (or (Double/isNaN v) (Double/isInfinite v)))))
+        (rounded (bigdec v) sc)
+        :else v))
+
+(def ^:private held-schema
+  "[:pg/held typmod t]: a value t takes once a column of typmod holds it (held-value), as
+   PostgreSQL converts a value to the column's type, then reads its CHECKs: varchar(3) takes
+   'abc  ', numeric(4,2) CHECK (n <= 10) takes 10.004; under :pg/precision, a number that fits it."
   (m/-simple-schema
-   {:type :pg/cut
-    :compile (fn [_ [n t] options]
-               (let [valid? (m/validator t options)]
-                 {:pred (fn [v] (and (string? v)
-                                     (valid? (if (> (.codePointCount ^String v 0 (count v)) n) (subs v 0 (.offsetByCodePoints ^String v 0 n)) v))))
-                  :type-properties {:error/message (str "should be a string whose first " n " characters the type takes")}
-                  :min 2 :max 2}))}))
+   {:type :pg/held
+    :compile (fn [{p :pg/precision sc :pg/scale n :pg/max-length cut? :pg/cut? :as typmod} [t] options]
+               (let [valid? (m/validator t options)
+                     fits? (if p (m/validator [:pg/numeric {:precision p :scale sc}] options) (constantly true))]
+                 {:pred (fn [v] (let [h (held-value typmod v)] (boolean (and (valid? h) (or (not (number? h)) (fits? h))))))
+                  :type-properties {:error/message (cond p (str "should be what numeric(" p ", " sc ") takes, rounded to " sc " places, then its CHECKs")
+                                                         cut? (str "should be a string whose first " n (if (= 1 n) " character" " characters") " the type takes")
+                                                         :else (str "should be a string the column takes, spaces past " n " cut off, then its CHECKs"))
+                                    :gen/schema t}
+                  :min 1 :max 1}))}))
 
 (def ^:private class-schema
   "[:pg/class \"java.lang.Integer\" ...]: a value of one of the classes named, where the classes
@@ -225,4 +242,4 @@
   "The schema types pgmalli registers, by name."
   {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
    :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema
-   :pg/text text-schema :pg/class class-schema :pg/cut cut-schema})
+   :pg/text text-schema :pg/class class-schema :pg/held held-schema})

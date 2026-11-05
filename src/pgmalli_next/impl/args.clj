@@ -168,17 +168,6 @@
                                                          "cast the parameter, [:cast <parameter> :" (str/replace t " " "-") "]")}]
                          cs)]))))
 
-(defn- cast-cut
-  "A string schema s as a cast to its type takes a value: cut to a varchar(n)'s or a char(n)'s
-   length first, its CHECKs reading what is left (:pg/cut)."
-  [s]
-  (let [n (some #(when (and (vector? %) (= :string (first %))) (:pg/max-length (second %))) (tree-seq vector? seq s))]
-    (if (and n (= :string (shape/kind s)))
-      (let [[_ p] (shape/domain-base s)]
-        (into [:and] (concat (some-> (shape/props s) vector)
-                             [[:string (not-empty (dissoc p :max :pg/max-length))] [:pg/cut n s]])))
-      s)))
-
 (defn- class-names [a] (when (and (= :and (shape/head a)) (= :pg/class (shape/head (last a)))) (shape/entries (last a))))
 
 (defn- classes-joined
@@ -207,10 +196,14 @@
                (= "character" t) (assoc ::jdbc/characters true)
                (= :common held-in) (assoc ::jdbc/array-use :common)
                (= :compare held-in) (assoc ::jdbc/array-use :whole)
-               (= :json held-in) (assoc ::jdbc/json true))
+               (= :json held-in) (assoc ::jdbc/json true)
+               ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; its CHECKs read what is left.
+               ;; Compared, PostgreSQL holds no value to the column's typmod
+               (= :cast held-in) (assoc ::jdbc/typmod :cut)
+               (#{:compare :call :common} held-in) (assoc ::jdbc/typmod :none))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) query/loose
-              (= :cast context) (-> shape/without-gen cast-cut))
+              (= :cast context) shape/without-gen)
         ;; cast to an array type, PostgreSQL casts an array element by element, NULL too, to the
         ;; element type; a scalar through the array type's input alike for every element type
         es (when (= :cast context) (some->> (types/element (:pg/type (shape/column-props s))) (query/named-type-schema registry opts)))
@@ -243,15 +236,22 @@
       (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T"} (types/category t)))
       (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
-      (= :enum (shape/kind own)) (labelled-type own alts context (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
+      ;; a list's labels, held as the column's typmod holds them (a varchar(n)'s spaces past n cut)
+      (= :enum (shape/kind own))
+      (let [[typmod list] (if (= :pg/held (shape/head own)) [(second own) (last own)] [nil own])]
+        (jdbc/typmod-held (labelled-type list alts context (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
+                          typmod))
       :else
       (let [own-alts (when-not (query/untyped? own) (shape/alternatives own))
             ;; a number held to a number column's range, which PostgreSQL checks after converting it, a
             ;; keyword or a Character to a string column's through its text (jdbc/text-held); a
             ;; date's cannot be said of the value sent
+            ;; and held as the column's typmod holds it (a Long rounded to a numeric(6,2)'s scale, held to its precision)
+            typmod (some #(when (= :pg/held (shape/head %)) (second %)) (tree-seq vector? seq own))
             alts (for [[p a] alts] (cond-> a
                                      (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)
-                                     (not= :compare context) (jdbc/text-held own)))
+                                     (not= :compare context) (jdbc/text-held own)
+                                     (not= :compare context) (jdbc/typmod-held typmod)))
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))

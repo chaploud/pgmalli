@@ -65,6 +65,8 @@
       ;; a recursive schema: a name already being described is the name
       (and (or (keyword? s) (string? s)) (vector? (get schemas s)))
       (if (*described* s) s (binding [*described* (conj *described* s)] (describe schemas (get schemas s))))
+      ;; a value as the column's typmod holds it reads as the column's type
+      (= :pg/held head) (describe schemas (last s))
       (= :maybe head) (let [d (describe schemas (first children))]
                         (cond (not (string? d)) [:maybe d]
                               (str/includes? d " | ") (str "(" d ")?")

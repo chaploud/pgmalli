@@ -801,6 +801,22 @@
     (is (not (ok? p -1)))
     (is (ok? (:x (:args (h/analyze reg {:select [[[:cast :?x :price] :p]]}))) 1))))
 
+(deftest a-value-is-held-as-the-columns-typmod-holds-it-before-its-checks-read-it
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:n [:and ['decimal? {:pg/type "numeric(4,2)"}] [:pg/numeric {:precision 4 :scale 2}] [:<= 10M]]]
+                                                        [:v [:and [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}] [:re "^[a-z]+$"]]]
+                                                        [:e [:enum {:pg/type "character varying(2)" :pg/max-length 2} "ab" "cd"]]]}})
+        ok? (fn [c v] (m/validate (:x (:args (h/analyze reg {:update :t :set {c :?x}}))) v {:registry reg}))]
+    (is (ok? :n 10.004M) "rounded to 10.00, which the CHECK takes")
+    (is (not (ok? :n 10.005M)) "rounded to 10.01")
+    (is (not (ok? :n 100)) "past numeric(4,2)'s precision")
+    (is (ok? :v "abc  ") "spaces past varchar(3) cut off")
+    (is (not (ok? :v "ab c")))
+    (is (ok? :e "ab   "))
+    (is (ok? :e :cd) "a list's labels as keywords still")
+    (is (not (ok? :e "ab c")))
+    (is (m/validate (h/values-schema reg :t) {:n 10.004M :v "abc  " :e "cd "} {:registry reg}) "a row written too")))
+
 (deftest a-cast-cuts-a-string-to-its-length
   (let [reg (pgmalli/registry {:registry {:pg.public/code3 [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}]
                                           :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code3"} :pg.public/code3]]]}})]

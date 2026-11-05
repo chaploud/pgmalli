@@ -222,11 +222,12 @@
       {:base b :refs refs})))
 
 (defn kind
-  "The kind of value t takes: its head, through [:and t checks...]; a function schema ([:fn f])
-   is a kind of its own."
+  "The kind of value t takes: its head, through [:and t checks...] and [:pg/held typmod t]; a
+   function schema ([:fn f]) is a kind of its own."
   [t]
   (case (head t)
     :and (kind (domain-base t))
+    :pg/held (kind (last t))
     :fn t
     (head t)))
 
