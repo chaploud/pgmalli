@@ -169,6 +169,17 @@
                                                          "cast the parameter, [:cast <parameter> :" (str/replace t " " "-") "]")}]
                          cs)]))))
 
+(defn- cast-cut
+  "A string schema s as a cast to its type takes a value: cut to a varchar(n)'s or a char(n)'s
+   length first, its CHECKs reading what is left (:pg/cut)."
+  [s]
+  (let [n (some #(when (and (vector? %) (= :string (first %))) (:pg/max-length (second %))) (tree-seq vector? seq s))]
+    (if (and n (= :string (shape/kind s)))
+      (let [[_ p] (shape/domain-base s)]
+        (into [:and] (concat (some-> (shape/props s) vector)
+                             [[:string (not-empty (dissoc p :max :pg/max-length))] [:pg/cut n s]])))
+      s)))
+
 (defn- class-names [a] (when (and (= :and (shape/head a)) (= :pg/class (shape/head (last a)))) (shape/entries (last a))))
 
 (defn- classes-joined
@@ -200,11 +211,7 @@
                (= :json held-in) (assoc ::jdbc/json true))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) query/loose
-              ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; a CHECK's bounds hold after it
-              (= :cast context) (->> (walk/postwalk #(if (and (vector? %) (= :string (first %)) (:pg/max-length (second %)))
-                                                       (update % 1 (fn [p] (cond-> (dissoc p :pg/max-length) (= (:max p) (:pg/max-length p)) (dissoc :max))))
-                                                       %))
-                                     shape/without-gen))
+              (= :cast context) (-> shape/without-gen cast-cut))
         ;; cast to an array type, PostgreSQL casts an array element by element, NULL too, to the
         ;; element type; a scalar through the array type's input alike for every element type
         es (when (= :cast context) (some->> (types/element (:pg/type (shape/column-props s))) (query/named-type-schema registry opts)))
@@ -249,7 +256,7 @@
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
-                  (= :call held-in) (keep #(class-held % t takes? opts)))]
+                  (and (= :call held-in) (not (::common-type opts))) (keep #(class-held % t takes? opts)))]
         (cond (or (= all own-alts) (empty? all)) own (next all) (into [:or] all) :else (first all))))))
 
 (defn- compared-type
@@ -532,7 +539,10 @@
                                   [ins] (range (count ins)))
               refused? (and (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
               ;; anyarray there (&&, @>): an array of the type it binds alone, no array PostgreSQL would convert
-              opts (cond-> opts (some #(= "anyarray" (get (:args %) i)) os) (assoc ::jdbc/array-use :whole))
+              opts (cond-> opts
+                     (some #(= "anyarray" (get (:args %) i)) os) (assoc ::jdbc/array-use :whole)
+                     ;; anycompatible: of the common type the argument takes part in deciding (array_append(int[], bigint))
+                     (some #(str/starts-with? (str (get (:args %) i)) "anycompatible") os) (assoc ::common-type true))
               ;; a value of each type, which a :pg/type of one would misname
               t (cond (empty? ss) nil
                       (next ss) (query/nullable

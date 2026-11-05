@@ -807,7 +807,12 @@
     (is (not (m/validate (:c (:args (h/analyze reg {:update :t :set {:c :?c}}))) "abcd" {:registry reg})) "assigned, it is too long"))
   (let [reg (pgmalli/registry {:registry {:pg.public/short [:string {:pg/type "character varying(10)" :max 10 :pg/max-length 10 :min 2}]
                                           :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "short"} :pg.public/short]]]}})]
-    (is (not (m/validate (:x (:args (h/analyze reg {:select [[[:cast :?x :short] :c]]}))) "a" {:registry reg})) "a cast keeps a CHECK's length")))
+    (is (not (m/validate (:x (:args (h/analyze reg {:select [[[:cast :?x :short] :c]]}))) "a" {:registry reg})) "a cast keeps a CHECK's length"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/abc [:and [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}] [:re "^abc$"]]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "abc"} :pg.public/abc]]]}})
+        ok? #(m/validate (:x (:args (h/analyze reg {:select [[[:cast :?x :abc] :c]]}))) % {:registry reg})]
+    (is (ok? "abcdef") "its CHECK reads the string cut")
+    (is (not (ok? "abd")))))
 
 (deftest min-and-max-of-a-domain-are-of-its-base-type
   (let [reg (pgmalli/registry {:registry {:pg.public/code3 [:enum {:pg/type "character varying(3)"} "aaa" "bbb"]
@@ -2444,6 +2449,9 @@
       (is (not (ok? q 2)) (pr-str q))
       (is (not (ok? q "2")) (pr-str q)))
     (is (ok? {:select [:*] :from [[[:generate_series 1 :?x] :g]]} 2) "a candidate takes a bigint")
+    (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:is [:vector {:pg/type "integer[]"} :pg/integer]] [:i :pg/integer]]}})]
+      (doseq [q [{:select [[[:array_append :is :?x] :a]] :from [:t]} {:select [[[:over [[:lag :i [:inline 1] :?x] {}]] :a]] :from [:t]}]]
+        (is (m/validate (:x (:args (h/analyze reg q))) 2 {:registry reg}) (str "anycompatible: of the common type a bigint takes part in deciding " (pr-str q)))))
     (is (ok? {:update :users :set {:score :?x} :where [:= :id 1]} 2) "assigned, PostgreSQL converts a bigint to an integer")
     (is (str/includes? (first ((requiring-resolve 'malli.error/humanize) (m/explain (:x (args {:select [[[:ntile :?x] :n]] :from [:users]})) 2 {:registry registry})))
                        "[:cast <parameter> :integer]"))

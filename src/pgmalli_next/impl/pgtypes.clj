@@ -2,7 +2,7 @@
   "The schema types pgmalli registers for PostgreSQL's own: a bytea of bounded
    length, the bounded numbers (with the ranges the integer types hold), the arrays the
    JDBC driver takes, a keyword's or a Character's text a column takes (:pg/text) and the values
-   of some classes of one schema (:pg/class)."
+   of some classes of one schema (:pg/class), a string a cast cuts (:pg/cut)."
   (:require [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [malli.core :as m]
@@ -195,6 +195,18 @@
                   :type-properties {:error/message "should be a keyword or a character whose text the column takes (its length and CHECKs)"}
                   :min 1 :max 1}))}))
 
+(def ^:private cut-schema
+  "[:pg/cut n t]: a string t takes cut to its first n characters, as a cast to char(n) or
+   varchar(n) cuts it before the type's CHECKs read it."
+  (m/-simple-schema
+   {:type :pg/cut
+    :compile (fn [_ [n t] options]
+               (let [valid? (m/validator t options)]
+                 {:pred (fn [v] (and (string? v)
+                                     (valid? (if (> (.codePointCount ^String v 0 (count v)) n) (subs v 0 (.offsetByCodePoints ^String v 0 n)) v))))
+                  :type-properties {:error/message (str "should be a string whose first " n " characters the type takes")}
+                  :min 2 :max 2}))}))
+
 (def ^:private class-schema
   "[:pg/class \"java.lang.Integer\" ...]: a value of one of the classes named, where the classes
    of one schema (:int, a Long's and an Integer's) go as types PostgreSQL takes apart."
@@ -211,4 +223,4 @@
   "The schema types pgmalli registers, by name."
   {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
    :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema
-   :pg/text text-schema :pg/class class-schema})
+   :pg/text text-schema :pg/class class-schema :pg/cut cut-schema})
