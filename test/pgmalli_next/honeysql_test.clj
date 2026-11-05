@@ -2448,6 +2448,26 @@
     (is (str/includes? (first ((requiring-resolve 'malli.error/humanize) (m/explain (:x (args {:select [[[:ntile :?x] :n]] :from [:users]})) 2 {:registry registry})))
                        "[:cast :?x :integer]"))))
 
+(deftest a-window-and-an-aggregate-read-their-lists-as-order-by-items
+  (doseq [q [{:select [[[:over [[:rank] {:partition-by [:nope] :order-by [:id]}]] :r]] :from [:users]}
+             {:select [[[:over [[:rank] {:partition-by [:id :nope]}]] :r]] :from [:users]}
+             {:select [[[:over [[:rank] {:order-by [:nope]}]] :r]] :from [:users]}
+             {:select [[[:over [[:rank] {:order-by [:id [:nope :desc]]}]] :r]] :from [:users]}
+             {:select [[[:over [[:rank] :w]] :r]] :from [:users] :window [:w {:partition-by [:nope]}]}
+             {:select [[[:over [[:sum :id] {:order-by [:id] :frame [:rows :between [:nope :preceding] :current-row]}]] :r]] :from [:users]}
+             {:select [[[:array_agg [:order-by :id :nope]] :a]] :from [:users]}
+             {:select [[[:array_agg [:order-by :nope :id]] :a]] :from [:users]}
+             {:select [[[:array_agg {:distinct :nope :order-by [:id]}] :a]] :from [:users]}
+             {:select [[[:count [:distinct :nope]] :a]] :from [:users]}]]
+    (is (= [[:unknown-column :nope]] (map (juxt :kind :column) (check q))) (pr-str q)))
+  (doseq [q [{:select [[[:over [[:rank] {:partition-by [:group_id [[:lower :nick]]] :order-by [:id [:score :desc]]}]] :r]] :from [:users]}
+             {:select [[[:over [[:rank] :w]] :r]] :from [:users] :window [:w {:partition-by [:group_id] :order-by [:id]}]}
+             {:select [[[:over [[:sum :id] {:order-by [:id] :frame [:rows :between [:?n :preceding] :current-row]}]] :r]] :from [:users]}
+             {:select [[[:over [[:sum :id] {:order-by [:id] :frame [:rows :between :unbounded-preceding :current-row]}]] :r]] :from [:users]}
+             {:select [[[:array_agg [:order-by :nick [:id :desc]]] :a]] :from [:users]}
+             {:select [[[:count [:distinct :nick]] :a]] :from [:users]}]]
+    (is (= [] (check q)) (pr-str q))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or
                 [:time/instant {:pg/type "timestamptz"}]

@@ -108,7 +108,21 @@
 (def ^:private expression-clauses
   "The clauses whose values are expressions, whose calls' arguments name columns."
   #{:select :select-distinct :select-distinct-on :where :having :group-by :order-by :set :values
-    :do-update-set :returning})
+    :do-update-set :returning :window :frame})
+
+(defn- listed-expressions
+  "The expressions x lists where HoneySQL writes a list of ORDER BY's items, each expr or [expr
+   direction], no call: a window's :partition-by and :order-by ({:partition-by [:a]}, in OVER or
+   WINDOW), an aggregate's [:order-by e items...] and [:distinct e ...], and a frame's bound
+   [offset :preceding]; nil for another x."
+  [x clause]
+  (cond (and (map? x) (some #{:partition-by :order-by} (keys x)) (not (syntax/statement? x)))
+        (map syntax/bare (mapcat #(syntax/vectorish (get x %)) [:partition-by :order-by]))
+        (not (vector? x)) nil
+        (= :order-by (first x)) (cons (second x) (map syntax/bare (drop 2 x)))
+        (= :distinct (first x)) (rest x)
+        (and (= :frame clause) (= 2 (count x)) (#{:preceding :following} (second x))) [(first x)]
+        (and (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x)))))) [(first x)]))
 
 (defn- column-problems [registry sc stmt ps {:keys [format] :as opts}]
   (let [target (syntax/target-scope sc stmt opts)
@@ -137,14 +151,12 @@
                                         (for [{:keys [x chain item? top? clause]} (syntax/expression-nodes ps)
                                               :let [items? (or (syntax/select-list-clauses clause) (= :order-by clause))]
                                               :when (and (expression-clauses clause)
-                                                         (not (and top? (or items? (= :group-by clause))))
+                                                         (not (and top? (or items? (#{:group-by :window :frame} clause))))
                                                          (not (and item? items?)))
-                                              ;; [expr direction], an item of an ORDER BY inside OVER or an aggregate, is no
-                                              ;; call: its expression alone names a column
-                                              :let [ordered? (and (vector? x) (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x))))))
+                                              :let [listed (listed-expressions x clause)
                                                     ;; [:cast x t]: x alone, t a type's name
                                                     cast? (and (vector? x) (= :cast (first x)) (= 3 (count x)))
-                                                    [kind _ args] (cond ordered? [:order [] [(first x)]]
+                                                    [kind _ args] (cond listed [:order [] listed]
                                                                         cast? [:cast [] [(second x)]]
                                                                         :else (when-not (syntax/comparison? x) (syntax/call-parts x)))]
                                               :when kind
