@@ -340,8 +340,8 @@
           t (driver-type schema true)
           ;; a date or time column takes the java.time value its type is, which the one reading
           ;; reads it as; a timetz one also the java.sql.Time the one reading leaves it as (inst?)
-          t (cond (= :time/offset-time k) (shape/update-base t #(shape/either (distinct [(shape/domain-base schema) %]) %))
-                  (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k)) (shape/update-base t (constantly (shape/domain-base schema)))
+          t (cond (= :time/offset-time k) (shape/update-and-base t #(shape/either (distinct [(shape/and-base schema) %]) %))
+                  (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k)) (shape/update-and-base t (constantly (shape/and-base schema)))
                   :else t)
           n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
           ;; an enum's labels are the column's values; an argument's type keeps those a class sent
@@ -352,7 +352,7 @@
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema
             (= :any (shape/head t)) (shape/either sent t)
             ;; a kind the column's own values have already takes their bounds (an integer's range)
-            :else (shape/either (concat (shape/alternatives t) (remove #(= (value-kind %) (value-kind (shape/domain-base t))) sent)) t)))))
+            :else (shape/either (concat (shape/alternatives t) (remove #(= (value-kind %) (value-kind (shape/and-base t))) sent)) t)))))
 
 ;;; rows as next.jdbc builds them
 
@@ -379,7 +379,7 @@
 (defn- column-read-type*
   [s pgjdbc?]
   (let [;; the driver returns the elements of an array of a domain (d[]) as PGobjects
-        d (when (array-column? s) (some->> (:pg/domain (shape/column-props s)) (re-matches #"(.*)\[\]$") second))]
+        d (when (array-column? s) (some-> (:pg/domain (shape/column-props s)) types/element))]
     (cond-> (read-type (cond-> s d (assoc (dec (count s)) [:any {:pg/type d}])) pgjdbc?)
       d (shape/merge-props {:pg/domain (str d "[]")}))))
 

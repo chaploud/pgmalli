@@ -78,7 +78,7 @@
    non-zero. Else returns {:unrendered [entry ...] :diagnostics [diagnostic ...]}, each nil when
    it has nothing.
 
-   A difference names the registry entry (:name) and, for a row or insert schema, the :column,
+   A difference names the registry entry (:name) and, for a row schema, the :column,
    :property (of the map, or with :column of that column) or column :order that differ, with the
    :file and :db sides (nil where a side lacks it); a function or operator by :key (:functions or
    :operators), :schema and :name; the file's other parts (:schemas, :sequences, :unrendered,

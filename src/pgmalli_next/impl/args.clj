@@ -52,7 +52,7 @@
    values have (their :min and :max). PostgreSQL rounds a fraction going to an integer type
    first, so a fraction is held to the bounds half a unit wider."
   [a p t own]
-  (let [base (shape/domain-base own)
+  (let [base (shape/and-base own)
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
         [min max] (if (and (accept/integer-type? t) (not (accept/integer-type? p))) [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))]
@@ -458,7 +458,7 @@
   (for [{:keys [x chain]} (syntax/expression-nodes ps)
         :let [operands (query/resolving-operands x)]
         :when (some syntax/param-key operands)
-        :let [r (query/common registry (map #(query/expression-type registry chain % opts) (remove syntax/param-key operands)))]
+        :let [r (query/common (map #(query/expression-type registry chain % opts) (remove syntax/param-key operands)))]
         :when (:schema r)
         o operands
         :when (syntax/param-key o)]
@@ -500,7 +500,7 @@
 (defn- literal-comparison-problems
   "Of a number or a boolean compared with a column or a typed expression, as compared-arg-type
    types an argument there ([:= :nick 1]: character varying = bigint does not exist); a string's
-   is an :uncast-string, a label list's an :enum-literal."
+   is an :uncast-string, an enum label's an :enum-literal."
   [registry ps opts]
   (for [[op side value chain] (syntax/comparison-sides ps)
         :let [v (sent-literal value opts)]
@@ -610,7 +610,7 @@
      (let [x (unlabel x)
            props (shape/props x)]
        (cond (= :pg/array (shape/head x)) #{::array}
-             (= :enum (shape/kind x)) (set (map #(.getName (class %)) (shape/entries (shape/domain-base x))))
+             (= :enum (shape/kind x)) (set (map #(.getName (class %)) (shape/entries (shape/and-base x))))
              (and (= :fn (shape/head x)) (:pg/class props)) #{(:pg/class props)}
              :else (if-let [b (bare x)]
                      (try (set (for [[c v] accept/values :when (m/validate b v {:registry registry/base})] (.getName ^Class c)))
@@ -679,7 +679,7 @@
   [t]
   (let [t (shape/non-null t)]
     (case (shape/head t)
-      :and (some->> (typed-only (shape/domain-base t)) constantly (shape/update-base t))
+      :and (some->> (typed-only (shape/and-base t)) constantly (shape/update-and-base t))
       :or (some-> (seq (keep typed-only (shape/alternatives t))) (shape/either nil))
       :enum (let [ls (remove keyword? (shape/entries t))]
               (when (seq ls) (into (enum-head t) ls)))

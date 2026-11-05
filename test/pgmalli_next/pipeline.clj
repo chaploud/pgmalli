@@ -11,10 +11,7 @@
                :data (let [d (pr-str (ex-data e))] (subs d 0 (min 1200 (count d))))}])))
 
 (defn catalog-findings
-  "The facts a generated file could not render, as findings: :unparsed, :unknown-type, :unrendered."
+  "The columns a generated file left out (:unrendered), as findings of kind :unknown-type."
   [data]
   (for [f (:unrendered data)]
-    (case (:fact f)
-      :unparsed {:kind :unparsed :table (:table f) :type-name (:type-name f) :column (:column f) :constraint (:constraint f) :input (:input f) :error (:error f)}
-      :unknown-type {:kind :unknown-type :table (:table f) :column (:column f) :type (:type f)}
-      {:kind :unrendered :table (:table f) :type-name (:type-name f) :column (:column f) :constraint (:constraint f) :fact (:fact f) :expr (:expr f)})))
+    (assoc (select-keys f [:table :column :type :type-schema]) :kind :unknown-type)))

@@ -35,7 +35,7 @@
                        :extra-paths ["dev"]
                        :requires ([catalog])
                        :task (prn (catalog/dump))}
-         fixture {:doc "Rewrite test/resources/pgmalli-next/{sample,other}.edn, a generated file of each schema, from dev/fixture.clj (no database)"
+         fixture {:doc "Rewrite test/resources/pgmalli-next/{sample,other,both}.edn, generated files of a schema each and of both, from dev/fixture.clj (no database)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/fixture.clj")}
          test:nodb {:doc "bb test without the tests that need a database (no docker)"

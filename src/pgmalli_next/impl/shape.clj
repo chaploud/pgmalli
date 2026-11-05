@@ -110,20 +110,21 @@
   [s]
   (or (props (if (maybe? s) (last s) s)) {}))
 
-(defn domain-base
-  "The base of a domain's registry schema: the first schema of [:and base checks...]."
-  [d]
-  (if (and (vector? d) (= :and (first d))) (first (entries d)) d))
+(defn and-base
+  "s's first schema where it is [:and x ...] (an argument held to a range or to classes, an
+   override), else s."
+  [s]
+  (if (and (vector? s) (= :and (first s))) (first (entries s)) s))
 
 (defn ref-target
   "The registry schema [:ref ... name] s refers to; nil for another s."
   [schemas s]
   (when (and (vector? s) (= :ref (first s))) (get schemas (last s))))
 
-(defn update-base
-  "d with f applied to its base: the first schema of [:and base checks...], else d itself."
-  [d f]
-  (if (and (vector? d) (= :and (first d))) (update d (if (map? (second d)) 2 1) f) (f d)))
+(defn update-and-base
+  "s with f applied to and-base's schema."
+  [s f]
+  (if (and (vector? s) (= :and (first s))) (update s (if (map? (second s)) 2 1) f) (f s)))
 
 (defn column-entries
   "[[column props schema] ...] of a row or insert schema as data."
@@ -206,11 +207,11 @@
   (if (vector? t) (first t) t))
 
 (defn kind
-  "The kind of value t takes: its head, through [:and t checks...]; a
+  "The kind of value t takes: its head, through [:and t ...]; a
    function schema ([:fn f]) is a kind of its own."
   [t]
   (case (head t)
-    :and (kind (domain-base t))
+    :and (kind (and-base t))
     :fn t
     (head t)))
 

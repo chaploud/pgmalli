@@ -72,7 +72,7 @@
       (not (or enum (types/known? bare type_schema)))
       (conj (cond-> (merge base {:fact :unknown-type :type data_type})
               (not (#{nil "pg_catalog" (:schema base)} type_schema)) (assoc :type-schema type_schema)))
-      (and max_length (#{:max-length :bits :max-bits} (:typmod (types/entry bare))))
+      (and max_length (:typmod (types/entry bare)))
       (conj (merge base {:fact :max-length :max max_length})))))
 
 (defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial exclude deferrable]}]

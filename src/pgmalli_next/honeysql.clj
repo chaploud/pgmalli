@@ -126,7 +126,7 @@
   [t]
   (case (shape/head t)
     :maybe [:maybe (one-value (last t))]
-    :and (shape/update-base t one-value)
+    :and (shape/update-and-base t one-value)
     :or (shape/either (remove #(or (= :keyword (shape/kind %)) (#{:vector :sequential} (shape/head %)))
                               (map one-value (shape/alternatives t)))
                       t)
@@ -181,7 +181,7 @@
                                t (if-let [n (when (or (shape/maybe? c) triggered?) (sql-word-schema :null (:format opts)))] [:or t n] t)
                                plain (if (fills k) [:or t default] t)
                                lifted (assigned opts)
-                               labels (let [e (shape/domain-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]]
+                               labels (let [e (shape/and-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]]
                      ;; [:lift v] sends v as one parameter, a keyword label too
                      [(written-key k opts) (not (or (:optional props) triggered?))
                       [:or plain [:tuple {:error/message (str "should be [:lift v], v "

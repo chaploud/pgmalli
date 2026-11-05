@@ -1,21 +1,21 @@
 (ns pgmalli-next.impl.diff
-  "Generated files against the database and against each other: what differs, entry by entry."
+  "The generated file against the database, and two generated files against each other: what
+   differs, entry by entry."
   (:require [clojure.java.io :as io]
             [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.shape :as shape]))
 
 (defn- row-parts
-  "{:columns {name entry} :props} of a row or insert schema, nil for other entries."
+  "{:columns {name entry} :props} of a row schema, nil for other entries."
   [s]
-  (let [m s]
-    (when (and (vector? m) (= :map (first m)) (map? (second m)))
-      {:columns (into {} (map (fn [[k p s]] [k (if (seq p) [p s] s)])) (shape/column-entries s))
-       :props (second m)})))
+  (when (and (vector? s) (= :map (first s)) (map? (second s)))
+    {:columns (into {} (map (fn [[k p c]] [k (if (seq p) [p c] c)])) (shape/column-entries s))
+     :props (second s)}))
 
 (defn- differences
   "The differences between the file's and the database's version of one registry entry, a
-   row or insert schema by column and property, anything else as a whole."
+   row schema by column and property, anything else as a whole."
   [name file db]
   (let [f (row-parts file) d (row-parts db)
         props (fn [s] (when (and (vector? s) (map? (second s))) (second s)))

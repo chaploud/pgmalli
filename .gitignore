@@ -6,6 +6,5 @@
 .nrepl-port
 target/
 
-# generate run in this checkout writes here; pgmalli ships ir.sql, and impl/catalog.edn (bb catalog)
-# where no schema's file can go
-resources/pgmalli-next/*.edn
+# where generate! run in this checkout writes
+/resources/pgmalli-next.edn

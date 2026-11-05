@@ -4,9 +4,7 @@
    facts -> registry -> EDN -> load. What does
    not go through is a finding, one EDN map each, written under out-dir/<file>.edn:
 
-     :unparsed        an expression pgmalli's parser refused         (cannot handle)
      :unknown-type    a column type with no malli rendering          (cannot handle)
-     :unrendered      a CHECK reported, not rendered (better rendering possible)
      :error           an exception anywhere in the pipeline          (bug)
 
    bb sweep <sql-dir> <out-dir> [file-glob]; bb sweep:report <out-dir> groups what it found.

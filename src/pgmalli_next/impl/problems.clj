@@ -272,8 +272,7 @@
 (defn- uncast-type
   "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
    type of types' :cast (bit takes varbit, which keeps its length), or any other type types
-   has; nil for a string type (text, varchar, char, name, citext) or a type types lacks (a
-   domain over a base type among them)."
+   has; nil for a string type (text, varchar, char, name, citext) or a type types lacks."
   [registry s]
   (let [p (shape/column-props s)
         e (types/entry (shape/type-name p))]
@@ -328,7 +327,7 @@
                            :let [os (query/resolving-operands x)]
                            :when (some #(literal % opts) os)
                            :let [typed (remove #(literal % opts) os)
-                                 s (:schema (query/common registry (map #(query/expression-type registry chain % opts) typed)))]
+                                 s (:schema (query/common (map #(query/expression-type registry chain % opts) typed)))]
                            :when s
                            x os]
                        {:column (or (first (filter syntax/column-keyword? typed)) (first typed)) :x x :schema s})

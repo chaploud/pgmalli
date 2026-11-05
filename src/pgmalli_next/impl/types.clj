@@ -8,7 +8,6 @@
      :value      the kind of value: :integer (with :range), :exact, :float, :json; a string type has none (its category, S, says it)
      :typmod     what the typmod n of a column bounds: :max-length (varchar(n), char(n)),
                  :bits (bit(n): exactly n), :max-bits (bit varying(n))
-     :gen        how a value is generated when the schema alone does not: :bits (0s and 1s)
      :literals   values as text the database reads, generated for an :any column
      :cast       the type :uncast-string says to cast a string to, for a type whose :schema is
                  :string but which takes no varchar: bit's varbit (which keeps its length), bit
@@ -38,8 +37,8 @@
    "character" {:aliases ["char" "bpchar"] :schema :string :typmod :max-length}
    "name" {:schema :string}
    "\"char\"" {:schema :string}
-   "bit" {:schema :string :typmod :bits :gen :bits :cast :varbit :read :bit}
-   "bit varying" {:aliases ["varbit"] :schema :string :typmod :max-bits :gen :bits :cast (keyword "bit varying") :read :any}
+   "bit" {:schema :string :typmod :bits :cast :varbit :read :bit}
+   "bit varying" {:aliases ["varbit"] :schema :string :typmod :max-bits :cast (keyword "bit varying") :read :any}
    "boolean" {:aliases ["bool"] :schema :boolean}
    "uuid" {:schema :uuid}
    "bytea" {:schema 'bytes?}
@@ -162,7 +161,7 @@
 
 (defn by-keyword
   "{name entry} of the types whose entry satisfies pred, every name and alias spelt as
-   pgmalli-next.impl.expr spells a cast's type (:double-precision)."
+   HoneySQL spells a cast's type (:double-precision)."
   [pred]
   (into {} (for [[n e] by-name :when (pred e)] [(keyword (str/replace n " " "-")) e])))
 
