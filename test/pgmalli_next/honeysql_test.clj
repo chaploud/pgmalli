@@ -2446,7 +2446,9 @@
     (is (ok? {:select [:*] :from [[[:generate_series 1 :?x] :g]]} 2) "a candidate takes a bigint")
     (is (ok? {:update :users :set {:score :?x} :where [:= :id 1]} 2) "assigned, PostgreSQL converts a bigint to an integer")
     (is (str/includes? (first ((requiring-resolve 'malli.error/humanize) (m/explain (:x (args {:select [[[:ntile :?x] :n]] :from [:users]})) 2 {:registry registry})))
-                       "[:cast :?x :integer]"))))
+                       "[:cast <parameter> :integer]"))
+    (is (every? #(ok? {:select [[[:ntile :?x] :n]] :from [:users]} %) (mg/sample (:x (args {:select [[[:ntile :?x] :n]] :from [:users]})) {:registry registry :seed 1}))
+        "it generates")))
 
 (deftest a-window-and-an-aggregate-read-their-lists-as-order-by-items
   (doseq [q [{:select [[[:over [[:rank] {:partition-by [:nope] :order-by [:id]}]] :r]] :from [:users]}

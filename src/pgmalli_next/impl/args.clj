@@ -148,21 +148,26 @@
                                      (unlabel a))))))
 
 (defn- class-held
-  "A function's argument's alternative a held to the classes the one sending sends as t or a type
-   takes? takes, where the classes of its schema go as types apart (a Long as bigint, an Integer as integer: ntile(?)
-   takes the Integer alone, PostgreSQL converting no bigint to an integer implicitly)."
+  "A function's argument's alternative a held to the classes of its schema the one sending sends
+   typed as t or a type takes? takes (ntile(?) takes an Integer, sent as integer, not a Long, sent
+   as bigint, which PostgreSQL does not convert to integer implicitly); nil where it sends none of
+   them so (a real argument's Double, sent as double precision)."
   [a t takes? opts]
   (let [k (shape/kind a)
-        rows (filter (fn [[s]] (some #(= k (shape/kind %)) (shape/alternatives s))) (jdbc/write-rows opts false))
+        rows (filter (fn [[s p]] (and (not= :unknown p) (some #(= k (shape/kind %)) (shape/alternatives s)))) (jdbc/write-rows opts false))
         [in out] ((juxt filter remove) (fn [[_ p]] (or (= t p) (takes? p))) rows)
-        names #(str/join ", " (map (fn [[_ _ ^Class c]] (.getSimpleName c)) %))]
-    (if (and (seq in) (seq out) (string? t))
-      [:and a (into [:pg/class {:error/message (str "should be one of " (names in) ", which go as a type PostgreSQL takes here (" t "); "
-                                                    (names out) " goes as " (str/join " or " (distinct (map second out)))
-                                                    ", which it does not convert to " t " implicitly: convert the value" (when (some #(= Integer (nth % 2)) in) " ((int n))")
-                                                    " or cast the parameter in the query ([:cast :?x :" (str/replace t " " "-") "])")}]
-                    (map (fn [[_ _ ^Class c]] (.getName c)) in))]
-      a)))
+        named (fn [[_ _ ^Class c]] (let [n (.getSimpleName c)] (str (if (#{\A \E \I \O \U} (first n)) "an " "a ") n)))
+        hint (some (fn [[_ _ c]] ({Integer "(int n)" Short "(short n)"} c)) in)]
+    (cond (or (empty? out) (not (string? t))) a
+          (empty? in) nil
+          :else (let [cs (map (fn [[_ _ ^Class c]] (.getName c)) in)]
+                  [:and {:gen/schema (into [:pg/class] cs)} a
+                   (into [:pg/class {:error/message (str "should be " (str/join " or " (map named in))
+                                                         " (sent as " (str/join " or " (distinct (map second in))) ", which PostgreSQL takes as " t "); "
+                                                         (str/join ", " (map #(str (named %) " goes as " (second %)) out))
+                                                         ", which it does not convert to " t " implicitly: send " (when hint (str hint " or "))
+                                                         "cast the parameter, [:cast <parameter> :" (str/replace t " " "-") "]")}]
+                         cs)]))))
 
 (defn- class-names [a] (when (and (= :and (shape/head a)) (= :pg/class (shape/head (last a)))) (shape/entries (last a))))
 
@@ -174,8 +179,9 @@
   (let [by-kind (group-by shape/kind as)]
     (distinct (for [a as :let [same (by-kind (shape/kind a))]]
                 (cond (not-every? class-names same) (first (remove class-names same))
-                      :else (let [[h b c] (first same)]
-                              [h b (into [:pg/class (shape/props c)] (distinct (mapcat class-names same)))]))))))
+                      :else (let [[b c] (shape/entries (first same))
+                                  cs (distinct (mapcat class-names same))]
+                              [:and {:gen/schema (into [:pg/class] cs)} b (into [:pg/class (shape/props c)] cs)]))))))
 
 (defn accepted-type
   "The type of an argument where a value of column schema s goes, in context (:compare, :call,
@@ -243,8 +249,8 @@
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
-                  (= :call held-in) (map #(class-held % t takes? opts)))]
-        (cond (= all own-alts) own (next all) (into [:or] all) :else (first all))))))
+                  (= :call held-in) (keep #(class-held % t takes? opts)))]
+        (cond (or (= all own-alts) (empty? all)) own (next all) (into [:or] all) :else (first all))))))
 
 (defn- compared-type
   "The type of an argument compared with a column by op, t as accepted-type gives it compared

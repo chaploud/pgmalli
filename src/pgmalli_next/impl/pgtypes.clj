@@ -1,7 +1,8 @@
 (ns pgmalli-next.impl.pgtypes
   "The schema types pgmalli registers for PostgreSQL's own: a bytea of bounded
-   length, the bounded numbers (with the ranges the integer types hold) and the arrays the
-   JDBC driver takes."
+   length, the bounded numbers (with the ranges the integer types hold), the arrays the
+   JDBC driver takes, a keyword's or a Character's text a column takes (:pg/text) and the values
+   of some classes of one schema (:pg/class)."
   (:require [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [malli.core :as m]
@@ -191,7 +192,7 @@
                  {:pred (fn [v] (cond (keyword? v) (valid? (subs (str v) 1))
                                       (char? v) (valid? (str v))
                                       :else false))
-                  :type-properties {:error/message "should go as a text the column takes (its length, its CHECKs)"}
+                  :type-properties {:error/message "should be a keyword or a character whose text the column takes (its length and CHECKs)"}
                   :min 1 :max 1}))}))
 
 (def ^:private class-schema
@@ -202,7 +203,8 @@
     :compile (fn [_ names _]
                (let [cs (set names)]
                  {:pred (fn [v] (contains? cs (.getName (class v))))
-                  :type-properties {:error/message (str "should be one of " (str/join ", " names))}
+                  :type-properties {:error/message (str "should be one of " (str/join ", " names))
+                                    :gen/gen (gen/elements (keep (fn [[c v]] (when (cs (.getName ^Class c)) v)) accept/values))}
                   :min 1 :max Long/MAX_VALUE}))}))
 
 (def schemas

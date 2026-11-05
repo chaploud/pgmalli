@@ -276,21 +276,10 @@
   (class-fn "org.postgresql.util.PGobject"
             (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
-(defn- int-bounds
-  "{:min :max} of the integer alternative of t: its type's range (pgtypes/int-ranges) narrowed
-   by its properties, a domain's CHECK's; nil for none."
-  [t]
-  (some (fn [a]
-          (let [k (shape/kind a) p (shape/props a)]
-            (cond (pgtypes/int-ranges k) (let [[lo hi] (pgtypes/int-ranges k)] {:min (max lo (:min p lo)) :max (min hi (:max p hi))})
-                  (= :int k) (not-empty (select-keys p [:min :max])))))
-        (shape/alternatives (shape/non-null t))))
-
-(defn- held-to
-  "Alternatives as, their integer ones held to bounds (int-bounds), as PostgreSQL checks an element
-   it converts against its type and CHECKs."
-  [as bounds]
-  (if bounds (map #(if (#{:int} (shape/kind %)) (shape/merge-props % bounds) %) as) as))
+(defn- value-kind
+  "The kind of alternative a as a value: pgmalli's integer types (:pg/integer) an :int, as malli's is."
+  [a]
+  (let [k (shape/kind a)] (if (pgtypes/int-ranges k) :int k)))
 
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :whole, compared with an
@@ -325,9 +314,9 @@
                       own (set (map shape/kind (or cs (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives))))
                       strip (fn [s]
                               (let [as (shape/alternatives s)
-                                    kinds (set (map shape/kind as))]
+                                    kinds (set (map value-kind as))]
                                 (shape/either (concat (remove (fn [a] (and (untyped (shape/kind a)) (not (own (shape/kind a))))) as)
-                                                      (held-to (remove (comp kinds shape/kind) cs) (int-bounds s)))
+                                                      (remove (comp kinds value-kind) cs))
                                               s)))]
                   (if (shape/maybe? t) [:maybe (strip (shape/non-null t))] (strip t))))
         ;; a typed array's elements are also the values of its element type, where the column
@@ -338,13 +327,8 @@
                         ;; an element of no known type (an opaque column's) stays so
                         e (when (and x elem (not= x elem)) (types/entry x))]
                     (if e
-                      (let [;; pgmalli's integer types are integers, as :int is
-                            kind #(let [k (shape/kind %)] (if (pgtypes/int-ranges k) :int k))
-                            own (set (map kind (shape/alternatives (shape/non-null t))))
-                            more (held-to (for [a (shape/alternatives (write-type (types/type-schema (:name e)) opts))
-                                                :when (not (own (kind a)))]
-                                            a)
-                                          (int-bounds t))]
+                      (let [own (set (map value-kind (shape/alternatives (shape/non-null t))))
+                            more (remove #(own (value-kind %)) (shape/alternatives (write-type (types/type-schema (:name e)) opts)))]
                         (shape/either (distinct (concat (shape/alternatives t) more)) t))
                       t)))
         alts (distinct (for [[s sent c] (write-rows opts true) :when (takes? sent)
@@ -419,11 +403,10 @@
             :else
             (let [base (shape/domain-base t)
                   ;; a kind the base has already takes its bounds (a varchar(n)'s length)
-                  more (remove #(= (shape/kind %) (shape/kind base)) sent)
-                  ;; a CHECK reads a number as the number it is (a BigInt's > 0), the base's bounds too;
-                  ;; a keyword or a Character as the text it goes as (text-held)
-                  [held free] ((juxt filter remove) #(and (numbers (shape/kind base)) (numbers (shape/kind %))) more)
-                  held (held-to held (int-bounds base))]
+                  more (remove #(= (value-kind %) (value-kind base)) sent)
+                  ;; a CHECK reads a number as the number it is (a BigInt's > 0); a keyword or a
+                  ;; Character as the text it goes as (text-held)
+                  [held free] ((juxt filter remove) #(and (numbers (shape/kind base)) (numbers (shape/kind %))) more)]
               (shape/either (concat (shape/alternatives (shape/update-base t #(shape/either (distinct (cons % held)) %)))
                                     (map #(text-held % t) free))
                             t))))))

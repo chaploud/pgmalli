@@ -113,14 +113,14 @@
 (defn- listed-expressions
   "The expressions x lists where HoneySQL writes a list of ORDER BY's items, each expr or [expr
    direction], no call: a window's :partition-by and :order-by ({:partition-by [:a]}, in OVER or
-   WINDOW), an aggregate's [:order-by e items...] and [:distinct e ...], and a frame's bound
+   WINDOW), an aggregate's [:order-by e items...] and [:distinct e] (HoneySQL writes no more), and a frame's bound
    [offset :preceding]; nil for another x."
   [x clause]
   (cond (and (map? x) (some #{:partition-by :order-by} (keys x)) (not (syntax/statement? x)))
         (map syntax/bare (mapcat #(syntax/vectorish (get x %)) [:partition-by :order-by]))
         (not (vector? x)) nil
         (= :order-by (first x)) (cons (second x) (map syntax/bare (drop 2 x)))
-        (= :distinct (first x)) (rest x)
+        (= :distinct (first x)) [(second x)]
         (and (= :frame clause) (= 2 (count x)) (#{:preceding :following} (second x))) [(first x)]
         (and (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x)))))) [(first x)]))
 
