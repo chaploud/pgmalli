@@ -229,10 +229,11 @@
     (syntax/distinct-ops op) query/nullable))
 
 (defn- literal
-  "{:value v} of a literal x, a value written in the query: a string, a number or a boolean, bare
-   or [:lift v] (HoneySQL sends it as a parameter, sql/format's :inline aside), [:lift :kw] (sent
-   untyped as its text, :text, :ns/a's ns/a), or [:inline s] (written into the SQL, :inline);
-   nil for another x (a bare keyword is a column)."
+  "{:value v} of a literal x, a value written in the query: a string or a number, bare or
+   [:lift v] (HoneySQL sends it as a parameter, sql/format's :inline aside), a boolean (bare,
+   HoneySQL writes TRUE or FALSE), [:lift :kw] (sent untyped as its text, :text, :ns/a's ns/a),
+   or [:inline s] (written into the SQL, :inline); nil for another x (a bare keyword is a
+   column)."
   [x]
   (let [v (when (and (vector? x) (= 2 (count x))) (second x))]
     (cond (or (string? x) (number? x) (boolean? x)) {:value x}
@@ -242,10 +243,10 @@
           (and (= :inline (when (vector? x) (first x))) (string? v)) {:value v :inline true})))
 
 (defn- literal-key
-  "The key of a literal at a position: one per occurrence, with where it goes (:column, :function,
-   :schema) for the problem it may make."
+  "The key of literal x at a position, with where it goes (:column, :function, :schema) for the
+   problem it may make."
   [x where]
-  (assoc where ::literal x ::at (Object.)))
+  (assoc where ::literal x))
 
 (defn- value-arg
   "[argument array?] of a value where an argument goes: an argument itself, or a column of
@@ -367,7 +368,8 @@
                                      a (shape/alternatives (shape/non-null (accepted-type registry s :call opts)))]
                                  (unlabel a))
                                seq shape/distinct-kinds)))]
-    (for [[x chain k elements?] (distinct casts)
+    ;; a cast of an argument once, a literal's each time it is written
+    (for [[x chain k elements?] (let [arg? (fn [[_ _ k e]] (or (syntax/param-key k) e))] (concat (distinct (filter arg? casts)) (remove arg? casts)))
           :let [s (:schema (query/expression-type registry chain x opts))]
           :when (and s (or (syntax/param-key k) elements? (query/enum-values registry s)))
           :let [e (when-not elements? (unnest-cast-element registry ps x opts))
@@ -548,29 +550,16 @@
                 (:cast e) (name (:cast e))
                 (not= :string (:schema e)) (:name e))))))
 
-(defn- sent-typed?
-  "Whether literal x goes as a parameter of a type of its own: not under sql/format's :inline,
-   not written into the SQL, not sent untyped (a keyword)."
+(defn- literal-sent-type
+  "The type literal x goes to PostgreSQL as: a bare boolean's boolean, written into the SQL; a
+   value sent as a parameter, the type the one sending sends it as; nil where x goes untyped
+   (written into the SQL as a string, sent as a keyword, or under sql/format's :inline)."
   [x opts]
   (let [{:keys [value inline]} (literal x)]
-    (and (some? value) (not inline) (string? (jdbc/sent-type value opts)))))
+    (cond (boolean? x) "boolean"
+          (and (some? value) (not inline)) (let [t (jdbc/sent-type value opts)] (when (string? t) t)))))
 
-(defn- call-literals
-  "A literal sent typed as an argument of a function or an operator ([:round :price 2]), as
-   call-arg-type types an argument there, the call's literals taken as its arguments are."
-  [registry ps opts]
-  (for [{:keys [x chain clause]} (syntax/expression-nodes ps)
-        :let [[_ n args :as parts] (when-not (or (syntax/comparison? x) (query/type-call registry chain x opts)) (syntax/call-parts x))]
-        :when (and n (some #(sent-typed? % opts) args)
-                   (not (and (= "unnest" n) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by])))))
-        :let [ins (mapv #(if (sent-typed? % opts) :free (:type (query/expression-type registry chain % opts))) args)
-              os (query/reached registry opts parts)]
-        [i a] (map-indexed vector args)
-        :when (sent-typed? a opts)
-        :let [ss (map types/type-schema (resolve/argument-types ins i os))
-              t (when (every? some? ss) (call-arg-type registry ss os i opts))]
-        :when t]
-    [(literal-key a {:function n :schema (when (= 1 (count ss)) (first ss))}) t]))
+(defn- sent-typed? [x opts] (some? (literal-sent-type x opts)))
 
 (defn- literal-problem
   "The problem of literal x where a value of type t goes (an argument there takes t), of a column
@@ -586,8 +575,8 @@
           (and (sent-typed? x opts) (refuses? registry t value))
           (let [u (when (and s (string? value)) (uncast-type registry s))]
             (if u
-              {:kind :uncast-string :column column :value value :type u}
-              (cond-> {:kind :literal-type :function function :value value :sent (jdbc/sent-type value opts)}
+              (cond-> {:kind :uncast-string :value value :type u} column (assoc :column column) (not column) (assoc :function function))
+              (cond-> {:kind :literal-type :function function :value value :sent (literal-sent-type x opts)}
                 (some-> s shape/column-props :pg/type) (assoc :type (:pg/type (shape/column-props s)))))))))
 
 (defn- call-args
@@ -600,13 +589,17 @@
   [registry ps opts]
   (for [{:keys [x chain clause]} (syntax/expression-nodes ps)
         :let [[kind n args :as parts] (when-not (or (syntax/comparison? x) (query/type-call registry chain x opts)) (syntax/call-parts x))]
-        :when (and kind (some syntax/param-key args))
-        :let [ins (mapv #(:type (query/expression-type registry chain % opts)) args)
+        :when (and kind (some #(or (syntax/param-key %) (sent-typed? % opts)) args))
+        :let [type-of #(:type (query/expression-type registry chain % opts))
+              ;; a literal judged as an argument: the call's literals taken as its arguments are
+              literal-ins (mapv #(if (sent-typed? % opts) :free (type-of %)) args)
+              param-ins (mapv type-of args)
               os (query/reached registry opts parts)]
         [j a] (map-indexed vector args)
-        :when (syntax/param-key a)
+        :when (or (syntax/param-key a) (sent-typed? a opts))
         ;; unnest(a, b) in FROM is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
-        :let [[ins i] (if (and (= "unnest" n) (next args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth ins j)] 0] [ins j])
+        :let [all-ins (if (syntax/param-key a) param-ins literal-ins)
+              [ins i] (if (and (= "unnest" n) (next args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth all-ins j)] 0] [all-ins j])
               ss (map types/type-schema (resolve/argument-types ins i os))
               ;; another parameter of the call is of a type its value picks: refused whatever type it is
               sibling-ins (reduce (fn [inss j] (if (and (not= j i) (= :free (nth ins j)))
@@ -614,12 +607,12 @@
                                                    (if (seq ts) (for [x inss t ts] (assoc x j t)) inss))
                                                  inss))
                                   [ins] (range (count ins)))
-              refused? (and (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
+              refused? (and (syntax/param-key a) (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
               t (call-arg-type registry ss os i opts)]
         :when (or refused? (and t (every? some? ss)))]
-    (if refused?
-      [a (or (some-> t typed-only) (jdbc/typed-where #(resolve/takes-at? ins i os %))) {:typed-only n}]
-      [a t])))
+    (cond refused? [a (or (some-> t typed-only) (jdbc/typed-where #(resolve/takes-at? ins i os %))) {:typed-only n}]
+          (syntax/param-key a) [a t]
+          :else [(literal-key a {:function n :schema (when (= 1 (count ss)) (first ss))}) t])))
 
 (defn- null-tested-args
   "The arguments a statement among positions ps tests for NULL ([:= :?x nil], which HoneySQL
@@ -743,7 +736,7 @@
    the function, on its schema; :untyped, such an argument whose other uses take no value sent
    with a type, and the type they name."
   [registry body opts]
-  (let [uses [comparison-args limit-args truth-tested-args cast-args assignment-args resolving-args call-args call-literals]
+  (let [uses [comparison-args limit-args truth-tested-args cast-args assignment-args resolving-args call-args]
         sps (query/once registry query/statement-positions body opts)
         typed (concat (for [[_ _ _ ps] sps
                             f uses
@@ -757,7 +750,7 @@
         typed-keys (set (keep (comp syntax/param-key first) typed))
         null-tested (set (for [[_ _ _ ps] sps, k (null-tested-args ps opts)] k))
         left (into {} (for [[k t] types] [k (if (and (only-typed k) (not= :any t)) (typed-only t) t)]))]
-    {:literals (for [[k t] typed :when (and (map? k) (::literal k))] [k t])
+    {:literals (for [[k t] typed :when (and (map? k) (contains? k ::literal))] [k t])
      :args (into {} (for [[k t] types
                           :let [only (only-typed k)
                                 ;; where it goes untyped elsewhere, the typed-only uses' values; else those of both

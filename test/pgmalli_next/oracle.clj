@@ -317,8 +317,9 @@
 (defn- by-design?
   "Whether check reports problem p by design (docs/queries.md \"Stricter than PostgreSQL\"): a
    literal outside an enum's labels where PostgreSQL never evaluates it (the statement may still
-   run through OR or CASE); NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails
-   once a row is touched or conflicts; a label the result set's columns (labels, a delay) have
+   run through OR or CASE); a literal sent typed that PostgreSQL converts on assignment alone;
+   NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails once a row
+   is touched or conflicts; a label the result set's columns (labels, a delay) have
    more than once. listed: listed of the schema; the column is one of a relation query names."
   [listed id query labels p]
   (case (:kind p)
@@ -330,10 +331,10 @@
                              (some (fn [[[rel col] ls]]
                                      (and (= col (last (str/split (name c) #"\."))) (named rel) (contains? ls (set (map str (:allowed p))))))
                                    listed))))
-;; a literal sent typed that PostgreSQL converts on assignment alone, which an argument there
+    ;; a literal sent typed that PostgreSQL converts on assignment alone, which an argument there
     ;; does not take (docs/queries.md "Stricter than PostgreSQL")
     :literal-type (boolean (and (:type p) (accept/accepts? (:type p) (:sent p) :assign) (not (accept/holds? (:type p) (:sent p) :assign))))
-        ;; an UPDATE's SET or ON CONFLICT DO UPDATE's, even where it touches no row or none conflicts
+    ;; an UPDATE's SET or ON CONFLICT DO UPDATE's, even where it touches no row or none conflicts
     :not-null-violation (contains? #{:set :do-update-set} (:clause p))
     false))
 

@@ -643,9 +643,9 @@ naming its `:var`; `{:ns 'app.queries}` (or a list of namespaces) limits it to s
 ## Stricter than PostgreSQL
 
 pgmalli reports or refuses some of what PostgreSQL runs, where it is almost always a mistake.
-Write the query so PostgreSQL's reading is explicit instead. Each rule holds for an argument and
-for a literal HoneySQL sends as a parameter (a number, a string, `[:lift v]`), which PostgreSQL
-cannot tell from one; a literal written into the SQL (`:inline`, `[:inline "s"]`) or sent untyped
+Write the query so PostgreSQL's reading is explicit instead. The rules on what an argument takes
+hold for a literal HoneySQL sends as a parameter (a number, a string, `[:lift v]`) too, which
+PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:inline "s"]`) or sent untyped
 (`[:lift :kw]`) is held to an enum's labels alone, as PostgreSQL reads it through the type's input.
 
 - An argument takes what PostgreSQL converts implicitly, not all it converts: a cast

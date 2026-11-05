@@ -138,7 +138,19 @@
       (is (= [[:enum-literal "zz"]] (problems {:update :t :set {:m [:cast "zz" :mood]}})))
       (is (= [[:literal-type 2]] (problems {:select [:id] :from [:t] :where [:= [:round :id 2] 1]}))))
     (is (= [[:uncast-string "sad"] [:uncast-string "sad"]] (problems {:insert-into :t :values [{:id 1 :m "sad"} {:id 2 :m "sad"}]}))
-        "each occurrence its own")))
+        "each occurrence its own")
+    (is (= [[:enum-literal "zz"] [:enum-literal "zz"]] (problems {:insert-into :t :values [{:id 1 :m [:cast "zz" :mood]} {:id 2 :m [:cast "zz" :mood]}]}))
+        "a cast written twice, twice")
+    (is (= [[:literal-type true] [:literal-type false]] (problems {:insert-into :t :values [{:id 1 :u true} {:id 2 :u false}]}))
+        "a boolean, false too, written as TRUE or FALSE")
+    (is (= [] (:problems (h/analyze reg {:update :t :set {:u 1}} {:schema "public" :format {:inline true}}))) "inlined, untyped")
+    (testing "one problem of a literal of an IN list, ANY's array, nullif, greatest"
+      (is (= [[:enum-literal "zz"]] (problems {:select [:id] :from [:t] :where [:in :m [[:inline "ok"] [:inline "zz"]]]})))
+      (is (= [[:enum-literal "zz"]] (problems {:select [:id] :from [:t] :where [:= :m [:any [:array [[:inline "zz"]]]]]})))
+      (is (= [[:enum-literal "zz"]] (problems {:select [[[:nullif :m [:inline "zz"]] :x]] :from [:t]})))
+      (is (= [[:enum-literal "zz"]] (problems {:select [[[:greatest :m [:inline "zz"]] :x]] :from [:t]}))))
+    (is (= [{:kind :uncast-string :value "x" :type "uuid" :function "uuid_send"}]
+           (:problems (h/analyze reg {:select [[[:uuid_send "x"] :b]]} {:schema "public"}))))))
 
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
