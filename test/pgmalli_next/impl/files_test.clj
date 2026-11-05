@@ -12,7 +12,7 @@
     (is (not (str/includes? s "#:pg")))))
 
 (deftest a-misspelt-config-key-names-the-key-meant
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid config: .*:out_dir .*; did you mean: :out-dir" (files/config {:out_dir "x"})))]
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"invalid config: .*:outt .*; did you mean: :out" (files/config {:outt "x"})))]
     (is (= :pgmalli.error/invalid-config (:pgmalli/error (ex-data e))))
     (is (= :cognitect.anomalies/incorrect (:cognitect.anomalies/category (ex-data e))))))
 
@@ -23,18 +23,6 @@
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:db {:password "s3cret"} :schemas "public"})))]
     (is (not (str/includes? (pr-str (ex-data e)) "s3cret")))))
 
-(deftest a-schema-under-a-constraint-name-names-the-columns-to-give-it-to
-  (let [facts (p/facts {:name "public" :types {"d" {:kind "DOMAIN" :base_type "text" :not_null false
-                                                    :constraints [{:name "d_check" :definition "CHECK (validate(VALUE))"}]}}
-                        :tables {"t" {:columns [{:name "a" :position 1 :data_type "d" :type_schema "public" :is_nullable true}
-                                                {:name "b" :position 2 :data_type "integer" :is_nullable true}]
-                                      :constraints {"ab" {:name "ab" :type "CHECK" :check_clause "CHECK (f(a, b))"}}}}})
-        message #(try (files/checked-overrides! % facts) nil (catch clojure.lang.ExceptionInfo e (ex-message e)))]
-    (is (= ":overrides: \"d_check\" :string: a constraint takes {:skip reason} alone; skip it and give its column a schema (:public.t/a)"
-           (message {"d_check" :string})) "a domain's CHECK, the domain's columns")
-    (is (= ":overrides: \"ab\" :map: a constraint takes {:skip reason} alone: a CHECK across columns is kept or skipped whole"
-           (message {"ab" :map})))))
-
 (deftest a-column-override-names-a-column-of-a-schema-generated
   (let [facts (p/facts {:name "public" :types {}
                         :tables {"jobs" {:columns [{:name "input" :position 1 :data_type "jsonb" :is_nullable false}
@@ -42,7 +30,7 @@
                                          :constraints {"jobs_n_check" {:name "jobs_n_check" :type "CHECK" :check_clause "CHECK (n > 0)"}}}}})
         checked #(files/checked-overrides! % facts)
         fails (fn [overrides] (try (checked overrides) nil (catch clojure.lang.ExceptionInfo e [(ex-message e) (:pgmalli/error (ex-data e)) (:did-you-mean (ex-data e))])))
-        ok {:public.jobs/input [:map [:p [:ref :app/prompt]]] "jobs_n_check" {:skip "why"} :public.jobs/n :pg/integer}]
+        ok {:public.jobs/input [:map [:p [:ref :app/prompt]]] :public.jobs/n :pg/integer}]
     (is (= ok (checked ok)) "a reference to the user's registry")
     (testing "a type key is an error naming the columns of the type, by an alias too"
       (is (= [":overrides: :jsonb names a type: give each column a schema, :schema.table/column (:public.jobs/input)" :pgmalli.error/invalid-config nil]
@@ -51,13 +39,10 @@
              (fails {:int4 :int})))
       (is (= [":overrides: :inet names a type: give each column a schema, :schema.table/column; no column of the schemas generated: public has it" :pgmalli.error/invalid-config nil]
              (fails {:inet :string}))))
-    (testing "a string key names a constraint, which takes {:skip reason} alone"
-      (is (= [":overrides: \"jobs_n_chek\" names no constraint of the schemas generated: public; did you mean: \"jobs_n_check\"" :pgmalli.error/invalid-config ["jobs_n_check"]]
-             (fails {"jobs_n_chek" {:skip "x"}})))
-      (is (= [":overrides: \"jobs_n_check\" [:int {:min 1}]: a constraint takes {:skip reason} alone; skip it and give its column a schema (:public.jobs/n)" :pgmalli.error/invalid-config nil]
-             (fails {"jobs_n_check" [:int {:min 1}]}))))
-    (testing "{:skip reason} leaves out a constraint alone"
-      (is (= [":overrides: :public.jobs/n {:skip \"x\"}: only a constraint is skipped; give the column a malli schema" :pgmalli.error/invalid-config nil]
+    (testing "a constraint is no key, and nothing is skipped: a CHECK is not read"
+      (is (= [":overrides: \"jobs_n_check\" names no column: an override is a column's, :schema.table/column (a CHECK is not read, so nothing is skipped)" :pgmalli.error/invalid-config nil]
+             (fails {"jobs_n_check" {:skip "x"}})))
+      (is (= [":overrides: :public.jobs/n {:skip \"x\"}: a column takes a malli schema (a CHECK is not read, so nothing is skipped)" :pgmalli.error/invalid-config nil]
              (fails {:public.jobs/n {:skip "x"}}))))
     (testing "a value is a malli schema"
       (is (= ":overrides: :public.jobs/input's schema [:strin] is no malli schema: invalid-schema {:schema :strin, :form [:strin]}"

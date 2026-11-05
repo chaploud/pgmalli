@@ -11,14 +11,15 @@
 
 (defn- portable [registry name] (portable/portable-data registry (shape/schema-of registry name)))
 
+(defn- column [row k] (some (fn [[c _ s]] (when (= k c) s)) (shape/column-entries row)))
+
 (deftest other-shapes-of-the-same-schema
   (testing "portable: what malli's default registry reads"
     (let [p (portable registry :pg.sample/users)
           opts {:registry (merge (m/default-schemas) (malli.experimental.time/schemas))}]
-      (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (get-in p [1 7 1])) "the enum is inlined")
-      (is (= [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] (get-in p [1 4 1])) "integers carry their range")
-      (is (= :multi (first (nth p 2))) "the branching CHECK stays")
-      (is (= 3 (count p)) "the row and its branching CHECK")
+      (is (= [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"] (column p :mood)) "the enum is inlined")
+      (is (= [:int {:pg/type "integer" :min -2147483648 :max 2147483647}] (column p :group_id)) "integers carry their range")
+      (is (= :map (first p)) "the row alone: a CHECK is no part of it")
       (is (m/validate p (assoc user :group_name "a") opts))
       (is (not (m/validate p (assoc user :group_id 2147483648) opts)))
       (is (= 'bytes? (get-in (portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))

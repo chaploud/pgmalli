@@ -167,6 +167,6 @@
    ((requiring-resolve 'next.jdbc/get-datasource) {:jdbcUrl (jdbc-url db) :user user :password password})))
 
 (defn generated
-  "The generated data of schema, read from the database config's :db names, as generate writes it."
-  [config schema]
-  (get-in (files/generated-all (assoc config :schemas [schema])) [schema :data]))
+  "The generated data of schemas, read from the database config's :db names, as generate writes it."
+  [config & schemas]
+  (:data (files/generated (assoc config :schemas (vec schemas)))))

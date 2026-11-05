@@ -15,9 +15,6 @@
                               (shell {:extra-env {"PGMALLI_PG_IMAGE" (str "postgres:" v "-alpine")}} "bb test"))}
          upstream {:doc "The JVM suite against the newest HoneySQL, next.jdbc, pgjdbc, malli and postgres:alpine, with what to update (needs docker)"
                    :task (load-file "dev/upstream.clj")}
-         harvest {:doc "Rebuild test/corpus/harvested.edn (needs docker)"
-                  :extra-paths ["dev"]
-                  :task (load-file "dev/harvest.clj")}
          sweep {:doc "bb sweep <sql-dir> <out-dir> [glob]: run SQL files through the whole pipeline, findings as EDN (needs docker)"
                 :extra-paths ["dev"]
                 :task (load-file "dev/sweep.clj")}
@@ -27,7 +24,7 @@
          mutate {:doc "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs] [--out f.edn]: which mutants of a source file the tests miss: the bb suite, or the JVM suite under --jvm; database tests only under --db (needs docker)"
                  :extra-paths ["dev"]
                  :task (load-file "dev/mutate.clj")}
-         docs:example {:doc "Rewrite docs/example/pgmalli-next/public.edn from docs/example/schema.sql (needs docker)"
+         docs:example {:doc "Rewrite docs/example/pgmalli-next/generated.edn from docs/example/schema.sql (needs docker)"
                        :extra-paths ["dev"]
                        :task (load-file "dev/docs_example.clj")}
          catalog {:doc "Rewrite resources/pgmalli-next/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs (needs docker)"
@@ -38,7 +35,7 @@
                        :extra-paths ["dev"]
                        :requires ([catalog])
                        :task (prn (catalog/dump))}
-         fixture {:doc "Rewrite test/resources/pgmalli-next/{sample,other}.edn from dev/fixture.clj (no database)"
+         fixture {:doc "Rewrite test/resources/pgmalli-next/{sample,other}.edn, a generated file of each schema, from dev/fixture.clj (no database)"
                   :extra-paths ["dev"]
                   :task (load-file "dev/fixture.clj")}
          test:nodb {:doc "bb test without the tests that need a database (no docker)"
@@ -68,12 +65,11 @@
          test:jvm {:doc "bb test:jvm [main|oracle]: run the test suite on the JVM, or one part of it (needs docker)"
                    :task (apply shell "clojure -M:test" (suite [] ["-r" "pgmalli-next\\.(?!oracle-test$).*-test$"]))}
          ;; the oldest versions README supports, in a string: as deps (in deps.edn or as EDN here)
-         ;; Renovate would raise them. fuzz-test builds its CHECKs with HoneySQL, which 2.4.1066
-         ;; writes IS DISTINCT FROM in wrong
+         ;; Renovate would raise them
          test:floor {:doc "bb test:floor [main|oracle]: run the JVM suite, or one part of it, on the oldest Clojure, HoneySQL, malli, next.jdbc and pgjdbc README supports (needs docker)"
                      :task (apply shell "clojure" "-Sdeps"
                                   "{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version \"2.4.1066\"} org.clojure/clojure {:mvn/version \"1.11.4\"} metosin/malli {:mvn/version \"0.20.0\"} com.github.seancorfield/next.jdbc {:mvn/version \"1.3.1048\"} org.postgresql/postgresql {:mvn/version \"42.7.7\"}}}}}"
-                                  "-M:test:floor" (suite ["-r" "pgmalli-next\\.(?!fuzz-test).*"] ["-r" "pgmalli-next\\.(?!fuzz-test|oracle-test$).*"]))}
+                                  "-M:test:floor" (suite [] ["-r" "pgmalli-next\\.(?!oracle-test$).*"]))}
          test:all {:doc "lint, bb test, test:jvm, test:floor, oracle and test:docs at once, each into target/<task>.log (: as -), and the exit code of each (needs docker)"
                    :requires ([babashka.fs :as fs] [babashka.process :as p] [clojure.string :as str])
                    :task (let [_ (fs/create-dirs "target")

@@ -1,5 +1,5 @@
 (ns pgmalli-next.impl.files
-  "Config -> generated EDN files, one per schema: README.md#installation, and the file
+  "Config -> the generated EDN file of its schemas: README.md#installation, and the file
    docs/types.md#the-generated-file. Output is deterministic (sorted maps, pprint); overrides
    that are not EDN (functions) are rejected at generation time."
   (:require [clojure.edn :as edn]
@@ -17,25 +17,12 @@
             [pgmalli-next.impl.render :as render]
             [pgmalli-next.impl.types :as types]))
 
-(def default-config {:schemas ["public"] :out-dir "resources/pgmalli-next" :overrides {} :db {}})
-
-(defn- file-name?
-  "A schema name that is one file's name in :out-dir: no separator, NUL, . or .."
-  [s]
-  (not (or (#{"" "." ".."} s) (re-find #"[/\\\x00]" s))))
-
-;; a case-insensitive file system (macOS, Windows) keeps one of "public" and "Public"
-(defn- distinct-files? [ss]
-  (or (not (sequential? ss)) (empty? ss) (apply distinct? (map str/lower-case ss))))
+(def default-config {:schemas ["public"] :out "resources/pgmalli-next/generated.edn" :overrides {} :db {}})
 
 (def config-schema
   [:map {:closed true :pgmalli/not-a-map "should be a map, such as {:schemas [\"public\"]} (README.md#installation)"}
-   [:schemas {:optional true}
-    [:and
-     [:sequential {:min 1 :error/message "should be a vector of schema names, such as [\"public\"]"}
-      [:and :string [:fn {:error/message "should be a schema name that is a file name: no /, \\, NUL, . or .."} file-name?]]]
-     [:fn {:error/message "should not hold two names that differ only in case: their files would be one on a case-insensitive file system"} distinct-files?]]]
-   [:out-dir {:optional true} :string]
+   [:schemas {:optional true} [:sequential {:min 1 :error/message "should be a vector of schema names, such as [\"public\"]"} [:string {:min 1}]]]
+   [:out {:optional true} :string]
    [:overrides {:optional true} [:map-of [:or :string :keyword] :any]]
    [:db {:optional true} [:map-of {:error/message "should be a map: psql's keys (:host :port :dbname ...), {:jdbc-url ...} or {:datasource ds}"} :keyword :any]]])
 
@@ -49,28 +36,23 @@
   (walk/postwalk #(if (map? %) (into (sorted-map-by (fn [a b] (compare (str a) (str b)))) %) %) x))
 
 (defn- left-out
-  "An :unrendered or :skipped entry as the file keeps it: what was left out and where. :kind is
-   :unparsed (a constraint pgmalli cannot read), :type (a column type it has no schema for) or
-   :check (a constraint it reads but cannot express)."
-  [{:keys [schema table type-name column constraint sql input type type-schema fact]}]
-  (cond-> {:kind (case fact :unparsed :unparsed :unknown-type :type :check)}
-    table (assoc :table (str schema "." table))
-    (and type-name (not table)) (assoc :domain (str schema "." type-name))
-    column (assoc :column column)
-    constraint (assoc :constraint constraint)
-    (or sql input) (assoc :sql (or sql input))
-    type (assoc :type type)
+  "An :unrendered entry as the file keeps it: a column of a type pgmalli has no schema for."
+  [{:keys [schema table column type type-schema]}]
+  (cond-> {:kind :type :table (str schema "." table) :column column :type type}
     type-schema (assoc :type-schema type-schema)))
 
 (defn assemble
-  "The file's data from the rendering of a schema's facts, in reading order: what it is, then
-   what deserves a look, then the schemas, then what was left out."
-  [schema database-version facts overrides]
-  (let [r (sort-maps (render/rendered facts (or overrides {})))]
-    (array-map :schema schema :database-version database-version
-               :diagnostics (:diagnostics r) :registry (:registry r)
-               :functions (:functions r) :operators (:operators r) :sequences (:sequences r)
-               :unrendered (mapv left-out (:unrendered r)) :skipped (mapv left-out (:skipped r)))))
+  "The file's data from the rendering of each schema's facts ({schema facts}, in the config's
+   order), in reading order: what it is, then what deserves a look, then the schemas, then what
+   was left out."
+  [database-version facts-by-schema overrides]
+  (let [rs (for [[s facts] facts-by-schema] [s (sort-maps (render/rendered facts (or overrides {})))])
+        by-schema (fn [k] (into (sorted-map) (for [[s r] rs] [s (get r k)])))]
+    (array-map :schemas (mapv first rs) :database-version database-version
+               :diagnostics (vec (mapcat (comp :diagnostics second) rs))
+               :registry (into (sorted-map-by #(compare (str %1) (str %2))) (map (comp :registry second)) rs)
+               :functions (by-schema :functions) :operators (by-schema :operators) :sequences (by-schema :sequences)
+               :unrendered (vec (mapcat (comp #(map left-out %) :unrendered second) rs)))))
 
 (def ^:private override-registry
   "The base schemas, and any qualified name: a reference to the user's registry, which
@@ -88,9 +70,8 @@
 (def ^:private by-keyword (types/by-keyword any?))
 
 (defn checked-overrides!
-  "overrides when each key names what it overrides in facts: a column (:schema.table/column)
-   with a malli schema, or a constraint name with {:skip reason}. An error names what to write
-   instead."
+  "overrides when each key names a column of facts (:schema.table/column) with a malli schema.
+   An error names what to write instead."
   [overrides facts]
   (let [column-facts (filter #(= :column (:fact %)) facts)
         key-of #(render/column-override-key (:schema %) (:table %) (:column %))
@@ -99,24 +80,13 @@
         by-table (group-by namespace columns)
         schemas (distinct (keep :schema facts))
         generated (str "the schemas generated: " (str/join ", " schemas))
-        constraints (distinct (keep :constraint facts))
         listed #(str/join ", " %)
         fail! (fn [message given meant]
                 (error/fail! :pgmalli.error/invalid-config (str ":overrides: " (pr-str given) " " message (error/did-you-mean (some-> meant pr-str)))
                              (cond-> {:given given} meant (assoc :did-you-mean [meant]))))]
     (doseq [[k v] overrides]
       (cond (string? k)
-            (cond (not (some #{k} constraints))
-                  (fail! (str "names no constraint of " generated) k (error/suggest k constraints))
-                  (not (and (map? v) (contains? v :skip)))
-                  (let [f (some #(when (= k (:constraint %)) %) facts)
-                        cols (cond (:column f) [(key-of f)]
-                                   (and (:type-name f) (not (:table f))) (of-type (:type-name f)))]
-                    (fail! (str (pr-str v) ": a constraint takes {:skip reason} alone"
-                                (if (seq cols)
-                                  (str "; skip it and give its column a schema (" (listed cols) ")")
-                                  ": a CHECK across columns is kept or skipped whole"))
-                           k nil)))
+            (fail! "names no column: an override is a column's, :schema.table/column (a CHECK is not read, so nothing is skipped)" k nil)
             (simple-keyword? k)
             (let [cols (of-type (:name (by-keyword k) (name k)))]
               (fail! (str "names a type: give each column a schema, :schema.table/column"
@@ -133,7 +103,7 @@
                                       :else ""))
                            (cond-> {:given k} meant (assoc :did-you-mean [meant]))))
             (and (map? v) (contains? v :skip))
-            (fail! (str (pr-str v) ": only a constraint is skipped; give the column a malli schema") k nil)
+            (fail! (str (pr-str v) ": a column takes a malli schema (a CHECK is not read, so nothing is skipped)") k nil)
             :else
             (try (m/schema v {:registry override-registry})
                  (catch Exception e
@@ -157,19 +127,13 @@
   (let [ir (ir/from-db (assoc db :schema schema))]
     [(major-version (:database_version ir)) (pattern/facts ir)]))
 
-(defn path-for
-  "Where a schema's file goes: <out-dir>/<schema>.edn; the config as given or with its
-   defaults applied."
-  [c schema]
-  (str (io/file (:out-dir c (:out-dir default-config)) (str schema ".edn"))))
-
-(defn generated-all
-  "{schema {:path :data}} for every schema in the config."
+(defn generated
+  "{:path :data} of the config's schemas: where the file goes (:out) and what it holds."
   [c]
   (let [c (config c)
-        read (into {} (for [s (:schemas c)] [s (read-schema (:db c) s)]))]
-    (checked-overrides! (:overrides c) (mapcat second (vals read)))
-    (into {} (for [[s [version facts]] read] [s {:path (path-for c s) :data (assemble s version facts (:overrides c))}]))))
+        read (for [s (:schemas c)] [s (read-schema (:db c) s)])]
+    (checked-overrides! (:overrides c) (mapcat (comp second second) read))
+    {:path (:out c) :data (assemble (first (second (first read))) (for [[s [_ facts]] read] [s facts]) (:overrides c))}))
 
 (defn edn-string
   "The file's text: a deterministic pprint of the data behind the do-not-edit header. Data that
@@ -183,9 +147,9 @@
     (str ";; generated by pgmalli; do not edit (adjust :overrides instead)\n" s)))
 
 (defn generate!
-  "Writes every schema's file. Returns {schema path}."
+  "Writes the config's file. Returns its path."
   [c]
-  (into {} (for [[schema {:keys [path data]}] (generated-all c)]
-             (do (io/make-parents path)
-                 (spit path (edn-string data))
-                 [schema path]))))
+  (let [{:keys [path data]} (generated c)]
+    (io/make-parents path)
+    (spit path (edn-string data))
+    path))

@@ -1,9 +1,16 @@
 (ns pgmalli-next.sample
-  "The registry of the checked-in test/resources/pgmalli-next/sample.edn and the row values
-   that have to match it, shared by the test namespaces that read it."
-  (:require [pgmalli-next.core :as pgmalli]))
+  "The registry of the checked-in test/resources/pgmalli-next/sample.edn (schema sample; other.edn,
+   schema other, beside it) and the row values that have to match it, shared by the test
+   namespaces that read it."
+  (:require [clojure.edn :as edn]
+            [clojure.java.io :as io]
+            [pgmalli-next.core :as pgmalli]))
 
-(def registry (pgmalli/registry "sample"))
+(def sample-data (edn/read-string (slurp (io/resource "pgmalli-next/sample.edn"))))
+
+(def other-data (edn/read-string (slurp (io/resource "pgmalli-next/other.edn"))))
+
+(def registry (pgmalli/registry sample-data))
 
 (def opts {:registry registry})
 

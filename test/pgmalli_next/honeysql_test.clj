@@ -35,7 +35,7 @@
 ;; compared, = takes a number of any number type: PostgreSQL converts one side implicitly
 (defn- compared [t] [:or t 'decimal? 'integer? :double 'float?])
 (def nick-assigned
-  (let [s [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]] [:maybe [:or s (jdbc/text-held :keyword s)]]))
+  (let [s [:string {:pg/max-length 40 :pg/type "character varying"}]] [:maybe [:or s :keyword]]))
 (def int-call
   (let [[_ held] (:x (args {:select [[[:ntile :?x] :n]] :from [:users]}))] held))
 (def bigint-cmp (compared bigint))
@@ -163,7 +163,9 @@
 
 (deftest a-set-operations-row-is-named-by-its-first-member
   (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]
-    (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:name [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
+    (is (= [:map
+            [:id [:int {:pg/identity :always :pg/type "bigint"}]]
+            [:name [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]]]
            (row body opts)))
     (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]] (row {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]}))
         "of the members' type, NULL left out, nullable where one is")))
@@ -297,7 +299,7 @@
            (args body)))
     (let [row (:row (h/analyze registry body opts))]
       (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]
-              [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]
+              [:nick [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]]
               [:closed_at [:maybe [:time/instant {:pg/type "timestamptz"}]]]
               [:g int4]]
              row))
@@ -439,7 +441,7 @@
       "its own columns still are"))
 
 (deftest one-row-results
-  (is (= [:=> {:pgmalli/problems []} [:cat bigint-cmp] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]]]]
+  (is (= [:=> {:pgmalli/problems []} [:cat bigint-cmp] [:maybe [:map [:nick [:maybe [:string {:pg/type "character varying" :pg/max-length 40}]]]]]]
          (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} (assoc opts :result :one)))
       "{:result :one} for a function returning one row or nil"))
 
@@ -489,7 +491,7 @@
     (is (= [:map [:n bigint]] (row [[[:count :nick] :n]])) "count is never NULL")
     (is (= [:map [:s [:maybe bigint]]] (row [[[:sum :group_id] :s]])) "sum of an integer is a bigint, NULL over no row")
     (is (= [:map [:a [:maybe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]] (row [[[:avg :group_id] :a]])))
-    (is (= [:map [:n [:maybe [:string {:pg/type "character varying" :max 40 :pg/max-length 40}]]]] (row [[[:coalesce :nick] :n]]))
+    (is (= [:map [:n [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]]] (row [[[:coalesce :nick] :n]]))
         "coalesce of one column is that column")
     (is (= [:map [:n nick]] (row [[[:coalesce :nick "x"] :n]]))
         "a value that is not NULL makes it NOT NULL; a literal's length is not the column's")
@@ -711,8 +713,7 @@
         "a subquery's comparison is the cast's use there alone")))
 
 (deftest a-domain-over-a-timestamp-with-a-precision-takes-its-java-time-type
-  (let [reg (pgmalli/registry {:registry {:pg.public/at3 [:time/instant {:pg/type "timestamp(3) with time zone"}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:at [:ref {:pg/type "at3"} :pg.public/at3]]]}})]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:at [:time/instant {:pg/type "timestamp with time zone" :pg/domain "at3"}]]]}})]
     (is (m/validate (:x (:args (h/analyze reg {:update :t :set {:at :?x}}))) (java.time.OffsetDateTime/now) {:registry reg}))))
 
 (deftest a-keyword-goes-in-a-cast-too
@@ -735,29 +736,6 @@
          (:args (h/analyze (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
                       {:update :t :set {:j :?m}} {})))
       "what goes as a type pgmalli has the driver's object for is all its argument takes"))
-
-(deftest a-domain-keeps-its-checks-whatever-send-sends
-  (let [reg (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:> 0]]
-                                          :pg.public/amount [:and ['decimal? {:pg/type "numeric"}] [:>= 0]]
-                                          :pg.public/t [:map {:pg/table "public.t"}
-                                                        [:p [:ref {:pg/type "pos"} :pg.public/pos]]
-                                                        [:a [:ref {:pg/type "amount"} :pg.public/amount]]]}})
-        {:keys [p a]} (:args (h/analyze reg {:update :t :set {:p :?p :a :?a}}))
-        ok? #(m/validate %1 %2 {:registry reg})]
-    (is (ok? p 3))
-    (is (not (ok? p -3)))
-    (is (ok? a 3) "a Long is a numeric's own value, through the domain")
-    (is (not (ok? a -3M)))
-    (is (not (ok? (h/values-schema reg :pg.public/t) {:p -3 :a 1M})))
-    (is (not (ok? (:x (:args (h/analyze reg {:select [[[:cast :?x :amount] :a]]}))) -3M)))))
-
-(deftest a-cast-to-an-integer-domain-with-a-check-list-takes-what-postgresql-converts
-  (let [reg (pgmalli/registry {:registry {:pg.public/lvl [:enum {:pg/type "integer"} 1 2]}})
-        x (:x (:args (h/analyze reg {:select [[[:cast :?x :lvl] :v]]})))
-        ok? #(m/validate x % {:registry reg})]
-    ;; PostgreSQL converts the value to integer, rounding, then checks the list
-    (is (every? ok? [1 2 1.0 (float 1) 1.5 1.5M true]))
-    (is (not (ok? 3)) "a Long outside the list stays refused")))
 
 (deftest an-insert-selects-argument-to-a-check-list-of-a-type-with-a-typmod-takes-the-list
   (let [reg (pgmalli/registry {:registry {:pg.public/wd [:enum {:pg/type "character varying(10)"} "a" "b"]
@@ -792,15 +770,6 @@
     (is (m/validate t :sad {:registry reg}))
     (is (not (m/validate t :glad {:registry reg})) "no keyword but a label")))
 
-(deftest a-numeric-domains-integer-is-held-to-its-checks-alone
-  (let [reg (pgmalli/registry {:registry {:pg.public/price [:and ['decimal? {:pg/type "numeric(10,2)"}] [:pg/numeric {:precision 10 :scale 2}] [:>= 0M]]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:p [:ref {:pg/type "price"} :pg.public/price]]]}})
-        ok? #(m/validate %1 %2 {:registry reg})
-        p (:p (:args (h/analyze reg {:update :t :set {:p :?p}})))]
-    (is (ok? p 1) "PostgreSQL takes a bigint into a numeric domain")
-    (is (not (ok? p -1)))
-    (is (ok? (:x (:args (h/analyze reg {:select [[[:cast :?x :price] :p]]}))) 1))))
-
 (deftest a-value-is-held-as-the-columns-typmod-holds-it-before-its-checks-read-it
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                         [:n [:and ['decimal? {:pg/type "numeric(4,2)"}] [:pg/numeric {:precision 4 :scale 2}] [:<= 10M]]]
@@ -817,48 +786,27 @@
     (is (not (ok? :e "ab c")))
     (is (m/validate (h/values-schema reg :t) {:n 10.004M :v "abc  " :e "cd "} {:registry reg}) "a row written too")))
 
-(deftest a-cast-cuts-a-string-to-its-length
-  (let [reg (pgmalli/registry {:registry {:pg.public/code3 [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code3"} :pg.public/code3]]]}})]
-    (is (m/validate (:x (:args (h/analyze reg {:select [[[:cast :?x :code3] :c]]}))) "abcd" {:registry reg}) "CAST('abcd' AS varchar(3)) is 'abc'")
-    (is (not (m/validate (:c (:args (h/analyze reg {:update :t :set {:c :?c}}))) "abcd" {:registry reg})) "assigned, it is too long"))
-  (let [reg (pgmalli/registry {:registry {:pg.public/short [:string {:pg/type "character varying(10)" :max 10 :pg/max-length 10 :min 2}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "short"} :pg.public/short]]]}})]
-    (is (not (m/validate (:x (:args (h/analyze reg {:select [[[:cast :?x :short] :c]]}))) "a" {:registry reg})) "a cast keeps a CHECK's length"))
-  (let [reg (pgmalli/registry {:registry {:pg.public/abc [:and [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}] [:re "^abc$"]]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "abc"} :pg.public/abc]]]}})
-        ok? #(m/validate (:x (:args (h/analyze reg {:select [[[:cast :?x :abc] :c]]}))) % {:registry reg})]
-    (is (ok? "abcdef") "its CHECK reads the string cut")
-    (is (not (ok? "abd")))))
-
 (deftest min-and-max-of-a-domain-are-of-its-base-type
-  (let [reg (pgmalli/registry {:registry {:pg.public/code3 [:enum {:pg/type "character varying(3)"} "aaa" "bbb"]
-                                          :pg.public/pos [:pg/integer {:min 1 :pg/type "integer"}]
-                                          :pg.public/mood [:enum "ok" "sad"]
-                                          :pg.public/mood_d [:ref :pg.public/mood]
+  (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
                                           :pg.public/t [:map {:pg/table "public.t"}
-                                                        [:c [:ref {:pg/type "code3"} :pg.public/code3]]
-                                                        [:p [:ref {:pg/type "pos"} :pg.public/pos]]
-                                                        [:m [:ref {:pg/type "mood_d"} :pg.public/mood_d]]]}})
+                                                        [:c [:string {:pg/type "character varying" :pg/max-length 3 :pg/domain "code3"}]]
+                                                        [:p [:pg/integer {:pg/type "integer" :pg/domain "pos"}]]
+                                                        [:m [:ref {:pg/type "mood" :pg/domain "mood_d"} :pg.public/mood]]]}})
         row #(:row (h/analyze reg {:select [[[:max %] :x]] :from [:t]} {}))]
     (is (= [:map [:x [:maybe text]]] (row :c)) "max(varchar) is max(text)")
     (is (= [:map [:x [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row :p)))
     (is (= [:map [:x [:maybe [:enum {:pg/type "mood"} "ok" "sad"]]]] (row :m)) "a domain over an enum is the enum")))
 
 (deftest a-domain-over-bit-or-numeric-is-read-as-the-driver-reads-its-base
-  (let [reg (pgmalli/registry {:registry {:pg.public/d1 [:string {:pg/type "bit(1)"}]
-                                          :pg.public/d4 [:string {:pg/type "bit(4)"}]
-                                          :pg.public/dv [:string {:pg/type "bit varying(5)"}]
-                                          :pg.public/t [:map {:pg/table "public.t"}
-                                                        [:d1 [:ref {:pg/type "d1"} :pg.public/d1]]
-                                                        [:d4 [:ref {:pg/type "d4"} :pg.public/d4]]
-                                                        [:dv [:ref {:pg/type "dv"} :pg.public/dv]]]}})]
-    (is (= [:map [:d1 [:boolean {:pg/type "bit(1)"}]] [:d4 [:any {:pg/type "bit(4)"}]] [:dv [:any {:pg/type "bit varying(5)"}]]]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:d1 [:string {:pg/type "bit" :pg/max-length 1 :pg/domain "d1"}]]
+                                                        [:d4 [:string {:pg/type "bit" :pg/max-length 4 :pg/domain "d4"}]]
+                                                        [:dv [:string {:pg/type "bit varying" :pg/max-length 5 :pg/domain "dv"}]]]}})]
+    (is (= [:map [:d1 [:boolean {:pg/type "bit"}]] [:d4 [:any {:pg/type "bit"}]] [:dv [:any {:pg/type "bit varying"}]]]
            (:row (h/analyze reg {:select [:d1 :d4 :dv] :from [:t]} {})))
         "a Boolean for bit(1), a PGobject otherwise"))
-  (let [reg (pgmalli/registry {:registry {:pg.public/nm [:and ['decimal? {:pg/type "numeric(6,2)"}] [:pg/numeric {:precision 6 :scale 2}]]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:n [:ref {:pg/type "nm"} :pg.public/nm]]]}})]
-    (is (= [:map [:n [:or ['decimal? {:pg/type "numeric(6,2)"}] ['double? {:pg/type "numeric(6,2)"}]]]]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n ['decimal? {:pg/type "numeric" :pg/domain "nm"}]]]}})]
+    (is (= [:map [:n [:or {:pg/domain "nm"} ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
            (:row (h/analyze reg {:select [:n] :from [:t]} {})))
         "a numeric domain's NaN is a Double")))
 
@@ -1081,7 +1029,7 @@
 (deftest a-set-operations-row-keeps-a-null-columns-key
   (is (= [:map
           [:id [:int {:pg/identity :always :pg/type "bigint"}]]
-          [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
+          [:nick [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]]]
          (row {:union [{:select [:id :nick] :from [:users]} {:select [:id :nick] :from [:users]}]} opts))))
 
 (deftest query-schema-carries-the-problems-check-finds
@@ -1157,7 +1105,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reads HoneySQL query data" (check body)) (pr-str body))))
 
 (deftest a-row-of-a-table-the-registry-lacks-is-nil
-  (is (nil? (:row (h/analyze (pgmalli/registry "sample" "other") {:select [:id] :from [:users]} {:schema "other"})))))
+  (is (nil? (:row (h/analyze (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data) {:select [:id] :from [:users]} {:schema "other"})))))
 
 (deftest a-ctes-visibility-is-one-judgment
   (let [body {:select [:id :mood] :from [:users] :where [:exists {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]}]
@@ -1388,7 +1336,7 @@
     (is (= :%count.c (ffirst (rest (row {:select [[:%count.* :%count.c]] :from [:users]})))) "an alias is no column: its dots stay")))
 
 (deftest a-table-of-another-schema-is-the-one-meant-when-schema-is-left-out
-  (let [ps (:problems (h/analyze (pgmalli/registry "sample" "other") {:select [:id] :from [:users]} {:schema "other"}))]
+  (let [ps (:problems (h/analyze (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data) {:select [:id] :from [:users]} {:schema "other"}))]
     (is (= [{:kind :unknown-table :table "other.users" :did-you-mean ["sample.users"]}] ps))
     (is (= ["unknown table other.users; sample.users exists; pass {:schema \"sample\"}, or name it :sample.users"] (h/humanize ps)))))
 
@@ -1404,7 +1352,7 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^the registry holds no schema \"other\"; it holds \"a\", \"b\"$"
                             (:problems (h/analyze (pgmalli/registry {:registry {:pg.a/t [:map {:pg/table "a.t"} [:id :int]] :pg.b/t [:map {:pg/table "b.t"} [:id :int]]}}) q {:schema "other"}))))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"; did you mean: \"sample\"$"
-                            (:problems (h/analyze (pgmalli/registry "sample" "other") q {:schema "smaple"})))))
+                            (:problems (h/analyze (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data) q {:schema "smaple"})))))
     (is (= [] (:problems (h/analyze {:app/x :int} {:select [1]}))) "a registry of no generated schema names none")))
 
 (deftest a-qualifier-no-table-or-alias-has-is-the-problem-with-the-alias-meant
@@ -1493,7 +1441,7 @@
 
 (deftest join-by-joins-in-its-order-as-the-join-clauses
   (let [q {:select [:u.nick :g.name] :from [[:users :u]] :join-by [:right [[:groups :g] [:= :g.id 9]]]}]
-    (is (= [:map [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]] [:name text]] (row q))
+    (is (= [:map [:nick [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]] [:name text]] (row q))
         "a RIGHT JOIN leaves the tables before it NULL")
     (is (= (row q) (row (assoc q :join-by [{:right [[:groups :g] [:= :g.id 9]]}]))) "maps of a join type and its clauses")
     (is (= [{:kind :unknown-column :column :g.nope}] (check (assoc q :select [:g.nope]))))
@@ -1685,14 +1633,6 @@
     (is (m/validate s :open {:registry check-list-registry}))
     (is (not (m/validate s :archived {:registry check-list-registry})))))
 
-(deftest a-keyword-assigned-to-a-checked-string-column-is-held-to-its-text
-  (let [s (:v (args {:update :users :set {:nick :?v} :where [:= :id 1]}))]
-    (is (m/validate s :a {:registry registry}))
-    (is (not (m/validate s (keyword (apply str (repeat 41 "a"))) {:registry registry})))
-    (is (not (m/validate (h/values-schema registry :users opts)
-                         {:nick [:lift (keyword (apply str (repeat 41 "a")))] :group_id 1 :score 1} {:registry registry}))
-        "a row written too")))
-
 (def ^:private kinds-registry
   (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:>= 1]]
                                 :pg.public/t [:map {:pg/table "public.t"}
@@ -1725,9 +1665,6 @@
   (is (m/validate (h/values-schema registry :pg.sample/users {:schema "sample"})
                   {:group_id 1 :score 0 :nick_upper :default} {:registry registry})
       "a column the database writes keyed as the others")
-  (let [reg (pgmalli/registry {:registry {:pg.public/short [:string {:pg/type "character varying(10)" :max 5 :pg/max-length 10}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "short"} :pg.public/short]]]}})]
-    (is (not (m/validate (:x (:args (h/analyze reg {:select [[[:cast :?x :short] :c]]}))) "abcdef" {:registry reg})) "a cast keeps a CHECK's :max"))
   (is (m/validate (:x (args {:select [:id] :from [:users] :where [:= :group_id :?x]} {:schema "sample"})) (short 1) {:registry registry})
       "an integer column takes a smallint")
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes a table as a keyword" (h/values-schema registry 'users {:schema "sample"}))))
@@ -1785,7 +1722,9 @@
 
 (deftest a-subquerys-or-ctes-columns-are-typed-by-its-select
   (let [recent {:with [[:recent {:select [:id :nick] :from [:users]}]]}]
-    (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]] [:nick [:maybe [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]]]]
+    (is (= [:map
+            [:id [:int {:pg/identity :always :pg/type "bigint"}]]
+            [:nick [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]]]
            (row (merge recent {:select [:id :nick] :from [:recent]}))))
     (is (= {:n [:or [:string {:pg/type "character varying"}] :keyword]} (args (merge recent {:select [:id] :from [:recent] :where [:= :nick :?n]}))))
     (is (= [{:kind :unknown-column :column :mail}] (check (merge recent {:select [:mail] :from [:recent]})))
@@ -2233,29 +2172,24 @@
     (is (m/validate (:p (:args (h/analyze reg {:select [:id] :from [:z] :where [:= :vs :?p]}))) (into-array String ["abcdefg"]) {:registry reg}))))
 
 (deftest a-domains-value-is-sent-as-its-base-types
-  (let [reg (pgmalli/registry {:registry {:pg.public/dn [:and {:pg/type "numeric"} 'decimal? [:> 0]]
-                                          :pg.public/dd [:time/local-date {:pg/type "date"}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
-                                                        [:n [:ref {:pg/type "dn"} :pg.public/dn]]
-                                                        [:ds [:maybe [:vector {:pg/type "dd[]"} [:ref {:pg/type "dd"} :pg.public/dd]]]]]}})]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
+                                                        [:n ['decimal? {:pg/type "numeric" :pg/domain "dn"}]]]}})]
     (is (m/validate (:x (:args (h/analyze reg {:select [:id] :from [:t] :where [:= :n :?x]}))) 1N {:registry reg}) "a BigInt as a numeric")
-    (is (not (m/validate (:x (:args (h/analyze reg {:update :t :set {:n :?x} :where [:= :id 1]}))) -1N {:registry reg})) "held to the domain's CHECK")))
+    (is (m/validate (:x (:args (h/analyze reg {:update :t :set {:n :?x} :where [:= :id 1]}))) 1 {:registry reg}) "a Long assigned, as to a numeric")))
 
 (deftest a-domain-arrays-elements-read-as-the-drivers-objects
-  (let [reg (pgmalli/registry {:registry {:pg.public/posint [:int {:pg/type "integer" :min 1}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:ps [:vector {:pg/type "posint[]"} [:ref {:pg/type "posint"} :pg.public/posint]]]]}})]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ps [:vector {:pg/type "integer[]" :pg/domain "posint[]"} [:int {:pg/type "integer"}]]]]}})]
     (is (m/validate (pgmalli/as-read reg :pg.public/t)
                     {:ps [(Object.)]} {:registry reg})
         "pgjdbc returns a domain's elements as PGobjects")))
 
-(deftest an-array-assigneds-elements-are-held-to-the-element-types-range-and-checks
-  (let [reg (pgmalli/registry {:registry {:pg.public/posint [:int {:pg/type "integer" :min 1}]
-                                          :pg.public/t [:map {:pg/table "public.t"}
-                                                        [:ps [:vector {:pg/type "posint[]"} [:ref {:pg/type "posint"} :pg.public/posint]]]
+(deftest an-array-assigneds-elements-are-held-to-the-element-types-range
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:ps [:vector {:pg/type "integer[]" :pg/domain "posint[]"} :pg/integer]]
                                                         [:is [:vector {:pg/type "integer[]"} :pg/integer]]]}})
         ok? (fn [c v] (m/validate (:x (:args (h/analyze reg {:update :t :set {c :?x}}))) v {:registry reg}))]
     (is (ok? :ps (long-array [1])))
-    (is (not (ok? :ps (long-array [0]))))
+    (is (not (ok? :ps (long-array [3000000000]))) "a domain's elements, its base type's range")
     (is (ok? :is (long-array [2147483647])))
     (is (not (ok? :is (long-array [3000000000]))))))
 
@@ -2284,7 +2218,7 @@
 (defn- generated-on
   "The sample registry, its file generated on PostgreSQL version v."
   [v]
-  (pgmalli/registry (assoc (pgmalli/generated "sample") :database-version v)))
+  (pgmalli/registry (assoc pgmalli-next.sample/sample-data :database-version v)))
 
 (deftest a-pg-catalog-column-not-in-every-version-the-registry-is-of-is-optional
   (let [frozen #(some (fn [e] (when (= :relallfrozen (first e)) e)) (rest (:row (h/analyze % {:select [:*] :from [:pg_class]} opts))))]
@@ -2361,7 +2295,7 @@
 
 (deftest a-schemas-own-functions-and-operators-resolve-with-pg-catalogs
   (let [row #(:row (h/analyze registry {:select (vec (for [[k e] %] [e k])) :from [:users]} opts))
-        both (pgmalli/registry "sample" "other")]
+        both (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data)]
     (is (= [:map [:d [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row {:d [:double_it :score]})))
     (is (= [:map [:r [:maybe [:string {:pg/type "text"}]]]] (row {:r [:round :score]}))
         "an exact match of the schema's beats pg_catalog's round(double precision), which an integer converts to")
@@ -2386,9 +2320,9 @@
         "one that returns a set does not")))
 
 (deftest a-schemas-own-function-is-nullable-and-of-its-declared-type-alone
-  (let [reg (pgmalli/registry (update (pgmalli/generated "sample") :functions assoc
-                                      "my_rank" [{:args [] :result "bigint" :kind :w}]
-                                      "jsonb_object" [{:args ["integer"] :result "jsonb"}]))]
+  (let [reg (pgmalli/registry (update-in pgmalli-next.sample/sample-data [:functions "sample"] assoc
+                                         "my_rank" [{:args [] :result "bigint" :kind :w}]
+                                         "jsonb_object" [{:args ["integer"] :result "jsonb"}]))]
     (is (= [:map [:r [:maybe [:int {:pg/type "bigint"}]]]]
            (:row (h/analyze reg {:select [[[:over [[:my_rank] {} :r]]]] :from [:users]} opts)))
         "a window function of no argument of the schema's may return NULL; row_number never does")
@@ -2771,7 +2705,7 @@
   (let [fails #(try (%) nil (catch clojure.lang.ExceptionInfo e [(:pgmalli/error (ex-data e)) (ex-message e)]))]
     (is (re-find #"should be true, false or a vector of column names" (second (fails #(check {:select [:id] :from [:users]} {:jdbc {:return-keys "id"}})))))
     (is (= :pgmalli.error/invalid-options (first (fails #(h/schema-problems {:ns 'no.such.ns})))))
-    (is (= :pgmalli.error/invalid-options (first (fails #(pgmalli/registry)))))
+    (is (= :pgmalli.error/not-generated (first (fails #(pgmalli/registry)))))
     (let [q {:select [:id] :from [:users] :where [:= :id :?id]}]
       (is (= (repeat 3 :pgmalli.error/not-a-registry)
              (map #(first (fails (fn [] (% (m/default-schemas))))) [#(h/analyze % q) #(h/values-schema % :users) #(h/set-schema % :users)]))

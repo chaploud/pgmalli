@@ -42,7 +42,7 @@
     (exec-sql! shadowing)
     (let [ir (ir/from-db (assoc *db* :schema "evil"))]
       (is (= #{"t" "p"} (set (keys (:tables ir)))))
-      (is (= #{"mood" "word"} (set (keys (:types ir))))))
+      (is (= #{"mood"} (set (keys (:types ir))))))
     (when-not (System/getProperty "babashka.version")
       (let [{:keys [user password]} *db*
             ir (ir/from-db {:jdbc-url (jdbc-url) :user user :password password :schema "evil"})]

@@ -10,43 +10,15 @@
 
 (def ^:private generated
   (r/rendered (p/facts {:name "public"
-                        :types {"lbl" {:kind "DOMAIN" :base_type "text" :not_null false
-                                       :constraints [{:name "lbl_check" :definition "CHECK ((VALUE = ANY (ARRAY['a'::text, 'b'::text])))"}]}
-                                "lvl" {:kind "DOMAIN" :base_type "bigint" :not_null false
-                                       :constraints [{:name "lvl_check" :definition "CHECK ((VALUE = ANY (ARRAY[(1)::bigint, (2)::bigint])))"}]}}
+                        :types {}
                         :tables {"t" {:columns [{:name "id" :position 1 :data_type "bigint" :is_nullable false :identity "ALWAYS"}
-                                                {:name "l" :position 2 :data_type "lbl" :type_schema "public" :is_nullable false}
-                                                {:name "v" :position 3 :data_type "lvl" :type_schema "public" :is_nullable false}
+                                                {:name "l" :position 2 :data_type "text" :domain "lbl" :is_nullable false}
+                                                {:name "v" :position 3 :data_type "bigint" :domain "lvl" :is_nullable false}
                                                 {:name "n" :position 4 :data_type "integer" :is_nullable false}
                                                 {:name "s" :position 5 :data_type "character varying" :is_nullable true :max_length 10}]
-                                      :constraints {"n_check" {:name "n_check" :type "CHECK" :check_clause "CHECK (n = ANY (ARRAY[1, 2]))"}}}}})))
+                                      :constraints {}}}})))
 
 (def ^:private registry (pgmalli/registry generated))
-
-(deftest a-domains-list-keeps-its-base-type-and-is-no-enum-type
-  (is (= [:enum {:pg/type "text"} "a" "b"] (get-in generated [:registry :pg.public/lbl])))
-  (is (= [:enum {:pg/type "bigint"} 1 2] (get-in generated [:registry :pg.public/lvl])))
-  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :l "a"]})))
-      "a varchar goes to a text domain, as PostgreSQL reads it")
-  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:and [:= :l :?x] [:= :v :?y]]}))))
-  (is (= [{:kind :enum-literal :column :l :value "c" :allowed ["a" "b"]}]
-         (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :l "c"]})))
-      "a value outside the list still matches no row")
-  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:or [:<> :l "c"] [:< :l "c"] [:not-in :l ["c"]]]})))
-      "other comparisons compare it as its base type"))
-
-(deftest a-literal-is-a-number-label-as-postgresql-reads-it
-  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :n "1"]} {:format {:inline true}})))
-      "an untyped '1' is 1")
-  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :v "2"]} {:format {:inline true}}))))
-  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :n 1.0]}))))
-  (is (= [] (:problems (h/analyze registry {:select [:id] :from [:t] :where [:in :n ["0x1" "2" " 1 " "0b10" "0x_1"]]} {:format {:inline true}})))
-      "PostgreSQL 16 reads 0x, 0o and 0b integers")
-  (is (= [{:kind :enum-literal :column :n :value 3 :allowed [1 2]}]
-         (:problems (h/analyze registry {:select [:id] :from [:t] :where [:= :n 3]})))
-      "a number outside the list matches no row")
-  (is (= [{:kind :enum-literal :column :n :value 3 :allowed [1 2]}]
-         (:problems (h/analyze registry {:select [:id] :from [:t] :where [:in :n [1 3]]})))))
 
 (deftest a-cast-to-a-type-with-its-length-has-the-type
   (is (= [:map [:x [:maybe [:string {:pg/type "character varying"}]]]]
@@ -61,7 +33,7 @@
     (is (m/validate (h/values-schema registry :t {:format {:quoted true}}) (assoc row :id [:default]) {:registry registry}))))
 
 (deftest an-unknown-schema-names-tables-before-what-derives-from-them
-  (is (= [:pg.public/lbl :pg.public/lvl :pg.public/t]
+  (is (= [:pg.public/t :pg.public.t/insert :pg.public.t/update]
          (take 3 (:known (ex-data (try (pgmalli/as-read registry :pg.public/zz) (catch clojure.lang.ExceptionInfo e e))))))))
 
 (deftest a-coalesce-of-a-check-list-takes-the-others-values-too

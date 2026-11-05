@@ -53,7 +53,7 @@ Load the generated file as a registry and validate an INSERT:
          '[malli.error :as me]
          '[malli.generator :as mg])
 
-(def registry (pgmalli/registry "public"))
+(def registry (pgmalli/registry))
 
 (m/validate :pg.public.users/insert
             {:group_id 1 :email "ann@example.com"}

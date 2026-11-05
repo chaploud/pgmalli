@@ -153,7 +153,7 @@
   (when-not (::generated? registry)
     (error/fail! :pgmalli.error/not-a-registry
                  (str "the registry holds no schema pgmalli generates, so table " table
-                      " is unknown; pass (pgmalli-next.core/registry \"<schema>\")")
+                      " is unknown; pass (pgmalli-next.core/registry)")
                  {:given table})))
 
 (defn with-defaults
@@ -538,11 +538,22 @@
   [registry s]
   (loose (beyond-list registry s)))
 
+(defn- domain-of
+  "The domain a column schema declares: d, or d[] for an array of domain d; nil for none."
+  [s]
+  (some-> s shape/column-props :pg/domain))
+
+(defn- scalar-domain
+  "The domain of a column schema of a domain (over an array too): a value of it is of its base
+   type where PostgreSQL resolves types. An array of a domain (d[]) is a type of its own."
+  [s]
+  (when-let [d (domain-of s)] (when-not (str/ends-with? d "[]") d)))
+
 (defn- computed-of-one-type
   "computed, of a value whose inputs are all of s's type: a domain stays, as PostgreSQL types the
    value (and its array, which pgjdbc reads as the domain's PGobjects)."
   [registry s]
-  (if (= :ref (shape/head (shape/non-null s))) s (computed registry s)))
+  (if (or (domain-of s) (= :ref (shape/head (shape/non-null s)))) s (computed registry s)))
 
 (defn compared-schema
   "The schema a value op compares with a column of schema s must fit: under equality-ops, or
@@ -592,13 +603,10 @@
    not answer for."
   [registry s]
   (let [p (shape/column-props s)
-        d (shape/ref-target (::schemas registry) (shape/non-null s))
         t (if-let [e (types/entry (shape/type-name p))]
             (cond-> (:name e) (types/element (:pg/type p)) types/array-of)
-            ;; enum-type's d is an enum type, or a domain over one
-            (when-let [n (enum-type registry s)] (cond-> [:enum n] (and d (not= :enum (shape/head d))) (conj {:domain? true}))))]
-    (cond (accept/answers? t) t
-          (and d (not (enum-type registry s))) (slot-type registry (shape/domain-base d)))))
+            (when-let [n (enum-type registry s)] (cond-> [:enum n] (:pg/domain p) (conj {:domain? true}))))]
+    (when (accept/answers? t) t)))
 
 (defn side-schema
   "The column schema of one side of a comparison: a column's, or an expression's where
@@ -669,34 +677,37 @@
             (= :maybe h) [h (loose (last t))]
             ;; an array column's :pg/type is what tells pgjdbc's java.sql.Array (an argument) from a read
             ;; vector; :pg/classes the Java arrays a whole array compared takes
-            (#{:vector :sequential :set :pg/array} h) (let [kept (select-keys p [:pg/type :pg/classes])]
+            ;; :pg/domain the domain of its elements, which pgjdbc reads as PGobjects
+            (#{:vector :sequential :set :pg/array} h) (let [kept (select-keys p [:pg/type :pg/classes :pg/domain])]
                                                         (if (seq kept) [h kept (loose (last t))] [h (loose (last t))]))
             (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
             (seq children) t
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 
 (defn- domain-base-type
-  "s, or the base type of the domain s refers to (through domains over domains), its :pg/type
-   without typmod: the type PostgreSQL resolves a function's argument of a domain to."
-  [registry s]
-  (let [{:keys [base refs]} (shape/resolved (::schemas registry) s)
-        t (:pg/type (shape/column-props base))]
-    (cond (empty? refs) s
-          t (shape/merge-props base {:pg/type (types/bare-name t)})
-          (next refs) (shape/merge-props (peek refs) {:pg/type (second (shape/schema-and-name (last (peek refs))))})
-          :else s)))
+  "s, or the base type of the domain s is of: the type PostgreSQL resolves a function's argument
+   of a domain to."
+  [_registry s]
+  (if (shape/maybe? s)
+    [:maybe (domain-base-type _registry (last s))]
+    (let [p (shape/props s)]
+      (cond (not (scalar-domain s)) s
+            (= 1 (count p)) (into [(first s)] (drop 2 s))
+            :else (assoc s 1 (dissoc p :pg/domain))))))
 
 (defn- domain-array
-  "The schema of an array of values of column schema s where s is of a domain (a CHECK's list
-   too, but not an enum type): the domain's array, as PostgreSQL keeps it in ARRAY[...] and in a
-   polymorphic function's anyarray bound by anyelement (array_agg); nil otherwise."
-  [registry s]
-  (let [s (some-> s shape/non-null)
-        {:keys [base refs enum?]} (shape/resolved (::schemas registry) s)]
-    (when (and (seq refs) (not (and enum? (nil? (:pg/type (shape/props base))))))
-      [:vector {:pg/type (types/array-of (:pg/type (shape/column-props s) (second (shape/schema-and-name (last s)))))} s])))
+  "The schema of an array of values of column schema s where s is of a domain: the domain's
+   array, as PostgreSQL keeps it in ARRAY[...] and in a polymorphic function's anyarray bound by
+   anyelement (array_agg); nil otherwise."
+  [_registry s]
+  (let [s (some-> s shape/non-null)]
+    (when-let [d (scalar-domain s)]
+      [:vector {:pg/type (types/array-of (:pg/type (shape/column-props s))) :pg/domain (types/array-of d)} s])))
 
-(defn- canonical-type [{s :schema}] (some-> s shape/column-props :pg/type types/canonical-name))
+(defn- canonical-type [{s :schema}]
+  (if (and (domain-of s) (not (scalar-domain s)))
+    (domain-of s)
+    (some-> s shape/column-props :pg/type types/canonical-name)))
 
 (defn resolver-type
   "The type pgmalli-next.impl.resolve takes for a value of column schema s: a domain's base type,
@@ -711,7 +722,7 @@
 (defn own-type?
   "Whether expression type m is of type t itself, not of a domain over it."
   [m t]
-  (and (= t (:type m)) (= (if (vector? t) (second t) t) (canonical-type m))))
+  (and (= t (:type m)) (= (if (vector? t) (second t) t) (canonical-type m)) (not (scalar-domain (:schema m)))))
 
 (defn- result-schema
   "The schema of a value of resolver type t computed from inputs (expression types): an input's
@@ -738,7 +749,7 @@
       (when (and t (or (not-any? #{:free} ts) (= "S" (types/category t))))
         {:type t
          ;; inputs all of one domain resolve to it (select_common_type); with another, to its base type
-         :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %)))) typed))
+         :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %))) (comp domain-of :schema)) typed))
                           (or (own-type? (first typed) (:type (first typed))) (= (count typed) (count ms))))
                    (cond->> (:schema (first typed)) (next ms) (computed-of-one-type registry))
                    (result-schema registry t typed))}))))
@@ -1104,15 +1115,14 @@
                  (jdbc/row-entry (ffirst entries)
                                 (cond (not united?) :any
                                       ;; with an untyped member, a domain resolves to its base type, as CASE's does
-                                      (= 1 (count inners)) (let [[s] inners
-                                                                 k (if (= :ref (shape/head s))
-                                                                     (last s)
-                                                                     (some-> (:pg/type (shape/column-props s)) keyword (#(first (registry-type registry % opts)))))
-                                                                 d (get (::schemas registry) k)]
-                                                             (if (and d (not= :enum (shape/head d)) (< (count known) (count schemas)))
-                                                               (computed registry (domain-base-type registry [:ref k]))
+                                      (= 1 (count inners)) (let [[s] inners]
+                                                             (if (and (scalar-domain s) (< (count known) (count schemas)))
+                                                               (computed registry (domain-base-type registry s))
                                                                s))
-                                      ;; the members' schemas are as the driver reads them: one of them, or untold
+                                      ;; the members' schemas are as the driver reads them: of one type, each
+                                      ;; value as its member's (a bit(1) a Boolean, a bit(4) a PGobject)
+                                      (apply = (map (juxt #(:pg/type (shape/column-props %)) domain-of) inners)) (shape/either inners :any)
+                                      ;; else one of them, or untold
                                       :else (let [r (:schema (common registry (for [s inners] {:schema s :type (resolver-type registry s)})))]
                                               (if (and r (some #(= r (computed registry %)) inners)) r :any)))
                                 (some shape/maybe? schemas))

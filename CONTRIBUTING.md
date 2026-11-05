@@ -53,11 +53,11 @@ it, `bb docs:example` generates `docs/example/pgmalli-next/` again; a test fails
 block that cannot run (a shell command, a database call) gets `<!-- :test-doc-blocks/skip -->`
 before it.
 
-When a change touches what a type or CHECK becomes, update [docs/types.md](docs/types.md).
+When a change touches what a type becomes, update [docs/types.md](docs/types.md).
 
 ## Randomized tests
 
-`fuzz-test`, `catalog-fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a
+`catalog-fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a
 seed, 42 in CI. `PGMALLI_FUZZ_SEED=<n> bb test:jvm` runs other seeds. A failure prints its seed,
 the case (shrunk where test.check shrinks it), where it failed and the command that runs it
 again, with `PGMALLI_FUZZ_SEED`, `PGMALLI_FUZZ_CASE` or `PGMALLI_FUZZ_SCHEMAS` set.
@@ -167,9 +167,6 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
 
 ## Other tasks
 
-- `bb harvest` rebuilds the expression corpus from checkouts named by env vars:
-  `PGMALLI_PGREGRESS_DIR` (PostgreSQL REL_17_STABLE's `src/test/regress/sql`) and
-  `PGMALLI_PGSCHEMA_DIR` (pgschema's `testdata/diff`).
 - `bb sweep <sql-dir> <out-dir> [glob]` takes SQL files through the whole pipeline and writes
   what did not go through as EDN; `bb sweep:report <out-dir>` groups it for reading.
 - `bb catalog` rewrites `resources/pgmalli-next/impl/catalog.edn`, the snapshot of `pg_catalog`

@@ -4,25 +4,40 @@
             [pgmalli-next.impl.pattern :as p]
             [pgmalli-next.impl.types :as types]))
 
-(defn- schema-with-checks [& clauses]
+(def ^:private schema
   {:name "public"
    :types {"mood" {:kind "ENUM" :enum_values ["happy" "sad"]}}
    :tables {"t" {:columns [{:name "c" :position 1 :data_type "integer" :is_nullable true}
                            {:name "m" :position 2 :data_type "mood" :type_schema "public" :is_nullable false :default_value "'happy'::mood"}
                            {:name "v" :position 3 :data_type "character varying" :is_nullable true :max_length 40}]
-                 :constraints (into {} (map-indexed (fn [i c] [(str "k" i) {:name (str "k" i) :type "CHECK" :check_clause (str "CHECK (" c ")")}]) clauses))}}})
-
-(defn- check-facts [& clauses]
-  (->> (p/facts (apply schema-with-checks clauses)) (filter :constraint) (map #(cond-> (dissoc % :schema :table :constraint :sql) (not= :table-check (:fact %)) (dissoc :expr))) vec))
+                 :constraints {"t_c_check" {:name "t_c_check" :type "CHECK" :check_clause "CHECK (c > 0)"}}}}})
 
 (deftest facts-from-types-and-columns
   (is (= [{:fact :enum-type :schema "public" :type-name "mood" :values ["happy" "sad"]}
           {:fact :column :schema "public" :table "t" :column "c" :type "integer" :position 1 :nullable? true}
-          {:fact :column :schema "public" :table "t" :column "m" :type "mood" :position 2 :nullable? false :default [:cast "happy" :mood] :default-sql "'happy'::mood"}
+          {:fact :column :schema "public" :table "t" :column "m" :type "mood" :position 2 :nullable? false :default "happy" :default-sql "'happy'::mood"}
           {:fact :enum :schema "public" :table "t" :column "m" :type-name "mood" :values ["happy" "sad"]}
           {:fact :column :schema "public" :table "t" :column "v" :type "character varying" :position 3 :nullable? true}
           {:fact :max-length :schema "public" :table "t" :column "v" :max 40}]
-         (p/facts (schema-with-checks)))))
+         (p/facts schema))
+      "a CHECK is no fact: the database checks it"))
+
+(deftest ir-sql-reads-the-length-of-the-types-with-one
+  (let [max-length (second (re-find #"(?s)'max_length', CASE(.*?)END" (slurp (io/resource "pgmalli-next/ir.sql"))))]
+    (is (= (set (for [[t e] types/types :when (#{:max-length :bits :max-bits} (:typmod e))] t))
+           (set (map #(:name (types/entry (second %))) (re-seq #"'(\w+)'::regtype" max-length)))))))
+
+(deftest a-domains-column-is-of-its-base-type-with-the-domain-named
+  (let [fs (p/facts {:name "public"
+                     :types {"mood" {:kind "ENUM" :enum_values ["happy" "sad"]}}
+                     :tables {"t" {:columns [{:name "mail" :position 1 :data_type "character varying" :domain "work_email" :type_schema "pg_catalog"
+                                              :is_nullable false :default_value "'a@b'::text" :max_length 80}
+                                             {:name "feel" :position 2 :data_type "mood" :domain "feeling" :type_schema "public" :is_nullable true}]
+                                   :constraints {}}}})
+        col #(some (fn [f] (when (and (= :column (:fact f)) (= % (:column f))) f)) fs)]
+    (is (= {:type "character varying" :domain "work_email" :nullable? false :default "a@b"} (select-keys (col "mail") [:type :domain :nullable? :default])))
+    (is (= [:max-length 80] ((juxt :fact :max) (some #(when (and (= "mail" (:column %)) (= :max-length (:fact %))) %) fs))))
+    (is (= "mood" (:type-name (some #(when (and (= "feel" (:column %)) (= :enum (:fact %))) %) fs))) "a domain over an enum is the enum")))
 
 (deftest unknown-types-are-kept-and-a-default-as-its-sql
   (let [fs (p/facts {:name "public" :types {}
@@ -41,62 +56,6 @@
     (is (= [["c" :column] ["l" :column] ["p" :column] ["p" :unknown-type]] (map (juxt :column :fact) fs))
         "a composite type of the schema named point is not pg_catalog's point")))
 
-(deftest ir-sql-reads-the-typmod-of-the-types-with-one
-  (let [max-length (second (re-find #"(?s)'max_length', CASE(.*?)END" (slurp (io/resource "pgmalli-next/ir.sql"))))]
-    (is (= (set (for [[t e] types/types :when (:typmod e)] t))
-           (set (map #(:name (types/entry (second %))) (re-seq #"'(\w+)'::regtype" max-length)))))))
-
-(deftest column-patterns
-  (is (= [{:fact :not-null :column "c"}] (check-facts "c IS NOT NULL")))
-  (is (= [{:fact :in-set :column "c" :values [1 2]} {:fact :range :column "m" :min 1 :min-exclusive? false}]
-         (check-facts "c = ANY (ARRAY[1, 2]) AND m >= 1")) "PostgreSQL's rewrites are undone below the top level too")
-  (is (= [{:fact :when-present :column "c" :fact-when-present {:fact :in-set :values [1 2]}}]
-         (check-facts "c IS NULL OR c = ANY (ARRAY[1, 2])")))
-  (is (= [{:fact :in-set :column "c" :values ["a" "b"]}] (check-facts "c IN ('a'::text, 'b'::text)")))
-  (is (= [{:fact :in-set :column "c" :values ["a"]}] (check-facts "c = 'a'::mood")))
-  (is (= [{:fact :in-set :column "v" :values ["a" "b"]}] (check-facts "v::text IN ('a'::character varying, 'b'::character varying)")))
-  (is (= [{:fact :in-set :column "m" :values ["happy"]}] (check-facts "(m)::text = 'happy'::text")) "an enum's label is its text")
-  (is (= [{:fact :in-set :column "c" :values ["a" "b" "c"]}] (check-facts "c = ANY (ARRAY['a'::text, 'b'::text, 'c'::text])")))
-  (is (= [{:fact :in-set :column "c" :values [0 1 2]}] (check-facts "c = ANY (ARRAY[0, 1, 2])")))
-  (is (= [{:fact :range :column "c" :min 1 :min-exclusive? false :max 5 :max-exclusive? false}] (check-facts "c >= 1 AND c <= 5")))
-  (is (= [{:fact :range :column "c" :min 1 :min-exclusive? false :max 5 :max-exclusive? false}] (check-facts "c BETWEEN 1 AND 5")))
-  (is (= [{:fact :range :column "c" :min 0 :min-exclusive? true}] (check-facts "c > 0")))
-  (is (= [{:fact :range :column "c" :min -1 :min-exclusive? false}] (check-facts "c >= '-1'::integer")))
-  (is (= [{:fact :range :column "c" :max 10 :max-exclusive? false}] (check-facts "10 >= c")))
-  (is (= [{:fact :non-blank :column "c" :trim? true}] (check-facts "length(TRIM(BOTH FROM c)) > 0")))
-  (is (= [{:fact :non-blank :column "v" :trim? true}] (check-facts "v::text = btrim(v::text) AND v::text <> ''::text")))
-  (is (= [{:fact :non-blank :column "c" :trim? false}] (check-facts "c <> ''::text")))
-  (is (= [{:fact :length :column "c" :fn :octet_length :exact 32}] (check-facts "octet_length(c) = 32")))
-  (is (= [{:fact :length :column "c" :fn :length :max 9}] (check-facts "length(c) < 10")))
-  (is (= [{:fact :json-type :column "c" :json-type "object"}] (check-facts "jsonb_typeof(c) = 'object'::text")))
-  (is (= [{:fact :regex :column "c" :re "^[a-z]+$" :case-insensitive? false}] (check-facts "c ~ '^[a-z]+$'::text")))
-  (is (= [{:fact :when-present :column "c" :fact-when-present {:fact :range :min 0 :min-exclusive? true}}]
-         (check-facts "c IS NULL OR c > 0")))
-  (is (= [{:fact :when-present :column "c" :fact-when-present {:fact :range :min 0 :min-exclusive? true}}]
-         (check-facts "c > 0 OR c IS NULL"))))
-
-(deftest and-of-column-patterns-yields-several-facts
-  (is (= [{:fact :non-blank :column "c" :trim? true} {:fact :length :column "c" :fn :length :max 100}]
-         (check-facts "length(TRIM(BOTH FROM c)) > 0 AND length(c) <= 100")))
-  (is (= [{:fact :range :column "c" :min 0 :min-exclusive? false} {:fact :range :column "m" :min 1 :min-exclusive? false}]
-         (check-facts "c >= 0 AND m >= 1"))))
-
-(deftest everything-else-stays-a-table-check
-  (is (= [{:fact :table-check :expr [:or [:is :a nil] [:<> :a :b]] :columns ["a" "b"]}]
-         (check-facts "a IS NULL OR a <> b")))
-  (is (= [{:fact :table-check :expr [:and [:>= :c 0] [:<= :c :total]] :columns ["c" "total"]}]
-         (check-facts "c >= 0 AND c <= total")))
-  (is (= [{:fact :table-check :expr [:in :x [:a :b]] :columns ["x" "a" "b"]}] (check-facts "x IN (a, b)")))
-  (is (= [{:fact :table-check :expr :c :columns ["c"]}] (check-facts "c")) "a bare boolean column")
-  (is (= ["c" "p"] (:columns (first (check-facts "CASE c WHEN 'a'::text THEN (p ->> 'x'::text) = 'y'::text ELSE false END"))))))
-
-(deftest not-valid-is-never-matched
-  (let [fs (p/facts {:name "public" :types {}
-                     :tables {"t" {:columns [{:name "c" :position 1 :data_type "integer" :is_nullable true}]
-                                   :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (c >= 0)" :is_valid false}}}}})]
-    (is (= {:fact :table-check :valid? false :columns ["c"] :expr [:>= :c 0] :sql "CHECK (c >= 0)"}
-           (dissoc (last fs) :schema :table :constraint)))))
-
 (deftest keys-and-references
   (let [fs (p/facts {:name "public" :types {}
                      :tables {"m" {:columns [{:name "id" :position 1 :data_type "integer" :is_nullable false :default_value "nextval('m_id_seq'::regclass)"}
@@ -109,89 +68,3 @@
     (is (= [[:references ["g"]] [:unique ["g"]] [:primary-key ["id"]]]
            (map (juxt :fact :columns) (filter :constraint fs))) "constraints in name order")
     (is (= {:schema "public" :table "groups" :columns ["id"]} (:to (first (filter (comp #{:references} :fact) fs)))))))
-
-(deftest domains
-  (let [fs (p/facts {:name "public"
-                     :types {"email" {:kind "DOMAIN" :base_type "text" :not_null false
-                                      :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)"}]}}
-                     :tables {"t" {:columns [{:name "mail" :position 1 :data_type "email" :type_schema "public" :is_nullable true}] :constraints {}}}})]
-    (is (= {:fact :domain :schema "public" :type-name "email" :base "text" :not-null? false
-            :facts [{:fact :regex :re "@" :case-insensitive? false :constraint "email_check" :sql "CHECK (VALUE ~ '@'::text)" :schema "public" :type-name "email"
-                     :expr [:regex :VALUE [:cast "@" :text]]}]}
-           (first fs)))
-    (is (= [{:fact :column} {:fact :domain-ref :base "text"}] (map #(select-keys % [:fact :base]) (rest fs))))))
-
-(deftest a-cast-that-changes-the-value-matches-no-pattern
-  (doseq [chk ["c::numeric(3,0) = 3" "v::character varying(3) = 'abc'::text" "length((v)::character varying(2)) = 2"
-               "(v)::character(3) = 'abc'::bpchar" "(v)::bpchar = 'abc'::bpchar" "(c)::text = '1'::text" "(c)::bigint = ANY (ARRAY[(1)::bigint, (2)::bigint])"
-               "v = 'abc'::character varying(2)" "v = 'abc  '::bpchar"
-               ;; text orders by the collation, which malli's bounds do not know
-               "(v)::text >= 'a'::text" "(v)::text >= 'a'::text AND (v)::text <= 'z'::text" "v BETWEEN 'a' AND 'z'"]]
-    (is (= [:table-check] (map :fact (check-facts chk))) chk)))
-
-(deftest a-pattern-is-true-on-a-not-null-column-is-the-pattern
-  (let [facts (fn [nullable? chk]
-                (->> (p/facts {:name "public" :types {}
-                               :tables {"t" {:columns [{:name "v" :position 1 :data_type "text" :is_nullable nullable?}]
-                                             :constraints {"k" {:name "k" :type "CHECK" :check_clause (str "CHECK (" chk ")")}}}}})
-                     (filter :constraint) (map :fact)))]
-    (is (= [:like] (facts false "(v ~~ like_escape('a#%'::text, '#'::text)) IS TRUE")))
-    (is (= [:table-check] (facts true "(v ~~ like_escape('a#%'::text, '#'::text)) IS TRUE")) "a NULL is false IS TRUE, which v ~~ 'a%' takes")))
-
-(deftest a-bit-string-cast-to-bit-is-the-same-bits
-  (is (= [:length] (->> (p/facts {:name "public" :types {}
-                                  :tables {"t" {:columns [{:name "a" :position 1 :data_type "bit varying" :is_nullable false :max_length 4}]
-                                                :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (length(a::\"bit\") = 3)"}}}}})
-                        (filter :constraint) (map :fact)))))
-
-(deftest a-double-precision-range-is-a-pattern-with-an-upper-bound-since-postgresql-orders-nan-above-numbers
-  (let [facts (fn [chk]
-                (->> (p/facts {:name "public" :types {}
-                               :tables {"t" {:columns [{:name "w" :position 1 :data_type "double precision" :is_nullable true}
-                                                       {:name "r" :position 2 :data_type "real" :is_nullable true}]
-                                             :constraints {"k" {:name "k" :type "CHECK" :check_clause (str "CHECK (" chk ")")}}}}})
-                     (filter :constraint) (map #(select-keys % [:fact :min :max]))))]
-    (is (= [{:fact :table-check}] (facts "w >= (0)::double precision")))
-    (is (= [{:fact :range :min 0.0 :max 1.0}] (facts "w >= (0)::double precision AND w <= (1)::double precision")))
-    (is (= [{:fact :range :min 0 :max 1}] (facts "w BETWEEN 0 AND 1")))
-    (is (= [{:fact :when-present}] (facts "w IS NULL OR w <= 1")) "the pattern under IS NULL OR")
-    (is (= [{:fact :table-check}] (facts "r >= (0)::double precision AND r <= (1)::double precision")) "a real compares rounded to single precision")
-    (is (= [{:fact :in-set}] (facts "w = ANY (ARRAY[(1)::double precision, (2)::double precision])")))))
-
-(deftest check-true-is-no-fact
-  (is (= [] (check-facts "true"))))
-
-(deftest an-integer-column-cast-to-numeric-keeps-its-value
-  (is (= [{:fact :range :column "c" :min 0.5M :min-exclusive? false}] (check-facts "(c)::numeric >= 0.5"))))
-
-(deftest a-cast-of-a-number-literal-is-folded-as-postgresql-casts-it
-  (is (= [{:fact :in-set :column "c" :values [3]}] (check-facts "c = (2.5)::integer"))))
-
-(deftest a-domain-over-char-n-or-citext-takes-a-check-read-otherwise-as-a-domain-check-not-as-nothing
-  (let [facts (fn [base definition]
-                (p/facts {:name "public"
-                          :types {"d" {:kind "DOMAIN" :base_type base :not_null false
-                                       :constraints [{:name "d_check" :definition definition}]}}
-                          :tables {}}))]
-    (let [fs (facts "character(4)" "CHECK (char_length(VALUE) <= 2)")]
-      (is (= [{:fact :max-length :max 4}] (map #(select-keys % [:fact :max]) (:facts (first fs)))) "char(n) measures without trailing spaces")
-      (is (= [:domain-check] (map :fact (rest fs)))))
-    (is (= [:unparsed] (map :fact (rest (facts "citext" "CHECK ((VALUE ~ 'a'::citext) OR (lower((VALUE)::text) = upper((VALUE)::text)))"))))
-        "citext compares otherwise")))
-
-(deftest branch-checks
-  (is (= [{:fact :branch-check :dispatch "m"
-           :branches [{:values ["happy"] :facts [{:fact :null :column "closed_at"}]}
-                      {:values ["sad" "x"] :facts [{:fact :not-null :column "closed_at"}]}]
-           :default nil}]
-         (check-facts "m = 'happy'::mood AND closed_at IS NULL OR (m IN ('sad'::mood, 'x'::mood)) AND closed_at IS NOT NULL")))
-  (is (= [{:fact :branch-check :dispatch "m"
-           :branches [{:values ["sad" "x"] :facts [{:fact :not-null :column "approver"}]}]
-           :default [{:fact :null :column "approver"}]}]
-         (check-facts "(m IN ('sad'::mood, 'x'::mood)) AND approver IS NOT NULL OR (m <> ALL (ARRAY['sad'::mood, 'x'::mood])) AND approver IS NULL")))
-  (is (= [{:fact :or-check
-           :alternatives [[{:fact :null :column "pin"}]
-                          [{:fact :in-set :column "kind" :values ["skill"]} {:fact :in-set :column "verb" :values ["acquired"]}]]}]
-         (check-facts "pin IS NULL OR kind = 'skill'::text AND verb = 'acquired'::text"))
-      "alternatives over different columns become an :or-check")
-  (is (= :table-check (:fact (first (check-facts "a IS NULL OR a <> b"))))))

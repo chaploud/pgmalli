@@ -19,22 +19,22 @@
    through its schemas. Anything else is an error: a generated data map, a map whose values are
    not schemas."
   [registry]
-  (cond (and (map? registry) (contains? registry :registry) (contains? registry :schema))
+  (cond (and (map? registry) (contains? registry :registry) (contains? registry :schemas))
         (error/fail! :pgmalli.error/not-a-registry
-                     (str "given the generated data of schema " (pr-str (:schema registry)) ", not a registry; pass (pgmalli-next.core/registry " (pr-str (:schema registry)) ")")
-                     {:given (:schema registry)})
+                     (str "given the generated data of schemas " (pr-str (:schemas registry)) ", not a registry; pass (pgmalli-next.core/registry <that data>)")
+                     {:given (:schemas registry)})
         (identical? registry @checked-registry) registry
         (map? registry)
         (if-let [[k v] (first (remove (comp schema-form? val) registry))]
           (error/fail! :pgmalli.error/not-a-registry
-                       (str "not a registry: " (pr-str k) " maps to " (pr-str v) ", not a schema; pass (pgmalli-next.core/registry \"<schema>\")")
+                       (str "not a registry: " (pr-str k) " maps to " (pr-str v) ", not a schema; pass (pgmalli-next.core/registry)")
                        {:given k})
           (reset! checked-registry registry))
         :else
         (if-let [r (mr/registry registry)]
           (mr/-schemas r)
           (error/fail! :pgmalli.error/not-a-registry
-                       (str "not a registry: " (pr-str (type registry)) "; pass (pgmalli-next.core/registry \"<schema>\")")
+                       (str "not a registry: " (pr-str (type registry)) "; pass (pgmalli-next.core/registry)")
                        {:given (type registry)}))))
 
 (defn generated-name?
@@ -208,18 +208,6 @@
   "A schema's type: its first element, or itself."
   [t]
   (if (vector? t) (first t) t))
-
-(defn resolved
-  "Column schema s of a registry's schemas under the references it makes, through domains over
-   domains: {:base b :refs [ref ...]}, refs the [:ref ...] schemas followed, outermost first, b
-   the base of the last one's schema ([:and b checks...]); that schema itself, :enum? true, where
-   it is an [:enum ...] (an enum type, or a domain that is a CHECK's list alone)."
-  [schemas s]
-  (loop [b s refs []]
-    (if-let [d (ref-target schemas b)]
-      (let [refs (conj refs b)]
-        (if (= :enum (head d)) {:base d :refs refs :enum? true} (recur (domain-base d) refs)))
-      {:base b :refs refs})))
 
 (defn kind
   "The kind of value t takes: its head, through [:and t checks...] and [:pg/held typmod t]; a

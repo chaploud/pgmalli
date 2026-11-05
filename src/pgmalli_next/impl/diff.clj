@@ -7,17 +7,16 @@
             [pgmalli-next.impl.shape :as shape]))
 
 (defn- row-parts
-  "{:columns {name entry} :props :checks} of a row or insert schema, nil for other entries."
+  "{:columns {name entry} :props} of a row or insert schema, nil for other entries."
   [s]
   (let [m (shape/row-map s)]
     (when (and (vector? m) (= :map (first m)) (map? (second m)))
       {:columns (into {} (map (fn [[k p s]] [k (if (seq p) [p s] s)])) (shape/column-entries s))
-       :props (second m)
-       :checks (when (= :and (first s)) (vec (drop 2 s)))})))
+       :props (second m)})))
 
 (defn- differences
   "The differences between the file's and the database's version of one registry entry, a
-   row or insert schema by column, property and CHECKs, anything else as a whole."
+   row or insert schema by column and property, anything else as a whole."
   [name file db]
   (let [f (row-parts file) d (row-parts db)
         props (fn [s] (when (and (vector? s) (map? (second s))) (second s)))
@@ -34,8 +33,7 @@
                               d))
         order (fn [s] (map first (shape/column-entries s)))]
     (cond (= file db) nil
-          (and f d) (let [ds (concat (by :columns :column) (by :props :property)
-                                     (when (not= (:checks f) (:checks d)) [{:name name :checks true :file (:checks f) :db (:checks d)}]))]
+          (and f d) (let [ds (concat (by :columns :column) (by :props :property))]
                       (if (seq ds) ds [{:name name :order true :file (order file) :db (order db)}]))
           :else [{:name name :file file :db db}])))
 
@@ -46,39 +44,27 @@
                      d (differences k (get-in before [:registry k]) (get-in after [:registry k]))]
                  d)
                (for [k (distinct (concat (keys before) (keys after)))
-                     :when (and (not (#{:registry :database-version :schema} k)) (not= (get before k) (get after k)))
-                     d (cond (not (#{:functions :operators} k)) [{:key k :file (get before k) :db (get after k)}]
-                             ;; a file of a pgmalli that did not read them: every name would differ
-                             (not (contains? before k)) [{:key k :absent :file}]
-                             (not (contains? after k)) [{:key k :absent :db}]
-                             :else (for [n (sort (distinct (concat (keys (get before k)) (keys (get after k)))))
-                                         :let [a (get-in before [k n]) b (get-in after [k n])]
-                                         :when (not= a b)]
-                                     {:key k :name n :file a :db b}))]
+                     :when (and (not (#{:registry :database-version} k)) (not= (get before k) (get after k)))
+                     d (if (#{:functions :operators} k)
+                         (for [s (sort (distinct (concat (keys (get before k)) (keys (get after k)))))
+                               n (sort (distinct (concat (keys (get-in before [k s])) (keys (get-in after [k s])))))
+                               :let [a (get-in before [k s n]) b (get-in after [k s n])]
+                               :when (not= a b)]
+                           {:key k :schema s :name n :file a :db b})
+                         [{:key k :file (get before k) :db (get after k)}])]
                  d))))
-
-(defn- files [config]
-  (into {} (for [schema (:schemas (files/config config))
-                 :let [p (files/path-for config schema)]
-                 :when (.exists (io/file p))]
-             [schema (registry/read-generated-file p)])))
-
-(defn- stale* [config files]
-  (let [diffs (for [[schema {:keys [data]}] (files/generated-all config)
-                    :let [ds (diff (get files schema) data)]
-                    :when (seq ds)]
-                [schema ds])]
-    (when (seq diffs) (into {} diffs))))
 
 (defn check
   "What pgmalli-next.generate/check reports."
   ([config] (check config {}))
   ([config {:keys [db?] :or {db? true} :as opts}]
    (jdbc/checked! [:map {:closed true} [:db? {:optional true} :boolean]] opts)
-   (let [files (files config)
-         missing (not-empty (vec (remove files (:schemas (files/config config)))))]
-     (cond-> {:missing missing
-              :unrendered (not-empty (into {} (for [[s f] files :when (seq (:unrendered f))] [s (:unrendered f)])))
-              :diagnostics (not-empty (into {} (for [[s f] files :when (seq (:diagnostics f))] [s (:diagnostics f)])))}
+   (let [path (:out (files/config config))
+         file (when (.exists (io/file path)) (registry/read-generated-file path))
+         ;; read where there is no file too: the database unreachable is what CI reports
+         db (when db? (:data (files/generated config)))]
+     (cond-> {:missing (when-not file path)
+              :unrendered (not-empty (:unrendered file))
+              :diagnostics (not-empty (:diagnostics file))}
        ;; a missing file differs in every entry; saying it is missing says it all
-       db? (assoc :stale (not-empty (apply dissoc (stale* config files) missing)))))))
+       db? (assoc :stale (when file (not-empty (diff file db))))))))

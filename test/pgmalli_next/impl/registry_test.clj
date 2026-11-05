@@ -1,14 +1,12 @@
 (ns pgmalli-next.impl.registry-test
   "Generated files as malli registries, on the checked-in test/resources/pgmalli-next/{sample,other}.edn."
-  (:require [clojure.string :as str]
-            [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
             [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.pattern :as p]
             [pgmalli-next.impl.portable :as portable]
-            [pgmalli-next.impl.registry :as reg]
             [pgmalli-next.impl.shape :as shape]
             [malli.registry]
             malli.experimental.time
@@ -16,17 +14,15 @@
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.sample :refer [opts registry user]]))
 
-(deftest registry-from-classpath
+(deftest a-registry-of-generated-data
   (is (m/validate :pg.sample/users user opts))
   (is (= {:pg/table "sample.users" :pg/primary-key ["id"]
           :pg/foreign-keys [{:columns ["group_id" "group_name"] :table "sample.groups" :to ["id" "name"]}
                             {:columns ["group_id"] :table "sample.groups" :to ["id"]}
                             {:columns ["referrer_id"] :table "sample.users" :to ["id"]}]}
          (shape/row-props (shape/schema-of registry :pg.sample/users))))
-  (is (= {:closed_at ["violates check constraint closed_check: CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"]}
-         (me/humanize (m/explain :pg.sample/users (assoc user :closed_at nil) opts)))
-      "errors name the constraint")
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not on the classpath" (pgmalli/registry "nope"))))
+  (is (m/validate :pg.sample/users (assoc user :closed_at nil) opts) "a CHECK is the database's")
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry takes generated data" (pgmalli/registry "sample")) "no schema name: the data, or the classpath's file"))
 
 (deftest a-map-of-no-schemas-is-not-a-registry
   (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"not a registry: :a maps to 1, not a schema; pass \(pgmalli-next.core/registry"
@@ -34,8 +30,8 @@
     (is (= :pgmalli.error/not-a-registry (:pgmalli/error (ex-data e))))))
 
 (deftest generated-data-in-place-of-a-registry-names-the-call-to-make
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"given the generated data of schema \"sample\", not a registry; pass \(pgmalli-next.core/registry \"sample\"\)"
-                        (pgmalli/as-read (pgmalli/generated "sample") :pg.sample/users))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"given the generated data of schemas \[\"sample\"\], not a registry; pass \(pgmalli-next.core/registry <that data>\)"
+                        (pgmalli/as-read pgmalli-next.sample/sample-data :pg.sample/users))))
 
 (deftest insert-schemas
   (let [insert (fn [row] (m/validate :pg.sample.users/insert row opts))]
@@ -44,36 +40,16 @@
     (is (not (insert {:id 1 :group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1})) "identity ALWAYS cannot be inserted")
     (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :nick_upper "X"})) "nor a generated column")
     (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :seq 7 :total 9}) "serials and defaults may be given")
-    (is (not (insert {:group_id 1 :mood "happy" :closed_at (java.time.Instant/now) :score 1})) "table constraints apply")
-    (is (not (insert {:group_id 1 :closed_at (java.time.Instant/now) :score 1})) "omitting mood means happy, which forbids closed_at")
-    (is (insert {:group_id 1 :score 1}) "happy with no closed_at")
-    (is (not (insert {:group_id 1 :mood "sad" :score 1})) "an omitted column without a default is NULL, which sad forbids"))
+    (is (insert {:group_id 1 :mood "happy" :closed_at (java.time.Instant/now) :score 1}) "a CHECK is the database's")
+    (is (insert {:group_id 1 :score 1}) "an omitted mood takes its default"))
   (testing "from generated data instead of the classpath"
     (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:pg/integer {:pg/type "integer" :pg/default 1}]]]
-                                            :pg.public/t [:and [:map {:pg/table "public.t"}
-                                                                [:a [:pg/integer {:pg/type "integer"}]]
-                                                                [:b [:maybe [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]]]
-                                                          [:or [:map [:a {:error/message "c"} [:int {:min 1}]]] [:map [:b :nil]]]]}})]
+                                            :pg.public/t [:map {:pg/table "public.t"}
+                                                          [:a [:pg/integer {:pg/type "integer"}]]
+                                                          [:b [:maybe [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]]]}})]
       (is (m/validate "pg.public.Order Items/insert" {} {:registry reg}) "string keys follow the same naming")
-      (is (m/validate :pg.public.t/insert {:a 0 :b nil} {:registry reg}) "entries with properties inside fragments survive")
-      (is (not (m/validate :pg.public.t/insert {:a 0} {:registry reg})) "an omitted b is 5, not NULL, so the :or has no alternative left")
-      (is (not (m/validate :pg.public.t/insert {:a 0 :b 1} {:registry reg})))))
-  (testing "what an omitted column stands for"
-    (let [reg (pgmalli/registry {:registry {:pg.public/t [:and [:map {:pg/table "public.t"}
-                                                                [:status [:string {:pg/type "text" :pg/default "approved" :default "approved"}]]
-                                                                [:approver [:maybe [:string {:pg/type "text"}]]]
-                                                                [:a [:pg/integer {:pg/type "integer"}]]
-                                                                [:b [:pg/integer {:pg/type "integer" :pg/default 5 :default 5}]]
-                                                                [:c [:pg/integer {:pg/type "integer" :pg/default {:sql "nextval('s'::regclass)"}}]]]
-                                                          [:multi {:dispatch :status}
-                                                           ["approved" [:map [:approver :string]]]
-                                                           [:malli.core/default [:map [:approver :nil]]]]
-                                                          [:or [:map [:a [:int {:min 1}]]] [:map [:b [:int {:min 1}]]]]]}})
-          insert (fn [row] (m/validate :pg.public.t/insert row {:registry reg}))]
-      (is (insert {:status "pending" :approver nil :a 0}) "a value without a branch of its own still takes the default branch")
-      (is (not (insert {:approver nil :a 0})) "omitted status is approved, which needs an approver")
-      (is (insert {:approver "x" :a 0}) "the default b satisfies the :or, so it may be omitted")
-      (is (not (insert {:approver "x" :a 0 :b nil})) "an explicit NULL wins over the default"))))
+      (is (m/validate :pg.public.t/insert {:a 0} {:registry reg}) "a column with a default may be omitted")
+      (is (not (m/validate :pg.public.t/insert {:b 1} {:registry reg})) "one without a default may not"))))
 
 (deftest what-an-update-may-set
   (is (= [:map {:pg/table "sample.users" :closed true}
@@ -88,7 +64,7 @@
   (is (not (m/validate :pg.sample.users/update {:nope 1} opts)) "closed"))
 
 (deftest several-schemas
-  (let [registry (pgmalli/registry "sample" "other")
+  (let [registry (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data)
         opts {:registry registry}]
     (is (m/validate :pg.other.notes/insert {:id 1 :user_id 1} opts))
     (is (m/validate :pg.sample/users user opts))))
@@ -104,36 +80,21 @@
 
 (def ^:private generated
   (let [col (fn [n t & {:as more}] (merge {:name n :position 1 :data_type t :is_nullable false} more))
-        check (fn [n c] [n {:name n :type "CHECK" :check_clause (str "CHECK (" c ")")}])
         reg (pgmalli/registry
-             (files/assemble "public" "x"
+             (files/assemble "x" [["public"
                              (p/facts {:name "public"
-                                       :types {"day" {:kind "DOMAIN" :base_type "date" :not_null false :constraints []}
-                                               "small" {:kind "DOMAIN" :base_type "numeric" :not_null false :constraints []}}
-                                       :tables {"t" {:columns [(col "n" "numeric") (col "sm" "small" :type_schema "public") (col "s" "text")
-                                                               (col "tz" "time with time zone") (col "j" "jsonb") (col "d" "day" :type_schema "public")
+                                       :types {}
+                                       :tables {"t" {:columns [(col "n" "numeric") (col "sm" "numeric" :domain "small") (col "s" "text")
+                                                               (col "tz" "time with time zone") (col "j" "jsonb") (col "d" "date" :domain "day")
                                                                (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric" :precision 6 :scale 2)]
-                                                     :constraints (into {} (remove nil?) [;; babashka has no test.chuck: a regex is drawn and filtered there, which ^A defeats
-                                                                            (when @reg/regex-generation? (check "s_check" "s ~* '^A'::text"))
-                                                                            (check "j_check" "jsonb_typeof(j) = 'array'::text")
-                                                                            (check "p_check" "p > 0::numeric")])}}})
+                                                     :constraints {}}}})]]
                              {}))]
     {:registry reg :rows (try (vec (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})) (catch Exception e (ex-message e)))}))
 
 (defn- generated-values [k] (let [rows (:rows generated)] (if (string? rows) [rows] (map k rows))))
 
-(deftest a-case-insensitive-regex-generates-without-test-chuck-failing
-  (when @reg/regex-generation?
-    (is (every? #(re-find #"^[Aa]" %) (generated-values :s)))))
-
 (deftest a-timetz-generates-an-offset-postgresql-takes
   (is (every? #(<= (Math/abs (.getTotalSeconds (.getOffset ^java.time.OffsetTime %))) (+ (* 15 3600) (* 59 60) 59)) (generated-values :tz))))
-
-(def ^:private json-write
-  @(requiring-resolve (if (System/getProperty "babashka.version") 'cheshire.core/generate-string 'clojure.data.json/write-str)))
-
-(deftest a-json-array-generates-elements-json-carries
-  (is (every? #(and (sequential? %) (json-write %)) (generated-values :j))))
 
 (deftest dates-in-domains-and-arrays-generate-within-2025
   (is (every? #(= 2025 (.getYear ^java.time.LocalDate %)) (concat (generated-values :d) (mapcat identity (generated-values :ds))))))
@@ -143,57 +104,11 @@
         row {:n 1M :sm 2M :s "A" :tz (java.util.Date. 0) :j [] :d (java.time.LocalDate/of 2025 1 1) :ds [(java.time.LocalDate/of 2025 1 1)] :b :pgobject :p 1.5M}]
     (is (m/validate read row {:registry (:registry generated)}) (pr-str (me/humanize (m/explain read row {:registry (:registry generated)}))))))
 
-(deftest a-column-whose-default-its-check-refuses-is-carried-by-every-insert
-  (let [reg (pgmalli/registry (files/assemble "public" "x" (p/facts {:name "public" :types {}
-                                                                    :tables {"t" {:columns [{:name "b" :position 1 :data_type "smallint" :is_nullable true :default_value "1"}]
-                                                                                  :constraints {"b_check" {:name "b_check" :type "CHECK" :check_clause "CHECK (b IS NULL OR (b <> ALL (ARRAY[1, 2])))"}}}}})
-                                              {}))]
-    (is (not (m/validate :pg.public.t/insert {} {:registry reg})) "left out, b is 1, which the CHECK refuses")
-    (is (m/validate :pg.public.t/insert {:b nil} {:registry reg}))))
+(deftest a-bit-string-generates-digits
+  (is (every? #(re-matches #"[01]+" %) (generated-values :b))))
 
-(deftest a-branch-on-a-quoted-column-dispatches-on-its-string-key
-  (let [reg (pgmalli/registry (files/assemble "public" "x" (p/facts {:name "public" :types {}
-                                                                    :tables {"t" {:columns [{:name "Mixed Col" :position 1 :data_type "integer" :is_nullable false}
-                                                                                            {:name "b" :position 2 :data_type "integer" :is_nullable false}]
-                                                                                  :constraints {"c" {:name "c" :type "CHECK" :check_clause "CHECK (\"Mixed Col\" = 1 AND b > 0 OR \"Mixed Col\" = 2 AND b < 0)"}}}}})
-                                              {}))]
-    (is (m/validate :pg.public/t {"Mixed Col" 1 :b 1} {:registry reg}))
-    (is (not (m/validate :pg.public/t {"Mixed Col" 1 :b -1} {:registry reg})))))
-
-(deftest a-bounded-numeric-generates-at-its-scale
-  (is (every? #(and (<= (.scale ^BigDecimal %) 2) (pos? %)) (generated-values :p))))
-
-(deftest a-bit-string-generates-digits-of-its-length
-  (is (every? #(re-matches #"[01]{3}" %) (generated-values :b))))
-
-(defn- registry-of [types columns checks]
-  (pgmalli/registry (files/assemble "public" "x" (p/facts {:name "public" :types types
-                                                          :tables {"t" {:columns columns
-                                                                        :constraints (into {} (for [[n c] checks] [n {:name n :type "CHECK" :check_clause (str "CHECK (" c ")")}]))}}})
-                                    {})))
-
-(deftest an-in-on-a-domain-generates-from-its-values-not-from-the-domain
-  (let [reg (registry-of {"dom" {:kind "DOMAIN" :base_type "integer" :not_null false :constraints [{:name "dom_check" :definition "CHECK (VALUE <> 3)"}]}
-                          "o" {:kind "DOMAIN" :base_type "dom" :not_null false :constraints [{:name "o_check" :definition "CHECK (VALUE = ANY (ARRAY[1, 2, 5]))"}]}}
-                         [{:name "c" :position 1 :data_type "o" :type_schema "public" :is_nullable false}] [])]
-    (is (every? #{1 2 5} (map :c (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1}))))))
-
-(deftest a-regex-over-a-domain-generates-short-strings-of-either-case-the-domain-keeps
-  (when @reg/regex-generation?
-    (let [reg (registry-of {"dq" {:kind "DOMAIN" :base_type "character varying(5)" :not_null false
-                                  :constraints [{:name "dq_check" :definition "CHECK (VALUE::text ~ '^[[:alpha:]]+$'::text)"}]}
-                            "o" {:kind "DOMAIN" :base_type "dq" :not_null false
-                                 :constraints [{:name "o_check" :definition "CHECK (VALUE::text ~~* 'A%'::text)"}]}}
-                           [{:name "o" :position 1 :data_type "o" :type_schema "public" :is_nullable false}] [])
-          rows (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})]
-      (is (every? #(re-matches #"[aA]\p{IsAlphabetic}{0,4}" %) (map :o rows))))))
-
-(deftest a-text-column-with-two-likes-generates-strings-of-both
-  (when @reg/regex-generation?
-    (let [reg (registry-of {} [{:name "s" :position 1 :data_type "text" :is_nullable false}]
-                           [["s_check" "s ~~ 'a%b%'::text"] ["s_check1" "s ~~ '%c%d'::text"]])
-          rows (mg/sample :pg.public.t/insert {:registry reg :size 20 :seed 1})]
-      (is (every? #(and (str/starts-with? % "a") (str/ends-with? % "d")) (map :s rows))))))
+(defn- registry-of [types columns]
+  (pgmalli/registry (files/assemble "x" [["public" (p/facts {:name "public" :types types :tables {"t" {:columns columns :constraints {}}}})]] {})))
 
 (deftest an-re-in-the-registry-round-trips-through-malli-ast
   (let [reg (pgmalli/registry {:registry {}})
@@ -208,14 +123,7 @@
     (is (not (m/validate s (str long-value "!"))))))
 
 (deftest a-default-pgmalli-cannot-parse-is-its-sql-and-the-column-optional-in-insert
-  (let [reg (registry-of {} [{:name "c" :position 1 :data_type "text" :is_nullable false :default_value "CASE WHEN"}] [])
+  (let [reg (registry-of {} [{:name "c" :position 1 :data_type "text" :is_nullable false :default_value "CASE WHEN"}])
         c (some #(when (= :c (first %)) %) (m/children (m/deref (m/schema :pg.public/t {:registry reg}))))]
     (is (= {:sql "CASE WHEN"} (:pg/default (m/properties (last c)))))
-    (is (m/validate :pg.public.t/insert {} {:registry reg}))))
-
-(deftest a-domains-default-expression-reaches-its-columns
-  (let [reg (registry-of {"stamp" {:kind "DOMAIN" :base_type "timestamp with time zone" :not_null true :default "now()" :constraints []}}
-                         [{:name "at" :position 1 :data_type "stamp" :type_schema "public" :is_nullable false}] [])
-        c (some #(when (= :at (first %)) %) (m/children (m/deref (m/schema :pg.public/t {:registry reg}))))]
-    (is (= {:sql "now()"} (:pg/default (m/properties (last c)))))
     (is (m/validate :pg.public.t/insert {} {:registry reg}))))

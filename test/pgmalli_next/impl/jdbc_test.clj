@@ -8,16 +8,15 @@
             [pgmalli-next.sample :refer [registry]]))
 
 (deftest a-domain-over-a-date-or-timestamp-takes-what-is-sent-as-its-base
-  (let [reg (pgmalli/registry {:registry {:pg.public/at [:and [:time/instant {:pg/type "timestamptz"}] [:fn {:pg/constraint "c"} any?]]
-                                          :pg.public/day [:time/local-date {:pg/type "date"}]}})
-        schemas (shape/schemas-of reg)
-        takes? (fn [k v] (m/validate (jdbc/column-write-type schemas [:ref k] {}) v {:registry reg}))]
-    (is (not (takes? :pg.public/at (java.util.Date.))) "sent nowhere")
-    (is (takes? :pg.public/at (java.time.OffsetDateTime/now)))
-    (is (takes? :pg.public/at (java.time.Instant/now)))
-    (is (not (takes? :pg.public/day (java.util.Date.))))
-    (is (takes? :pg.public/day (java.time.LocalDate/now)))
-    (is (not (takes? :pg.public/day "2026-01-01")))))
+  (let [at [:time/instant {:pg/type "timestamptz" :pg/domain "at"}]
+        day [:time/local-date {:pg/type "date" :pg/domain "day"}]
+        takes? (fn [s v] (m/validate (jdbc/column-write-type (shape/schemas-of registry) s {}) v {:registry registry}))]
+    (is (not (takes? at (java.util.Date.))) "sent nowhere")
+    (is (takes? at (java.time.OffsetDateTime/now)))
+    (is (takes? at (java.time.Instant/now)))
+    (is (not (takes? day (java.util.Date.))))
+    (is (takes? day (java.time.LocalDate/now)))
+    (is (not (takes? day "2026-01-01")))))
 
 (deftest a-shaped-json-column-takes-its-shape-from-a-map-or-vector-sent-as-jsonb
   (let [shaped [:map {:pg/type "jsonb"} [:prompt :string]]]

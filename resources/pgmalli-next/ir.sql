@@ -1,7 +1,7 @@
 -- One schema as a single JSON document. Run with: psql -At -v schema=NAME -f ir.sql
 -- Reads tables (regular, partition parents and foreign), views and materialized views, columns,
--- CHECK / PRIMARY KEY / UNIQUE / FOREIGN KEY / EXCLUDE constraints, enum and domain types,
--- functions, operators and sequences. Expressions are kept as PostgreSQL's deparser prints them.
+-- PRIMARY KEY / UNIQUE / FOREIGN KEY / EXCLUDE constraints, enum types, functions,
+-- operators and sequences. A CHECK is not read: the database checks it.
 -- search_path is pinned so type qualification does not depend on the connecting user, with
 -- pg_catalog first so that the schema's own functions and operators never stand in for its: every
 -- function is called qualified, and every operator has an exact match in pg_catalog (hence the
@@ -12,25 +12,44 @@ WITH cols AS (
          pg_catalog.json_build_object(
            'name', a.attname,
            'position', a.attnum,
-           'data_type', pg_catalog.format_type(a.atttypid, NULL),
+           -- a domain's column (an array of a domain's) is of the domain's base type under all its
+           -- domains, of any schema; NOT NULL and DEFAULT are a domain's own, not its array's
+           'data_type', CASE WHEN dom.root IS NULL THEN pg_catalog.format_type(a.atttypid, NULL)
+                             ELSE pg_catalog.format_type(dom.root, NULL) || CASE WHEN e.oid <> t.oid THEN '[]'::text ELSE ''::text END END,
+           -- the domain as the column declares it: "d", or "d[]" for an array of one
+           'domain', CASE WHEN dom.root IS NOT NULL THEN pg_catalog.format_type(a.atttypid, NULL) END,
            'type_schema', tn.nspname,
-           'is_nullable', NOT a.attnotnull,
-           'default_value', CASE WHEN a.attgenerated = '' THEN pg_catalog.pg_get_expr(d.adbin, d.adrelid) END,
+           'is_nullable', NOT (a.attnotnull OR (e.oid = t.oid AND COALESCE(dom.not_null, false))),
+           'default_value', CASE WHEN a.attgenerated = '' THEN COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), CASE WHEN e.oid = t.oid THEN dom.default_value END) END,
            'generated_expr', CASE WHEN a.attgenerated <> '' THEN pg_catalog.pg_get_expr(d.adbin, d.adrelid) END,
            'identity', CASE a.attidentity WHEN 'a' THEN 'ALWAYS' WHEN 'd' THEN 'BY DEFAULT' END,
-           -- the typmod of an array column is its element type's
-           'max_length', CASE WHEN COALESCE(NULLIF(t.typelem, 0::oid), t.oid) IN ('varchar'::regtype::oid, 'bpchar'::regtype::oid) AND a.atttypmod > 4 THEN a.atttypmod - 4
-                              WHEN COALESCE(NULLIF(t.typelem, 0::oid), t.oid) IN ('bit'::regtype::oid, 'varbit'::regtype::oid) AND a.atttypmod > 0 THEN a.atttypmod END,
-           'precision', CASE WHEN a.atttypid = 'numeric'::regtype::oid AND a.atttypmod > 4 THEN ((a.atttypmod - 4) >> 16) & 65535 END,
-           -- the scale is the low 11 bits of the typmod, signed (numeric(2,-3) is allowed)
-           'scale', CASE WHEN a.atttypid = 'numeric'::regtype::oid AND a.atttypmod > 4
-                    THEN CASE WHEN ((a.atttypmod - 4) & 2047) >= 1024 THEN ((a.atttypmod - 4) & 2047) - 2048 ELSE (a.atttypmod - 4) & 2047 END END
+           -- a varchar(n)'s, char(n)'s, bit(n)'s or bit varying(n)'s n, the typmod of an array column its element type's
+           'max_length', CASE WHEN COALESCE(NULLIF(b.typelem, 0::oid), b.oid) IN ('varchar'::regtype::oid, 'bpchar'::regtype::oid) AND m.typmod > 4 THEN m.typmod - 4
+                              WHEN COALESCE(NULLIF(b.typelem, 0::oid), b.oid) IN ('bit'::regtype::oid, 'varbit'::regtype::oid) AND m.typmod > 0 THEN m.typmod END
          ) AS col
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   JOIN pg_catalog.pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
   JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
-  JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace
+  -- an array's element type (a domain over an array is no array: it is its own element)
+  JOIN pg_catalog.pg_type e ON e.oid = CASE WHEN t.typtype = 'b' AND t.typcategory = 'A' THEN t.typelem ELSE t.oid END
+  LEFT JOIN LATERAL (
+    WITH RECURSIVE chain AS (
+      SELECT x.typbasetype AS base, x.typtypmod AS typmod, x.typnotnull AS not_null, x.typdefault AS default_value, 1 AS depth
+      FROM pg_catalog.pg_type x WHERE x.oid = e.oid AND x.typtype = 'd'
+      UNION ALL
+      SELECT x.typbasetype, x.typtypmod, x.typnotnull, x.typdefault, chain.depth + 1
+      FROM chain JOIN pg_catalog.pg_type x ON x.oid = chain.base AND x.typtype = 'd'
+    )
+    SELECT (SELECT base FROM chain ORDER BY depth DESC LIMIT 1) AS root,
+           (SELECT typmod FROM chain ORDER BY depth DESC LIMIT 1) AS typmod,
+           (SELECT bool_or(not_null) FROM chain) AS not_null,
+           (SELECT default_value FROM chain WHERE default_value IS NOT NULL ORDER BY depth LIMIT 1) AS default_value
+  ) dom ON true
+  -- the type the column's values are of, and its typmod
+  JOIN pg_catalog.pg_type b ON b.oid = COALESCE(dom.root, e.oid)
+  CROSS JOIN LATERAL (SELECT CASE WHEN dom.root IS NULL THEN a.atttypmod ELSE dom.typmod END AS typmod) m
+  JOIN pg_catalog.pg_namespace tn ON tn.oid = b.typnamespace
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
   WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition
 ),
@@ -38,11 +57,10 @@ cons AS (
   SELECT k.conrelid AS relid,
          pg_catalog.json_build_object(
            'name', k.conname,
-           'type', CASE k.contype WHEN 'c' THEN 'CHECK' WHEN 'p' THEN 'PRIMARY KEY' WHEN 'u' THEN 'UNIQUE' WHEN 'f' THEN 'FOREIGN KEY' WHEN 'x' THEN 'EXCLUDE' END,
+           'type', CASE k.contype WHEN 'p' THEN 'PRIMARY KEY' WHEN 'u' THEN 'UNIQUE' WHEN 'f' THEN 'FOREIGN KEY' WHEN 'x' THEN 'EXCLUDE' END,
            'columns', (SELECT pg_catalog.json_agg(a.attname ORDER BY ord)
                        FROM pg_catalog.unnest(k.conkey) WITH ORDINALITY AS c(attnum, ord)
                        JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = c.attnum),
-           'check_clause', CASE WHEN k.contype = 'c' THEN pg_catalog.pg_get_constraintdef(k.oid, true) END,
            'is_valid', k.convalidated,
            'deferrable', k.condeferrable,
            -- NOT ENFORCED (PostgreSQL 18): conenforced is absent before, hence read through jsonb
@@ -67,7 +85,7 @@ cons AS (
          ) AS con
   FROM pg_catalog.pg_constraint k
   JOIN pg_catalog.pg_namespace n ON n.oid = k.connamespace
-  WHERE n.nspname = :'schema' AND k.contype IN ('c', 'p', 'u', 'f', 'x') AND k.conparentid = 0::oid
+  WHERE n.nspname = :'schema' AND k.contype IN ('p', 'u', 'f', 'x') AND k.conparentid = 0::oid
   UNION ALL
   -- a unique index over plain columns constrains rows as a UNIQUE constraint does, a partial one
   -- (with a predicate) the rows it covers; its key columns only (INCLUDE columns are not part of the key)
@@ -91,33 +109,6 @@ cons AS (
   WHERE n.nspname = :'schema' AND i.indisunique AND NOT i.indisprimary
     AND i.indexprs IS NULL
     AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conindid = i.indexrelid)
-  UNION ALL
-  -- a partitioned table takes a row only when one of its leaf partitions does: their bounds
-  -- (each including its ancestors') and the leaf's own CHECKs, as one CHECK; none, false
-  SELECT p.oid AS relid,
-         pg_catalog.json_build_object(
-           'name', p.relname::text || ' (partitions)',
-           'type', 'CHECK',
-           'check_clause', 'CHECK (' || COALESCE(leaves.clause, 'false') || ')',
-           'is_valid', true
-         ) AS con
-  FROM pg_catalog.pg_class p
-  JOIN pg_catalog.pg_namespace n ON n.oid = p.relnamespace
-  JOIN LATERAL (
-    WITH RECURSIVE tree AS (
-      SELECT inhrelid FROM pg_catalog.pg_inherits WHERE inhparent = p.oid
-      UNION ALL
-      SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.inhrelid
-    )
-    -- a DEFAULT partition with no sibling has no constraint: it takes every row
-    SELECT pg_catalog.string_agg('(' || COALESCE(pg_catalog.pg_get_partition_constraintdef(t.inhrelid), 'true')
-                          || COALESCE((SELECT pg_catalog.string_agg(' AND (' || pg_catalog.pg_get_expr(k.conbin, k.conrelid) || ')', '')
-                                       FROM pg_catalog.pg_constraint k WHERE k.conrelid = t.inhrelid AND k.contype = 'c' AND k.conislocal), '')
-                          || ')', ' OR ' ORDER BY l.relname) AS clause
-    FROM tree t JOIN pg_catalog.pg_class l ON l.oid = t.inhrelid
-    WHERE l.relkind IN ('r', 'f')
-  ) leaves ON true
-  WHERE n.nspname = :'schema' AND p.relkind = 'p'
 ),
 tables AS (
   SELECT c.relname,
@@ -151,19 +142,11 @@ tables AS (
 ),
 types AS (
   SELECT t.typname,
-         CASE t.typtype
-           WHEN 'e' THEN pg_catalog.json_build_object('name', t.typname, 'kind', 'ENUM',
-                           'enum_values', (SELECT pg_catalog.json_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid))
-           WHEN 'd' THEN pg_catalog.json_build_object('name', t.typname, 'kind', 'DOMAIN',
-                           'base_type', pg_catalog.format_type(t.typbasetype, t.typtypmod),
-                           'not_null', t.typnotnull,
-                           'default', t.typdefault,
-                           'constraints', (SELECT COALESCE(pg_catalog.json_agg(pg_catalog.json_build_object('name', k.conname, 'definition', pg_catalog.pg_get_constraintdef(k.oid, true), 'is_valid', k.convalidated) ORDER BY k.conname), '[]'::json)
-                                           FROM pg_catalog.pg_constraint k WHERE k.contypid = t.oid AND k.contype = 'c'))
-         END AS typ
+         pg_catalog.json_build_object('name', t.typname, 'kind', 'ENUM',
+                                      'enum_values', (SELECT pg_catalog.json_agg(e.enumlabel ORDER BY e.enumsortorder) FROM pg_catalog.pg_enum e WHERE e.enumtypid = t.oid)) AS typ
   FROM pg_catalog.pg_type t
   JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
-  WHERE n.nspname = :'schema' AND t.typtype IN ('e', 'd')
+  WHERE n.nspname = :'schema' AND t.typtype = 'e'
 ),
 -- what a query calls: no procedure, no trigger function, nothing taking or returning a type
 -- SQL has no value of (internal, cstring, an access method's or a language's handler)

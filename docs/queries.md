@@ -21,7 +21,7 @@ whose `:in` says where the symbol is, as `get-in` reads it.
          '[malli.core :as m]
          '[next.jdbc.result-set :as rs])
 
-(def registry (pgmalli/registry "public"))
+(def registry (pgmalli/registry))
 
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
 ;; => {:args {:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}

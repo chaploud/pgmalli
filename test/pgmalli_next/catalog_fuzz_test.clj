@@ -1,7 +1,6 @@
 (ns pgmalli-next.catalog-fuzz-test
   "Random schemas through the whole pipeline against PostgreSQL itself: a test.check generator
-   makes a schema model (enums, domain chains, many column types, CHECKs of the patterns
-   pgmalli-next.impl.pattern matches, partitions, identity and generated columns, quoted names,
+   makes a schema model (enums, domain chains, many column types, partitions, identity and generated columns, quoted names,
    views), rendered to DDL. For each schema the registry is built from the database, and:
      :rejected       an insert row the database refused
      :false-positive a row the database took that the insert schema rejects
@@ -29,8 +28,8 @@
 ;;; the model
 
 (def ^:private types
-  "Column types: their SQL and a few values (as the registry holds them), some outside what a
-   CHECK or the type allows, so the database has something to refuse."
+  "Column types: their SQL and a few values (as the registry holds them), some outside what the
+   type allows, so the database has something to refuse."
   {:integer {:sql "integer" :vals [0 1 2 5 -1 100 2147483647]}
    :smallint {:sql "smallint" :vals [0 1 5 -1 32767]}
    :bigint {:sql "bigint" :vals [0 1 5 9007199254740993]}
@@ -59,37 +58,10 @@
    :int-arr {:sql "integer[]" :vals [[] [1 2] [5]]}
    :text-arr {:sql "text[]" :vals [[] ["a"] ["a" "bb"]]}})
 
-(def ^:private kinds
-  "How CHECKs and values treat a type."
-  {:number #{:integer :smallint :bigint}
-   :decimal #{:numeric :numeric62}
-   :string #{:text :varchar5}
-   :array #{:int-arr :text-arr}})
-
-(defn- kind [t] (some (fn [[k ts]] (when (ts t) k)) kinds))
-
-(def ^:private checks
-  "CHECK patterns by kind, $c the column (VALUE in a domain)."
-  {:number ["$c IN (1, 2, 5)" "$c BETWEEN 0 AND 10" "$c > 0" "$c >= 1 AND $c <= 100" "$c <> 3" "$c NOT IN (1, 2)"
-            "$c >= 0.5"]
-   :decimal ["$c BETWEEN 0 AND 10" "$c > 0" "$c >= 1 AND $c <= 100" "$c >= 0.5"]
-   :string ["$c IN ('a', 'bb')" "length($c) <= 3" "char_length($c) BETWEEN 1 AND 4" "length(btrim($c)) > 0" "$c <> ''"
-            "$c ~ '^[a-z]+$'" "$c ~* '^A'" "$c LIKE 'a%'" "$c ILIKE 'A%'" "$c NOT IN ('x')"
-            "$c ~ '^[[:alpha:]]+$'" "$c ~* '^é'" "$c ~ '^[A-Z]{2}'" "$c ~ '^\\w+$'"]
-   :jsonb ["jsonb_typeof($c) = 'object'" "jsonb_typeof($c) = 'array'"]
-   :array ["cardinality($c) <= 2" "array_length($c, 1) <= 2" "cardinality($c) > 0"]
-   :bytea ["octet_length($c) <= 2"]
-   :enum ["$c <> $l" "$c IN ($l)"]
-   :bits ["length($c) = 3"]})
-
-(defn- check-kind [t] (or (kind t) ({:jsonb :jsonb :bytea :bytea :varbit4 :bits} t)))
-
 (def ^:private gen-column
   (tcg/hash-map :type (tcg/elements (concat (keys types) [:enum :enum :enum-arr :domain :domain :domain-arr]))
                 :ref (tcg/choose 0 9)
                 :not-null tcg/boolean
-                :check (tcg/frequency [[3 (tcg/return nil)] [2 (tcg/choose 0 50)]])
-                :when-present tcg/boolean
                 :default (tcg/frequency [[5 (tcg/return false)] [1 (tcg/return true)]])))
 
 (def ^:private gen-table
@@ -97,7 +69,6 @@
                 :pk tcg/boolean
                 :identity (tcg/elements [nil nil :always :default :serial])
                 :generated tcg/boolean
-                :table-check (tcg/elements [nil nil 1 2])
                 :partition (tcg/frequency [[6 (tcg/return nil)] [1 (tcg/elements [:list :list-default :range :range-default :hash :range-identity])]])
                 :fk tcg/boolean
                 :view tcg/boolean
@@ -107,7 +78,6 @@
   (tcg/hash-map :enums (tcg/vector (tcg/fmap (comp vec distinct) (tcg/vector (tcg/elements ["a" "bb" "it's" "Ü" "b c" "x\"y" "UPPER"]) 1 4)) 0 2)
                 :enum-names (tcg/shuffle ["e" "Mood" "Mixed Case" "a\"q"])
                 :domains (tcg/vector (tcg/hash-map :base (tcg/elements [:integer :text :varchar5 :char3 :numeric :date :prev :prev])
-                                                   :check (tcg/frequency [[1 (tcg/return nil)] [2 (tcg/choose 0 50)]])
                                                    :not-null (tcg/frequency [[4 (tcg/return false)] [1 (tcg/return true)]]))
                                      0 3)
                 :domain-names (tcg/shuffle ["d" "Dom" "order" "D q"])
@@ -120,15 +90,13 @@
 
 (defn- resolve-model
   "The model with its references resolved: domains on a type or an earlier domain, columns on
-   types that exist, CHECKs picked from their kind's patterns."
+   types that exist."
   [{:keys [enums enum-names domains domain-names tables table-names]}]
   (let [enums (mapv (fn [labels n] {:name n :labels labels}) enums enum-names)
-        domains (reduce (fn [ds [{:keys [base check not-null]} n]]
+        domains (reduce (fn [ds [{:keys [base not-null]} n]]
                           (let [base (if (= :prev base) (if (seq ds) {:domain (dec (count ds))} :text) base)
-                                root (if (map? base) (:root (get ds (:domain base))) base)
-                                k (check-kind root)]
-                            (conj ds {:name n :base base :not-null not-null :root root
-                                      :check (when (and check k) (str/replace (nth (checks k) (mod check (count (checks k)))) "$c" "VALUE"))})))
+                                root (if (map? base) (:root (get ds (:domain base))) base)]
+                            (conj ds {:name n :base base :not-null not-null :root root})))
                         [] (map vector domains domain-names))]
     {:enums enums
      :domains domains
@@ -150,17 +118,6 @@
     :domain-arr (str (q schema) "." (q (get-in model [:domains ref :name])) "[]")
     (get-in types [type :sql])))
 
-(defn- column-check [model {:keys [type ref check when-present] cname :name}]
-  (when check
-    (let [k (case type :enum :enum :enum-arr :array :domain-arr :array (check-kind type))
-          ;; <> the only label leaves a NOT NULL column no value
-          ps (if (and (= :enum k) (= 1 (count (get-in model [:enums ref :labels])))) ["$c IN ($l)"] (get checks k))]
-      (when ps
-        (let [e (-> (nth ps (mod check (count ps)))
-                    (str/replace "$c" (q cname))
-                    (str/replace "$l" (sql-literal (first (get-in model [:enums ref :labels] ["a"])))))]
-          (if when-present (str (q cname) " IS NULL OR (" e ")") e))))))
-
 (defn- domain-root [model ref] (get-in model [:domains ref :root]))
 
 (defn- default-sql [model {:keys [type ref]}]
@@ -171,16 +128,6 @@
       :enum (sql-literal (first (get-in model [:enums ref :labels])))
       :boolean "true"
       nil)))
-
-(defn- integer-columns [t]
-  (filter #(#{:integer :smallint :bigint} (:type %)) (:columns t)))
-
-(defn- table-check [t]
-  (let [[a b] (map (comp q :name) (integer-columns t))]
-    (when (and a b (:table-check t))
-      (case (int (:table-check t))
-        1 (str a " > 5 OR " b " < 3")
-        2 (str "(" a " = 1 AND " b " > 0) OR (" a " = 2 AND " b " < 0)")))))
 
 (defn- partition-of [t]
   (let [p (:partition t)]
@@ -202,8 +149,7 @@
       true (into (for [c (:columns t)]
                    (assoc c :sql (str (type-sql (:schema model) model c)
                                       (when (:not-null c) " NOT NULL")
-                                      (when-let [d (when (:default c) (default-sql model c))] (str " DEFAULT " d))
-                                      (when-let [e (column-check model c)] (str " CHECK (" e ")")))))))))
+                                      (when-let [d (when (:default c) (default-sql model c))] (str " DEFAULT " d)))))))))
 
 (defn- partitions-sql [t]
   (let [parent (:qualified t)
@@ -229,14 +175,13 @@
   (str "CREATE SCHEMA " (q schema) ";\n"
        (apply str (for [{:keys [name labels]} enums]
                     (str "CREATE TYPE " (q schema) "." (q name) " AS ENUM (" (str/join ", " (map sql-literal labels)) ");\n")))
-       (apply str (for [{:keys [name base not-null check]} domains]
+       (apply str (for [{:keys [name base not-null]} domains]
                     (str "CREATE DOMAIN " (q schema) "." (q name) " AS "
                          (if (map? base) (str (q schema) "." (q (get-in model [:domains (:domain base) :name]))) (get-in types [base :sql]))
-                         (when not-null " NOT NULL") (when check (str " CHECK (" check ")")) ";\n")))
+                         (when not-null " NOT NULL") ";\n")))
        (apply str (for [t tables]
                     (str "CREATE TABLE " (:qualified t) " ("
-                         (str/join ", " (concat (for [c (:all-columns t)] (str (q (:name c)) " " (:sql c)))
-                                                (when-let [c (table-check t)] [(str "CHECK (" c ")")])))
+                         (str/join ", " (for [c (:all-columns t)] (str (q (:name c)) " " (:sql c))))
                          ")"
                          (case (partition-of t)
                            nil ""
@@ -328,7 +273,9 @@
                          (for [row rows
                                :let [by-key (into {} (map (juxt row-key identity)) (:all-columns t))
                                      refused (attempt! tx [(insert-sql model t (update-keys row by-key))])]
-                               :when (and refused (not= unique-violation (:sqlstate refused)))]
+                               ;; a key and a partition's bounds are the database's to check
+                               :when (and refused (not= unique-violation (:sqlstate refused))
+                                          (not (str/includes? (:message refused) "no partition of relation")))]
                            (merge {:kind :rejected :table (:name t) :row row} refused)))]
                  f)
                (for [[i t] (map-indexed vector (:tables model))

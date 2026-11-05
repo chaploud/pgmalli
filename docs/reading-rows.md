@@ -9,7 +9,7 @@ PostgreSQL's JDBC driver returns, read with next.jdbc's `as-unqualified-maps`. T
 (require '[pgmalli-next.core :as pgmalli]
          '[malli.core :as m])
 
-(def registry (pgmalli/registry "public"))
+(def registry (pgmalli/registry))
 ```
 
 ## The builder

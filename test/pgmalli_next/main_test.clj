@@ -53,38 +53,36 @@
       (is (str/starts-with? err (str "pgmalli-next: cannot read " f " as EDN: "))))))
 
 (deftest a-misspelt-config-key-exits-2-with-the-key-meant
-  (let [{:keys [code err]} (cli "check" (config-file {:outdir "x"}))]
+  (let [{:keys [code err]} (cli "check" (config-file {:outt "x"}))]
     (is (= 2 code))
-    (is (= "pgmalli-next: invalid config: {:outdir [\"disallowed key\"]}; did you mean: :out-dir\n" err))))
+    (is (= "pgmalli-next: invalid config: {:outt [\"disallowed key\"]}; did you mean: :out\n" err))))
 
 (deftest a-missing-psql-exits-3-on-one-line
-  (let [{:keys [code out err]} (cli "check" (config-file {:out-dir (temp-dir) :db {:psql "/nonexistent/psql"}}))]
+  (let [{:keys [code out err]} (cli "check" (config-file {:out (str (temp-dir) "/generated.edn") :db {:psql "/nonexistent/psql"}}))]
     (is (= 3 code))
     (is (= "" out))
     (is (str/starts-with? err "pgmalli-next: cannot run psql (/nonexistent/psql)"))
     (is (= 1 (count (str/split-lines err))) "no stack trace")))
 
 (deftest an-unreachable-database-exits-3-without-the-password
-  (let [{:keys [code err]} (cli "check" (config-file {:out-dir (temp-dir) :db {:host "localhost" :port 1 :dbname "nope" :user "u" :password "s3cret"}}))]
+  (let [{:keys [code err]} (cli "check" (config-file {:out (str (temp-dir) "/generated.edn") :db {:host "localhost" :port 1 :dbname "nope" :user "u" :password "s3cret"}}))]
     (is (= 3 code))
     (is (str/starts-with? err "pgmalli-next: cannot connect to localhost:1/nope with psql: "))
     (is (= 1 (count (str/split-lines err))))
     (is (not (str/includes? err "s3cret")))))
 
-(deftest a-function-differs-by-name-and-a-file-without-functions-in-one-line
-  (let [printed #(str/split-lines (with-out-str (#'main/print-difference "public" %)))]
-    (is (= ["public :functions \"g\"" "  file: [{:args [], :result \"text\"}]" "  db:   nil"]
-           (printed {:key :functions :name "g" :file [{:args [] :result "text"}] :db nil})))
-    (is (= ["public :operators: the file has none, as an older pgmalli wrote it; generate writes them"]
-           (printed {:key :operators :absent :file})))))
+(deftest a-function-differs-by-schema-and-name
+  (let [printed #(str/split-lines (with-out-str (#'main/print-difference %)))]
+    (is (= [":functions public \"g\"" "  file: [{:args [], :result \"text\"}]" "  db:   nil"]
+           (printed {:key :functions :schema "public" :name "g" :file [{:args [] :result "text"}] :db nil})))))
 
 (deftest an-unrendered-type-is-overridden-by-its-column
-  (is (= ["public: unrendered (2), left out of the schemas:"
+  (is (= ["unrendered (2), left out of the schemas:"
           "  public.t ps: type pair[]"
           "    to keep it, add to pgmalli-next.edn :overrides {:public.t/ps <malli schema>}"
           "  public.t p: type pair"
           "    to keep it, add to pgmalli-next.edn :overrides {:public.t/p <malli schema>}"]
-         (str/split-lines (with-out-str (#'main/print-unrendered "public" [{:kind :type :table "public.t" :column "ps" :type "pair[]"}
+         (str/split-lines (with-out-str (#'main/print-unrendered [{:kind :type :table "public.t" :column "ps" :type "pair[]"}
                                                                            {:kind :type :table "public.t" :column "p" :type "pair"}]))))))
 
 (deftest a-server-newer-than-the-catalog-snapshot-is-a-warning
@@ -94,47 +92,45 @@
 
 (deftest check-names-a-missing-file-and-the-command-that-writes-it
   (when *db*
-    (let [out-dir (temp-dir)
-          f (config-file {:out-dir out-dir :db *db*})
-          {:keys [code out err]} (cli "check" f)]
+    (let [out (str (temp-dir) "/generated.edn")
+          f (config-file {:out out :db *db*})
+          {:keys [code err] printed :out} (cli "check" f)]
       (is (= 1 code))
       (is (= "" err))
-      (is (= [(str "public: no generated file at " out-dir "/public.edn")
-              (str "missing: public; run `" (#'main/command "generate" f) "` and commit the files")]
-             (str/split-lines out))
+      (is (= [(str "no generated file at " out)
+              (str "missing: " out "; run `" (#'main/command "generate" f) "` and commit it")]
+             (str/split-lines printed))
           "one line for the file, not every entry as a difference"))))
 
 (deftest generate-then-check-exits-0-and-lists-the-findings-on-stdout
   (when *db*
-    (exec-sql! "CREATE FUNCTION is_slug(s text) RETURNS boolean IMMUTABLE LANGUAGE sql AS $$ SELECT s ~ '^[a-z-]+$' $$;
-                CREATE TABLE tags (id int PRIMARY KEY, slug text CHECK (is_slug(slug)), weight int);
-                ALTER TABLE tags ADD CONSTRAINT weight_positive CHECK (weight > 0) NOT VALID;")
-    (let [out-dir (temp-dir)
-          f (config-file {:out-dir out-dir :db *db*})
+    (exec-sql! "CREATE TABLE owners (id int PRIMARY KEY); CREATE TYPE pair AS (a int);
+                CREATE TABLE tags (id int PRIMARY KEY, slug text CHECK (slug <> ''), weight int, owner int, g pair);
+                ALTER TABLE tags ADD CONSTRAINT tags_owner_fkey FOREIGN KEY (owner) REFERENCES owners (id) NOT VALID;")
+    (let [out-file (str (temp-dir) "/generated.edn")
+          f (config-file {:out out-file :db *db*})
           generated (cli "generate" f)
           {:keys [code out err]} (cli "check" f)]
       (is (= 0 (:code generated)))
-      (is (str/starts-with? (:out generated) (str "wrote " out-dir "/public.edn (schema public; tables: 1, views: 0")))
-      (is (str/ends-with? (:out generated) (str "; commit them, and run `" (#'main/command "check" f) "` in CI\n")))
+      (is (str/starts-with? (:out generated) (str "wrote " out-file " (schemas: public; tables: 2, views: 0")))
+      (is (str/ends-with? (:out generated) (str "done: commit it, and run `" (#'main/command "check" f) "` in CI\n")))
       (is (= 0 code))
       (is (= "" err))
-      (is (= ["public: unrendered (2), left out of the schemas:"
-              "  public.tags tags_slug_check: CHECK (is_slug(slug))"
-              "    to silence it, add to pgmalli-next.edn :overrides {\"tags_slug_check\" {:skip \"<why>\"}}"
-              "  public.tags weight_positive: CHECK (weight > 0) NOT VALID"
-              "    to silence it, add to pgmalli-next.edn :overrides {\"weight_positive\" {:skip \"<why>\"}}"
-              "public: diagnostics (1):"
-              "  info public.tags: weight_positive is NOT VALID: rows from before it may violate it, new rows may not"
-              "ok: the files of public match the database"]
+      (is (= ["unrendered (1), left out of the schemas:"
+              "  public.tags g: type pair"
+              "    to keep it, add to pgmalli-next.edn :overrides {:public.tags/g <malli schema>}"
+              "diagnostics (1):"
+              "  info public.tags: tags_owner_fkey is NOT VALID: rows from before it may violate it, new rows may not"
+              "ok: the file of public matches the database"]
              (str/split-lines out)))
       (is (= {:stale nil :missing nil} (select-keys (edn/read-string (:out (cli "check" "--edn" f))) [:stale :missing]))
           "--edn prints check's map")
       (exec-sql! "ALTER TABLE tags ALTER COLUMN weight SET NOT NULL")
       (let [{:keys [code out]} (cli "check" f)]
         (is (= 1 code))
-        (is (= ["public :pg.public/tags :weight"
+        (is (= [":pg.public/tags :weight"
                 "  file: [:maybe [:pg/integer {:pg/type \"integer\"}]]"
                 "  db:   [:pg/integer {:pg/type \"integer\"}]"]
                (take 3 (str/split-lines out)))
             "a subject line, then the file's and the database's side")
-        (is (str/ends-with? out (str "stale: public (differences: 1); run `" (#'main/command "generate" f) "` and commit the files\n")))))))
+        (is (str/ends-with? out (str "stale (differences: 1); run `" (#'main/command "generate" f) "` and commit the file\n")))))))

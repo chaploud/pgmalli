@@ -1,6 +1,6 @@
 (ns pgmalli-next.core
-  "The application side of pgmalli: the schemas generated from a PostgreSQL schema (files on
-   the classpath as pgmalli-next/<schema>.edn), read and used. Generation and freshness, which need
+  "The application side of pgmalli: the schemas generated from PostgreSQL schemas (the file on
+   the classpath as pgmalli-next/generated.edn), read and used. Generation and freshness, which need
    psql, are pgmalli-next.generate; HoneySQL queries checked and typed, pgmalli-next.honeysql."
   (:require [clojure.string :as str]
             [malli.core :as m]
@@ -14,25 +14,24 @@
             [pgmalli-next.impl.shape :as shape]))
 
 (defn generated
-  "The generated file of a schema, read from the classpath, as data:
-   {:schema :database-version :registry {name schema} :functions {name [overload ...]}
-    :operators {name [overload ...]} :sequences [name ...] :unrendered [entry ...] :skipped [entry ...]
+  "The generated file on the classpath (pgmalli-next/generated.edn), as data:
+   {:schemas [name ...] :database-version :registry {name schema}
+    :functions {schema {name [overload ...]}} :operators {schema {name [overload ...]}}
+    :sequences {schema [name ...]} :unrendered [entry ...]
     :diagnostics [{:table :kind :severity :message ...} ...]},
    its entries and diagnostics as docs/types.md#the-generated-file lists them."
-  [schema-name]
-  (reg/read-generated schema-name))
+  []
+  (reg/read-generated))
 
 (defn registry
-  "A malli registry of the named schemas' generated files, with the insert and update
-   schemas derived from them, malli's default schemas, malli.util and malli.experimental.time.
+  "A malli registry of the generated file on the classpath, or of generated data, with the
+   insert and update schemas derived from them, malli's default schemas, malli.util and
+   malli.experimental.time.
 
-   (registry \"public\")
-
-   A generated data map (see generated) is taken in place of a name."
-  [& schemas]
-  (when (empty? schemas)
-    (error/fail! :pgmalli.error/invalid-options "registry takes the schemas to read: (registry \"public\")" {:given []}))
-  (apply reg/registry schemas))
+   (registry)
+   (registry (clojure.edn/read-string (slurp (clojure.java.io/resource \"app/generated.edn\"))))"
+  [& generated]
+  (apply reg/registry generated))
 
 (defn as-read
   "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it under
@@ -96,7 +95,7 @@
   ([schema]
    (when (shape/generated-name? schema)
      (error/fail! :pgmalli.error/invalid-options (str "describe reads " (pr-str schema) " through a registry: (describe registry " (pr-str schema) ")") {:given schema}))
-   (d/describe {} (schema! (reg/registry) schema)))
+   (d/describe {} (schema! reg/base schema)))
   ([registry schema]
    (when (shape/generated-name? schema) (shape/schema-of registry schema))
    (d/describe (shape/schemas-of registry) (schema! registry schema))))

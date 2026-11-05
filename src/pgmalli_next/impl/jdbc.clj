@@ -258,10 +258,12 @@
   [schema pgjdbc?]
   (let [t (pg-type schema)
         head (if (vector? schema) (first schema) schema)
-        ;; a domain's base comes with its typmod: "bit(4)"
-        driver-read (when-not (array-column? schema) (:read (types/entry (shape/type-name {:pg/type t}))))]
-    (cond (= :bit driver-read) (if (or (= 1 (:max (second schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
-          (= :or-double driver-read) [:or (driver-type schema pgjdbc?) ['double? {:pg/type t}]]
+                driver-read (when-not (array-column? schema) (:read (types/entry (shape/type-name {:pg/type t}))))]
+    (cond (= :bit driver-read) (if (or (= 1 (:pg/max-length (shape/column-props schema))) (str/ends-with? t "(1)")) [:boolean {:pg/type t}] [:any {:pg/type t}])
+          ;; a domain's name on the :or, where the type is read
+          (= :or-double driver-read) (let [d (:pg/domain (shape/props schema))]
+                                       (cond-> [:or (driver-type (cond-> schema d (update 1 dissoc :pg/domain)) pgjdbc?) ['double? {:pg/type t}]]
+                                         d (shape/merge-props {:pg/domain d})))
           driver-read [driver-read {:pg/type t}]
           ;; the driver's own object, whatever an override says the value is
           (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
@@ -470,62 +472,28 @@
       (shape/not-a-row! registry name "as-read"))
     (shape/row-map s)))
 
-(defn- through-domain
-  "A column of a domain whose type the driver returns as something else (a date as a
-   java.sql.Date, a citext as a PGobject) as that type, without the domain's CHECKs, which read
-   the registry's types; a domain pgjdbc returns (or, where f is write-type, takes) as the registry
-   holds it stays a reference. f is called with nothing sent, as sends add values to the base
-   type and do not change how the driver reads it."
-  [schemas s f]
-  (if-let [d (shape/ref-target schemas s)]
-    (let [base (through-domain schemas (shape/domain-base d) f)]
-      (if (= base (f base))
-        s
-        (shape/merge-props (shape/without-gen base) (dissoc (shape/column-props s) :pg/type))))
-    s))
-
 (defn- column-read-type*
-  [schemas s pgjdbc?]
-  (let [;; the driver returns an array's elements of a domain (but an enum type's) as PGobjects;
-        ;; a domain that is a CHECK's list alone is an [:enum] of its base's :pg/type
-        x (when (array-column? s) (last s))
-        target (shape/ref-target schemas x)
-        enum-type? (and (= :enum (shape/head target)) (nil? (pg-type target)))
-        s (if (and target (not enum-type?)) (assoc s (dec (count s)) [:any {:pg/type (pg-type x)}]) s)]
-    (read-type (through-domain schemas s #(read-type % pgjdbc?)) pgjdbc?)))
+  [s pgjdbc?]
+  (let [;; the driver returns the elements of an array of a domain (d[]) as PGobjects
+        d (when (array-column? s) (some->> (:pg/domain (shape/column-props s)) (re-matches #"(.*)\[\]$") second))]
+    (cond-> (read-type (cond-> s d (assoc (dec (count s)) [:any {:pg/type d}])) pgjdbc?)
+      d (shape/merge-props {:pg/domain (str d "[]")}))))
 
 (defn column-read-type
-  "read-type of a column schema (without NULL) of a registry's schemas under the one reading, a
-   domain read as its base is. opts are a write type's, which the one reading does not read."
-  [schemas s _opts]
-  (column-read-type* schemas s false))
+  "read-type of a column schema (without NULL) under the one reading. The registry's schemas and
+   opts (a write type's) are not read: the arguments are column-write-type's."
+  [_schemas s _opts]
+  (column-read-type* s false))
 
 (defn- column-write-type*
-  "write-type of a column schema (without NULL) of a registry's schemas, a domain taken as the
-   driver takes its base."
+  "write-type of a column schema (without NULL) of a registry's schemas."
   [schemas s opts]
   (let [;; an array's elements of an enum type are its labels: array-type takes an array of that type alone
         e (when (array-column? s) (last s))
         target (shape/ref-target schemas e)
-        s (cond (nil? target) s
-                (= :enum (shape/head target))
-                (assoc s (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (shape/entries target)))
-                ;; a domain's array reads as its base type's, elements and all
-                :else (if-let [base (base-type-name target)]
-                        (-> s (assoc-in [1 :pg/type] (types/array-of base)) (assoc (dec (count s)) (shape/domain-base target)))
-                        s))
-        ;; a domain's value is sent as its base type's: the classes sent as that type, held to the
-        ;; domain's checks, its definition in place of the reference
-        d (shape/ref-target schemas (shape/non-null s))
-        ;; (a number domain's: its checks read the number; a date and time one's, of a type more than
-        ;; one class goes as (a timestamptz an Instant and an OffsetDateTime); one of a typmod's, which
-        ;; holds the value before its checks read it (typmod-held); another's may hold code only the
-        ;; registry runs)
-        s (if (and d (or (some-> (base-type-name d) types/entry :name accept/number-type?)
-                         (some-> (shape/kind (shape/domain-base d)) (#(and (keyword? %) (= "time" (namespace %)))))
-                         (and (not= :none (::typmod opts)) (typmod-of d false))))
-            d s)]
-    (write-type (through-domain schemas s #(write-type % (assoc opts ::nothing-sent true))) opts)))
+        s (cond-> s
+            (= :enum (shape/head target)) (assoc (dec (count s)) (into [:enum {:pg/type (pg-type e)}] (shape/entries target))))]
+    (write-type s opts)))
 
 (def untyped-kinds
   "The kinds of the values the one sending sends untyped (a keyword, an Instant ...)."
@@ -547,7 +515,7 @@
    takes one too, so a value read without an extension is written back."
   [schemas s opts]
   (let [w (column-write-type* schemas s opts)
-        r (column-read-type* schemas s true)
+        r (column-read-type* s true)
         t (pg-type r)]
     (if (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (types/element t))
              (or (types/json? t) (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t}))))))

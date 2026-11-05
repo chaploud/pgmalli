@@ -153,7 +153,7 @@ write them as malli and join them to the generated schema, with no copy of eithe
          '[malli.error :as me]
          '[malli.generator :as mg])
 
-(def registry (pgmalli/registry "public"))
+(def registry (pgmalli/registry))
 
 (def evidence-v1 [:map [:course :string] [:score :int]])
 (def evidence-v2 [:map [:course :string] [:score :int] [:graded_by :string]])

@@ -59,8 +59,10 @@
     (let [[_ base dims] (re-matches #"(.*?)((?:\[\])*)" t)]
       (str (:name (types/entry base) base) dims))))
 
-(defn- pg-type [schema]
-  (some #(when (map? %) (:pg/type %)) (tree-seq vector? seq schema)))
+(defn- pg-type
+  "The type a schema names: its domain's (d, or d[] for an array of one) where it names one."
+  [schema]
+  (some #(when (map? %) (or (:pg/domain %) (:pg/type %))) (tree-seq vector? seq schema)))
 
 (defn- query
   "The query selecting items, [alias expression] each; under :union an expression is a pair, a

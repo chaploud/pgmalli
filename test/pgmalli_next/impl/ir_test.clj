@@ -6,34 +6,42 @@
 
 (use-fixtures :once with-postgres)
 
-(deftest reads-tables-columns-checks-and-types
+(deftest reads-tables-columns-keys-and-types-and-no-check
   (when *db*
     (exec-sql! "CREATE TYPE mood AS ENUM ('happy', 'sad');
                 CREATE DOMAIN email AS text CHECK (VALUE ~ '@');
+                CREATE SCHEMA elsewhere; CREATE DOMAIN elsewhere.code AS varchar(3) NOT NULL DEFAULT 'abc';
+                CREATE DOMAIN work_code AS elsewhere.code; CREATE DOMAIN feel AS mood; CREATE DOMAIN codes AS varchar(2)[];
                 CREATE TABLE users (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, mood mood NOT NULL DEFAULT 'happy',
                                     age integer CHECK (age >= 0), nick varchar(40), price numeric(10,2),
-                                    mail email, full_name text GENERATED ALWAYS AS (nick || '!') STORED);")
+                                    mail email, full_name text GENERATED ALWAYS AS (nick || '!') STORED,
+                                    code work_code, codes work_code[], f feel, cs codes);")
     (let [s (ir/from-db *db*)
           users (get-in s [:tables "users"])
           col #(first (filter (comp #{%} :name) (:columns users)))]
       (is (= "public" (:name s)))
       (is (re-matches #"PostgreSQL \d+(\.\d+)?" (:database_version s)) "the server version alone, the same on every machine")
       (is (= ["happy" "sad"] (get-in s [:types "mood" :enum_values])))
-      (is (= {:kind "DOMAIN" :base_type "text" :not_null false :default nil :name "email"
-              :constraints [{:name "email_check" :definition "CHECK (VALUE ~ '@'::text)" :is_valid true}]}
-             (get-in s [:types "email"])))
+      (is (= {:data_type "text" :domain "email" :type_schema "pg_catalog" :is_nullable true} (select-keys (col "mail") [:data_type :domain :type_schema :is_nullable])))
+      (is (= {:data_type "character varying" :domain "work_code" :is_nullable false :default_value "'abc'::character varying" :max_length 3}
+             (select-keys (col "code") [:data_type :domain :is_nullable :default_value :max_length]))
+          "a domain over another schema's domain: the base type under both, the NOT NULL and DEFAULT of the one under it")
+      (is (= {:data_type "character varying[]" :domain "work_code[]" :is_nullable true :default_value nil :max_length 3}
+             (select-keys (col "codes") [:data_type :domain :is_nullable :default_value :max_length]))
+          "an array of a domain takes neither its NOT NULL nor its DEFAULT")
+      (is (= ["mood" "feel"] ((juxt :data_type :domain) (col "f"))) "a domain over an enum is of the enum")
+      (is (= ["character varying[]" "codes" 2] ((juxt :data_type :domain :max_length) (col "cs"))) "a domain over an array is no array of a domain")
+      (is (= #{"mood"} (set (keys (:types s)))) "the types are the enum types")
       (is (= ["mood" "public"] ((juxt :data_type :type_schema) (col "mood"))))
       (is (= "'happy'::mood" (:default_value (col "mood"))))
       (is (= "ALWAYS" (:identity (col "id"))))
       (is (true? (:is_nullable (col "age"))))
       (is (= 40 (:max_length (col "nick"))))
-      (is (= [10 2] ((juxt :precision :scale) (col "price"))))
       (is (= "((nick)::text || '!'::text)" (:generated_expr (col "full_name"))))
       (is (nil? (:default_value (col "full_name"))))
-      (is (= "CHECK (age >= 0)" (get-in users [:constraints "users_age_check" :check_clause])))
-      (is (= {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"] :check_clause nil :is_valid true :deferrable false :is_enforced true :nulls_not_distinct nil :references nil :exclude nil}
+      (is (= {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"] :is_valid true :deferrable false :is_enforced true :nulls_not_distinct nil :references nil :exclude nil}
              (get-in users [:constraints "users_pkey"])))
-      (is (= #{"users_age_check" "users_pkey"} (set (keys (:constraints users))))))))
+      (is (= #{"users_pkey"} (set (keys (:constraints users)))) "a CHECK is not read"))))
 
 (deftest views-and-materialized-views
   (when *db*

@@ -1,77 +1,67 @@
 (ns pgmalli-next.generate-test
   "The generation side read from files alone; no database."
-  (:require [clojure.java.io :as io]
+  (:require [pgmalli-next.sample]
+            [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.generate :as generate]
             [pgmalli-next.impl.files :as files]))
 
 (deftest a-migration-read-from-two-files
-  (let [before (pgmalli/generated "sample")
+  (let [before pgmalli-next.sample/sample-data
         after (assoc-in before [:registry :pg.sample/groups] (conj (get-in before [:registry :pg.sample/groups]) [:motto [:maybe [:string {:pg/type "text"}]]]))]
     (is (= [{:name :pg.sample/groups :column :motto :file nil :db [:maybe [:string {:pg/type "text"}]]}]
            (generate/diff before after)))
     (is (= [] (generate/diff before before)))))
 
-(deftest a-file-generated-before-functions-were-read-is-stale
-  (let [now (pgmalli/generated "other")]
-    (is (= [{:key :functions :absent :file} {:key :operators :absent :file}]
-           (generate/diff (dissoc now :functions :operators) now)))))
-
 (deftest functions-and-operators-differ-by-name
-  (let [now (pgmalli/generated "other")
-        before (-> now (assoc-in [:functions "gone"] [{:args [] :result "text"}])
-                   (assoc-in [:functions "note_count" 0 :result] "integer")
-                   (assoc-in [:operators "~~~"] [{:args ["text" "text"] :result "boolean"}]))]
-    (is (= [{:key :functions :name "gone" :file [{:args [] :result "text"}] :db nil}
-            {:key :functions :name "note_count" :file [{:args [] :result "integer"}] :db [{:args [] :result "bigint"}]}
-            {:key :operators :name "~~~" :file [{:args ["text" "text"] :result "boolean"}] :db nil}]
+  (let [now pgmalli-next.sample/other-data
+        before (-> now (assoc-in [:functions "other" "gone"] [{:args [] :result "text"}])
+                   (assoc-in [:functions "other" "note_count" 0 :result] "integer")
+                   (assoc-in [:operators "other" "~~~"] [{:args ["text" "text"] :result "boolean"}]))]
+    (is (= [{:key :functions :schema "other" :name "gone" :file [{:args [] :result "text"}] :db nil}
+            {:key :functions :schema "other" :name "note_count" :file [{:args [] :result "integer"}] :db [{:args [] :result "bigint"}]}
+            {:key :operators :schema "other" :name "~~~" :file [{:args ["text" "text"] :result "boolean"}] :db nil}]
            (generate/diff before now)))))
 
-(deftest check-without-a-database-reports-a-missing-file
-  (let [out-dir (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete))]
-    (is (= ["sample"] (:missing (generate/check {:out-dir out-dir :schemas ["sample"]} {:db? false}))))))
+(defn- temp-out [] (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete) "/generated.edn"))
 
-(deftest check-without-a-database-reads-the-files
-  (let [out-dir (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete))
-        config {:out-dir out-dir :schemas ["sample"]}
-        data (assoc (pgmalli/generated "sample")
-                    :unrendered [{:kind :check :table "sample.users"}]
+(deftest check-without-a-database-reports-a-missing-file
+  (let [out (temp-out)]
+    (is (= out (:missing (generate/check {:out out :schemas ["sample"]} {:db? false}))))))
+
+(deftest check-without-a-database-reads-the-file
+  (let [config {:out (temp-out) :schemas ["sample"]}
+        data (assoc pgmalli-next.sample/sample-data
+                    :unrendered [{:kind :type :table "sample.users" :column "g" :type "geometry"}]
                     :diagnostics [{:table "sample.users" :kind :row-trigger}])]
-    (spit (doto (files/path-for config "sample") (io/make-parents)) (files/edn-string data))
+    (spit (doto (:out config) (io/make-parents)) (files/edn-string data))
     (is (= {:missing nil
-            :unrendered {"sample" [{:kind :check :table "sample.users"}]}
-            :diagnostics {"sample" [{:table "sample.users" :kind :row-trigger}]}}
+            :unrendered [{:kind :type :table "sample.users" :column "g" :type "geometry"}]
+            :diagnostics [{:table "sample.users" :kind :row-trigger}]}
            (generate/check config {:db? false})))))
 
 (deftest diff-and-registry-take-generated-data-maps
   (doseq [x [42 "x" [nil] nil {} {:registry 1}]]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"generated data map" (generate/diff x {:registry {}})) (pr-str x)))
-  (doseq [x [{} {:registry 1} (pgmalli/registry "sample")]]
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry takes generated data maps" (pgmalli/registry x)))))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"diff takes generated data" (generate/diff x {:registry {}})) (pr-str x)))
+  (doseq [x [{} {:registry 1} (pgmalli/registry pgmalli-next.sample/sample-data)]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry takes generated data" (pgmalli/registry x)))))
 
 (deftest a-file-that-is-not-generated-data-is-an-error-naming-it
-  (let [config {:schemas ["sample"] :out-dir (str (doto (java.io.File/createTempFile "pgmalli-not-generated" "") .delete))}
-        path (files/path-for config "sample")]
+  (let [path (str (doto (java.io.File/createTempFile "pgmalli-not-generated" "") .delete) "/app.edn")
+        config {:schemas ["sample"] :out path}]
     (doseq [text ["{:schema" "[1 2]"]]
       (spit (doto path (io/make-parents)) text)
       (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not a generated file.*run pgmalli-next.main generate"
                                     (generate/check config {:db? false})))]
         (is (= :pgmalli.error/not-generated (:pgmalli/error (ex-data e))) text)
-        (is (re-find #"sample.edn" (ex-message e)) text)))))
+        (is (re-find #"app.edn" (ex-message e)) text)))))
 
 (deftest a-config-of-the-wrong-shape-says-the-shape
   (doseq [[c says] [["pgmalli-next.edn" #"should be a map, such as \{:schemas"]
                     [{:schemas []} #"\{:schemas \[\"should be a vector of schema names, such as \[\\\"public\\\"\]\"\]\}$"]
                     [{:db "postgres://localhost/app"} #":db \[\"should be a map: psql's keys"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (files/config c)) (pr-str c))))
-
-(deftest a-schema-name-that-is-not-one-file-name-in-out-dir-is-an-error
-  (doseq [schemas [["../esc"] ["a/b"] ["a\\b"] [".."] ["public" "Public"]]]
-    (is (= :pgmalli.error/invalid-config
-           (:pgmalli/error (ex-data (is (thrown? clojure.lang.ExceptionInfo (files/config {:schemas schemas}))))))
-        (pr-str schemas)))
-  (is (= ["public" "app"] (:schemas (files/config {:schemas ["public" "app"]})))))
 
 (deftest a-misspelt-db-keeps-its-password-out-of-the-error
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:dbb {:password "s3cret"}})))]
@@ -80,4 +70,4 @@
 
 (deftest a-name-ending-in-a-question-mark-is-suggested-as-it-is
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :db\?$"
-                        (generate/check {:schemas ["sample"] :out-dir "test/resources/pgmalli-next"} {:db false}))))
+                        (generate/check {:schemas ["sample"] :out "test/resources/pgmalli-next/sample.edn"} {:db false}))))

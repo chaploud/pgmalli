@@ -1,5 +1,6 @@
 (ns pgmalli-next.core-test
-  (:require [clojure.string :as str]
+  (:require [pgmalli-next.sample]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             honey.sql
             [malli.core :as m]
@@ -16,145 +17,90 @@
 
 (use-fixtures :once with-postgres)
 
+(defn- temp-out [prefix] (str (doto (File/createTempFile prefix "") .delete) "/generated.edn"))
+
 (deftest generate-check-roundtrip
   (when *db*
-    (let [out-dir (str (doto (File/createTempFile "pgmalli-gen" "") .delete))
-          config {:db *db* :out-dir out-dir}
-          out (files/path-for config "public")]
+    (let [out (temp-out "pgmalli-gen")
+          config {:db *db* :out out}]
       (exec-sql! "CREATE TYPE mood AS ENUM ('happy', 'sad');
                   CREATE TABLE users (id bigint PRIMARY KEY, mood mood NOT NULL DEFAULT 'happy',
-                                      age integer CHECK (age >= 0), nick varchar(40) CHECK (length(TRIM(BOTH FROM nick)) > 0),
-                                      closed_at timestamptz, CONSTRAINT closed CHECK (mood = 'sad' OR closed_at IS NULL));
+                                      age integer CHECK (age >= 0), nick varchar(40), closed_at timestamptz,
+                                      CONSTRAINT closed CHECK (mood = 'sad' OR closed_at IS NULL));
                   CREATE UNIQUE INDEX users_nick_idx ON users (nick);
                   CREATE UNIQUE INDEX users_nick_lower_idx ON users (lower(nick));
                   CREATE UNIQUE INDEX users_age_open_idx ON users (age) WHERE closed_at IS NULL;
                   CREATE UNIQUE INDEX users_age_inc_idx ON users (age) INCLUDE (nick);
                   CREATE UNIQUE INDEX closed ON users (closed_at);
-                  CREATE TABLE prices (id integer PRIMARY KEY, p1 numeric(3,1), p2 numeric(3,5), p3 numeric(2,-3));
-                  CREATE TABLE parted (k integer NOT NULL, v text, CONSTRAINT k_nonneg CHECK (k >= 0)) PARTITION BY RANGE (k);
+                  CREATE TABLE prices (id integer PRIMARY KEY, p1 numeric(3,1));
+                  CREATE TABLE parted (k integer NOT NULL, v text) PARTITION BY RANGE (k);
                   CREATE TABLE parted_low PARTITION OF parted FOR VALUES FROM (0) TO (100);
                   CREATE TABLE parted_high PARTITION OF parted FOR VALUES FROM (100) TO (200);
-                  CREATE TABLE nopart (k integer) PARTITION BY LIST (k);
                   CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
                   CREATE TRIGGER users_touch BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION touch();")
-      (testing "a missing file is stale"
-        (is (every? (comp nil? :file) (get (:stale (generate/check config)) "public"))))
+      (testing "a missing file is missing"
+        (is (= out (:missing (generate/check config))))
+        (is (nil? (:stale (generate/check config)))))
       (testing "generate, read back, validate"
-        (is (= {"public" out} (generate/generate! config)))
-        (let [data (registry/read-generated-file out)]
-          (is (= data (get-in (files/generated-all config) ["public" :data])))
+        (is (= out (generate/generate! config)))
+        (let [data (registry/read-generated-file out)
+              reg (pgmalli/registry data)]
+          (is (= data (:data (files/generated config))))
           (is (= (slurp out) (do (generate/generate! config) (slurp out))) "byte-for-byte deterministic")
-          (is (empty? (:unrendered data)) "the table CHECK is a :multi")
-          (let [reg (pgmalli/registry data)]
-            (is (m/validate :pg.public/users {:id 1 :mood "sad" :age 3 :nick "n" :closed_at nil} {:registry reg}))
-            (is (not (m/validate :pg.public/users {:id 1 :mood "sad" :age -1 :nick "n" :closed_at nil} {:registry reg})))
-            (is (not (m/validate :pg.public/users {:id 1 :mood "happy" :age 1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg}))
-                "closed_at only when sad")
-            (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
-            (is (= [{:columns ["age"] :index true} {:columns ["age"] :index true :where true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}] (let [s (:pg.public/users reg)] (:pg/unique (second (if (= :and (first s)) (second s) s)))))
-                "unique indexes over plain columns count, key columns only, even one named as a constraint is, a partial one marked; expression ones do not")
-            (is (some #(= "closed" (:pg/constraint (second %))) (drop 2 (:pg.public/users reg))) "the CHECK of that name is there too")
-            (let [col (fn [k] (shape/non-null (some (fn [[c _ s]] (when (= k c) s)) (shape/column-entries (shape/schema-of reg :pg.public/prices)))))]
-              (is (= [[:pg/numeric {:precision 3 :scale 1}] [:pg/numeric {:precision 3 :scale 5}] [:pg/numeric {:precision 2 :scale -3}]]
-                     (map #(last (col %)) [:p1 :p2 :p3]))
-                  "the scale is read as PostgreSQL stores it, signed")
-              (doseq [[i [k ok bad]] (map-indexed vector [[:p1 99.94M 99.95M] [:p2 0.00999M 0.01M] [:p3 99000M 99500M]])]
-                (is (m/validate (col k) ok {:registry reg}))
-                (is (not (m/validate (col k) bad {:registry reg})))
-                (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (* 2 i) ", " ok ")"))
-                (is (thrown-with-msg? clojure.lang.ExceptionInfo #"numeric field overflow"
-                                      (exec-sql! (str "INSERT INTO prices (id, " (name k) ") VALUES (" (inc (* 2 i)) ", " bad ")")))
-                    (str k ": the database draws the line where the schema does")))
-              (is (m/validate :pg.public/parted {:k 150 :v nil} {:registry reg}))
-              (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
-              (is (= 1 (count (re-seq #"k_nonneg" (pr-str (:pg.public/parted reg))))) "the parent's own CHECK is not repeated from every partition")
-              (is (= [] (:problems (h/analyze reg {:select [:k :v] :from [:parted_low] :where [:= :k :?k]})))
-                  "a query reads a partition by name, a row of its table")
-              (is (= [{:kind :unknown-column :column :nope}] (map #(select-keys % [:kind :column]) (:problems (h/analyze reg {:select [:nope] :from [:parted_high]})))))
-              (is (m/validate :pg.public.parted_low/insert {:k 5} {:registry reg}))
-              (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"} {:kind :redundant-unique :constraint "users_age_open_idx"}]
-                     (map #(select-keys % [:kind (if (= :redundant-unique (:kind %)) :constraint :table)]) (:diagnostics data)))
-                  "the file says what deserves a look")))))
-      (testing "stale and unrendered"
+          (is (= ["public"] (:schemas data)))
+          (is (empty? (:unrendered data)) "a CHECK is no unrendered entry: the database checks it")
+          (is (m/validate :pg.public/users {:id 1 :mood "happy" :age -1 :nick "n" :closed_at (java.time.Instant/now)} {:registry reg})
+              "the CHECKs are the database's")
+          (is (not (m/validate :pg.public/users {:id 1 :mood "angry" :age 1 :nick "n" :closed_at nil} {:registry reg})) "an enum's labels hold")
+          (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
+          (is (= [{:columns ["age"] :index true} {:columns ["age"] :index true :where true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}]
+                 (:pg/unique (second (:pg.public/users reg))))
+              "unique indexes over plain columns count, key columns only, even one named as a constraint is, a partial one marked; expression ones do not")
+          (is (m/validate :pg.public/prices {:id 1 :p1 99.95M} {:registry reg}) "numeric(3,1)'s precision is the database's")
+          (is (= [] (:problems (h/analyze reg {:select [:k :v] :from [:parted_low] :where [:= :k :?k]})))
+              "a query reads a partition by name, a row of its table")
+          (is (= [{:kind :unknown-column :column :nope}] (map #(select-keys % [:kind :column]) (:problems (h/analyze reg {:select [:nope] :from [:parted_high]})))))
+          (is (m/validate :pg.public.parted_low/insert {:k 5} {:registry reg}))
+          (is (= [{:kind :row-trigger :table "public.users"} {:kind :redundant-unique :constraint "users_age_open_idx"}]
+                 (map #(select-keys % [:kind (if (= :redundant-unique (:kind %)) :constraint :table)]) (:diagnostics data)))
+              "the file says what deserves a look")))
+      (testing "stale"
         (is (nil? (:stale (generate/check config))))
-        (is (empty? (:unrendered (registry/read-generated-file out))))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
-        (let [diffs (get (:stale (generate/check config)) "public")]
+        (let [diffs (:stale (generate/check config))]
           (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
 
 (deftest a-foreign-table-or-a-sequence-is-a-relation-a-query-reads
   (when *db*
-    (let [config {:db *db* :out-dir (str (doto (File/createTempFile "pgmalli-ft" "") .delete))}]
+    (let [config {:db *db* :out (temp-out "pgmalli-ft")}]
       (exec-sql! "CREATE EXTENSION IF NOT EXISTS file_fdw; CREATE SERVER ft_files FOREIGN DATA WRAPPER file_fdw;
                   CREATE SCHEMA ft; CREATE FOREIGN TABLE ft.lines (a text) SERVER ft_files OPTIONS (program 'echo hi', format 'text');
                   CREATE SEQUENCE ft.counter;")
       (generate/generate! (assoc config :schemas ["ft"]))
-      (let [reg (pgmalli/registry (registry/read-generated-file (files/path-for config "ft")))]
+      (let [reg (pgmalli/registry (registry/read-generated-file (:out config)))]
         (is (= [] (:problems (h/analyze reg {:select [:a] :from [:lines]} {:schema "ft"}))))
         (is (= [:map [:last_value [:int {:pg/type "bigint"}]] [:is_called [:boolean {:pg/type "boolean"}]]]
                (:row (h/analyze reg {:select [:last_value :is_called] :from [:counter]} {:schema "ft"}))))))))
 
-(deftest a-char-n-list-holds-without-trailing-spaces-other-char-n-and-arithmetic-checks-are-left-to-the-database
-  (when *db*
-    (let [out-dir (str (doto (File/createTempFile "pgmalli-ch" "") .delete))
-          config {:db *db* :out-dir out-dir}
-          sql-row (fn [{:keys [c k v n]}] (str "INSERT INTO ch.t VALUES ('" c "', '" k "', '" v "', " n ")"))]
-      (exec-sql! "CREATE SCHEMA ch;
-                  CREATE TABLE ch.t (c char(4) CHECK (length(c) <= 2), k char(4) CHECK (k IN ('ab', 'cd')), v varchar(3),
-                                     n integer, CONSTRAINT no_overflow CHECK (n + 2147483000 > 0));")
-      (generate/generate! (assoc config :schemas ["ch"]))
-      (let [data (registry/read-generated-file (files/path-for config "ch"))
-            reg (pgmalli/registry data)]
-        (is (= ["no_overflow" "t_c_check"] (sort (map :constraint (:unrendered data)))))
-        (doseq [row [{:c "ab  " :k "ab  " :v "😀😀" :n 1} {:c "ab" :k "cd" :v "abc" :n 647} {:c "ab" :k "cd " :v "a" :n 1}]]
-          (is (m/validate :pg.ch/t row {:registry reg}) (pr-str row))
-          (exec-sql! (sql-row row)))
-        (doseq [row [{:c "a" :k "ab" :v "abcd" :n 1} {:c "a" :k " ab" :v "a" :n 1} {:c "a" :k "a" :v "a" :n 1}]]
-          (is (not (m/validate :pg.ch/t row {:registry reg})) (pr-str row))
-          (is (thrown? clojure.lang.ExceptionInfo (exec-sql! (sql-row row)))))))))
-
-(deftest column-checks-take-the-strings-postgresql-takes
-  (when *db*
-    (let [out-dir (str (doto (File/createTempFile "pgmalli-cs" "") .delete))
-          config {:db *db* :out-dir out-dir}
-          checks {"r" "r ~ '^a.b$'" "l" "l LIKE 'a%'" "u" "length(trim(u)) > 0" "w" "length(w) <= 2"
-                  "x" "x <> ''" "y" "btrim(y) <> ''" "z" "z ~ '^[[:alpha:]]+$'" "e" "e ~ 'b$'"
-                  "o" "o ~ '^\\w+$'" "i" "i ~* '^é'" "k" "k ILIKE 'é%'"}
-          strings ["a\nb" "a\tb" "\n" "\t" "\u00a0" "😀😀" "😀😀😀" "ab  " "" " " "a" "ab" "a\n" "ab\n" "abc" "abcd  " "é" "Éa" "ÉA"]]
-      (exec-sql! (str "CREATE SCHEMA cs; CREATE TABLE cs.t (v varchar(3)"
-                      (apply str (for [[c chk] checks] (str ", " c " text CHECK (" chk ")"))) ");"
-                      "CREATE FUNCTION cs.takes(col text, val text) RETURNS boolean LANGUAGE plpgsql AS $$
-                       BEGIN EXECUTE format('INSERT INTO cs.t (%I) VALUES (%L)', col, val); RETURN true;
-                       EXCEPTION WHEN check_violation OR string_data_right_truncation THEN RETURN false; END $$;"))
-      (generate/generate! (assoc config :schemas ["cs"]))
-      (let [reg (pgmalli/registry (registry/read-generated-file (files/path-for config "cs")))
-            cases (for [c (cons "v" (keys checks)), s strings] [c s (m/validate :pg.cs/t (assoc (zipmap (map keyword (cons "v" (keys checks))) (repeat nil)) (keyword c) s) {:registry reg})])]
-        (is (= :map (first (:pg.cs/t reg))) "the CHECKs are column schemas")
-        (exec-sql! (str "DO $$ BEGIN "
-                        ;; outside ASCII a class is the server's: the schema takes what it may take
-                        (apply str (for [[c s ok] cases :when (not (and ok (#{"z" "o"} c) (re-find #"[^\x00-\x7F]" s)))]
-                                     (str "IF cs.takes('" c "', " (sql-literal s) ") <> " ok
-                                          " THEN RAISE EXCEPTION 'schema says " ok " for % in " c "', " (sql-literal s) "; END IF;")))
-                        " END $$;"))
-        (is true)))))
-
 (deftest check-reads-everything-once
   (when *db*
-    (let [out-dir (str (doto (File/createTempFile "pgmalli-chk" "") .delete))
-          config {:db *db* :out-dir out-dir :schemas ["chk"]}]
-      (exec-sql! "CREATE SCHEMA chk; CREATE TABLE chk.empty_parted (k integer) PARTITION BY LIST (k);")
+    (let [config {:db *db* :out (temp-out "pgmalli-chk") :schemas ["chk" "chk2"]}]
+      (exec-sql! "CREATE SCHEMA chk; CREATE TABLE chk.t (k integer); CREATE SCHEMA chk2; CREATE TABLE chk2.u (k integer);
+                  CREATE FUNCTION chk.f() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+                  CREATE TRIGGER t_f AFTER INSERT ON chk.t FOR EACH ROW EXECUTE FUNCTION chk.f();")
       (generate/generate! config)
       (let [{:keys [stale unrendered diagnostics]} (generate/check config)]
         (is (nil? stale))
         (is (nil? unrendered))
-        (is (= [:no-partition] (map :kind (get diagnostics "chk")))))
+        (is (= [:row-trigger] (map :kind diagnostics))))
+      (is (= ["chk" "chk2"] (:schemas (registry/read-generated-file (:out config)))) "one file of the schemas")
       (is (not (contains? (generate/check config {:db? false}) :stale)) "without the database, only the files")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (generate/check config {:db false})) "a misspelt option is an error")
-      (let [ks [:schema :database-version :diagnostics :registry :functions :operators :sequences :unrendered :skipped]
-            text (slurp (files/path-for config "chk"))]
-        (is (= (set ks) (set (keys (registry/read-generated-file (files/path-for config "chk"))))))
+      (let [ks [:schemas :database-version :diagnostics :registry :functions :operators :sequences :unrendered]
+            text (slurp (:out config))]
+        (is (= (set ks) (set (keys (registry/read-generated-file (:out config))))))
         (is (apply < (map #(str/index-of text (str "\n " %)) (rest ks))) "read from the top: what it is, what deserves a look, the schemas")))))
 
 (defn- registry-of [schema ddl]
@@ -173,7 +119,7 @@
       (is (= {"add_one" [{:args ["bigint" "bigint"] :result "bigint"}]
               "maybe_total" [{:args ["bigint"] :result "bigint" :kind :a}]
               "total" [{:args ["bigint"] :result "bigint" :kind :a :non-null true}]}
-             (:functions data))
+             (get-in data [:functions "fx"]))
           "an aggregate starting from a value is never NULL, as count; internal and cstring are no values of SQL"))))
 
 (deftest a-partitioned-table-whose-only-partition-is-default-takes-every-row
@@ -202,32 +148,10 @@
           ok? #(m/validate :pg.tn/t (merge {:d nil :mc nil :ma nil :da nil} %) {:registry reg})]
       (is (empty? (:unrendered data)))
       (is (ok? {:d "ab" :mc "a" :ma ["ok" "bad"] :da ["xy"]}))
-      (is (not (ok? {:d "a"})) "a domain over a domain keeps the inner domain's CHECK")
+      (is (ok? {:d "a"}) "a domain over a domain is its base type: its CHECK is the database's")
       (is (not (ok? {:mc "b"})))
       (is (not (ok? {:ma ["nope"]})) "an array of an enum holds its labels")
-      (is (not (ok? {:da ["x"]})) "an array of a domain holds its values"))))
-
-(deftest citext-checks-take-what-postgresql-takes
-  (when *db*
-    (let [[reg data] (registry-of "ci" "CREATE SCHEMA ci; CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
-                                        CREATE DOMAIN ci.mail AS public.citext CHECK (VALUE ~ '^[a-z]+@x$');
-                                        CREATE DOMAIN ci.tmail AS public.citext CHECK (VALUE::text ~ '^[a-z]+@x$');
-                                        CREATE TABLE ci.t (id int PRIMARY KEY, r public.citext CHECK (r ~ '^[a-z]+$'),
-                                                           l public.citext CHECK (l LIKE 'ab%'), c public.citext CHECK (c IN ('Red', 'Blue')), m ci.mail,
-                                                           tr public.citext CHECK (tr::text ~ '^[a-z]+$'), tl public.citext CHECK (tl::text LIKE 'ab%'), tm ci.tmail);
-                                        CREATE FUNCTION ci.takes(col text, val text) RETURNS boolean LANGUAGE plpgsql AS $$
-                                        BEGIN EXECUTE format('INSERT INTO ci.t (id, %I) VALUES ((SELECT coalesce(max(id), 0) + 1 FROM ci.t), %L)', col, val); RETURN true;
-                                        EXCEPTION WHEN check_violation THEN RETURN false; END $$;")
-          verdicts (for [[col v] [[:r "ABC"] [:r "abc"] [:r "a1"] [:l "ABx"] [:l "xab"] [:c "red"] [:m "AB@X"] [:m "ab@y"]
-                                  [:tr "ABC"] [:tr "abc"] [:tl "ABx"] [:tl "abx"] [:tm "AB@X"] [:tm "ab@x"]]]
-                     [col v (m/validate :pg.ci/t (assoc {:id 1 :r nil :l nil :c nil :m nil :tr nil :tl nil :tm nil} col v) {:registry reg})])]
-      (is (= ["t_c_check"] (keep :constraint (:unrendered data))) "IN on citext compares ignoring case: not rendered")
-      (exec-sql! (str "DO $$ BEGIN "
-                      (apply str (for [[col v ok] verdicts]
-                                   (str "IF ci.takes('" (name col) "', " (sql-literal v) ") <> " ok
-                                        " THEN RAISE EXCEPTION 'schema says " ok " for % in " (name col) "', " (sql-literal v) "; END IF;")))
-                      " END $$;"))
-      (is true "the schema agrees with PostgreSQL on every value; a citext cast to text compares with case"))))
+      (is (not (ok? {:da [1]})) "an array of a domain holds its base type's values"))))
 
 (deftest a-domain-reads-as-the-driver-reads-its-base
   (when *db*
@@ -235,9 +159,9 @@
                                    CREATE DOMAIN dr.email AS public.citext CHECK (VALUE ~ '@'); CREATE DOMAIN dr.doc AS jsonb;
                                    CREATE TABLE dr.t (id int PRIMARY KEY, e dr.email, j dr.doc);")]
       (is (= [:map {:pg/primary-key ["id"] :pg/table "dr.t"}
-              [:e [:maybe [:any {:pg/type "public.citext"}]]] [:id [:pg/integer {:pg/type "integer"}]] [:j [:maybe [:ref {:pg/type "doc"} :pg.dr/doc]]]]
+              [:e [:maybe [:any {:pg/type "public.citext"}]]] [:id [:pg/integer {:pg/type "integer"}]] [:j [:maybe [:any {:pg/domain "doc" :pg/type "jsonb"}]]]]
              (pgmalli/as-read reg :pg.dr/t {}))
-          "a citext a PGobject, as pgjdbc returns it; jsonb parsed, the domain's own"))))
+          "a citext a PGobject, as pgjdbc returns it; a domain its base type"))))
 
 (deftest an-exclude-constraint-is-on-the-table
   (when *db*
@@ -276,12 +200,12 @@
     (exec-sql! "CREATE SCHEMA catalog; CREATE SCHEMA wh;
                 CREATE DOMAIN catalog.sku AS text CHECK (VALUE ~ '^[A-Z]{3}$'); CREATE TYPE catalog.kind AS ENUM ('a', 'b');
                 CREATE TABLE wh.stock (id int PRIMARY KEY, sku catalog.sku NOT NULL, k catalog.kind);")
-    (is (= [{:kind :type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}
-            {:kind :type :table "wh.stock" :column "sku" :type "catalog.sku" :type-schema "catalog"}]
-           (:unrendered (generated {:db *db*} "wh"))))
-    (let [config {:db *db* :overrides {:wh.stock/sku [:ref :pg.catalog/sku] :wh.stock/k [:ref :pg.catalog/kind]}}
-          reg (apply pgmalli/registry (map :data (vals (files/generated-all (assoc config :schemas ["catalog" "wh"])))))]
-      (is (not (m/validate :pg.wh/stock {:id 1 :sku "abc" :k nil} {:registry reg})))
+    (is (= [{:kind :type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}]
+           (:unrendered (generated {:db *db*} "wh")))
+        "another schema's domain is its base type, as one of the schema's own is")
+    (let [config {:db *db* :overrides {:wh.stock/k [:ref :pg.catalog/kind]}}
+          reg (pgmalli/registry (:data (files/generated (assoc config :schemas ["catalog" "wh"]))))]
+      (is (not (m/validate :pg.wh/stock {:id 1 :sku nil :k nil} {:registry reg})))
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "c"} {:registry reg})))
       (is (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "a"} {:registry reg}))
       (exec-sql! "INSERT INTO wh.stock VALUES (1, 'ABC', 'a')"))))
@@ -290,36 +214,23 @@
   (when *db*
     (exec-sql! "CREATE SCHEMA ov; CREATE TABLE ov.jobs (id int PRIMARY KEY, input jsonb NOT NULL, meta jsonb, n int NOT NULL CHECK (n < 100));")
     (let [config {:db *db* :schemas ["ov"] :overrides {:ov.jobs/input [:map [:prompt :string]] :ov.jobs/n [:int {:min 1}]}}
-          reg (pgmalli/registry (get-in (files/generated-all config) ["ov" :data]))
+          reg (pgmalli/registry (:data (files/generated config)))
           o {:schema "ov"}
           sends o
           row {:id 1 :input {:prompt "x"} :meta nil :n 5}
           read (fn [k opts] (last (second (:row (h/analyze reg {:select [k] :from [:jobs]} opts)))))]
       (is (m/validate :pg.ov/jobs row {:registry reg}))
-      (doseq [bad [{:input {:prompt 1}} {:input nil} {:n 0} {:n 100}]]
+      (doseq [bad [{:input {:prompt 1}} {:input nil} {:n 0}]]
         (is (not (m/validate :pg.ov/jobs (merge row bad) {:registry reg})) (pr-str bad)))
       (testing "read: the declared shape, parsed"
         (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (read :input o)))
-        (is (= [:int {:min 1 :max 99 :pg/type "integer" :pg/constraints ["jobs_n_check"]}] (read :n o))))
+        (is (= [:int {:min 1 :pg/type "integer"}] (read :n o))))
       (testing "write: the declared shape for a map sent as jsonb"
         (is (= [:or [:map {:pg/type "jsonb"} [:prompt :string]] jdbc/pg-object] (:i (:args (h/analyze reg {:update :jobs :set {:input :?i}} sends)))))
         (is (m/validate (h/values-schema reg :jobs sends) row {:registry reg}))
         (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg})))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #":overrides: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"
-                          (files/generated-all {:db *db* :schemas ["ov"] :overrides {:ov.jobs/inptu :map}})))))
-
-(deftest like-with-an-escape-takes-what-postgresql-takes
-  (when *db*
-    (let [[reg data] (registry-of "le" "CREATE SCHEMA le; CREATE TABLE le.t (id int PRIMARY KEY,
-                                          a text NOT NULL CHECK (a LIKE 'a!%%' ESCAPE '!'), b text NOT NULL CHECK (b LIKE 'b\\_%' ESCAPE '\\'),
-                                          c text NOT NULL CHECK (c LIKE 'c\\%' ESCAPE ''), d text NOT NULL CHECK (d ILIKE 'd!!_' ESCAPE '!'));")
-          base {:id 1 :a "a%" :b "b_" :c "c\\" :d "d!x"}
-          row-sql (fn [row] (first (honey.sql/format {:insert-into :le.t :values [row]} {:inline true})))]
-      (is (empty? (:unrendered data)))
-      (doseq [[k v ok] [[:a "a%x" true] [:a "ax" false] [:b "b_x" true] [:b "bx" false] [:c "c\\x" true] [:c "cx" false] [:d "D!y" true] [:d "dxy" false]]
-              :let [row (assoc base k v)]]
-        (is (= ok (m/validate :pg.le/t row {:registry reg})) (pr-str row))
-        (is (= ok (try (exec-sql! (str (row-sql row) "; DELETE FROM le.t;")) true (catch clojure.lang.ExceptionInfo _ false))) (pr-str row))))))
+                          (files/generated {:db *db* :schemas ["ov"] :overrides {:ov.jobs/inptu :map}})))))
 
 (deftest a-check-through-a-cast-that-changes-the-value-takes-what-postgresql-takes
   (when *db*
@@ -336,7 +247,7 @@
             (str chk " takes " (pr-str v)))))))
 
 (deftest an-unqualified-name-means-the-generated-schema-of-that-name
-  (let [registry (pgmalli/registry "sample")
+  (let [registry (pgmalli/registry pgmalli-next.sample/sample-data)
         meant (fn [f] (try (f) (catch clojure.lang.ExceptionInfo e [(ex-message e) (:did-you-mean (ex-data e))])))]
     (is (= ["the registry holds no schema \"public\"; pass {:schema \"sample\"}" nil]
            (meant #(pgmalli/as-read registry :users))))

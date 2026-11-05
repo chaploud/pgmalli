@@ -27,11 +27,7 @@
                                    "users_group_composite_fkey" {:name "users_group_composite_fkey" :type "FOREIGN KEY" :columns ["group_id" "group_name"]
                                                                  :references {:schema "sample" :table "groups" :columns ["id" "name"]}}
                                    "users_referrer_id_fkey" {:name "users_referrer_id_fkey" :type "FOREIGN KEY" :columns ["referrer_id"]
-                                                             :references {:schema "sample" :table "users" :columns ["id"]}}
-                                   "closed_check" {:name "closed_check" :type "CHECK"
-                                                   :check_clause "CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}
-                                   "score_check" {:name "score_check" :type "CHECK" :check_clause "CHECK (score >= 0 AND score <= total)"}
-                                   "referrer_check" {:name "referrer_check" :type "CHECK" :check_clause "CHECK (referrer_id <> id)"}}}}
+                                                             :references {:schema "sample" :table "users" :columns ["id"]}}}}}
    ;; round(integer) beats pg_catalog's round(double precision); lower(text) is pg_catalog's
    :functions [{:name "double_it" :args ["integer"] :result "integer" :kind "f" :defaults 0}
                {:name "round" :args ["integer"] :result "text" :kind "f" :defaults 0}
@@ -52,5 +48,5 @@
    :functions [{:name "note_count" :args [] :result "bigint" :kind "f" :defaults 0}]})
 (doseq [schema [sample other]]
   (let [path (str "test/resources/pgmalli-next/" (:name schema) ".edn")]
-    (spit path (files/edn-string (files/assemble (:name schema) "none" (p/facts schema) {})))
+    (spit path (files/edn-string (files/assemble "none" [[(:name schema) (p/facts schema)]] {})))
     (println "wrote" path)))

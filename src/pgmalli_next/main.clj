@@ -44,40 +44,35 @@
                        (str "no config file at " path "; give the path of an existing pgmalli-next.edn, or none for the defaults")
                        {:given path})
           :else
-          (do (warn "no pgmalli-next.edn here; using the defaults (schema public, files in resources/pgmalli-next)")
+          (do (warn "no pgmalli-next.edn here; using the defaults (schema public, file resources/pgmalli-next/generated.edn)")
               {}))))
 
 (defn- counts [data]
   (let [entries (vals (:registry data))
         kind (fn [s] (cond (:pg/view (shape/row-props s)) :view
                            (shape/row-schema? s) :table
-                           (and (vector? s) (= :enum (first s))) :enum
-                           :else :domain))
+                           :else :enum))
         f (frequencies (map kind entries))]
-    (str "tables: " (f :table 0) ", views: " (f :view 0) ", enums: " (f :enum 0) ", domains: " (f :domain 0)
+    (str "schemas: " (str/join ", " (:schemas data)) "; tables: " (f :table 0) ", views: " (f :view 0) ", enums: " (f :enum 0)
          "; unrendered: " (count (:unrendered data)) ", diagnostics: " (count (:diagnostics data)))))
 
-(defn- print-unrendered [schema facts]
+(defn- print-unrendered [facts]
   (when (seq facts)
-    (println (str schema ": unrendered (" (count facts) "), left out of the schemas:"))
-    (doseq [{:keys [table domain constraint column sql type kind]} facts]
-      (println (str "  " (or table domain) " " (or constraint column) ": "
-                    (cond sql sql type (str "type " type) :else (name kind))))
-      (cond constraint (println (str "    to silence it, add to pgmalli-next.edn :overrides {" (pr-str constraint) " {:skip \"<why>\"}}"))
-            (and table column) (println (str "    to keep it, add to pgmalli-next.edn :overrides {" (keyword table column) " <malli schema>}"))))))
+    (println (str "unrendered (" (count facts) "), left out of the schemas:"))
+    (doseq [{:keys [table column type]} facts]
+      (println (str "  " table " " column ": type " type))
+      (println (str "    to keep it, add to pgmalli-next.edn :overrides {" (keyword table column) " <malli schema>}")))))
 
-(defn- print-diagnostics [schema ds]
+(defn- print-diagnostics [ds]
   (when (seq ds)
-    (println (str schema ": diagnostics (" (count ds) "):"))
+    (println (str "diagnostics (" (count ds) "):"))
     (doseq [d ds] (println (str "  " (name (:severity d)) " " (:table d) ": " (:message d))))))
 
-(defn- print-difference [schema {:keys [name key column property checks order absent file db]}]
-  (if absent
-    (println (str schema " " key ": the " (clojure.core/name absent) " has none, as an older pgmalli wrote it; generate writes them"))
-    (do (println (str/join " " (remove nil? [schema (some-> key pr-str) (some-> name pr-str) (some-> column pr-str) (some-> property pr-str)
-                                             (cond checks "CHECKs" order "column order")])))
-        (println "  file:" (pr-str file))
-        (println "  db:  " (pr-str db)))))
+(defn- print-difference [{:keys [name key schema column property order file db]}]
+  (println (str/join " " (remove nil? [(some-> key pr-str) schema (some-> name pr-str) (some-> column pr-str) (some-> property pr-str)
+                                       (when order "column order")])))
+  (println "  file:" (pr-str file))
+  (println "  db:  " (pr-str db)))
 
 (defn- version-warning
   "Why a file of a server's version (\"PostgreSQL 19\") is typed as an older one, nil when the
@@ -89,33 +84,26 @@
            "): a query's pg_catalog functions and types are typed as PostgreSQL " (last versions) " has them"))))
 
 (defn- generate! [config path]
-  (let [written (generate/generate! config)
-        out-dir (:out-dir (files/config config))]
-    (when-not (= "pgmalli-next" (last (str/split (str/replace out-dir #"/+$" "") #"/")))
-      (warn (str ":out-dir " out-dir " does not end in pgmalli-next: pgmalli-next.core/registry reads pgmalli-next/<schema>.edn from the classpath")))
-    (when-let [w (some-> written vals first registry/read-generated-file :database-version version-warning)] (warn w))
-    (doseq [[schema out] written
-            :let [data (registry/read-generated-file out)]]
-      (println "wrote" out (str "(schema " schema "; " (counts data) ")"))
-      (print-diagnostics schema (:diagnostics data))
-      (print-unrendered schema (:unrendered data)))
-    (println (str "done: files written: " (count written) "; commit them, and run `" (command "check" path) "` in CI"))
+  (let [out (generate/generate! config)
+        data (registry/read-generated-file out)]
+    (when-let [w (version-warning (:database-version data))] (warn w))
+    (println "wrote" out (str "(" (counts data) ")"))
+    (print-diagnostics (:diagnostics data))
+    (print-unrendered (:unrendered data))
+    (println (str "done: commit it, and run `" (command "check" path) "` in CI"))
     0))
 
 (defn- check! [config path edn?]
   (let [{:keys [stale missing unrendered diagnostics] :as result} (generate/check config)]
     (if edn?
       (prn result)
-      (do (doseq [schema missing]
-            (println (str schema ": no generated file at " (files/path-for config schema))))
-          (doseq [[schema ds] stale, d ds] (print-difference schema d))
-          (doseq [[schema un] unrendered] (print-unrendered schema un))
-          (doseq [[schema ds] diagnostics] (print-diagnostics schema ds))
-          (println (if (or stale missing)
-                     (str (str/join ", " (concat (for [[schema ds] stale] (str "stale: " schema " (differences: " (count ds) ")"))
-                                                 (for [schema missing] (str "missing: " schema))))
-                          "; run `" (command "generate" path) "` and commit the files")
-                     (str "ok: the files of " (str/join ", " (:schemas (files/config config))) " match the database")))))
+      (do (when missing (println (str "no generated file at " missing)))
+          (doseq [d stale] (print-difference d))
+          (print-unrendered unrendered)
+          (print-diagnostics diagnostics)
+          (println (cond missing (str "missing: " missing "; run `" (command "generate" path) "` and commit it")
+                         stale (str "stale (differences: " (count stale) "); run `" (command "generate" path) "` and commit the file")
+                         :else (str "ok: the file of " (str/join ", " (:schemas (files/config config))) " matches the database")))))
     (if (or stale missing) 1 0)))
 
 (defn- run* [args]
