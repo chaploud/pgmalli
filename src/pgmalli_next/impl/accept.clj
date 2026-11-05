@@ -66,22 +66,40 @@
          bytes-class (.getBytes "a") clojure.lang.Keyword :a
          clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1]}))
 
+(defn- array-type-row?
+  "Whether row r sends its class as an array type."
+  [r]
+  (and (string? (second r)) (some? (types/element (second r)))))
+
 (defn row-of
   "The row of rows (classes', json-classes') a value of class c is sent by: its class's, else the
-   first of a class it is one of, in their order (java.sql.Date's java.util.Date row); nil for
-   none."
+   first of a class it is one of, in their order (java.sql.Date's java.util.Date row); of an array
+   of arrays, its component's where that goes as an array type, as pgjdbc sends a long[][] as a
+   bigint[] (PostgreSQL's array types tell no dimensions); nil for none."
   [^Class c rows]
   (or (some #(when (= c (first %)) %) rows)
-      (some #(when (.isAssignableFrom ^Class (first %) c) %) rows)))
+      (some #(when (.isAssignableFrom ^Class (first %) c) %) rows)
+      (when-let [e (when (.isArray c) (.getComponentType c))]
+        (when (.isArray e)
+          (when-let [r (row-of e rows)] (when (array-type-row? r) (assoc r 0 c)))))))
+
+(defn multi-dimensional?
+  "Whether a Java array of class c goes as the array type its component goes as (row-of)."
+  [^Class c]
+  (boolean (when-let [e (when (.isArray c) (.getComponentType c))]
+             (and (.isArray e) (some-> (row-of e classes) array-type-row?)))))
 
 (defn element-schema
   "The schema of an element of a Java array of class c the one sending sends: its component class's
-   row's, else, of a java.sql.Date[] or a Timestamp[] (pgjdbc's typed date[] and timestamptz[]),
-   a java.util.Date's (inst?), which goes nowhere alone; nil for another c."
+   row's (of an array of arrays, its innermost elements'), else, of a java.sql.Date[] or a
+   Timestamp[] (pgjdbc's typed date[] and timestamptz[]), a java.util.Date's (inst?), which goes
+   nowhere alone; nil for another c."
   [^Class c]
   (when-let [e (some-> c .getComponentType)]
-    (or (get (row-of e classes) 2)
-        (when (.isAssignableFrom java.util.Date e) 'inst?))))
+    (if (multi-dimensional? c)
+      (element-schema e)
+      (or (get (row-of e classes) 2)
+          (when (.isAssignableFrom java.util.Date e) 'inst?)))))
 
 (def class-types
   "[class type] of classes, in its order."

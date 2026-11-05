@@ -255,6 +255,13 @@
     (is (not (m/validate (:x (args q)) (.getBytes "a") {:registry registry})) (pr-str q))
     (is (m/validate (:x (args q)) (long-array [1]) {:registry registry}) (pr-str q))))
 
+(deftest a-java-array-of-arrays-goes-as-the-array-type-its-component-does
+  (let [t (:x (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]}))
+        ok? #(m/validate t % {:registry registry})]
+    (is (ok? (into-array (Class/forName "[J") [(long-array [1 2]) (long-array [3 4])])) "pgjdbc sends a long[][] as a bigint[]")
+    (is (not (ok? (into-array (Class/forName "[J") [(long-array [1 2]) (long-array [3])]))) "arrays not all as long, which pgjdbc cannot send")
+    (is (not (ok? (into-array (Class/forName "[Ljava.lang.String;") [(into-array String ["a"])]))) "a varchar[]")))
+
 (deftest a-whole-array-compared-takes-an-array-of-the-columns-type-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                        [:ints [:vector {:pg/type "integer[]"} :pg/integer]]

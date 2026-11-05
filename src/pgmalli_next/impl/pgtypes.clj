@@ -78,9 +78,21 @@
   ;; by name: babashka has no java.sql
   (boolean (some #(= "java.sql.Array" (.getName ^Class %)) (supers (class v)))))
 
-(def ^:private array-classes
-  "The Java array classes the one sending sends as an array type."
-  (set (for [[c t] accept/classes :when (and (.isArray ^Class c) (string? t) (types/element t))] c)))
+(defn- array-class?
+  "Whether the one sending sends a Java array of class c as an array type (accept/row-of)."
+  [^Class c]
+  (boolean (and c (.isArray c) (some-> (accept/row-of c accept/classes) second string?)
+                (some? (types/element (second (accept/row-of c accept/classes)))))))
+
+(defn- elements
+  "The elements of Java array v, of an array of arrays (accept/multi-dimensional?) its innermost
+   ones; nil where its arrays are not all as long, which pgjdbc cannot send."
+  [v]
+  (if (accept/multi-dimensional? (class v))
+    (let [subs (seq v)]
+      (when (apply = (map count subs))
+        (reduce (fn [acc s] (if-let [es (elements s)] (into acc es) (reduced nil))) [] subs)))
+    (vec (seq v))))
 
 (def ^:private array-schema
   "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a Java array of a
@@ -93,9 +105,9 @@
                (let [valid? (m/validator child options)]
                  {:pred (fn [v] (or (sql-array? v)
                                     (let [c (class v)]
-                                      (boolean (and (array-classes c)
+                                      (boolean (and (array-class? c)
                                                     (or (nil? classes) (contains? classes (.getName ^Class c)))
-                                                    (every? valid? v))))))
+                                                    (some->> (elements v) (every? valid?)))))))
                   :type-properties {:error/message "should be a typed Java array (long-array, (into-array String [...])) or a java.sql.Array of such elements; a vector goes as jsonb"}
                   :min 1 :max 1}))}))
 
