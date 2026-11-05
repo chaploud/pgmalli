@@ -642,7 +642,8 @@
   (merge accept/values
          {java.time.ZonedDateTime (java.time.ZonedDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
           java.time.Duration (java.time.Duration/ofSeconds 1) java.time.Period (java.time.Period/ofDays 1)
-          java.sql.Date (java.sql.Date/valueOf "2026-01-01")
+          java.sql.Date (java.sql.Date/valueOf "2026-01-01") java.sql.Time (java.sql.Time/valueOf "01:00:00")
+          java.util.Date (java.util.Date. 0)
           java.sql.Timestamp (java.sql.Timestamp/valueOf "2026-01-01 00:00:00")
           clojure.lang.PersistentArrayMap {"a" "b"}
           org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))}))
