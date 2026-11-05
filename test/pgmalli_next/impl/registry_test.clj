@@ -6,7 +6,6 @@
             [malli.error :as me]
             [malli.generator :as mg]
             [pgmalli-next.impl.files :as files]
-            [pgmalli-next.impl.json :as json]
             [pgmalli-next.impl.pattern :as p]
             [pgmalli-next.impl.portable :as portable]
             [pgmalli-next.impl.registry :as reg]
@@ -130,8 +129,11 @@
 (deftest a-timetz-generates-an-offset-postgresql-takes
   (is (every? #(<= (Math/abs (.getTotalSeconds (.getOffset ^java.time.OffsetTime %))) (+ (* 15 3600) (* 59 60) 59)) (generated-values :tz))))
 
+(def ^:private json-write
+  @(requiring-resolve (if (System/getProperty "babashka.version") 'cheshire.core/generate-string 'clojure.data.json/write-str)))
+
 (deftest a-json-array-generates-elements-json-carries
-  (is (every? #(and (sequential? %) (json/write %)) (generated-values :j))))
+  (is (every? #(and (sequential? %) (json-write %)) (generated-values :j))))
 
 (deftest dates-in-domains-and-arrays-generate-within-2025
   (is (every? #(= 2025 (.getYear ^java.time.LocalDate %)) (concat (generated-values :d) (mapcat identity (generated-values :ds))))))

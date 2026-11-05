@@ -16,9 +16,6 @@
                  for bit(1), else a PGobject), :or-double (a Double for NaN)
      :extension  the extension that adds the type, outside pg_catalog
 
-   unsupported lists the types pgmalli has no entry for yet, each with why. pgmalli-next.upstream-test
-   checks every type of pg_catalog and of the extensions PostgreSQL ships is in one of them.
-
    catalog is what PostgreSQL's own catalog says of pg_catalog's types (typcategory,
    typispreferred), casts, ranges, functions and operators, which bb catalog writes to
    resources/pgmalli-next/impl/catalog.edn from each PostgreSQL version CI runs."
@@ -133,16 +130,6 @@
    "localtimestamp" "timestamp without time zone" "localtime" "time without time zone"
    "current_user" "name" "session_user" "name" "current_role" "name" "user" "name"
    "current_schema" "name" "current_catalog" "name" "system_user" "text"})
-
-(def unsupported
-  "The types of pg_catalog and of the extensions PostgreSQL ships that have no entry yet, with
-   why: what to add next. A column of one is :any, listed in :unrendered, and generates no value."
-  (merge
-   (zipmap ["aclitem" "pg_node_tree" "pg_ndistinct" "pg_dependencies" "pg_mcv_list" "pg_brin_bloom_summary" "pg_brin_minmax_multi_summary"]
-           (repeat "the catalog's own, which no table column holds"))
-   {"refcursor" "a cursor's name, meaningful only inside the transaction that opened it"}
-   (zipmap ["gtsvector" "gbtreekey2" "gbtreekey4" "gbtreekey8" "gbtreekey16" "gbtreekey32" "gbtreekey_var" "ghstore" "intbig_gkey" "ltree_gist" "gtrgm"]
-           (repeat "a GiST index's storage type, with no input function"))))
 
 (def ^:private by-name
   (into {} (for [[t e] types, n (cons t (:aliases e))] [n (assoc e :name t)])))

@@ -16,12 +16,11 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.accept :as accept]
-            [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.jdbc :as pjdbc]
             [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.oracle :as oracle]
-            [pgmalli-next.test-db :refer [*db* datasource exec-sql! with-postgres]]))
+            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
 
 (def ^:private matrix
   "[name type sample] of pgmalli-next.oracle/matrix-types: u has c_<name> of the type, a_<name> an
@@ -134,7 +133,7 @@
 
 (defn- col [t] (some (fn [[c x]] (when (= t x) c)) columns))
 
-(defn- registry [] (pgmalli/registry (files/from-database {:db *db*} "public") (files/from-database {:db *db*} "matrix")))
+(defn- registry [] (pgmalli/registry (generated {:db *db*} "public") (generated {:db *db*} "matrix")))
 
 (def ^:private pairs
   "[a b]: each pair of the plain columns (c_), and each pair of columns of any form whose types are
@@ -412,7 +411,7 @@
 (deftest a-schemas-own-functions-and-operators-are-typed-as-postgresql-types-them
   (when *db*
     (exec-sql! own-schema)
-    (let [registry (pgmalli/registry (files/from-database {:db *db*} "fx"))
+    (let [registry (pgmalli/registry (generated {:db *db*} "fx"))
           o (assoc opts :schema "fx")
           typnames (into {} (map (juxt :typname :t)) (jdbc/execute! (datasource) ["SELECT typname, format_type(oid, NULL) AS t FROM pg_type"]
                                                                    {:builder-fn rs/as-unqualified-maps}))

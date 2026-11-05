@@ -12,9 +12,8 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
-            [pgmalli-next.impl.files :as files]
             [pgmalli-next.oracle :as oracle]
-            [pgmalli-next.test-db :refer [*db* datasource exec-sql! with-postgres]]))
+            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres
   (fn [f]
@@ -46,7 +45,7 @@
 (deftest as-read-is-what-next-jdbc-builds
   (when *db*
     (with-open [con (jdbc/get-connection (datasource))]
-      (doseq [:let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))]
+      (doseq [:let [registry (pgmalli/registry (generated {:db *db*} "matrix"))]
               table [:types :v]
               :let [read (into [] (remove #(and (vector? %) (unreadable (first %))))
                                (pgmalli/as-read registry (keyword "pg.matrix" (name table))))
@@ -61,7 +60,7 @@
 (deftest a-value-read-is-written-back-where-postgresql-takes-it
   (when *db*
     (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
+          registry (pgmalli/registry (generated {:db *db*} "matrix"))
           o {:schema "matrix"}
           values (m/schema (h/values-schema registry :types o) {:registry registry})
           set (m/schema (h/set-schema registry :types o) {:registry registry})]
@@ -97,7 +96,7 @@
 
 (deftest an-enum-label-goes-as-a-keyword-not-as-a-string
   (when *db*
-    (let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
+    (let [registry (pgmalli/registry (generated {:db *db*} "matrix"))
           ok? #(m/validate %1 %2 {:registry registry})]
       (doseq [[ds o vs] [[(datasource) {:schema "matrix"} ["a" :a]]]
               v vs
@@ -109,7 +108,7 @@
 
 (deftest a-json-column-takes-a-pgobject-whatever-is-sent-as-json
   (when *db*
-    (let [registry (pgmalli/registry (files/from-database {:db *db*} "matrix"))
+    (let [registry (pgmalli/registry (generated {:db *db*} "matrix"))
           v (doto (org.postgresql.util.PGobject.) (.setType "jsonb") (.setValue "{}"))]
       (is (every? #(taken? (datasource) (str "UPDATE matrix.types SET " % " = ? WHERE id = 2") v) ["c_jsonb" "c_json"]))
       (doseq [o [{:schema "matrix"}]]

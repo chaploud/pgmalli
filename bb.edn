@@ -1,7 +1,6 @@
 {:paths ["src" "resources" "test" "test/resources"]
  :deps {com.github.seancorfield/honeysql {:mvn/version "2.8.85"}
-        metosin/malli {:mvn/version "0.20.3"}
-        com.gfredericks/test.chuck {:mvn/version "0.2.15"}}
+        metosin/malli {:mvn/version "0.20.3"}}
  :tasks {:init (defn suite
                 "The test runner's arguments for bb test:jvm or test:floor <suite>: all, without a suite;
                  main, all but pgmalli-next.oracle-test; oracle, pgmalli-next.oracle-test (CI runs each in a job)."

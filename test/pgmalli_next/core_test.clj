@@ -11,7 +11,7 @@
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.shape :as shape]
-            [pgmalli-next.test-db :refer [*db* exec-sql! sql-literal with-postgres]])
+            [pgmalli-next.test-db :refer [generated *db* exec-sql! sql-literal with-postgres]])
   (:import (java.io File)))
 
 (use-fixtures :once with-postgres)
@@ -159,7 +159,7 @@
 
 (defn- registry-of [schema ddl]
   (exec-sql! ddl)
-  (let [data (files/from-database {:db *db*} schema)]
+  (let [data (generated {:db *db*} schema)]
     [(pgmalli/registry data) data]))
 
 (deftest a-schemas-functions-are-the-ones-sql-calls-built-as-pg-catalogs-are
@@ -244,7 +244,7 @@
     (exec-sql! "CREATE EXTENSION IF NOT EXISTS btree_gist; CREATE SCHEMA ex;
                 CREATE TABLE ex.slots (id int PRIMARY KEY, room int NOT NULL CHECK (room BETWEEN 1 AND 3), seat int NOT NULL,
                   EXCLUDE USING gist (room WITH =, seat WITH <>));")
-    (let [g (files/from-database {:db *db*} "ex")
+    (let [g (generated {:db *db*} "ex")
           registry (pgmalli/registry g)
           props (shape/row-props (shape/schema-of registry :pg.ex/slots))]
       (is (= [{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} {:column "seat" :op "<>"}]}]
@@ -278,9 +278,9 @@
                 CREATE TABLE wh.stock (id int PRIMARY KEY, sku catalog.sku NOT NULL, k catalog.kind);")
     (is (= [{:kind :type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}
             {:kind :type :table "wh.stock" :column "sku" :type "catalog.sku" :type-schema "catalog"}]
-           (:unrendered (files/from-database {:db *db*} "wh"))))
+           (:unrendered (generated {:db *db*} "wh"))))
     (let [config {:db *db* :overrides {:wh.stock/sku [:ref :pg.catalog/sku] :wh.stock/k [:ref :pg.catalog/kind]}}
-          reg (pgmalli/registry (files/from-database config "catalog") (files/from-database config "wh"))]
+          reg (apply pgmalli/registry (map :data (vals (files/generated-all (assoc config :schemas ["catalog" "wh"])))))]
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "abc" :k nil} {:registry reg})))
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "c"} {:registry reg})))
       (is (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "a"} {:registry reg}))

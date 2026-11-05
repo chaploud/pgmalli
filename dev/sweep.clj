@@ -38,7 +38,7 @@
   "Every finding of one schema of a database."
   [dbname schema]
   (let [config {:db (assoc db/*db* :dbname dbname)}
-        [data e1] (try-step :generate #(files/from-database config schema))]
+        [data e1] (try-step :generate #(db/generated config schema))]
     (if e1
       [e1]
       (let [facts-findings (pipeline/catalog-findings data)

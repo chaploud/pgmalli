@@ -18,11 +18,9 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
-            [pgmalli-next.impl.files :as files]
-            [pgmalli-next.impl.json :as json]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.pipeline :as pipeline]
-            [pgmalli-next.test-db :refer [*db* exec-sql! sql-literal with-postgres]]
+            [pgmalli-next.test-db :refer [generated *db* exec-sql! sql-literal with-postgres]]
             [pgmalli-next.test-seed :as ts])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetTime)))
 
@@ -261,7 +259,7 @@
 
 (defn- literal [column-type v]
   (cond (nil? v) "NULL"
-        (#{"json" "jsonb"} column-type) (sql-literal (json/write v))
+        (#{"json" "jsonb"} column-type) (sql-literal ((requiring-resolve 'clojure.data.json/write-str) v))
         (vector? v) (if (empty? v) "'{}'" (str "ARRAY[" (str/join ", " (map #(literal nil %) v)) "]::" column-type))
         (bytes? v) (sql-literal (str "\\x" (apply str (map #(format "%02x" (bit-and % 0xff)) v))))
         (or (number? v) (boolean? v)) (str v)
@@ -311,7 +309,7 @@
   (let [ddl-error (try (exec-sql! (ddl model)) nil (catch Exception e (ex-message e)))]
     (if ddl-error
       [{:kind :ddl :message ddl-error}]
-      (let [[data e1] (pipeline/try-step :generate #(files/from-database {:db *db*} schema))
+      (let [[data e1] (pipeline/try-step :generate #(generated {:db *db*} schema))
             [reg e2] (when data (pipeline/try-step :load #(pgmalli/registry data)))
             opts {:registry reg}]
         (if-not reg

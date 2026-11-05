@@ -157,12 +157,6 @@
   (let [ir (ir/from-db (assoc db :schema schema))]
     [(major-version (:database_version ir)) (pattern/facts ir)]))
 
-(defn from-database
-  "Generated data for one schema, read from the database."
-  [{:keys [db overrides]} schema]
-  (let [[version facts] (read-schema db schema)]
-    (assemble schema version facts overrides)))
-
 (defn path-for
   "Where a schema's file goes: <out-dir>/<schema>.edn; the config as given or with its
    defaults applied."

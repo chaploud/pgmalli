@@ -11,7 +11,6 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.catalog-source :as source]
             [pgmalli-next.core :as pgmalli]
-            [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.test-db :as test-db :refer [*db* datasource]]))
 
@@ -27,6 +26,16 @@
 
 (defn- column [ds sql] (mapv (comp val first) (jdbc/execute! ds [sql])))
 
+
+(def ^:private unsupported
+  "The types of pg_catalog and of the extensions PostgreSQL ships that types/types has no entry
+   for yet, with why: what to add next."
+  (merge
+   (zipmap ["aclitem" "pg_node_tree" "pg_ndistinct" "pg_dependencies" "pg_mcv_list" "pg_brin_bloom_summary" "pg_brin_minmax_multi_summary"]
+           (repeat "the catalog's own, which no table column holds"))
+   {"refcursor" "a cursor's name, meaningful only inside the transaction that opened it"}
+   (zipmap ["gtsvector" "gbtreekey2" "gbtreekey4" "gbtreekey8" "gbtreekey16" "gbtreekey32" "gbtreekey_var" "ghstore" "intbig_gkey" "ltree_gist" "gtrgm"]
+           (repeat "a GiST index's storage type, with no input function"))))
 
 (deftest every-type-of-postgresql-and-its-extensions-is-supported-or-listed-as-unsupported
   (when *db*
@@ -49,10 +58,10 @@
         (is (< 50 (count rows)))
         (doseq [{:keys [ext type]} rows
                 :let [e (types/entry type)]]
-          (is (or e (types/unsupported type))
+          (is (or e (unsupported type))
               (str "PostgreSQL " version (if ext (str " extension " ext " adds type ") " has type ") type
                    " that pgmalli neither supports nor lists as unsupported: add an entry to src/pgmalli_next/impl/types.clj/types"
-                   " (or, with why, to unsupported)"))
+                   " (or, with why, to this test's unsupported)"))
           (when e
             (is (= ext (:extension e)) (str type "'s :extension in src/pgmalli_next/impl/types.clj/types is " (pr-str (:extension e)) ", PostgreSQL " version " says " (pr-str ext)))))
         (testing "every entry names a type there is"
@@ -83,7 +92,7 @@
       (doseq [e (set (keep :extension (vals types/types)))]
         (jdbc/execute! ds [(str "CREATE EXTENSION IF NOT EXISTS \"" e "\"")]))
       (jdbc/execute! ds [(str/join ";\n" (for [[table t] tables] (str "CREATE TABLE " table " (id integer PRIMARY KEY, c " t " NOT NULL)")))])
-      (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+      (let [registry (pgmalli/registry (test-db/generated {:db *db*} "public"))]
         (doseq [[table t] tables
                 [id {:keys [c]}] (map-indexed vector (mg/sample (keyword (str "pg.public." table) "insert") {:registry registry :size 3 :seed 42}))]
           (testing t

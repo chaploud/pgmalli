@@ -4,7 +4,6 @@
 .direnv/
 .lsp/
 .nrepl-port
-result
 target/
 
 # generate run in this checkout writes here; pgmalli ships ir.sql, and impl/catalog.edn (bb catalog)

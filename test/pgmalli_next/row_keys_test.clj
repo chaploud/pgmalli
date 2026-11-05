@@ -9,9 +9,8 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
-            [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.ir :as ir]
-            [pgmalli-next.test-db :refer [*db* datasource exec-sql! jdbc-url with-postgres]]))
+            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! jdbc-url with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -70,7 +69,7 @@
                 INSERT INTO groups VALUES (1, 'g'); INSERT INTO users VALUES (1, 1, 'a'); INSERT INTO posts VALUES (1, 't'), (2, 'u');
                 INSERT INTO likes VALUES (1, 1), (2, 2);")
     (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+          registry (pgmalli/registry (generated {:db *db*} "public"))]
       (doseq [q (concat queries using-chains)
               row (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps})
               :let [schema (:row (h/analyze registry q))]]
@@ -81,7 +80,7 @@
   (when *db*
     (exec-sql! "CREATE TABLE tags (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL);")
     (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+          registry (pgmalli/registry (generated {:db *db*} "public"))]
       (doseq [q [{:insert-into :tags :values [{:name "a"} {:name "b"}]}
                  {:insert-into :tags :values [{:name "a"}] :on-conflict [:id] :do-nothing true}
                  {:update :tags :set {:name "c"} :where [:= :name "a"]}
@@ -107,7 +106,7 @@
     (exec-sql! "CREATE TYPE feel AS ENUM ('ok', 'meh'); CREATE DOMAIN positive AS int CHECK (VALUE > 0);
                 CREATE TABLE notes (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, n int NOT NULL, feel feel, body text);")
     (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+          registry (pgmalli/registry (generated {:db *db*} "public"))
           opts {}]
       (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest :?bodies]]]}]}
                            {:n 1 :feel "ok" :bodies ["a" "b"]}]
@@ -127,7 +126,7 @@
   (when *db*
     (exec-sql! "CREATE TABLE prices (id bigint PRIMARY KEY, amount numeric NOT NULL, at timestamptz); INSERT INTO prices VALUES (1, 2.5, now());")
     (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+          registry (pgmalli/registry (generated {:db *db*} "public"))]
       (doseq [[q opts values] [[{:select [:id] :from [:prices] :where [:= :id :?x]} {} [1 (int 1)]]
                                [{:select [:id] :from [:prices] :where [:> :amount :?x]} {} [1 2.5M]]
                                [{:select [:id] :from [:prices] :where [:< :at [:cast :?x :timestamptz]]} {}
@@ -155,7 +154,7 @@
   (when *db*
     (exec-sql! "CREATE TABLE docs (id int PRIMARY KEY, paths text[], meta jsonb NOT NULL CHECK (jsonb_typeof(meta) = 'object'));")
     (let [ds (datasource)
-          registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+          registry (pgmalli/registry (generated {:db *db*} "public"))
           ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
           args (:args (h/analyze registry ins))
           v (into-array String ["a" "b"])]
@@ -170,7 +169,7 @@
   (when *db*
     (exec-sql! "CREATE TABLE odd_keys (id int PRIMARY KEY, line_no2 int, \"userId\" int, tags text[], doc jsonb, span interval, born date);
                 INSERT INTO odd_keys VALUES (1, 2, 3, '{a}', '{\"a\": 1}', '1 day', '2026-01-01');")
-    (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))
+    (let [registry (pgmalli/registry (generated {:db *db*} "public"))
           row (first (jdbc/execute! (datasource) ["SELECT * FROM odd_keys"] {:builder-fn rs/as-unqualified-maps}))
           schema (pgmalli/as-read registry :pg.public/odd_keys)]
       (is (= #{:id :line_no2 :userId :tags :doc :span :born} (set (keys row)) (set (map first (drop 2 schema)))))

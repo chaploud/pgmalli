@@ -12,12 +12,11 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
-            [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.jdbc :as pgjdbc]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.oracle :as oracle]
-            [pgmalli-next.test-db :refer [*db* datasource exec-sql! with-postgres]])
+            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]])
   (:import (java.lang.reflect Array)
            (java.time Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime)))
 
@@ -216,7 +215,7 @@
 (deftest an-enum-takes-a-keyword-label-and-a-string-label-cast
   (when *db*
     (exec-sql! "CREATE TYPE sent_mood AS ENUM ('ok', 'meh'); CREATE TABLE sent_probe (e sent_mood)")
-    (let [registry (pgmalli/registry (files/from-database {:db *db*} "public"))]
+    (let [registry (pgmalli/registry (generated {:db *db*} "public"))]
       (with-open [con (jdbc/get-connection (datasource))]
         (doseq [q [{:select [:e] :from [:sent_probe] :where [:= :e :?x]}
                    {:insert-into :sent_probe :values [{:e :?x}]}

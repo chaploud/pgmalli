@@ -37,7 +37,6 @@
       "matchDepNames": [
         "org.clojure/data.json",
         "metosin/malli",
-        "camel-snake-kebab/camel-snake-kebab",
         "org.clojure/test.check"
       ],
       "groupName": "runtime deps"

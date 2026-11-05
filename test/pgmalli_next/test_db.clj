@@ -5,6 +5,7 @@
             [clojure.string :as str]
             [clojure.test :as t]
             [honey.sql :as sql]
+            [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.types :as types])
   (:import (java.lang ProcessHandle) (java.net ServerSocket)))
 
@@ -164,3 +165,8 @@
   ([] (datasource *db*))
   ([{:keys [user password] :as db}]
    ((requiring-resolve 'next.jdbc/get-datasource) {:jdbcUrl (jdbc-url db) :user user :password password})))
+
+(defn generated
+  "The generated data of schema, read from the database config's :db names, as generate writes it."
+  [config schema]
+  (get-in (files/generated-all (assoc config :schemas [schema])) [schema :data]))

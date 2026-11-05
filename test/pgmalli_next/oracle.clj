@@ -47,7 +47,6 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.accept :as accept]
-            [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.jdbc :as pjdbc]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.test-db :as test-db])
@@ -150,7 +149,7 @@
   "The registry of db's schemas, and of the schemas extra."
   [db & extra]
   (let [ss (with-open [conn (jdbc/get-connection (test-db/datasource db))] (schemas conn))]
-    (apply pgmalli/registry (for [s (concat ss extra)] (files/from-database {:db db} s)))))
+    (apply pgmalli/registry (for [s (concat ss extra)] (test-db/generated {:db db} s)))))
 
 (defn- quoted-name?
   "Whether a name is PostgreSQL's only when quoted."

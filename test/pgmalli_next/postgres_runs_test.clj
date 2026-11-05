@@ -8,8 +8,7 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
-            [pgmalli-next.impl.files :as files]
-            [pgmalli-next.test-db :refer [*db* datasource exec-sql! with-postgres]])
+            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]])
   (:import (org.postgresql.util PGobject)))
 
 (use-fixtures :once
@@ -44,7 +43,7 @@
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
 
-(defn- registry [] (pgmalli/registry (files/from-database {:db *db*} "public") (files/from-database {:db *db*} "app")))
+(defn- registry [] (pgmalli/registry (generated {:db *db*} "public") (generated {:db *db*} "app")))
 
 (defn- pg-object [type value] (doto (PGobject.) (.setType type) (.setValue value)))
 
