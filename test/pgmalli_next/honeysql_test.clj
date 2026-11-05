@@ -249,6 +249,12 @@
     (is (= "PGobject of text[]" (pgmalli/describe docs (:p (:args (h/analyze docs {:select [:id] :from [:docs] :where [:= :paths :?p]})))))
         "compared, an array of text[]'s type alone, which no Java array goes as (a String[] goes as varchar[])")))
 
+(deftest an-array-argument-takes-no-byte-array-which-goes-as-a-bytea
+  (doseq [q [{:select [:id] :from [:users] :where [:= :id [:any :?x]]}
+             {:select [:x] :from [[[:unnest :?x] :x]]}]]
+    (is (not (m/validate (:x (args q)) (.getBytes "a") {:registry registry})) (pr-str q))
+    (is (m/validate (:x (args q)) (long-array [1]) {:registry registry}) (pr-str q))))
+
 (deftest a-whole-array-compared-takes-an-array-of-the-columns-type-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                        [:ints [:vector {:pg/type "integer[]"} :pg/integer]]

@@ -4,6 +4,7 @@
    JDBC driver takes."
   (:require [clojure.test.check.generators :as gen]
             [malli.core :as m]
+            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -77,17 +78,22 @@
   ;; by name: babashka has no java.sql
   (boolean (some #(= "java.sql.Array" (.getName ^Class %)) (supers (class v)))))
 
+(def ^:private array-classes
+  "The Java array classes the one sending sends as an array type."
+  (set (for [[c t] accept/classes :when (and (.isArray ^Class c) (string? t) (types/element t))] c)))
+
 (def ^:private array-schema
-  "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a typed Java array
-   (long[], Long[], String[] ...; not Object[], which it refuses) of t's, of one of the classes
-   :pg/classes names where it names some, or a java.sql.Array, whose elements are not read."
+  "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a Java array of a
+   class the one sending sends as an array type (accept/classes: long[], Long[], String[] ...; not
+   a byte[], a bytea, nor Object[]) of t's, of one of the classes :pg/classes names where it names
+   some, or a java.sql.Array, whose elements are not read."
   (m/-simple-schema
    {:type :pg/array
     :compile (fn [{:pg/keys [classes]} [child] options]
                (let [valid? (m/validator child options)]
                  {:pred (fn [v] (or (sql-array? v)
                                     (let [c (class v)]
-                                      (boolean (and c (.isArray ^Class c) (not= Object (.getComponentType ^Class c))
+                                      (boolean (and (array-classes c)
                                                     (or (nil? classes) (contains? classes (.getName ^Class c)))
                                                     (every? valid? v))))))
                   :type-properties {:error/message "should be a typed Java array (long-array, (into-array String [...])) or a java.sql.Array of such elements; a vector goes as jsonb"}
