@@ -2905,6 +2905,22 @@
   (is (= "(mood: :happy | :sad)?" (pgmalli/describe registry (:m (args {:select [:id] :from [:users] :where [:or [:= [:cast :?m :mood] nil] [:= :mood :?m]]}))))
       "a cast to mood reads a String, compared with an enum column it goes as varchar: the labels as keywords alone"))
 
+(deftest a-raw-from-item-is-named-as-postgresql-names-it
+  (doseq [[raw q] [["jsonb_array_elements('[1]'::jsonb) AS e(value)" [:e.value]]
+                   ["jsonb_array_elements('[1]'::jsonb) WITH ORDINALITY AS e(value, n)" [:e.value :e.n]]
+                   ["generate_series(1, 2) g" [:g]]
+                   ["generate_series(1, 2)" [:generate_series]]]]
+    (is (= [] (check {:select q :from [[[:raw raw]]]})) raw))
+  (is (= [:unknown-column] (map :kind (check {:select [:x.n] :from [[[:raw "generate_series(1, 2) AS g(n)"]]]}))) "x names no item")
+  (is (= [] (check {:select [:x.n] :from [[[:raw "LATERAL (SELECT 1 AS n) x"] ]]})) "a raw item named as written")
+  (is (= [] (check {:select [:z.n] :from [[[:raw "ROWS FROM (generate_series(1, 2))"]]]})) "one whose name is not read may be any"))
+
+(deftest a-lifted-collection-is-typed-as-the-one-sending-sends-it
+  (is (= [:map [:p [:any {:pg/type "jsonb"}]]] (row {:select [[[:lift {:a 1}] :p]]})))
+  (is (= "(jsonb | org.postgresql.util.PGobject)?"
+         (pgmalli/describe registry (:doc (args {:select [[[:jsonb_set [:coalesce [:cast nil :jsonb] [:lift {}]] [:cast [:inline "{a}"] [:raw "text[]"]] :?doc] :x]]}))))
+      "beside it, a jsonb argument"))
+
 (deftest returning-old-and-new-are-null-where-the-statement-has-no-such-row
   (let [nullable #(shape/maybe? (last (second (row %))))]
     (is (not (nullable {:update :users :set {:score 1} :where [:= :id 1] :returning [:new.score]})))

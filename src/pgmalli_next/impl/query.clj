@@ -424,8 +424,10 @@
         each (fn [a {:keys [table opaque? nullable? types elements order]}]
                (for [i (range (max 1 (count (filter #{column} order))))] [a table opaque? nullable? types elements i]))]
     (if alias
-      (when-let [entry (get scope alias)]
-        (when (has-column? registry entry column) (vec (each alias entry))))
+      (if-let [entry (get scope alias)]
+        (when (has-column? registry entry column) (vec (each alias entry)))
+        ;; a raw FROM item whose name is not read may be the one alias names
+        (when-let [[a] (first (filter (comp syntax/unnamed-raw? key) scope))] [[a nil true]]))
       ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
       (distinct (for [[a {:keys [qualifier-only?] :as entry}] scope
                       :when (and (not qualifier-only?) (has-column? registry entry column))
@@ -955,8 +957,12 @@
       (not= x (syntax/operand-alone x)) (sub (syntax/operand-alone x))
       (and (not (keyword? x)) (not (keyword? h))) nil
       (= :inline h) (let [v (second x)] (when (or (string? v) (boolean? v) (number? v)) (literal-type v true opts)))
-      ;; [:lift v] sends v as a parameter as it is, a keyword or a vector too
-      (= :lift h) (let [v (second x)] (when-not (or (keyword? v) (coll? v)) (sub v)))
+      ;; [:lift v] sends v as a parameter as it is, a keyword or a vector too: a collection as the one
+      ;; sending sends its class (a map as jsonb)
+      (= :lift h) (let [v (second x)]
+                    (cond (keyword? v) nil
+                          (coll? v) (let [t (jdbc/sent-type v opts)] (when (string? t) (of-type t)))
+                          :else (sub v)))
       (= :cast h) (cast-type registry x (sub (second x)) opts)
       ;; INTERVAL '1 day'
       (= :interval h) (of-type "interval")

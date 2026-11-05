@@ -1383,4 +1383,9 @@
  [:r14c-time-cast-text {:select [:id], :from [:kinds], :where [:or [:= :at :?t] [:= :at [:cast :?t :time]]]}] ;; GROUP BY ROLLUP of an output column; a CTE's columns of one name
  [:rollup-output-column {:select [[[:date_trunc "month" :created_at] :m] [[:count :*] :n]] :from [:posts] :group-by [[:rollup :m]]}]
  [:cte-columns-of-one-name {:with [[:s {:select [:u.id :g.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}]] :select [:s.id] :from [:s]}]
+ ;; a raw FROM item's own alias; a lifted map as jsonb
+ [:raw-from-alias {:select [:e.value] :from [[[:raw "jsonb_array_elements('[1, 2]'::jsonb) AS e(value)"]]]}]
+ [:raw-from-ordinality {:select [:e.value :e.n] :from [[[:raw "jsonb_array_elements('[1, 2]'::jsonb) WITH ORDINALITY AS e(value, n)"]]]}]
+ [:raw-from-in-subquery {:select [:h.id [{:select [[[:jsonb_agg :e.value]]] :from [[[:raw "jsonb_array_elements(coalesce(h.doc, '[]'::jsonb)) AS e(value)"]]]} :vs]] :from [[:hosts :h]]}]
+ [:lift-map-jsonb {:select [:id [[:jsonb_set [:coalesce :doc [:lift {}]] [:cast [:inline "{a}"] [:raw "text[]"]] :?doc] :d]] :from [:hosts]}]
 ]
