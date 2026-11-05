@@ -271,11 +271,13 @@
   (for [[op side value chain] (syntax/comparison-sides ps)
         :let [x (array-arg value)
               [k elements?] (if x [x false] (value-arg registry chain value))
-              lits (when-not (or k (syntax/like-ops op)) (compared-literals op value))]
+              lits (when-not k (compared-literals op value))]
         :when (or (seq lits) (and k (not (and elements? (or (syntax/in-ops op) (second (value-arg registry chain side)))))))
         entry (if (seq lits)
                 (let [s (query/side-schema registry chain side opts)]
-                  (for [l lits :when s] [(literal-key l {:column side :function (name op) :schema s}) (compared-arg-type registry chain side opts)]))
+                  ;; a LIKE pattern is no value of the column: its type alone, no labels
+                  (for [l lits :when s] [(literal-key l {:column side :function (name op) :context :compare :schema (when-not (syntax/like-ops op) s)})
+                                         (compared-arg-type registry chain side opts)]))
                 (let [;; ANY(?)'s elements of the column's type (a varchar column's takes a String[])
                       base (when (and x (not elements?)) (some->> (query/side-schema registry chain side opts) (query/slot-type registry)))
                       t (compared-type op (compared-arg-type registry chain side opts) (when-not elements? x)
@@ -399,7 +401,7 @@
         :when (or k s)]
     (if k
       [k (if elements? (jdbc/array-type t opts :unnest) t)]
-      [(literal-key x {:column assign :function (name assign) :schema s}) t])))
+      [(literal-key x {:column assign :function (name assign) :context :assign :schema s}) t])))
 
 (defn- json-field-type
   "The type of a value of a key of a JSON document json_populate_record reads into a column of
@@ -511,7 +513,7 @@
         :let [t (query/nullable (accepted-type registry (:schema r) :common opts))]]
     (if (syntax/param-key o)
       [o t]
-      [(literal-key o {:column (first (filter syntax/column-keyword? typed)) :function (or (syntax/called x) "CASE") :schema (:schema r)}) t])))
+      [(literal-key o {:column (first (filter syntax/column-keyword? typed)) :function (or (syntax/called x) "CASE") :context :compare :schema (:schema r)}) t])))
 
 (defn- call-arg-type
   "What a value takes at argument i of a call PostgreSQL may resolve to candidates os, ss the
@@ -567,16 +569,22 @@
    sent typed where an argument there would refuse it, an :uncast-string for a string, a
    :literal-type otherwise. A literal written into the SQL or sent untyped is held to the labels
    alone, as PostgreSQL reads it as the type's input."
-  [registry {x ::literal :keys [column type function] s :schema} t opts]
+  [registry {x ::literal :keys [column type function context] s :schema} t opts]
   (let [{:keys [value text]} (literal x)
-        labels (some->> s (query/enum-values registry))]
+        labels (some->> s (query/enum-values registry))
+        ;; of a type pgmalli does not type, an argument takes any value: whether its slot takes a String
+        slot (when (and s context (query/untyped? (shape/non-null t))) (query/slot-type registry s))
+        refused? (if slot
+                   (and (string? value) (not-any? #(accept/accepts? slot % context) (jdbc/string-sends opts)))
+                   (refuses? registry t value))]
     (cond (and labels (not (some #{(or text value)} labels)))
           (cond-> {:kind :enum-literal :value value :allowed labels} column (assoc :column column) type (assoc :type type))
-          (and (sent-typed? x opts) (refuses? registry t value))
+          (and (sent-typed? x opts) refused?)
           (let [u (when (and s (string? value)) (uncast-type registry s))]
             (if u
               (cond-> {:kind :uncast-string :value value :type u} column (assoc :column column) (not column) (assoc :function function))
               (cond-> {:kind :literal-type :function function :value value :sent (literal-sent-type x opts)}
+                (= :assign context) (assoc :column column)
                 (some-> s shape/column-props :pg/type) (assoc :type (:pg/type (shape/column-props s)))))))))
 
 (defn- call-args

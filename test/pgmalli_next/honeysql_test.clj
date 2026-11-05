@@ -149,6 +149,13 @@
       (is (= [[:enum-literal "zz"]] (problems {:select [:id] :from [:t] :where [:= :m [:any [:array [[:inline "zz"]]]]]})))
       (is (= [[:enum-literal "zz"]] (problems {:select [[[:nullif :m [:inline "zz"]] :x]] :from [:t]})))
       (is (= [[:enum-literal "zz"]] (problems {:select [[[:greatest :m [:inline "zz"]] :x]] :from [:t]}))))
+    (is (= [[:literal-type 1]] (problems {:select [:id] :from [:t] :where [:like :n 1]})) "text ~~ bigint does not exist")
+    (let [xml (pgmalli/registry {:registry {:pg.public/x [:map {:pg/table "public.x"} [:d [:maybe [:any {:pg/type "xml"}]]]]}})]
+      (is (= [:uncast-string :uncast-string] (map :kind (concat (:problems (h/analyze xml {:select [:d] :from [:x] :where [:= :d "<a/>"]}))
+                                                                (:problems (h/analyze xml {:update :x :set {:d "<a/>"}})))))
+          "a type pgmalli does not type takes no varchar: xml = varchar does not exist"))
+    (is (= ["1 goes to column u as a parameter, which pgjdbc sends as bigint, a type column u takes there through no implicit conversion; cast it, [:cast 1 :uuid]"]
+           (h/humanize (:problems (h/analyze reg {:update :t :set {:u 1}} {:schema "public"})))))
     (is (= [{:kind :uncast-string :value "x" :type "uuid" :function "uuid_send"}]
            (:problems (h/analyze reg {:select [[[:uuid_send "x"] :b]]} {:schema "public"}))))))
 
@@ -2399,7 +2406,7 @@
       (is (empty? (lits q)) (pr-str q)))
     (is (empty? (map :kind (filter (comp #{:literal-type} :kind) (check {:select [[[:round :score 2] :r]] :from [:users]} (assoc opts :format {:inline true})))))
         "written into the SQL, 2 is an integer")
-    (is (= ["2 goes to round as a parameter, which pgjdbc sends as bigint, a type round takes there through no implicit conversion; write it into the SQL, [:inline 2], or cast it, [:cast 2 :integer]"]
+    (is (= ["2 goes to round as a parameter, which pgjdbc sends as bigint, a type round takes there through no implicit conversion; cast it, [:cast 2 :integer]"]
            (h/humanize (filter (comp #{:literal-type} :kind) (check {:select [[[:round :score 2] :r]] :from [:users]})))))))
 
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
