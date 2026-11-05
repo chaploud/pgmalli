@@ -307,8 +307,11 @@
    :no-operator (fn [{:keys [column op domain type]}]
                   (str "PostgreSQL has no " (if (#{:in :not-in} op) "=" (name op)) " for " (column-name column) ", of domain " domain " over enum " type
                        "; compare the enum: " (pr-str [:cast column (keyword (str/replace type " " "-"))])))
-   :uncast-string (fn [{:keys [column value type]}]
-                    (str (pr-str value) " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
+   :uncast-string (fn [{:keys [column function value type]}]
+                    (str (pr-str value) " reaches " (cond (keyword? column) (str "column " (column-name column))
+                                                          column (pr-str column)
+                                                          :else (str "an argument of " function))
+                         " as a typed string, which its type " type " does not take"
                          " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar);"
                          " write " (cast-form (pr-str value) type)))
    :literal-type (fn [{:keys [function column value sent type]}]

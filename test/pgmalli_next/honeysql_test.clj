@@ -159,7 +159,9 @@
     (is (= ["1 goes to column u as a parameter, which pgjdbc sends as bigint, a type column u takes there through no implicit conversion; cast it, [:cast 1 :uuid]"]
            (h/humanize (:problems (h/analyze reg {:update :t :set {:u 1}} {:schema "public"})))))
     (is (= [{:kind :uncast-string :value "x" :type "uuid" :function "uuid_send"}]
-           (:problems (h/analyze reg {:select [[[:uuid_send "x"] :b]]} {:schema "public"}))))))
+           (:problems (h/analyze reg {:select [[[:uuid_send "x"] :b]]} {:schema "public"}))))
+    (is (= ["\"x\" reaches an argument of uuid_send as a typed string, which its type uuid does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:cast \"x\" :uuid]"]
+           (h/humanize (:problems (h/analyze reg {:select [[[:uuid_send "x"] :b]]} {:schema "public"})))))))
 
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
