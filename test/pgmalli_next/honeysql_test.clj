@@ -121,6 +121,25 @@
            (row {:union-all [{:select [[:b1 :x]] :from [:t]} {:select [[:b4 :x]] :from [:t]}]}))
         "bit(1) a Boolean, bit(4) a PGobject: the result's typmod is gone, and pgjdbc reads each value")))
 
+(deftest a-literal-honeysql-sends-is-judged-as-an-argument-there-is
+  (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/mood [:enum "ok" "sad"]
+                                                             :pg.public/t [:map {:pg/table "public.t"} [:id [:pg/integer {:pg/type "integer"}]]
+                                                                           [:u [:maybe [:uuid {:pg/type "uuid"}]]] [:n [:maybe [:string {:pg/type "text"}]]]
+                                                                           [:m [:maybe [:ref {:pg/type "mood"} :pg.public/mood]]]
+                                                                           [:r [:maybe [:any {:pg/type "regclass"}]]]]}})
+        problems (fn [q] (map (juxt :kind :value) (:problems (h/analyze reg q {:schema "public"}))))]
+    (is (= [[:literal-type 1]] (problems {:update :t :set {:u 1}})) "assigned: uuid takes no bigint")
+    (is (= [[:literal-type 1]] (problems {:update :t :set {:n 1}})) "stricter: a number to a text column, as an argument")
+    (is (= [[:uncast-string "w"]] (problems {:select [:id] :from [:t] :where [:= :r "w"]})) "regclass = varchar does not exist")
+    (is (= [] (problems {:update :t :set {:r "w"}})) "regclass takes varchar by assignment")
+    (testing "one problem of each literal, wherever it sits"
+      (is (= [[:enum-literal "x"]] (problems {:select [:id] :from [:t] :where [:= :m [:coalesce :m [:inline "x"]]]})))
+      (is (= [[:enum-literal "x"]] (problems {:select [:id] :from [:t] :where [:= [:case [:= :id 1] [:inline "x"] :else :m] :m]})))
+      (is (= [[:enum-literal "zz"]] (problems {:update :t :set {:m [:cast "zz" :mood]}})))
+      (is (= [[:literal-type 2]] (problems {:select [:id] :from [:t] :where [:= [:round :id 2] 1]}))))
+    (is (= [[:uncast-string "sad"] [:uncast-string "sad"]] (problems {:insert-into :t :values [{:id 1 :m "sad"} {:id 2 :m "sad"}]}))
+        "each occurrence its own")))
+
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))
@@ -1475,7 +1494,7 @@
                                                             [:note [:string {:pg/type "text"}]]
                                                             [:born [:maybe [inst? {:pg/type "date"}]]]
                                                             [:seen [:maybe [inst? {:pg/type "timestamp with time zone"}]]]
-                                                            [:paths [:maybe [:any {:pg/type "text[]"}]]]]}})
+                                                            [:paths [:maybe [:vector {:pg/type "text[]"} :string]]]]}})
         check #(:problems (h/analyze reg %1 (merge {:schema "public"} %2)))]
     (testing "a type of types but the string ones"
       (is (= [{:kind :uncast-string :column :born :value "2020-01-01" :type "date"}] (check {:select [:id] :from [:hosts] :where [:= :born "2020-01-01"]} {})))

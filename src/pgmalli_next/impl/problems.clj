@@ -2,13 +2,10 @@
   "The problems analyze reports of a query (README.md's table of :kind)."
   (:require [clojure.string :as str]
             [honey.sql :as sql]
-            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
-            [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
-            [pgmalli-next.impl.shape :as shape]
-            [pgmalli-next.impl.types :as types]))
+            [pgmalli-next.impl.shape :as shape]))
 
 (defn- output-column?
   "Whether a bare :col of :order-by or :group-by may mean an output column of stmt."
@@ -269,86 +266,6 @@
              :when p]
          p)))))
 
-(defn- uncast-type
-  "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
-   type of types' :cast (bit takes varbit, which keeps its length), or any other type types
-   has; nil for a string type (text, varchar, char, name, citext) or a type types lacks."
-  [registry s]
-  (let [p (shape/column-props s)
-        e (types/entry (shape/type-name p))]
-    (or (query/enum-type registry s)
-        (when e
-          (cond (types/element (:pg/type p)) (types/array-of (:name e))
-                (:cast e) (name (:cast e))
-                (not= :string (:schema e)) (:name e))))))
-
-(defn- takes-string?
-  "Whether a column of schema s takes a string sent as one of types, compared or assigned; nil
-   where pgmalli-next.impl.accept does not answer."
-  [registry s assigned? types]
-  (when-let [t (query/slot-type registry s)] (boolean (some #(accept/accepts? t % (if assigned? :assign :compare)) types))))
-
-(defn- literal
-  "{:value v :text t :sent? bool} of a literal x as HoneySQL writes it: a string (bare, [:lift s]
-   or [:inline s]), a keyword lifted ([:lift :sad], which the one sending sends untyped as its
-   text t, :ns/a's ns/a) or a number; :sent? where a string goes as a parameter (not under
-   :inline, which inlines [:lift s] too), which the one sending sends as varchar. nil for another x (a bare keyword is a column)."
-  [x opts]
-  (cond (string? x) {:value x :sent? (not (:inline (:format opts)))}
-        (number? x) {:value x}
-        (and (vector? x) (= :lift (first x)) (string? (second x))) {:value (second x) :sent? (not (:inline (:format opts)))}
-        (and (vector? x) (= :lift (first x)) (keyword? (second x))) {:value (second x) :text (subs (str (second x)) 1)}
-        (and (vector? x) (= :inline (first x)) (string? (second x))) {:value (second x)}))
-
-(defn- literal-problems
-  "Of each literal (literal) where a value of a column or an expression of an enum type goes,
-   one place for every position PostgreSQL types it at: a side of a comparison (each of an IN
-   list, each element of [:any [:array ...]]), an assignment, an operand resolved to the
-   others' type (coalesce, greatest, least, nullif, CASE's values), and a string cast to one. A literal no label is an
-   :enum-literal, however it is sent; a string or keyword sent as a parameter to a column
-   PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar) an
-   :uncast-string. A named argument is args/arg-types', which types it by the class sent."
-  [registry ps opts]
-  (let [operands (fn [v] (cond (and (vector? v) (= :any (first v)) (vector? (second v)) (= :array (first (second v))) (vector? (second (second v))))
-                               (second (second v))
-                               (and (vector? v) (not (keyword? (first v)))) v
-                               :else [v]))
-        uses (concat (for [[op side value chain] (syntax/comparison-sides ps)
-                           :when (not (syntax/like-ops op))
-                           :let [s (query/side-schema registry chain side opts)]
-                           :when s
-                           x (operands value)]
-                       {:column side :x x :schema s})
-                     (for [{:keys [assign x target] :as a} (syntax/assignments ps) :when (seq target)
-                           :let [{s :schema} (query/assigned-column registry a)]
-                           :when s]
-                       {:column assign :x x :schema s :assigned? true})
-                     (for [{:keys [x chain]} (syntax/expression-nodes ps)
-                           :let [os (query/resolving-operands x)]
-                           :when (some #(literal % opts) os)
-                           :let [typed (remove #(literal % opts) os)
-                                 s (:schema (query/common (map #(query/expression-type registry chain % opts) typed)))]
-                           :when s
-                           x os]
-                       {:column (or (first (filter syntax/column-keyword? typed)) (first typed)) :x x :schema s})
-                     ;; a string cast to an enum type: [:cast "sad" :mood]
-                     (for [{:keys [x chain]} (syntax/expression-nodes ps)
-                           :when (and (vector? x) (= :cast (first x)) (string? (second x)))
-                           :let [s (:schema (query/expression-type registry chain x opts))]
-                           :when (query/enum-values registry s)]
-                       {:type (query/enum-type registry s) :x [:inline (second x)] :schema s}))]
-    (for [{:keys [column type x assigned?] s :schema} uses
-           :let [{:keys [value text sent?]} (literal x opts)]
-           :when (some? value)
-           :let [allowed (query/enum-values registry s)
-                 invalid? (and allowed (not (some #{(or text value)} allowed)))
-                 uncast (when (and sent? (not invalid?) (not (takes-string? registry s assigned? (jdbc/string-sends opts))))
-                          (uncast-type registry s))]
-           p [(when invalid? (cond-> {:kind :enum-literal :value value :allowed allowed} column (assoc :column column) type (assoc :type type)))
-              (when uncast {:kind :uncast-string :column column :value value :type uncast})]
-           :when p]
-       p)))
-
 (defn- operator-problems
   "Of each comparison of a column or an expression of a domain over an enum type, which
    PostgreSQL compares with nothing (dmood = unknown, dmood = mood and dmood = dmood do not
@@ -387,7 +304,6 @@
                      meant (assoc :did-you-mean meant)))
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
-                 (literal-problems registry ps opts)
                  (operator-problems registry ps opts)))))
 
 (defn- unread-clauses

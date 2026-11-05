@@ -192,15 +192,21 @@
       (and (= :compare held-in) (some-> (query/domain-of s) types/element))
       (jdbc/array-pg-object (query/domain-of s) :whole)
       ;; compared, assigned, a function's argument or a :common operand, of a type whose values
-      ;; pgmalli does not type and pgjdbc reads as a PGobject (a geometric, network or timespan one:
-      ;; inet, interval), that and what converts to it, not any value
-      (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T"} (types/category t)))
+      ;; pgmalli does not type and pgjdbc reads as a PGobject or a String (a geometric, network,
+      ;; timespan or numeric one: inet, interval, regclass, money), a PGobject of it and what
+      ;; converts to it, not any value
+      (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T" "N"} (types/category t)))
       (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
       (= :enum (shape/kind own))
       (labelled-type own alts (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
       :else
       (let [own-alts (when-not (query/untyped? own) (shape/alternatives own))
+            ;; a String of the column's own :string goes as varchar, which a type of another
+            ;; category may not take there (regclass = varchar does not exist)
+            own-alts (if (or (= :cast context) (some #(or (= t %) (takes? %)) (jdbc/string-sends opts)))
+                       own-alts
+                       (remove #(= :string (shape/kind %)) own-alts))
             ;; a number held to a number column's range, which PostgreSQL checks after converting it
             alts (for [[p a] alts] (cond-> a
                                      (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
@@ -222,6 +228,25 @@
                 :else t)
     (syntax/distinct-ops op) query/nullable))
 
+(defn- literal
+  "{:value v} of a literal x, a value written in the query: a string, a number or a boolean, bare
+   or [:lift v] (HoneySQL sends it as a parameter, sql/format's :inline aside), [:lift :kw] (sent
+   untyped as its text, :text, :ns/a's ns/a), or [:inline s] (written into the SQL, :inline);
+   nil for another x (a bare keyword is a column)."
+  [x]
+  (let [v (when (and (vector? x) (= 2 (count x))) (second x))]
+    (cond (or (string? x) (number? x) (boolean? x)) {:value x}
+          (= :lift (when (vector? x) (first x)))
+          (cond (or (string? v) (number? v) (boolean? v)) {:value v}
+                (keyword? v) {:value v :text (subs (str v) 1)})
+          (and (= :inline (when (vector? x) (first x))) (string? v)) {:value v :inline true})))
+
+(defn- literal-key
+  "The key of a literal at a position: one per occurrence, with where it goes (:column, :function,
+   :schema) for the problem it may make."
+  [x where]
+  (assoc where ::literal x ::at (Object.)))
+
 (defn- value-arg
   "[argument array?] of a value where an argument goes: an argument itself, or a column of
    unnest(?) of arguments (array? true: the argument's elements go there); nil for any other."
@@ -229,20 +254,34 @@
   (cond (syntax/param-key x) [x false]
         (syntax/column-keyword? x) (let [e (:element (query/resolve-column registry chain x))] (when (syntax/param-key e) [e true]))))
 
+(defn- compared-literals
+  "The literals of value compared with a side: itself, each of an IN list, each element of
+   [:any [:array [...]]]."
+  [op value]
+  (filter literal (cond (and (vector? value) (= :any (first value)) (vector? (second value)) (= :array (first (second value))) (sequential? (second (second value))))
+                        (second (second value))
+                        (and (syntax/in-ops op) (vector? value) (not (keyword? (first value)))) value
+                        :else [value])))
+
 (defn- comparison-args
   "An argument compared with a column or a typed expression, as compared-type types it; an
-   unnest's column, its argument an array of that."
+   unnest's column, its argument an array of that. A literal compared there, as an argument."
   [registry ps opts]
   (for [[op side value chain] (syntax/comparison-sides ps)
         :let [x (array-arg value)
-              [k elements?] (if x [x false] (value-arg registry chain value))]
-        :when (and k (not (and elements? (or (syntax/in-ops op) (second (value-arg registry chain side))))))
-        :let [;; ANY(?)'s elements of the column's type (a varchar column's takes a String[])
-              base (when (and x (not elements?)) (some->> (query/side-schema registry chain side opts) (query/slot-type registry)))
-              t (compared-type op (compared-arg-type registry chain side opts) (when-not elements? x)
-                               (cond-> opts (string? base) (assoc ::jdbc/element-type base)))]
-        :when (not (and elements? (query/untyped? t)))]
-    [k (if elements? (jdbc/array-type t opts :unnest) t)]))
+              [k elements?] (if x [x false] (value-arg registry chain value))
+              lits (when-not (or k (syntax/like-ops op)) (compared-literals op value))]
+        :when (or (seq lits) (and k (not (and elements? (or (syntax/in-ops op) (second (value-arg registry chain side)))))))
+        entry (if (seq lits)
+                (let [s (query/side-schema registry chain side opts)]
+                  (for [l lits :when s] [(literal-key l {:column side :function (name op) :schema s}) (compared-arg-type registry chain side opts)]))
+                (let [;; ANY(?)'s elements of the column's type (a varchar column's takes a String[])
+                      base (when (and x (not elements?)) (some->> (query/side-schema registry chain side opts) (query/slot-type registry)))
+                      t (compared-type op (compared-arg-type registry chain side opts) (when-not elements? x)
+                                       (cond-> opts (string? base) (assoc ::jdbc/element-type base)))]
+                  (when-not (and elements? (query/untyped? t))
+                    [[k (if elements? (jdbc/array-type t opts :unnest) t)]])))]
+    entry))
 
 (defn- limit-args
   "LIMIT and OFFSET take a bigint of at least 0 by assignment, NULL for none."
@@ -302,7 +341,7 @@
                             (and (vector? x) (= :array (first x)) (= 3 (count x)) (sequential? (second x)) (keyword? (nth x 2)))
                             (for [e (second x)] [:cast e (nth x 2)])
                             :else (some-> (query/type-call registry chain x opts) vector))
-                    :let [[k elements?] (value-arg registry chain (second x))]
+                    :let [[k elements?] (or (value-arg registry chain (second x)) (when (literal (second x)) [(second x) false]))]
                     :when k]
                 [x chain k elements?])
         ;; each operand of a comparison once: BETWEEN's bounds, IN's items too
@@ -330,7 +369,7 @@
                                seq shape/distinct-kinds)))]
     (for [[x chain k elements?] (distinct casts)
           :let [s (:schema (query/expression-type registry chain x opts))]
-          :when s
+          :when (and s (or (syntax/param-key k) elements? (query/enum-values registry s)))
           :let [e (when-not elements? (unnest-cast-element registry ps x opts))
                 t (accepted-type registry s :cast (cond-> opts e (assoc ::cast-element e)))
                 t (if-let [more (some-> (calls x) call-type)]
@@ -341,18 +380,24 @@
                     ;; the other conditions keep, or once ahead of the scan), so its ranges may never be checked
                     (= (get compared x 0) (uses x)) query/loose
                     (< (get refusing x 0) (uses x)) query/nullable)]]
-      [k (if elements? (cast-arrays registry s t opts) t)])))
+      (if (or (syntax/param-key k) elements?)
+        [k (if elements? (cast-arrays registry s t opts) t)]
+        ;; a literal cast to an enum type: its labels
+        [(literal-key k {:type (query/enum-type registry s) :function "CAST" :schema s}) t]))))
 
 (defn- assignment-args
   "An argument assigned to a column; unnest(?), of a typed array (unnest(unknown) is ambiguous),
    or an unnest's column, each element assigned to it."
   [registry ps opts]
-  (for [{:keys [x chain] :as a} (syntax/assignments ps)
+  (for [{:keys [x chain assign] :as a} (syntax/assignments ps)
         :let [t (assigned-type registry a :assign opts)
               u (array-arg x #{:unnest})
-              [k elements?] (if u [u true] (value-arg registry chain x))]
-        :when k]
-    [k (if elements? (jdbc/array-type t opts :unnest) t)]))
+              [k elements?] (if u [u true] (value-arg registry chain x))
+              s (when (and (not k) (literal x)) (:schema (query/assigned-column registry a)))]
+        :when (or k s)]
+    (if k
+      [k (if elements? (jdbc/array-type t opts :unnest) t)]
+      [(literal-key x {:column assign :function (name assign) :schema s}) t])))
 
 (defn- json-field-type
   "The type of a value of a key of a JSON document json_populate_record reads into a column of
@@ -451,13 +496,20 @@
    others' type; nil is a value there."
   [registry ps opts]
   (for [{:keys [x chain]} (syntax/expression-nodes ps)
-        :let [operands (query/resolving-operands x)]
-        :when (some syntax/param-key operands)
-        :let [r (query/common (map #(query/expression-type registry chain % opts) (remove syntax/param-key operands)))]
+        :let [operands (query/resolving-operands x)
+              slot? #(or (syntax/param-key %) (literal %))]
+        :when (some slot? operands)
+        :let [type-of #(query/expression-type registry chain % opts)
+              ;; the type of the operands no value decides, else of the literals too (nullif(?, 0))
+              typed (remove slot? operands)
+              r (or (query/common (map type-of typed)) (query/common (map type-of (remove syntax/param-key operands))))]
         :when (:schema r)
         o operands
-        :when (syntax/param-key o)]
-    [o (query/nullable (accepted-type registry (:schema r) :common opts))]))
+        :when (slot? o)
+        :let [t (query/nullable (accepted-type registry (:schema r) :common opts))]]
+    (if (syntax/param-key o)
+      [o t]
+      [(literal-key o {:column (first (filter syntax/column-keyword? typed)) :function (or (syntax/called x) "CASE") :schema (:schema r)}) t])))
 
 (defn- call-arg-type
   "What a value takes at argument i of a call PostgreSQL may resolve to candidates os, ss the
@@ -478,60 +530,65 @@
                                    :any))
           :else (query/nullable (accepted-type registry (first ss) :call opts)))))
 
-(defn- sent-literal
-  "The value of x where HoneySQL sends it as a parameter (2, \"a\", [:lift 2]) of a class the one
-   sending sends typed; nil for another x, or under sql/format's :inline."
-  [x opts]
-  (let [v (if (and (vector? x) (= :lift (first x)) (= 2 (count x))) (second x) x)]
-    (when (and (or (number? v) (string? v) (boolean? v))
-               (string? (jdbc/sent-type v opts)))
-      v)))
-
 (defn- refuses?
   "Whether argument schema t refuses literal v."
   [registry t v]
   (not (try (m/validate t v {:registry (merge registry/base (::query/schemas registry))}) (catch Exception _ true))))
 
-(defn- literal-comparison-problems
-  "Of a number or a boolean compared with a column or a typed expression, as compared-arg-type
-   types an argument there ([:= :nick 1]: character varying = bigint does not exist); a string's
-   is an :uncast-string, an enum label's an :enum-literal."
-  [registry ps opts]
-  (for [[op side value chain] (syntax/comparison-sides ps)
-        :let [v (sent-literal value opts)]
-        :when (and (some? v) (not (string? v)))
-        :let [s (query/side-schema registry chain side opts)]
-        :when (and s (empty? (query/enum-values registry s)) (refuses? registry (accepted-type registry s :compare opts) v))]
-    {:kind :literal-type :function (name op) :value v :sent (jdbc/sent-type v opts)
-     :type (:pg/type (shape/column-props s))}))
+(defn- uncast-type
+  "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
+   type of types' :cast (bit takes varbit, which keeps its length), or any other type types
+   has; nil for a string type (text, varchar, char, name, citext) or a type types lacks."
+  [registry s]
+  (let [p (shape/column-props s)
+        e (types/entry (shape/type-name p))]
+    (or (query/enum-type registry s)
+        (when e
+          (cond (types/element (:pg/type p)) (types/array-of (:name e))
+                (:cast e) (name (:cast e))
+                (not= :string (:schema e)) (:name e))))))
 
-(defn- literal-call-problems
-  "Of each literal of a call at an argument that refuses it (call-arg-type), the call's literals
-   taken as its arguments are: [:round :price 2] sends 2 as a Long, a bigint, which
-   round(numeric, integer) does not take."
+(defn- sent-typed?
+  "Whether literal x goes as a parameter of a type of its own: not under sql/format's :inline,
+   not written into the SQL, not sent untyped (a keyword)."
+  [x opts]
+  (let [{:keys [value inline]} (literal x)]
+    (and (some? value) (not inline) (string? (jdbc/sent-type value opts)))))
+
+(defn- call-literals
+  "A literal sent typed as an argument of a function or an operator ([:round :price 2]), as
+   call-arg-type types an argument there, the call's literals taken as its arguments are."
   [registry ps opts]
   (for [{:keys [x chain clause]} (syntax/expression-nodes ps)
         :let [[_ n args :as parts] (when-not (or (syntax/comparison? x) (query/type-call registry chain x opts)) (syntax/call-parts x))]
-        :when (and n (some #(sent-literal % opts) args)
+        :when (and n (some #(sent-typed? % opts) args)
                    (not (and (= "unnest" n) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by])))))
-        :let [ins (mapv #(if (sent-literal % opts) :free (:type (query/expression-type registry chain % opts))) args)
+        :let [ins (mapv #(if (sent-typed? % opts) :free (:type (query/expression-type registry chain % opts))) args)
               os (query/reached registry opts parts)]
         [i a] (map-indexed vector args)
-        :let [v (sent-literal a opts)]
-        :when (some? v)
+        :when (sent-typed? a opts)
         :let [ss (map types/type-schema (resolve/argument-types ins i os))
               t (when (every? some? ss) (call-arg-type registry ss os i opts))]
-        :when (and t (refuses? registry t v))]
-    (cond-> {:kind :literal-type :function n :value v :sent (jdbc/sent-type v opts)}
-      (= 1 (count ss)) (assoc :type (:pg/type (shape/column-props (first ss)))))))
+        :when t]
+    [(literal-key a {:function n :schema (when (= 1 (count ss)) (first ss))}) t]))
 
-(defn literal-problems
-  "A :literal-type problem of each literal HoneySQL sends as a parameter where an argument there
-   would refuse it: PostgreSQL resolves the call or the comparison by the type pgjdbc sends it as."
-  [registry body opts]
-  (vec (for [[_ _ _ ps] (query/once registry query/statement-positions body opts)
-             p (concat (literal-comparison-problems registry ps opts) (literal-call-problems registry ps opts))]
-         p)))
+(defn- literal-problem
+  "The problem of literal x where a value of type t goes (an argument there takes t), of a column
+   or expression of schema s: outside an enum's labels however it is sent, an :enum-literal;
+   sent typed where an argument there would refuse it, an :uncast-string for a string, a
+   :literal-type otherwise. A literal written into the SQL or sent untyped is held to the labels
+   alone, as PostgreSQL reads it as the type's input."
+  [registry {x ::literal :keys [column type function] s :schema} t opts]
+  (let [{:keys [value text]} (literal x)
+        labels (some->> s (query/enum-values registry))]
+    (cond (and labels (not (some #{(or text value)} labels)))
+          (cond-> {:kind :enum-literal :value value :allowed labels} column (assoc :column column) type (assoc :type type))
+          (and (sent-typed? x opts) (refuses? registry t value))
+          (let [u (when (and s (string? value)) (uncast-type registry s))]
+            (if u
+              {:kind :uncast-string :column column :value value :type u}
+              (cond-> {:kind :literal-type :function function :value value :sent (jdbc/sent-type value opts)}
+                (some-> s shape/column-props :pg/type) (assoc :type (:pg/type (shape/column-props s)))))))))
 
 (defn- call-args
   "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve
@@ -686,7 +743,7 @@
    the function, on its schema; :untyped, such an argument whose other uses take no value sent
    with a type, and the type they name."
   [registry body opts]
-  (let [uses [comparison-args limit-args truth-tested-args cast-args assignment-args resolving-args call-args]
+  (let [uses [comparison-args limit-args truth-tested-args cast-args assignment-args resolving-args call-args call-literals]
         sps (query/once registry query/statement-positions body opts)
         typed (concat (for [[_ _ _ ps] sps
                             f uses
@@ -700,7 +757,8 @@
         typed-keys (set (keep (comp syntax/param-key first) typed))
         null-tested (set (for [[_ _ _ ps] sps, k (null-tested-args ps opts)] k))
         left (into {} (for [[k t] types] [k (if (and (only-typed k) (not= :any t)) (typed-only t) t)]))]
-    {:args (into {} (for [[k t] types
+    {:literals (for [[k t] typed :when (and (map? k) (::literal k))] [k t])
+     :args (into {} (for [[k t] types
                           :let [only (only-typed k)
                                 ;; where it goes untyped elsewhere, the typed-only uses' values; else those of both
                                 t (cond (nil? only) t
@@ -720,6 +778,12 @@
    why}]. docs/queries.md#the-types-of-the-arguments says where an argument is typed and how."
   [registry body opts]
   (:args (query/once registry analysis body opts)))
+
+(defn literal-problems
+  "The problem of each literal at a position PostgreSQL types it at, as literal-problem judges it
+   against the type an argument there takes (docs/queries.md#stricter-than-postgresql)."
+  [registry body opts]
+  (vec (keep (fn [[k t]] (literal-problem registry k t opts)) (:literals (query/once registry analysis body opts)))))
 
 (defn arg-problems
   "An :undetermined-type problem of each argument at a position PostgreSQL takes its type from

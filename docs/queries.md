@@ -643,7 +643,10 @@ naming its `:var`; `{:ns 'app.queries}` (or a list of namespaces) limits it to s
 ## Stricter than PostgreSQL
 
 pgmalli reports or refuses some of what PostgreSQL runs, where it is almost always a mistake.
-Write the query so PostgreSQL's reading is explicit instead.
+Write the query so PostgreSQL's reading is explicit instead. Each rule holds for an argument and
+for a literal HoneySQL sends as a parameter (a number, a string, `[:lift v]`), which PostgreSQL
+cannot tell from one; a literal written into the SQL (`:inline`, `[:inline "s"]`) or sent untyped
+(`[:lift :kw]`) is held to an enum's labels alone, as PostgreSQL reads it through the type's input.
 
 - An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
@@ -704,8 +707,9 @@ Write the query so PostgreSQL's reading is explicit instead.
   (`CREATE CAST`), and an extension's type's category, are not read: a call whose argument is of
   an extension's type is untyped unless an overload takes the type exactly.
 
-- Values written in the query beyond NULL, enum literals and strings sent typed (`varchar`): an empty `[:in :id []]` is not reported (an argument in `:in` is
-  typed non-empty).
+- A literal written into the SQL or sent untyped, beyond an enum's labels ([stricter than
+  PostgreSQL](#stricter-than-postgresql)); an empty `[:in :id []]` (an argument in `:in` is typed
+  non-empty).
 - A raw FROM item of SQL beyond a name (`[[:raw "jsonb_array_elements(doc) AS e(v)"]]`) is not
   read: its name and columns are not told, and a column any qualifier names may be its.
 - An ON clause naming a table joined after it in its own join list, or an UPDATE's FROM joining
