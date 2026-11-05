@@ -35,24 +35,24 @@
   (let [x (try (edn/read-string (slurp f))
                (catch RuntimeException e
                  (error/fail! :pgmalli.error/not-generated
-                              (str f " is not a generated file (" (ex-message e) "); run pgmalli-next.main generate")
+                              (str f " is not a generated file (" (ex-message e) "); run pgmalli-next.generate/generate!")
                               {:given (str f)} e)))]
     (if (generated? x)
       x
       (error/fail! :pgmalli.error/not-generated
-                   (str f " is not a generated file (no :registry map); run pgmalli-next.main generate")
+                   (str f " is not a generated file (no :registry map); run pgmalli-next.generate/generate!")
                    {:given (str f)}))))
 
 (def resource
-  "Where generate's file is on the classpath by default (its :out under resources/)."
-  "pgmalli-next/generated.edn")
+  "Where generate!'s file is on the classpath by default (its :out under resources/)."
+  "pgmalli-next.edn")
 
 (defn read-generated
   "The generated data on the classpath (resource)."
   []
   (read-generated-file (or (io/resource resource)
                            (error/fail! :pgmalli.error/not-generated
-                                        (str resource " is not on the classpath; run pgmalli-next.main generate, or read the file :out names and pass its data")
+                                        (str resource " is not on the classpath; run pgmalli-next.generate/generate!, or read the file :out names and pass its data")
                                         {:given resource}))))
 
 (defn- insert-entry
@@ -99,7 +99,7 @@
    NULL), which throws, naming where, when a value is wanted."
   [where type-name]
   (with-meta (gen/sized (fn [_] (error/fail! :pgmalli.error/cannot-generate
-                                             (str where ": pgmalli cannot make a value of type " type-name "; give one with :overrides in pgmalli-next.edn")
+                                             (str where ": pgmalli cannot make a value of type " type-name "; give one with :overrides")
                                              {:given where :type type-name})))
     {:malli.generator/never-gen true}))
 
@@ -162,8 +162,8 @@
   (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas))
 
 (defn- with-other-schemas-types
-  "The generated schemas with each :any column whose :pg/type names an enum type or a domain of
-   another loaded schema made a [:ref] to it: each file stands alone, so generation types such a
+  "The generated schemas with each :any column whose :pg/type names an enum type of another
+   schema of the file made a [:ref] to it: generation reads each schema alone, so it types such a
    column :any."
   [schemas]
   (let [own (fn [t] (when-let [[_ s n] (and (string? t) (re-matches #"([a-z_][a-z0-9_$]*)\.([a-z_][a-z0-9_$]*)" t))]
@@ -204,12 +204,13 @@
 (defn registry
   "The registry pgmalli-next.core/registry documents: of generated data, or of the classpath's
    (read-generated) with none."
-  [& generated]
-  (let [data (if (seq generated) (map #(generated-data % "registry") generated) [(read-generated)])
-        generated (into {} (map (fn [[k s]] [k (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k)))]))
-                        (with-partitions (with-other-schemas-types (apply merge (concat (map :registry data) (map sequence-rows data))))))]
-    (merge base
-           (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
-           (into {} (for [d data, s (:schemas d)]
+  ([] (registry (read-generated)))
+  ([data]
+   (let [d (generated-data data "registry")
+         generated (into {} (map (fn [[k s]] [k (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k)))]))
+                         (with-partitions (with-other-schemas-types (merge (:registry d) (sequence-rows d)))))]
+     (merge base
+            (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
+            (into {} (for [s (:schemas d)]
                       [(shape/routines-key s)
-                       [:any {:pg/functions (get-in d [:functions s]) :pg/operators (get-in d [:operators s]) :pg/database-version (:database-version d)}]])))))
+                        [:any {:pg/functions (get-in d [:functions s]) :pg/operators (get-in d [:operators s]) :pg/database-version (:database-version d)}]]))))))

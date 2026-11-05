@@ -35,7 +35,7 @@
                (let [c (without-urls e)]
                  (error/fail! :pgmalli.error/db-unavailable
                               (str "cannot connect to " (target jdbc-url) ": " (ex-message c)
-                                   "; check :db :jdbc-url, :user and :password in pgmalli-next.edn and that PostgreSQL is running")
+                                   "; check :db's :jdbc-url, :user and :password and that PostgreSQL is running")
                               {:given (target jdbc-url)} c)))))))
 
 (defn- document [^java.sql.Statement st sql]

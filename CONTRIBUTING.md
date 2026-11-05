@@ -49,7 +49,7 @@ the REPL exits; each run of a namespace gets a new database.
 ## Documentation
 
 The examples run against [docs/example/schema.sql](docs/example/schema.sql). After changing
-it, `bb docs:example` generates `docs/example/pgmalli-next/` again; a test fails until it does. A
+it, `bb docs:example` generates `docs/example/pgmalli-next.edn` again; a test fails until it does. A
 block that cannot run (a shell command, a database call) gets `<!-- :test-doc-blocks/skip -->`
 before it.
 

@@ -9,8 +9,6 @@
                       org.postgresql/postgresql {:mvn/version "42.7.14"}
                       com.github.seancorfield/next.jdbc {:mvn/version "1.4.72"}
                       com.github.seancorfield/honeysql {:mvn/version "2.8.85"}
-                      ;; strings from regexes, which pgmalli uses when it is on the classpath
-                      com.gfredericks/test.chuck {:mvn/version "0.2.15"}
                       ;; dev/update_expected.clj, which bb test:update:jvm runs and dev-tools-test tests
                       rewrite-clj/rewrite-clj {:mvn/version "1.3.59"}}
          :main-opts ["-m" "cognitect.test-runner"]}
@@ -19,7 +17,7 @@
   ;; with :test, as bb test:update:jvm runs it
   :test-update {:main-opts ["-m" "update-expected"]}
   ;; bb test:docs: README.md and docs/*.md as tests; with :test and :docs to run them, the example
-  ;; registry (docs/example/pgmalli-next) on the classpath
+  ;; generated file (docs/example/pgmalli-next.edn) on the classpath
   :test-doc-blocks {:replace-deps {com.github.lread/test-doc-blocks {:mvn/version "1.2.22"}}
                     ;; GHSA-p6pp-m3f8-5c89 (fixed in 2.18.11)
                     :override-deps {com.fasterxml.jackson.core/jackson-core {:mvn/version "2.22.4"}}

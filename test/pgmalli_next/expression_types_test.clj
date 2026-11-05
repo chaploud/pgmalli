@@ -135,7 +135,7 @@
 
 (defn- col [t] (some (fn [[c x]] (when (= t x) c)) columns))
 
-(defn- registry [] (pgmalli/registry (generated {:db *db*} "public") (generated {:db *db*} "matrix")))
+(defn- registry [] (pgmalli/registry (generated {:db *db*} "public" "matrix")))
 
 (def ^:private pairs
   "[a b]: each pair of the plain columns (c_), and each pair of columns of any form whose types are

@@ -69,7 +69,7 @@
           ;; psql exits 2 when it cannot connect, 3 when the script fails
           (= 2 exit) (error/fail! :pgmalli.error/db-unavailable
                                   (str "cannot connect to " (target env) " with psql: " first-err
-                                       "; check :db in pgmalli-next.edn (or PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD) and that PostgreSQL is running")
+                                       "; check :db (or PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD) and that PostgreSQL is running")
                                   {:given (target env) :exit exit :err err})
           :else (error/fail! :pgmalli.error/fault
                              (str "psql failed reading schema " schema " on " (target env) " (exit " exit "): " first-err
@@ -110,7 +110,7 @@
         ir (keywordize (json/parse (str/trim out)) false)]
     (when-not (:exists ir)
       (let [meant (error/suggest schema (:schemas ir))]
-        (error/fail! :pgmalli.error/invalid-config (str "schema " (pr-str schema) " does not exist in the database; check :schemas in pgmalli-next.edn"
+        (error/fail! :pgmalli.error/invalid-config (str "schema " (pr-str schema) " does not exist in the database; check :schemas"
                                                         (error/did-you-mean (some-> meant pr-str)))
                      (cond-> {:given schema} meant (assoc :did-you-mean [meant])))))
     (dissoc ir :exists :schemas)))

@@ -2,7 +2,6 @@
   "Generated files against the database and against each other: what differs, entry by entry."
   (:require [clojure.java.io :as io]
             [pgmalli-next.impl.files :as files]
-            [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.shape :as shape]))
 
@@ -55,16 +54,14 @@
                  d))))
 
 (defn check
-  "What pgmalli-next.generate/check reports."
-  ([config] (check config {}))
-  ([config {:keys [db?] :or {db? true} :as opts}]
-   (jdbc/checked! [:map {:closed true} [:db? {:optional true} :boolean]] opts)
-   (let [path (:out (files/config config))
-         file (when (.exists (io/file path)) (registry/read-generated-file path))
-         ;; read where there is no file too: the database unreachable is what CI reports
-         db (when db? (:data (files/generated config)))]
-     (cond-> {:missing (when-not file path)
-              :unrendered (not-empty (:unrendered file))
-              :diagnostics (not-empty (:diagnostics file))}
-       ;; a missing file differs in every entry; saying it is missing says it all
-       db? (assoc :stale (when file (not-empty (diff file db))))))))
+  "What pgmalli-next.generate/check compares: {:missing :stale :unrendered :diagnostics}."
+  [config]
+  (let [path (:out (files/config config))
+        file (when (.exists (io/file path)) (registry/read-generated-file path))
+        ;; read where there is no file too: the database unreachable is what CI reports
+        db (:data (files/generated config))]
+    {:missing (when-not file path)
+     ;; a missing file differs in every entry; saying it is missing says it all
+     :stale (when file (not-empty (diff file db)))
+     :unrendered (not-empty (:unrendered db))
+     :diagnostics (not-empty (:diagnostics db))}))

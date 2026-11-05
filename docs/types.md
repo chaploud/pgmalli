@@ -121,7 +121,7 @@ A row schema differs from PostgreSQL in a few places:
 The types without a malli counterpart generate from a fixed list of literals PostgreSQL
 accepts (an interval in ISO 8601). A NOT NULL
 column of a type pgmalli cannot make a value of fails to generate, naming it:
-`public.t.p: pgmalli cannot make a value of type pair; give one with :overrides in pgmalli-next.edn`.
+`public.t.p: pgmalli cannot make a value of type pair; give one with :overrides`.
 
 Dates and times generate within 2025 (in domains and arrays too), `timetz` offsets within
 what PostgreSQL takes, a `jsonb_typeof = 'array'` column an array of JSON values.

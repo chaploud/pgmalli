@@ -64,7 +64,7 @@
   (is (not (m/validate :pg.sample.users/update {:nope 1} opts)) "closed"))
 
 (deftest several-schemas
-  (let [registry (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data)
+  (let [registry (pgmalli/registry pgmalli-next.sample/both-data)
         opts {:registry registry}]
     (is (m/validate :pg.other.notes/insert {:id 1 :user_id 1} opts))
     (is (m/validate :pg.sample/users user opts))))

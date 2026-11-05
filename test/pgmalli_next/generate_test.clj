@@ -24,23 +24,6 @@
             {:key :operators :schema "other" :name "~~~" :file [{:args ["text" "text"] :result "boolean"}] :db nil}]
            (generate/diff before now)))))
 
-(defn- temp-out [] (str (doto (java.io.File/createTempFile "pgmalli-nodb" "") .delete) "/generated.edn"))
-
-(deftest check-without-a-database-reports-a-missing-file
-  (let [out (temp-out)]
-    (is (= out (:missing (generate/check {:out out :schemas ["sample"]} {:db? false}))))))
-
-(deftest check-without-a-database-reads-the-file
-  (let [config {:out (temp-out) :schemas ["sample"]}
-        data (assoc pgmalli-next.sample/sample-data
-                    :unrendered [{:kind :type :table "sample.users" :column "g" :type "geometry"}]
-                    :diagnostics [{:table "sample.users" :kind :row-trigger}])]
-    (spit (doto (:out config) (io/make-parents)) (files/edn-string data))
-    (is (= {:missing nil
-            :unrendered [{:kind :type :table "sample.users" :column "g" :type "geometry"}]
-            :diagnostics [{:table "sample.users" :kind :row-trigger}]}
-           (generate/check config {:db? false})))))
-
 (deftest diff-and-registry-take-generated-data-maps
   (doseq [x [42 "x" [nil] nil {} {:registry 1}]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"diff takes generated data" (generate/diff x {:registry {}})) (pr-str x)))
@@ -52,13 +35,13 @@
         config {:schemas ["sample"] :out path}]
     (doseq [text ["{:schema" "[1 2]"]]
       (spit (doto path (io/make-parents)) text)
-      (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not a generated file.*run pgmalli-next.main generate"
-                                    (generate/check config {:db? false})))]
+      (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is not a generated file.*run pgmalli-next.generate/generate!"
+                                    (generate/check config)))]
         (is (= :pgmalli.error/not-generated (:pgmalli/error (ex-data e))) text)
         (is (re-find #"app.edn" (ex-message e)) text)))))
 
 (deftest a-config-of-the-wrong-shape-says-the-shape
-  (doseq [[c says] [["pgmalli-next.edn" #"should be a map, such as \{:schemas"]
+  (doseq [[c says] [["public" #"should be a map, such as \{:schemas"]
                     [{:schemas []} #"\{:schemas \[\"should be a vector of schema names, such as \[\\\"public\\\"\]\"\]\}$"]
                     [{:db "postgres://localhost/app"} #":db \[\"should be a map: psql's keys"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (files/config c)) (pr-str c))))
@@ -67,7 +50,3 @@
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:dbb {:password "s3cret"}})))]
     (is (not (re-find #"s3cret" (pr-str (ex-data e)))))
     (is (not (re-find #"s3cret" (str e))))))
-
-(deftest a-name-ending-in-a-question-mark-is-suggested-as-it-is
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :db\?$"
-                        (generate/check {:schemas ["sample"] :out "test/resources/pgmalli-next/sample.edn"} {:db false}))))

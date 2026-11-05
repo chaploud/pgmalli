@@ -43,7 +43,7 @@
                          CREATE TABLE app.items (id serial PRIMARY KEY, status public.status);"))
            (f)))))
 
-(defn- registry [] (pgmalli/registry (generated {:db *db*} "public") (generated {:db *db*} "app")))
+(defn- registry [] (pgmalli/registry (generated {:db *db*} "public" "app")))
 
 (defn- pg-object [type value] (doto (PGobject.) (.setType type) (.setValue value)))
 

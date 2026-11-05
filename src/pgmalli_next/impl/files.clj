@@ -1,5 +1,5 @@
 (ns pgmalli-next.impl.files
-  "Config -> the generated EDN file of its schemas: README.md#installation, and the file
+  "Config -> the generated EDN file of its schemas: README.md#generating, and the file
    docs/types.md#the-generated-file. Output is deterministic (sorted maps, pprint); overrides
    that are not EDN (functions) are rejected at generation time."
   (:require [clojure.edn :as edn]
@@ -17,10 +17,10 @@
             [pgmalli-next.impl.render :as render]
             [pgmalli-next.impl.types :as types]))
 
-(def default-config {:schemas ["public"] :out "resources/pgmalli-next/generated.edn" :overrides {} :db {}})
+(def default-config {:schemas ["public"] :out "resources/pgmalli-next.edn" :overrides {} :db {}})
 
 (def config-schema
-  [:map {:closed true :pgmalli/not-a-map "should be a map, such as {:schemas [\"public\"]} (README.md#installation)"}
+  [:map {:closed true :pgmalli/not-a-map "should be a map, such as {:schemas [\"public\"]} (README.md#generating)"}
    [:schemas {:optional true} [:sequential {:min 1 :error/message "should be a vector of schema names, such as [\"public\"]"} [:string {:min 1}]]]
    [:out {:optional true} :string]
    [:overrides {:optional true} [:map-of [:or :string :keyword] :any]]

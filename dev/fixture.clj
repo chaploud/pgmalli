@@ -1,4 +1,5 @@
-;; Writes test/resources/pgmalli-next/{sample,other}.edn from in-memory schemas (no database needed).
+;; Writes test/resources/pgmalli-next/{sample,other,both}.edn from in-memory schemas (no database needed):
+;; a generated file of each schema, and of the two.
 (require '[pgmalli-next.impl.pattern :as p] '[pgmalli-next.impl.files :as files])
 (def sample
   {:name "sample"
@@ -46,7 +47,7 @@
                                    "notes_user_id_fkey" {:name "notes_user_id_fkey" :type "FOREIGN KEY" :columns ["user_id"]
                                                          :references {:schema "sample" :table "users" :columns ["id"]}}}}}
    :functions [{:name "note_count" :args [] :result "bigint" :kind "f" :defaults 0}]})
-(doseq [schema [sample other]]
-  (let [path (str "test/resources/pgmalli-next/" (:name schema) ".edn")]
-    (spit path (files/edn-string (files/assemble "none" [[(:name schema) (p/facts schema)]] {})))
+(doseq [[n schemas] [["sample" [sample]] ["other" [other]] ["both" [sample other]]]]
+  (let [path (str "test/resources/pgmalli-next/" n ".edn")]
+    (spit path (files/edn-string (files/assemble "none" (for [s schemas] [(:name s) (p/facts s)]) {})))
     (println "wrote" path)))

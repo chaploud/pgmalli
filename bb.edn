@@ -24,7 +24,7 @@
          mutate {:doc "bb mutate --file src/... [--kind table|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs] [--out f.edn]: which mutants of a source file the tests miss: the bb suite, or the JVM suite under --jvm; database tests only under --db (needs docker)"
                  :extra-paths ["dev"]
                  :task (load-file "dev/mutate.clj")}
-         docs:example {:doc "Rewrite docs/example/pgmalli-next/generated.edn from docs/example/schema.sql (needs docker)"
+         docs:example {:doc "Rewrite docs/example/pgmalli-next.edn from docs/example/schema.sql (needs docker)"
                        :extra-paths ["dev"]
                        :task (load-file "dev/docs_example.clj")}
          catalog {:doc "Rewrite resources/pgmalli-next/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs (needs docker)"

@@ -1105,7 +1105,7 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"reads HoneySQL query data" (check body)) (pr-str body))))
 
 (deftest a-row-of-a-table-the-registry-lacks-is-nil
-  (is (nil? (:row (h/analyze (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data) {:select [:id] :from [:users]} {:schema "other"})))))
+  (is (nil? (:row (h/analyze (pgmalli/registry pgmalli-next.sample/both-data) {:select [:id] :from [:users]} {:schema "other"})))))
 
 (deftest a-ctes-visibility-is-one-judgment
   (let [body {:select [:id :mood] :from [:users] :where [:exists {:with [[:users {:select [:id] :from [:groups]}]] :select [:id] :from [:users]}]}]
@@ -1336,7 +1336,7 @@
     (is (= :%count.c (ffirst (rest (row {:select [[:%count.* :%count.c]] :from [:users]})))) "an alias is no column: its dots stay")))
 
 (deftest a-table-of-another-schema-is-the-one-meant-when-schema-is-left-out
-  (let [ps (:problems (h/analyze (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data) {:select [:id] :from [:users]} {:schema "other"}))]
+  (let [ps (:problems (h/analyze (pgmalli/registry pgmalli-next.sample/both-data) {:select [:id] :from [:users]} {:schema "other"}))]
     (is (= [{:kind :unknown-table :table "other.users" :did-you-mean ["sample.users"]}] ps))
     (is (= ["unknown table other.users; sample.users exists; pass {:schema \"sample\"}, or name it :sample.users"] (h/humanize ps)))))
 
@@ -1352,7 +1352,7 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^the registry holds no schema \"other\"; it holds \"a\", \"b\"$"
                             (:problems (h/analyze (pgmalli/registry {:registry {:pg.a/t [:map {:pg/table "a.t"} [:id :int]] :pg.b/t [:map {:pg/table "b.t"} [:id :int]]}}) q {:schema "other"}))))
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"; did you mean: \"sample\"$"
-                            (:problems (h/analyze (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data) q {:schema "smaple"})))))
+                            (:problems (h/analyze (pgmalli/registry pgmalli-next.sample/both-data) q {:schema "smaple"})))))
     (is (= [] (:problems (h/analyze {:app/x :int} {:select [1]}))) "a registry of no generated schema names none")))
 
 (deftest a-qualifier-no-table-or-alias-has-is-the-problem-with-the-alias-meant
@@ -2295,7 +2295,7 @@
 
 (deftest a-schemas-own-functions-and-operators-resolve-with-pg-catalogs
   (let [row #(:row (h/analyze registry {:select (vec (for [[k e] %] [e k])) :from [:users]} opts))
-        both (pgmalli/registry pgmalli-next.sample/sample-data pgmalli-next.sample/other-data)]
+        both (pgmalli/registry pgmalli-next.sample/both-data)]
     (is (= [:map [:d [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row {:d [:double_it :score]})))
     (is (= [:map [:r [:maybe [:string {:pg/type "text"}]]]] (row {:r [:round :score]}))
         "an exact match of the schema's beats pg_catalog's round(double precision), which an integer converts to")
@@ -2687,11 +2687,12 @@
   (is (= [:any {:pgmalli/untyped :position}] (:row (args {:update :users :set :?row :where [:= :id :?id]})))))
 
 (deftest a-column-of-another-schemas-enum-type-is-of-that-type-and-of-its-row-type-the-drivers-object
-  (let [reg (pgmalli/registry {:schema "a" :registry {:pg.a/mood [:enum "x" "y"]
-                                                      :pg.a/v [:map {:pg/view "a.v"} [:id :int]]
-                                                      :pg.a/t [:map {:pg/table "a.t"} [:id :int]]}}
-                              {:schema "b" :registry {:pg.b/t [:map {:pg/table "b.t"} [:m [:any {:pg/type "a.mood"}]] [:ms [:vector {:pg/type "a.mood[]"} :any]]
-                                                               [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]}})]
+  (let [reg (pgmalli/registry {:schemas ["a" "b"]
+                               :registry {:pg.a/mood [:enum "x" "y"]
+                                          :pg.a/v [:map {:pg/view "a.v"} [:id :int]]
+                                          :pg.a/t [:map {:pg/table "a.t"} [:id :int]]
+                                          :pg.b/t [:map {:pg/table "b.t"} [:m [:any {:pg/type "a.mood"}]] [:ms [:vector {:pg/type "a.mood[]"} :any]]
+                                                   [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]}})]
     (is (= [:map [:m [:enum {:pg/type "a.mood"} "x" "y"]] [:ms [:vector {:pg/type "a.mood[]"} [:maybe [:enum "x" "y"]]]] [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]
            (:row (h/analyze reg {:select [:m :ms :v :t] :from [:t]} {:schema "b"}))))))
 

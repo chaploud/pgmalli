@@ -17,7 +17,13 @@
 
 (use-fixtures :once with-postgres)
 
-(defn- temp-out [prefix] (str (doto (File/createTempFile prefix "") .delete) "/generated.edn"))
+(defn- temp-out [prefix] (str (doto (File/createTempFile prefix "") .delete) "/pgmalli-next.edn"))
+
+(defn- refusal
+  "The ex-data of check's refusal; nil when it returns."
+  [config]
+  (try (with-out-str (generate/check config)) nil
+       (catch clojure.lang.ExceptionInfo e (ex-data e))))
 
 (deftest generate-check-roundtrip
   (when *db*
@@ -39,8 +45,7 @@
                   CREATE FUNCTION touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
                   CREATE TRIGGER users_touch BEFORE INSERT ON users FOR EACH ROW EXECUTE FUNCTION touch();")
       (testing "a missing file is missing"
-        (is (= out (:missing (generate/check config))))
-        (is (nil? (:stale (generate/check config)))))
+        (is (= {:pgmalli/error :pgmalli.error/stale :missing out :stale nil} (select-keys (refusal config) [:pgmalli/error :missing :stale]))))
       (testing "generate, read back, validate"
         (is (= out (generate/generate! config)))
         (let [data (registry/read-generated-file out)
@@ -65,9 +70,9 @@
                  (map #(select-keys % [:kind (if (= :redundant-unique (:kind %)) :constraint :table)]) (:diagnostics data)))
               "the file says what deserves a look")))
       (testing "stale"
-        (is (nil? (:stale (generate/check config))))
+        (is (nil? (refusal config)))
         (exec-sql! "ALTER TABLE users ADD COLUMN extra int;")
-        (let [diffs (:stale (generate/check config))]
+        (let [diffs (:stale (refusal config))]
           (is (= [[:pg.public/users :extra]] (map (juxt :name :column) diffs))
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
@@ -91,13 +96,10 @@
                   CREATE FUNCTION chk.f() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
                   CREATE TRIGGER t_f AFTER INSERT ON chk.t FOR EACH ROW EXECUTE FUNCTION chk.f();")
       (generate/generate! config)
-      (let [{:keys [stale unrendered diagnostics]} (generate/check config)]
-        (is (nil? stale))
+      (let [{:keys [unrendered diagnostics]} (generate/check config)]
         (is (nil? unrendered))
         (is (= [:row-trigger] (map :kind diagnostics))))
       (is (= ["chk" "chk2"] (:schemas (registry/read-generated-file (:out config)))) "one file of the schemas")
-      (is (not (contains? (generate/check config {:db? false}) :stale)) "without the database, only the files")
-      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (generate/check config {:db false})) "a misspelt option is an error")
       (let [ks [:schemas :database-version :diagnostics :registry :functions :operators :sequences :unrendered]
             text (slurp (:out config))]
         (is (= (set ks) (set (keys (registry/read-generated-file (:out config))))))

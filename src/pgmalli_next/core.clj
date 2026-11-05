@@ -1,6 +1,6 @@
 (ns pgmalli-next.core
   "The application side of pgmalli: the schemas generated from PostgreSQL schemas (the file on
-   the classpath as pgmalli-next/generated.edn), read and used. Generation and freshness, which need
+   the classpath as pgmalli-next.edn), read and used. Generation and freshness, which need
    psql, are pgmalli-next.generate; HoneySQL queries checked and typed, pgmalli-next.honeysql."
   (:require [clojure.string :as str]
             [malli.core :as m]
@@ -14,7 +14,7 @@
             [pgmalli-next.impl.shape :as shape]))
 
 (defn generated
-  "The generated file on the classpath (pgmalli-next/generated.edn), as data:
+  "The generated file on the classpath (pgmalli-next.edn), as data:
    {:schemas [name ...] :database-version :registry {name schema}
     :functions {schema {name [overload ...]}} :operators {schema {name [overload ...]}}
     :sequences {schema [name ...]} :unrendered [entry ...]
@@ -29,9 +29,9 @@
    malli.experimental.time.
 
    (registry)
-   (registry (clojure.edn/read-string (slurp (clojure.java.io/resource \"app/generated.edn\"))))"
-  [& generated]
-  (apply reg/registry generated))
+   (registry (clojure.edn/read-string (slurp \"api/pgmalli-next.edn\")))"
+  ([] (reg/registry))
+  ([generated] (reg/registry generated)))
 
 (defn as-read
   "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it under

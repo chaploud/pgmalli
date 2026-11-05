@@ -81,7 +81,7 @@
 (deftest unknown-schema
   (when *db*
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"schema \"nope\" does not exist in the database; check :schemas" (ir/from-db (assoc *db* :schema "nope"))))
-    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^schema \"pubic\" does not exist in the database; check :schemas in pgmalli-next.edn; did you mean: \"public\"$"
+    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^schema \"pubic\" does not exist in the database; check :schemas; did you mean: \"public\"$"
                                   (ir/from-db (assoc *db* :schema "pubic"))))]
       (is (= ["public"] (:did-you-mean (ex-data e)))))))
 
@@ -91,7 +91,7 @@
     (is (instance? java.io.IOException (ex-cause e)) "the cause is kept")))
 
 (deftest psql-that-cannot-connect-names-the-target-on-one-line
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope with psql: [^\n]*; check :db in pgmalli-next.edn"
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope with psql: [^\n]*; check :db"
                                 (ir/from-db {:host "localhost" :port 1 :dbname "nope" :user "u" :password "s3cret"})))]
     (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
     (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e))) "s3cret")))))
