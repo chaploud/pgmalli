@@ -664,6 +664,8 @@ Write the query so PostgreSQL's reading is explicit instead.
   text's bytes: send a string, or the column a `jsonb` one.
 - An argument compared with a column does not take nil, unless the query also tests it for NULL
   ([compare NULL in the query body](#the-types-of-the-arguments)).
+- A sequence read by name as a table (`:from [:users_id_seq]`): the registry lists no sequence,
+  so it is an `:unknown-table`. Read it through `nextval`, `currval` or `pg_sequence_last_value`.
 - An argument `INSERT INTO t (cols) SELECT` writes to a `NOT NULL` column does not take nil, nor
   a value past the column's length, range or CHECKs, though PostgreSQL takes it where the SELECT
   returns no row: `SELECT ?x WHERE NOT EXISTS (...)`, which skips a duplicate, writes the nil
@@ -733,8 +735,6 @@ Write the query so PostgreSQL's reading is explicit instead.
 - An argument schema with a regex CHECK (`[:and [:string] [:re ...]]`) does not generate with
   `mg/generate`; it validates only. It lacks the generation hint the registry's column schema
   carries, and test.chuck refuses the regex's `\z`.
-- Partitions and sequences: the registry lists neither, so a query reading one by name
-  (`:from [:events_2026]`, `:from [:users_id_seq]`) gets `:unknown-table`.
 - A string sent as `varchar` to a column of a domain over a type other than an enum (a
   domain over `integer`), which PostgreSQL refuses; and an argument whose type `:args`
   leaves `:any` (a cast to `inet`'s), which may be an object of the type.

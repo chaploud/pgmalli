@@ -136,7 +136,15 @@ tables AS (
                         WHERE t.tgrelid = c.oid AND NOT t.tgisinternal AND t.tgenabled <> 'D' AND (t.tgtype::int4 & 1) = 1),
            -- a table other tables inherit (not as partitions): a query reads their rows too, which its keys do not span
            'inherited', EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
-                                WHERE i.inhparent = c.oid AND NOT ch.relispartition)
+                                WHERE i.inhparent = c.oid AND NOT ch.relispartition),
+           -- a partitioned table's partitions of this schema, at any depth: a query reads or writes one by name
+           'partitions', (WITH RECURSIVE tree AS (
+                            SELECT inhrelid FROM pg_catalog.pg_inherits WHERE inhparent = c.oid
+                            UNION ALL
+                            SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.inhrelid)
+                          SELECT pg_catalog.json_agg(l.relname ORDER BY l.relname)
+                          FROM tree JOIN pg_catalog.pg_class l ON l.oid = tree.inhrelid
+                          WHERE c.relkind = 'p' AND l.relnamespace = c.relnamespace)
          ) AS tbl
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

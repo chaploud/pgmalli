@@ -67,6 +67,10 @@
               (is (m/validate :pg.public/parted {:k 150 :v nil} {:registry reg}))
               (is (not (m/validate :pg.public/parted {:k 250 :v nil} {:registry reg})) "no partition takes 250: the row schema says so")
               (is (= 1 (count (re-seq #"k_nonneg" (pr-str (:pg.public/parted reg))))) "the parent's own CHECK is not repeated from every partition")
+              (is (= [] (:problems (h/analyze reg {:select [:k :v] :from [:parted_low] :where [:= :k :?k]})))
+                  "a query reads a partition by name, a row of its table")
+              (is (= [{:kind :unknown-column :column :nope}] (map #(select-keys % [:kind :column]) (:problems (h/analyze reg {:select [:nope] :from [:parted_high]})))))
+              (is (m/validate :pg.public.parted_low/insert {:k 5} {:registry reg}))
               (is (= [{:kind :no-partition :table "public.nopart"} {:kind :row-trigger :table "public.users"} {:kind :redundant-unique :constraint "users_age_open_idx"}]
                      (map #(select-keys % [:kind (if (= :redundant-unique (:kind %)) :constraint :table)]) (:diagnostics data)))
                   "the file says what deserves a look")))))

@@ -335,12 +335,25 @@
                         :else f)))]
     (update-vals schemas #(if (shape/row-schema? %) (walk/postwalk (fn [f] (if (and (vector? f) (map? (second f))) (typed f) f)) %) %))))
 
+(defn- with-partitions
+  "Row schemas with each :pg/partitions' partition a row schema of its table's (its :pg/table
+   its own): a query reads or writes a partition by name."
+  [schemas]
+  (into schemas (for [[k s] schemas
+                      :when (and (keyword? k) (shape/row-schema? s))
+                      n (:pg/partitions (shape/row-props s))]
+                  [(keyword (namespace k) n)
+                   (walk/postwalk #(if (and (map? %) (:pg/partitions %))
+                                     (-> % (dissoc :pg/partitions) (assoc :pg/table (str (subs (namespace k) 3) "." n)))
+                                     %)
+                                  s)])))
+
 (defn registry
   "The registry pgmalli-next.core/registry documents."
   [& schemas]
   (let [data (map #(if (map? %) (generated-data % "registry") (read-generated %)) schemas)
         generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k))))]))
-                        (with-other-schemas-types (apply merge (map :registry data))))]
+                        (with-partitions (with-other-schemas-types (apply merge (map :registry data)))))]
     (merge base
            (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
                         #(walk/postwalk dispatch-by-key %))
