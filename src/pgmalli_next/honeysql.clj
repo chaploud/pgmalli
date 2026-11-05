@@ -302,8 +302,8 @@
                               (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"))
    :values-arity (fn [{:keys [row columns values]}]
                    (str ":values row " row " has " values (if (= 1 values) " value" " values") " for " columns " :columns; give each row as many values as :columns"))
-   :enum-literal (fn [{:keys [column value allowed]}]
-                   (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
+   :enum-literal (fn [{:keys [column type value allowed]}]
+                   (str (pr-str value) " is no value of " (if column (column-name column) (str "type " type)) "; it takes " (str/join ", " (map pr-str allowed))))
    :uncast-string (fn [{:keys [column value type]}]
                     (str (pr-str value) " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
                          " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar);"

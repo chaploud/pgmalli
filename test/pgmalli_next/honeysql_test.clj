@@ -87,7 +87,7 @@
           {:kind :uncast-string :column :mood :value "sad" :type "mood"}]
          (check {:insert-into :users :values [{:group_id 1 :mood "sad"}]}))
       "an INSERT must carry the columns the insert schema requires")
-  (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
+  (is (= [{:kind :enum-literal :value "angry" :allowed ["happy" "sad"] :type "mood"}]
          (check {:select [:id] :from [:users] :where [:= :mood [:cast "angry" :mood]]})))
   (is (= [{:kind :enum-literal :column :mood :value "angry" :allowed ["happy" "sad"]}]
          (check {:update :users :set {:mood "angry"} :where [:= :id 1]})) "assigned literals too")

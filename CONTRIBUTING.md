@@ -73,7 +73,7 @@ the number of mutants per query `PGMALLI_ORACLE_MUTANTS` or 8. The queries are:
 - seeded mutants of them (a column, an alias or a table swapped, a qualifier dropped or added),
   drawn from the catalog but `matrix`, `kinds` and names that need quoting;
 - the queries `pgmalli-next.oracle/generated-corpus` builds from the catalog: each kind of column
-  (type with its typmod, CHECKs, NOT NULL, kind of type and relation, quoting, schema) through
+  (type with its typmod, NOT NULL, kind of type and relation, quoting, schema) through
   casts, subqueries, joins, aggregates, CTEs, set operations and RETURNING, and each pair of
   kinds PostgreSQL unites through UNION, CASE, coalesce, greatest and EXCEPT. A column of a new
   kind in `schema.sql` is covered without a corpus entry.
@@ -82,8 +82,8 @@ Each query is sent twice: its values inlined, and as parameters as HoneySQL and 
 them. The oracle prints:
 
 - a false positive (PostgreSQL takes the query, `:problems` reports one) and a miss
-  (PostgreSQL refuses it, `:problems` is empty). A comparison with a literal outside an enum's or a
-  CHECK's list is reported by design.
+  (PostgreSQL refuses it, `:problems` is empty). A comparison with a literal outside an enum's labels is
+  reported by design.
 - where PostgreSQL runs the query, a return `h/query-schema` refuses: by default it must take what
   `execute!` returned, under `{:result :one}` what `execute-one!` returned.
 - the same queries' keys: those of `:row`'s map must equal the keys next.jdbc's
@@ -144,12 +144,12 @@ ran. The tests that catch a change upstream, each naming the list to update:
 | test | catches |
 |---|---|
 | `pgmalli-next.honeysql-contract-test` | a clause HoneySQL adds or drops, or special syntax of `pgmalli-next.impl.hsyntax/operator-syntax` it drops; a change in how `sql/format` writes joins, `:in`, parameters and `:values` maps |
-| `pgmalli-next.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` nor `unsupported` (src/pgmalli_next/impl/types.clj), or that does not generate, insert and read back; a map builder next.jdbc adds or drops; a type, implicit cast, range, function, operator or relation of `pg_catalog` that differs from the catalog snapshot (`resources/pgmalli-next/impl/catalog.edn`, which `bb catalog` rewrites) |
+| `pgmalli-next.upstream-test` | a type of `pg_catalog` or of an extension the image ships that is neither in `types` (src/pgmalli_next/impl/types.clj) nor in the test's `unsupported`, or that does not generate, insert and read back; a map builder next.jdbc adds or drops; a type, implicit cast, range, function, operator or relation of `pg_catalog` that differs from the catalog snapshot (`resources/pgmalli-next/impl/catalog.edn`, which `bb catalog` rewrites) |
 | `pgmalli-next.accept-test` | a type pgjdbc's `setObject` sends a class as that differs from `accept/class-types`; a type PostgreSQL takes or refuses where `accept/accepts?` says otherwise |
 | `pgmalli-next.expression-types-test` | a type PostgreSQL gives coalesce, greatest, least, CASE, nullif or UNION over two column types, an aggregate, an SQL word, a json builder, a literal or a parameter that differs from the one `h/analyze`'s `:row` gives (`pgmalli-next.impl.resolve` over the catalog snapshot, and the grammar pgmalli types itself: `sql-value-types` and `grammar-operators` in `pgmalli-next.impl.hsyntax`, `json-shapes` in `pgmalli-next.impl.query`); a name PostgreSQL gives an unaliased expression that differs from `pgmalli-next.impl.hsyntax/expression-name`'s |
 
 A type of PostgreSQL's or of an extension is one entry of `types` in
-`src/pgmalli_next/impl/types.clj`, or one of `unsupported` there with why. To add one, move it to
+`src/pgmalli_next/impl/types.clj`, or one of `unsupported` in `test/pgmalli_next/upstream_test.clj` with why. To add one, move it to
 `types` and run `pgmalli-next.upstream-test`: it creates every extension the PostgreSQL image ships,
 fails on a type in neither list, and generates, inserts and reads back a NOT NULL column of
 every entry.

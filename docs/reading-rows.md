@@ -149,7 +149,7 @@ where a column is read by index, as next.jdbc's builders read a row (`execute!`,
 the `java.sql.Time`: build the row with a builder there (`(rs/datafiable-row row ds {:builder-fn
 rs/as-unqualified-maps})`), or convert the column where your application knows its type.
 
-A json or jsonb column's schema is the parsed value's, as a CHECK (`jsonb_typeof`) or an
+A json or jsonb column's schema is the parsed value's, as an
 [override](../README.md#overrides) shapes it: one override for what is read and what is
 written. An override that types a JSON number takes what a JSON parser returns: an integer
 `integer?`, a fraction `double?`: data.json, as here, gives a `Long` or a `BigInt` and a

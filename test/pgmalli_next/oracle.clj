@@ -12,8 +12,7 @@
    part check does not judge by design, or an opaque table), :mismatch (both refuse, for
    different reasons), :other-silent / :other-flagged (PostgreSQL refuses it for something
    check does not judge, a type or syntax), :reported-by-design (PostgreSQL runs it, check
-   reports a column compared with a literal outside its enum's or CHECK's list, which matches
-   no row, or NULL that ON CONFLICT DO UPDATE sets into a NOT NULL column, which fails once a
+   reports NULL that ON CONFLICT DO UPDATE sets into a NOT NULL column, which fails once a
    row conflicts), :unformatted (HoneySQL cannot write it), :timeout (it outran
    in-parallel's statement_timeout).
 
@@ -208,10 +207,10 @@
 
 (defn- listed
   "{[relation column-name] #{labels}}: the labels (as strings) each column of the oracle schema
-   allows, by its enum or by a CHECK list on it alone, its relation named as a query names it."
+   of an enum allows, its relation named as a query names it."
   [relations]
-  (reduce (fn [m {:keys [sch tbl col labels lists]}]
-            (update m [(relation-name sch tbl) col] (fnil into #{}) (map #(set (map str %)) (cond-> lists labels (conj labels)))))
+  (reduce (fn [m {:keys [sch tbl col labels]}]
+            (cond-> m (seq labels) (update [(relation-name sch tbl) col] (fnil conj #{}) (set (map str labels)))))
           {} relations))
 
 ;;; PostgreSQL's verdict and check's
@@ -279,8 +278,6 @@
                 (catch PSQLException e
                   (case (.getSQLState e)
                     "23502" {:pg :not-null-violation :state "23502" :message (.getMessage e)}
-                    ;; a value outside a CHECK's list, which check reports as an enum literal
-                    "23514" {:pg :enum-literal :state "23514" :message (.getMessage e)}
                     "57014" {:pg :timeout :state "57014"}
                     ;; it plans: what fails as it runs is the rows' (a division by zero)
                     (do (refused e) {:pg :ok}))))
@@ -303,8 +300,8 @@
 
 (def ^:private enum-literal-by-design
   "Corpus ids whose :enum-literal check reports by design though the compared expression is no
-   column of the schema with that list: PostgreSQL traces the value to one through a subquery,
-   a CTE or a view's alias."
+   column of the schema of that enum: PostgreSQL traces the value to one through a subquery, a
+   CTE or a view's alias."
   #{})
 
 (defn- result-labels
@@ -318,9 +315,8 @@
 
 (defn- by-design?
   "Whether check reports problem p by design (docs/queries.md \"Stricter than PostgreSQL\"): a
-   comparison of a column with a literal outside the list its enum or CHECK allows, false on
-   every row, which the CHECK guarantees (the statement may still return rows through OR or
-   CASE); NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails
+   literal outside an enum's labels where PostgreSQL never evaluates it (the statement may still
+   run through OR or CASE); NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails
    once a row is touched or conflicts; a label the result set's columns (labels, a delay) have
    more than once. listed: listed of the schema; the column is one of a relation query names."
   [listed id query labels p]
@@ -815,12 +811,6 @@
 
 (def ^:private compared-contexts #{:= :<> :in :any :returning :unnest :compared-and-cast :compared-and-any :compared-and-polymorphic :compared-and-overloaded})
 
-(defn- outside?
-  "Whether v (an array's every element) is outside a CHECK's list."
-  [list v]
-  (let [in? #(some (fn [l] (if (and (number? l) (number? %)) (== l %) (= l %))) list)]
-    (if (and v (.isArray (class v))) (not-any? in? (seq v)) (not (in? v)))))
-
 (defn- written-refuses
   "(f opts table column context v): whether the schema of the row a write of context (:update,
    :insert) carries, set-schema's or values-schema's under opts, refuses v in column
@@ -883,8 +873,7 @@
    parameters as the one sending sends them. :refused: PostgreSQL takes the value, the argument's schema from
    arg-types refuses it, and the stricter rule of docs/queries.md does not explain it: a class
    sent as a type the column does not hold as its own (accept/holds?; under a cast, one
-   PostgreSQL does not cast, accept/accepts?), a comparison with a value outside a CHECK's list
-   or with NULL. :written: as :refused, the schema of the row an UPDATE's :set or an INSERT's
+   PostgreSQL does not cast, accept/accepts?), a comparison with NULL. :written: as :refused, the schema of the row an UPDATE's :set or an INSERT's
    :values carries (set-schema, values-schema). :rule: holds? (accepts? under a cast) says
    PostgreSQL takes a value there, and PostgreSQL refuses its type (type-refusals).
    :untyped: arg-types throws or gives the argument no schema (:schema says which). :timeout:
@@ -911,7 +900,7 @@
           cat
           (in-parallel
            db places
-           (fn [conn {:keys [context query table column list notnull compared-type quoted?] t :type :as place}]
+           (fn [conn {:keys [context query table column notnull compared-type quoted?] t :type :as place}]
              (let [opts {:format (fmt quoted?)}
                    s (try (or (some-> (:x (:args (h/analyze registry query opts))) (m/schema {:registry registry}))
                               "arg-types gives :x no schema")
@@ -943,7 +932,7 @@
                                   explained? (or (and (some? v) (not takes?))
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
-                                                 (and (compared-contexts context) (or (nil? v) (and list (outside? list v))))
+                                                 (and (compared-contexts context) (nil? v))
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
                                   rule? (and takes? (not cast?) (not untyped-there?))]

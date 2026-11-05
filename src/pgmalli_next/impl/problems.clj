@@ -337,15 +337,15 @@
                            :when (and (vector? x) (= :cast (first x)) (string? (second x)))
                            :let [s (:schema (query/expression-type registry chain x opts))]
                            :when (query/enum-values registry s)]
-                       {:column (nth x 2) :x [:inline (second x)] :schema s}))]
-    (for [{:keys [column x assigned?] s :schema} uses
+                       {:type (query/enum-type registry s) :x [:inline (second x)] :schema s}))]
+    (for [{:keys [column type x assigned?] s :schema} uses
            :let [{:keys [value text sent?]} (literal x opts)]
            :when (some? value)
            :let [allowed (query/enum-values registry s)
                  invalid? (and allowed (not (some #{(or text value)} allowed)))
                  uncast (when (and sent? (not invalid?) (not (takes-string? registry s assigned? (jdbc/string-sends opts))))
                           (uncast-type registry s))]
-           p [(when invalid? {:kind :enum-literal :column column :value value :allowed allowed})
+           p [(when invalid? (cond-> {:kind :enum-literal :value value :allowed allowed} column (assoc :column column) type (assoc :type type)))
               (when uncast {:kind :uncast-string :column column :value value :type uncast})]
            :when p]
        p)))
