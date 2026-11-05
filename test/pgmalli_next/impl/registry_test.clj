@@ -7,6 +7,7 @@
             [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.pattern :as p]
             [pgmalli-next.impl.portable :as portable]
+            [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.shape :as shape]
             [malli.registry]
             malli.experimental.time
@@ -84,7 +85,8 @@
                                        :types {}
                                        :tables {"t" {:columns [(col "n" "numeric") (col "sm" "numeric" :domain "small") (col "s" "text")
                                                                (col "tz" "time with time zone") (col "j" "jsonb") (col "d" "date" :domain "day")
-                                                               (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric")]
+                                                               (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric")
+                                                               (col "v" "character varying" :max_length 5) (col "vb" "bit varying" :max_length 2)]
                                                      :constraints {}}}})]]
                              {}))]
     {:registry reg :rows (try (vec (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})) (catch Exception e (ex-message e)))}))
@@ -99,11 +101,20 @@
 
 (deftest a-domain-over-a-type-the-driver-returns-otherwise-is-read-as-the-driver-returns-it
   (let [read (pgmalli/as-read (:registry generated) :pg.public/t {})
-        row {:n 1M :sm 2M :s "A" :tz (java.util.Date. 0) :j [] :d (java.time.LocalDate/of 2025 1 1) :ds [(java.time.LocalDate/of 2025 1 1)] :b :pgobject :p 1.5M}]
+        row {:n 1M :sm 2M :s "A" :tz (java.util.Date. 0) :j [] :d (java.time.LocalDate/of 2025 1 1) :ds [(java.time.LocalDate/of 2025 1 1)] :b :pgobject :p 1.5M :v "a" :vb :pgobject}]
     (is (m/validate read row {:registry (:registry generated)}) (pr-str (me/humanize (m/explain read row {:registry (:registry generated)}))))))
 
-(deftest a-bit-string-generates-digits
-  (is (every? #(re-matches #"[01]+" %) (generated-values :b))))
+(deftest a-bit-string-generates-digits-within-its-length
+  (is (every? #(re-matches #"[01]{3}" %) (generated-values :b)) "bit(3): exactly 3")
+  (is (every? #(re-matches #"[01]{1,2}" %) (generated-values :vb)) "bit varying(2): at most 2"))
+
+(deftest a-string-generates-within-its-varchar-length-which-no-schema-checks
+  (is (every? #(<= (count %) 5) (generated-values :v)))
+  (is (m/validate :pg.public/t (assoc (first (:rows generated)) :v "longer than five") {:registry (:registry generated)})))
+
+(deftest the-registry-of-no-argument-is-the-classpaths-generated-file
+  (with-redefs [registry/resource "pgmalli-next/sample.edn"]
+    (is (= (pgmalli/registry pgmalli-next.sample/sample-data) (pgmalli/registry)))))
 
 (defn- registry-of [types columns]
   (pgmalli/registry (files/assemble "x" [["public" (p/facts {:name "public" :types types :tables {"t" {:columns columns :constraints {}}}})]] {})))

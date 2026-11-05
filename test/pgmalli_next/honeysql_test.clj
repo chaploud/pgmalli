@@ -107,6 +107,18 @@
     (is (not (m/validate x (int-array [1]) {:registry reg})) "dint[] = integer[] does not exist")
     (is (re-find #"PGobject of type dint\[\]" (pr-str x)))))
 
+(deftest a-lifted-string-is-inlined-under-inline-which-an-enum-takes
+  (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:lift "sad"]]} (assoc opts :format {:inline true})))))
+
+(deftest a-set-operations-column-of-one-type-reads-each-value-as-its-member-reads-it
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:b1 [:string {:pg/type "bit" :pg/max-length 1}]]
+                                                        [:b4 [:string {:pg/type "bit" :pg/max-length 4}]]]}})
+        row #(:row (h/analyze reg % {}))]
+    (is (= [:map [:x [:or [:boolean {:pg/type "bit"}] [:any {:pg/type "bit"}]]]]
+           (row {:union-all [{:select [[:b1 :x]] :from [:t]} {:select [[:b4 :x]] :from [:t]}]}))
+        "bit(1) a Boolean, bit(4) a PGobject: the result's typmod is gone, and pgjdbc reads each value")))
+
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))

@@ -12,10 +12,12 @@
                 CREATE DOMAIN email AS text CHECK (VALUE ~ '@');
                 CREATE SCHEMA elsewhere; CREATE DOMAIN elsewhere.code AS varchar(3) NOT NULL DEFAULT 'abc';
                 CREATE DOMAIN work_code AS elsewhere.code; CREATE DOMAIN feel AS mood; CREATE DOMAIN codes AS varchar(2)[];
+                CREATE DOMAIN outer_code AS elsewhere.code DEFAULT 'xyz'; CREATE DOMAIN bits4 AS bit(4);
                 CREATE TABLE users (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, mood mood NOT NULL DEFAULT 'happy',
                                     age integer CHECK (age >= 0), nick varchar(40), price numeric(10,2),
                                     mail email, full_name text GENERATED ALWAYS AS (nick || '!') STORED,
-                                    code work_code, codes work_code[], f feel, cs codes);")
+                                    code work_code, codes work_code[], f feel, cs codes,
+                                    oc outer_code, oc2 outer_code DEFAULT 'q', b bit(4), vb varbit(6), bd bits4);")
     (let [s (ir/from-db *db*)
           users (get-in s [:tables "users"])
           col #(first (filter (comp #{%} :name) (:columns users)))]
@@ -32,6 +34,9 @@
       (is (= ["mood" "feel"] ((juxt :data_type :domain) (col "f"))) "a domain over an enum is of the enum")
       (is (= ["character varying[]" "codes" 2] ((juxt :data_type :domain :max_length) (col "cs"))) "a domain over an array is no array of a domain")
       (is (= #{"mood"} (set (keys (:types s)))) "the types are the enum types")
+      (is (= ["'xyz'::character varying" "'q'::character varying"] (map (comp :default_value col) ["oc" "oc2"]))
+          "the outer domain's DEFAULT over the inner's, the column's over both")
+      (is (= [4 6 4] (map (comp :max_length col) ["b" "vb" "bd"])) "bit(n)'s and bit varying(n)'s n, through a domain too")
       (is (= ["mood" "public"] ((juxt :data_type :type_schema) (col "mood"))))
       (is (= "'happy'::mood" (:default_value (col "mood"))))
       (is (= "ALWAYS" (:identity (col "id"))))
