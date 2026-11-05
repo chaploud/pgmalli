@@ -29,7 +29,7 @@
    :file and :db sides (nil where a side lacks it); a function or operator by :key (:functions
    or :operators) and :name, or :absent :file when the file has none (an older pgmalli's); the
    file's other parts (:unrendered, :skipped, :diagnostics) as wholes under :key. :missing lists
-   the schemas with no file.
+   the schemas with no file, which :stale leaves out.
 
    Option {:db? false} reads the files alone: no :stale key, as nothing was compared."
   ([config] (diff/check config))

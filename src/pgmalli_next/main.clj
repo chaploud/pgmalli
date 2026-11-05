@@ -103,9 +103,7 @@
     0))
 
 (defn- check! [config path edn?]
-  (let [{:keys [stale missing unrendered diagnostics] :as result} (generate/check config)
-        ;; a missing file differs in every entry; saying it is missing says it all
-        stale (not-empty (apply dissoc stale missing))]
+  (let [{:keys [stale missing unrendered diagnostics] :as result} (generate/check config)]
     (if edn?
       (prn result)
       (do (doseq [schema missing]

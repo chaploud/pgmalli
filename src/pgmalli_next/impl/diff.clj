@@ -75,8 +75,10 @@
   ([config] (check config {}))
   ([config {:keys [db?] :or {db? true} :as opts}]
    (jdbc/checked! [:map {:closed true} [:db? {:optional true} :boolean]] opts)
-   (let [files (files config)]
-     (cond-> {:missing (not-empty (vec (remove files (:schemas (files/config config)))))
+   (let [files (files config)
+         missing (not-empty (vec (remove files (:schemas (files/config config)))))]
+     (cond-> {:missing missing
               :unrendered (not-empty (into {} (for [[s f] files :when (seq (:unrendered f))] [s (:unrendered f)])))
               :diagnostics (not-empty (into {} (for [[s f] files :when (seq (:diagnostics f))] [s (:diagnostics f)])))}
-       db? (assoc :stale (stale* config files))))))
+       ;; a missing file differs in every entry; saying it is missing says it all
+       db? (assoc :stale (not-empty (apply dissoc (stale* config files) missing)))))))
