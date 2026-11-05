@@ -55,7 +55,8 @@
   [base {cname :name :keys [data_type domain type_schema is_nullable default_value max_length identity generated_expr position]} enums]
   (let [[ident array?] (type-ident data_type)
         base (assoc base :column cname)
-        enum (when (contains? enums ident)
+        ;; an enum of another schema may share a name with one of this schema's
+        enum (when (and (contains? enums ident) (= type_schema (:schema base)))
                (cond-> (merge base {:fact :enum :type-name ident :values (get enums ident)}) array? (assoc :array? true)))
         lit (some-> default_value default-literal)
         bare (types/bare-name (str/replace data_type #"\[\]$" ""))]

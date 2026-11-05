@@ -39,6 +39,13 @@
     (is (= [:max-length 80] ((juxt :fact :max) (some #(when (and (= "mail" (:column %)) (= :max-length (:fact %))) %) fs))))
     (is (= "mood" (:type-name (some #(when (and (= "feel" (:column %)) (= :enum (:fact %))) %) fs))) "a domain over an enum is the enum")))
 
+(deftest an-enum-of-another-schema-is-not-this-schemas-enum-of-its-name
+  (let [fs (p/facts {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["happy" "sad"]}}
+                     :tables {"t" {:columns [{:name "j" :position 1 :data_type "other.mood" :type_schema "other" :is_nullable true}
+                                             {:name "m" :position 2 :data_type "mood" :type_schema "public" :is_nullable true}]
+                                   :constraints {}}}})]
+    (is (= [["j" :column] ["j" :unknown-type] ["m" :column] ["m" :enum]] (map (juxt :column :fact) (filter :column fs))))))
+
 (deftest unknown-types-are-kept-and-a-default-as-its-sql
   (let [fs (p/facts {:name "public" :types {}
                      :tables {"t" {:columns [{:name "e" :position 1 :data_type "email" :type_schema "public" :is_nullable false :default_value "CASE WHEN"}
