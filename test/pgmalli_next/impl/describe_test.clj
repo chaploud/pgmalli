@@ -14,7 +14,6 @@
   (is (= ["any" "bigint" "varchar?"] (map #(pgmalli/describe registry %) [:any [:int {:min 0}] [:maybe :string]]))
       "a class's schema by the type the one sending sends it as")
   (is (= ["numeric" "numeric"] [(pgmalli/describe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]) (pgmalli/describe 'decimal?)]))
-  (is (= "numeric(14,2)?" (pgmalli/describe [:maybe [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 14 :scale 2}]]])))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :pg.sample/users" (pgmalli/describe registry :pg.sample/usres)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"through a registry" (pgmalli/describe :pg.sample/users)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #":pg.sample/mood is read through a registry" (pgmalli/describe (pgmalli/as-read registry :pg.sample/users))))

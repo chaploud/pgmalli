@@ -1,8 +1,7 @@
 (ns pgmalli-next.impl.pgtypes
   "The schema types pgmalli registers for PostgreSQL's own: a bytea of bounded
    length, the bounded numbers (with the ranges the integer types hold), the arrays the
-   JDBC driver takes, a keyword's or a Character's text a column takes (:pg/text) and the values
-   of some classes of one schema (:pg/class), a value as a column's typmod holds it (:pg/held)."
+   JDBC driver takes and the values of some classes of one schema (:pg/class)."
   (:require [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [malli.core :as m]
@@ -16,18 +15,6 @@
   [v]
   (if (string? v) (.codePointCount ^String v 0 (count v)) (count v)))
 
-;; A BigDecimal read from a request can be 1e100000000: setScale would spell out its digits
-(defn- integer-digits
-  "Digits before the point, read off precision and scale; 0 or less when |d| < 1, and fewer than
-   any bound for a zero (0E+30's precision and scale say 31)."
-  [^BigDecimal d]
-  (if (zero? (.signum d)) Integer/MIN_VALUE (- (.precision d) (.scale d))))
-
-(defn- rounded
-  "d at scale places, half up; a d too small to reach them is zero, without the division."
-  ^BigDecimal [^BigDecimal d scale]
-  (if (< (integer-digits d) (- scale)) (BigDecimal/valueOf 0 (int scale)) (.setScale d (int scale) java.math.RoundingMode/HALF_UP)))
-
 (defn- float4?
   "Whether a double fits a real: single precision neither overflows to infinity nor
    underflows to zero, where PostgreSQL rejects the value."
@@ -36,22 +23,15 @@
     (not (or (and (Float/isInfinite f) (not (Double/isInfinite d))) (and (zero? f) (not (zero? d)))))))
 
 (def string-schema
-  ":string with :min and :max counting characters (code points), as PostgreSQL's length and
-   varchar(n) do, where malli's counts UTF-16 units. :pg/max-length n is a varchar(n) or
-   char(n): it cuts spaces past n off, then :min and :max count what it keeps. A bit string
-   (:pg/type bit or bit varying) holds 0s and 1s alone."
+  ":string with :min and :max counting characters (code points), as PostgreSQL's length does,
+   where malli's counts UTF-16 units. A bit string (:pg/type bit or bit varying) holds 0s and 1s
+   alone."
   (m/-simple-schema
    {:type :string :pred string?
     :property-pred (fn [props]
-                     (let [bounds ((m/-min-max-pred char-length) props)
-                           n (:pg/max-length props)
-                           bits? (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
-                           bounds (if bits? (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s))))) bounds)]
-                       (if n
-                         (fn [^String s]
-                           (let [kept (if (<= (char-length s) n) s (subs s 0 (.offsetByCodePoints s 0 (int n))))]
-                             (boolean (and (or (identical? kept s) (re-matches #" *" (subs s (count kept))))
-                                           (or (nil? bounds) (bounds kept))))))
+                     (let [bounds ((m/-min-max-pred char-length) props)]
+                       (if (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
+                         (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s)))))
                          bounds)))}))
 
 (def double-schema
@@ -128,7 +108,7 @@
 
 (defn- bounded-int
   "A schema type for an integer type of PostgreSQL: its range, narrowed by :min and :max
-   properties from CHECKs, generated within :gen/min and :gen/max when given."
+   properties (an override's), generated within :gen/min and :gen/max when given."
   [type]
   (let [[lo hi] (int-ranges type)]
     (m/-simple-schema
@@ -136,34 +116,12 @@
       :compile (fn [{:keys [min max] gen-min :gen/min gen-max :gen/max} _ _]
                  (let [lo (clojure.core/max lo (or min lo)) hi (clojure.core/min hi (or max hi))]
                    {:pred (fn [v] (and (int? v) (<= lo v hi)))
-                    ;; CHECKs that contradict each other (a > 5 AND a < 3) leave no value, none generated
-                    :type-properties (cond-> {:error/message (if (<= lo hi) (str "should be an integer between " lo " and " hi) "no integer fits: its CHECKs contradict each other")}
+                    ;; bounds that contradict each other leave no value, none generated
+                    :type-properties (cond-> {:error/message (if (<= lo hi) (str "should be an integer between " lo " and " hi) "no integer fits: its bounds contradict each other")}
                                        (<= lo hi) (assoc :gen/gen (gen/large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})))
                     :min 0 :max 0}))})))
 
 (def smallint-schema (bounded-int :pg/smallint))
-
-(def numeric-schema
-  "[:pg/numeric {:precision p :scale s}]: a BigDecimal a numeric(p, s) column stores: rounded to
-   s places (half up, as PostgreSQL rounds on the way in), fewer than p - s digits before the
-   point. s may exceed p, or be negative, as PostgreSQL allows."
-  (m/-simple-schema
-   {:type :pg/numeric
-    :compile (fn [{:keys [precision scale] :or {scale 0} gen-min :gen/min gen-max :gen/max} _ _]
-               (let [limit (.movePointRight 1M (int (- precision scale)))
-                     digits (int (clojure.core/min precision 18))
-                     bound (dec (long (.longValueExact (.movePointRight 1M digits))))
-                     ;; generated within :gen/min and :gen/max (BigDecimals) when given, at the scale
-                     scaled (fn [d] (.longValueExact (.setScale (.movePointRight (bigdec d) (int scale)) 0 java.math.RoundingMode/HALF_UP)))]
-                 {:pred (fn [v] (and (decimal? v)
-                                     ;; rounding adds a digit at most
-                                     (<= (integer-digits v) (inc (- precision scale)))
-                                     (< (.abs (rounded v scale)) limit)))
-                  :type-properties {:error/message (str "should fit numeric(" precision ", " scale ")")
-                                    :gen/gen (gen/fmap #(.movePointLeft (BigDecimal/valueOf ^long %) (int scale))
-                                                   (gen/large-integer* {:min (clojure.core/max (- bound) (if gen-min (scaled gen-min) (- bound)))
-                                                                    :max (clojure.core/min bound (if gen-max (scaled gen-max) bound))}))}
-                  :min 0 :max 0}))}))
 
 (def integer-schema (bounded-int :pg/integer))
 
@@ -193,48 +151,6 @@
                                      (try (some? (re-find p x)) (catch StackOverflowError _ (found-on-a-large-stack p x)))))
                   :min 1 :max 1}))}))
 
-(def ^:private text-schema
-  "[:pg/text t]: a keyword or a Character whose text t takes (a keyword's name, :ns/a's ns/a; a
-   Character's one-character string), the text the one sending sends it as and PostgreSQL checks."
-  (m/-simple-schema
-   {:type :pg/text
-    :compile (fn [_ [t] options]
-               (let [valid? (m/validator t options)]
-                 {:pred (fn [v] (cond (keyword? v) (valid? (subs (str v) 1))
-                                      (char? v) (valid? (str v))
-                                      :else false))
-                  :type-properties {:error/message "should be a keyword or a character whose text the column takes (its length and CHECKs)"}
-                  :min 1 :max 1}))}))
-
-(defn held-value
-  "v as a column of typmod {:pg/max-length n :pg/cut? :pg/scale} holds it, which its CHECKs then
-   read: a string past n cut to n where the rest is spaces (assigned) or always (pg/cut?, cast);
-   a number rounded to scale places (half up, away from zero); v as it is otherwise, or nil
-   where the type holds no such value."
-  [{n :pg/max-length cut? :pg/cut? sc :pg/scale} v]
-  (cond (and n (string? v) (> (char-length v) n))
-        (let [kept (subs v 0 (.offsetByCodePoints ^String v 0 (int n)))]
-          (if (or cut? (re-matches #" *" (subs v (count kept)))) kept v))
-        (and sc (number? v) (not (and (double? v) (or (Double/isNaN v) (Double/isInfinite v)))))
-        (rounded (bigdec v) sc)
-        :else v))
-
-(def ^:private held-schema
-  "[:pg/held typmod t]: a value t takes once a column of typmod holds it (held-value), as
-   PostgreSQL converts a value to the column's type, then reads its CHECKs: varchar(3) takes
-   'abc  ', numeric(4,2) CHECK (n <= 10) takes 10.004; under :pg/precision, a number that fits it."
-  (m/-simple-schema
-   {:type :pg/held
-    :compile (fn [{p :pg/precision sc :pg/scale n :pg/max-length cut? :pg/cut? :as typmod} [t] options]
-               (let [valid? (m/validator t options)
-                     fits? (if p (m/validator [:pg/numeric {:precision p :scale sc}] options) (constantly true))]
-                 {:pred (fn [v] (let [h (held-value typmod v)] (boolean (and (valid? h) (or (not (number? h)) (fits? h))))))
-                  :type-properties {:error/message (cond p (str "should be what numeric(" p ", " sc ") takes, rounded to " sc " places, then its CHECKs")
-                                                         cut? (str "should be a string whose first " n (if (= 1 n) " character" " characters") " the type takes")
-                                                         :else (str "should be a string the column takes, spaces past " n " cut off, then its CHECKs"))
-                                    :gen/schema t}
-                  :min 1 :max 1}))}))
-
 (def ^:private class-schema
   "[:pg/class \"java.lang.Integer\" ...]: a value of one of the classes named, where the classes
    of one schema (:int, a Long's and an Integer's) go as types PostgreSQL takes apart."
@@ -250,5 +166,5 @@
 (def schemas
   "The schema types pgmalli registers, by name."
   {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
-   :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema
-   :pg/text text-schema :pg/class class-schema :pg/held held-schema})
+   :pg/smallint smallint-schema :pg/integer integer-schema :pg/array array-schema
+   :pg/class class-schema})

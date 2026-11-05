@@ -8,7 +8,7 @@
 (defn- row-parts
   "{:columns {name entry} :props} of a row or insert schema, nil for other entries."
   [s]
-  (let [m (shape/row-map s)]
+  (let [m s]
     (when (and (vector? m) (= :map (first m)) (map? (second m)))
       {:columns (into {} (map (fn [[k p s]] [k (if (seq p) [p s] s)])) (shape/column-entries s))
        :props (second m)})))

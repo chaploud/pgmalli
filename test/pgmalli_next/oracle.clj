@@ -149,7 +149,7 @@
   "The registry of db's schemas, and of the schemas extra."
   [db & extra]
   (let [ss (with-open [conn (jdbc/get-connection (test-db/datasource db))] (schemas conn))]
-    (apply pgmalli/registry (for [s (concat ss extra)] (test-db/generated {:db db} s)))))
+    (pgmalli/registry (apply test-db/generated {:db db} (concat ss extra)))))
 
 (defn- quoted-name?
   "Whether a name is PostgreSQL's only when quoted."

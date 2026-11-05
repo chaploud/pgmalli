@@ -146,19 +146,6 @@
     (is (= [:maybe [:any {:pg/type "tstzrange" :pg/generated {:sql "tstzrange(valid_from, valid_until)"}}]] (last (get-in registry [:pg.public/t 4]))) ":any with its type")
     (is (empty? unrendered))))
 
-(deftest numeric-rounds-before-it-counts-digits
-  (let [reg (registry-with {})
-        fits? (fn [p s v] (m/validate [:pg/numeric {:precision p :scale s}] v {:registry reg}))]
-    (is (fits? 3 1 99.94M) "rounds to 99.9")
-    (is (not (fits? 3 1 99.95M)) "rounds to 100.0, three digits before the point: PostgreSQL says numeric_value_out_of_range")
-    (is (fits? 3 5 0.00999M) "scale above precision")
-    (is (not (fits? 3 5 0.01M)))
-    (is (fits? 2 -3 99000M) "negative scale")
-    (is (not (fits? 2 -3 99500M)) "rounds to 100000")
-    (is (not (fits? 3 1 1.0)) "a double is not what the driver returns")
-    (doseq [[p s] [[3 1] [3 5] [2 -3] [30 10]]]
-      (is (every? #(fits? p s %) (mg/sample [:pg/numeric {:precision p :scale s}] {:registry reg :size 50})) (str "generates within numeric(" p "," s ")")))))
-
 (deftest not-null-of-an-opaque-type-rejects-nil
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
                                                  :tables {"t" {:columns [{:name "a" :position 1 :data_type "jsonb" :is_nullable false}

@@ -34,11 +34,10 @@
       :any)))
 
 (defn- compared-arg-type
-  "The type of an argument op compares with side, as compared-schema narrows side's schema; :any
-   where side's is not told."
-  [registry sc side op opts]
+  "The type of an argument compared with side, of side's schema; :any where side's is not told."
+  [registry sc side opts]
   (if-let [s (query/side-schema registry sc side opts)]
-    (accepted-type registry (query/compared-schema registry s op) :compare opts)
+    (accepted-type registry s :compare opts)
     :any))
 
 (defn- unlabel
@@ -50,21 +49,16 @@
 
 (defn- within
   "Alternative a, a number sent as type p, held to the range a column of type t's own assigned
-   values have: their :min and :max, and the checks of an [:and base checks...]. PostgreSQL
-   rounds a fraction going to an integer type first, so a fraction is held to the bounds half
-   a unit wider, and not to the checks."
+   values have (their :min and :max). PostgreSQL rounds a fraction going to an integer type
+   first, so a fraction is held to the bounds half a unit wider."
   [a p t own]
   (let [base (shape/domain-base own)
-        ;; a base's own kind among them (the decimal? a numeric(p,s) domain also holds) bounds no other kind
-        checks (when (= :and (shape/head own)) (remove #(= (shape/kind %) (shape/kind base)) (rest (shape/entries own))))
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
-        rounded? (and (accept/integer-type? t) (not (accept/integer-type? p)))
-        [min max] (if rounded? [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
-        bounds (cond-> {} min (assoc :min min) max (assoc :max max))
-        a (cond (empty? bounds) a
-                (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
-                :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))]
-    (if (and (seq checks) (not rounded?)) (into [:and a] checks) a)))
+        [min max] (if (and (accept/integer-type? t) (not (accept/integer-type? p))) [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
+        bounds (cond-> {} min (assoc :min min) max (assoc :max max))]
+    (cond (empty? bounds) a
+          (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
+          :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))))
 
 (defn- arrays-sent
   "[type schema] of the arrays the one sending sends (jdbc/write-rows) as a type pred takes, element in
@@ -91,48 +85,24 @@
                       :pgmalli/describe (str "PGobject of " (types/short-name t))}))
 
 (defn- labelled-type
-  "The type of an argument where a value of own values own, labels (an enum's, a CHECK's list),
-   goes in context, alts the [type alternative] of each type sent it takes, strings? whether a
-   String goes as a type that takes the labels: a text label as a String only then, as a keyword
-   where a row of keywords goes, unless keywords? is false (HoneySQL writes a keyword in :values
-   as a column); a number as the number class of each number row (1.0 as 1 where a bigint goes
-   to a double precision, 1 as 1.0 where a double is compared with an integer, as a Float in an
-   :enum of its own where a real is). Where no label is sent (an enum's under pgjdbc's
-   default, which sends a String as varchar), a PGobject, which pgjdbc sends as the type it names."
-  [own alts context strings? keywords?]
-  (let [e (shape/domain-base own)
-        props (shape/props e)
-        labels (shape/entries e)
-        kinds (set (map (comp shape/kind second) alts))
-        kept (filter #(or strings? (not (string? %))) labels)
-        as (fn [l] (concat (when (and keywords? (string? l) (some #(:keyword (shape/value-classes (second %))) alts)) [(keyword l)])
-                           ;; a number label as a string, which PostgreSQL reads as the number where a string goes (untyped, or cast)
-                           (when (and (number? l) (some #(:string (shape/value-classes (second %))) alts)) [(str l)])
-                           (when (number? l)
-                             (concat (when (and (kinds :int) (== l (Math/rint (double l)))) [(long l)])
-                                     (when (kinds 'decimal?) [(bigdec l)])
-                                     (when (kinds :double) [(double l)])))))
-        sent (concat kept (remove (set kept) (distinct (mapcat as labels))))
+  "The type of an argument where a value of own, an enum type's labels, goes, alts the [type
+   alternative] of each type sent it takes: a label as a String where strings? (a String goes as a
+   type that takes it), as a keyword where a row of keywords goes, unless keywords? is false
+   (HoneySQL writes a keyword in :values as a column). Where no label is sent (pgjdbc's default
+   sends a String as varchar), a PGobject, which pgjdbc sends as the type it names."
+  [own alts strings? keywords?]
+  (let [props (shape/props own)
+        labels (shape/entries own)
+        keywords? (and keywords? (some #(:keyword (shape/value-classes (second %))) alts))
+        sent (concat (when strings? labels) (when keywords? (map keyword labels)))
         ;; a default (malli's default-value transformer fills it) as one of the labels sent
-        props (if (and (contains? props :default) (not (some #{(:default props)} sent)))
-                (if-let [d (first (filter (set sent) (as (:default props))))] (assoc props :default d) (dissoc props :default))
-                props)
-        labelled (cond (empty? sent) nil
-                       (= sent labels) own
-                       ;; a domain's checks stay around its labels; a CHECK's list takes a label as each is sent
-                       :else (let [l (shape/update-base own (constantly (into (cond-> [:enum] (seq props) (conj props)) sent)))
-                                   as-sent #(if (= :enum (shape/head %)) (into % (remove (set (shape/entries %)) (mapcat as (shape/entries %)))) %)]
-                               (if (= :and (shape/head l))
-                                 (into [(first l)] (map-indexed (fn [i x] (if (> i (if (map? (second l)) 1 0)) (as-sent x) x)) (rest l)))
-                                 l)))
-        ;; cast, PostgreSQL converts another kind to the number type first (1.5 to 2, true to 1)
-        ;; and checks the list after: those values are not held to the labels here
-        converted (when (and (= :cast context) (every? number? labels))
-                    (distinct (remove #(#{:int 'integer? :string} (shape/kind %)) (map second alts))))
-        ;; a set holds 1.0 or a Float 1.0, which are =, not both: an :enum of its own
-        floats (when (and labelled (kinds 'float?)) (seq (distinct (map float (filter number? labels)))))
-        all (concat (when labelled [labelled]) (when floats [(into [:enum] floats)]) converted (when (nil? labelled) [(if-let [t (:pg/type props)] (typed-pg-object t) jdbc/pg-object)]))]
-    (if (next all) (into [:or] all) (first all))))
+        d (:default props)
+        props (cond (or (nil? d) (some #{d} sent)) props
+                    keywords? (assoc props :default (keyword d))
+                    :else (dissoc props :default))]
+    (cond (empty? sent) (if-let [t (:pg/type props)] (typed-pg-object t) jdbc/pg-object)
+          (= sent labels) own
+          :else (into (cond-> [:enum] (seq props) (conj props)) sent))))
 
 (defn- untyped-type-values
   "The values of a type whose own pgmalli does not type (interval, inet), s its schema: a
@@ -196,11 +166,7 @@
                (= "character" t) (assoc ::jdbc/characters true)
                (= :common held-in) (assoc ::jdbc/array-use :common)
                (= :compare held-in) (assoc ::jdbc/array-use :whole)
-               (= :json held-in) (assoc ::jdbc/json true)
-               ;; a cast cuts a string to a varchar(n)'s or a char(n)'s length; its CHECKs read what is left.
-               ;; Compared, PostgreSQL holds no value to the column's typmod
-               (= :cast held-in) (assoc ::jdbc/typmod :cut)
-               (#{:compare :call :common} held-in) (assoc ::jdbc/typmod :none))
+               (= :json held-in) (assoc ::jdbc/json true))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) query/loose
               (= :cast context) shape/without-gen)
@@ -236,22 +202,13 @@
       (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T"} (types/category t)))
       (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
-      ;; a list's labels, held as the column's typmod holds them (a varchar(n)'s spaces past n cut)
       (= :enum (shape/kind own))
-      (let [[typmod list] (if (= :pg/held (shape/head own)) [(second own) (last own)] [nil own])]
-        (jdbc/typmod-held (labelled-type list alts context (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
-                          typmod))
+      (labelled-type own alts (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
       :else
       (let [own-alts (when-not (query/untyped? own) (shape/alternatives own))
-            ;; a number held to a number column's range, which PostgreSQL checks after converting it, a
-            ;; keyword or a Character to a string column's through its text (jdbc/text-held); a
-            ;; date's cannot be said of the value sent
-            ;; and held as the column's typmod holds it (a Long rounded to a numeric(6,2)'s scale, held to its precision)
-            typmod (some #(when (= :pg/held (shape/head %)) (second %)) (tree-seq vector? seq own))
+            ;; a number held to a number column's range, which PostgreSQL checks after converting it
             alts (for [[p a] alts] (cond-> a
-                                     (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)
-                                     (not= :compare context) (jdbc/text-held own)
-                                     (not= :compare context) (jdbc/typmod-held typmod)))
+                                     (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
@@ -260,7 +217,7 @@
 
 (defn- compared-type
   "The type of an argument compared with a column by op, t as accepted-type gives it compared
-   (its CHECKs, lengths and ranges left out: PostgreSQL compares a value beyond them, matching
+   (its ranges left out: PostgreSQL compares a value beyond them, matching
    no row), without NULL; :in's a non-empty vector, list or set of it, as
    sql/format expands it (IN () is not SQL); an array's the Java arrays the one sending sends (jdbc/array-type).
    NULL is compared with IS NULL in the query body."
@@ -285,9 +242,9 @@
         :let [x (array-arg value)
               [k elements?] (if x [x false] (value-arg registry chain value))]
         :when (and k (not (and elements? (or (syntax/in-ops op) (second (value-arg registry chain side))))))
-        :let [;; ANY(?)'s elements of a domain's base type, which a CHECK's list there reads as (a list over varchar takes a String[])
+        :let [;; ANY(?)'s elements of the column's type (a varchar column's takes a String[])
               base (when (and x (not elements?)) (some->> (query/side-schema registry chain side opts) (query/slot-type registry)))
-              t (compared-type op (compared-arg-type registry chain side op opts) (when-not elements? x)
+              t (compared-type op (compared-arg-type registry chain side opts) (when-not elements? x)
                                (cond-> opts (string? base) (assoc ::jdbc/element-type base)))]
         :when (not (and elements? (query/untyped? t)))]
     [k (if elements? (jdbc/array-type t opts :unnest) t)]))
@@ -335,8 +292,8 @@
               (shape/maybe? assigned) query/nullable)))))))
 
 (defn- cast-args
-  "[:cast :?x :timestamptz]: what PostgreSQL casts to the type, its CHECKs, lengths and ranges
-   left out where every use of the cast is compared; nil too unless every use of the
+  "[:cast :?x :timestamptz]: what PostgreSQL casts to the type, its ranges left out where every
+   use of the cast is compared; nil too unless every use of the
    cast is compared (not under IS [NOT] DISTINCT FROM, not with NULL) or assigned where NULL may not go (assigned-column). [:cast :x.a :date] of an
    unnest's column: an array of that, typed."
   [registry ps opts]
@@ -386,7 +343,7 @@
                     t)
                 t (cond-> t
                     ;; compared, PostgreSQL evaluates the cast only where its plan reaches it (a row
-                    ;; the other conditions keep, or once ahead of the scan), so its CHECKs and ranges may never run
+                    ;; the other conditions keep, or once ahead of the scan), so its ranges may never be checked
                     (= (get compared x 0) (uses x)) query/loose
                     (< (get refusing x 0) (uses x)) query/nullable)]]
       [k (if elements? (cast-arrays registry s t opts) t)])))
@@ -512,8 +469,7 @@
         :when (:schema r)
         o operands
         :when (syntax/param-key o)]
-    ;; the others' values join a CHECK's list: its base type
-    [o (query/nullable (accepted-type registry (query/beyond-list registry (:schema r)) :common opts))]))
+    [o (query/nullable (accepted-type registry (:schema r) :common opts))]))
 
 (defn- call-arg-type
   "What a value takes at argument i of a call PostgreSQL may resolve to candidates os, ss the
@@ -556,7 +512,7 @@
   (for [[op side value chain] (syntax/comparison-sides ps)
         :let [v (sent-literal value opts)]
         :when (and (some? v) (not (string? v)))
-        :let [s (some-> (query/side-schema registry chain side opts) (#(query/compared-schema registry % op)))]
+        :let [s (query/side-schema registry chain side opts)]
         :when (and s (empty? (query/enum-values registry s)) (refuses? registry (accepted-type registry s :compare opts) v))]
     {:kind :literal-type :function (name op) :value v :sent (jdbc/sent-type v opts)
      :type (:pg/type (shape/column-props s))}))

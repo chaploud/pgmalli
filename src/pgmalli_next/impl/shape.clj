@@ -74,10 +74,6 @@
                      (cond-> {:given name :known known} suggest (assoc :did-you-mean (vec suggest))))))
     (get schemas name)))
 
-(defn row-map
-  "The [:map ...] of a row schema, looking through the [:and ...] a table with CHECKs is."
-  [schema] (if (= :and (first schema)) (second schema) schema))
-
 (defn entries
   "The children of a schema vector: everything after the tag, and after the property map when
    the second element is one."
@@ -102,7 +98,7 @@
 (defn row-props
   "The properties of a row (or insert, update) schema's map: :pg/table or :pg/view, keys..."
   [s]
-  (props (when (vector? s) (row-map s))))
+  (props (when (vector? s) s)))
 
 (defn maybe?
   "Whether a column schema takes NULL: [:maybe ...]."
@@ -132,7 +128,7 @@
 (defn column-entries
   "[[column props schema] ...] of a row or insert schema as data."
   [schema]
-  (map entry-parts (filter vector? (entries (row-map schema)))))
+  (map entry-parts (filter vector? (entries schema))))
 
 (defn read-row?
   "Whether a schema is a row a query returns: a table's or a view's, not an insert or update
@@ -210,12 +206,11 @@
   (if (vector? t) (first t) t))
 
 (defn kind
-  "The kind of value t takes: its head, through [:and t checks...] and [:pg/held typmod t]; a
+  "The kind of value t takes: its head, through [:and t checks...]; a
    function schema ([:fn f]) is a kind of its own."
   [t]
   (case (head t)
     :and (kind (domain-base t))
-    :pg/held (kind (last t))
     :fn t
     (head t)))
 

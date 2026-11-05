@@ -737,54 +737,16 @@
                       {:update :t :set {:j :?m}} {})))
       "what goes as a type pgmalli has the driver's object for is all its argument takes"))
 
-(deftest an-insert-selects-argument-to-a-check-list-of-a-type-with-a-typmod-takes-the-list
-  (let [reg (pgmalli/registry {:registry {:pg.public/wd [:enum {:pg/type "character varying(10)"} "a" "b"]
-                                          :pg.public/lists [:map {:pg/table "public.lists"}
-                                                            [:w [:ref {:pg/type "wd"} :pg.public/wd]]
-                                                            [:v [:enum {:pg/type "character varying(10)"} "a"]]]}})]
-    (doseq [c [:w :v]
-            :let [x (:x (:args (h/analyze reg {:insert-into [[:lists [c]] {:select [:?x] :where false}]})))]]
-      (is (m/validate x "a" {:registry reg}) (str c))
-      (is (not (m/validate x "c" {:registry reg})) (str c)))))
-
-(deftest a-number-check-lists-labels-go-as-each-number-sent
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
-                                                         [:d [:enum {:pg/type "double precision" :pg/constraints ["t_d_check"]} 1.0 2.0]]
-                                                         [:i [:enum {:pg/type "integer" :pg/constraints ["t_i_check"]} 1 2]]]}})
-        ok? #(m/validate %1 %2 {:registry reg})
-        {:keys [d]} (:args (h/analyze reg {:update :t :set {:d :?d}}))
-        {:keys [i]} (:args (h/analyze reg {:update :t :set {:i [:cast :?i :integer]}}))]
-    (is (ok? d 1) "a bigint 1 goes to a double precision as 1.0")
-    (is (not (ok? d 3)))
-    (is (every? #(ok? i %) [1 1M 1.0]) "PostgreSQL casts a numeric or a double that is a label")))
-
 (deftest a-string-of-another-string-type-is-a-string-columns-own
   (is (= {:n [:maybe [:or text :keyword]]}
          (args {:update :users :set {:group_name :?n} :where [:= :id 1]} {:schema "sample"}))))
 
 (deftest an-enum-domain-takes-its-labels-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
-                                          :pg.public/good [:and [:ref {:pg/type "mood"} :pg.public/mood] [:not= "ok"]]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:g [:ref {:pg/type "good"} :pg.public/good]]]}})
+                                          :pg.public/t [:map {:pg/table "public.t"} [:g [:ref {:pg/type "mood" :pg/domain "good"} :pg.public/mood]]]}})
         t (:g (:args (h/analyze reg {:update :t :set {:g :?g}} {})))]
     (is (m/validate t :sad {:registry reg}))
     (is (not (m/validate t :glad {:registry reg})) "no keyword but a label")))
-
-(deftest a-value-is-held-as-the-columns-typmod-holds-it-before-its-checks-read-it
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
-                                                        [:n [:and ['decimal? {:pg/type "numeric(4,2)"}] [:pg/numeric {:precision 4 :scale 2}] [:<= 10M]]]
-                                                        [:v [:and [:string {:pg/type "character varying(3)" :max 3 :pg/max-length 3}] [:re "^[a-z]+$"]]]
-                                                        [:e [:enum {:pg/type "character varying(2)" :pg/max-length 2} "ab" "cd"]]]}})
-        ok? (fn [c v] (m/validate (:x (:args (h/analyze reg {:update :t :set {c :?x}}))) v {:registry reg}))]
-    (is (ok? :n 10.004M) "rounded to 10.00, which the CHECK takes")
-    (is (not (ok? :n 10.005M)) "rounded to 10.01")
-    (is (not (ok? :n 100)) "past numeric(4,2)'s precision")
-    (is (ok? :v "abc  ") "spaces past varchar(3) cut off")
-    (is (not (ok? :v "ab c")))
-    (is (ok? :e "ab   "))
-    (is (ok? :e :cd) "a list's labels as keywords still")
-    (is (not (ok? :e "ab c")))
-    (is (m/validate (h/values-schema reg :t) {:n 10.004M :v "abc  " :e "cd "} {:registry reg}) "a row written too")))
 
 (deftest min-and-max-of-a-domain-are-of-its-base-type
   (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
@@ -867,15 +829,6 @@
       "a String literal goes as varchar")
   (is (= [] (check {:select [:id] :from [:users] :where [:= :mood :?m]} {:schema "sample"}))
       "an argument is arg-types'"))
-
-(deftest a-number-going-to-a-checked-number-column-is-held-to-the-check
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
-                                                         [:n [:and {:pg/type "numeric" :pg/constraints ["t_n_check"]} 'decimal? [:> 0]]]
-                                                         [:k [:enum {:pg/type "integer" :pg/constraints ["t_k_check"]} 1 2]]]}})
-        {:keys [n k]} (:args (h/analyze reg {:update :t :set {:n :?n :k :?k}} {}))]
-    (is (m/validate n 3 {:registry reg}))
-    (is (not (m/validate n -3 {:registry reg})) "PostgreSQL checks the CHECK after converting it")
-    (is (= [:enum {:pg/type "integer" :pg/constraints ["t_k_check"]} 1 2] k) "a number label has no keyword")))
 
 (deftest a-cast-to-a-type-pgmalli-does-not-answer-for-takes-anything
   (let [reg (pgmalli/registry {:registry {}})]
@@ -1558,80 +1511,19 @@
     (is (= [:uncast-string] (map :kind (:problems (h/analyze reg {:select [:id] :from [:rc] :where [:= :r "w"]})))))
     (is (= [:uncast-string] (map :kind (:problems (h/analyze reg {:update :rc :set {:rt "integer"}})))) "regclass alone takes text by assignment")))
 
-(def ^:private check-list-registry
-  ;; state is a text column a CHECK narrows to a list; mood an enum type
-  (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
-                                :pg.public/t [:map {:pg/table "public.t"}
-                                              [:id [:int {:pg/type "integer"}]]
-                                              [:state [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed"]]
-                                              [:n [:enum {:pg/type "integer" :pg/constraints ["t_n_check"]} 1 2]]
-                                              [:m [:ref {:pg/type "mood"} :pg.public/mood]]]}}))
-
-(deftest a-check-list-narrows-writes-and-equality-not-other-comparisons
-  (let [q #(:problems (h/analyze check-list-registry {:select [:id] :from [:t] :where %} {}))]
-    (doseq [w [[:= :state "archived"] [:in :state ["archived"]] [:is-not-distinct-from :state "archived"]
-               [:= "archived" :state] [:not [:<> :state "archived"]] [:not [:not [:= :state "archived"]]]]]
-      (is (= [:enum-literal] (map :kind (q w))) (pr-str w)))
-    (doseq [w [[:<> :state "archived"] [:not= :state "archived"] [:not-in :state ["archived"]]
-               [:< :state "z"] [:between :state "a" "z"] [:is-distinct-from :state "archived"]
-               [:<> "archived" :state] [:not [:= :state "archived"]] [:not [:in :state ["archived"]]]
-               [:not [:and [:= :id 1] [:= :state "archived"]]]]]
-      (is (= [] (q w)) (str (pr-str w) ": PostgreSQL compares a text, and the query matches rows")))
-    (is (= [:enum-literal] (map :kind (:problems (h/analyze check-list-registry {:update :t :set {:state "archived"}}))))
-        "a write the CHECK refuses")
-    (doseq [w [[:<> :m "zz"] [:< :m "zz"] [:not-in :m ["zz"]]]]
-      (is (= [:enum-literal] (map :kind (q w))) (str (pr-str w) ": an enum type refuses the value however compared")))))
-
-(deftest an-argument-compared-with-a-check-list-takes-its-base-type-except-under-equality
-  (let [args #(:args (h/analyze check-list-registry {:select [:id] :from [:t] :where %}))
-        text [:or text :keyword]]
-    (is (= {:x [:enum
-                {:pg/type "text" :pg/constraints ["t_state_check"]}
-                "open"
-                "closed"
-                :open
-                :closed]} (args [:= :state :?x])))
-    (is (= {:x text} (args [:<> :state :?x])))
-    (is (= {:x text} (args [:< :state :?x])))
-    (is (= {:x (in-list text)}
-           (args [:not-in :state :?x])))
-    (is (= {:x [:enum {:pg/type "mood"} :ok :sad]} (:args (h/analyze check-list-registry {:select [:id] :from [:t] :where [:<> :m :?x]} {})))
-        "an enum type keeps its labels")
-    (is (= {:x (in-list [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed" :open :closed])}
-           (args [:in :state :?x])))
-    (is (= {:lo text :hi text} (args [:between :state :?lo :?hi])))
-    (is (= {:x [:maybe text]} (args [:is-distinct-from :state :?x])))
-    (is (= {:x text} (args [:not [:= :state :?x]])) "NOT = is <>")
-    (is (= {:x integer-cmp} (args [:<> :n :?x])) "an integer-cmp column's list, its base type")
-    (is (= {:x [:or [:enum {:pg/type "integer" :pg/constraints ["t_n_check"]} 1 2 1M 1.0 2M 2.0] [:enum (float 1.0) (float 2.0)]]} (args [:= :n :?x])))
-    (is (= {:x [:enum {:pg/type "text" :pg/constraints ["t_state_check"]} "open" "closed" :open :closed] :y text}
-           (:args (h/analyze check-list-registry {:update :t :set {:state :?x} :where [:<> :state :?y]})))
-        "the write keeps the list, the comparison in the same statement does not")
-    (is (= {:x text}
-           (:args (h/analyze check-list-registry {:select [:id] :from [:t] :where [:<> :state :?x]} {})))
-        "a keyword, sent untyped, compared with the base type")))
+(deftest an-argument-compared-with-an-enum-takes-its-labels-however-compared
+  (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:m [:ref {:pg/type "mood"} :pg.public/mood]]]}})]
+    (is (= {:x [:enum {:pg/type "mood"} :ok :sad]} (:args (h/analyze reg {:select [:id] :from [:t] :where [:<> :m :?x]} {}))))))
 
 (deftest null-in-any-case-is-sql-null
   (is (= [{:kind :not-null-violation :table "sample.users" :column :score :clause :set}]
          (check {:update :users :set {:score :NULL} :where [:= :id 1]})))
   (is (= [] (check {:select [:id] :from [:users] :where [:is :nick :NULL]})) "not a column named NULL"))
 
-(deftest not-negates-through-and-or-only-and-each-occurrence-on-its-own
-  (let [q #(map :kind (:problems (h/analyze check-list-registry {:select [:id] :from [:t] :where %} {})))
-        c [:= :state "archived"]]
-    (is (= [:enum-literal] (q [:not [:case [:= :state "archived"] true :else false]])) "a CASE's condition is not negated")
-    (is (= [:enum-literal] (q [:not [:= :id [:case [:= :state "archived"] 1 :else 2]]])))
-    (is (= [:enum-literal] (q [:or c [:not c]])) "the same vector, once plain and once negated")
-    (is (= [] (q [:not [:or [:= :state "archived"] [:= :id 1]]])))))
-
 (deftest an-sql-word-in-any-case-names-its-column-as-postgresql-does
   (is (= [:map [:current_date [:time/local-date {:pg/type "date"}]]] (row {:select [:CURRENT_DATE] :from [:users]})))
   (is (= [:map [:?column? [:maybe :any]]] (row {:select [:NULL] :from [:users]}))))
-
-(deftest a-check-lists-labels-go-as-keywords-assigned-too
-  (let [s (:v (:args (h/analyze check-list-registry {:update :t :set {:state :?v}} {})))]
-    (is (m/validate s :open {:registry check-list-registry}))
-    (is (not (m/validate s :archived {:registry check-list-registry})))))
 
 (def ^:private kinds-registry
   (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:>= 1]]
@@ -1896,7 +1788,7 @@
   (is (= [:any {:pgmalli/untyped :type}] (:n (args {:update :nosuch :set {:nick :?n} :where [:= :id :?id]})))))
 
 (deftest a-numeric-with-a-precision-takes-an-integer-assigned
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:and {:pg/type "numeric"} 'decimal? [:pg/numeric {:precision 6 :scale 2}]]]]}})]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n ['decimal? {:pg/type "numeric"}]]]}})]
     (doseq [q [{:insert-into :t :values [{:n :?v}]} {:update :t :set {:n :?v}}]
             v [12 (int 12) 12N 12.5M]]
       (is (m/validate (:v (:args (h/analyze reg q))) v {:registry reg}) (pr-str q v)))
@@ -1968,15 +1860,6 @@
            (:m (args q o))) "a keyword sent untyped as the label it names")
     (is (ok? (:x (args {:select [[[:cast :?x :mood] :m]]} o)) "sad") "PostgreSQL casts a varchar to an enum")))
 
-(deftest a-class-sent-as-text-is-held-to-no-check-on-text
-  (let [reg (pgmalli/registry {:registry {:pg.public/roles [:map {:pg/table "public.roles"}
-                                                            [:k [:and {:pg/constraints ["f"] :pg/type "character varying"} [:string {:max 255 :pg/type "character varying"}] [:re "^[a-z0-9-]+$"]]]
-                                                            [:n [:and {:pg/type "numeric"} 'decimal? [:> 0]]]]}})
-        a (:args (h/analyze reg {:insert-into :roles :values [{:k :?k :n :?n}]}))]
-    (is (m/validate (:k a) :store-manager {:registry reg}) "the text an application makes of a keyword is its own")
-    (is (not (m/validate (:k a) "Bad!" {:registry reg})) "a string is held to the CHECK")
-    (is (not (m/validate (:n a) -3 {:registry reg})) "a number to a number column's CHECK, whatever its class")))
-
 (deftest a-boxed-or-other-java-array-is-typed-by-its-elements
   (is (m/validate (:ids (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]})) (into-array Long [1 2]) {:registry registry})
       "pgjdbc sends a Long[] as a bigint[]"))
@@ -2036,10 +1919,10 @@
         ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
         long-nick (into-array String [(apply str (repeat 41 "a"))])]
     (doseq [select [[:*] [:r.group_id :r.nick]]]
-      (is (not (ok? (q select {}) :ns long-nick)) "longer than the column's varchar(40)")
+      (is (ok? (q select {}) :ns long-nick) "longer than the column's varchar(40): the database's to refuse")
       (is (ok? (q select {}) :ns (into-array String ["a" nil])))
       (is (not (ok? (q select {}) :gs (into-array Integer [nil]))) "NULL into a NOT NULL column")
-      (is (not (ok? (q select {:where [:= :r.group_id 1]}) :ns long-nick)) "as on a row the WHERE lets through"))
+      (is (not (ok? (q select {:where [:= :r.group_id 1]}) :gs (into-array Integer [nil]))) "as on a row the WHERE lets through"))
     (is (ok? {:insert-into [[:users [:group_id]] {:select [:*] :from [[[:unnest [:cast :?gs [:raw "bigint[]"]]] [:r {:columns [:group_id]}]]]}]}
              :gs (long-array [Long/MAX_VALUE]))
         "into a column of another type, the cast's type")))
@@ -2054,7 +1937,6 @@
       (is (ok? q :doc doc) (pr-str doc)))
     (doseq [[doc why] [[{:nik "ann"} "a key of no column, which PostgreSQL ignores"]
                        [{:nick "ann" "nick" "bob"} "a column's key both as a keyword and as a string"]
-                       [{:nick (apply str (repeat 41 "a"))} "longer than the column's varchar(40)"]
                        [{:group_id 3000000000} "beyond the integer's range"]
                        [{:group_id 1.5} "a fraction, which an integer's input does not read"]
                        [{:mood "angry"} "no label of the enum"]
@@ -2558,8 +2440,8 @@
       (is (every? #(m/validate t % {:registry registry}) [nil 1])
           "tested for NULL, cast so that PostgreSQL types it (a bare ? IS NOT NULL is 42P18 for a NULL): nil writes no row")
       (is (not (m/validate t 3000000000 {:registry registry}))))
-    (is (not (m/validate (:n (args {:insert-into [[:users [:nick]] {:select [:?n] :where false}]})) (apply str (repeat 41 "x")) {:registry registry}))
-        "a length, a range or a CHECK holds as on a row it writes")))
+    (is (not (m/validate (:g (args {:insert-into [[:users [:group_id]] {:select [:?g] :where false}]})) 3000000000 {:registry registry}))
+        "a range holds as on a row it writes")))
 
 (deftest an-inserted-value-takes-nil-only-from-a-before-insert-trigger
   ;; PostgreSQL checks NOT NULL on the row proposed for insertion before it looks for a conflict

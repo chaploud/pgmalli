@@ -98,7 +98,7 @@
 
 (deftest jdbc-that-cannot-connect-names-the-target-and-keeps-the-cause-without-the-url
   (when-not (System/getProperty "babashka.version")
-    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope: .*; check :db :jdbc-url"
+    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope: .*; check :db's :jdbc-url"
                                   (ir/from-db {:jdbc-url "jdbc:postgresql://localhost:1/nope?password=s3cret" :user "u" :password "s3cret"})))]
       (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
       (is (= :cognitect.anomalies/unavailable (:cognitect.anomalies/category (ex-data e))))

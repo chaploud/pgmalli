@@ -65,16 +65,12 @@
       ;; a recursive schema: a name already being described is the name
       (and (or (keyword? s) (string? s)) (vector? (get schemas s)))
       (if (*described* s) s (binding [*described* (conj *described* s)] (describe schemas (get schemas s))))
-      ;; a value as the column's typmod holds it reads as the column's type
-      (= :pg/held head) (describe schemas (last s))
       (= :maybe head) (let [d (describe schemas (first children))]
                         (cond (not (string? d)) [:maybe d]
                               (str/includes? d " | ") (str "(" d ")?")
                               :else (str d "?")))
       (= :map head) (ordered (for [[k ep v] (map shape/entry-parts children)]
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))
-      ;; a table with CHECKs: its columns
-      (and (= :and head) (vector? (first children)) (= :map (ffirst children))) (describe schemas (first children))
       (#{:sequential :vector :set :pg/array} head) (or (type-label p) (classes-label p) [(describe schemas (first children))])
       ;; 1.5 and 1.5M, 1.0 and a Float 1.0, a label as each class sends it, print alike
       (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " (distinct (map str children))))
@@ -98,12 +94,7 @@
                       (if (and (vector? target) (= :enum (first target)))
                         (str (or (type-label p) "enum") ": " (str/join " | " (shape/entries target)))
                         (or (type-label p) (describe schemas (last s)))))
-      (= :and head) (let [n (some #(when (and (vector? %) (= :pg/numeric (first %))) (second %)) children)
-                          label (or (type-label p) (describe schemas (first children)))
-                          uses? (:pgmalli/uses p)]
-                      (cond
-                        ;; numeric(p,s) keeps its typmod in a [:pg/numeric ...] part, not in :pg/type
-                        (and n (= "numeric" label)) (str "numeric(" (:precision n) "," (:scale n) ")")
-                        uses? (str/join " & " (map #(let [d (describe schemas %)] (if (string? d) (str "(" d ")") (pr-str d))) children))
-                        :else label))
+      (= :and head) (if (:pgmalli/uses p)
+                      (str/join " & " (map #(let [d (describe schemas %)] (if (string? d) (str "(" d ")") (pr-str d))) children))
+                      (or (type-label p) (describe schemas (first children))))
       :else (or (type-label p) (leaf s)))))

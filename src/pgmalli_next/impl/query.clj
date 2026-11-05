@@ -14,7 +14,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare beyond-list derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-entries type-call)
+(declare derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-entries type-call)
 
 (defn- versions
   "The versions of the catalog snapshot the registry's generated files are of: each file's
@@ -364,7 +364,7 @@
                                   (when ts (for [[c t] added] [c (some-> t types/type-schema)])))
                     ;; a CTE's name may list new names for its columns, by position; a recursive
                     ;; one's later rows may hold NULL where its first member's do not
-                    types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (beyond-list registry t)) t)])))]
+                    types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable t) t)])))]
                 (cond-> sc types (update alias assoc :types types :order (mapv first named)))))
             sc items)))
 
@@ -504,15 +504,13 @@
                         (syntax/positions s c outer (some (fn [[select f]] (when (identical? select s) f)) feeds) opts))])))
 
 (defn- labels
-  "The [:enum ...] of an enum column: a CHECK's list, an enum type, or a domain over either."
+  "The [:enum ...] of an enum column: an enum type's, or a domain's over one."
   [registry schema]
   (let [s (shape/non-null schema)]
     (when (vector? s)
       (case (first s)
         :enum s
         :ref (labels registry (shape/ref-target (::schemas registry) s))
-        ;; a domain's CHECKs narrow its base as [:and base ...]
-        :and (labels registry (first (shape/entries s)))
         nil))))
 
 (defn enum-values
@@ -520,23 +518,11 @@
   [registry schema]
   (some->> (labels registry schema) rest (remove map?) vec))
 
-(defn- list-type
-  "The base type of a column's labels that are a CHECK's list (the column's, or its domain's):
-   the :pg/type they keep; nil for an enum type's labels, which name none."
-  [registry s]
-  (some-> (labels registry s) shape/column-props :pg/type))
-
-(defn beyond-list
-  "s, or the base type of a CHECK's list it is: the type of a value computed from it and others
-   (coalesce, CASE, a recursive CTE's later rows), which the list does not hold."
-  [registry s]
-  (or (some-> (list-type registry s) types/type-schema) s))
-
 (defn- computed
   "The schema of a value computed from a value of s and others (coalesce, CASE, a set operation's
-   column): its base type where s is a CHECK's list, without the bounds the computation may leave."
-  [registry s]
-  (loose (beyond-list registry s)))
+   column): s without the bounds the computation may leave."
+  [_registry s]
+  (loose s))
 
 (defn- domain-of
   "The domain a column schema declares: d, or d[] for an array of domain d; nil for none."
@@ -554,14 +540,6 @@
    value (and its array, which pgjdbc reads as the domain's PGobjects)."
   [registry s]
   (if (or (domain-of s) (= :ref (shape/head (shape/non-null s)))) s (computed registry s)))
-
-(defn compared-schema
-  "The schema a value op compares with a column of schema s must fit: under equality-ops, or
-   for an enum type's labels, the column's; for a CHECK's list otherwise, the base type."
-  [registry s op]
-  (if-let [t (when-not (syntax/equality-ops op) (list-type registry s))]
-    (or (types/type-schema t) :any)
-    s))
 
 (defn table-props
   "The properties of the row schema of table (\"schema.table\")."
@@ -585,15 +563,11 @@
                                      (and s (not opaque?) (filled-by-trigger? (table-props registry table) event)))))))
 
 (defn enum-type
-  "The type of an enum type's column (with CHECKs too), of a domain over one, or of an
-   expression's value of one; not of a domain whose CHECK lists its base type's values, whose
-   labels name that type."
+  "The type of an enum type's column, of a domain over one, or of an expression's value of one."
   [registry s]
-  (let [inner (shape/non-null s)
-        ;; an enum column's CHECK narrows it as [:and base ...]
-        base (if (= :and (shape/head inner)) (first (shape/entries inner)) inner)
+  (let [base (shape/non-null s)
         n (shape/type-name (shape/column-props s))]
-    (cond (and (vector? base) (= :ref (first base)) (labels registry base) (not (list-type registry base))) n
+    (cond (and (= :ref (shape/head base)) (labels registry base)) n
           ;; an expression's value of an enum type (coalesce(tier, ?)): its labels with the type's name, which no base type has
           (and (= :enum (shape/head base)) n (nil? (types/entry n))) n)))
 
@@ -661,7 +635,7 @@
       (when (and s (empty? (shape/column-entries s))) [k s]))))
 
 (defn loose
-  "A column type without the bounds a comparison need not keep (CHECKs, lengths, ranges): its
+  "A column type without the bounds a comparison need not keep (lengths, ranges): its
    kind and :pg/type, each alternative's of an :or. A type with other children (an enum) stays:
    PostgreSQL refuses a value outside an enum, even compared."
   [t]
@@ -726,12 +700,12 @@
 
 (defn- result-schema
   "The schema of a value of resolver type t computed from inputs (expression types): an input's
-   where it is of t (a domain's base type, an enum's labels; without a CHECK's list or
-   bounds), else t's."
+   where it is of t (a domain's base type, an enum's labels; without bounds), else t's."
   [registry t inputs]
   (or (some #(let [s (domain-base-type registry (:schema %))]
                ;; a typmod reads otherwise (bit(1) a Boolean), which a value computed from others may not keep
-               (when (and (= t (:type %)) (not (str/includes? (str (:pg/type (shape/column-props s))) "(")))
+               (when (and (= t (:type %)) (not (str/includes? (str (:pg/type (shape/column-props s))) "("))
+                          (not (:pg/max-length (shape/column-props s))))
                  (computed registry s)))
             inputs)
       (when (string? t) (types/type-schema t))))

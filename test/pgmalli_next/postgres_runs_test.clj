@@ -346,8 +346,7 @@
   (when *db*
     (let [reg (registry)
           insert (fn [t cols] {:insert-into [[t cols] {:select cols :from [[[:jsonb_populate_recordset [:cast nil t] :?rows] :r]]}]})
-          q (insert :positions [:group_id :name :sort_order])
-          long-name (apply str (repeat 101 "a"))]
+          q (insert :positions [:group_id :name :sort_order])]
       (is (some? (runs! q {:rows [{:group_id 1 :name "a" :sort_order 1} {:group_id 2 :name "b"}]} {})))
       (is (accepted? reg q {:rows [{:group_id 1 :name "a" :sort_order 1} {:group_id 2 :name "b"}]} {}))
       (testing "a key of no column: PostgreSQL ignores it, pgmalli refuses it"
@@ -362,7 +361,7 @@
         (let [rows [{"group_id" 1 "name" "a" "sort_order" 1}]]
           (is (= [{:name "a" :sort_order 1}] (runs! (assoc q :returning [:name :sort_order]) {:rows rows} {})))
           (is (accepted? reg q {:rows rows} {}))))
-      (doseq [row [{:group_id 1 :name long-name} {:group_id 1 :name "a" :sort_order 3000000000} {:group_id 1 :name "a" :sort_order 1.5}
+      (doseq [row [{:group_id 1 :name "a" :sort_order 3000000000} {:group_id 1 :name "a" :sort_order 1.5}
                    {:group_id 1}]]
         (testing (pr-str row)
           (is (thrown? Exception (runs! q {:rows [row]} {})))

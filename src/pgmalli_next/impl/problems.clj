@@ -342,7 +342,7 @@
                      (for [{:keys [assign x target] :as a} (syntax/assignments ps) :when (seq target)
                            :let [{s :schema} (query/assigned-column registry a)]]
                        {:col assign :value x :assigned? true :schema s}))]
-    (for [{:keys [col assigned? op] s :schema :as use} uses
+    (for [{:keys [col assigned?] s :schema :as use} uses
           :let [lifted? #(and (vector? %) (= :lift (first %)) (string? (second %)))
                 unlift #(if (lifted? %) (second %) %)
                 value (let [v (:value use)] (if (and (vector? v) (not (keyword? (first v)))) (mapv unlift v) (unlift v)))
@@ -350,7 +350,7 @@
                 numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
                 values (cond (or strings? numbers?) (if (vector? value) value [value])
                              (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
-                allowed (when s (query/enum-values registry (if assigned? s (query/compared-schema registry s op))))
+                allowed (when s (query/enum-values registry s))
                 uncast (when (and s strings? (not (:inline (:format opts))) (not (takes-string? registry s assigned? (jdbc/string-sends opts))))
                          (uncast-type registry s))]
           :when (seq values)

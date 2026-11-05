@@ -699,10 +699,6 @@
 (def ^:private comparison-ops
   (into #{:= :<> :not= :!= :< :> :<= :>=} (concat distinct-ops in-ops like-ops)))
 
-;; a value outside a CHECK's list makes these match no row; the others compare the column's base
-;; type, which takes any value
-(def equality-ops #{:= :in :is-not-distinct-from})
-
 (def ^:private negated-op
   {:= :<> :<> := :not= := :!= := :in :not-in :not-in :in
    :is-not-distinct-from :is-distinct-from :is-distinct-from :is-not-distinct-from})

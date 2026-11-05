@@ -184,12 +184,10 @@
 (defn write-rows
   "[schema type class] for each class the one sending sends, in accept/class-types' order, by array?
    an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
-   none under ::nothing-sent, where a type is taken as the driver reads it alone; under ::json,
-   a value of a JSON document as accept/json-classes writes it, no array; a Character under
-   ::characters alone (sends)."
+   under ::json, a value of a JSON document as accept/json-classes writes it, no array; a
+   Character under ::characters alone (sends)."
   [opts array?]
-  (cond (::nothing-sent opts) []
-        (::json opts) (if array? [] (get json-rows false []))
+  (cond (::json opts) (if array? [] (get json-rows false []))
         (::characters opts) (get character-rows array? [])
         :else (get sent-rows array? [])))
 
@@ -358,60 +356,6 @@
                                 :pgmalli/element (shape/non-null t)}))
           :else :any)))
 
-(defn- base-type-name
-  "The type a column schema names, on itself or on the base of its [:and base checks...]
-   (numeric(10,2) keeps it on its decimal?), without typmod or brackets."
-  [schema]
-  (some #(shape/type-name (shape/column-props %)) [schema (shape/domain-base schema)]))
-
-(def ^:private numbers
-  "The kinds of the number classes a CHECK on a number column reads: the number types' schemas'
-   and the number classes'."
-  (into (set (for [[t e] types/types :when (accept/number-type? t)] (shape/kind (:schema e))))
-        (for [[_ t s] accept/classes :when (accept/number-type? t)] (shape/kind s))))
-
-(defn text-held
-  "Alternative a of a keyword or a Character, held to string column schema t (its length, a
-   CHECK's) through the text it goes as (:pg/text); a as it is for another a, or a t that checks
-   nothing beyond being a string."
-  [a t]
-  (let [k (shape/kind a)
-        u (if (= :pg/held (shape/head t)) (last t) t)]
-    (if (and (#{:keyword 'char?} k)
-             (= :string (shape/kind (shape/domain-base u)))
-             (or (not= u (shape/domain-base u)) (some #{:max :min} (keys (shape/props u)))))
-      [:and a [:pg/text t]]
-      a)))
-
-(defn- typmod-of
-  "{:pg/max-length n :pg/scale s :pg/precision p} of column schema t's typmod, as :pg/held reads
-   it: a varchar(n)'s or char(n)'s length, a numeric(p,s)'s precision and scale; :pg/cut? under
-   cut? (a cast, which cuts a string to n); nil for none."
-  [t cut?]
-  (let [nodes (filter #(and (vector? %) (map? (second %))) (tree-seq vector? seq t))
-        n (some #(when (#{:string :enum} (first %)) (:pg/max-length (second %))) nodes)
-        num (some #(when (= :pg/numeric (first %)) (second %)) nodes)]
-    (cond num {:pg/precision (:precision num) :pg/scale (:scale num 0)}
-          n (cond-> {:pg/max-length n} cut? (assoc :pg/cut? true)))))
-
-(defn typmod-held
-  "Argument schema t (alternatives) of a column of typmod (typmod-of), each alternative a value
-   of that typmod reads otherwise once the column holds it in [:pg/held typmod a]: a number
-   under a scale; a string, under a length, where a CHECK reads it or a cast cuts it (a plain
-   varchar(n)'s :pg/max-length cuts its spaces already)."
-  [t typmod]
-  (if-not typmod
-    t
-    (let [number? (fn [a] (every? (comp numbers shape/kind) (shape/alternatives (shape/domain-base a))))
-          checked? (fn [a] (or (= :enum (shape/kind a)) (and (= :and (shape/head a)) (next (shape/entries a)))))
-          held (fn [a] (cond (= :pg/held (shape/head a)) a
-                             (and (:pg/scale typmod) (number? a)) [:pg/held typmod a]
-                             (and (:pg/max-length typmod) (#{:string :enum} (shape/kind a)) (or (:pg/cut? typmod) (checked? a))) [:pg/held typmod a]
-                             :else a))]
-      (if (shape/maybe? t)
-        [:maybe (shape/either (map held (shape/alternatives (shape/non-null t))) (shape/non-null t))]
-        (shape/either (map held (shape/alternatives t)) t)))))
-
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's
    argument is an array of its elements' (array-type, used as ::array-use, :assign by default); otherwise the types read-type shares
@@ -428,27 +372,16 @@
           t (cond (= :time/offset-time k) (shape/update-base t #(shape/either (distinct [(shape/domain-base schema) %]) %))
                   (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k)) (shape/update-base t (constantly (shape/domain-base schema)))
                   :else t)
-          n (some-> (base-type-name schema) types/entry :name)
-          ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
-          ;; keeps those a class sent goes as (pgmalli-next.impl.args/labelled-type)
-          sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))
-          typmod (when-not (= :none (::typmod opts)) (typmod-of schema (= :cut (::typmod opts))))]
-      (typmod-held
-       (cond (empty? sent) t
-            ;; a json column an override or a CHECK shapes: what is sent as its type is held to that shape
+          n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
+          ;; an enum's labels are the column's values; an argument's type keeps those a class sent
+          ;; goes as (pgmalli-next.impl.args/labelled-type)
+          sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))]
+      (cond (empty? sent) t
+            ;; a json column an override shapes: what is sent as its type is held to that shape
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema
             (= :any (shape/head t)) (shape/either sent t)
-            :else
-            (let [base (shape/domain-base t)
-                  ;; a kind the base has already takes its bounds (a varchar(n)'s length)
-                  more (remove #(= (value-kind %) (value-kind base)) sent)
-                  ;; a CHECK reads a number as the number it is (a BigInt's > 0); a keyword or a
-                  ;; Character as the text it goes as (text-held)
-                  [held free] ((juxt filter remove) #(and (numbers (shape/kind base)) (numbers (shape/kind %))) more)]
-              (shape/either (concat (shape/alternatives (shape/update-base t #(shape/either (distinct (cons % held)) %)))
-                                    (map #(text-held % t) free))
-                            t)))
-       typmod))))
+            ;; a kind the column's own values have already takes their bounds (an integer's range)
+            :else (shape/either (concat (shape/alternatives t) (remove #(= (value-kind %) (value-kind (shape/domain-base t))) sent)) t)))))
 
 ;;; rows as next.jdbc builds them
 
@@ -470,7 +403,7 @@
   (let [s (shape/schema-of registry name)]
     (when-not (shape/read-row? s)
       (shape/not-a-row! registry name "as-read"))
-    (shape/row-map s)))
+    s))
 
 (defn- column-read-type*
   [s pgjdbc?]

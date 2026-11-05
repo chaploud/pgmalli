@@ -32,11 +32,7 @@
       (is (m/validate r {:id 1 :group_id 1 :mood "sad" :seq 1 :score 1 :total 2 :born nil :closed_at nil :group_name nil :nick nil :referrer_id nil :updated_at nil :nick_upper nil} opts)))
     (is (some #{[:nick_upper [:maybe [:string {:pg/generated {:sql "upper((nick)::text)"} :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {})))
     (is (= :line_no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {}) 2)))
-        "_ read as -"))
-  (testing "portable converts what it inlines"
-    (let [reg (pgmalli/registry {:registry {:pg.public/code [:and 'decimal? [:pg/numeric {:precision 3 :scale 0}]]
-                                            :pg.public/t [:map {:pg/table "public.t"} [:c [:ref {:pg/type "code"} :pg.public/code]]]}})]
-      (is (= [:map {:pg/table "public.t"} [:c ['decimal? {:pg/type "code"}]]] (portable reg :pg.public/t))))))
+        "_ read as -")))
 
 (deftest unknown-names-are-an-error
   (doseq [[what f] {:portable #(portable registry :pg.sample/nope)

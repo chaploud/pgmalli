@@ -71,7 +71,7 @@
   "What an INSERT may carry: identity ALWAYS and generated columns removed, columns with a
    default or NULL optional, closed map."
   [row registry]
-  (let [[_ props & entries] (shape/row-map row)]
+  (let [[_ props & entries] row]
     (into [:map (assoc props :closed true)] (keep #(insert-entry registry %) entries))))
 
 (defn- update-schema
@@ -79,7 +79,7 @@
    the columns it changes), each holding what the column holds (a NOT NULL column cannot be set
    to NULL), closed map."
   [row]
-  (let [[_ props & entries] (shape/row-map row)]
+  (let [[_ props & entries] row]
     (into [:map (assoc (select-keys props [:pg/table]) :closed true)]
           (for [e entries :let [[k p s] (shape/entry-parts e) cp (shape/column-props s)]
                 :when (not (shape/written-by-database? cp))]
@@ -91,7 +91,7 @@
                    e)))
 
 (def ^:private json-value
-  "What a json or jsonb column with no CHECK to shape it generates: small JSON values."
+  "What a json or jsonb column with no override to shape it generates: small JSON values."
   [:or :string :int :boolean [:map-of {:max 3} :string [:or :string :int]] [:vector {:max 3} [:or :string :int]]])
 
 (defn- cannot-make
@@ -147,7 +147,7 @@
 (defn- with-gen-hints
   "The row with generation hints on its columns."
   [row]
-  (let [[_ props & entries] (shape/row-map row)
+  (let [[_ props & entries] row
         key-cols (set (map shape/ident-key (concat (:pg/primary-key props) (mapcat :columns (:pg/unique props)) (mapcat :columns (:pg/foreign-keys props)))))
         hinted (fn [e] (let [[k p s] (shape/entry-parts e)
                              key? (or (key-cols k) (:pg/identity (shape/column-props s)))

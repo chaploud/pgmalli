@@ -9,9 +9,7 @@
    The result is the JSON document resources/pgmalli-next/ir.sql builds, which holds its shape,
    keywordized but for the maps keyed by an object's name (:tables, :constraints, :types). A
    unique index over plain columns is a UNIQUE constraint too, keyed \"<name> (index)\", since an
-   index may bear a constraint's name. A partitioned table carries a CHECK named
-   \"<table> (partitions)\": the OR of its partitions' bounds, since it takes a row only when one
-   of them does. Expressions are the strings PostgreSQL's deparser produces."
+   index may bear a constraint's name. Expressions are the strings PostgreSQL's deparser produces."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]
