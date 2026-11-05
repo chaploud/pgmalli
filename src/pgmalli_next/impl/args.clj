@@ -68,11 +68,13 @@
 
 (defn- arrays-sent
   "[type schema] of the arrays the one sending sends (jdbc/write-rows) as a type pred takes, element in
-   their elements' place, and the values of the array's own elements (accept/element-schema: a
-   java.sql.Date[]'s inst?) where element does not hold them already."
+   their elements' place, and the values of the array's own elements of a class sent nowhere alone
+   (accept/element-schema: a java.sql.Date[]'s inst?), which element, of the classes sent, does not
+   hold; those of a class sent alone element holds as its type takes them (an enum's labels)."
   [opts pred element]
-  (for [[schema q c] (jdbc/write-rows opts true) :when (pred q)
-        :let [own (some-> c accept/element-schema shape/alternatives)
+  (for [[schema q ^Class c] (jdbc/write-rows opts true) :when (pred q)
+        :let [own (when (and c (.isArray c) (nil? (accept/row-of (.getComponentType c) accept/classes)))
+                    (some-> c accept/element-schema shape/alternatives))
               kinds (set (map shape/kind (shape/alternatives (shape/non-null element))))
               more (remove (comp kinds shape/kind) own)
               e (if (and (seq more) (not (query/untyped? element)))
