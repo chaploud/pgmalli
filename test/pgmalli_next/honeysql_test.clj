@@ -1800,6 +1800,35 @@
     (is (nil? (rows {:select [:id [{:select [[[:count :*]]] :from [:groups]} :c]] :from [:users]})) "nor one in a subquery")
     (is (nil? (rows {:select [[[:count :*] :n] [[:generate_series 1 3] :g]] :from [:users]})) "a set-returning function repeats the row")))
 
+(deftest a-row-count-is-told-of-values-set-operations-a-select-without-from-and-fetch
+  (let [rows #(:rows (h/analyze registry % opts))
+        one {:select [[[:cast "12:34:56" :time] :t]]}
+        users {:select [:id] :from [:users]}]
+    (is (= {:min 1 :max 1} (rows one)))
+    (is (= {:min 1 :max 1} (rows (assoc one :limit 1))))
+    (is (= {:min 0 :max 1} (rows (assoc one :where [:= 1 :?x]))))
+    (is (= {:min 1 :max 1} (rows {:select-distinct [[1 :x]]})))
+    (is (= {:min 1 :max 1} (rows {:select [[1 :x]] :group-by [:x]})) "one group of its one row")
+    (is (= {:min 0 :max 1} (rows {:select [[1 :x]] :group-by [:x] :having [:= 1 :?x]})))
+    (is (nil? (rows {:select [[1 :x]] :group-by [[:generate_series 1 3]]})) "a set-returning function in GROUP BY repeats the group")
+    (is (nil? (rows {:select [[1 :x]] :group-by [[:rollup :x]]})) "ROLLUP adds a group")
+    (is (nil? (rows {:select [:id] :from [:users] :where [:= :id 1] :group-by [[:rollup :id]]})) "even of one row")
+    (is (nil? (rows {:select [:id] :from [:users] :where [:= :id 1] :group-by [:id [:generate_series 1 3]]})))
+    (is (= {:min 0 :max 2} (rows (assoc users :fetch 2))))
+    (is (= {:min 0 :max 1} (rows (assoc one :fetch 2 :offset 1))))
+    (is (nil? (rows (assoc users :fetch :?n))))
+    (is (nil? (rows (assoc users :limit :all))))
+    (is (= {:min 3 :max 3} (rows {:values [[1] [2] [3]]})))
+    (is (= {:min 2 :max 2} (rows {:union-all [one one]})))
+    (is (= {:min 1 :max 2} (rows {:union [one one]})) "UNION drops the duplicate")
+    (is (= {:min 0 :max 2} (rows {:union [(assoc one :where [:= 1 :?x]) (assoc one :where [:= 1 :?x])]})))
+    (is (= {:min 0 :max 1} (rows {:intersect [one users]})))
+    (is (= {:min 0 :max 1} (rows {:except [one users]})))
+    (is (= {:min 0 :max 1} (rows {:except-all [one users]})))
+    (is (= {:min 0 :max 1} (rows {:union-all [one users] :limit 1})) "a limit bounds a member of no count")
+    (is (nil? (rows {:union-all [one users]})) "a member of no count")
+    (is (nil? (rows {:union-all [one {:select [[[:generate_series 1 3] :t]]}]})))))
+
 (deftest a-row-count-is-told-only-where-nothing-may-change-it
   (let [ret #(last (h/query-schema registry [:db] % (merge opts %2)))
         counted? #(map? (second (ret % {})))]

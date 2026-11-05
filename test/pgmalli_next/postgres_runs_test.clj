@@ -412,3 +412,38 @@
           (is (= 2 (get (frequencies (first (jdbc/execute! (datasource) (sql/format q) {:builder-fn rs/as-unqualified-arrays}))) label)))
           (is (= 1 (count (filter #{label} (keys (first (runs! q {} {})))))))
           (is (= [[:duplicate-column label]] (map (juxt :kind :column) (:problems (h/analyze reg q))))))))))
+
+(deftest a-row-count-holds-what-postgresql-returns
+  (when *db*
+    (let [reg (registry)
+          one {:select [[[:cast "12:34:56" :time] :t]]}
+          ids {:select [:id] :from [:accounts]}
+          id {:select [[[:cast 1 :bigint] :id]]}]
+      (doseq [[q rows n] [[one {:min 1 :max 1} 1]
+                          [(assoc one :limit 1) {:min 1 :max 1} 1]
+                          [(assoc one :where false) {:min 0 :max 1} 0]
+                          [{:select-distinct [[1 :x]]} {:min 1 :max 1} 1]
+                          [{:select [[[:count :*] :n]] :where false} {:min 1 :max 1} 1]
+                          [{:select [[1 :x]] :group-by [:x]} {:min 1 :max 1} 1]
+                          [{:select [[1 :x]] :group-by [:x] :having false} {:min 0 :max 1} 0]
+                          [{:select [[1 :x]] :where false :group-by [:x]} {:min 0 :max 1} 0]
+                          [{:select [[1 :x]] :group-by [[:generate_series 1 3]]} nil 3]
+                          [{:select [[1 :x]] :group-by [[:rollup :x]]} nil 2]
+                          [{:select [:id] :from [:uq] :where [:= :id 1] :group-by [[:rollup :id]]} nil 2]
+                          [{:select [:id] :from [:uq] :where [:= :id 1] :group-by [:id [:generate_series 1 3]]} nil 3]
+                          [{:select [[[:generate_series 1 3] :g]]} nil 3]
+                          [(assoc ids :fetch 1) {:min 0 :max 1} 1]
+                          [(assoc ids :limit 5 :offset 1) {:min 0 :max 5} 1]
+                          [(assoc ids :limit :all) nil 2]
+                          [{:values [[1] [2] [3]]} {:min 3 :max 3} 3]
+                          [{:union-all [one one one]} {:min 3 :max 3} 3]
+                          [{:union [one one]} {:min 1 :max 2} 1]
+                          [{:union [(assoc one :where false) (assoc one :where false)]} {:min 0 :max 2} 0]
+                          [{:intersect [id ids]} {:min 0 :max 1} 1]
+                          [{:except [id ids]} {:min 0 :max 1} 0]
+                          [{:except-all [id ids]} {:min 0 :max 1} 0]
+                          [{:union-all [id ids]} nil 3]
+                          [{:union-all [id ids] :limit 2} {:min 0 :max 2} 2]]]
+        (testing (pr-str q)
+          (is (= rows (:rows (h/analyze reg q))))
+          (is (= n (count (runs! q {} {})))))))))

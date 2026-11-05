@@ -561,13 +561,17 @@ what `execute!` returns on a datasource or connection, `:any` where `:row` is ni
 Where the data tells how many rows a statement returns, the return says so
 (`[:sequential {:max 1} row]`; read the row with `last` or `m/children`, not by position): one
 row of a SELECT of aggregates of columns or constants alone (no GROUP BY, HAVING, OFFSET or a
-limit a parameter gives), and of a SELECT without FROM (at most one with a WHERE); a subquery
+limit a parameter gives), and of a SELECT without FROM, its one row one group under GROUP BY (at
+most one with a WHERE or HAVING); a subquery
 or EXISTS in the select list is one value; at most one of a statement on one table (no CTE of its name, no table
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
-index (neither partial nor DEFERRABLE) equal to a value; up to one for each row of an INSERT's
-`:values` with RETURNING; at most `:limit`. A function that may return a set (one that does, of
+index (neither partial nor DEFERRABLE) equal to a value; one for each row of a VALUES list, up
+to one for each row of an INSERT's `:values` with RETURNING; of a set operation, the sum of its
+members' under `:union-all` and at most that under `:union`, at most the fewest under
+`:intersect`, at most the first's under `:except`; at most `:limit` or `:fetch`. A function that may return a set (one that does, of
 `pg_catalog` as `generate_series` or of a generated schema, or one the registry has none of) in the select list, ORDER
-BY or `:values` makes it say nothing. Where it is one
+BY, GROUP BY or `:values`, or a GROUP BY with ROLLUP, CUBE or GROUPING SETS, which add groups,
+makes it say nothing but a limit. Where it is one
 row, `{:result :one}` drops the `[:maybe]`:
 
 ```clojure
