@@ -305,12 +305,13 @@
   #{})
 
 (defn- result-labels
-  "The labels of the columns of sqlvec's result set, in order; nil without one."
+  "The labels of the columns of sqlvec's result set, in order, as PostgreSQL describes the
+   statement without running it (a row it refuses as it runs, out of every partition, says nothing
+   of them); nil without one."
   [^java.sql.Connection conn sqlvec]
   (try (with-open [ps (jdbc/prepare conn sqlvec)]
-         (when (.execute ps)
-           (with-open [rs (.getResultSet ps)]
-             (let [md (.getMetaData rs)] (mapv #(.getColumnLabel md (int %)) (range 1 (inc (.getColumnCount md))))))))
+         (when-let [md (.getMetaData ps)]
+           (mapv #(.getColumnLabel md (int %)) (range 1 (inc (.getColumnCount md))))))
        (finally (.rollback conn))))
 
 (defn- by-design?
