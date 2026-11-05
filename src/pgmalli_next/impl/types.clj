@@ -10,8 +10,9 @@
                  :bits (bit(n): exactly n), :max-bits (bit varying(n))
      :gen        how a value is generated when the schema alone does not: :bits (0s and 1s)
      :literals   values as text the database reads, generated for an :any column
-     :cast       the type :uncast-string says to cast a string to, where it is not the type
-                 itself: a bit string's varbit, which keeps its length
+     :cast       the type :uncast-string says to cast a string to, for a type whose :schema is
+                 :string but which takes no varchar: bit's varbit (which keeps its length), bit
+                 varying itself
      :read       what pgjdbc returns instead of :schema's values: a schema, :bit (a Boolean
                  for bit(1), else a PGobject), :or-double (a Double for NaN)
      :extension  the extension that adds the type, outside pg_catalog

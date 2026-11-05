@@ -204,7 +204,7 @@
   (mapcat #(let [w (get x %)] (when (vector? w) w)) with-keys))
 
 (defn insert-parts
-  "{:table :columns :select} of :insert-into in its HoneySQL shapes: :t, [:t [:a :b]],
+  "{:table :alias :columns :written :select} of :insert-into in its HoneySQL shapes: :t, [:t [:a :b]],
    [target {:select ...}], any of them behind an option map ({:overriding-value :system}); the
    statement's :columns when the target lists none. nil when the target is none of them."
   [stmt]
@@ -658,8 +658,8 @@
   (first (distinct-on-parts (:select-distinct-on stmt))))
 
 (defn selected-items
-  "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns)
-   or :returning, an expression HoneySQL writes as its operand alone (operand-alone) that
+  "The items of :select, :select-distinct, :select-distinct-on (after its DISTINCT ON columns),
+   :select-top or :select-distinct-top (after their first value) or :returning, an expression HoneySQL writes as its operand alone (operand-alone) that
    operand."
   [stmt]
   (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))

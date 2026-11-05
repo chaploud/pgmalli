@@ -1,25 +1,9 @@
 (ns pgmalli-next.impl.render
-  "Facts -> malli schemas.
-
-   rendered returns {:registry {name schema} :unrendered [fact] :skipped [fact]}; :registry is
-   the file's :registry map (names to schemas), not a malli registry, and holds
-     :pg.<schema>/<type>     enum types and domains
-     :pg.<schema>/<table>    a valid row as read from the database
-     :pg.<schema>/<view>     a row of a view: columns and types, every column nullable, :pg/view on the map
-   A row schema is [:map ...] alone, or [:and [:map ...] checks...] when the table has constraints
-   across columns: [:multi ...] for branches on one column's value, [:or ...] of map fragments.
-   A CHECK no pattern covers is in :unrendered, left to the database. bytea columns with a
-   length CHECK are [:pg/bytes {:min :max}]. Insert and update schemas are
-   derived from row schemas when a registry is loaded (pgmalli-next.impl.registry).
-
-   Properties: on the map :pg/table (\"schema.table\"), :pg/primary-key, :pg/unique
-   ({:columns} each, :nulls-distinct false for NULLS NOT DISTINCT, :where true for a partial
-   unique index) and :pg/foreign-keys
-   ({:columns :table :to} each, tables schema-qualified, :match :full for MATCH FULL); on columns :pg/type
-   :pg/default :pg/identity :pg/generated :pg/constraints, and malli's :default for literal defaults.
-
-   Identifiers that are not plain names become string keys, keeping the output readable EDN.
-   overrides is {:schema.table/column schema, constraint-name {:skip reason}}."
+  "Facts -> malli schemas: rendered. A row schema is [:map ...] alone, or [:and [:map ...]
+   checks...] when the table has constraints across columns: [:multi ...] for branches on one
+   column's value, [:or ...] of map fragments. A CHECK no pattern covers is in :unrendered, left
+   to the database. Identifiers that are not plain names become string keys. Properties are
+   docs/types.md#properties. overrides is {:schema.table/column schema, constraint-name {:skip reason}}."
   (:require [clojure.string :as str]
             [pgmalli-next.impl.expr :as x]
             [pgmalli-next.impl.regex :as regex]

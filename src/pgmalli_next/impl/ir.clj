@@ -6,30 +6,12 @@
    psql's connection settings are its own (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD,
    PGSSLMODE, ~/.pgpass); entries in the db map override them for the call.
 
-   Result shape:
-     {:name \"public\" :database_version \"PostgreSQL 17.6\"
-      :tables {\"users\" {:name \"users\" :kind \"TABLE\"
-                        :columns [{:name :position :data_type :type_schema :is_nullable
-                                   :default_value :generated_expr :identity :max_length :precision :scale}]
-                        :constraints {\"users_age_check\" {:name :type :columns :check_clause :is_valid :deferrable :nulls_not_distinct :references :exclude}}
-                        :triggers [{:name :before :insert :update :delete}] :inherited false}}
-      :types {\"mood\" {:kind \"ENUM\" :enum_values [...]}
-              \"email\" {:kind \"DOMAIN\" :base_type :not_null :default :constraints [{:name :definition}]}}
-      :functions [{:name :args :result :set :kind :variadic :defaults :columns}]
-      :operators [{:name :args :result :btree}]}
-   :kind is \"TABLE\", \"VIEW\" or \"MATERIALIZED VIEW\" (views have columns and no constraints);
-   :type is one of \"CHECK\", \"PRIMARY KEY\", \"UNIQUE\", \"FOREIGN KEY\"; :references is
-   {:match :schema :table :columns} for foreign keys, :match one of \"SIMPLE\", \"FULL\", \"PARTIAL\";
-   :is_enforced is false for a NOT ENFORCED constraint (PostgreSQL 18);
-   :nulls_not_distinct is set for UNIQUE constraints; a unique index over plain columns is
-   listed as a UNIQUE constraint too, with :index true (and :partial true for one with a
-   predicate), keyed \"<name> (index)\"
-   since an index may bear a constraint's name. A partitioned table carries a CHECK named
-   \"<table> (partitions)\": the OR of its partitions' bounds, since it takes a row only when
-   one of them does. :max_length is the typmod of varchar, bpchar, bit and varbit columns,
-   of the element type for an array column. Maps keyed by object name (:tables, :constraints,
-   :types) keep string keys; everything else is keywordized. Expressions are the strings
-   PostgreSQL's deparser produces."
+   The result is the JSON document resources/pgmalli-next/ir.sql builds, which holds its shape,
+   keywordized but for the maps keyed by an object's name (:tables, :constraints, :types). A
+   unique index over plain columns is a UNIQUE constraint too, keyed \"<name> (index)\", since an
+   index may bear a constraint's name. A partitioned table carries a CHECK named
+   \"<table> (partitions)\": the OR of its partitions' bounds, since it takes a row only when one
+   of them does. Expressions are the strings PostgreSQL's deparser produces."
   (:require [clojure.java.io :as io]
             [clojure.java.shell :as shell]
             [clojure.string :as str]

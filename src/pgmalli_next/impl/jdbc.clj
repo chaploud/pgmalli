@@ -307,8 +307,8 @@
                          :else true)))
         untyped (set (map shape/kind (sent-as opts :unknown)))
         ;; a typed array's elements are its type's, never a scalar sent untyped (a String's, where
-        ;; t takes one): t without those; a Java array's are its component class's (a Time[]'s
-        ;; java.sql.Times, inst?), which t takes too
+        ;; t takes one): t without those; a Java array's are its component class's (a Timestamp[]'s
+        ;; java.sql.Timestamps, inst?), which t takes too
         typed (fn [x ^Class c]
                 (let [cs (some-> c accept/element-schema shape/alternatives)
                       own (set (map shape/kind (or cs (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives))))
@@ -473,7 +473,7 @@
 (defn- through-domain
   "A column of a domain whose type the driver returns as something else (a date as a
    java.sql.Date, a citext as a PGobject) as that type, without the domain's CHECKs, which read
-   the registry's types; a domain the driver returns (or, f a write type, takes) as the registry
+   the registry's types; a domain pgjdbc returns (or, where f is write-type, takes) as the registry
    holds it stays a reference. f is called with nothing sent, as sends add values to the base
    type and do not change how the driver reads it."
   [schemas s f]
@@ -543,7 +543,7 @@
                 :any))
 
 (defn column-write-type
-  "column-write-type*: a column pgjdbc returns as a PGobject (json, jsonb, citext, bit(n > 1))
+  "column-write-type*: a column pgjdbc returns as a PGobject (json, jsonb, citext, bit(n > 1), bit varying)
    takes one too, so a value read without an extension is written back."
   [schemas s opts]
   (let [w (column-write-type* schemas s opts)

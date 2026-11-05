@@ -151,7 +151,7 @@
     {:malli.generator/never-gen true}))
 
 (defn- gen-hints
-  "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap) for a column
+  "Generation hints (:gen/min, :gen/max, :gen/schema, :gen/elements, :gen/fmap, :gen/gen) for a column
    schema: key and identity integers are small and positive, strings short, times within 2025
    (fixed, so a seed gives the same rows in every run), an unshaped json column a JSON value,
    an opaque type one of a few literals, a bit string digits. A NOT NULL column of a type
@@ -319,8 +319,9 @@
   (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas))
 
 (defn- with-other-schemas-types
-  "The generated schemas with a column of an enum type or a domain of another of them as a column
-   of the schema's own type: a file stands alone, so it types such a column :any."
+  "The generated schemas with each :any column whose :pg/type names an enum type or a domain of
+   another loaded schema made a [:ref] to it: each file stands alone, so generation types such a
+   column :any."
   [schemas]
   (let [own (fn [t] (when-let [[_ s n] (and (string? t) (re-matches #"([a-z_][a-z0-9_$]*)\.([a-z_][a-z0-9_$]*)" t))]
                       (let [k (shape/schema-key s n)]

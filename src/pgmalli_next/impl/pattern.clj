@@ -26,11 +26,11 @@
      :like                                               {:pattern :case-insensitive?}
      :not-null :null
      :when-present col IS NULL OR <column pattern>       {:fact-when-present}
-     :primary-key  table primary key                      {:columns}
+     :primary-key  table primary key                      {:columns :deferrable?}
      :exclude      EXCLUDE constraint                     {:method :partial? :elements [{:column :op}]}
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
                                                            :index? (from a unique index, not a constraint)
-                                                           :partial? (the index has a predicate)}
+                                                           :partial? (the index has a predicate) :deferrable?}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns} :valid? (false for NOT VALID)}
      :domain       domain type                            {:type-name :base :not-null? :default :facts (column patterns over VALUE;
                                                            :enum or :domain-ref for a base type of the schema)}
@@ -42,6 +42,9 @@
      :table-check  CHECK that matched no pattern         {:expr :columns :valid?}
      :not-enforced a NOT ENFORCED CHECK or FOREIGN KEY   {:constraint :input} (nothing to render)
      :trigger      a row-level trigger left enabled       {:name :before :insert :update :delete} (nothing to render)
+     :inherited    a table other tables inherit (not as partitions) {} (nothing to render)
+     :partitions   a partitioned table's partitions        {:names}
+     :sequence     a sequence of the schema                {:name}
      :unparsed     expression that could not be read     {:input :error}
      :function     a function a query may call            {:name :overload}
      :operator     an operator                            {:name :overload}

@@ -274,7 +274,7 @@
 (defn fixed-result
   "{:result type :non-null bool :schema s} of calling function or operator n with k arguments of
    types not told, among the overloads os it reaches: the result type every overload taking k
-   arguments gives, where that is no polymorphic type (docs 38.2.5) and every version agrees;
+   arguments gives, where that is no polymorphic type (docs 38.2.5) nor record and every version agrees;
    nil otherwise. :non-null where each of them is never NULL, :schema where they are all of s."
   [k os]
   (when (seq os)

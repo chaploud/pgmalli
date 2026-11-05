@@ -1,8 +1,7 @@
 -- One schema as a single JSON document. Run with: psql -At -v schema=NAME -f ir.sql
--- Reads tables (regular and partition parents), views and materialized views, columns,
--- CHECK / PRIMARY KEY / UNIQUE / FOREIGN KEY constraints, enum and domain types, functions and
--- operators. Expressions
--- are kept as PostgreSQL's deparser prints them.
+-- Reads tables (regular, partition parents and foreign), views and materialized views, columns,
+-- CHECK / PRIMARY KEY / UNIQUE / FOREIGN KEY / EXCLUDE constraints, enum and domain types,
+-- functions, operators and sequences. Expressions are kept as PostgreSQL's deparser prints them.
 -- search_path is pinned so type qualification does not depend on the connecting user, with
 -- pg_catalog first so that the schema's own functions and operators never stand in for its: every
 -- function is called qualified, and every operator has an exact match in pg_catalog (hence the

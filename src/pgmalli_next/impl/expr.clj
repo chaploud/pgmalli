@@ -345,7 +345,7 @@
        (catch Exception e {:error (or (ex-message e) (str (class e))) :input s})))
 
 (defn check-clause
-  "The expression inside \"CHECK (...)\" as data. Trailing NOT VALID / NO INHERIT are ignored."
+  "The expression inside \"CHECK (...)\" as data. Trailing NOT VALID, NO INHERIT and [NOT] ENFORCED are ignored."
   [s]
   (let [[_ inner] (re-matches #"(?s)CHECK\s*\((.*)\)(?:\s+(?:NOT VALID|NO INHERIT|NOT ENFORCED|ENFORCED))*\s*" s)]
     (when-not inner (throw (ex-info "not a CHECK (...) clause" {:input s})))

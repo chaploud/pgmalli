@@ -170,10 +170,9 @@
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::query/schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
           triggered? (query/filled-by-trigger? (shape/row-props s) (keyword derived))
-          ;; [keys required? type generated] of each column, generated the values it takes that
+          ;; [key required? type generated] of each column, generated the values it takes that
           ;; malli generates (nil for none)
           columns (concat
-                   ;; one the database may fill takes DEFAULT too
                    (for [[k props c] written
                          :let [assigned #(cond-> (args/accepted-type r c :assign %) (or (shape/maybe? c) triggered?) query/nullable)
                                a (assigned (assoc opts ::args/keywords-columns true))
@@ -189,7 +188,6 @@
                                                               (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
                                   [:= :lift] lifted]]
                       (generated-values plain)])
-                   ;; one the database writes (generated, identity ALWAYS) takes DEFAULT alone
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(written-key k opts) false default default]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))

@@ -417,7 +417,7 @@
         :else (contains? (table-columns registry table) column)))
 
 (defn- own-hits
-  "[[alias table opaque? nullable? types elements] ...] of the tables of one scope a column may belong to."
+  "[[alias table opaque? nullable? types elements index] ...] of the tables of one scope a column may belong to."
   [registry scope col]
   (let [[alias column] (syntax/split-column col (::format registry))
         ;; a subquery's or a CTE's columns of one name are as many hits: PostgreSQL finds it ambiguous

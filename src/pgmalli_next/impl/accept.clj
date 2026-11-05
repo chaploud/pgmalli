@@ -4,7 +4,7 @@
    with it (an operator), assigned to it (INSERT, UPDATE), passed to a function (:call), resolved
    with it to one type (:common: coalesce, CASE), read from a JSON document (:json) or cast to it. Types are the names
    pgmalli-next.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
-   a caller passes a domain as its base type. pgmalli-next.accept-test holds both against the one
+   a caller passes a domain as its base type, a domain over an enum as [:enum name {:domain? true}]. pgmalli-next.accept-test holds both against the one
    sending and PostgreSQL."
   (:require [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.types :as types]))
@@ -111,10 +111,10 @@
    its type's input: a String as a JSON string, whose text every type's input reads (\"*\");
    a BigInt and a BigInteger as the integer data.json writes; a number, a boolean and a JSON
    string of another class as the one sending sends the class.
-   A Character, a byte[] and a java.sql.Time, which it does not write as a value of theirs, are
+   A Character and a byte[], which it does not write as a value of theirs, are
    left out."
   (vec (keep (fn [[c :as row]]
-               (cond (or (#{Character bytes-class} c) (= "java.sql.Time" (.getName ^Class c))) nil
+               (cond (#{Character bytes-class} c) nil
                      (= String c) [c :unknown :string #{"*"}]
                      (#{clojure.lang.BigInt java.math.BigInteger} c) (assoc row 1 "bigint")
                      :else row))

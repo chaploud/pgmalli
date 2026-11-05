@@ -114,7 +114,7 @@
                   :min 1 :max 1}))}))
 
 (def int-ranges
-  "The range each integer type pgmalli registers holds (a bigint is exactly a long, so it is :int)."
+  "The range each integer type pgmalli registers holds."
   (into {} (for [e (vals types/types) :when (and (:range e) (= "pg" (namespace (:schema e))))] [(:schema e) (:range e)])))
 
 (defn- bounded-int
