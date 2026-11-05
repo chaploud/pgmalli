@@ -665,16 +665,19 @@
 
 (defn- matrix-values
   "What each argument is sent: a value of each class the one sending sends and of the others of
-   values, nil, numbers at the integer types' bounds and a fraction, an empty string, a number as
-   a string, and each label of the schema's enums and CHECK lists, alone, as a keyword and in a
-   String[]."
+   values, nil, each integer type's bounds and the integers either side of them (types/types'
+   :range), a fraction, an empty string, a number as a string, and each label of the schema's
+   enums and CHECK lists and a string no enum has, alone, as a keyword and in a String[]."
   [labels]
-  (vec (concat (map (comp value first) accept/class-types)
-               (vals (apply dissoc values (map first accept/class-types)))
-               [nil 0 1.5 1.5M 2147483648 -2147483649 Long/MAX_VALUE Long/MIN_VALUE 9223372036854775808N "" "1"]
-               labels
-               (map keyword (filter string? labels))
-               (map #(into-array String [%]) labels))))
+  (let [bounds (distinct (for [[_ {[lo hi] :range}] types/types :when lo, b [(dec' lo) lo hi (inc' hi)]] b))
+        labels (concat labels ["no-label-of-any-enum"])]
+    (vec (concat (map (comp value first) accept/class-types)
+                 (vals (apply dissoc values (map first accept/class-types)))
+                 [nil 0 1.5 1.5M "" "1"]
+                 bounds
+                 labels
+                 (map keyword (filter string? labels))
+                 (map #(into-array String [%]) labels)))))
 
 (def ^:private samples
   "A value as text of each type of pgmalli-next.impl.types without :literals, for the row of matrix.types."
@@ -872,13 +875,19 @@
        (catch PSQLException _ false)
        (finally (.rollback conn))))
 
+(def ^:private stricter
+  "{[sent context] #{column type}}: where PostgreSQL takes a parameter that accept/holds? leaves
+   out, as pgmalli-next.accept-test pins it."
+  (update-vals (edn/read-string (slurp "test/resources/pgmalli-next/stricter.edn")) set))
+
 (defn arg-matrix
   "Each argument of the queries of matrix-queries, over every column of the oracle schema and
    of matrix.types (matrix-schema!, which it creates first), sent each of matrix-values as
    parameters as the one sending sends them. :refused: PostgreSQL takes the value, the argument's schema from
-   arg-types refuses it, and the stricter rule of docs/queries.md does not explain it: a class
-   sent as a type the column does not hold as its own (accept/holds?; under a cast, one
-   PostgreSQL does not cast, accept/accepts?), a comparison with NULL. :written: as :refused, the schema of the row an UPDATE's :set or an INSERT's
+   arg-types refuses it, and the stricter rule of docs/queries.md does not explain it: a type
+   sent and a column type stricter.edn pins (under a cast, one accept/accepts? refuses, which
+   accept-test pins to PostgreSQL), a comparison with NULL. A value accept/holds? leaves out is
+   sent to PostgreSQL all the same. :written: as :refused, the schema of the row an UPDATE's :set or an INSERT's
    :values carries (set-schema, values-schema). :rule: holds? (accepts? under a cast) says
    PostgreSQL takes a value there, and PostgreSQL refuses its type (type-refusals).
    :untyped: arg-types throws or gives the argument no schema (:schema says which). :timeout:
@@ -918,14 +927,20 @@
                                   arg (if (= :in context) [v] v)
                                   sent (pjdbc/sent-type v opts)
                                   cast? (= :cast context)
+                                  ;; an array assigned to an array column: element by element, as array-type reads it
+                                  assign? (#{:update :insert :insert-select :insert-select-tested :limit} context)
+                                  elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))
+                                  held-t (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
+                                  held-sent (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
                                   takes? (and sent (or (not= :unknown sent) (accept/reads? t (class v) (if cast? :cast :assign))) (if cast?
                                                      (accept/accepts? t sent :cast)
-                                                     ;; an array assigned to an array column: element by element, as array-type reads it
-                                                     (let [assign? (#{:update :insert :insert-select :insert-select-tested :limit} context)
-                                                           elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))]
-                                                       (accept/holds? (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
-                                                                      (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
-                                                                      (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare)))))
+                                                     (accept/holds? held-t held-sent (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare))))
+                                  ;; left out by a rule of docs/queries.md "Stricter than PostgreSQL" that PostgreSQL's
+                                  ;; verdicts pin (stricter.edn); a cast's accepts? PostgreSQL's verdicts pin (accept-test)
+                                  ;; a class the one sending sends nowhere (docs/queries.md#what-your-application-sends)
+                                  pinned? (or (nil? sent)
+                                              (and cast? (not takes?))
+                                              (contains? (get stricter [held-sent (if assign? :assign :compare)]) held-t))
                                   refused? (not (try (m/validate s arg) (catch Exception _ false)))
                                   row-refused? (written-refuses opts table column context v)
                                   ;; NULL in a NOT NULL column fails once a row is written; the table may have none
@@ -934,7 +949,7 @@
                                   honeysql? (or (keyword? v) (and (vector? v) (not (keyword? (first v)))))
                                   ;; sent untyped, or nil, where PostgreSQL takes the type from the value
                                   untyped-there? (and (#{:compared-and-any :compared-and-polymorphic} context) (or (nil? v) (= :unknown sent)))
-                                  explained? (or (and (some? v) (not takes?))
+                                  explained? (or (and (some? v) (not takes?) pinned?)
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))

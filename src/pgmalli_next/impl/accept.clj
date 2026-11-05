@@ -221,7 +221,8 @@
    type; or one sent untyped, which PostgreSQL reads through t's input function, which every type
    has; compared, a function's argument or resolved with t, where t has an = of its own the
    catalog holds (json, point and an extension's type but citext have none here), not where t is a
-   domain over an enum ([:enum name {:domain? true}]), which has no = for an untyped value. Under
+   domain over an enum ([:enum name {:domain? true}]) compared or a function's argument, which has
+   no = for an untyped value (resolved with it, coalesce(dmood, 'sad'), it is one). Under
    :json (a JSON number read through t's input), a number of any number type, but an integer
    type's input reads no fraction."
   [t sent context]
@@ -235,4 +236,4 @@
       (and (= :unknown sent)
            (or (not (#{:compare :call :common} context))
                (string-type? t)
-               (if (vector? t) (not (:domain? (get t 2))) (compares? t t))))))
+               (if (vector? t) (or (= :common context) (not (:domain? (get t 2)))) (compares? t t))))))
