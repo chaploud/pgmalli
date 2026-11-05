@@ -434,5 +434,7 @@
           (let [theirs (own-described con typnames q)]
             (is (= (mapv pop theirs) (ours q)) (pr-str q))
             (is (every? #{""} (map peek theirs)) (str "of no table: " (pr-str q))))))
-      (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (:args (h/analyze registry {:select [[[:double_it :?x] :d]] :from [:t]} o)))))))
+      (let [x (:x (:args (h/analyze registry {:select [[[:double_it :?x] :d]] :from [:t]} o)))]
+        (is (m/validate x (int 2) {:registry registry}))
+        (is (not (m/validate x 2 {:registry registry})) "a Long goes as bigint, which double_it(integer) does not take")))))
 

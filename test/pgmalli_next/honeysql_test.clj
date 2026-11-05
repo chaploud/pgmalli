@@ -36,6 +36,8 @@
 (defn- compared [t] [:or t 'decimal? 'integer? :double 'float?])
 (def nick-assigned
   (let [s [:string {:max 40 :pg/max-length 40 :pg/type "character varying"}]] [:maybe [:or s (jdbc/text-held :keyword s)]]))
+(def int-call
+  (let [[_ held] (:x (args {:select [[[:ntile :?x] :n]] :from [:users]}))] held))
 (def bigint-cmp (compared bigint))
 (def integer-cmp (compared integer))
 (def text [:string {:pg/type "text"}])
@@ -2355,7 +2357,7 @@
         "a function qualified with its schema")
     (is (= [:map [:n [:maybe :any]]] (:row (h/analyze both {:select [[[:note_count] :n]]} opts)))
         "a schema off the search path (:schema) is not searched")
-    (is (= {:x [:maybe [:int {:pg/type "integer"}]]} (args {:select [[[:double_it :?x] :d]] :from [:users]})))
+    (is (= {:x [:maybe int-call]} (args {:select [[[:double_it :?x] :d]] :from [:users]})))
     (is (map? (second (last (h/query-schema registry [:db] {:select [[[:double_it :score] :d]] :from [:users] :where [:= :id 1]} opts))))
         "a function of the schema's that returns no set keeps the row count")
     (is (not (map? (second (last (h/query-schema registry [:db] {:select [[[:user_rows] :d]] :from [:users] :where [:= :id 1]} opts)))))
@@ -2433,6 +2435,19 @@
     (is (some #(str/includes? (str %) "should be an org.postgresql.util.PGobject")
               (flatten [((requiring-resolve 'malli.error/humanize) (m/explain x 42 malli-opts))])))))
 
+(deftest an-integer-argument-of-a-function-takes-no-long-postgresql-converts-no-bigint-to-integer-implicitly
+  (let [ok? (fn [q v] (m/validate (:x (args q)) v {:registry registry}))]
+    (doseq [q [{:select [[[:ntile :?x] :n]] :from [:users]} {:select [[[:round :score :?x] :r]] :from [:users]}
+               {:select [[[:left :nick :?x] :l]] :from [:users]}]]
+      (is (ok? q (int 2)) (pr-str q))
+      (is (ok? q (short 2)) (pr-str q))
+      (is (not (ok? q 2)) (pr-str q))
+      (is (not (ok? q "2")) (pr-str q)))
+    (is (ok? {:select [:*] :from [[[:generate_series 1 :?x] :g]]} 2) "a candidate takes a bigint")
+    (is (ok? {:update :users :set {:score :?x} :where [:= :id 1]} 2) "assigned, PostgreSQL converts a bigint to an integer")
+    (is (str/includes? (first ((requiring-resolve 'malli.error/humanize) (m/explain (:x (args {:select [[[:ntile :?x] :n]] :from [:users]})) 2 {:registry registry})))
+                       "[:cast :?x :integer]"))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or
                 [:time/instant {:pg/type "timestamptz"}]
@@ -2442,7 +2457,7 @@
           :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval does not take)"
                                                             :pgmalli/describe "PGobject of interval"})
                       :time/local-time]]
-          :n [:maybe [:int {:pg/type "integer"}]]} (args {:select [:id] :from [:users]
+          :n [:maybe int-call]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
                             [:< [:+ :closed_at :?d] :current_timestamp]
                             [:= :nick [:repeat "a" :?n]]]})))

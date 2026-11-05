@@ -2,7 +2,8 @@
   "The schema types pgmalli registers for PostgreSQL's own: a bytea of bounded
    length, the bounded numbers (with the ranges the integer types hold) and the arrays the
    JDBC driver takes."
-  (:require [clojure.test.check.generators :as gen]
+  (:require [clojure.string :as str]
+            [clojure.test.check.generators :as gen]
             [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.shape :as shape]
@@ -193,8 +194,19 @@
                   :type-properties {:error/message "should go as a text the column takes (its length, its CHECKs)"}
                   :min 1 :max 1}))}))
 
+(def ^:private class-schema
+  "[:pg/class \"java.lang.Integer\" ...]: a value of one of the classes named, where the classes
+   of one schema (:int, a Long's and an Integer's) go as types PostgreSQL takes apart."
+  (m/-simple-schema
+   {:type :pg/class
+    :compile (fn [_ names _]
+               (let [cs (set names)]
+                 {:pred (fn [v] (contains? cs (.getName (class v))))
+                  :type-properties {:error/message (str "should be one of " (str/join ", " names))}
+                  :min 1 :max Long/MAX_VALUE}))}))
+
 (def schemas
   "The schema types pgmalli registers, by name."
   {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
    :pg/smallint smallint-schema :pg/integer integer-schema :pg/numeric numeric-schema :pg/array array-schema
-   :pg/text text-schema})
+   :pg/text text-schema :pg/class class-schema})
