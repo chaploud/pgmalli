@@ -42,8 +42,9 @@ $ createdb pgmalli_example
 $ psql -d pgmalli_example -f path/to/pgmalli-next/docs/example/schema.sql
 $ export PGDATABASE=pgmalli_example
 $ clojure -X:pgmalli-next
-wrote resources/pgmalli-next.edn (schemas: public; tables: 4, views: 0, enums: 1; unrendered: 0, diagnostics: 0)
 ```
+
+It writes `resources/pgmalli-next.edn`, and prints only what deserves a look.
 
 Load the generated file as a registry and validate an INSERT:
 
@@ -126,7 +127,8 @@ JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sq
 ```
 
 One file holds every schema in `:schemas`. `generate!` writes over no file but one it wrote,
-and prints and returns the diagnostics and the columns left out ([docs/types.md](docs/types.md#the-generated-file)). Generating needs a
+and returns the diagnostics and the columns left out ([docs/types.md](docs/types.md#the-generated-file));
+it prints the columns left out and a diagnostic above `:info`, nothing where all is well. Generating needs a
 [supported PostgreSQL](#supported-versions).
 
 `(pgmalli/registry)` reads `pgmalli-next.edn` from the classpath. Where `:out` is elsewhere,

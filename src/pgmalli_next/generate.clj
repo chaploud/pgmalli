@@ -12,16 +12,7 @@
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.registry :as registry]
-            [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
-
-(defn- counts [data]
-  (let [kind (fn [s] (cond (:pg/view (shape/row-props s)) :view
-                           (shape/row-schema? s) :table
-                           :else :enum))
-        f (frequencies (map kind (vals (:registry data))))]
-    (str "schemas: " (str/join ", " (:schemas data)) "; tables: " (f :table 0) ", views: " (f :view 0) ", enums: " (f :enum 0)
-         "; unrendered: " (count (:unrendered data)) ", diagnostics: " (count (:diagnostics data)))))
 
 (defn- print-unrendered [facts]
   (when (seq facts)
@@ -30,8 +21,10 @@
       (println (str "  " table " " column ": type " type))
       (println (str "    to keep it, add to :overrides {" (keyword table column) " <malli schema>}")))))
 
-(defn- print-diagnostics [ds]
-  (when (seq ds)
+(defn- print-diagnostics
+  "The diagnostics above :info; an :info one is data alone, in what generate! and check return."
+  [ds]
+  (when-let [ds (seq (remove #(= :info (:severity %)) ds))]
     (println (str "diagnostics (" (count ds) "):"))
     (doseq [d ds] (println (str "  " (name (:severity d)) " " (:table d) ": " (:message d))))))
 
@@ -52,14 +45,13 @@
 
 (defn generate!
   "Writes the generated file of config's schemas to its :out (where no file is, or one it wrote),
-   and prints what it holds. Returns {:out path :unrendered [entry ...] :diagnostics
+   and prints what deserves a look: the columns left out, a diagnostic above :info. Returns {:out path :unrendered [entry ...] :diagnostics
    [diagnostic ...]}, as check returns them."
   [config]
   (binding [*print-namespace-maps* false]
     (let [out (files/generate! config)
           data (registry/read-generated-file out)]
       (when-let [w (version-warning (:database-version data))] (println "warning:" w))
-      (println "wrote" out (str "(" (counts data) ")"))
       (print-diagnostics (:diagnostics data))
       (print-unrendered (:unrendered data))
       {:out out :unrendered (not-empty (:unrendered data)) :diagnostics (not-empty (:diagnostics data))})))
@@ -73,7 +65,8 @@
 
 (defn check
   "What CI checks, reading the database once with the config generate! takes: prints how the file
-   at :out differs from what the database yields now, and throws when it does (:pgmalli/error
+   at :out differs from what the database yields now, and what generate! prints, and throws when
+   it differs (:pgmalli/error
    :pgmalli.error/stale, ex-data {:out path :missing path :stale [difference ...]}), so clojure -X exits
    non-zero. Else returns {:unrendered [entry ...] :diagnostics [diagnostic ...]}, each nil when
    it has nothing.
@@ -96,5 +89,4 @@
                        (str "no generated file at " missing "; run pgmalli-next.generate/generate! with the same map and commit it")
                        (str "stale (differences: " (count stale) "); run pgmalli-next.generate/generate! with the same map and commit the file"))
                      {:out (:out (files/config config)) :missing missing :stale stale}))
-      (println "ok: the file of" (str/join ", " (:schemas (files/config config))) "matches the database")
       {:unrendered unrendered :diagnostics diagnostics})))
