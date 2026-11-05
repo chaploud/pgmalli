@@ -68,10 +68,15 @@
 
 (defn- arrays-sent
   "[type schema] of the arrays the one sending sends (jdbc/write-rows) as a type pred takes, element in
-   their elements' place."
+   their elements' place; a java.sql.Date[]'s and a Timestamp[]'s elements java.util.Dates (inst?) too."
   [opts pred element]
-  (for [[schema q] (jdbc/write-rows opts true) :when (pred q)]
-    [q (walk/postwalk-replace {:pgmalli/element element} schema)]))
+  (for [[schema q ^Class c] (jdbc/write-rows opts true) :when (pred q)
+        :let [dates? (and c (.isArray c) (.isAssignableFrom java.util.Date (.getComponentType c)))
+              e (if (and dates? (not (query/untyped? element)))
+                  (let [with (shape/either (distinct (concat (shape/alternatives (shape/non-null element)) ['inst?])) element)]
+                    (cond-> with (shape/maybe? element) query/nullable))
+                  element)]]
+    [q (walk/postwalk-replace {:pgmalli/element e} schema)]))
 
 (defn- typed-pg-object
   "jdbc/pg-object of type t: what it says where a value of t is refused."
