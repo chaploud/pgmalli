@@ -3,7 +3,11 @@
    its :cognitect.anomalies/category, and where they apply :given (the input at fault),
    :known (what was expected) and :did-you-mean (a vector of the ones probably meant). Messages say what is
    wrong, with which input, and what to do, in one line. Neither carries a db map, a URL or a
-   password.")
+   password."
+  (:require [clojure.string :as str]
+            [clojure.walk :as walk]
+            [malli.core :as m]
+            [malli.error :as me]))
 
 (def categories
   {:pgmalli.error/invalid-config :cognitect.anomalies/incorrect
@@ -68,3 +72,31 @@
    a name may end in one (:db?)."
   [x]
   (if x (str "; did you mean: " x) ""))
+
+(defn checked!
+  "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
+   with the one meant, otherwise. kind and label say whose they are (options by default).
+   A config's :db, which may hold a password, is left out of the error, and so are the values of
+   keys schema does not take (a misspelt :db is one)."
+  ([schema opts] (checked! schema opts :pgmalli.error/invalid-options "pgmalli options"))
+  ([schema opts kind label]
+   (if (m/validate schema (or opts {}))
+     opts
+     (let [errors (if-let [shape (when-not (or (nil? opts) (map? opts)) (:pgmalli/not-a-map (m/properties schema)))]
+                    [shape]
+                    (walk/postwalk #(if (and (vector? %) (every? string? %)) (vec (distinct %)) %)
+                                           (me/humanize (m/explain schema opts))))
+           known (when (= :map (m/type schema)) (map first (m/children (m/schema schema))))
+           stray (when (map? opts) (remove (set known) (keys opts)))
+           suggest (some #(suggest % known) stray)]
+       (fail! kind (str label ": " (pr-str errors)
+                              (cond suggest (did-you-mean suggest)
+                                    (and (seq stray) (seq known)) (str "; it takes " (str/join ", " known))))
+                    (cond-> {:given (cond-> opts
+                                      (and (map? opts) known) (select-keys known)
+                                      (map? opts) (dissoc :db))
+                             :errors errors}
+                      known (assoc :known (vec known))
+                      ;; the names of the keys it does not take, not their values
+                      (seq stray) (assoc :unknown (vec stray))
+                      suggest (assoc :did-you-mean [suggest])))))))

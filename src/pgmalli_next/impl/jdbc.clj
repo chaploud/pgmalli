@@ -6,7 +6,6 @@
             [honey.sql :as sql]
             [clojure.walk]
             [malli.core :as m]
-            [malli.error :as me]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.pgtypes :as pgtypes]
@@ -41,34 +40,6 @@
                                            (for [[k v] format-entries] [k {:optional true} [:maybe v]]))]})
 
 (def ^:private format-read (mapv first format-entries))
-
-(defn checked!
-  "opts (nil is none) when schema takes them; an error naming what it does not, a misspelt key
-   with the one meant, otherwise. kind and label say whose they are (options by default).
-   A config's :db, which may hold a password, is left out of the error, and so are the values of
-   keys schema does not take (a misspelt :db is one)."
-  ([schema opts] (checked! schema opts :pgmalli.error/invalid-options "pgmalli options"))
-  ([schema opts kind label]
-   (if (m/validate schema (or opts {}))
-     opts
-     (let [errors (if-let [shape (when-not (or (nil? opts) (map? opts)) (:pgmalli/not-a-map (m/properties schema)))]
-                    [shape]
-                    (clojure.walk/postwalk #(if (and (vector? %) (every? string? %)) (vec (distinct %)) %)
-                                           (me/humanize (m/explain schema opts))))
-           known (when (= :map (m/type schema)) (map first (m/children (m/schema schema))))
-           stray (when (map? opts) (remove (set known) (keys opts)))
-           suggest (some #(error/suggest % known) stray)]
-       (error/fail! kind (str label ": " (pr-str errors)
-                              (cond suggest (error/did-you-mean suggest)
-                                    (and (seq stray) (seq known)) (str "; it takes " (str/join ", " known))))
-                    (cond-> {:given (cond-> opts
-                                      (and (map? opts) known) (select-keys known)
-                                      (map? opts) (dissoc :db))
-                             :errors errors}
-                      known (assoc :known (vec known))
-                      ;; the names of the keys it does not take, not their values
-                      (seq stray) (assoc :unknown (vec stray))
-                      suggest (assoc :did-you-mean [suggest])))))))
 
 ;; compiled once per set of keys: malli keeps a schema's validator, and options are checked on every call
 (def ^:private options-schema
@@ -127,7 +98,7 @@
    error names what it does not take, with the one meant; an option of an earlier version what
    replaced it."
   [opts ks]
-  (when-not (or (nil? opts) (map? opts)) (checked! (options-schema ks) opts))
+  (when-not (or (nil? opts) (map? opts)) (error/checked! (options-schema ks) opts))
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
     (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
       (fail! (str (pr-str old) " is no longer read: " one-sending) old))
@@ -159,7 +130,7 @@
         (when-not (and (= [:builder-fn] (keys given)) (the-builder? (:builder-fn given)))
           (fail! (str ":jdbc's " (str/join ", " (keys given)) " is not read: " builder-only)
                  given))))
-    (checked! (options-schema ks) opts)
+    (error/checked! (options-schema ks) opts)
     opts))
 
 (def ^:private sends

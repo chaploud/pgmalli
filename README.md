@@ -388,7 +388,7 @@ $ clojure -X:pgmalli-next pgmalli-next.generate/check
 :pg.public/groups :motto
   file: nil
   db:   [:maybe [:string {:pg/type "text"}]]
-Execution error (ExceptionInfo) at pgmalli-next.impl.error/fail! (error.clj:24).
+...
 stale (differences: 1); run pgmalli-next.generate/generate! with the same map and commit the file
 ```
 
@@ -468,7 +468,8 @@ A `[:ref ...]` to your own schema needs a registry holding it:
 CI tests the oldest versions listed here.
 
 pgmalli depends on malli, test.check and data.json. HoneySQL, next.jdbc
-and pgjdbc are yours to add.
+and pgjdbc are yours to add: `pgmalli-next.core` and `pgmalli-next.honeysql` load HoneySQL;
+generating needs none of them, but pgjdbc for a `:db` with `:jdbc-url`.
 
 ## Limits
 

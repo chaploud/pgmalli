@@ -11,7 +11,6 @@
             [malli.registry :as mr]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.ir :as ir]
-            [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.pattern :as pattern]
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.render :as render]
@@ -29,7 +28,7 @@
 (defn config
   "Config with defaults applied. A key or value config-schema does not take is an error."
   [c]
-  (jdbc/checked! config-schema c :pgmalli.error/invalid-config "invalid config")
+  (error/checked! config-schema c :pgmalli.error/invalid-config "invalid config")
   (merge default-config c))
 
 (defn- sort-maps [x]
