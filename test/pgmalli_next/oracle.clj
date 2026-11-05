@@ -754,13 +754,28 @@
             :list (lists [tbl col])
             :quoted? (boolean (or (some quoted-name? (str/split tbl #"\.")) (quoted-name? col)))}))))
 
+(def ^:private polymorphic-calls
+  "[name position kind] of each operator and function of the catalog taking two polymorphic
+   arguments, one an array (anyarray, anycompatiblearray), the comparisons aside (matrix-queries
+   compares already): the array column goes at position, the argument at the other."
+  (let [poly? #(and (string? %) (str/starts-with? % "any"))]
+    (sort (distinct (for [kind [:operators :functions]
+                          [n os] (kind @types/catalog)
+                          :when (not (#{"=" "<>" "<" ">" "<=" ">="} n))
+                          {as :args} os
+                          :when (and (= 2 (count as)) (every? poly? as))
+                          [p a] (map-indexed vector as)
+                          :when (#{"anyarray" "anycompatiblearray"} a)]
+                      [n p kind])))))
+
 (defn- matrix-queries
   "[context query] for each place an argument :?x goes with column c: compared (=, <>, IN, =
    ANY, in RETURNING, an element of unnest(?) joined), assigned (UPDATE SET, INSERT VALUES,
    INSERT ... SELECT, and one whose WHERE tests it for NULL), beside it (coalesce, CASE, greatest),
    cast to its type, compared and cast at once, compared and passed where PostgreSQL takes its
    type from the value alone (concat's \"any\", cardinality's anyarray), compared and passed to
-   a function an extension overloads (regexp_replace); and LIMIT."
+   a function an extension overloads (regexp_replace); beside an array column in each polymorphic
+   operator and function (polymorphic-calls); and LIMIT."
   [{:keys [table column declared writable]}]
   (let [t (keyword table) c (keyword column) where #(hash-map :select [:*] :from [t] :where %)]
     (remove nil? (concat [[:= (where [:= c :?x])] [:<> (where [:<> c :?x])] [:in (where [:in c :?x])] [:any (where [:= c [:any :?x]])]
@@ -780,7 +795,12 @@
              [:compared-and-any (where [:and [:= c :?x] [:is-not [:concat :?x] nil]])]
              (when (str/ends-with? declared "[]") [:compared-and-polymorphic (where [:and [:= c :?x] [:>= [:cardinality :?x] 0]])])
              ;; compared, and passed to a function an extension overloads (citext's regexp_replace beside text's)
-             (when (#{"text" "citext" "character varying"} declared) [:compared-and-overloaded (where [:and [:= c :?x] [:is-not [:regexp_replace :?x "a" "b"] nil]])])]))))
+             (when (#{"text" "citext" "character varying"} declared) [:compared-and-overloaded (where [:and [:= c :?x] [:is-not [:regexp_replace :?x "a" "b"] nil]])])]
+            ;; the array column beside the argument in each polymorphic operator and function of two
+            ;; arguments (||, @>, array_append ...), which PostgreSQL resolves from the two together
+            (when (str/ends-with? declared "[]")
+              (for [[n p] polymorphic-calls]
+                [(keyword "polymorphic" (str n "/" p)) {:select [[(into [(keyword n)] (if (zero? p) [c :?x] [:?x c])) :v]] :from [t]}]))))))
 
 (defn- send!
   "Runs [sql & params] on conn, each parameter set as the one sending (docs/reading-rows.md, which
@@ -957,7 +977,7 @@
                                                  (and (compared-contexts context) (nil? v))
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
-                                  rule? (and takes? (not cast?) (not untyped-there?))]
+                                  rule? (and takes? (not cast?) (not untyped-there?) (not= "polymorphic" (namespace context)))]
                             :when (or rule? (and (or refused? row-refused?) (not explained?)))
                             :let [sqlvec (sql/format query (assoc (fmt quoted?) :params {:x arg}))
                                   pg (refusal conn sqlvec column null-refused?)
