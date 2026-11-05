@@ -132,15 +132,22 @@ What each type comes back as:
 
 | type | value |
 |---|---|
-| `timestamp` | `java.time.LocalDateTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Timestamp`); `infinity` `LocalDateTime/MAX`, `-infinity` `MIN` |
-| `timestamptz` | `java.time.Instant` (read by index too); `infinity` `Instant/MAX`, `-infinity` `MIN` |
+| `timestamp` | `java.time.LocalDateTime`; `infinity` `LocalDateTime/MAX`, `-infinity` `MIN` |
+| `timestamptz` | `java.time.Instant`; `infinity` `Instant/MAX`, `-infinity` `MIN` |
 | `date` | `java.time.LocalDate`; `infinity` `LocalDate/MAX`, `-infinity` `MIN` |
-| `time` | `java.time.LocalTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Time`) |
+| `time` | `java.time.LocalTime` |
 | `timetz` | `java.sql.Time` (`inst?`), as pgjdbc returns it: pgjdbc takes the offset off, and the extension cannot put it back |
 | an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions). pgjdbc cannot read the elements of a `money[]` or a `bit(n)[]` (n > 1): reading one throws; select it cast to `text[]` |
 | `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer a `Long` (a `BigInt` past it), a fraction a `Double`, booleans and strings as they are |
 | an enum type | its label, a `String` |
 | every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` a `Double`, an `interval` a `PGInterval` (an interval holds months, days and a time at once, which neither a `Duration` nor a `Period` holds alone), `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |
+
+A `timestamp` and a `timestamptz` (pgjdbc's `java.sql.Timestamp` both) and a `time` and a
+`timetz` (its `java.sql.Time` both) are told apart by the column's type, which the extension sees
+where a column is read by index, as next.jdbc's builders read a row (`execute!`,
+`execute-one!`). `plan`'s `(:col row)` reads by label, which leaves the `java.sql.Timestamp` and
+the `java.sql.Time`: build the row with a builder there (`(rs/datafiable-row row ds {:builder-fn
+rs/as-unqualified-maps})`), or convert the column where your application knows its type.
 
 A json or jsonb column's schema is the parsed value's, as a CHECK (`jsonb_typeof`) or an
 [override](../README.md#overrides) shapes it: one override for what is read and what is
