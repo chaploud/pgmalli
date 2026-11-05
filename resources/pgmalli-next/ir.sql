@@ -7,7 +7,7 @@
 -- function is called qualified, and every operator has an exact match in pg_catalog (hence the
 -- casts on literals), since a later schema's exact match beats pg_catalog's coercion.
 SET search_path TO pg_catalog, :"schema";
-WITH cols AS (
+WITH RECURSIVE cols AS (
   SELECT c.oid AS relid, a.attnum,
          pg_catalog.json_build_object(
            'name', a.attname,
@@ -148,13 +148,27 @@ types AS (
   JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace
   WHERE n.nspname = :'schema' AND t.typtype = 'e'
 ),
+-- each domain's base type under all its domains, which a function or operator of the domain
+-- takes and returns, as a column of it holds
+domain_bases(oid, base) AS (
+  SELECT t.oid, t.typbasetype FROM pg_catalog.pg_type t WHERE t.typtype = 'd'
+  UNION ALL
+  SELECT d.oid, t.typbasetype FROM domain_bases d JOIN pg_catalog.pg_type t ON t.oid = d.base AND t.typtype = 'd'
+),
+-- every type with the type its values are of: a domain's base, else itself
+type_bases(oid, base) AS (
+  SELECT t.oid, COALESCE(d.base, t.oid)
+  FROM pg_catalog.pg_type t
+  LEFT JOIN (domain_bases d JOIN pg_catalog.pg_type b ON b.oid = d.base AND b.typtype <> 'd') ON d.oid = t.oid
+),
 -- what a query calls: no procedure, no trigger function, nothing taking or returning a type
 -- SQL has no value of (internal, cstring, an access method's or a language's handler)
 functions AS (
   SELECT pg_catalog.json_build_object(
            'name', p.proname,
-           'args', ARRAY(SELECT pg_catalog.format_type(u.t, NULL) FROM pg_catalog.unnest(p.proargtypes::pg_catalog.oid[]) WITH ORDINALITY u(t, n) ORDER BY u.n),
-           'result', pg_catalog.format_type(p.prorettype, NULL),
+           'args', ARRAY(SELECT pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = u.t), NULL)
+                         FROM pg_catalog.unnest(p.proargtypes::pg_catalog.oid[]) WITH ORDINALITY u(t, n) ORDER BY u.n),
+           'result', pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = p.prorettype), NULL),
            'set', p.proretset,
            'kind', p.prokind,
            'variadic', p.provariadic <> 0::oid,
@@ -163,7 +177,7 @@ functions AS (
            -- function of no argument (row_number)
            'non_null', (a.agginitval IS NOT NULL AND a.aggfinalfn = 0::oid) OR (p.prokind = 'w' AND p.pronargs = 0),
            -- the columns it returns in FROM: its OUT (and TABLE) arguments, else its composite type's
-           'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(u.n, pg_catalog.format_type(u.t, NULL)) ORDER BY u.i)
+           'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(u.n, pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = u.t), NULL)) ORDER BY u.i)
                                 FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
                                 WHERE u.m IN ('o', 'b', 't')),
                                (SELECT pg_catalog.json_agg(pg_catalog.json_build_array(a.attname, pg_catalog.format_type(a.atttypid, NULL)) ORDER BY a.attnum)
@@ -182,9 +196,10 @@ functions AS (
 operators AS (
   SELECT pg_catalog.json_build_object(
            'name', o.oprname,
-           'args', CASE WHEN o.oprleft = 0::oid THEN pg_catalog.json_build_array(pg_catalog.format_type(o.oprright, NULL))
-                        ELSE pg_catalog.json_build_array(pg_catalog.format_type(o.oprleft, NULL), pg_catalog.format_type(o.oprright, NULL)) END,
-           'result', pg_catalog.format_type(o.oprresult, NULL),
+           'args', CASE WHEN o.oprleft = 0::oid THEN pg_catalog.json_build_array(pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprright), NULL))
+                        ELSE pg_catalog.json_build_array(pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprleft), NULL),
+                                                         pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprright), NULL)) END,
+           'result', pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprresult), NULL),
            -- a comparison: an operator of a btree operator family, or its negator
            'btree', EXISTS (SELECT 1 FROM pg_catalog.pg_amop a JOIN pg_catalog.pg_am am ON am.oid = a.amopmethod
                             WHERE a.amopopr IN (o.oid, o.oprnegate) AND am.amname = 'btree')

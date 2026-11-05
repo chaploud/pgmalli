@@ -117,12 +117,16 @@
                                       CREATE AGGREGATE fx.total(bigint) (SFUNC = fx.add_one, STYPE = bigint, INITCOND = '0');
                                       CREATE AGGREGATE fx.maybe_total(bigint) (SFUNC = fx.add_one, STYPE = bigint);
                                       CREATE FUNCTION fx.text_in(cstring) RETURNS text LANGUAGE internal IMMUTABLE STRICT AS 'textin';
-                                      CREATE FUNCTION fx.am(internal) RETURNS index_am_handler LANGUAGE internal AS 'bthandler';")]
+                                      CREATE FUNCTION fx.am(internal) RETURNS index_am_handler LANGUAGE internal AS 'bthandler';
+                                      CREATE DOMAIN fx.pos AS bigint; CREATE DOMAIN fx.pos2 AS fx.pos;
+                                      CREATE FUNCTION fx.twice(n fx.pos2) RETURNS fx.pos LANGUAGE sql AS 'SELECT n * 2';")]
       (is (= {"add_one" [{:args ["bigint" "bigint"] :result "bigint"}]
               "maybe_total" [{:args ["bigint"] :result "bigint" :kind :a}]
-              "total" [{:args ["bigint"] :result "bigint" :kind :a :non-null true}]}
+              "total" [{:args ["bigint"] :result "bigint" :kind :a :non-null true}]
+              "twice" [{:args ["bigint"] :result "bigint"}]}
              (get-in data [:functions "fx"]))
-          "an aggregate starting from a value is never NULL, as count; internal and cstring are no values of SQL"))))
+          "an aggregate starting from a value is never NULL, as count; internal and cstring are no values of SQL; a domain is its base type")
+      (is (= [:map [:x [:maybe [:int {:pg/type "bigint"}]]]] (:row (h/analyze (pgmalli/registry data) {:select [[[:fx.twice 2] :x]]} {:schema "fx"})))))))
 
 (deftest a-partitioned-table-whose-only-partition-is-default-takes-every-row
   (when *db*
