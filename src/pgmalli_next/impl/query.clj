@@ -518,7 +518,7 @@
   [registry schema]
   (some->> (labels registry schema) rest (remove map?) vec))
 
-(defn- domain-of
+(defn domain-of
   "The domain a column schema declares: d, or d[] for an array of domain d; nil for none."
   [s]
   (some-> s shape/column-props :pg/domain))

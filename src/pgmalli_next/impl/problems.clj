@@ -349,6 +349,20 @@
            :when p]
        p)))
 
+(defn- operator-problems
+  "Of each comparison of a column or an expression of a domain over an enum type, which
+   PostgreSQL compares with nothing (dmood = unknown, dmood = mood and dmood = dmood do not
+   exist): :no-operator, with the enum type to cast it to."
+  [registry ps opts]
+  (distinct
+   (for [[op side other chain] (syntax/comparison-sides ps)
+         ;; HoneySQL writes = and <> with NULL as IS [NOT] NULL
+         :when (not (and (#{:= :<> :not= :!=} op) (syntax/null-value? other (:format opts))))
+         :let [s (query/side-schema registry chain side opts)
+               t (when s (query/slot-type registry s))]
+         :when (and (vector? t) (:domain? (get t 2)))]
+     {:kind :no-operator :column side :op op :domain (query/domain-of s) :type (second t)})))
+
 (defn- problems
   "The problems of one statement (README.md's table of :kind), scope the statement's (from
    scope) or, for a nested statement, the chain of its own and the enclosing ones."
@@ -372,7 +386,8 @@
                      meant (assoc :did-you-mean meant)))
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
-                 (literal-problems registry ps opts)))))
+                 (literal-problems registry ps opts)
+                 (operator-problems registry ps opts)))))
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so

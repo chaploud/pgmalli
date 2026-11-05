@@ -252,6 +252,16 @@
   [a]
   (let [k (shape/kind a)] (if (pgtypes/int-ranges k) :int k)))
 
+(defn array-pg-object
+  "pg-object of array type a, compared as a whole or under = ANY(?) (use :whole or :compare),
+   where no Java array goes as a."
+  [a use]
+  (shape/merge-props pg-object
+                     {:error/message (str "should be a PGobject of type " a " (no Java array goes as " a ", which "
+                                          (if (= :whole use) "a comparison of arrays" "= ANY(?)")
+                                          " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
+                      :pgmalli/describe (str "PGobject of " a)}))
+
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :whole, compared with an
    array column; :assign, to an array column; :common, beside an array column in coalesce or
@@ -318,13 +328,8 @@
           ;; no Java array of the type (text[]'s, String[] going as varchar[]; an enum's): a PGobject
           ;; of it, which PostgreSQL takes as the array a comparison infers, its elements t's
           (and p (#{:whole :compare} use))
-          (let [a (types/short-name (types/array-of (or elem p)))]
-            (shape/merge-props pg-object
-                               {:error/message (str "should be a PGobject of type " a " (no Java array goes as " a ", which "
-                                                    (if (= :whole use) "a comparison of arrays" "= ANY(?)")
-                                                    " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
-                                :pgmalli/describe (str "PGobject of " a)
-                                :pgmalli/element (shape/non-null t)}))
+          (shape/merge-props (array-pg-object (types/short-name (types/array-of (or elem p))) use)
+                             {:pgmalli/element (shape/non-null t)})
           :else :any)))
 
 (defn write-type
@@ -414,17 +419,28 @@
                                   [pg-object]))
                 :any))
 
+(defn typed-pg-object
+  "pg-object of type t: what it says where a value of t is refused."
+  [t]
+  (shape/merge-props pg-object
+                     {:error/message (str "should be a PGobject of type " t " (a String goes as varchar, which " t
+                                          " does not take)")
+                      :pgmalli/describe (str "PGobject of " (types/short-name t))}))
+
 (defn column-write-type
   "column-write-type*: a column pgjdbc returns as a PGobject (json, jsonb, citext, bit(n > 1), bit varying)
-   takes one too, so a value read without an extension is written back."
+   takes one too, so a value read without an extension is written back. A bit string column
+   takes no String, which goes as varchar: a PGobject of its type alone."
   [schemas s opts]
   (let [w (column-write-type* schemas s opts)
         r (column-read-type* s true)
-        t (pg-type r)]
-    (if (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (types/element t))
-             (or (types/json? t) (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t}))))))
-      (shape/either (concat (shape/alternatives w) [pg-object]) w)
-      w)))
+        t (pg-type r)
+        e (types/entry (shape/type-name (shape/column-props s)))]
+    (cond (and (:cast e) (not (array-column? s))) (typed-pg-object (:name e))
+          (and (not= :any (shape/head w)) (= :any (shape/head r)) t (not (types/element t))
+               (or (types/json? t) (#{:any :bit} (:read (types/entry (shape/type-name {:pg/type t}))))))
+          (shape/either (concat (shape/alternatives w) [pg-object]) w)
+          :else w)))
 
 (defn as-read
   "The [:map ...] of a row as next.jdbc's as-unqualified-maps builds it; the options are documented on

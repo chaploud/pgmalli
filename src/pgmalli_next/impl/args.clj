@@ -76,14 +76,6 @@
                   element)]]
     [q (walk/postwalk-replace {:pgmalli/element e} schema)]))
 
-(defn- typed-pg-object
-  "jdbc/pg-object of type t: what it says where a value of t is refused."
-  [t]
-  (shape/merge-props jdbc/pg-object
-                     {:error/message (str "should be a PGobject of type " t " (a String goes as varchar, which " t
-                                          " does not take)")
-                      :pgmalli/describe (str "PGobject of " (types/short-name t))}))
-
 (defn- labelled-type
   "The type of an argument where a value of own, an enum type's labels, goes, alts the [type
    alternative] of each type sent it takes: a label as a String where strings? (a String goes as a
@@ -100,7 +92,7 @@
         props (cond (or (nil? d) (some #{d} sent)) props
                     keywords? (assoc props :default (keyword d))
                     :else (dissoc props :default))]
-    (cond (empty? sent) (if-let [t (:pg/type props)] (typed-pg-object t) jdbc/pg-object)
+    (cond (empty? sent) (if-let [t (:pg/type props)] (jdbc/typed-pg-object t) jdbc/pg-object)
           (= sent labels) own
           :else (into (cond-> [:enum] (seq props) (conj props)) sent))))
 
@@ -110,7 +102,7 @@
    (a LocalTime for interval)."
   [registry s context opts]
   (let [t (query/slot-type registry s)
-        pg-object (typed-pg-object t)]
+        pg-object (jdbc/typed-pg-object t)]
     (distinct (cons pg-object (for [[x p] (jdbc/write-rows opts false)
                                          :when (and (string? p) (not= p t) (accept/holds? t p context))
                                          a (shape/alternatives x)]
@@ -196,6 +188,9 @@
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
+      ;; an array of a domain (d[]) is compared with a d[] alone: no Java array goes as one
+      (and (= :compare context) (some-> (query/domain-of s) types/element))
+      (jdbc/array-pg-object (query/domain-of s) :whole)
       ;; compared, assigned, a function's argument or a :common operand, of a type whose values
       ;; pgmalli does not type and pgjdbc reads as a PGobject (a geometric, network or timespan one:
       ;; inet, interval), that and what converts to it, not any value

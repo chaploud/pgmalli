@@ -78,6 +78,35 @@
     (is (= [[:enum-literal :angry]] (kinds {:update :users :set {:mood [:lift :angry]} :where [:= :id 1]})) "assigned")
     (is (= [] (kinds {:select [[[:coalesce :nick [:inline "angry"]] :n]] :from [:users]})) "a string column takes any")))
 
+(deftest a-column-of-a-domain-over-an-enum-is-compared-with-nothing
+  (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/mood [:enum "ok" "sad"]
+                                                             :pg.public/t [:map {:pg/table "public.t"}
+                                                                           [:m [:maybe [:ref {:pg/type "mood" :pg/domain "dmood"} :pg.public/mood]]]
+                                                                           [:k [:maybe [:ref {:pg/type "mood"} :pg.public/mood]]]]}})
+        kinds (fn [w] (map :kind (:problems (h/analyze reg {:select [:k] :from [:t] :where w}))))]
+    (doseq [w [[:= :m [:inline "sad"]] [:in :m [[:inline "sad"]]] [:= :m :k] [:<> [:inline "sad"] :m] [:= :m :?x]]]
+      (is (= [:no-operator] (kinds w)) (str (pr-str w) ": dmood = unknown, = mood and = dmood do not exist")))
+    (doseq [w [[:= [:cast :m :mood] [:inline "sad"]] [:= :m nil] [:= [:coalesce :m [:inline "ok"]] [:inline "ok"]]]]
+      (is (= [] (kinds w)) (pr-str w)))
+    (is (= ["PostgreSQL has no = for m, of domain dmood over enum mood; compare the enum: [:cast :m :mood]"]
+           (h/humanize (:problems (h/analyze reg {:select [:k] :from [:t] :where [:= :m [:inline "sad"]]})))))))
+
+(deftest a-bit-string-column-takes-a-pgobject-of-its-type-no-string
+  (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                                           [:b1 [:string {:pg/type "bit" :pg/max-length 1}]]
+                                                                           [:vb [:string {:pg/type "bit varying" :pg/max-length 3}]]]}})]
+    (doseq [q [{:update :t :set {:b1 :?x}} {:select [:b1] :from [:t] :where [:= :vb :?x]}]
+            :let [x (:x (:args (h/analyze reg q)))]]
+      (is (not (m/validate x "1" {:registry reg})) (str (pr-str q) ": bit = character varying does not exist"))
+      (is (not (m/validate x true {:registry reg})) "nor does bit take a boolean")
+      (is (re-find #"PGobject of type bit" (pr-str x))))))
+
+(deftest an-array-of-a-domain-is-compared-with-a-pgobject-of-the-domains-array-alone
+  (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:vector {:pg/type "integer[]" :pg/domain "dint[]"} :pg/integer]]]}})
+        x (:x (:args (h/analyze reg {:select [:n] :from [:t] :where [:= :n :?x]})))]
+    (is (not (m/validate x (int-array [1]) {:registry reg})) "dint[] = integer[] does not exist")
+    (is (re-find #"PGobject of type dint\[\]" (pr-str x)))))
+
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))

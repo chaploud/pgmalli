@@ -304,6 +304,9 @@
                    (str ":values row " row " has " values (if (= 1 values) " value" " values") " for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column type value allowed]}]
                    (str (pr-str value) " is no value of " (if column (column-name column) (str "type " type)) "; it takes " (str/join ", " (map pr-str allowed))))
+   :no-operator (fn [{:keys [column op domain type]}]
+                  (str "PostgreSQL has no " (if (#{:in :not-in} op) "=" (name op)) " for " (column-name column) ", of domain " domain " over enum " type
+                       "; compare the enum: " (pr-str [:cast column (keyword (str/replace type " " "-"))])))
    :uncast-string (fn [{:keys [column value type]}]
                     (str (pr-str value) " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
                          " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar);"
