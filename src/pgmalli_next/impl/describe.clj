@@ -32,6 +32,12 @@
               (cond-> m (and k n (not (contains? m k))) (assoc k n))))
           {} accept/classes))
 
+(defn- classes-label
+  "The types the one sending sends the Java arrays :pg/classes of props names as, short."
+  [props]
+  (when-let [cs (seq (:pg/classes props))]
+    (str/join " | " (distinct (for [n (sort cs), [c t] accept/classes :when (= n (.getName ^Class c))] (types/short-name t))))))
+
 (defn- leaf [s]
   (cond (keyword? s) (get class-names s (name s))
         ;; a predicate no class is sent by as a type (inst?) by its name, without the ?
@@ -67,7 +73,7 @@
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))
       ;; a table with CHECKs: its columns
       (and (= :and head) (vector? (first children)) (= :map (ffirst children))) (describe schemas (first children))
-      (#{:sequential :vector :set :pg/array} head) (or (type-label p) [(describe schemas (first children))])
+      (#{:sequential :vector :set :pg/array} head) (or (type-label p) (classes-label p) [(describe schemas (first children))])
       ;; 1.5 and 1.5M, 1.0 and a Float 1.0, a label as each class sends it, print alike
       (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " (distinct (map str children))))
       (= :=> head) (cond-> {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
@@ -77,7 +83,8 @@
       (and (= :tuple head) (= [:= :lift] (first children))) (let [d (describe schemas (second children))] (str "[:lift " (if (string? d) d (pr-str d)) "]"))
       (= :cat head) (mapv #(describe schemas %) children)
       ;; an argument of several collections (IN's)
-      (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children))
+      (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children)
+           (not-every? (comp :pg/classes props-of) children))
       (let [elem (describe schemas (last (first children)))]
         (str elem "[] (" (str/join ", " (map #(name (first %)) children)) ")"))
       (= :or head) (str/join " | " (distinct (map #(let [d (describe schemas %)]

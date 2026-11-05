@@ -246,8 +246,22 @@
   (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
     (is (= {:paths [:maybe [:pg/array text]] :meta [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]} (select-keys (:args (h/analyze docs body)) [:paths :meta]))
         "an assigned array is a Java array: a vector goes as jsonb")
-    (is (= {:p [:pg/array text]} (:args (h/analyze docs {:select [:id] :from [:docs] :where [:= :paths :?p]})))
-        "compared too")))
+    (is (= "PGobject of text[]" (pgmalli/describe docs (:p (:args (h/analyze docs {:select [:id] :from [:docs] :where [:= :paths :?p]})))))
+        "compared, an array of text[]'s type alone, which no Java array goes as (a String[] goes as varchar[])")))
+
+(deftest a-whole-array-compared-takes-an-array-of-the-columns-type-alone
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                       [:ints [:vector {:pg/type "integer[]"} :pg/integer]]
+                                                       [:bigs [:vector {:pg/type "bigint[]"} :int]]
+                                                       [:vcs [:vector {:pg/type "character varying[]"} :string]]]}})
+        ok? (fn [q v] (m/validate (:x (:args (h/analyze reg q))) v {:registry reg}))]
+    (is (ok? {:select [:*] :from [:t] :where [:= :ints :?x]} (into-array Integer [(int 1)])))
+    (is (not (ok? {:select [:*] :from [:t] :where [:= :ints :?x]} (long-array [1]))) "integer[] = bigint[] does not resolve")
+    (is (not (ok? {:select [:*] :from [:t] :where [(keyword "&&") :ints :?x]} (long-array [1]))) "&& too, anyarray's")
+    (is (ok? {:select [:*] :from [:t] :where [(keyword "@>") :bigs :?x]} (long-array [1])))
+    (is (ok? {:select [:*] :from [:t] :where [(keyword "&&") :vcs :?x]} (into-array String ["a"])))
+    (is (ok? {:update :t :set {:ints :?x}} (long-array [1])) "assigned, element by element")
+    (is (ok? {:select [:*] :from [:t] :where [:= :bigs [:any :?x]]} (into-array Integer [(int 1)])) "= ANY compares an element")))
 
 (deftest an-any-or-all-argument-is-an-array
   (let [body {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:<> :group_id [:all :?gs]]]}]

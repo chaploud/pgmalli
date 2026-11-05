@@ -1388,4 +1388,7 @@
  [:raw-from-ordinality {:select [:e.value :e.n] :from [[[:raw "jsonb_array_elements('[1, 2]'::jsonb) WITH ORDINALITY AS e(value, n)"]]]}]
  [:raw-from-in-subquery {:select [:h.id [{:select [[[:jsonb_agg :e.value]]] :from [[[:raw "jsonb_array_elements(coalesce(h.doc, '[]'::jsonb)) AS e(value)"]]]} :vs]] :from [[:hosts :h]]}]
  [:lift-map-jsonb {:select [:id [[:jsonb_set [:coalesce :doc [:lift {}]] [:cast [:inline "{a}"] [:raw "text[]"]] :?doc] :d]] :from [:hosts]}]
+ ;; a whole array compared: the column's array type alone
+ [:ints-equal-array {:select [:id] :from [:kinds] :where [:= :ints :?xs]}]
+ [:bigs-overlap-array {:select [:id] :from [:kinds] :where [:&& :bigs :?xs]}]
 ]

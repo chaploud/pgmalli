@@ -150,6 +150,7 @@
         opts (cond-> opts
                (= "character" t) (assoc ::jdbc/characters true)
                (= :common held-in) (assoc ::jdbc/array-use :common)
+               (= :compare held-in) (assoc ::jdbc/array-use :whole)
                (= :json held-in) (assoc ::jdbc/json true))
         own (cond-> (query/driver-schema registry jdbc/column-write-type s opts)
               (= :compare context) query/loose
@@ -467,6 +468,8 @@
                                                  inss))
                                   [ins] (range (count ins)))
               refused? (and (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
+              ;; anyarray there (&&, @>): an array of the type it binds alone, no array PostgreSQL would convert
+              opts (cond-> opts (some #(= "anyarray" (get (:args %) i)) os) (assoc ::jdbc/array-use :whole))
               ;; a value of each type, which a :pg/type of one would misname
               t (cond (empty? ss) nil
                       (next ss) (query/nullable

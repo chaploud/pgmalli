@@ -79,15 +79,17 @@
 
 (def ^:private array-schema
   "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a typed Java array
-   (long[], Long[], String[] ...; not Object[], which it refuses) of t's, or a java.sql.Array,
-   whose elements are not read."
+   (long[], Long[], String[] ...; not Object[], which it refuses) of t's, of one of the classes
+   :pg/classes names where it names some, or a java.sql.Array, whose elements are not read."
   (m/-simple-schema
    {:type :pg/array
-    :compile (fn [_ [child] options]
+    :compile (fn [{:pg/keys [classes]} [child] options]
                (let [valid? (m/validator child options)]
                  {:pred (fn [v] (or (sql-array? v)
                                     (let [c (class v)]
-                                      (boolean (and c (.isArray ^Class c) (not= Object (.getComponentType ^Class c)) (every? valid? v))))))
+                                      (boolean (and c (.isArray ^Class c) (not= Object (.getComponentType ^Class c))
+                                                    (or (nil? classes) (contains? classes (.getName ^Class c)))
+                                                    (every? valid? v))))))
                   :type-properties {:error/message "should be a typed Java array (long-array, (into-array String [...])) or a java.sql.Array of such elements; a vector goes as jsonb"}
                   :min 1 :max 1}))}))
 

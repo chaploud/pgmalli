@@ -277,8 +277,9 @@
             (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
 (defn array-type
-  "An array argument of elements t, used as use (:compare, = ANY(?); :assign, to an array
-   column; :common, beside an array column in coalesce or CASE; :unnest, a column of unnest(?), assigned or compared): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
+  "An array argument of elements t, used as use (:compare, = ANY(?); :whole, compared with an
+   array column; :assign, to an array column; :common, beside an array column in coalesce or
+   CASE; :unnest, a column of unnest(?), assigned or compared): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
    element type is one of t's own (accept/holds?, assigned; under :common, as coalesce resolves it; compared, t is what a comparison takes already), its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
@@ -293,7 +294,9 @@
         takes? (fn [sent]
                  (if (= :unknown sent)
                    (not= :unnest use)
-                   (cond (and elem (accept/answers? elem)) (accept/holds? elem (types/element sent) (if (= :common use) :common :assign))
+                   (cond ;; a whole array compared (=, &&, @>): anyarray's operators take an array of its type alone
+                         (and elem (= :whole use)) (= elem (some-> (types/element sent) types/entry :name))
+                         (and elem (accept/answers? elem)) (accept/holds? elem (types/element sent) (if (= :common use) :common :assign))
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
                          (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
@@ -327,8 +330,18 @@
                       t)))
         alts (distinct (for [[s sent c] (write-rows opts true) :when (takes? sent)
                              a (shape/alternatives s)]
-                         (clojure.walk/postwalk-replace {:pgmalli/element (element sent c)} a)))]
-    (shape/either (cond-> alts (and (seq alts) (some #{pg-object} (shape/alternatives (shape/non-null t)))) (concat [pg-object])) :any)))
+                         (cond-> (clojure.walk/postwalk-replace {:pgmalli/element (element sent c)} a)
+                           ;; elements alike (a long[]'s and an Integer[]'s), the array's class tells the type sent
+                           (and (= :whole use) (instance? Class c) (= :pg/array (shape/head a)))
+                           (shape/merge-props {:pg/classes #{(.getName ^Class c)}}))))]
+    (cond (seq alts) (shape/either (cond-> alts (some #{pg-object} (shape/alternatives (shape/non-null t))) (concat [pg-object])) :any)
+          ;; no Java array of the type (text[]'s, String[] going as varchar[]): a PGobject of it
+          (= :whole use) (let [a (types/short-name (types/array-of (or elem p)))]
+                           (shape/merge-props pg-object
+                                              {:error/message (str "should be a PGobject of type " a " (no Java array goes as " a ", which a comparison of arrays"
+                                                                   " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
+                                               :pgmalli/describe (str "PGobject of " a)}))
+          :else :any)))
 
 (defn- base-type-name
   "The type a column schema names, on itself or on the base of its [:and base checks...]

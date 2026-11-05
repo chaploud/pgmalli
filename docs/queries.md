@@ -347,8 +347,12 @@ gives it; a json or interval column, where pgmalli knows only the driver's objec
 
 An array argument takes a Java array, the column's element type in its elements' place: a
 vector goes as `jsonb`, no array. Compared (`[:= :id [:any :?ids]]`), it takes the elements its
-type compares with; under `unnest`, each element assigned to the column. Without such a class
-(an enum type's array) an array argument is `:any`.
+type compares with; under `unnest`, each element assigned to the column. Compared with an array
+column whole (`=`, `&&`, `@>`, whose `anyarray` takes an array of one type alone), it takes a
+Java array the one sending sends as the column's type alone (an `int[]` column an `Integer[]` or
+an `int[]`, no `long[]`): where none goes so (a `text[]` column, a `String[]` going as
+`varchar[]`), a `PGobject` of the type, or cast it (`[:cast :?tags [:raw "text[]"]]`). Without
+such a class (an enum type's array) an array argument is `:any`.
 
 An enum argument takes its labels as keywords, which go untyped, or as strings cast
 (`[:cast :?m :user_status]`): PostgreSQL neither compares a `varchar` with an enum nor assigns
