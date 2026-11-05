@@ -7,7 +7,7 @@
   "The namespaces ns's ns form requires."
   [ns]
   (when-let [f (some #(io/resource (str (-> (name ns) (.replace "-" "_") (.replace "." "/")) %)) [".clj" ".cljc"])]
-    (let [[_ _ & clauses] (binding [*read-eval* false] (read-string (slurp f)))]
+    (let [[_ _ & clauses] (binding [*read-eval* false] (read-string {:read-cond :allow} (slurp f)))]
       (for [[k & specs] clauses :when (= :require k)
             spec specs]
         (if (vector? spec) (first spec) spec)))))
