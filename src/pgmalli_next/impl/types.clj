@@ -247,12 +247,21 @@
   [t]
   (boolean (and (string? t) (get-in @catalog [:types t :preferred]))))
 
+(defn extension-string?
+  "Whether t is an extension's type of strings (citext), which pg_catalog's catalog does not
+   hold."
+  [t]
+  (boolean (and (not= "S" (category t))
+                (when-let [e (and (string? t) (entry t))] (and (:extension e) (= :string (:schema e)))))))
+
 (defn implicit?
   "Whether PostgreSQL converts a value of type from to type to implicitly (pg_cast's castcontext
-   'i', an array element by element)."
+   'i', an array element by element); an extension's type of strings to text, as citext's own
+   casts, which the catalog does not hold, do."
   [from to]
   (or (= from to)
       (contains? (:casts @catalog) [from to "i"])
+      (and (= "text" to) (extension-string? from))
       (let [a (element from) b (element to)] (boolean (and a b (implicit? a b))))))
 
 (def ^:private contexts

@@ -122,17 +122,10 @@
 
 ;;; what PostgreSQL takes
 
-(defn- extension-string?
-  "Whether t is an extension's type of strings (citext), which pg_catalog's catalog does not
-   hold."
-  [t]
-  (boolean (and (not= "S" (types/category t))
-                (when-let [e (and (string? t) (types/entry t))] (and (:extension e) (= :string (:schema e)))))))
-
 (defn- string-type?
   "Whether t is of PostgreSQL's string category, or an extension's type of strings."
   [t]
-  (or (= "S" (types/category t)) (extension-string? t)))
+  (or (= "S" (types/category t)) (types/extension-string? t)))
 
 (defn answers?
   "Whether accepts? answers for type t: an enum, a type of pg_catalog or an array of one, or an
@@ -177,7 +170,7 @@
   (memoize
    (fn [t sent]
      (let [os (resolve/overloads :operators "=")
-           [t sent] (map #(if (extension-string? %) "text" %) [t sent])]
+           [t sent] (map #(if (types/extension-string? %) "text" %) [t sent])]
        (boolean (some #(resolve/call :operators "=" [t sent] (resolve/of-version os %)) (:versions @types/catalog)))))))
 
 (defn accepts?

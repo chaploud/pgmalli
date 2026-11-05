@@ -176,6 +176,13 @@
     (is (m/validate (x {:select [[[:nullif :iv :?x] :n]] :from [:t]}) (java.time.LocalTime/of 1 0) {:registry reg})
         "nullif(interval, time) is interval = time, which resolves")))
 
+(deftest a-citext-column-goes-where-text-does-in-a-call
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ci [:string {:pg/type "citext"}]]]}})
+        x (fn [q] (:x (:args (h/analyze reg q))))]
+    (is (m/validate (x {:select [[[:substr :ci :?x] :s]] :from [:t]}) (int 2) {:registry reg}) "substr(text, integer), citext cast to text")
+    (is (m/validate (x {:select [[[:|| :ci :?x] :s]] :from [:t]}) 1 {:registry reg}) "text || anynonarray")
+    (is (= [] (:problems (h/analyze reg {:select [[[:|| :ci 1] :s]] :from [:t]}))))))
+
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))
