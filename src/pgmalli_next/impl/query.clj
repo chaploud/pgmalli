@@ -916,12 +916,15 @@
 
 (defn- nullif-type
   "The expression type of nullif of arguments of expression types ms: its first argument's, as =
-   takes it."
+   takes it; of two of one extension's string type (citext), that type, whose own = the catalog
+   does not hold."
   [ms]
   (when (= 2 (count ms))
+    (if (and (types/extension-string? (:type (first ms))) (apply = (map :type ms)))
+      (assoc (first ms) :nullable? true)
     (when-let [{[t] :args :as r} (resolve/call :operators "=" (mapv :type ms) (resolve/overloads :operators "="))]
       (when (= "boolean" (:result r))
-        (when-let [s (result-schema t ms)] {:type t :schema s :nullable? true})))))
+        (when-let [s (result-schema t ms)] {:type t :schema s :nullable? true}))))))
 
 (defn expression-type
   "{:schema column-schema :nullable? bool :type t} of an expression, t its type as
