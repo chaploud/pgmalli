@@ -1,7 +1,6 @@
 # pgmalli-next
 
 [![ci](https://github.com/chaploud/pgmalli-next/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chaploud/pgmalli-next/actions/workflows/ci.yml)
-[![Clojars](https://img.shields.io/clojars/v/io.github.chaploud/pgmalli-next.svg)](https://clojars.org/io.github.chaploud/pgmalli-next)
 
 Your PostgreSQL schema as [malli](https://github.com/metosin/malli) schemas: validate rows,
 generate test data and check HoneySQL queries, without a database at hand.
@@ -88,9 +87,11 @@ shows how CI catches a forgotten one.
 
 ## Installation
 
+pgmalli is not released yet: depend on a commit of this repository in `deps.edn`'s `:deps`,
+
 <!-- :test-doc-blocks/skip -->
 ```clojure
-io.github.chaploud/pgmalli-next {:mvn/version "0.3.3"}
+io.github.chaploud/pgmalli-next {:git/url "https://github.com/chaploud/pgmalli-next" :git/sha "<commit>"}
 ```
 
 Applications need only the generated file. On babashka, put the same coordinate in `bb.edn`'s
