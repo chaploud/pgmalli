@@ -1,7 +1,8 @@
 name: ci
 on:
   push:
-    branches: [main]
+    # the review lane too, which main catches up with: a pull request of it closes as merged then
+    branches: [main, develop/review-lane]
   pull_request: {}
 permissions:
   contents: read
