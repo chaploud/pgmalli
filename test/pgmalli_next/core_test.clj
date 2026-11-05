@@ -79,6 +79,15 @@
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
 
+(deftest a-foreign-table-is-a-table-a-query-reads
+  (when *db*
+    (let [config {:db *db* :out-dir (str (doto (File/createTempFile "pgmalli-ft" "") .delete))}]
+      (exec-sql! "CREATE EXTENSION IF NOT EXISTS file_fdw; CREATE SERVER ft_files FOREIGN DATA WRAPPER file_fdw;
+                  CREATE SCHEMA ft; CREATE FOREIGN TABLE ft.lines (a text) SERVER ft_files OPTIONS (program 'echo hi', format 'text');")
+      (generate/generate! (assoc config :schemas ["ft"]))
+      (let [reg (pgmalli/registry (registry/read-generated-file (files/path-for config "ft")))]
+        (is (= [] (:problems (h/analyze reg {:select [:a] :from [:lines]} {:schema "ft"}))))))))
+
 (deftest a-char-n-list-holds-without-trailing-spaces-other-char-n-and-arithmetic-checks-are-left-to-the-database
   (when *db*
     (let [out-dir (str (doto (File/createTempFile "pgmalli-ch" "") .delete))

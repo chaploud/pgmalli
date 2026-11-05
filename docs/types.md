@@ -239,7 +239,7 @@ class.
 
 ## What is read
 
-Tables (regular and partitioned), views, materialized views, columns, CHECK, PRIMARY KEY,
+Tables (regular, partitioned and foreign), views, materialized views, columns, CHECK, PRIMARY KEY,
 UNIQUE, FOREIGN KEY and EXCLUDE constraints, unique indexes over plain columns, row-level
 triggers, enum and domain types.
 

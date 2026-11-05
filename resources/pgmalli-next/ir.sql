@@ -33,7 +33,7 @@ WITH cols AS (
   JOIN pg_catalog.pg_type t ON t.oid = a.atttypid
   JOIN pg_catalog.pg_namespace tn ON tn.oid = t.typnamespace
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
-  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm') AND NOT c.relispartition
+  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition
 ),
 cons AS (
   SELECT k.conrelid AS relid,
@@ -140,7 +140,7 @@ tables AS (
          ) AS tbl
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm') AND NOT c.relispartition
+  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition
 ),
 types AS (
   SELECT t.typname,
