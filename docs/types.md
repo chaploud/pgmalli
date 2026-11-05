@@ -34,6 +34,8 @@ A **view's** columns are all `[:maybe ...]`. Views have no insert schema.
 A **domain's** column is of the domain's base type, under all its domains and of whatever
 schema; `:pg/domain` names the domain. The domain's NOT NULL and DEFAULT are the column's
 (an array of a domain takes neither). The registry holds no entry of a domain.
+A column of a NOT NULL domain is not `[:maybe ...]`, although PostgreSQL stores NULL there from an
+empty scalar subquery; its documentation calls this a defect not to rely on.
 
 pgmalli's own schema types are in the registry too: `:pg/bytes`, `:pg/smallint`,
 `:pg/integer`, `:pg/array` and `:pg/class`. Three of malli's are replaced: `:string` counts

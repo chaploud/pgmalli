@@ -31,8 +31,3 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
 - **A domain over an array of a domain is untyped.** `CREATE DOMAIN codes AS code[]` with `code`
   a domain: ir.sql's domain chain stops at `code[]`, which is no domain, so the column is `:any`
   and listed in `:unrendered`. Follow an array's element through its domains too.
-- **A NOT NULL domain's column takes no NULL.** ir.sql folds a domain's NOT NULL into the
-  column's, but PostgreSQL stores NULL there from an empty scalar subquery (its documentation's
-  own example: `INSERT INTO t (x) VALUES ((SELECT x FROM t WHERE false))`).
-  The row schema refuses nil where PostgreSQL holds one. Rare; decide whether the row schema
-  should take nil for a domain's NOT NULL alone.
