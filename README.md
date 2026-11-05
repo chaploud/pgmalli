@@ -12,7 +12,7 @@ generate test data and check HoneySQL queries, without a database at hand.
 - [Generating test data](#generating-test-data)
 - [Checking HoneySQL queries](#checking-honeysql-queries)
 - [Function schemas for queries](#function-schemas-for-queries): instrument query functions
-- [Keeping the files current](#keeping-the-files-current): stale files fail CI
+- [Keeping the file current](#keeping-the-file-current): a stale file fails CI
 - [Overrides](#overrides)
 - [Supported versions](#supported-versions), [Limits](#limits) and [Stability](#stability)
 - Reference: [types and constraints](docs/types.md), [reading rows](docs/reading-rows.md),
@@ -82,7 +82,7 @@ Generate rows of the table's types:
 ;; => true
 ```
 
-Regenerate the file after each migration; [Keeping the files current](#keeping-the-files-current)
+Regenerate the file after each migration; [Keeping the file current](#keeping-the-file-current)
 shows how CI catches a forgotten one.
 
 ## Installation
@@ -377,7 +377,7 @@ returns:
 
 The options of `pgmalli-next.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
 
-## Keeping the files current
+## Keeping the file current
 
 `generate/check` takes the map `generate!` does, reads the database and compares the file
 with what it yields now. Where the file differs or is missing, it prints the differences and
@@ -475,15 +475,15 @@ generating needs none of them, but pgjdbc for a `:db` with `:jdbc-url`.
 ## Limits
 
 - The registry is the schema at generate time; nothing reads the database at run time
-  ([Keeping the files current](#keeping-the-files-current)).
+  ([Keeping the file current](#keeping-the-file-current)).
 - PRIMARY KEY, UNIQUE and foreign keys are not checked: a row schema holds for one row.
 - Triggers, EXCLUDE constraints and policies are not enforced
   ([docs/types.md](docs/types.md#what-is-read)).
 - `h/analyze` reads a query as the data `sql/format` takes: code in it is an error, and each
   variant your code builds is analyzed on its own
   ([docs/queries.md](docs/queries.md#stricter-than-postgresql)).
-- A CHECK, a domain's CHECK, a partition's bounds, a length and a scale are the database's:
-  the schemas take a row they refuse ([docs/types.md](docs/types.md#names-in-the-registry)).
+- What the database checks of a row beyond its columns' types and NOT NULL, no schema checks
+  ([docs/types.md](docs/types.md#names-in-the-registry)).
 
 ## Stability
 

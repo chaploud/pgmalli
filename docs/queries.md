@@ -41,7 +41,7 @@ whose `:in` says where the symbol is, as `get-in` reads it.
   `group_id`); quoted (`:quoted`, a dialect), as written (`:Users` is `"Users"`). A string, which
   HoneySQL quotes, is as written.
 - A table is looked up in the `:schema` option (`"public"` by default); `:other.t` names its schema.
-  A `:schema` given that the registry holds no generated file, table or view of is an error
+  A `:schema` the registry holds no generated schema, table or view of is an error
   naming the ones it holds; where the default `"public"` is one it lacks, an unqualified table is an
   `:unknown-table` naming the schema that holds it.
 - A `:with` entry is a table its later entries and the main statement see.
@@ -95,8 +95,8 @@ own (a CTE under the ones before it, a subquery under the CTEs of the query it r
 subquery with the tables before it, a recursive CTE as its first member, NULL allowed); a
 column it does not give is `:unknown-column`. A table or
 view of `pg_catalog` (`pg_class`) the registry lacks has the columns of the catalog snapshot as
-of the PostgreSQL versions the registry's files were generated on (each file's
-`:database-version`; every version the snapshot holds where a file's is not one of them): a
+of the PostgreSQL version the registry was generated on (the file's `:database-version`; every
+version the snapshot holds where it is not one of them): a
 column whose type the versions disagree on is `:any`, and one a version lacks is an optional key
 of `SELECT *`. A function of `pg_catalog` or of a generated schema in FROM
 has the columns it returns ([The row a query returns](#the-row-a-query-returns)). The columns of
@@ -428,13 +428,13 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   their `recordset` of a table's row type (`NULL::t`, or an alias's whole row), the table's
   columns, nullable. pgmalli reads the functions, operators and implicit casts
   from a snapshot of `pg_catalog` (`resources/pgmalli-next/impl/catalog.edn`) of the PostgreSQL versions it
-  supports, as of the versions the registry's files were generated on (as for `pg_catalog`'s
+  supports, as of the version the registry was generated on (as for `pg_catalog`'s
   tables above): a call one of them resolves otherwise is untyped, and a function of PostgreSQL
   18 alone (`uuidv7`) is typed for a registry generated on 18. Of an argument whose type is not
   told, a call is typed where every overload of its number of arguments returns one type that is
   not polymorphic (`count`, `jsonb_build_object`). Read parsed, a function of `pg_catalog` that
   builds a `json` or `jsonb` object is a map, one that builds an array (`jsonb_agg`) a sequential.
-- A call of a function or an operator of a generated schema, from its file's `:functions` and
+- A call of a function or an operator of a generated schema, from the file's `:functions` and
   `:operators` ([types.md](types.md#the-generated-file)). pgmalli takes the search path to be
   `pg_catalog`, then `:schema`, as PostgreSQL puts `pg_catalog` first when the path does not
   name it ([5.9.6](https://www.postgresql.org/docs/current/ddl-schemas.html#DDL-SCHEMAS-CATALOG)):
@@ -455,7 +455,7 @@ a column of a domain is of the domain's base type. The
 catalog does not say when a function returns NULL, so a call is nullable, but `count`, a window
 function of no argument (`row_number`) and a comparison (an operator of a btree operator family,
 or its negator) of values that are not NULL. An argument of the application's own type
-(an extension's, a composite), a function of a schema the registry has no file of, and anything else is nullable
+(an extension's, a composite), a function of a schema not generated into the registry, and anything else is nullable
 `:any`:
 
 ```clojure
@@ -697,8 +697,7 @@ Write the query so PostgreSQL's reading is explicit instead.
 
 ## Not checked
 
-- A CHECK, a domain's CHECK, a partition's bounds, a length or a scale: the database checks them
-  ([types.md](types.md#names-in-the-registry)).
+- What [types.md](types.md#names-in-the-registry) leaves to the database: a CHECK and the like.
 - A search path other than `pg_catalog` and then `:schema` (one naming `pg_catalog` later, or
   several schemas): a call resolves as under that one. A cast the application defines
   (`CREATE CAST`), and an extension's type's category, are not read: a call whose argument is of

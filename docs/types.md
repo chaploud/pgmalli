@@ -194,8 +194,8 @@ An EXCLUDE is a table property, not a check: a row it would reject validates all
 and each EXCLUDE is listed in `:diagnostics`. A row a trigger would reject validates too; a
 row-level INSERT trigger is listed in `:diagnostics`.
 
-Not read: CHECK constraints, a domain's CHECKs, partition bounds, other indexes, policies and
-privileges.
+Not read: other indexes, policies and privileges, and what [above](#names-in-the-registry) leaves
+to the database.
 
 A generated column is left to the database.
 

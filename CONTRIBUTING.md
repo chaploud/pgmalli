@@ -171,7 +171,7 @@ without activity in the repository: `gh workflow enable upstream.yml` turns it b
   what did not go through as EDN; `bb sweep:report <out-dir>` groups it for reading.
 - `bb catalog` rewrites `resources/pgmalli-next/impl/catalog.edn`, the snapshot of `pg_catalog`
   that types a query's functions, operators and casts, from each PostgreSQL version CI runs.
-- `bb fixture` rewrites `test/resources/pgmalli-next/{sample,other}.edn`, which the tests read,
+- `bb fixture` rewrites `test/resources/pgmalli-next/{sample,other,both}.edn`, which the tests read,
   from `dev/fixture.clj`. Edit that file, not the EDN.
 
 ## Releases
@@ -180,15 +180,15 @@ A release is a pushed `vX.Y.Z` tag; the tag is the version. Choose it by semanti
 versioning: patch for fixes, minor for additions and, before 1.0, any change to the
 contract; what is breaking is the README's [Stability](README.md#stability) list.
 
-A fix can change what `generate` writes for some schemas, so that `check` finds their files
-stale until they are regenerated. Choose the version by
+A fix can change what `generate` writes for some schemas, so that `check` finds their file
+stale until it is regenerated. Choose the version by
 what upgrading then costs the users at the time, not by precedent: a patch while regenerating
 is a step nobody minds, a minor once it is work people plan for.
 
 1. On main, in one commit: add the version's section to CHANGELOG.md (`## X.Y.Z (date)`) and
    set the coordinate in README.md's Installation to the new version. The section is written
    then, of the changes since the last tag, in a few short bullets: what a user meets, what a
-   breaking one has them do, and whether the files need regenerating. Nothing is written
+   breaking one has them do, and whether the file needs regenerating. Nothing is written
    between releases.
 2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The release workflow checks that the tag is on main, runs `bb test:jvm` and builds the
