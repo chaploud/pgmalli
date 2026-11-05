@@ -497,7 +497,7 @@
 
 (defn- resolving-args
   "coalesce(?, col), CASE ... ELSE col and the like: PostgreSQL resolves an argument to the
-   others' type; nil is a value there."
+   others' type; nullif's as = reads it beside the other; nil is a value there."
   [registry ps opts]
   (for [{:keys [x chain]} (syntax/expression-nodes ps)
         :let [operands (query/resolving-operands x)
@@ -510,7 +510,7 @@
         :when (:schema r)
         o operands
         :when (slot? o)
-        :let [t (query/nullable (accepted-type registry (:schema r) :common opts))]]
+        :let [t (query/nullable (accepted-type registry (:schema r) (if (= "nullif" (syntax/called x)) :compare :common) opts))]]
     (if (syntax/param-key o)
       [o t]
       [(literal-key o {:column (first (filter syntax/column-keyword? typed)) :function (or (syntax/called x) "CASE") :context :compare :schema (:schema r)}) t])))
@@ -524,15 +524,17 @@
         opts (cond-> opts
                (some #(= "anyarray" (get (:args %) i)) os) (assoc ::jdbc/array-use :whole)
                ;; anycompatible: of the common type the argument takes part in deciding (array_append(int[], bigint))
-               (some #(str/starts-with? (str (get (:args %) i)) "anycompatible") os) (assoc ::common-type true))]
+               (some #(str/starts-with? (str (get (:args %) i)) "anycompatible") os) (assoc ::common-type true))
+        ;; anycompatible: what PostgreSQL resolves with the others to one type (array_append(int[], 1.5) is a double precision[])
+        held-in (if (::common-type opts) :common :call)]
     (cond (empty? ss) nil
           (next ss) (query/nullable
                      ;; beside others, a type pgmalli does not type (pg_lsn for +) takes a PGobject, not any value
                      (shape/either (shape/distinct-kinds
-                                    (classes-joined (for [s ss, x (shape/alternatives (accepted-type registry s :call opts))]
+                                    (classes-joined (for [s ss, x (shape/alternatives (accepted-type registry s held-in opts))]
                                                       (if (= :any (shape/head x)) jdbc/pg-object (unlabel x)))))
                                    :any))
-          :else (query/nullable (accepted-type registry (first ss) :call opts)))))
+          :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 
 (defn- refuses?
   "Whether argument schema t refuses literal v."

@@ -163,6 +163,17 @@
     (is (= ["\"x\" reaches an argument of uuid_send as a typed string, which its type uuid does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:cast \"x\" :uuid]"]
            (h/humanize (:problems (h/analyze reg {:select [[[:uuid_send "x"] :b]]} {:schema "public"})))))))
 
+(deftest an-anycompatible-argument-takes-what-resolves-with-the-others-and-nullifs-what-equals-takes
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:ints [:vector {:pg/type "integer[]"} :pg/integer]]
+                                                        [:iv [:any {:pg/type "interval"}]]]}})
+        x (fn [q] (:x (:args (h/analyze reg q))))]
+    (is (m/validate (x {:select [[[:array_append :ints :?x] :a]] :from [:t]}) 1.5 {:registry reg})
+        "array_append(int[], 1.5) resolves to double precision[]")
+    (is (= [] (:problems (h/analyze reg {:select [[[:array_append :ints 1.5] :a]] :from [:t]}))))
+    (is (m/validate (x {:select [[[:nullif :iv :?x] :n]] :from [:t]}) (java.time.LocalTime/of 1 0) {:registry reg})
+        "nullif(interval, time) is interval = time, which resolves")))
+
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))
