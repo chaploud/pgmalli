@@ -269,16 +269,8 @@
 
 (defn- raw-ident-name [[_ q n]] (if q (str/replace q "\"\"" "\"") (folded n)))
 
-(defn- raw-item-name
-  "The name PostgreSQL gives a FROM item written as raw SQL s: its alias (... AS e(value), (...)
-   v), else the function it calls (jsonb_array_elements(...)); nil where neither is read."
-  [s]
-  (some-> (or (re-find (re-pattern (str "(?is).*(?:\\bAS|\\))\\s+" raw-ident "\\s*(?:\\([^()]*\\))?\\s*$")) s)
-              (re-find (re-pattern (str "(?is)^\\s*(?:[A-Za-z_][A-Za-z0-9_$]*\\.)?" raw-ident "\\s*\\(")) s))
-          raw-ident-name))
-
 (defn unnamed-raw?
-  "Whether alias is that of a raw FROM item whose name is not read (raw-item-name): the columns
+  "Whether alias is that of a raw FROM item of SQL beyond a name, which is not read: the columns
    any name qualifies may be its."
   [alias]
   (and (string? alias) (str/starts-with? alias "(raw ")))
@@ -324,9 +316,9 @@
                      (and (vector? f) (keyword? (first f))) (last-part (first f))
                      :else "with_ordinality")
            nil])
-        ;; [[:raw "f(...) AS e(c)"]], written as it is
+        ;; [[:raw "f(...) AS e(c)"]], SQL beyond a name, which is not read: its name is not told
         (and (nil? b) (vector? a) (= :raw (first a)) (string? (second a)))
-        [nil (or (raw-item-name (second a)) (str "(raw " (hash a) ")")) nil]
+        [nil (str "(raw " (hash a) ")") nil]
         ;; [[:f args...]]: a table function, named after the function
         (and (nil? b) (vector? a) (keyword? (first a))) [nil (last-part (first a)) nil]
         ;; [subquery]: one with no alias

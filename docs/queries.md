@@ -699,6 +699,8 @@ Write the query so PostgreSQL's reading is explicit instead.
 
 - Values written in the query beyond NULL, enum literals and strings sent typed (`varchar`): an empty `[:in :id []]` is not reported (an argument in `:in` is
   typed non-empty).
+- A raw FROM item of SQL beyond a name (`[[:raw "jsonb_array_elements(doc) AS e(v)"]]`) is not
+  read: its name and columns are not told, and a column any qualifier names may be its.
 - An ON clause naming a table joined after it in its own join list, or an UPDATE's FROM joining
   on the target table (invalid reference to FROM-clause entry), which PostgreSQL rejects. (An ON
   inside a parenthesized join naming a table outside it is an `:unknown-column` with
