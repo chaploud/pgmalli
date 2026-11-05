@@ -149,7 +149,11 @@
                                                                         :else (when-not (syntax/comparison? x) (syntax/call-parts x)))]
                                               :when kind
                                               a args
-                                              :when (syntax/column-keyword? a format)]
+                                              ;; ROLLUP's, CUBE's and GROUPING SETS' items are GROUP BY's: an output column too
+                                              :when (and (syntax/column-keyword? a format)
+                                                         (not (and (= :group-by clause) (vector? x) (#{:rollup :cube :grouping-sets} (first x))
+                                                                   (output-column? stmt a format)
+                                                                   (empty? (query/column-hits registry chain a)))))]
                                           [a chain])
                                         ;; a keyword assigned in SET is a column the statement sees
                                         (for [{:keys [x chain clause]} (syntax/assignments ps)
@@ -164,7 +168,10 @@
                   (nil? (query/resolve-column registry scope col)))
           :let [hits (query/column-hits registry scope col)]]
       (if (< 1 (count hits))
-        {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)}
+        (if (apply = (map first hits))
+          ;; one subquery's or CTE's columns of that name
+          {:kind :ambiguous-column :column col :candidates [(ffirst hits)]}
+          {:kind :ambiguous-column :column col :candidates (mapv (fn [[alias table]] (or table alias)) hits)})
         (let [[qualifier meant] (unknown-qualifier registry scope col)
               ;; a table of the statement an ON inside a parenthesized join does not see
               outside? (and qualifier (contains? (first sc) qualifier) (not (contains? (first scope) qualifier)))

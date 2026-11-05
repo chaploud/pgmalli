@@ -285,7 +285,9 @@
                                     meant meant
                                     (not qualifier) "; no table of the statement has it")))))
    :ambiguous-column (fn [{:keys [column candidates]}]
-                       (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias"))
+                       (if (next candidates)
+                         (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias")
+                         (str "column " (column-name column) " names several columns of " (first candidates) "; give them names apart there ([expr alias])")))
    :duplicate-column (fn [{:keys [column items]}]
                        (let [label (name column)
                              x (last items)

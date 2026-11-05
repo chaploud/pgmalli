@@ -419,14 +419,18 @@
 (defn- own-hits
   "[[alias table opaque? nullable? types elements] ...] of the tables of one scope a column may belong to."
   [registry scope col]
-  (let [[alias column] (syntax/split-column col (::format registry))]
+  (let [[alias column] (syntax/split-column col (::format registry))
+        ;; a subquery's or a CTE's columns of one name are as many hits: PostgreSQL finds it ambiguous
+        each (fn [a {:keys [table opaque? nullable? types elements order]}]
+               (for [i (range (max 1 (count (filter #{column} order))))] [a table opaque? nullable? types elements i]))]
     (if alias
-      (when-let [{:keys [table opaque? nullable? types elements] :as entry} (get scope alias)]
-        (when (has-column? registry entry column) [[alias table opaque? nullable? types elements]]))
+      (when-let [entry (get scope alias)]
+        (when (has-column? registry entry column) (vec (each alias entry))))
       ;; an unqualified column is never EXCLUDED's: that row is only reached through its name
-      (distinct (for [[a {:keys [table opaque? qualifier-only? nullable? types elements] :as entry}] scope
-                      :when (and (not qualifier-only?) (has-column? registry entry column))]
-                  [a table opaque? nullable? types elements])))))
+      (distinct (for [[a {:keys [qualifier-only?] :as entry}] scope
+                      :when (and (not qualifier-only?) (has-column? registry entry column))
+                      hit (each a entry)]
+                  hit)))))
 
 (defn column-hits
   "The hits of the innermost scope (a map, or the chain of a statement and its enclosing
@@ -465,6 +469,8 @@
              :schema (get cs column)
              :nullable? (boolean nullable?) :opaque? (boolean opaque?)
              :element (get elements column)})
+          ;; one table's columns of that name: ambiguous, whatever is opaque
+          (some #(pos? (nth % 6 0)) hits) nil
           (and opaque (>= 1 (count (remove #(nth % 2) hits))))
           (let [[alias table] opaque] {:table (or table alias) :column column :schema nil :nullable? true :opaque? true}))))
 

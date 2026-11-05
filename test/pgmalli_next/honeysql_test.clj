@@ -2878,6 +2878,12 @@
   (is (= [:nope] (map :column (check {:select-distinct-on [[:id :nope] :nick] :from [:users]}))) "DISTINCT ON's expressions are no [expr alias]")
   (is (= [:nik] (map :column (check {:select [:id] :from [:users] :group-by [[:upper :nik]]}))) "a call in GROUP BY is checked")
   (is (= [:nik] (map :column (check {:select [[[:cast :nik :text] :x]] :from [:users]}))) "a column cast is checked, the type's name no column")
+  (is (= [] (check {:select [[1 :x]] :group-by [[:rollup :x]]})) "ROLLUP's item may be an output column, as GROUP BY's")
+  (is (= [:y] (map :column (check {:select [[1 :x]] :group-by [[:rollup :y]]}))))
+  (is (= [] (check {:select [[:%count.id :n]] :from [:users] :group-by [:%lower.nick]})) "a call's shorthand in GROUP BY")
+  (let [ps (check {:with [[:s {:select [:u.id :g.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}]] :select [:s.id] :from [:s]})]
+    (is (= [{:kind :ambiguous-column :column :s.id :candidates ["s"]}] ps) "column reference id is ambiguous")
+    (is (= ["column s.id names several columns of s; give them names apart there ([expr alias])"] (h/humanize ps))))
   (let [q {:select [:id] :from [:users] :where [:in :id {:nest {:select [:nope] :from [:users]}}]}]
     (is (= {:select [:nope] :from [:users]} (get-in q (:in (first (check q))))) ":in reaches the statement through :nest")))
 

@@ -1380,5 +1380,7 @@
  [:r14c-prio-cast {:select [:id], :from [:app.orders], :where [:or [:= :prio :?p] [:= :prio [:cast :?p :app.prio]]]}]
  [:r14c-numeric-three {:select [:id], :from [:nums], :where [:and [:>= :n :?amt] [:<= :d :?amt] [:<> :r :?amt]]}]
  [:r14c-bytes-raw-cast {:select [:id], :from [:kinds], :where [:or [:= :raw :?b] [:= [:cast :raw :text] :?b]]}]
- [:r14c-time-cast-text {:select [:id], :from [:kinds], :where [:or [:= :at :?t] [:= :at [:cast :?t :time]]]}]
+ [:r14c-time-cast-text {:select [:id], :from [:kinds], :where [:or [:= :at :?t] [:= :at [:cast :?t :time]]]}] ;; GROUP BY ROLLUP of an output column; a CTE's columns of one name
+ [:rollup-output-column {:select [[[:date_trunc "month" :created_at] :m] [[:count :*] :n]] :from [:posts] :group-by [[:rollup :m]]}]
+ [:cte-columns-of-one-name {:with [[:s {:select [:u.id :g.id] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}]] :select [:s.id] :from [:s]}]
 ]
