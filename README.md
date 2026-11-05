@@ -269,16 +269,23 @@ and writes (`:tables`) and the columns it uses of a `jsonb_populate_record` docu
 ;; => {:args {:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}, :row [:map [:email [:string {:max 120, :pg/max-length 120, :pg/type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
 ```
 
-`:problems` also reports a few queries that PostgreSQL runs but that can match no row
-([docs/queries.md](docs/queries.md#stricter-than-postgresql)):
+`:problems` reports what PostgreSQL would refuse, an enum's value outside its labels too:
 
 ```clojure
-
 (:problems (h/analyze registry {:select [:id :email] :from [:users] :where [:= :status [:cast "active" :user_status]]}))
 ;; => []
 
 (:problems (h/analyze registry {:select [:id :mail] :from [:users] :where [:= :status [:cast "gone" :user_status]]}))
 ;; => [{:kind :unknown-column, :column :mail, :did-you-mean [:email]} {:kind :enum-literal, :column :status, :value "gone", :allowed ["active" "closed"]}]
+```
+
+It also reports a few queries that PostgreSQL runs but that can match no row
+([docs/queries.md](docs/queries.md#stricter-than-postgresql)), such as a value outside a
+CHECK's list:
+
+```clojure
+(:problems (h/analyze registry {:select [:id] :from [:events] :where [:= :schema_version 3]}))
+;; => [{:kind :enum-literal, :column :schema_version, :value 3, :allowed [1 2]}]
 ```
 
 HoneySQL sends a string as a parameter, and pgjdbc sends it as `varchar`, which no enum column
