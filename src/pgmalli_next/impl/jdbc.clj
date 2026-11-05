@@ -253,12 +253,12 @@
   (let [k (shape/kind a)] (if (pgtypes/int-ranges k) :int k)))
 
 (defn array-pg-object
-  "pg-object of array type a, compared as a whole or under = ANY(?) (use :whole or :compare),
-   where no Java array goes as a."
+  "pg-object of array type a, compared as a whole or under = ANY(?) (use :whole or :compare), or
+   going where a value of it does, where no Java array goes as a."
   [a use]
   (shape/merge-props pg-object
                      {:error/message (str "should be a PGobject of type " a " (no Java array goes as " a ", which "
-                                          (if (= :whole use) "a comparison of arrays" "= ANY(?)")
+                                          (case use :whole "a comparison of arrays" :compare "= ANY(?)" "it")
                                           " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
                       :pgmalli/describe (str "PGobject of " a)}))
 
@@ -327,7 +327,8 @@
     (cond (seq alts) (shape/either (cond-> alts (some #{pg-object} (shape/alternatives (shape/non-null t))) (concat [pg-object])) :any)
           ;; no Java array of the type (text[]'s, String[] going as varchar[]; an enum's): a PGobject
           ;; of it, which PostgreSQL takes as the array a comparison infers, its elements t's
-          (and p (#{:whole :compare} use))
+          ;; an enum's array has no Java array wherever it goes: assigned too
+          (and p (or (#{:whole :compare} use) (= :enum (shape/kind (shape/non-null t)))))
           (shape/merge-props (array-pg-object (types/short-name (types/array-of (or elem p))) use)
                              {:pgmalli/element (shape/non-null t)})
           :else :any)))

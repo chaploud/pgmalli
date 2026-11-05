@@ -9,11 +9,6 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
 
 ## Accepted where PostgreSQL refuses
 
-- **An argument assigned to an enum array column takes any value.** `{:update :t :set {:moods :?x}}`
-  with `moods mood[]`: the argument is `[:any {:pgmalli/untyped :type}]`, so a `String[]` passes;
-  PostgreSQL refuses `character varying[]` there. `jdbc/array-type` finds no Java array sent as
-  `mood[]` and leaves the argument untyped. Type it as a `PGobject` of `mood[]`, as a comparison
-  already does.
 - **`'x' = ANY(c)` with `c` an array of a domain over an enum.** PostgreSQL has no `=` for it, as
   for the domain itself (`:no-operator`), but `problems/operator-problems` reads the comparison's
   sides alone, not ANY's elements.

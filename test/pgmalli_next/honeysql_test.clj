@@ -1899,12 +1899,13 @@
   (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:not [:is-distinct-from :id :?v]]]}))
       "nil where both take it"))
 
-(deftest an-enum-arrays-argument-is-an-array-of-the-enum-alone
+(deftest an-enum-arrays-argument-assigned-is-a-pgobject-of-the-enum-array-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/feel [:enum "a" "b"]
                                           :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
                                                         [:fs [:maybe [:vector {:pg/type "feel[]"} [:ref :pg.public/feel]]]]]}})
         t (:v (:args (h/analyze reg {:update :t :set {:fs :?v} :where [:= :id 1]})))]
-    (is (= [:any {:pgmalli/untyped :type}] t) "no Java array goes as feel[]: a String[] goes as varchar[], which feel[] does not take, a vector as jsonb")))
+    (is (not (m/validate t (into-array String ["a"]) {:registry reg})) "a String[] goes as varchar[], which feel[] does not take")
+    (is (re-find #"PGobject of type feel\[\]" (pr-str t)))))
 
 (deftest a-written-row-takes-no-vector-honeysql-would-write-as-a-row
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
