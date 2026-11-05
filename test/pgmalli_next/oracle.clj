@@ -307,14 +307,25 @@
    a CTE or a view's alias."
   #{})
 
+(defn- result-labels
+  "The labels of the columns of sqlvec's result set, in order; nil without one."
+  [^java.sql.Connection conn sqlvec]
+  (try (with-open [ps (jdbc/prepare conn sqlvec)]
+         (when (.execute ps)
+           (with-open [rs (.getResultSet ps)]
+             (let [md (.getMetaData rs)] (mapv #(.getColumnLabel md (int %)) (range 1 (inc (.getColumnCount md))))))))
+       (finally (.rollback conn))))
+
 (defn- by-design?
   "Whether check reports problem p by design (docs/queries.md \"Stricter than PostgreSQL\"): a
    comparison of a column with a literal outside the list its enum or CHECK allows, false on
    every row, which the CHECK guarantees (the statement may still return rows through OR or
    CASE); NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails
-   once a row is touched or conflicts. listed: listed of the schema; the column is one of a relation query names."
-  [listed id query p]
+   once a row is touched or conflicts; a label the result set's columns (labels, a delay) have
+   more than once. listed: listed of the schema; the column is one of a relation query names."
+  [listed id query labels p]
   (case (:kind p)
+    :duplicate-column (< 1 (count (filter #{(name (:column p))} @labels)))
     :enum-literal (or (enum-literal-by-design id)
                       (let [c (:column p)
                             named (set (map name (filter keyword? (tree-seq coll? seq query))))]
@@ -605,7 +616,7 @@
                               {described :mismatches typed :typed} (when result (column-mismatches registry conn doms query opts sqlvec))
                               r (merge c (dissoc v :result)
                                        {:return-rejections returned :column-mismatches described :columns-typed typed :format mode :sql (first sqlvec) :params (vec (rest sqlvec))
-                                        :problems problems :outcome (outcome v problems #(by-design? listed (or base id) query %))})]
+                                        :problems problems :outcome (outcome v problems (partial by-design? listed (or base id) query (delay (result-labels conn sqlvec))))})]
                           (vreset! before {:sqlvec sqlvec :verdict v :result r})
                           r))))))))))
 

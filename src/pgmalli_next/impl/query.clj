@@ -14,7 +14,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare beyond-list derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-schema* type-call)
+(declare beyond-list derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-entries type-call)
 
 (defn- versions
   "The versions of the catalog snapshot the registry's generated files are of: each file's
@@ -1002,17 +1002,21 @@
   [registry s opts]
   (cond (nil? s) :any (::columns opts) (shape/non-null s) :else (driver-schema registry jdbc/column-read-type s opts)))
 
+(defn- regrouped?
+  "Whether stmt's GROUP BY has ROLLUP, CUBE or GROUPING SETS, which add groups whose grouped
+   columns are NULL; :raw there may be one."
+  [stmt]
+  (boolean (some #(and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))) (syntax/vectorish (:group-by stmt)))))
+
 (defn- select-row
-  "The row a SELECT returns."
+  "The entries of the row a SELECT returns, in order, a label selected twice twice, each with
+   ::item, the index of the select item that makes it."
   [registry stmt chain opts]
   (let [sc (first chain)
-        ;; ROLLUP, CUBE and GROUPING SETS add rows whose grouped columns are NULL; :raw there
-        ;; may be one
-        regrouped? (some #(and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %)))
-                         (syntax/vectorish (:group-by stmt)))
+        regrouped (regrouped? stmt)
         entry (fn [column schema nullable? props]
                 (jdbc/row-entry (jdbc/row-key column) props (output-type registry schema opts)
-                                (or nullable? regrouped? (nil? schema) (shape/maybe? schema))))
+                                (or nullable? regrouped (nil? schema) (shape/maybe? schema))))
         merges (using-merges registry stmt sc opts)
         merged (fn [label {:keys [nullable?] s :schema}] [(entry label s nullable? nil)])
         ;; [[column entry] ...] of a table, or of a typed subquery or CTE, in order
@@ -1050,10 +1054,7 @@
                               (merged label m)
                               [(entry label schema nullable? nil)])))))]
     (when (and (seq items) (every? some? items) (not-any? :unknown? (vals sc)))
-      ;; a name selected twice is one key, the driver keeping the last column's value
-      (let [entries (apply concat items)
-            last-of (into {} (map (juxt first identity)) entries)]
-        (into [:map] (map last-of) (distinct (map first entries)))))))
+      (vec (apply concat (map-indexed (fn [i es] (map #(vary-meta % assoc ::item i) es)) items))))))
 
 (defn- unknown-columns
   "{position literal?} of the columns of SELECT stmt that are NULL or a literal of no type
@@ -1070,11 +1071,11 @@
 
 (defn- set-operation-row [registry members path chains opts]
   (when (and (vector? members) (seq members) (every? map? members))
-    (let [rows (map-indexed (fn [i m] (row-schema* registry m (conj path i) chains opts)) members)
+    (let [rows (map-indexed (fn [i m] (row-entries registry m (conj path i) chains opts)) members)
           unknown (map-indexed (fn [i m] (unknown-columns registry m (get chains (conj path i)) opts)) members)]
       (when (and (every? some? rows) (apply = (map count rows)))
-        (into [:map]
-              (for [[j entries] (map-indexed vector (apply map vector (map rest rows)))
+        (vec
+              (for [[j entries] (map-indexed vector (apply map vector rows))
                     :let [schemas (map last entries)
                           ;; PostgreSQL resolves a UNION b UNION c as (a UNION b) UNION c
                           ts (map (fn [s u] (if (contains? u j) :unknown (resolver-type registry (shape/non-null s)))) schemas unknown)
@@ -1085,7 +1086,8 @@
                           inners (distinct (map (cond->> shape/non-null literal? (comp (partial computed registry) shape/non-null))
                                                 (or (seq known) schemas)))]]
                 ;; PostgreSQL resolves each column's type as CASE's
-                (jdbc/row-entry (ffirst entries)
+                (with-meta
+                 (jdbc/row-entry (ffirst entries)
                                 (cond (not united?) :any
                                       ;; with an untyped member, a domain resolves to its base type, as CASE's does
                                       (= 1 (count inners)) (let [[s] inners
@@ -1099,14 +1101,15 @@
                                       ;; the members' schemas are as the driver reads them: one of them, or untold
                                       :else (let [r (:schema (common registry (for [s inners] {:schema s :type (resolver-type registry s)})))]
                                               (if (and r (some #(= r (computed registry %)) inners)) r :any)))
-                                (some shape/maybe? schemas))))))))
+                                (some shape/maybe? schemas))
+                 (meta (first entries)))))))))
 
 (defn- values-row
-  "The row of a VALUES list of rows (vectors): column1, column2 ... each of its values' common
-   type, as PostgreSQL resolves a VALUES column."
+  "The entries of the row of a VALUES list of rows (vectors): column1, column2 ... each of its
+   values' common type, as PostgreSQL resolves a VALUES column."
   [registry rows chain opts]
   (when (and (seq rows) (every? vector? rows) (apply = (map count rows)))
-    (into [:map]
+    (vec
           (for [[i xs] (map-indexed vector (apply map vector rows))
                 :let [ts (map #(expression-type registry chain % opts) xs)
                       s (:schema (common registry ts))]]
@@ -1114,22 +1117,31 @@
                             (output-type registry s opts)
                             (or (nil? s) (boolean (some :nullable? ts))))))))
 
-(defn- row-schema*
-  "row-schema of the statement at path in a query, chains its statements' scope chains by path
-   (statement-chains), which alone say which tables and CTEs a statement sees."
+(defn- returning
+  "stmt with the items of the row it returns alone: a write's RETURNING, not the SELECT an
+   INSERT writes ({:insert-into :t :columns [...] :select [...] :returning [...]})."
+  [stmt]
+  (cond-> stmt
+    (some #(contains? stmt %) syntax/write-keys) (dissoc :select :select-distinct :select-distinct-on :select-top :select-distinct-top)))
+
+(defn- row-entries
+  "The entries of the row of the statement at path in a query, in order, a label twice where its
+   columns have it twice; chains its statements' scope chains by path (statement-chains), which
+   alone say which tables and CTEs a statement sees. A SELECT's entry, and a set operation's of
+   its first member's, has ::in, the path of the SELECT, and ::item, the index of its item."
   [registry stmt path chains opts]
   (if-let [k (some #(when (contains? stmt %) %) syntax/set-operation-keys)]
     (set-operation-row registry (get stmt k) (conj path k) chains opts)
     (if (and (= #{:values} (set (keys stmt))) (vector? (:values stmt)))
       (values-row registry (:values stmt) (get chains path) opts)
-      (select-row registry stmt (get chains path) opts))))
+      (some->> (select-row registry (returning stmt) (get chains path) opts) (mapv #(vary-meta % assoc ::in path))))))
 
 (defn- derived-types*
   [registry stmt opts outer]
   (let [opts (-> opts (dissoc :jdbc) (assoc ::columns true))
         chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt opts outer))]
-    (when-let [row (row-schema* registry stmt [] chains opts)]
-      (vec (for [[k _ s] (map shape/entry-parts (shape/entries row))]
+    (when-let [entries (row-entries registry stmt [] chains opts)]
+      (vec (for [[k _ s] (map shape/entry-parts entries)]
              [(name k) (when-not (= :any s) s)])))))
 
 (defn- derived-types
@@ -1146,6 +1158,9 @@
        (do (swap! memo assoc k nil)
            (let [v (derived-types* registry stmt opts outer)] (swap! memo assoc k v) v))))))
 
+(defn- returned-entries [registry body opts]
+  (row-entries registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts))
+
 (defn row-schema
   "The [:map ...] of one row a query returns, as next.jdbc's as-unqualified-maps builds it (for a write with no
    RETURNING, its update count); nil when that cannot be told, as
@@ -1155,14 +1170,30 @@
   [registry body opts]
   (when (map? body)
     (if-let [body (sent body opts)]
-      (row-schema* registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts)
+      ;; a label twice is one key, as-unqualified-maps keeping the last column's value
+      (when-let [entries (once registry returned-entries body opts)]
+        (let [last-of (into {} (map (juxt first identity)) entries)]
+          (into [:map] (map last-of) (distinct (map first entries)))))
       update-count)))
+
+(defn duplicate-columns
+  "{:kind :duplicate-column :column k :items [item ...]} for each key k of the row a query
+   returns that more than one of its columns have: the select items making them, with :in, the
+   path of their statement, when nested (a set operation's first member)."
+  [registry body opts]
+  (when-let [body (and (map? body) (sent body opts))]
+    (for [[k es] (group-by first (once registry returned-entries body opts))
+          :when (next es)
+          :let [{path ::in} (meta (first es))
+                items (vec (syntax/selected-items (returning (get-in body path))))]]
+      (cond-> {:kind :duplicate-column :column k :items (mapv items (distinct (map (comp ::item meta) es)))}
+        (seq path) (assoc :in path)))))
 
 (def ^:private row-count-keys
   "The clauses row-count reads, and those that change no count."
-  (into #{:select :select-distinct :from :where :group-by :having :order-by :limit :offset :with :returning
+  (into #{:select :select-distinct :from :where :group-by :having :order-by :limit :offset :fetch :with :returning
           :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :for :join-by}
-        syntax/join-keys))
+        (concat syntax/join-keys syntax/set-operation-keys)))
 
 (defn- plain-value?
   "Whether x yields one value per row: a column, a constant, DEFAULT, a subquery, EXISTS, a
@@ -1214,36 +1245,62 @@
                       (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props)))]
     (boolean (and (not (:pg/inherited props)) (some #(every? equal %) key-columns)))))
 
+(defn- set-operation-count
+  "{:min n :max m} of the rows of set operation k (:union ...) of members of counts (row-count's,
+   nil where it tells none), nil where it cannot tell: UNION ALL adds them up, UNION gives at
+   most as many (and a row where a member gives one), INTERSECT at most the fewest, EXCEPT at
+   most the first's."
+  [k counts]
+  (let [mins (map #(:min % 0) counts)
+        maxes (keep :max counts)
+        all? (= (count maxes) (count counts))]
+    (case k
+      :union-all (when all? {:min (reduce + mins) :max (reduce + maxes)})
+      :union (when all? {:min (if (some pos? mins) 1 0) :max (reduce + maxes)})
+      :intersect (when (seq maxes) {:min 0 :max (apply min maxes)})
+      (:except :except-all) (some->> (:max (first counts)) (hash-map :min 0 :max)))))
+
 (defn row-count
   "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
-   any part may be a function that returns a set (plain-value?), it tells nothing. One of a SELECT
-   with an aggregate of its level and no GROUP BY, at most one with HAVING; at most one of a SELECT,
-   UPDATE or DELETE of one row (unique-row?), and of a SELECT without FROM; up to as many as
-   :values has rows of an INSERT returning (a trigger, a rule or ON CONFLICT may skip one); at most
-   :limit, from none where a parameter gives the limit or OFFSET skips some."
+   any part may be a function that returns a set (plain-value?), or GROUP BY has ROLLUP, CUBE or
+   GROUPING SETS, it tells nothing but a limit. One of a SELECT with an aggregate of its level and
+   no GROUP BY, at most one with HAVING; at most one of a SELECT, UPDATE or DELETE of one row
+   (unique-row?), and of a SELECT without FROM (one group of its one row under GROUP BY); as many
+   as a VALUES list has rows, up to as many of an INSERT returning (a trigger, a rule or ON
+   CONFLICT may skip one); of a set operation, as set-operation-count counts its members'; at most
+   :limit or :fetch, from none where a parameter gives the limit or OFFSET skips some."
   [registry stmt opts]
-  ;; a clause this does not read (:fetch, a set operation ...) may change the count
+  ;; a clause this does not read may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)))
     (let [write? (some #(contains? stmt %) syntax/write-keys)
+          op (some #(when (contains? stmt %) %) syntax/set-operation-keys)
+          members (get stmt op)
           items (map syntax/bare (syntax/selected-items stmt))
           order (map syntax/bare (syntax/vectorish (:order-by stmt)))
-          rows (when (and (:insert-into stmt) (vector? (:values stmt)) (not (:select (syntax/insert-parts stmt)))) (:values stmt))
-          plain? (every? #(plain-value? registry opts %) (concat items order (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
+          ;; a GROUP BY's items are expressions: generate_series there repeats the groups
+          groups (syntax/vectorish (:group-by stmt))
+          rows (when (and (vector? (:values stmt)) (not (:select (syntax/insert-parts stmt)))) (:values stmt))
+          plain? (every? #(plain-value? registry opts %) (concat items order groups (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
           unique? (unique-row? registry stmt (if write? (syntax/write-targets stmt) (syntax/table-items stmt)) opts)
-          limit (let [n (:limit stmt)] (when (and (integer? n) (<= 0 n)) n))
+          bound #(let [n (get stmt %)] (when (and (integer? n) (<= 0 n)) n))
+          limit (some->> (seq (keep bound [:limit :fetch])) (apply min))
           ;; a limit only a parameter tells may be 0
-          unbounded-limit? (and (contains? stmt :limit) (not limit))
+          unbounded-limit? (some #(and (contains? stmt %) (not (bound %))) [:limit :fetch])
           ;; HoneySQL writes no HAVING of []
           having? (and (contains? stmt :having) (not= [] (:having stmt)))
           ;; one group without GROUP BY: an aggregate of its level or HAVING makes it, which HAVING may drop
           grouped? (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not (contains? stmt :group-by))
                         (or having? (some #(aggregated? registry opts %) (concat items order))))
-          ;; SELECT without FROM: one row, none where WHERE is false
-          fromless? (and (:select stmt) (seq items) (not-any? #(contains? stmt %) (concat [:from :group-by :having] syntax/join-keys)))
+          ;; SELECT without FROM: one row, none where WHERE or HAVING is false
+          fromless? (and (or (:select stmt) (:select-distinct stmt)) (seq items) (not-any? #(contains? stmt %) (cons :from syntax/join-keys)))
           counted (cond (not plain?) nil
+                        (regrouped? stmt) nil
+                        op (let [cs (when (and (vector? members) (seq members)) (map #(row-count registry % opts) members))]
+                             (when (seq cs) (set-operation-count op cs)))
                         grouped? {:min (if having? 0 1) :max 1}
-                        fromless? {:min (if (contains? stmt :where) 0 1) :max 1}
-                        (and rows (:returning stmt)) {:min 0 :max (count rows)}
+                        fromless? {:min (if (or (contains? stmt :where) having?) 0 1) :max 1}
+                        (and rows (not write?) (every? vector? rows)) {:min (count rows) :max (count rows)}
+                        (and rows (:insert-into stmt) (:returning stmt)) {:min 0 :max (count rows)}
                         (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items)) {:min 0 :max 1})
           m (cond-> counted
               limit (update :max #(min (or % limit) limit))

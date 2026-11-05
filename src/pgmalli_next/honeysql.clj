@@ -286,6 +286,18 @@
                                     (not qualifier) "; no table of the statement has it")))))
    :ambiguous-column (fn [{:keys [column candidates]}]
                        (str "column " (column-name column) " is in " (str/join " and " candidates) "; qualify it with the table's alias"))
+   :duplicate-column (fn [{:keys [column items]}]
+                       (let [label (name column)
+                             x (last items)
+                             star? (and (keyword? x) (str/ends-with? (name x) "*"))
+                             alias (when-not star?
+                                     (let [a (if (syntax/column-keyword? x) (str/replace (name x) "." "_") label)]
+                                       (keyword (cond (not= a label) a (re-matches #"[a-z_][a-z0-9_]*" a) (str a "_2") :else "column_2"))))]
+                         (str (str/join " and " (map pr-str items)) (if (next items) " make" " makes") " several columns labelled " label
+                              "; next.jdbc's as-unqualified-maps reads them into one key " column ", keeping the last one's value; "
+                              (if star?
+                                (str "list the columns of " x " instead, giving one an alias of its own")
+                                (str "give one an alias of its own: " (pr-str [(if (keyword? x) x (first x)) alias]))))))
    :missing-required-column (fn [{:keys [table column]}]
                               (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"))
    :values-arity (fn [{:keys [row columns values]}]
