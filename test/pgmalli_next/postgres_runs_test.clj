@@ -470,3 +470,13 @@
                                       {:builder-fn rs/as-unqualified-maps}))
                 (str zone ": the values PostgreSQL holds"))))
         (finally (java.util.TimeZone/setDefault saved))))))
+
+(deftest infinity-reads-as-the-java-time-types-max-and-min
+  (when *db*
+    (with-open [c (jdbc/get-connection (datasource *db*))]
+      (is (= {:ts java.time.LocalDateTime/MAX :tz java.time.Instant/MAX :d java.time.LocalDate/MAX
+              :nts java.time.LocalDateTime/MIN :ntz java.time.Instant/MIN :nd java.time.LocalDate/MIN}
+             (jdbc/execute-one! c ["SELECT 'infinity'::timestamp AS ts, 'infinity'::timestamptz AS tz, 'infinity'::date AS d,
+                                           '-infinity'::timestamp AS nts, '-infinity'::timestamptz AS ntz, '-infinity'::date AS nd"]
+                                {:builder-fn rs/as-unqualified-maps}))
+          "pgjdbc's time for infinity would read as a time in the year 292278994 of the JVM's zone"))))

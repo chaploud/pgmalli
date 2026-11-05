@@ -44,7 +44,7 @@
    (some-> (array-of java.util.UUID) (vector "uuid[]"))
    ;; java.sql's arrays (babashka has not all of these classes)
    (some-> (named "java.sql.Date") array-of (vector "date[]"))
-   (some-> (named "java.sql.Time") array-of (vector "time with time zone[]"))
+   ;; (a java.sql.Time[] goes as a timetz[] of the JVM's offset, which changes with the JVM's time zone)
    (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))
    ;; as an OffsetDateTime in UTC, which pgjdbc sends as a timestamptz: an Instant pgjdbc refuses alone
    [java.time.Instant "timestamp with time zone" :time/instant]

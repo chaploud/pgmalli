@@ -42,7 +42,8 @@ before reading rows or sending arguments (it extends next.jdbc's protocols for t
          '[next.jdbc.prepare :as prepare]
          '[next.jdbc.result-set :as rs])
 (import '(java.sql PreparedStatement ResultSetMetaData Types)
-        '(java.time Instant OffsetDateTime ZoneOffset)
+        '(java.time Instant LocalDate LocalDateTime OffsetDateTime ZoneOffset)
+        '(org.postgresql PGStatement)
         '(org.postgresql.util PGobject))
 
 ;;; reading
@@ -72,16 +73,27 @@ before reading rows or sending arguments (it extends next.jdbc's protocols for t
 
 (defn- read-timestamp [^java.sql.Timestamp v ^ResultSetMetaData rsmeta i]
   ;; pgjdbc returns a timestamp and a timestamptz alike: a timestamptz's instant, a timestamp's
-  ;; date and time taken in the JVM's time zone, which toLocalDateTime gives back
-  (if (contains? #{"timestamp" "_timestamp"} (.getColumnTypeName rsmeta i)) (.toLocalDateTime v) (.toInstant v)))
+  ;; date and time taken in the JVM's time zone, which toLocalDateTime gives back; infinity as
+  ;; a time of its own, which pgjdbc's java.time reading reads as MAX (-infinity MIN)
+  (let [local? (contains? #{"timestamp" "_timestamp"} (.getColumnTypeName rsmeta i))]
+    (condp = (.getTime v)
+      PGStatement/DATE_POSITIVE_INFINITY (if local? LocalDateTime/MAX Instant/MAX)
+      PGStatement/DATE_NEGATIVE_INFINITY (if local? LocalDateTime/MIN Instant/MIN)
+      (if local? (.toLocalDateTime v) (.toInstant v)))))
+
+(defn- read-date [^java.sql.Date v]
+  (condp = (.getTime v)
+    PGStatement/DATE_POSITIVE_INFINITY LocalDate/MAX
+    PGStatement/DATE_NEGATIVE_INFINITY LocalDate/MIN
+    (.toLocalDate v)))
 
 (extend-protocol rs/ReadableColumn
   java.sql.Timestamp
   (read-column-by-label [v _] v)
   (read-column-by-index [v rsmeta i] (read-timestamp v rsmeta i))
   java.sql.Date
-  (read-column-by-label [v _] (.toLocalDate v))
-  (read-column-by-index [v _ _] (.toLocalDate v))
+  (read-column-by-label [v _] (read-date v))
+  (read-column-by-index [v _ _] (read-date v))
   java.sql.Time
   (read-column-by-label [v _] v)
   (read-column-by-index [v rsmeta i] (read-time v rsmeta i))
@@ -120,9 +132,9 @@ What each type comes back as:
 
 | type | value |
 |---|---|
-| `timestamp` | `java.time.LocalDateTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Timestamp`) |
-| `timestamptz` | `java.time.Instant` (read by index too) |
-| `date` | `java.time.LocalDate` |
+| `timestamp` | `java.time.LocalDateTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Timestamp`); `infinity` `LocalDateTime/MAX`, `-infinity` `MIN` |
+| `timestamptz` | `java.time.Instant` (read by index too); `infinity` `Instant/MAX`, `-infinity` `MIN` |
+| `date` | `java.time.LocalDate`; `infinity` `LocalDate/MAX`, `-infinity` `MIN` |
 | `time` | `java.time.LocalTime` (read by index, as next.jdbc's builders read a row; `plan`'s reads by label leave the `java.sql.Time`) |
 | `timetz` | `java.sql.Time` (`inst?`), as pgjdbc returns it: pgjdbc takes the offset off, and the extension cannot put it back |
 | an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions). pgjdbc cannot read the elements of a `money[]` or a `bit(n)[]` (n > 1): reading one throws; select it cast to `text[]` |
@@ -143,6 +155,20 @@ written. An override that types a JSON number takes what a JSON parser returns: 
             {:registry registry})
 ;; => true
 ```
+
+### The session's time zone
+
+pgjdbc sets the session's time zone to the JVM's when it connects; a URL's `options=-c
+TimeZone=UTC` does not change it, as pgjdbc's own setting comes after. A date and time sent and
+read as above is the same whatever that zone is, but SQL that converts between a `timestamptz`
+and a `timestamp` or a `date` converts in it (`created_at::date`, `date_trunc('day',
+created_at)`, a `timestamptz` compared with a `date`), so where days begin follows the JVM's
+zone. Fix it where your application connects, in one of two ways: run the JVM with
+`-Duser.timezone=UTC`, or run `SET TIME ZONE 'UTC'` once connected (a connection pool's
+initialization SQL). A `timestamp`'s date and time the JVM's zone skips (02:30 on a day
+`America/New_York` moves its clocks forward) reads an hour later: pgjdbc gives the extension a
+`java.sql.Timestamp` taken in that zone, and only a result-set builder reading the column with
+`getObject(i, LocalDateTime)` would not.
 
 ## Options
 

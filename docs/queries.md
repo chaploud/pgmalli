@@ -319,7 +319,7 @@ by the one sending, which your application installs
 | `OffsetTime`, `OffsetDateTime`, `Instant` | `timetz`, `timestamptz`, `timestamptz` (an `Instant` as an `OffsetDateTime` in UTC) |
 | a keyword | untyped, its text (`:ns/a` as `ns/a`) |
 | a map, a vector | `jsonb` |
-| a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`); a `java.sql.Time[]` a `timetz[]`, a `java.sql.Date[]` a `date[]`, a `java.sql.Timestamp[]` a `timestamptz[]` |
+| a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`); a `java.sql.Date[]` a `date[]`, a `java.sql.Timestamp[]` a `timestamptz[]` (pgjdbc sends no array of java.time's; a `java.sql.Time[]`, a `timetz[]` of the JVM's offset, is sent nowhere) |
 | a `PGobject` | the type it names |
 
 Another class (a set, a list, a symbol; a `java.util.Date`, which pgjdbc refuses, and java.sql's
@@ -671,7 +671,8 @@ Write the query so PostgreSQL's reading is explicit instead.
   in the session's time zone, which pgjdbc sets to the JVM's, so the value written changes with
   the JVM's time zone without a word. Send the column's own (`LocalDateTime`, `LocalDate`), or
   cast it in the query where the conversion is meant. Compared, a `timestamptz` and a
-  `timestamp` or a `date` convert implicitly, in that time zone too.
+  `timestamp` or a `date` convert implicitly, in that time zone too
+  ([the session's time zone](reading-rows.md#the-sessions-time-zone)).
 - A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
   one: taking it would put `char?` on every string argument (a `"char"` column takes a `varchar`
   on assignment alone, cut to its first byte). Send `(str c)`.
