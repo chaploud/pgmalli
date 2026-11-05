@@ -51,5 +51,7 @@
 
 
 (deftest a-typed-arrays-elements-are-its-types-never-what-goes-untyped
-  (is (= [:pg/array [:int {:pg/type "bigint"}]] (jdbc/array-type [:or [:int {:pg/type "bigint"}] :keyword] {} :compare))
-      "a Long[]'s elements are bigints, never what goes untyped"))
+  (is (= [:pg/array [:int {:pg/type "bigint"}]] (jdbc/array-type [:or [:int {:pg/type "bigint"}] :keyword] {} :assign))
+      "a Long[]'s elements are bigints, never what goes untyped")
+  (is (not-any? #{:keyword} (flatten (jdbc/array-type [:or [:int {:pg/type "bigint"}] :keyword] {} :compare)))
+      "under = ANY(?) too, though = resolves bigint with more element types (a double[]'s)"))

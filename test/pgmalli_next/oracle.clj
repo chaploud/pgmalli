@@ -934,7 +934,9 @@
                                   held-sent (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
                                   takes? (and sent (or (not= :unknown sent) (accept/reads? t (class v) (if cast? :cast :assign))) (if cast?
                                                      (accept/accepts? t sent :cast)
-                                                     (accept/holds? held-t held-sent (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare))))
+                                                     (and (accept/holds? held-t held-sent (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare))
+                                                          ;; compared and cast to the column's type: the cast too
+                                                          (or (not= :compared-and-cast context) (accept/accepts? t sent :cast)))))
                                   ;; left out by a rule of docs/queries.md "Stricter than PostgreSQL" that PostgreSQL's
                                   ;; verdicts pin (stricter.edn); a cast's accepts? PostgreSQL's verdicts pin (accept-test)
                                   ;; a class the one sending sends nowhere (docs/queries.md#what-your-application-sends)

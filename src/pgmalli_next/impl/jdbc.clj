@@ -267,7 +267,7 @@
    array column; :assign, to an array column; :common, beside an array column in coalesce or
    CASE; :unnest, a column of unnest(?), assigned or compared): the Java arrays the one sending sends (write-rows), t in place of :pgmalli/element, of those PostgreSQL takes
    there: an untyped one but under unnest (unnest(unknown) is ambiguous), a typed one whose
-   element type is one of t's own (accept/holds?, assigned; under :common, as coalesce resolves it; compared, t is what a comparison takes already), its elements
+   element type is one of t's own (accept/holds?, assigned; under :common, as coalesce resolves it; under = ANY(?), as = resolves an element with it), its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
    an array of that type alone; where t takes a PGobject (of a type known at run time alone), a
    PGobject too. ::element-type in opts names t's type where t's schema names none (numeric[]'s
@@ -282,7 +282,7 @@
                    (not= :unnest use)
                    (cond ;; a whole array compared (=, &&, @>): anyarray's operators take an array of its type alone
                          (and elem (= :whole use)) (= elem (some-> (types/element sent) types/entry :name))
-                         (and elem (accept/answers? elem)) (accept/holds? elem (types/element sent) (if (= :common use) :common :assign))
+                         (and elem (accept/answers? elem)) (accept/holds? elem (types/element sent) (case use :common :common :compare :compare :assign))
                          ;; an enum type's array takes an array of that type alone; a domain reads as its base
                          (and p (not elem) (= :enum (shape/kind (shape/non-null t)))) (= p (types/element sent))
                          :else true)))
