@@ -259,6 +259,7 @@
     (is (not (ok? {:select [:*] :from [:t] :where [:= :ints :?x]} (long-array [1]))) "integer[] = bigint[] does not resolve")
     (is (not (ok? {:select [:*] :from [:t] :where [(keyword "&&") :ints :?x]} (long-array [1]))) "&& too, anyarray's")
     (is (ok? {:select [:*] :from [:t] :where [(keyword "@>") :bigs :?x]} (long-array [1])))
+    (is (ok? {:select [:*] :from [:t] :where [:= :bigs :?x]} (into-array Long [1])) "a Long[] too, which goes as bigint[] as a long[] does")
     (is (ok? {:select [:*] :from [:t] :where [(keyword "&&") :vcs :?x]} (into-array String ["a"])))
     (is (ok? {:update :t :set {:ints :?x}} (long-array [1])) "assigned, element by element")
     (is (ok? {:select [:*] :from [:t] :where [:= :bigs [:any :?x]]} (into-array Integer [(int 1)])) "= ANY compares an element")))

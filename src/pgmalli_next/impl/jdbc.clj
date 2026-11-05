@@ -333,7 +333,13 @@
                          (cond-> (clojure.walk/postwalk-replace {:pgmalli/element (element sent c)} a)
                            ;; elements alike (a long[]'s and an Integer[]'s), the array's class tells the type sent
                            (and (= :whole use) (instance? Class c) (= :pg/array (shape/head a)))
-                           (shape/merge-props {:pg/classes #{(.getName ^Class c)}}))))]
+                           (shape/merge-props {:pg/classes #{(.getName ^Class c)}}))))
+        ;; arrays of like elements (a long[] and a Long[]) one alternative, of both classes
+        alts (if (= :whole use)
+               (let [like #(if (and (= :pg/array (shape/head %)) (map? (second %))) (update % 1 dissoc :pg/classes) %)]
+                 (for [[_ as] (group-by like alts)]
+                   (if (next as) (shape/merge-props (first as) {:pg/classes (into #{} (mapcat (comp :pg/classes shape/props)) as)}) (first as))))
+               alts)]
     (cond (seq alts) (shape/either (cond-> alts (some #{pg-object} (shape/alternatives (shape/non-null t))) (concat [pg-object])) :any)
           ;; no Java array of the type (text[]'s, String[] going as varchar[]): a PGobject of it
           (= :whole use) (let [a (types/short-name (types/array-of (or elem p)))]
