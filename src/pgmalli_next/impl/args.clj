@@ -25,12 +25,11 @@
 (defn- assigned-type
   "The type of an argument assignment a (positions) writes to its column, in context (:assign,
    or :cast where it is cast to the column's type first): NULL where assigned-column says it
-   may go. Where the row may not reach the column, without the CHECKs, lengths and ranges
-   PostgreSQL checks only on a row it writes."
-  [registry {:keys [may-drop?] :as a} context opts]
+   may go."
+  [registry a context opts]
   (let [{s :schema :keys [nullable?]} (query/assigned-column registry a)]
     (if s
-      (let [inner (cond-> (accepted-type registry (cond->> s may-drop? (query/beyond-list registry)) context opts) may-drop? query/loose)]
+      (let [inner (accepted-type registry s context opts)]
         (if nullable? [:maybe inner] inner))
       :any)))
 
@@ -430,7 +429,7 @@
    them; in place of the collections a json or jsonb value of the parameter takes there (bare, a
    value sent as the function's json or jsonb; cast, what the cast takes), or nil. A key is
    required, its value not nil, where an INSERT ... SELECT writes the column of that name of
-   the row type's table straight from it (positions not :may-drop?) and NULL may not go there
+   the row type's table straight from it and NULL may not go there
    (assigned-column). columns, the set of the columns the statements reading the call's alias
    name of it (resolved as a column of it, in the statement or one nested in it); nil where a
    use names none in particular: a star, its whole row, :raw, or a list of columns renaming
@@ -462,7 +461,7 @@
                                 :when (and opaque? (= alias from))]
                             (keyword column))))
               required (set (for [{c :x :as a} (syntax/assignments ps)
-                                  :when (and alias (not (:may-drop? a)) (syntax/column-keyword? c))
+                                  :when (and alias (syntax/column-keyword? c))
                                   :let [{:keys [column opaque?] from :table} (query/resolve-column registry (:chain a) c)
                                         {written :column t :table :keys [nullable? schema]} (query/assigned-column registry a)]
                                   :when (and opaque? (= alias from) (or (nil? table) (= table t)) schema (not nullable?) (= column written))]

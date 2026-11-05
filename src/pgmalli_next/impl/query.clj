@@ -567,10 +567,10 @@
   "{:schema :table :opaque? :nullable?} of the column an assignment (positions) writes, nil
    :schema where it is not told; nullable? where NULL may go there: the column takes it, a
    BEFORE row trigger for the write may fill it (an INSERT's value is the row proposed, whose
-   NOT NULL PostgreSQL checks before ON CONFLICT DO UPDATE), or the row may not reach it."
-  [registry {:keys [assign target event may-drop?]}]
+   NOT NULL PostgreSQL checks before ON CONFLICT DO UPDATE)."
+  [registry {:keys [assign target event]}]
   (let [{s :schema :keys [table opaque?] :as c} (resolve-column registry target assign)]
-    (assoc c :nullable? (boolean (or may-drop? (and s (shape/maybe? s))
+    (assoc c :nullable? (boolean (or (and s (shape/maybe? s))
                                      (and s (not opaque?) (filled-by-trigger? (table-props registry table) event)))))))
 
 (defn enum-type

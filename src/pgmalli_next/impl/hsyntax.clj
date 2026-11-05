@@ -774,16 +774,6 @@
   (let [[_ alias] (some-> (or (:update stmt) (insert-target stmt)) (table-ref opts))]
     (select-keys (first (chain scopes)) [alias])))
 
-(defn- may-drop-rows?
-  "Whether SELECT stmt may return no row where its arguments make one: it filters, groups,
-   limits, deduplicates or combines rows, or reads a table. unnest(?) of arguments drops none:
-   an empty array makes no row its other arguments go to; nor does a populate-item alone."
-  [stmt]
-  (let [items (from-items stmt [:from])]
-    (not (and (every? #{:select :from :order-by} (keys stmt))
-              (or (every? unnest-of-arguments? items)
-                  (and (= 1 (count items)) (populate-item? (first items))))))))
-
 (def read-clauses
   "The clauses analyze reads."
   (into statement-keys (concat with-keys from-keys join-keys
@@ -821,9 +811,8 @@
    CASE or a function's argument under NOT is not negated), top? for the clause's value itself
    (one of :values, :set, an item of FROM or a join), item? for a node right in it (an item of a
    select list, [expr alias], or of ORDER BY, [expr direction], which is no call). A value written to a column is
-   besides {:x value :assign column :event e :target scope :may-drop? bool}: e the write
-   (:insert, :update), scope the target table's, may-drop? where the row may not reach the
-   column. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
+   besides {:x value :assign column :event e :target scope}: e the write (:insert, :update),
+   scope the target table's. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
    its items go to those columns by position."
   [stmt chain outer feed {:keys [format] :as opts}]
   (let [nodes (fn nodes [k x c]
@@ -847,7 +836,7 @@
         written (group-by #(nth % 3) (writes stmt))
         assigned (fn [clause c]
                    (for [[col v event] (written clause) :when (not= ::untold v)]
-                     {:x v :assign col :event event :target target :may-drop? false :chain c :clause clause}))]
+                     {:x v :assign col :event event :target target :chain c :clause clause}))]
     (concat
      (for [[[k] v sees] (clause-parts stmt)
            :let [c (part-chain sees v chain outer opts)]
@@ -873,7 +862,7 @@
        (when (and (:columns feed) (not-any? #(or (and (keyword? %) (star? %)) (and (vector? %) (= :raw (first %)))) items))
          (for [[col v] (map (comp to-field vector) (:columns feed) items)
                :when (not= ::untold v)]
-           {:x v :assign (target-column col) :event :insert :target (:target feed) :may-drop? (may-drop-rows? stmt)
+           {:x v :assign (target-column col) :event :insert :target (:target feed)
             :chain chain :clause :select}))))))
 
 (defn expression-nodes [ps] (remove :assign ps))

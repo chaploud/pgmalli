@@ -327,7 +327,8 @@
         (is (and (heads :map) (not (heads :map-of))) "the column's CHECK shapes a map element"))
       (let [dropping (assoc-in (star :v "varchar[]") [:insert-into 1 :where] [:= :r.v "abc"])]
         (is (some? (runs! dropping {:xs (into-array String ["abcdef"])} {})))
-        (is (accepted? reg dropping {:xs (into-array String ["abcdef"])} {}) "a row the WHERE may drop is not held to the length"))
+        (is (not (accepted? reg dropping {:xs (into-array String ["abcdef"])} {}))
+            "stricter: held to the length as on a row the WHERE lets through, though PostgreSQL writes none here"))
       (is (= (get-in (h/analyze reg {:select [[[:cast :?xs [:raw "bigint[]"]] :x]]}) [:args :xs])
              (get-in (h/analyze reg (star :x "bigint[]")) [:args :xs]))
           "into a column of another type, the cast's type"))))

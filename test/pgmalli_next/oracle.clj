@@ -752,7 +752,7 @@
 (defn- matrix-queries
   "[context query] for each place an argument :?x goes with column c: compared (=, <>, IN, =
    ANY, in RETURNING, an element of unnest(?) joined), assigned (UPDATE SET, INSERT VALUES,
-   INSERT ... SELECT of a row it keeps or one it drops), beside it (coalesce, CASE, greatest),
+   INSERT ... SELECT, and one whose WHERE tests it for NULL), beside it (coalesce, CASE, greatest),
    cast to its type, compared and cast at once, compared and passed where PostgreSQL takes its
    type from the value alone (concat's \"any\", cardinality's anyarray), compared and passed to
    a function an extension overloads (regexp_replace); and LIMIT."
@@ -763,7 +763,8 @@
              [:unnest {:select [:*] :from [t] :join [[[:unnest :?x] [:u {:columns [:e]}]] [:= c :u.e]]}]]
             (when writable [[:update {:update t :set {c :?x}}] [:insert {:insert-into t :values [{c :?x}]}]
                             [:insert-select {:insert-into [[t [c]] {:select [:?x]}]}]
-                            [:insert-select-dropped {:insert-into [[t [c]] {:select [:?x] :where false}]}]])
+                            ;; nil writes no row where the statement tests it for NULL, cast so that PostgreSQL types it
+                            [:insert-select-tested {:insert-into [[t [c]] {:select [:?x] :where [:is-not [:cast :?x (keyword (str/replace declared " " "-"))] nil]}]}]])
             [[:coalesce {:select [[[:coalesce c :?x] :v]] :from [t]}]
              [:case {:select [[[:case [:= c nil] :?x :else c] :v]] :from [t]}]
              [:greatest {:select [[[:greatest c :?x] :v]] :from [t]}]
@@ -925,7 +926,7 @@
                                   takes? (and sent (or (not= :unknown sent) (accept/reads? t (class v) (if cast? :cast :assign))) (if cast?
                                                      (accept/accepts? t sent :cast)
                                                      ;; an array assigned to an array column: element by element, as array-type reads it
-                                                     (let [assign? (#{:update :insert :insert-select :insert-select-dropped :limit} context)
+                                                     (let [assign? (#{:update :insert :insert-select :insert-select-tested :limit} context)
                                                            elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))]
                                                        (accept/holds? (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
                                                                       (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)

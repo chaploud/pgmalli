@@ -759,14 +759,15 @@
     (is (every? ok? [1 2 1.0 (float 1) 1.5 1.5M true]))
     (is (not (ok? 3)) "a Long outside the list stays refused")))
 
-(deftest an-argument-a-row-may-not-carry-to-a-check-list-of-a-type-with-a-typmod-takes-the-base-type
+(deftest an-insert-selects-argument-to-a-check-list-of-a-type-with-a-typmod-takes-the-list
   (let [reg (pgmalli/registry {:registry {:pg.public/wd [:enum {:pg/type "character varying(10)"} "a" "b"]
                                           :pg.public/lists [:map {:pg/table "public.lists"}
                                                             [:w [:ref {:pg/type "wd"} :pg.public/wd]]
                                                             [:v [:enum {:pg/type "character varying(10)"} "a"]]]}})]
     (doseq [c [:w :v]
             :let [x (:x (:args (h/analyze reg {:insert-into [[:lists [c]] {:select [:?x] :where false}]})))]]
-      (is (= [:maybe [:or [:string {:pg/type "character varying"}] :keyword]] x) (str c)))))
+      (is (m/validate x "a" {:registry reg}) (str c))
+      (is (not (m/validate x "c" {:registry reg})) (str c)))))
 
 (deftest a-number-check-lists-labels-go-as-each-number-sent
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
@@ -2083,7 +2084,7 @@
       (is (not (ok? (q select {}) :ns long-nick)) "longer than the column's varchar(40)")
       (is (ok? (q select {}) :ns (into-array String ["a" nil])))
       (is (not (ok? (q select {}) :gs (into-array Integer [nil]))) "NULL into a NOT NULL column")
-      (is (ok? (q select {:where [:= :r.group_id 1]}) :ns long-nick) "a row the WHERE may drop is not written"))
+      (is (not (ok? (q select {:where [:= :r.group_id 1]}) :ns long-nick)) "as on a row the WHERE lets through"))
     (is (ok? {:insert-into [[:users [:group_id]] {:select [:*] :from [[[:unnest [:cast :?gs [:raw "bigint[]"]]] [:r {:columns [:group_id]}]]]}]}
              :gs (long-array [Long/MAX_VALUE]))
         "into a column of another type, the cast's type")))
@@ -2124,7 +2125,7 @@
       (is (not (ok? (insert select {}) :rows [{"group_id" 1 "score" nil}])) "nil to a NOT NULL column, as a string key")
       (is (not (ok? (insert select {}) :rows [{:group_id 1 :score nil}])) "nil to a NOT NULL column")
       (is (not (ok? (insert select {}) :rows {:group_id 1 :score 0})) "a map, which a recordset is not")
-      (is (ok? (insert select {:where [:> :r.score 0]}) :rows [{:group_id 1}]) "a row the WHERE may drop is not written"))
+      (is (not (ok? (insert select {:where [:> :r.score 0]}) :rows [{:group_id 1}])) "as on a row the WHERE lets through"))
     (is (ok? (insert [:r.group_id :r.score [:upper :r.nick]] {}) :rows [{:group_id 1 :score 0}]) "a column not written straight from the document")
     (let [star {:insert-into [[:groups [:id :name]] {:select [:*] :from [[[:jsonb_populate_recordset [:cast nil :groups] :?rows] :r]]}]}]
       (is (ok? star :rows [{:id 1 :name "a"}]))
@@ -2537,23 +2538,25 @@
                  :where [:exists {:select [1] :from [:groups] :where [:= :groups.id [:cast :x.i :integer]]}]}))
         "a subquery reads it in the scope it sees")))
 
-(deftest an-insert-selects-argument-takes-nil-where-the-select-may-drop-its-row
+(deftest an-insert-selects-argument-takes-what-its-column-takes-nil-only-where-the-statement-tests-it-for-null
   (let [q (fn [select] {:insert-into [[:users [:group_id :score]] select]})
         g #(:g (args (q %)))
         ss #(:ss (args (q %) opts))
-        plain (g {:select [:?g :?s]})
-        elements (ss {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})]
+        plain (g {:select [:?g :?s]})]
     (is (= plain (:g (args {:insert-into :users :values [{:group_id :?g :score :?s}]}))) "a row of arguments reaches the column, as one of :values does")
-    (is (not (m/validate elements (into-array Integer [(int 1) nil]) {:registry registry})) "unnest of arguments drops no element")
-    (is (= plain (g {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]})))
-    (doseq [more [{:where [:is-not :?g nil]} {:having true} {:limit 1} {:offset 1} {:group-by [:?s]}
-                  {:from [[[:unnest :?ss] [:x {:columns [:s]}]] :groups]}
-                  {:from [[[:unnest :?ss] [:x {:columns [:s]}]]] :join [:groups [:= :groups.id 1]]}]]
-      (is (= [:maybe integer] (g (merge {:select [:?g :?s]} more))) (str (pr-str more) ": nil, and no bounds"))
-      (is (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) (into-array Integer [(int 1) nil]) {:registry registry}) (pr-str more)))
-    (is (= [:maybe integer] (g {:select-distinct [:?g :?s]})))
-    (is (m/validate (:n (args {:insert-into [[:users [:nick]] {:select [:?n] :where false}]})) (apply str (repeat 41 "x")))
-        "PostgreSQL checks a length, a range or a CHECK only on a row it writes")))
+    (is (not (m/validate (ss {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]}) (into-array Integer [(int 1) nil]) {:registry registry}))
+        "unnest of arguments drops no element")
+    (doseq [more [{:where [:is-not :?g nil]} {:having true} {:limit 1} {:offset 1} {:group-by [:?s]} {:from [:groups]}
+                  {:where [:not [:exists {:select [1] :from [:users] :where [:= :score 5]}]]}]]
+      (is (= plain (g (merge {:select [:?g :?s]} more))) (str (pr-str more) ": a row it writes takes no nil, PostgreSQL refusing it there")))
+    (doseq [more [{:where [:= :x.s 1]} {:join [:groups [:= :groups.id 1]]}]]
+      (is (not (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) (into-array Integer [(int 1) nil]) {:registry registry})) (pr-str more)))
+    (let [t (g {:select [:?g :?s] :where [:is-not [:cast :?g :integer] nil]})]
+      (is (every? #(m/validate t % {:registry registry}) [nil 1])
+          "tested for NULL, cast so that PostgreSQL types it (a bare ? IS NOT NULL is 42P18 for a NULL): nil writes no row")
+      (is (not (m/validate t 3000000000 {:registry registry}))))
+    (is (not (m/validate (:n (args {:insert-into [[:users [:nick]] {:select [:?n] :where false}]})) (apply str (repeat 41 "x")) {:registry registry}))
+        "a length, a range or a CHECK holds as on a row it writes")))
 
 (deftest an-inserted-value-takes-nil-only-from-a-before-insert-trigger
   ;; PostgreSQL checks NOT NULL on the row proposed for insertion before it looks for a conflict
