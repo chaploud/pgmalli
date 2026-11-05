@@ -222,5 +222,9 @@ SELECT pg_catalog.json_build_object(
   'tables', (SELECT COALESCE(pg_catalog.json_object_agg(relname, tbl), '{}'::json) FROM tables),
   'types', (SELECT COALESCE(pg_catalog.json_object_agg(typname, typ), '{}'::json) FROM types),
   'functions', (SELECT COALESCE(pg_catalog.json_agg(fn ORDER BY proname, oid), '[]'::json) FROM functions),
-  'operators', (SELECT COALESCE(pg_catalog.json_agg(op ORDER BY oprname, oid), '[]'::json) FROM operators)
+  'operators', (SELECT COALESCE(pg_catalog.json_agg(op ORDER BY oprname, oid), '[]'::json) FROM operators),
+  -- a sequence's columns are every sequence's (last_value, log_cnt, is_called): its name alone
+  'sequences', (SELECT COALESCE(pg_catalog.json_agg(c.relname ORDER BY c.relname), '[]'::json)
+                FROM pg_catalog.pg_class c JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+                WHERE n.nspname = :'schema' AND c.relkind = 'S')
 );

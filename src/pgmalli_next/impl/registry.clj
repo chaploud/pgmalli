@@ -348,12 +348,21 @@
                                      %)
                                   s)])))
 
+(defn- sequence-rows
+  "The row schema of each of generated data d's :sequences, the columns every sequence has
+   (PostgreSQL 16 to 18 alike), which a query reads by its name."
+  [d]
+  (into {} (for [n (:sequences d)]
+             [(shape/schema-key (:schema d) n)
+              [:map {:pg/table (str (:schema d) "." n) :pg/sequence true}
+               [:last_value [:int {:pg/type "bigint"}]] [:log_cnt [:int {:pg/type "bigint"}]] [:is_called [:boolean {:pg/type "boolean"}]]]])))
+
 (defn registry
   "The registry pgmalli-next.core/registry documents."
   [& schemas]
   (let [data (map #(if (map? %) (generated-data % "registry") (read-generated %)) schemas)
         generated (into {} (map (fn [[k s]] [k (walk/postwalk generate-from-part (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k))))]))
-                        (with-partitions (with-other-schemas-types (apply merge (map :registry data)))))]
+                        (with-partitions (with-other-schemas-types (apply merge (concat (map :registry data) (map sequence-rows data))))))]
     (merge base
            (update-vals (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
                         #(walk/postwalk dispatch-by-key %))

@@ -486,6 +486,7 @@
                               (map :entry parts)))
       :functions (overloads facts :function)
       :operators (overloads facts :operator)
+      :sequences (vec (sort (for [f facts :when (= :sequence (:fact f))] (:name f))))
       :unrendered (vec (sort-by order (mapcat :unrendered parts)))
       :skipped (vec (sort-by order (mapcat :skipped parts)))
       :diagnostics (vec (sort-by (juxt :table :constraint :kind) (mapcat :diagnostics parts)))})))

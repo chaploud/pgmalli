@@ -69,7 +69,7 @@
   (let [r (sort-maps (render/rendered facts (or overrides {})))]
     (array-map :schema schema :database-version database-version
                :diagnostics (:diagnostics r) :registry (:registry r)
-               :functions (:functions r) :operators (:operators r)
+               :functions (:functions r) :operators (:operators r) :sequences (:sequences r)
                :unrendered (mapv left-out (:unrendered r)) :skipped (mapv left-out (:skipped r)))))
 
 (def ^:private override-registry

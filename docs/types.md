@@ -240,7 +240,7 @@ class.
 
 ## What is read
 
-Tables (regular, partitioned and foreign), views, materialized views, columns, CHECK, PRIMARY KEY,
+Tables (regular, partitioned and foreign), views, materialized views, sequences, columns, CHECK, PRIMARY KEY,
 UNIQUE, FOREIGN KEY and EXCLUDE constraints, unique indexes over plain columns, row-level
 triggers, enum and domain types.
 
@@ -276,6 +276,7 @@ registry holding a name wins.
 | `:diagnostics` | what deserves a look in the database |
 | `:registry` | `{name schema}`: the rows, enums and domains; the insert and update schemas are derived when it is loaded |
 | `:functions`, `:operators` | `{name [overload ...]}`: the schema's own functions (no procedure or trigger function) and operators, which [`pgmalli-next.honeysql`](queries.md#the-row-a-query-returns) resolves a call to beside `pg_catalog`'s. An overload is `{:args [type ...] :result type}`, types named as `:pg/type` names them, with `:set true` for a set-returning function, `:kind` (`:a` an aggregate, `:w` a window function), `:variadic true`, `:defaults` (how many of the last arguments may be left out), `:columns` (`[[name type] ...]` it returns in FROM: its OUT or `TABLE` arguments, or its composite type's columns), `:btree true` for a comparison operator |
+| `:sequences` | the schema's sequences' names: the registry holds a row schema of each by its name, `last_value` and `log_cnt` (`bigint`) and `is_called` (`boolean`), the columns every sequence has, with `:pg/sequence true` |
 | `:unrendered` | what pgmalli cannot express, left out of the schemas |
 | `:skipped` | what `:overrides` skips |
 

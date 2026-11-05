@@ -1,5 +1,6 @@
 (ns pgmalli-next.core-test
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             honey.sql
             [malli.core :as m]
             [malli.generator :as mg]
@@ -83,14 +84,17 @@
               "a new column shows as itself, in the row schema (the insert schema is derived at load, not in the file)")
           (is (every? (comp nil? :file) diffs)))))))
 
-(deftest a-foreign-table-is-a-table-a-query-reads
+(deftest a-foreign-table-or-a-sequence-is-a-relation-a-query-reads
   (when *db*
     (let [config {:db *db* :out-dir (str (doto (File/createTempFile "pgmalli-ft" "") .delete))}]
       (exec-sql! "CREATE EXTENSION IF NOT EXISTS file_fdw; CREATE SERVER ft_files FOREIGN DATA WRAPPER file_fdw;
-                  CREATE SCHEMA ft; CREATE FOREIGN TABLE ft.lines (a text) SERVER ft_files OPTIONS (program 'echo hi', format 'text');")
+                  CREATE SCHEMA ft; CREATE FOREIGN TABLE ft.lines (a text) SERVER ft_files OPTIONS (program 'echo hi', format 'text');
+                  CREATE SEQUENCE ft.counter;")
       (generate/generate! (assoc config :schemas ["ft"]))
       (let [reg (pgmalli/registry (registry/read-generated-file (files/path-for config "ft")))]
-        (is (= [] (:problems (h/analyze reg {:select [:a] :from [:lines]} {:schema "ft"}))))))))
+        (is (= [] (:problems (h/analyze reg {:select [:a] :from [:lines]} {:schema "ft"}))))
+        (is (= [:map [:last_value [:int {:pg/type "bigint"}]] [:is_called [:boolean {:pg/type "boolean"}]]]
+               (:row (h/analyze reg {:select [:last_value :is_called] :from [:counter]} {:schema "ft"}))))))))
 
 (deftest a-char-n-list-holds-without-trailing-spaces-other-char-n-and-arithmetic-checks-are-left-to-the-database
   (when *db*
@@ -148,8 +152,10 @@
         (is (= [:no-partition] (map :kind (get diagnostics "chk")))))
       (is (not (contains? (generate/check config {:db? false}) :stale)) "without the database, only the files")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (generate/check config {:db false})) "a misspelt option is an error")
-      (let [data (registry/read-generated-file (files/path-for config "chk"))]
-        (is (= [:schema :database-version :diagnostics :registry :functions :operators :unrendered :skipped] (keys data)) "read from the top: what it is, what deserves a look, the schemas")))))
+      (let [ks [:schema :database-version :diagnostics :registry :functions :operators :sequences :unrendered :skipped]
+            text (slurp (files/path-for config "chk"))]
+        (is (= (set ks) (set (keys (registry/read-generated-file (files/path-for config "chk"))))))
+        (is (apply < (map #(str/index-of text (str "\n " %)) (rest ks))) "read from the top: what it is, what deserves a look, the schemas")))))
 
 (defn- registry-of [schema ddl]
   (exec-sql! ddl)

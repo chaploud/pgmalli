@@ -85,6 +85,7 @@
          "violates check constraint closed_at_matches_status: CHECK (status = 'active'::user_status AND closed_at IS NULL OR status = 'closed'::user_status AND closed_at IS NOT NULL)"}]]]]]]},
  :functions {},
  :operators {},
+ :sequences ["events_id_seq" "groups_id_seq" "posts_id_seq" "users_id_seq"],
  :unrendered
  [{:kind :check,
    :table "public.posts",

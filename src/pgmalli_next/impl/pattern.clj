@@ -553,6 +553,7 @@
       (for [[n vs] enums] {:fact :enum-type :schema schema-name :type-name n :values vs})
       (for [f (:functions schema)] {:fact :function :schema schema-name :name (:name f) :overload (function-overload f)})
       (for [o (:operators schema)] {:fact :operator :schema schema-name :name (:name o) :overload (operator-overload o)})
+      (for [n (:sequences schema)] {:fact :sequence :schema schema-name :name n})
       domain-facts*
       (for [[tname t] (sort-by key (:tables schema))
             :let [base {:schema schema-name :table tname}
