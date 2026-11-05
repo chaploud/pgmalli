@@ -648,7 +648,7 @@ hold for a literal HoneySQL sends as a parameter (a number, a string, `[:lift v]
 PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:inline "s"]`) or sent untyped
 (`[:lift :kw]`) is held to an enum's labels alone, as PostgreSQL reads it through the type's input.
 
-- An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
+- <a id="stricter-assignment"></a>An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
   `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
   time off), and a number assigned to a `text` column PostgreSQL converts through its text.
@@ -667,7 +667,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   and fails where there is none. Test the argument for NULL where nil means "write nothing":
   `{:select [:?x] :where [:is-not [:cast :?x :integer] nil]}` (cast: PostgreSQL refuses a NULL
   parameter in a bare `? IS NOT NULL`, whose type nothing tells).
-- A value sent untyped, assigned or compared, where its text is not of the column's type's
+- <a id="stricter-untyped"></a>A value sent untyped, assigned or compared, where its text is not of the column's type's
   category: a keyword to a `bigint`, `uuid` or `date` column (`:1`, `:2020-01-01`), which
   PostgreSQL reads through the type's input. Taking them would put `:keyword` on every argument.
   Send the value of the column's type (`1`), or cast it in the query.

@@ -147,6 +147,27 @@
                      (when (seq left-out) (str "\n  now left out: " (str/join " " (map pr-str left-out))))
                      (when (seq held) (str "\n  now held: " (str/join " " (map pr-str held))))))))))))
 
+(defn- stricter-rule
+  "The id of the rule of docs/queries.md \"Stricter than PostgreSQL\" that leaves out a parameter
+   sent compared or assigned to a column of type t: a value sent untyped, of another category; a
+   value PostgreSQL converts on assignment alone, by a cast (an array's element by element, a
+   domain's base) or through its text into a string type."
+  [sent context t]
+  (let [base #(if (= "positive" %) "integer" %)
+        [s c] (if (and (types/element sent) (types/element t)) [(types/element sent) (types/element t)] [sent t])]
+    (cond (= :unknown sent) "stricter-untyped"
+          (and (= :assign context)
+               (or (some #{"a" "i"} (types/cast-contexts s (base c))) (@#'accept/string-type? c)))
+          "stricter-assignment")))
+
+(deftest every-pair-stricter-than-postgresql-is-a-rule-of-the-docs
+  (let [docs (slurp "docs/queries.md")
+        pairs (triples (edn/read-string (slurp stricter-file)))]
+    (is (= [] (vec (for [[sent context t] pairs :when (nil? (stricter-rule sent context t))] [sent context t])))
+        "a pair stricter.edn pins that no rule of docs/queries.md explains: a refusal of what PostgreSQL takes")
+    (doseq [id (distinct (keep #(apply stricter-rule %) pairs))]
+      (is (str/includes? docs (str "<a id=\"" id "\"></a>")) id))))
+
 (deftest a-jsonb-cast-to-a-scalar-type-takes-a-scalar-alone
   (when *db*
     (with-open [con (jdbc/get-connection (datasource))]

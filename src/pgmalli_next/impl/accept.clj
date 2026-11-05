@@ -215,8 +215,9 @@
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type; one PostgreSQL converts to
    t implicitly (pg_cast's castcontext 'i', an array element by element), assigned or as a
-   function's argument (:call); compared, also one t converts to implicitly, where = resolves (an
-   array of t's type alone: anyarray's = takes no other); resolved with t to one type (:common:
+   function's argument (:call); compared, one = resolves with (compares?), through casts to a
+   third type too (regclass = regoper as oid = oid, xid = integer as xid = int4; an array of t's
+   type alone: anyarray's = takes no other); resolved with t to one type (:common:
    coalesce's, CASE's), one of t's category select_common_type takes; a string of another string
    type; or one sent untyped, which PostgreSQL reads through t's input function, which every type
    has; compared, a function's argument or resolved with t, where t has an = of its own the
@@ -229,7 +230,7 @@
   (or (= t sent)
       (case context
         :json (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
-        :compare (and (string? t) (string? sent) (some #(contains? (apply types/cast-contexts %) "i") [[sent t] [t sent]]) (compares? t sent))
+        :compare (and (string? t) (string? sent) (compares? t sent))
         :common (and (string? t) (string? sent) (some? (resolve/common-type [t sent])))
         (and (string? t) (string? sent) (types/implicit? sent t)))
       (and (string-type? t) (string-type? sent))
