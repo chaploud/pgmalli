@@ -33,7 +33,11 @@
 
 (def ^:private left-out
   "Classes the one sending sends that class-types leaves out, with why."
-  {org.postgresql.util.PGobject "a PGobject names its type itself, value by value"})
+  {org.postgresql.util.PGobject "a PGobject names its type itself, value by value"
+   java.sql.Timestamp "untyped, its text in the JVM's time zone, which a timestamp column's value changes with"
+   java.sql.Date "untyped, its text at midnight of the JVM's time zone"
+   java.sql.Time "untyped, its text with the JVM's offset"
+   (class (Array/newInstance java.sql.Time 0)) "a timetz[] of the JVM's offset"})
 
 (defn- type-name
   "t by the name types keys it by."
@@ -198,7 +202,7 @@
   (when *db*
     (let [registry (pgmalli/registry {:registry {}})
           values [1 "a" 1.5M true (java.util.UUID/randomUUID) (java.time.OffsetDateTime/now) {:a 1} [1] (long-array [1])
-                  :a nil (java.time.Instant/now) (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0) (java.util.Date.)]]
+                  :a nil (java.time.Instant/now) (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0)]]
       (with-open [con (jdbc/get-connection (datasource))]
         (doseq [q [{:select [[[:concat :?x] :v]]} {:select [[[:format "%s" :?x] :v]]} {:select [[[:jsonb_build_object "k" :?x] :v]]}
                    {:select [[[:json_build_array 1 :?x] :v]]} {:select [[[:num_nulls :?x] :v]]}]

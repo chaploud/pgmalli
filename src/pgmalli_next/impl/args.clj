@@ -307,12 +307,25 @@
                                 :when (and c (not nullable?))]
                             (:x a))))
         compared (frequencies (for [{:keys [x]} nodes :when (syntax/comparison? x) o (operands x)] o))
-        uses (frequencies (map first casts))]
+        uses (frequencies (map first casts))
+        ;; [:f a] read as a cast to type f: the call it is, which func_get_detail resolves as a function
+        ;; where a's type has no cast to f (a typed date to timetz(timestamptz))
+        calls (into {} (for [{:keys [x chain]} nodes :let [c (query/type-call registry chain x opts)] :when c] [c x]))
+        call-type (fn [call]
+                    (let [os (query/reached registry opts (syntax/call-parts call))]
+                      (some->> (for [s (map types/type-schema (resolve/argument-types [:free] 0 os)) :when s
+                                     a (shape/alternatives (shape/non-null (accepted-type registry s :call opts)))]
+                                 (unlabel a))
+                               seq shape/distinct-kinds)))]
     (for [[x chain k elements?] (distinct casts)
           :let [s (:schema (query/expression-type registry chain x opts))]
           :when s
           :let [e (when-not elements? (unnest-cast-element registry ps x opts))
-                t (cond-> (accepted-type registry s :cast (cond-> opts e (assoc ::cast-element e)))
+                t (accepted-type registry s :cast (cond-> opts e (assoc ::cast-element e)))
+                t (if-let [more (some-> (calls x) call-type)]
+                    (shape/either (shape/distinct-kinds (concat (shape/alternatives (shape/non-null t)) more)) t)
+                    t)
+                t (cond-> t
                     ;; compared, PostgreSQL evaluates the cast only where its plan reaches it (a row
                     ;; the other conditions keep, or once ahead of the scan), so its CHECKs and ranges may never run
                     (= (get compared x 0) (uses x)) query/loose

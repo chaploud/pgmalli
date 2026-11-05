@@ -1554,17 +1554,17 @@
 (deftest information-schema-is-opaque-as-pg-catalog
   (is (= [] (check {:select [:table_name] :from [:information_schema.tables]}))))
 
-(deftest a-date-argument-takes-what-pgjdbc-sends
+(deftest a-date-argument-takes-a-local-date
   (let [t (:b (args {:update :users :set {:born :?b} :where [:= :id 1]}))]
     (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))
-    (is (m/validate t (java.util.Date.) malli-opts))
+    (is (not (m/validate t (java.util.Date.) malli-opts)) "sent nowhere: pgjdbc refuses it")
     (is (not (m/validate t "2020-01-01" malli-opts)))))
 
 (deftest a-domain-argument-takes-what-pgjdbc-takes-for-its-base
   (let [reg (pgmalli/registry {:registry {:pg.public/day [:time/local-date {:pg/type "date"}]
                                           :pg.public/t [:map {:pg/table "public.t"} [:d [:ref {:pg/type "day"} :pg.public/day]]]}})
         t (:d (:args (h/analyze reg {:update :t :set {:d :?d}})))]
-    (is (m/validate t (java.util.Date.) malli-opts))
+    (is (not (m/validate t (java.util.Date.) malli-opts)))
     (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))))
 
 (deftest a-string-assigned-to-a-regclass-column-is-taken
@@ -2405,7 +2405,6 @@
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or
                 [:time/instant {:pg/type "timestamptz"}]
-                ['inst? {:pg/type "timestamptz"}]
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
@@ -2416,7 +2415,7 @@
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
                             [:< [:+ :closed_at :?d] :current_timestamp]
                             [:= :nick [:repeat "a" :?n]]]})))
-  (is (= "(PGobject of interval | time | timestamptz | inst | date | timestamp)?"
+  (is (= "(PGobject of interval | time | timestamptz | date | timestamp)?"
          (:d (into {} (map vector [:now :d] (:args (pgmalli/describe registry (h/query-schema registry [:now :d] {:select [:id] :from [:users] :where [:> :?now [:- :current_timestamp :?d]]} opts))))))))
   (is (= {:x [:maybe integer-cmp]} (args {:select [[[:case [:= :id 1] :?x :else :score] :c]] :from [:users]}))
       "CASE's values resolve as coalesce's arguments"))
@@ -2559,7 +2558,7 @@
   (is (= {:n [:maybe [:or 'decimal? 'integer? :int]]} (args {:select [:*] :from [[[:generate_series 1 :?n] :g]]}))
       "an int, an int8 or a numeric each picks its overload")
   (is (= {:at [:maybe
-               [:or :time/local-date-time 'inst? :time/local-date :time/offset-time :time/local-time :time/instant :time/offset-date-time]]}
+               [:or :time/local-date-time :time/local-date :time/offset-time 'inst? :time/local-time :time/instant :time/offset-date-time]]}
          (args {:select [[[:timezone :nick :?at] :t]] :from [:users]}))))
 
 (deftest an-array-cast-casts-each-element

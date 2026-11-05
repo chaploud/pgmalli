@@ -42,7 +42,6 @@
             [malli.error :as me]
             [malli.generator :as mg]
             [next.jdbc :as jdbc]
-            next.jdbc.date-time
             [next.jdbc.prepare :as prep]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]

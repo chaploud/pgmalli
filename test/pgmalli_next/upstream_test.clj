@@ -9,7 +9,6 @@
             [clojure.data.json :as json]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
-            next.jdbc.date-time
             [pgmalli-next.catalog-source :as source]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.impl.files :as files]

@@ -189,26 +189,34 @@
 (deftest a-date-time-or-timestamp-goes-to-a-date-time-or-timestamp
   (when *db*
     (let [reg (registry)
-          ts (java.sql.Timestamp. 0)
-          sd (java.sql.Date/valueOf "1990-01-02")
-          st (java.sql.Time/valueOf "10:00:00")
-          ld (java.time.LocalDate/of 1990 1 2)]
-      (doseq [[q params] [[{:select [:id] :from [:typed] :where [:>= :tz :?x]} {:x ts}]
-                          [{:select [:id] :from [:typed] :where [:< :ts :?x]} {:x ts}]
-                          [{:select [:id] :from [:typed] :where [:= :d :?x]} {:x sd}]
-                          [{:select [:id] :from [:typed] :where [:< :t :?x]} {:x st}]
-                          [{:select [:id] :from [:typed] :where [:= :tt :?x]} {:x st}]
+          instant (java.time.Instant/ofEpochSecond 0)
+          local (java.time.LocalDateTime/of 1990 1 2 3 4)
+          ld (java.time.LocalDate/of 1990 1 2)
+          lt (java.time.LocalTime/of 10 0)
+          ot (java.time.OffsetTime/of 10 0 0 0 java.time.ZoneOffset/UTC)]
+      (doseq [[q params] [[{:select [:id] :from [:typed] :where [:>= :tz :?x]} {:x instant}]
+                          [{:select [:id] :from [:typed] :where [:< :ts :?x]} {:x local}]
+                          [{:select [:id] :from [:typed] :where [:= :d :?x]} {:x ld}]
+                          [{:select [:id] :from [:typed] :where [:< :t :?x]} {:x lt}]
+                          [{:select [:id] :from [:typed] :where [:= :tt :?x]} {:x ot}]
                           [{:select [:id] :from [:typed] :where [:< :tz :?x]} {:x ld}]
-                          [{:update :typed :set {:tz :?x :ts :?x} :where [:= :id 1]} {:x ts}]
+                          [{:select [:id] :from [:typed] :where [:< :tz :?x]} {:x local}]
+                          [{:update :typed :set {:tz :?x} :where [:= :id 1]} {:x instant}]
+                          [{:update :typed :set {:tz :?x :ts :?x} :where [:= :id 1]} {:x local}]
                           [{:update :typed :set {:d :?x :ts :?x} :where [:= :id 1]} {:x ld}]
-                          [{:update :typed :set {:d :?x} :where [:= :id 1]} {:x sd}]
-                          [{:update :typed :set {:t :?x :tt :?x} :where [:= :id 1]} {:x st}]
-                          [{:update :typed :set {:tts :?x} :where [:= :id 1]} {:x (into-array java.sql.Time [st])}]
-                          [{:insert-into :typed :values [{:tts :?x}]} {:x (into-array java.sql.Time [st])}]
-                          [{:select [:id] :from [:typed] :where [:< [:composite :tz :id] [:composite :?c :?i]]} {:c ts :i 1}]]]
+                          [{:update :typed :set {:t :?x} :where [:= :id 1]} {:x lt}]
+                          [{:update :typed :set {:tt :?x} :where [:= :id 1]} {:x ot}]
+                          [{:select [:id] :from [:typed] :where [:< [:composite :tz :id] [:composite :?c :?i]]} {:c instant :i 1}]]]
         (testing (pr-str q params)
           (is (some? (runs! q params {})))
-          (is (accepted? reg q params {})))))))
+          (is (accepted? reg q params {}))))
+      ;; converted on assignment alone, in the session's time zone: stricter than PostgreSQL
+      (doseq [[q params] [[{:update :typed :set {:ts :?x} :where [:= :id 1]} {:x instant}]
+                          [{:update :typed :set {:d :?x} :where [:= :id 1]} {:x instant}]
+                          [{:update :typed :set {:d :?x} :where [:= :id 1]} {:x local}]]]
+        (testing (str "stricter than PostgreSQL: " (pr-str q params))
+          (is (some? (runs! q params {})))
+          (is (not (accepted? reg q params {}))))))))
 
 (deftest a-character-goes-to-a-character-column-alone
   (when *db*
@@ -232,15 +240,21 @@
           (is (some? (runs! q {:x x} {})))
           (is (accepted? reg q {:x x} {})))))))
 
-(deftest a-date-or-time-sent-untyped-to-a-text-column-is-refused-though-postgresql-takes-it
+(deftest a-date-or-time-to-a-text-column-is-refused-though-postgresql-assigns-it
   (when *db*
-    (let [reg (registry)]
-      (doseq [v [(java.sql.Timestamp. 0) (java.sql.Date/valueOf "1990-01-02") (java.sql.Time/valueOf "10:00:00")
-                 (java.time.Instant/ofEpochSecond 0) (java.time.LocalDate/of 1990 1 2) (java.time.LocalDateTime/of 1990 1 2 3 4)
-                 (java.util.Date. 0)]
-              q [{:select [:id] :from [:accounts] :where [:= :email :?x]}
-                 {:update :accounts :set {:email :?x} :where [:= :id 1]}
-                 {:insert-into :accounts :values [{:email :?x}]}]]
+    (let [reg (registry)
+          writes [{:update :accounts :set {:email :?x} :where [:= :id 1]}
+                  {:insert-into :accounts :values [{:email :?x}]}]]
+      ;; java.time's go typed: assigned through the text input alone ('a'), compared not at all
+      (doseq [v [(java.time.Instant/ofEpochSecond 0) (java.time.LocalDate/of 1990 1 2) (java.time.LocalDateTime/of 1990 1 2 3 4)]]
+        (doseq [q writes]
+          (testing (pr-str q v)
+            (is (some? (runs! q {:x v} {})))
+            (is (not (accepted? reg q {:x v} {})))))
+        (is (not (accepted? reg {:select [:id] :from [:accounts] :where [:= :email :?x]} {:x v} {}))))
+      ;; java.sql's go untyped, their text in the JVM's time zone: sent nowhere
+      (doseq [v [(java.sql.Timestamp. 0) (java.sql.Date/valueOf "1990-01-02") (java.sql.Time/valueOf "10:00:00")]
+              q (cons {:select [:id] :from [:accounts] :where [:= :email :?x]} writes)]
         (testing (pr-str q v)
           (is (some? (runs! q {:x v} {})))
           (is (not (accepted? reg q {:x v} {}))))))))

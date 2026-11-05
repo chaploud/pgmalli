@@ -205,7 +205,7 @@ rounds it (a value at exactly half a unit past may round out of range):
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:> :created_at [:cast :?since :timestamptz]]}))
-;; => {:since [:or [:time/instant #:pg{:type "timestamp with time zone"}] [inst? #:pg{:type "timestamp with time zone"}] :time/offset-date-time :string :time/local-date :time/local-date-time :keyword]}
+;; => {:since [:or [:time/instant #:pg{:type "timestamp with time zone"}] :time/offset-date-time :string :time/local-date :time/local-date-time :keyword]}
 ```
 
 PostgreSQL types a parameter once, so an argument of several uses takes the values each of them

@@ -17,7 +17,6 @@
             [malli.generator :as mg]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
-            next.jdbc.date-time
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.impl.files :as files]
             [pgmalli-next.impl.json :as json]

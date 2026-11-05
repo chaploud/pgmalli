@@ -372,11 +372,11 @@
     (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) (::array-use opts :assign))
     (let [k (shape/kind schema)
           t (driver-type schema true)
-          ;; a date or time column takes the java.time value its type is (the one reading's, which
-          ;; goes untyped or as the type) and pgjdbc's inst? (a java.sql value, a java.util.Date, an Instant)
-          t (if (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k))
-              (shape/update-base t #(shape/either (distinct [(shape/domain-base schema) %]) %))
-              t)
+          ;; a date or time column takes the java.time value its type is, which the one reading
+          ;; reads it as; a timetz one also the java.sql.Time the one reading leaves it as (inst?)
+          t (cond (= :time/offset-time k) (shape/update-base t #(shape/either (distinct [(shape/domain-base schema) %]) %))
+                  (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k)) (shape/update-base t (constantly (shape/domain-base schema)))
+                  :else t)
           n (some-> (base-type-name schema) types/entry :name)
           ;; labels (an enum's, a CHECK's list) are the column's values; an argument's type
           ;; keeps those a class sent goes as (pgmalli-next.impl.args/labelled-type)
@@ -463,8 +463,12 @@
         ;; a domain's value is sent as its base type's: the classes sent as that type, held to the
         ;; domain's checks, its definition in place of the reference
         d (shape/ref-target schemas (shape/non-null s))
-        ;; (a number domain's: its checks read the number; another's may hold code only the registry runs)
-        s (if (and d (some-> (base-type-name d) types/entry :name accept/number-type?)) d s)]
+        ;; (a number domain's: its checks read the number; a date and time one's, of a type more than
+        ;; one class goes as (a timestamptz an Instant and an OffsetDateTime); another's may hold
+        ;; code only the registry runs)
+        s (if (and d (or (some-> (base-type-name d) types/entry :name accept/number-type?)
+                         (some-> (shape/kind (shape/domain-base d)) (#(and (keyword? %) (= "time" (namespace %)))))))
+            d s)]
     (write-type (through-domain schemas s #(write-type % (assoc opts ::nothing-sent true))) opts)))
 
 (def untyped-kinds
