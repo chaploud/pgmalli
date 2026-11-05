@@ -167,14 +167,17 @@
 (deftest a-cast-of-a-number-literal-is-folded-as-postgresql-casts-it
   (is (= [{:fact :in-set :column "c" :values [3]}] (check-facts "c = (2.5)::integer"))))
 
-(deftest a-domain-over-char-n-takes-no-pattern-of-its-checks
-  (let [domain (fn [base definition]
-                 (first (p/facts {:name "public"
-                                  :types {"d" {:kind "DOMAIN" :base_type base :not_null false
-                                               :constraints [{:name "d_check" :definition definition}]}}
-                                  :tables {}})))]
-    (is (= [{:fact :max-length :max 4}] (map #(select-keys % [:fact :max]) (:facts (domain "character(4)" "CHECK (char_length(VALUE) <= 2)"))))
-        "its CHECKs are no patterns: those read text")))
+(deftest a-domain-over-char-n-or-citext-takes-a-check-read-otherwise-as-a-domain-check-not-as-nothing
+  (let [facts (fn [base definition]
+                (p/facts {:name "public"
+                          :types {"d" {:kind "DOMAIN" :base_type base :not_null false
+                                       :constraints [{:name "d_check" :definition definition}]}}
+                          :tables {}}))]
+    (let [fs (facts "character(4)" "CHECK (char_length(VALUE) <= 2)")]
+      (is (= [{:fact :max-length :max 4}] (map #(select-keys % [:fact :max]) (:facts (first fs)))) "char(n) measures without trailing spaces")
+      (is (= [:domain-check] (map :fact (rest fs)))))
+    (is (= [:unparsed] (map :fact (rest (facts "citext" "CHECK ((VALUE ~ 'a'::citext) OR (lower((VALUE)::text) = upper((VALUE)::text)))"))))
+        "citext compares otherwise")))
 
 (deftest branch-checks
   (is (= [{:fact :branch-check :dispatch "m"

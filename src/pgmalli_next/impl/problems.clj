@@ -368,7 +368,7 @@
    scope) or, for a nested statement, the chain of its own and the enclosing ones."
   [registry stmt scope ps opts]
   (let [scopes (syntax/chain scope)]
-    (vec (concat (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?
+    (vec (concat (for [table (distinct (for [[_ {:keys [table unknown?]}] (first scopes) :when unknown?] table))
                        :let [meant (query/table-suggestions registry table)]]
                    (cond-> {:kind :unknown-table :table table}
                      meant (assoc :did-you-mean meant)

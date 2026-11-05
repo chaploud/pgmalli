@@ -618,7 +618,7 @@
 (defn column-keyword?
   "Whether HoneySQL writes keyword x as a column: no parameter, call or SQL word; under format,
    as it writes one (value-keyword?: under :quoted, :null is a column \"null\")."
-  ([x] (and (keyword? x) (not (sql-value x)) (not (param-key x)) (not (shorthand-fn x))))
+  ([x] (column-keyword? x nil))
   ([x format] (and (keyword? x) (not (value-keyword? x format)))))
 
 (defn vectorish

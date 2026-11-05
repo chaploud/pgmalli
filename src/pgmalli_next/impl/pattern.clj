@@ -450,9 +450,9 @@
                            citext-value? (and (citext? root) (contains? (uncast-columns (some-> expr x/canonical)) :VALUE))
                            ;; NOT VALID: existing values may violate it, so it is reported, not applied
                            ms (when (not= false is_valid) (some-> expr (normalize {:VALUE (column-type-info root (contains? enums (first (type-ident root))) not_null)}) match-columns))
-                           ms (cond citext-value? (let [cs (map citext-fact ms)] (when (every? some? cs) cs))
-                                    bpchar? (let [cs (map bpchar-fact ms)] (when (every? some? cs) cs))
-                                    :else ms)
+                           ;; a pattern it reads otherwise (citext's, char(n)'s) matches none: the CHECK is reported
+                           ms (let [f (cond citext-value? citext-fact bpchar? bpchar-fact)]
+                                (if f (some->> (seq ms) (map f) (#(when (every? some? %) %))) ms))
                            check (when expr (merge base {:constraint cname :sql definition :expr (x/canonical expr)}))]]
                  (cond ms {:facts (map #(merge check (dissoc % :column)) ms)}
                        (and expr citext-value?) {:check (merge base {:fact :unparsed :constraint cname :input definition :error citext-error})}

@@ -2485,6 +2485,18 @@
     (is (= [:happy :sad] (vec (shape/entries (:pgmalli/element (shape/props x))))) "the elements' schema, for an application sending them its own way")
     (is (not (m/validate x (into-array String ["happy"]) {:registry registry})) "a String[] goes as varchar[]: mood = character varying does not exist")))
 
+(deftest an-unknown-table-is-reported-once-though-returning-sees-it-as-old-and-new-too
+  (doseq [q [{:update :userz :set {:nick "a"} :returning [:id]} {:delete-from :userz :returning [:id]}]]
+    (is (= [:unknown-table] (map :kind (check q))) (pr-str q))))
+
+(deftest a-column-whose-checks-contradict-each-other-takes-no-integer-but-its-row-validates
+  (let [reg (pgmalli/registry {:registry {:pg.public/pairs [:map {:pg/table "public.pairs"} [:a [:maybe [:pg/integer {:pg/type "integer" :min 6 :max 2}]]]]}})]
+    (is (m/validate :pg.public/pairs {:a nil} {:registry reg}))
+    (is (not (m/validate :pg.public/pairs {:a 4} {:registry reg})))))
+
+(deftest a-number-keyword-is-a-number-not-a-column
+  (is (= [] (check {:select [[:10 :n]] :from [:users]}))))
+
 (deftest a-checks-list-literal-is-read-as-the-columns-type-reads-it
   (let [reg (pgmalli/registry {:registry {:pg.public/q [:map {:pg/table "public.q"}
                                                         [:u [:maybe [:enum {:pg/type "uuid"} #uuid "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"]]]

@@ -127,8 +127,9 @@
       :compile (fn [{:keys [min max] gen-min :gen/min gen-max :gen/max} _ _]
                  (let [lo (clojure.core/max lo (or min lo)) hi (clojure.core/min hi (or max hi))]
                    {:pred (fn [v] (and (int? v) (<= lo v hi)))
-                    :type-properties {:error/message (str "should be an integer between " lo " and " hi)
-                                      :gen/gen (gen/large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})}
+                    ;; CHECKs that contradict each other (a > 5 AND a < 3) leave no value, none generated
+                    :type-properties (cond-> {:error/message (if (<= lo hi) (str "should be an integer between " lo " and " hi) "no integer fits: its CHECKs contradict each other")}
+                                       (<= lo hi) (assoc :gen/gen (gen/large-integer* {:min (clojure.core/max lo (or gen-min lo)) :max (clojure.core/min hi (or gen-max hi))})))
                     :min 0 :max 0}))})))
 
 (def smallint-schema (bounded-int :pg/smallint))
