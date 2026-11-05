@@ -98,7 +98,7 @@ spelling.
 | `bit(n)`, `bit varying(n)` | `:string` of 0s and 1s (`:pg/max-length n`) |
 | `citext` | `:string` |
 | `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, geometric, range, multirange, `reg*` and other types | `[:any {:pg/type "..."}]` |
-| a composite type, a type pgmalli does not support | `[:any {:pg/type "..."}]` (`[:some ...]` when NOT NULL), listed in `:unrendered` |
+| a composite type, a type pgmalli does not support, a domain over an array of a domain (pgjdbc reads its elements as objects of the element's domain) | `[:any {:pg/type "..."}]` (`[:some ...]` when NOT NULL), listed in `:unrendered` |
 
 An enum of another schema (`wh.stock.k` of type `catalog.kind`) is `[:any]` (`[:some]` when
 NOT NULL) in the file, as each schema is read alone; its `:unrendered` entry names the schema
