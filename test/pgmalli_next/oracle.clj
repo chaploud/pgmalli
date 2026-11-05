@@ -330,7 +330,10 @@
                              (some (fn [[[rel col] ls]]
                                      (and (= col (last (str/split (name c) #"\."))) (named rel) (contains? ls (set (map str (:allowed p))))))
                                    listed))))
-    ;; an UPDATE's SET or ON CONFLICT DO UPDATE's, even where it touches no row or none conflicts
+;; a literal sent typed that PostgreSQL converts on assignment alone, which an argument there
+    ;; does not take (docs/queries.md "Stricter than PostgreSQL")
+    :literal-type (boolean (and (:type p) (accept/accepts? (:type p) (:sent p) :assign) (not (accept/holds? (:type p) (:sent p) :assign))))
+        ;; an UPDATE's SET or ON CONFLICT DO UPDATE's, even where it touches no row or none conflicts
     :not-null-violation (contains? #{:set :do-update-set} (:clause p))
     false))
 

@@ -204,7 +204,7 @@
       (let [own-alts (when-not (query/untyped? own) (shape/alternatives own))
             ;; a String of the column's own :string goes as varchar, which a type of another
             ;; category may not take there (regclass = varchar does not exist)
-            own-alts (if (or (= :cast context) (some #(or (= t %) (takes? %)) (jdbc/string-sends opts)))
+            own-alts (if (or (= :cast context) (some #(or (= t %) (accept/accepts? t % context)) (jdbc/string-sends opts)))
                        own-alts
                        (remove #(= :string (shape/kind %)) own-alts))
             ;; a number held to a number column's range, which PostgreSQL checks after converting it
