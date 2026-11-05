@@ -2479,6 +2479,12 @@
              {:select [[[:count [:distinct :nick]] :a]] :from [:users]}]]
     (is (= [] (check q)) (pr-str q))))
 
+(deftest an-enum-compared-with-any-takes-a-pgobject-of-its-array-type-its-elements-the-labels
+  (let [x (:ms (args {:select [:id] :from [:users] :where [:= :mood [:any :?ms]]}))]
+    (is (= "PGobject of mood[]" (:pgmalli/describe (shape/props x))))
+    (is (= [:happy :sad] (vec (shape/entries (:pgmalli/element (shape/props x))))) "the elements' schema, for an application sending them its own way")
+    (is (not (m/validate x (into-array String ["happy"]) {:registry registry})) "a String[] goes as varchar[]: mood = character varying does not exist")))
+
 (deftest a-literal-honeysql-sends-to-an-argument-that-takes-no-value-of-its-class-is-a-problem
   (let [lits #(map (juxt :value :sent :type) (filter (comp #{:literal-type} :kind) (check %)))]
     (is (= [[2 "bigint" "integer"]] (lits {:select [[[:round :score 2] :r]] :from [:users]})) "round(integer, bigint) does not exist")

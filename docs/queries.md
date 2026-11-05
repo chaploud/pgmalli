@@ -351,8 +351,11 @@ type compares with; under `unnest`, each element assigned to the column. Compare
 column whole (`=`, `&&`, `@>`, whose `anyarray` takes an array of one type alone), it takes a
 Java array the one sending sends as the column's type alone (an `int[]` column an `Integer[]` or
 an `int[]`, no `long[]`): where none goes so (a `text[]` column, a `String[]` going as
-`varchar[]`), a `PGobject` of the type, or cast it (`[:cast :?tags [:raw "text[]"]]`). Without
-such a class (an enum type's array) an array argument is `:any`.
+`varchar[]`), a `PGobject` of the type, or cast it (`[:cast :?tags [:raw "text[]"]]`). So does
+one compared with `ANY` where no Java array goes as the element type's array (an enum's:
+`[:= :mood [:any :?ms]]` takes a `PGobject` of `mood[]`, its elements' schema under
+`:pgmalli/element`; cast, `[:cast :?ms [:raw "mood[]"]]`, an array of the labels). Elsewhere,
+without such a class, an array argument is `:any`.
 
 An enum argument takes its labels as keywords, which go untyped, or as strings cast
 (`[:cast :?m :user_status]`): PostgreSQL neither compares a `varchar` with an enum nor assigns

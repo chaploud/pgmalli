@@ -344,12 +344,16 @@
                    (if (next as) (shape/merge-props (first as) {:pg/classes (into #{} (mapcat (comp :pg/classes shape/props)) as)}) (first as))))
                alts)]
     (cond (seq alts) (shape/either (cond-> alts (some #{pg-object} (shape/alternatives (shape/non-null t))) (concat [pg-object])) :any)
-          ;; no Java array of the type (text[]'s, String[] going as varchar[]): a PGobject of it
-          (= :whole use) (let [a (types/short-name (types/array-of (or elem p)))]
-                           (shape/merge-props pg-object
-                                              {:error/message (str "should be a PGobject of type " a " (no Java array goes as " a ", which a comparison of arrays"
-                                                                   " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
-                                               :pgmalli/describe (str "PGobject of " a)}))
+          ;; no Java array of the type (text[]'s, String[] going as varchar[]; an enum's): a PGobject
+          ;; of it, which PostgreSQL takes as the array a comparison infers, its elements t's
+          (and p (#{:whole :compare} use))
+          (let [a (types/short-name (types/array-of (or elem p)))]
+            (shape/merge-props pg-object
+                               {:error/message (str "should be a PGobject of type " a " (no Java array goes as " a ", which "
+                                                    (if (= :whole use) "a comparison of arrays" "= ANY(?)")
+                                                    " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
+                                :pgmalli/describe (str "PGobject of " a)
+                                :pgmalli/element (shape/non-null t)}))
           :else :any)))
 
 (defn- base-type-name

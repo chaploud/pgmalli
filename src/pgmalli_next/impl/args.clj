@@ -285,7 +285,10 @@
         :let [x (array-arg value)
               [k elements?] (if x [x false] (value-arg registry chain value))]
         :when (and k (not (and elements? (or (syntax/in-ops op) (second (value-arg registry chain side))))))
-        :let [t (compared-type op (compared-arg-type registry chain side op opts) (when-not elements? x) opts)]
+        :let [;; ANY(?)'s elements of a domain's base type, which a CHECK's list there reads as (a list over varchar takes a String[])
+              base (when (and x (not elements?)) (some->> (query/side-schema registry chain side opts) (query/slot-type registry)))
+              t (compared-type op (compared-arg-type registry chain side op opts) (when-not elements? x)
+                               (cond-> opts (string? base) (assoc ::jdbc/element-type base)))]
         :when (not (and elements? (query/untyped? t)))]
     [k (if elements? (jdbc/array-type t opts :unnest) t)]))
 
