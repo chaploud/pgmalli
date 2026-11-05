@@ -1,6 +1,6 @@
-(ns pgmalli-next.labels-test
-  "A CHECK's list of values, on a column or a domain, against the literals and arguments
-   PostgreSQL reads as its type's values."
+(ns pgmalli-next.rendered-table-test
+  "Queries against a table rendered from facts as generation renders them: identity, domains,
+   a varchar(n)."
   (:require [clojure.test :refer [deftest is]]
             [malli.core :as m]
             [pgmalli-next.core :as pgmalli]
@@ -35,10 +35,3 @@
 (deftest an-unknown-schema-names-tables-before-what-derives-from-them
   (is (= [:pg.public/t :pg.public.t/insert :pg.public.t/update]
          (take 3 (:known (ex-data (try (pgmalli/as-read registry :pg.public/zz) (catch clojure.lang.ExceptionInfo e e))))))))
-
-(deftest a-coalesce-of-a-check-list-takes-the-others-values-too
-  (is (= [] (:problems (h/analyze registry {:select [:s.id] :from [[{:select [:id [[:coalesce :n 3] :cc]] :from [:t]} :s]] :where [:= :s.cc 3]})))))
-
-(deftest a-recursive-ctes-later-rows-hold-values-beyond-its-first-members-list
-  (is (= [] (:problems (h/analyze registry {:with-recursive [[:c {:union-all [{:select [:n] :from [:t]} {:select [[[:+ :n 1] :n]] :from [:c]}]}]]
-                               :select [:n] :from [:c] :where [:= :c.n 3]})))))

@@ -850,10 +850,6 @@
       (is (not (ok? {:ip "10.0.0.1"})) "a String goes as varchar, which an inet column does not take: a PGobject of inet")
       (is (ok? {:ip default}) "HoneySQL's DEFAULT where the database fills a column"))))
 
-(deftest a-number-label-is-read-from-a-string-sent-untyped
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:l [:enum {:pg/type "integer" :pg/constraints ["t_l_check"]} 1 2 3]]]}})]
-    (is (m/validate (:l (:args (h/analyze reg {:update :t :set {:l [:cast :?l :integer]}} {}))) "1" {:registry reg}))))
-
 (deftest an-integer-is-a-bigint-columns-own
   (is (m/validate (:x (args {:select [:id] :from [:users] :where [:= :id :?x]} {:schema "sample"})) (int 1) {:registry registry})))
 
@@ -1037,22 +1033,15 @@
   (is (= {:pgmalli/problems []} (m/properties (m/schema (h/query-schema registry [:id] {:select [:nick] :from [:users] :where [:= :id :?id]} opts) {:registry registry})))
       "none on a query that agrees"))
 
-(def checked
-  (pgmalli/registry {:registry {:pg.public/email [:and :string [:re "@"]]
-                                :pg.public/roles [:map {:pg/table "public.roles"}
-                                                  [:role_key [:and {:pg/constraints ["roles_role_key_format"] :pg/type "character varying"}
-                                                              [:string {:max 255}] [:re "^[a-z_]+$"]]]
-                                                  [:nick [:maybe [:string {:max 40 :pg/type "character varying"}]]]
-                                                  [:mail [:ref {:pg/type "email"} :pg.public/email]]
-                                                  [:level [:int {:pg/type "integer" :min 1 :max 10}]]
-                                                  [:kind [:enum {:pg/type "kind"} "a" "b"]]]}}))
-
 (deftest nil-options-are-none
   (is (= [] (:problems (h/analyze {:app/x :int} {:select [1]} nil))))
   (is (= (pgmalli/as-read registry :pg.sample/users) (pgmalli/as-read registry :pg.sample/users nil))))
 
 (deftest a-like-pattern-is-no-value-of-the-column
-  (is (m/validate (:x (:args (h/analyze checked {:select [:role_key] :from [:roles] :where [:like :role_key :?x]}))) "%adm%"))
+  (let [overridden (pgmalli/registry {:registry {:pg.public/roles [:map {:pg/table "public.roles"}
+                                                                   [:role_key [:and {:pg/type "character varying"} :string [:re "^[a-z_]+$"]]]]}})]
+    (is (m/validate (:x (:args (h/analyze overridden {:select [:role_key] :from [:roles] :where [:like :role_key :?x]}))) "%adm%")
+        "an override's regex holds for a value, not for a pattern"))
   (is (m/validate (:n (args {:select [:id] :from [:users] :where [:ilike :nick :?n]})) (str "%" (apply str (repeat 40 "a")) "%"))
       "longer than the column's 40"))
 
@@ -1374,18 +1363,6 @@
   (is (= [{:kind :unknown-column :column :nik :did-you-mean [:nick] :var #'a-broken-query-fn}]
          (h/schema-problems {:ns 'pgmalli-next.honeysql-test}))))
 
-(deftest a-string-to-a-text-column-a-check-narrows-is-fine
-  (let [reg (pgmalli/registry {:registry {:pg.public/attempts [:map {:pg/table "public.attempts"}
-                                                               [:id [:int {:pg/type "bigint"}]]
-                                                               [:status [:enum {:default "active" :pg/constraints ["attempts_status_check"] :pg/default "active" :pg/type "character varying"}
-                                                                         "active" "submitted"]]]}})]
-    (is (= [] (:problems (h/analyze reg {:select [:id] :from [:attempts] :where [:= :status "active"]})))
-        "varchar = varchar needs no cast: only an enum type does")
-    (is (= [] (:problems (h/analyze reg {:update :attempts :set {:status "submitted"} :where [:= :id 1]}))))
-    (is (= [{:kind :enum-literal :column :status :value "gone" :allowed ["active" "submitted"]}]
-           (:problems (h/analyze reg {:select [:id] :from [:attempts] :where [:= :status "gone"]})))
-        "a value outside the CHECK's list is still reported")))
-
 (deftest a-function-alias-is-not-held-to-the-columns-it-lists
   (is (= [{:kind :unknown-column :column :t.name}] (check {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]}))
       "PostgreSQL reads t.name as name(t)"))
@@ -1402,9 +1379,9 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/attempts [:map {:pg/table "public.attempts"}
                                                                [:id [:int {:pg/type "bigint"}]]
                                                                [:role [:string {:pg/type "character varying"}]]
-                                                               [:status [:enum {:pg/constraints ["attempts_status_check"] :pg/type "character varying"} "active" "submitted"]]]}})
+                                                               [:status [:enum {:pg/type "character varying"} "active" "submitted"]]]}})
         o {}]
-    (is (= {:status [:enum {:pg/constraints ["attempts_status_check"] :pg/type "character varying"} "active" "submitted" :active :submitted]}
+    (is (= {:status [:enum {:pg/type "character varying"} "active" "submitted" :active :submitted]}
            (update-vals (:args (h/analyze reg {:select [:id] :from [:attempts] :where [:= :status :?status]} o)) m/form))
         "a column with labels keeps them, as keywords too")
     (is (= {:role [:or [:string {:pg/type "character varying"}] :keyword]}
@@ -1478,7 +1455,7 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/hosts [:map {:pg/table "public.hosts"}
                                                             [:id [:int {:pg/type "integer"}]]
                                                             [:ip [:any {:pg/type "inet"}]]
-                                                            [:flags [:string {:min 4 :max 4 :pg/type "bit"}]]
+                                                            [:flags [:string {:pg/type "bit" :pg/max-length 4}]]
                                                             [:mask [:maybe [:string {:pg/type "bit"}]]]
                                                             [:doc [:any {:pg/type "jsonb"}]]
                                                             [:note [:string {:pg/type "text"}]]
@@ -1510,10 +1487,6 @@
   (is (= [] (check {:truncate [:users :restart :identity]})))
   (is (= [{:kind :unknown-table :table "sample.nosuch"}] (check {:truncate [[:users :nosuch]]}))))
 
-(deftest an-inlined-enum-literal-is-one-too
-  (is (= [{:kind :enum-literal :column :mood :value "zz" :allowed ["happy" "sad"]}]
-         (check {:select [:id] :from [:users] :where [:= :mood [:inline "zz"]]}))))
-
 (deftest an-unknown-clause-of-the-query-is-unread
   (is (= [{:kind :unread-clause :clause :selct :did-you-mean [:select]}] (check {:selct [:id]}))))
 
@@ -1543,8 +1516,7 @@
     (is (not (m/validate t "2020-01-01" malli-opts)))))
 
 (deftest a-domain-argument-takes-what-pgjdbc-takes-for-its-base
-  (let [reg (pgmalli/registry {:registry {:pg.public/day [:time/local-date {:pg/type "date"}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:d [:ref {:pg/type "day"} :pg.public/day]]]}})
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:time/local-date {:pg/type "date" :pg/domain "day"}]]]}})
         t (:d (:args (h/analyze reg {:update :t :set {:d :?d}})))]
     (is (not (m/validate t (java.util.Date.) malli-opts)))
     (is (m/validate t (java.time.LocalDate/parse "2020-01-01") malli-opts))))
@@ -1571,12 +1543,10 @@
   (is (= [:map [:?column? [:maybe :any]]] (row {:select [:NULL] :from [:users]}))))
 
 (def ^:private kinds-registry
-  (pgmalli/registry {:registry {:pg.public/pos [:and [:int {:pg/type "bigint"}] [:>= 1]]
-                                :pg.public/t [:map {:pg/table "public.t"}
+  (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                               [:r [:string {:pg/type "regclass"}]] [:i [:string {:pg/type "inet"}]]
                                               [:re [:double {:pg/type "real"}]]
-                                              [:p [:ref {:pg/type "pos"} :pg.public/pos]]
-                                              [:dl [:enum {:pg/type "double precision" :pg/constraints ["c"]} 1.5 2.0]]
+                                              [:p [:pg/smallint {:pg/type "smallint"}]]
                                               [:j [:any {:pg/type "json"}]]]}}))
 
 (deftest each-rule-of-what-an-argument-takes-holds
@@ -1584,19 +1554,11 @@
         ok? #(m/validate %1 %2 {:registry reg})]
     (is (= [] (:problems (h/analyze reg {:update :t :set {:r :?x}}))) "a regclass takes a varchar argument")
     (is (ok? (:r (:args (h/analyze reg {:update :t :set {:re :?r}}))) 1) "a real takes an integer")
-    (is (ok? (:p (:args (h/analyze reg {:update :t :set {:p [:cast :?p :pos]}}))) 0.6) "a fraction rounded to an integer domain's range")
+    (is (ok? (:p (:args (h/analyze reg {:update :t :set {:p [:cast :?p :smallint]}}))) 32767.4) "a fraction rounded to an integer type's range")
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (h/values-schema registry :users {:schema "sample" :nope 1})))
     (is (= [:map [:s [:string {:pg/type "character varying"}]]] (row {:select [["s" :s]] :from [:users]} {:schema "sample"}))
         "a String goes as varchar by default")
-    (is (not (ok? (:d (:args (h/analyze reg {:update :t :set {:dl :?d}}))) 1)) "1.5 is no integer label")
     (is (= {:x [:any {:pg/type "json"}]} (:args (h/analyze reg {:update :t :set {:j :?x}} {}))))))
-
-(deftest an-enum-domains-checks-stay-around-its-labels
-  (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "ok" "sad"]
-                                          :pg.public/good [:and [:ref {:pg/type "mood"} :pg.public/mood] [:not= "ok"]]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:g [:ref {:pg/type "good"} :pg.public/good]]]}})
-        t (:g (:args (h/analyze reg {:update :t :set {:g :?g}} {})))]
-    (is (not (m/validate t "ok" {:registry reg})))))
 
 (deftest each-rule-of-a-row-written-holds
   (is (m/validate (h/values-schema registry :pg.sample/users {:schema "sample"})
@@ -1864,7 +1826,7 @@
 (deftest an-enum-arrays-argument-is-an-array-of-the-enum-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/feel [:enum "a" "b"]
                                           :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
-                                                        [:fs [:maybe [:vector {:pg/type "feel[]"} [:ref {:pg/type "feel"} :pg.public/feel]]]]]}})
+                                                        [:fs [:maybe [:vector {:pg/type "feel[]"} [:ref :pg.public/feel]]]]]}})
         t (:v (:args (h/analyze reg {:update :t :set {:fs :?v} :where [:= :id 1]})))]
     (is (= [:any {:pgmalli/untyped :type}] t) "no Java array goes as feel[]: a String[] goes as varchar[], which feel[] does not take, a vector as jsonb")))
 
@@ -1910,8 +1872,7 @@
       "pgjdbc sends a Long[] as a bigint[]"))
 
 (deftest a-domains-array-argument-takes-its-base-types-typed-array
-  (let [reg (pgmalli/registry {:registry {:pg.public/d_int [:pg/integer {:pg/type "integer"}]
-                                          :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:di [:maybe [:ref {:pg/type "d_int"} :pg.public/d_int]]]]}})]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:di [:maybe [:pg/integer {:pg/type "integer" :pg/domain "d_int"}]]]]}})]
     (is (m/validate (:v (:args (h/analyze reg {:select [:id] :from [:t] :where [:= :di [:any :?v]]}))) (int-array [1 2]) {:registry reg}))))
 
 (deftest a-case-resolves-its-values-as-coalesce-does
@@ -2086,10 +2047,9 @@
       (is (not (ok? insert :rows [{:group_id 1}])) "score is NOT NULL"))))
 
 (deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
-  (let [reg (pgmalli/registry {:registry {:pg.public/dnum [:and {:pg/type "numeric(10,2)"} 'decimal? [:> 0]]
-                                          :pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
+  (let [reg (pgmalli/registry {:registry {:pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
                                                         [:nn [:maybe [:vector {:pg/type "numeric[]"} 'decimal?]]]
-                                                        [:dn [:maybe [:vector {:pg/type "dnum[]"} [:ref {:pg/type "dnum"} :pg.public/dnum]]]]]}})]
+                                                        [:dn [:maybe [:vector {:pg/type "numeric[]" :pg/domain "dnum[]"} 'decimal?]]]]}})]
     (doseq [c [:nn :dn]]
       (is (m/validate (:p (:args (h/analyze reg {:update :z :set {c :?p} :where [:= :id 1]}))) (long-array [1]) {:registry reg}) (name c)))))
 

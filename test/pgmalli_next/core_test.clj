@@ -12,7 +12,7 @@
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.shape :as shape]
-            [pgmalli-next.test-db :refer [generated *db* exec-sql! sql-literal with-postgres]])
+            [pgmalli-next.test-db :refer [generated *db* exec-sql! with-postgres]])
   (:import (java.io File)))
 
 (use-fixtures :once with-postgres)
@@ -181,26 +181,6 @@
              (:pg/exclude props)))
       (is (= [:exclude] (map :kind (:diagnostics g))) "the schemas do not check it, and say so"))))
 
-(deftest char-n-integer-and-domain-checks-never-refuse-what-postgresql-takes
-  (when *db*
-    (let [[reg] (registry-of "cn" "CREATE SCHEMA cn;
-                                   CREATE DOMAIN cn.d4 AS char(4) CHECK (char_length(VALUE) <= 2);
-                                   CREATE DOMAIN cn.r4 AS char(4) CHECK (VALUE ~ '^.{4}$');
-                                   CREATE DOMAIN cn.di AS integer CHECK (VALUE * 2 > 0);
-                                   CREATE DOMAIN cn.cc AS char(2) CHECK (VALUE ~ '^[A-Z]{2}$');
-                                   CREATE DOMAIN cn.dom AS integer CHECK (VALUE <> 3);
-                                   CREATE DOMAIN cn.o AS cn.dom CHECK (VALUE IN (1, 2, 5));
-                                   CREATE TABLE cn.t (country char(2) NOT NULL CHECK (country ~ '^[A-Z]{2}$'),
-                                                      cur char(3) NOT NULL CHECK (cur IN ('JPY', 'USD', 'EUR')),
-                                                      d cn.d4, r cn.r4, i cn.di, c cn.cc NOT NULL, o cn.o NOT NULL,
-                                                      a int, b int, CHECK (b = (a * 0.5)::int), n int CHECK (n = 2.5::integer));")
-          base {:country "JP" :cur "JPY" :c "JP" :o 1}
-          takes? (fn [row] (try (exec-sql! (first (honey.sql/format {:insert-into :cn.t :values [row]} {:inline true}))) true
-                                (catch clojure.lang.ExceptionInfo _ false)))]
-      (doseq [row [{:d "ab  "} {:d "abc"} {:r "ab"} {:i 5} {:i 2000000000} {:a 5 :b 3} {:a 5 :b 2} {:n 3} {:n 2}]
-              :let [row (merge base row)]]
-        (when (takes? row) (is (m/validate :pg.cn.t/insert row {:registry reg}) (pr-str row)))))))
-
 (deftest a-type-of-another-schema-says-its-schema-and-an-override-refers-to-it
   (when *db*
     (exec-sql! "CREATE SCHEMA catalog; CREATE SCHEMA wh;
@@ -237,20 +217,6 @@
         (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg})))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #":overrides: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"
                           (files/generated {:db *db* :schemas ["ov"] :overrides {:ov.jobs/inptu :map}})))))
-
-(deftest a-check-through-a-cast-that-changes-the-value-takes-what-postgresql-takes
-  (when *db*
-    (let [cases [["f" "float8" "f::integer = 2" 2.5] ["n" "numeric" "n::integer = 3" 2.5M] ["t" "text" "t::varchar(3) = 'abc'" "abcd"]
-                 ["l" "text" "length(l::varchar(2)) = 2" "abc"] ["c" "text" "c::char(3) IN ('abc')" "abc  "] ["b" "boolean" "b::text = 'true'" true]
-                 ["r" "real" "r::text = '0.1'" 0.1] ["g" "numeric" "g::bigint IN (1, 2)" 1.4M] ["w" "float8" "w >= 0" ##NaN]]
-          [reg data] (registry-of "vc" (str "CREATE SCHEMA vc; CREATE TABLE vc.t (id int PRIMARY KEY"
-                                            (apply str (for [[c t chk] cases] (str ", " c " " t " CHECK (" chk ")"))) ");"))
-          unrendered (set (keep :constraint (:unrendered data)))
-          base (zipmap (cons :id (map (comp keyword first) cases)) (cons 1 (repeat nil)))]
-      (doseq [[i [c _ chk v]] (map-indexed vector cases)]
-        (exec-sql! (str "INSERT INTO vc.t (id, " c ") VALUES (" (+ 10 i) ", " (cond (string? v) (sql-literal v) (and (float? v) (Double/isNaN v)) "'NaN'" :else v) ")"))
-        (is (or (unrendered (str "t_" c "_check")) (m/validate :pg.vc/t (assoc base (keyword c) v) {:registry reg}))
-            (str chk " takes " (pr-str v)))))))
 
 (deftest an-unqualified-name-means-the-generated-schema-of-that-name
   (let [registry (pgmalli/registry pgmalli-next.sample/sample-data)

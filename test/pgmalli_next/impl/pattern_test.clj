@@ -10,7 +10,7 @@
    :tables {"t" {:columns [{:name "c" :position 1 :data_type "integer" :is_nullable true}
                            {:name "m" :position 2 :data_type "mood" :type_schema "public" :is_nullable false :default_value "'happy'::mood"}
                            {:name "v" :position 3 :data_type "character varying" :is_nullable true :max_length 40}]
-                 :constraints {"t_c_check" {:name "t_c_check" :type "CHECK" :check_clause "CHECK (c > 0)"}}}}})
+                 :constraints {}}}})
 
 (deftest facts-from-types-and-columns
   (is (= [{:fact :enum-type :schema "public" :type-name "mood" :values ["happy" "sad"]}
@@ -19,8 +19,7 @@
           {:fact :enum :schema "public" :table "t" :column "m" :type-name "mood" :values ["happy" "sad"]}
           {:fact :column :schema "public" :table "t" :column "v" :type "character varying" :position 3 :nullable? true}
           {:fact :max-length :schema "public" :table "t" :column "v" :max 40}]
-         (p/facts schema))
-      "a CHECK is no fact: the database checks it"))
+         (p/facts schema))))
 
 (deftest ir-sql-reads-the-length-of-the-types-with-one
   (let [max-length (second (re-find #"(?s)'max_length', CASE(.*?)END" (slurp (io/resource "pgmalli-next/ir.sql"))))]

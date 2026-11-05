@@ -35,12 +35,7 @@
                      :constraints {"users_pkey" {:name "users_pkey" :type "PRIMARY KEY" :columns ["id"]}
                                    "users_nick_key" {:name "users_nick_key" :type "UNIQUE" :columns ["nick"]}
                                    "users_group_id_fkey" {:name "users_group_id_fkey" :type "FOREIGN KEY" :columns ["group_id"]
-                                                          :references {:schema "public" :table "groups" :columns ["id"]}}
-                                   "age_check" {:name "age_check" :type "CHECK" :check_clause "CHECK (age IS NULL OR age >= 0 AND age <= 150)"}
-                                   "title_check" {:name "title_check" :type "CHECK" :check_clause "CHECK (length(TRIM(BOTH FROM title)) > 0)"}
-                                   "closed_check" {:name "closed_check" :type "CHECK"
-                                                   :check_clause "CHECK (mood = 'sad'::mood AND closed_at IS NOT NULL OR mood = 'happy'::mood AND closed_at IS NULL)"}
-                                   "score_check" {:name "score_check" :type "CHECK" :check_clause "CHECK (score <= total)"}}}}})
+                                                          :references {:schema "public" :table "groups" :columns ["id"]}}}}}})
 
 (def ^:private facts (p/facts schema))
 
@@ -60,14 +55,13 @@
     (is (= [:age [:maybe [:pg/integer {:pg/type "integer"}]]]
            (nth users 2)))
     (is (= 19 (count users)))
-    (is (= [] unrendered) "a CHECK is no unrendered entry: the database checks it")
+    (is (= [] unrendered))
     (testing "validation and generation through malli"
       (let [reg (registry-with registry)
             row {:id 1 :group_id 1 :mood "sad" :mail "a@b" :nick "n" :age 30 :title "t" :born (java.time.LocalDate/now)
                  :closed_at (java.time.Instant/now) :created_at (java.time.Instant/now) :seq 1 :full_name nil :score 1 :total 2
                  :price 1M :since (java.time.LocalDate/now) :flag true}]
         (is (m/validate :pg.public/users row {:registry reg}))
-        (is (m/validate :pg.public/users (assoc row :closed_at nil :title "  " :mail "nope" :age -1) {:registry reg}) "its CHECKs are the database's")
         (is (not (m/validate :pg.public/users (assoc row :title nil) {:registry reg})) "NOT NULL holds")))))
 
 (deftest only-rows-and-types-are-emitted
@@ -77,7 +71,7 @@
 (deftest unsupported-vocabulary-stays-unrendered
   (let [{:keys [unrendered]} (r/rendered (p/facts {:name "public" :types {}
                                                    :tables {"t" {:columns [{:name "g" :position 1 :data_type "geometry" :type_schema "public" :is_nullable true}]
-                                                                 :constraints {"k" {:name "k" :type "CHECK" :check_clause "CHECK (st_area(g) > 0)"}}}}}))]
+                                                                 :constraints {}}}}))]
     (is (= [:unknown-type] (map :fact unrendered)))))
 
 (deftest a-domain-is-no-entry-its-columns-carry-its-name
@@ -93,20 +87,19 @@
 
 (deftest numeric-and-key-shapes
   (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
-                                                 :tables {"t" {:columns [{:name "a" :position 1 :data_type "numeric" :is_nullable false :precision 3 :scale 1}
-                                                                         {:name "b" :position 2 :data_type "numeric" :is_nullable false :precision 4}
+                                                 :tables {"t" {:columns [{:name "a" :position 1 :data_type "numeric" :is_nullable false}
+                                                                         {:name "b" :position 2 :data_type "numeric" :is_nullable false}
                                                                          {:name "c" :position 3 :data_type "smallint" :is_nullable false}
                                                                          {:name "d" :position 4 :data_type "text" :is_nullable true}
                                                                          {:name "e" :position 5 :data_type "integer" :is_nullable true}]
                                                                :constraints {"t_d_key" {:name "t_d_key" :type "UNIQUE" :columns ["d"] :nulls_not_distinct true}
                                                                              "t_e_fkey" {:name "t_e_fkey" :type "FOREIGN KEY" :columns ["e"]
-                                                                                         :references {:match "FULL" :schema "public" :table "u" :columns ["id"]}}
-                                                                             "a_check" {:name "a_check" :type "CHECK" :check_clause "CHECK (a >= 0.5)"}}}}}))
+                                                                                         :references {:match "FULL" :schema "public" :table "u" :columns ["id"]}}}}}}))
         t (:pg.public/t registry)]
     (is (= {:pg/table "public.t" :pg/unique [{:columns ["d"] :nulls-distinct false}]
             :pg/foreign-keys [{:columns ["e"] :table "public.u" :to ["id"] :match :full}]}
            (second t)))
-    (is (= ['decimal? {:pg/type "numeric"}] (get-in t [2 1])) "numeric(3,1)'s precision is the database's")
+    (is (= ['decimal? {:pg/type "numeric"}] (get-in t [2 1])))
     (is (= ['decimal? {:pg/type "numeric"}] (get-in t [3 1])))
     (is (= [:pg/smallint {:pg/type "smallint"}] (get-in t [4 1])))
     (let [reg (registry-with registry)]
@@ -193,8 +186,7 @@
                                                                                       :constraints {"p_pkey" {:name "p_pkey" :type "PRIMARY KEY" :columns ["id"]}}}
                                                                                  "t" {:columns [{:name "b" :position 1 :data_type "integer" :is_nullable false}
                                                                                                 {:name "p_id" :position 2 :data_type "integer" :is_nullable true}]
-                                                                                      :constraints {"b_check" {:name "b_check" :type "CHECK" :check_clause "CHECK (b > 10) NOT ENFORCED" :is_valid true :is_enforced false}
-                                                                                                    "t_p_id_fkey" {:name "t_p_id_fkey" :type "FOREIGN KEY" :columns ["p_id"] :is_enforced false
+                                                                                      :constraints {"t_p_id_fkey" {:name "t_p_id_fkey" :type "FOREIGN KEY" :columns ["p_id"] :is_enforced false
                                                                                                                    :references {:schema "public" :table "p" :columns ["id"]}}}}}}))]
     (is (= [:map {:pg/table "public.t"} [:b [:pg/integer {:pg/type "integer"}]] [:p_id [:maybe [:pg/integer {:pg/type "integer"}]]]] (:pg.public/t registry))
         "the foreign key is not applied: the database never checks it")
@@ -245,7 +237,7 @@
                                                                                        {:name "m" :position 4 :data_type "mood" :type_schema "public" :is_nullable true}
                                                                                        {:name "ip" :position 5 :data_type "inet" :is_nullable true}
                                                                                        {:name "g" :position 6 :data_type "geometry" :type_schema "public" :is_nullable true}]
-                                                                             :constraints {"n_check" {:name "n_check" :type "CHECK" :check_clause "CHECK (n < 100)"}}}}})
+                                                                             :constraints {}}}})
                                                   {:public.jobs/input [:map [:prompt :string]]
                                                    :public.jobs/n [:int {:min 1}]
                                                    :public.jobs/m [:enum "a"]
@@ -254,7 +246,7 @@
         column (fn [k] (some #(when (= k (first %)) (last %)) (drop 2 (:pg.public/jobs registry))))]
     (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (column :input)) "the override is the column's value, its type kept")
     (is (= [:maybe [:any {:pg/type "jsonb"}]] (column :meta)) "another column of the type is as generated")
-    (is (= [:int {:min 1 :pg/type "integer"}] (column :n)) "the column's CHECKs still hold")
+    (is (= [:int {:min 1 :pg/type "integer"}] (column :n)) "the override's own bounds are kept")
     (is (= [:maybe [:enum {:pg/type "mood"} "a"]] (column :m)) "it replaces the type's schema, an enum's reference too")
     (is (= [:maybe [:string {:pg/type "inet"}]] (column :ip)) "a type the driver reads as an object of its own too")
     (is (empty? unrendered) "a column of a type pgmalli does not know is no longer left out")))

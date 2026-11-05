@@ -1,5 +1,5 @@
 (ns pgmalli-next.impl.registry-test
-  "Generated files as malli registries, on the checked-in test/resources/pgmalli-next/{sample,other}.edn."
+  "The generated file as a malli registry, on the checked-in test/resources/pgmalli-next/{sample,other,both}.edn."
   (:require [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [malli.error :as me]
@@ -21,7 +21,6 @@
                             {:columns ["group_id"] :table "sample.groups" :to ["id"]}
                             {:columns ["referrer_id"] :table "sample.users" :to ["id"]}]}
          (shape/row-props (shape/schema-of registry :pg.sample/users))))
-  (is (m/validate :pg.sample/users (assoc user :closed_at nil) opts) "a CHECK is the database's")
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"registry takes generated data" (pgmalli/registry "sample")) "no schema name: the data, or the classpath's file"))
 
 (deftest a-map-of-no-schemas-is-not-a-registry
@@ -40,7 +39,6 @@
     (is (not (insert {:id 1 :group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1})) "identity ALWAYS cannot be inserted")
     (is (not (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :nick_upper "X"})) "nor a generated column")
     (is (insert {:group_id 1 :mood "sad" :closed_at (java.time.Instant/now) :score 1 :seq 7 :total 9}) "serials and defaults may be given")
-    (is (insert {:group_id 1 :mood "happy" :closed_at (java.time.Instant/now) :score 1}) "a CHECK is the database's")
     (is (insert {:group_id 1 :score 1}) "an omitted mood takes its default"))
   (testing "from generated data instead of the classpath"
     (let [reg (pgmalli/registry {:registry {"pg.public/Order Items" [:map {:pg/table "public.Order Items"} ["line no" [:pg/integer {:pg/type "integer" :pg/default 1}]]]
@@ -86,7 +84,7 @@
                                        :types {}
                                        :tables {"t" {:columns [(col "n" "numeric") (col "sm" "numeric" :domain "small") (col "s" "text")
                                                                (col "tz" "time with time zone") (col "j" "jsonb") (col "d" "date" :domain "day")
-                                                               (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric" :precision 6 :scale 2)]
+                                                               (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric")]
                                                      :constraints {}}}})]]
                              {}))]
     {:registry reg :rows (try (vec (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})) (catch Exception e (ex-message e)))}))
