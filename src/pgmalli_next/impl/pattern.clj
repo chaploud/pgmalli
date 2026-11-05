@@ -226,8 +226,8 @@
    e))
 
 (defn- number-casts
-  "The expression with a number literal's cast to an integer type, numeric or double precision
-   done: (2.5)::integer is 3, rounded away from zero as from a numeric. Another cast stays, so
+  "The expression with a number literal's cast to an integer type, numeric, double precision or
+   real done: (2.5)::integer is 3, rounded away from zero as from a numeric. Another cast stays, so
    the CHECK matches no pattern."
   [e]
   (walk/postwalk (fn [f]
@@ -236,6 +236,7 @@
                      (cond (= :integer (:value t)) (if (integer? v) v (long (.setScale (bigdec v) 0 java.math.RoundingMode/HALF_UP)))
                            (= :exact (:value t)) (bigdec v)
                            (= "double precision" (:name t)) (double v)
+                           (= "real" (:name t)) (float v)
                            :else f)
                      f))
                  e))

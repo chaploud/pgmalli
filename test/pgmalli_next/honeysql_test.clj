@@ -2485,6 +2485,18 @@
     (is (= [:happy :sad] (vec (shape/entries (:pgmalli/element (shape/props x))))) "the elements' schema, for an application sending them its own way")
     (is (not (m/validate x (into-array String ["happy"]) {:registry registry})) "a String[] goes as varchar[]: mood = character varying does not exist")))
 
+(deftest a-checks-list-literal-is-read-as-the-columns-type-reads-it
+  (let [reg (pgmalli/registry {:registry {:pg.public/q [:map {:pg/table "public.q"}
+                                                        [:u [:maybe [:enum {:pg/type "uuid"} #uuid "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"]]]
+                                                        [:b [:maybe [:enum {:pg/type "boolean"} true]]]
+                                                        [:i [:maybe [:enum {:pg/type "integer"} 1 2]]]]}})
+        kinds #(map :kind (:problems (h/analyze reg {:insert-into :q :values [%]})))]
+    (doseq [row [{:u [:inline "A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11"]} {:u [:inline "{a0eebc999c0b4ef8bb6d6bb9bd380a11}"]}
+                 {:b [:inline "t"]} {:b [:inline "on"]} {:i [:inline 1.4]}]]
+      (is (empty? (kinds row)) (pr-str row)))
+    (doseq [row [{:u [:inline "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12"]} {:b [:inline "f"]} {:i [:inline 2.6]}]]
+      (is (= [:enum-literal] (kinds row)) (pr-str row)))))
+
 (deftest a-literal-honeysql-sends-to-an-argument-that-takes-no-value-of-its-class-is-a-problem
   (let [lits #(map (juxt :value :sent :type) (filter (comp #{:literal-type} :kind) (check %)))]
     (is (= [[2 "bigint" "integer"]] (lits {:select [[[:round :score 2] :r]] :from [:users]})) "round(integer, bigint) does not exist")

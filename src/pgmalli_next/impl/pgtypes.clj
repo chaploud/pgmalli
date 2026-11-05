@@ -160,10 +160,11 @@
 (defn- found-on-a-large-stack
   "(re-find p x) on a thread whose stack holds it: java.util.regex recurses once per character
    for a regex such as ^([a-z0-9]|-)+$, past a thread's default stack on a long value that
-   PostgreSQL's regex engine matches. false where even that stack runs out."
+   PostgreSQL's regex engine matches. true where even that stack runs out: the value is not
+   refused for what java.util.regex cannot tell."
   [p x]
   (let [result (promise)
-        t (Thread. nil #(deliver result (try (some? (re-find p x)) (catch StackOverflowError _ false)))
+        t (Thread. nil #(deliver result (try (some? (re-find p x)) (catch StackOverflowError _ true)))
                    "pgmalli-re" (* 512 1024 1024))]
     (.start t)
     (.join t)

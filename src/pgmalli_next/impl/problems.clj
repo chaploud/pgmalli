@@ -300,13 +300,32 @@
            (bigdec t))
          (catch NumberFormatException _ nil))))
 
+(defn- read-uuid
+  "s as uuid's input reads it: any case, in braces, with or without its hyphens; nil for no uuid."
+  [s]
+  (let [h (str/lower-case (str/replace (str/replace s #"^\{|\}$" "") "-" ""))]
+    (when (re-matches #"[0-9a-f]{32}" h)
+      (parse-uuid (str (subs h 0 8) "-" (subs h 8 12) "-" (subs h 12 16) "-" (subs h 16 20) "-" (subs h 20))))))
+
+(defn- read-boolean
+  "s as boolean's input reads it (t, true, yes, on, 1, a unique prefix, any case, trimmed); nil for none."
+  [s]
+  (let [w (str/lower-case (str/trim s))]
+    (cond (or (= "1" w) (= "on" w) (and (seq w) (or (str/starts-with? "true" w) (str/starts-with? "yes" w)))) true
+          (or (= "0" w) (#{"of" "off"} w) (and (seq w) (or (str/starts-with? "false" w) (str/starts-with? "no" w)))) false)))
+
 (defn- label=
-  "Whether literal v is label l as PostgreSQL reads it: a number of the same value, or a string,
-   which it reads as a number label's type ('1' is 1)."
-  [l v]
+  "Whether literal v is label l as PostgreSQL reads it: a number of the same value (rounded?,
+   assigned to an integer type, rounded), or a string, which it reads as the label's type ('1'
+   is 1, 't' true, a uuid in any spelling)."
+  [l v rounded?]
   (or (= l v)
       (and (number? l) (number? v) (== l v))
-      (and (number? l) (string? v) (some-> (parse-number v) (== l)))))
+      (and rounded? (integer? l) (number? v) (not (integer? v))
+           (== l (.setScale (bigdec v) 0 java.math.RoundingMode/HALF_UP)))
+      (and (number? l) (string? v) (some-> (parse-number v) (== l)))
+      (and (uuid? l) (string? v) (= l (read-uuid v)))
+      (and (boolean? l) (string? v) (= l (read-boolean v)))))
 
 (defn- string-problems
   "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
@@ -336,7 +355,8 @@
                          (uncast-type registry s))]
           :when (seq values)
           v values
-          :let [invalid? (and allowed (not (some #(label= % v) allowed)))]
+          :let [rounded? (and assigned? (= :integer (:value (types/entry (shape/type-name (shape/column-props s))))))
+                invalid? (and allowed (not (some #(label= % v rounded?) allowed)))]
           p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
              ;; a value outside the enum fails however it is sent
              (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
