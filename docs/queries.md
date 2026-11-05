@@ -710,6 +710,11 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - A literal written into the SQL or sent untyped, beyond an enum's labels ([stricter than
   PostgreSQL](#stricter-than-postgresql)); an empty `[:in :id []]` (an argument in `:in` is typed
   non-empty).
+- A value where no column's type reaches, an argument there being `[:any {:pgmalli/untyped
+  :position}]`: an item of `INSERT ... SELECT`'s select list, an element of `[:array ...]`, and
+  coalesce or CASE of values alone (`[:coalesce "a" 1]`).
+- A value beside a column of `xml`, which has no `=`, or of `"char"`, which coalesce and CASE
+  match with no `character varying`.
 - A raw FROM item of SQL beyond a name (`[[:raw "jsonb_array_elements(doc) AS e(v)"]]`) is not
   read: its name and columns are not told, and a column any qualifier names may be its.
 - An ON clause naming a table joined after it in its own join list, or an UPDATE's FROM joining

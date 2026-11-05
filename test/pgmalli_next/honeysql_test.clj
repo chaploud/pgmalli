@@ -153,6 +153,8 @@
       (is (= [[:enum-literal "zz"]] (problems {:select [[[:nullif :m [:inline "zz"]] :x]] :from [:t]})))
       (is (= [[:enum-literal "zz"]] (problems {:select [[[:greatest :m [:inline "zz"]] :x]] :from [:t]}))))
     (is (= [[:literal-type 1]] (problems {:select [:id] :from [:t] :where [:like :n 1]})) "text ~~ bigint does not exist")
+    (is (= [[:literal-type "o%"]] (problems {:select [:id] :from [:t] :where [:like :m "o%"]})) "mood ~~ character varying does not exist")
+    (is (= [[:literal-type 1]] (problems {:select [[[:coalesce :u 1] :x]] :from [:t]})) "uuid and bigint have no common type")
     (let [xml (pgmalli/registry {:registry {:pg.public/x [:map {:pg/table "public.x"} [:d [:maybe [:any {:pg/type "xml"}]]]]}})]
       (is (= [:uncast-string :uncast-string] (map :kind (concat (:problems (h/analyze xml {:select [:d] :from [:x] :where [:= :d "<a/>"]}))
                                                                 (:problems (h/analyze xml {:update :x :set {:d "<a/>"}})))))

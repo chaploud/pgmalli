@@ -13,18 +13,6 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
   refuses it, as for a column of the domain. ir.sql names a function's result by its domain's base
   type (`type_bases`), so the domain is lost. Keep the domain beside the base type, as a column's
   `:pg/domain` does.
-- **A literal beside an operand of another type in coalesce or CASE.** `[:coalesce :uuid_col 1]`
-  is not reported; PostgreSQL refuses it (types uuid and integer cannot be matched).
-  `args/resolving-args` checks a literal against the operands' common type, and there is none.
-  Report where `query/common` finds no common type.
-- **Literals no position types yet.** Each is refused by PostgreSQL and not reported:
-  - a literal item of `INSERT INTO t (c) SELECT 'x'`
-  - `[:coalesce "a" 1]`, of literals alone
-  - `[:= :ints [:array [1.5]]]`, an `ARRAY[...]` of literals against an array column
-  - `[:round :d 2]` with `d` a double precision column (`round(double precision, integer)` does not exist)
-  - `[:coalesce :c "a"]` with `c` a `"char"` column
-  - `[:= :x 1]` with `x` an xml column
-  - `[:like :m "o%"]` with `m` an enum column
 
 ## Types left untold or loose
 
