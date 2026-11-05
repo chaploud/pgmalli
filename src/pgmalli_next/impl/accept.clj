@@ -74,6 +74,15 @@
   (or (some #(when (= c (first %)) %) rows)
       (some #(when (.isAssignableFrom ^Class (first %) c) %) rows)))
 
+(defn element-schema
+  "The schema of an element of a Java array of class c the one sending sends: its component class's
+   row's, else, of a java.sql.Date[] or a Timestamp[] (pgjdbc's typed date[] and timestamptz[]),
+   a java.util.Date's (inst?), which goes nowhere alone; nil for another c."
+  [^Class c]
+  (when-let [e (some-> c .getComponentType)]
+    (or (get (row-of e classes) 2)
+        (when (.isAssignableFrom java.util.Date e) 'inst?))))
+
 (def class-types
   "[class type] of classes, in its order."
   (mapv (fn [[c t]] [c t]) classes))

@@ -68,13 +68,15 @@
 
 (defn- arrays-sent
   "[type schema] of the arrays the one sending sends (jdbc/write-rows) as a type pred takes, element in
-   their elements' place; a java.sql.Date[]'s and a Timestamp[]'s elements java.util.Dates (inst?) too."
+   their elements' place, and the values of the array's own elements (accept/element-schema: a
+   java.sql.Date[]'s inst?) where element does not hold them already."
   [opts pred element]
-  (for [[schema q ^Class c] (jdbc/write-rows opts true) :when (pred q)
-        :let [dates? (and c (.isArray c) (.isAssignableFrom java.util.Date (.getComponentType c)))
-              e (if (and dates? (not (query/untyped? element)))
-                  (let [with (shape/either (distinct (concat (shape/alternatives (shape/non-null element)) ['inst?])) element)]
-                    (cond-> with (shape/maybe? element) query/nullable))
+  (for [[schema q c] (jdbc/write-rows opts true) :when (pred q)
+        :let [own (some-> c accept/element-schema shape/alternatives)
+              kinds (set (map shape/kind (shape/alternatives (shape/non-null element))))
+              more (remove (comp kinds shape/kind) own)
+              e (if (and (seq more) (not (query/untyped? element)))
+                  (cond-> (shape/either (concat (shape/alternatives (shape/non-null element)) more) element) (shape/maybe? element) query/nullable)
                   element)]]
     [q (walk/postwalk-replace {:pgmalli/element e} schema)]))
 

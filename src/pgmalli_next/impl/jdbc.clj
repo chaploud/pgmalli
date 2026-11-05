@@ -305,10 +305,7 @@
         ;; t takes one): t without those; a Java array's are its component class's (a Time[]'s
         ;; java.sql.Times, inst?), which t takes too
         typed (fn [x ^Class c]
-                (let [e (some-> c .getComponentType)
-                      ;; a java.sql.Date[]'s and a Timestamp[]'s, pgjdbc's typed arrays of java.util.Dates
-                      cs (or (some-> e (accept/row-of accept/classes) (get 2) shape/alternatives)
-                             (when (and e (.isAssignableFrom java.util.Date ^Class e)) ['inst?]))
+                (let [cs (some-> c accept/element-schema shape/alternatives)
                       own (set (map shape/kind (or cs (some-> x types/entry :name types/type-schema (write-type opts) shape/alternatives))))
                       strip (fn [s]
                               (let [as (shape/alternatives s)
