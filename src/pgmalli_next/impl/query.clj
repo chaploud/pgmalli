@@ -583,7 +583,12 @@
   [registry sc side opts]
   (cond (syntax/column-keyword? side) (:schema (resolve-column registry sc side))
         ;; x op ANY(array) compares x with the array's elements (docs 9.24.3)
-        (syntax/array-of-elements? side) (some-> (expression-type registry sc (second side) opts) :type types/element types/type-schema)
+        (syntax/array-of-elements? side)
+        (let [{t :type a :schema} (expression-type registry sc (second side) opts)]
+          ;; an element of an array of domain d is of d, which = ANY compares as it compares d
+          (if-let [d (some-> a domain-of types/element)]
+            (shape/merge-props (last (shape/non-null a)) {:pg/type (types/element (:pg/type (shape/column-props a))) :pg/domain d})
+            (some-> t types/element types/type-schema)))
         ;; a literal of no type takes the other side's
         (vector? side) (let [m (expression-type registry sc side opts)] (when-not (= :unknown (:type m)) (:schema m)))))
 

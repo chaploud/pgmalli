@@ -9,9 +9,6 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
 
 ## Accepted where PostgreSQL refuses
 
-- **`'x' = ANY(c)` with `c` an array of a domain over an enum.** PostgreSQL has no `=` for it, as
-  for the domain itself (`:no-operator`), but `problems/operator-problems` reads the comparison's
-  sides alone, not ANY's elements.
 - **A function returning a domain over an enum, compared.** `f(m) = 'happy'` passes; PostgreSQL
   refuses it, as for a column of the domain. ir.sql names a function's result by its domain's base
   type (`type_bases`), so the domain is lost. Keep the domain beside the base type, as a column's

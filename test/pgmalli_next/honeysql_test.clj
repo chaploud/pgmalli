@@ -82,9 +82,10 @@
   (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/mood [:enum "ok" "sad"]
                                                              :pg.public/t [:map {:pg/table "public.t"}
                                                                            [:m [:maybe [:ref {:pg/type "mood" :pg/domain "dmood"} :pg.public/mood]]]
-                                                                           [:k [:maybe [:ref {:pg/type "mood"} :pg.public/mood]]]]}})
+                                                                           [:k [:maybe [:ref {:pg/type "mood"} :pg.public/mood]]]
+                                                                           [:ms [:maybe [:vector {:pg/type "mood[]" :pg/domain "dmood[]"} [:ref :pg.public/mood]]]]]}})
         kinds (fn [w] (map :kind (:problems (h/analyze reg {:select [:k] :from [:t] :where w}))))]
-    (doseq [w [[:= :m [:inline "sad"]] [:in :m [[:inline "sad"]]] [:= :m :k] [:<> [:inline "sad"] :m] [:= :m :?x]]]
+    (doseq [w [[:= :m [:inline "sad"]] [:in :m [[:inline "sad"]]] [:= :m :k] [:<> [:inline "sad"] :m] [:= :m :?x] [:= :?x [:any :ms]]]]
       (is (= [:no-operator] (kinds w)) (str (pr-str w) ": dmood = unknown, = mood and = dmood do not exist")))
     (doseq [w [[:= [:cast :m :mood] [:inline "sad"]] [:= :m nil] [:is-distinct-from :m nil] [:= [:coalesce :m [:inline "ok"]] [:inline "ok"]]]]
       (is (= [] (kinds w)) (pr-str w)))
