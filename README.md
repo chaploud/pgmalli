@@ -44,7 +44,7 @@ $ export PGDATABASE=pgmalli_example
 $ clojure -X:pgmalli-next
 ```
 
-It writes `resources/pgmalli-next.edn`, and prints only what deserves a look.
+It writes `resources/pgmalli-next.edn`.
 
 Load the generated file as a registry and validate an INSERT:
 
@@ -62,8 +62,8 @@ Load the generated file as a registry and validate an INSERT:
 ;; => true
 ```
 
-The schemas hold the columns' types; a CHECK is the database's
-([docs/types.md](docs/types.md#names-in-the-registry)). malli has no message of the
+The schemas hold the columns' types ([what the database checks](docs/types.md#names-in-the-registry)
+aside). malli has no message of the
 `java.time` types; `pgmalli/errors` holds them, for `me/humanize`:
 
 ```clojure
@@ -88,7 +88,7 @@ shows how CI catches a forgotten one.
 
 ## Installation
 
-pgmalli is not released yet: depend on a commit of this repository in `deps.edn`'s `:deps`,
+Depend on a commit of this repository in `deps.edn`'s `:deps`:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
@@ -126,9 +126,10 @@ JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sq
 ;; => {:out "resources/pgmalli-next.edn", :unrendered nil, :diagnostics nil}
 ```
 
-One file holds every schema in `:schemas`. `generate!` writes over no file but one it wrote,
-and returns the diagnostics and the columns left out ([docs/types.md](docs/types.md#the-generated-file));
-it prints the columns left out and a diagnostic above `:info`, nothing where all is well. Generating needs a
+One file holds every schema in `:schemas`. `generate!` writes over no file but a generated one,
+and returns the diagnostics and the columns left out ([docs/types.md](docs/types.md#the-generated-file)).
+`generate!` and `check` print the columns left out and a diagnostic above `:info`, nothing where
+all is well. Generating needs a
 [supported PostgreSQL](#supported-versions).
 
 `(pgmalli/registry)` reads `pgmalli-next.edn` from the classpath. Where `:out` is elsewhere,
@@ -225,8 +226,8 @@ There are two ways to check a row read from the database:
 
 ## Generating test data
 
-`mg/generate` gives a row of the table's types, strings within their `varchar(n)`'s length (a
-CHECK is the database's, so it may refuse one):
+`mg/generate` gives a row of the table's types, strings within their `varchar(n)`'s length
+([what the database checks](docs/types.md#names-in-the-registry) aside):
 
 ```clojure
 (m/validate :pg.public.posts/insert
@@ -384,7 +385,7 @@ The options of `pgmalli-next.honeysql`'s functions are in [docs/queries.md](docs
 
 `generate/check` takes the map `generate!` does, reads the database and compares the file
 with what it yields now. Where the file differs or is missing, it prints the differences and
-throws (`:pgmalli.error/stale`, ex-data `{:missing path :stale [difference ...]}`), so
+throws (`:pgmalli.error/stale`, ex-data `{:out path :missing path :stale [difference ...]}`), so
 `clojure -X` exits non-zero in CI; else it returns `{:unrendered :diagnostics}`:
 
 ```shell
@@ -502,8 +503,8 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 
 | `:pgmalli/error` | when |
 |---|---|
-| `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` or `:overrides` too), or a schema the database lacks |
-| `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:missing` and `:stale` |
+| `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` or `:overrides` too), a schema the database lacks, or an `:out` file generate! did not write |
+| `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
 | `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |

@@ -49,7 +49,7 @@ Column schemas carry where they came from:
 |---|---|
 | `:pg/type` | the column's type, as PostgreSQL prints it, without its length (`"character varying"`) |
 | `:pg/domain` | the domain the column is declared of (`"email"`), or `"email[]"` for an array of it; a domain of another schema schema-qualified |
-| `:pg/max-length` | `n` of a `varchar(n)`, `char(n)`, `bit(n)` or `bit varying(n)`; no schema checks it, and values generate within it |
+| `:pg/max-length` | `n` of a `varchar(n)`, `char(n)`, `bit(n)` or `bit varying(n)`, which values generate within |
 | `:pg/default` | a literal, or `{:sql "now()"}`, the default expression's SQL as the database prints it |
 | `:default` | malli's default, for a literal default |
 | `:pg/identity` | `:always`, `:default` or `:serial` |
@@ -116,8 +116,7 @@ column of a type pgmalli cannot make a value of fails to generate, naming it:
 `public.t.p: pgmalli cannot make a value of type pair; give one with :overrides`.
 
 Dates and times generate within 2025 (in arrays too), `timetz` offsets within what PostgreSQL
-takes, a string within its `:pg/max-length`. As no CHECK is read, a generated row may be one a
-CHECK refuses.
+takes, a string within its `:pg/max-length`.
 
 ## Extensions
 

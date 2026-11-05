@@ -186,7 +186,7 @@ what upgrading then costs the users at the time, not by precedent: a patch while
 is a step nobody minds, a minor once it is work people plan for.
 
 1. On main, in one commit: add the version's section to CHANGELOG.md (`## X.Y.Z (date)`) and
-   set the coordinate in README.md's Installation to the new version. The section is written
+   replace the `:git/sha` coordinate in README.md's Installation with `{:mvn/version "X.Y.Z"}`. The section is written
    then, of the changes since the last tag, in a few short bullets: what a user meets, what a
    breaking one has them do, and whether the file needs regenerating. Nothing is written
    between releases.

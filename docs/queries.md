@@ -263,9 +263,10 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 (`:users` in `:schema`, `:app.users`) or as the registry does (`:pg.public/users`). Each column
 is typed as an argument assigned to it (what your application sends, held to the column's range) and keyed
 by the column's name (`:group_id`), the one key a row is read with
-([the builder](reading-rows.md#the-builder)), so a row read is written back as it is (but an enum
-column, read as a String, which pgjdbc sends as `varchar`: write its label as `[:lift :happy]`
-or a `PGobject`); another
+([the builder](reading-rows.md#the-builder)), so a row read is written back as it is, but for an enum
+column, read as a String, which pgjdbc sends as `varchar` (write its label as `[:lift :happy]`
+or a `PGobject`), a `bit(1)` column, read as a `Boolean` (write a `PGobject` of `bit`), and an
+array column, read as a vector (write a Java array); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
