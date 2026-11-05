@@ -2479,6 +2479,22 @@
              {:select [[[:count [:distinct :nick]] :a]] :from [:users]}]]
     (is (= [] (check q)) (pr-str q))))
 
+(deftest a-literal-honeysql-sends-to-an-argument-that-takes-no-value-of-its-class-is-a-problem
+  (let [lits #(map (juxt :value :sent :type) (filter (comp #{:literal-type} :kind) (check %)))]
+    (is (= [[2 "bigint" "integer"]] (lits {:select [[[:round :score 2] :r]] :from [:users]})) "round(integer, bigint) does not exist")
+    (is (= [[1 "bigint" nil] [2 "bigint" nil]] (lits {:select [[[:substring :nick 1 2] :s]] :from [:users]})))
+    (is (= [[1 "bigint" nil]] (lits {:select [[[:+ :born 1] :d]] :from [:users]})) "date + bigint does not exist")
+    (is (= [[1 "bigint" "character varying"]] (lits {:select [:id] :from [:users] :where [:= :nick 1]})) "character varying = bigint does not exist")
+    (is (empty? (lits {:select [:id] :from [:users] :where [:and [:= :score 1] [:= :id 1] [:< :score 2.5]]})) "integer = bigint, integer < double precision exist")
+    (doseq [q [{:select [[[:+ :score 1] :d]] :from [:users]} {:select [[[:+ 1 2] :d]] :from [:users]}
+               {:select [[[:generate_series 1 3] :g]] :from [:users]} {:select [[[:round :score [:inline 2]] :r]] :from [:users]}
+               {:select [[[:round :score [:cast 2 :integer]] :r]] :from [:users]} {:select [[[:date_trunc "month" :closed_at] :c]] :from [:users]}]]
+      (is (empty? (lits q)) (pr-str q)))
+    (is (empty? (map :kind (filter (comp #{:literal-type} :kind) (check {:select [[[:round :score 2] :r]] :from [:users]} (assoc opts :format {:inline true})))))
+        "written into the SQL, 2 is an integer")
+    (is (= ["2 goes to round as a parameter, which pgjdbc sends as bigint, a type round takes there through no implicit conversion; write it into the SQL, [:inline 2], or cast it, [:cast 2 :integer]"]
+           (h/humanize (filter (comp #{:literal-type} :kind) (check {:select [[[:round :score 2] :r]] :from [:users]})))))))
+
 (deftest an-argument-of-a-function-or-operator-takes-the-type-it-resolves-to
   (is (= {:now [:or
                 [:time/instant {:pg/type "timestamptz"}]

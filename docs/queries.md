@@ -721,6 +721,10 @@ Write the query so PostgreSQL's reading is explicit instead.
   rejects.
 - Under ON CONFLICT, whether RETURNING and DO UPDATE WHERE may name the target or `excluded`.
 - RETURNING's `old` and `new` are taken on every version; PostgreSQL before 18 refuses them.
+- A call of a function PostgreSQL knows none of (`[:lowr :email]`), or of one or an operator no
+  candidate of which takes its columns' types; its value is `:any`. A literal HoneySQL sends as a
+  parameter where no candidate takes its class is a `:literal-type` (`[:round :price 2]`,
+  `[:= :email 1]`'s `character varying = bigint`).
 - A column of the query in a frame's offset (`[:score :preceding]`), which PostgreSQL refuses
   whatever its name: an offset holds no variable.
 - An argument schema with a regex CHECK (`[:and [:string] [:re ...]]`) does not generate with

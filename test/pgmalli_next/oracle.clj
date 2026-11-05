@@ -298,6 +298,8 @@
 (defn- name-class [k]
   (cond (#{:unknown-table :unknown-column} k) :unknown-name
         (#{:missing-required-column :not-null-violation} k) :not-null-violation
+        ;; the parameters' types alone refuse it (42883, 42804): a string's, or a literal's at a call
+        (#{:uncast-string :literal-type} k) :uncast-string
         :else k))
 
 (def ^:private enum-literal-by-design

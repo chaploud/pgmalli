@@ -71,7 +71,7 @@
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
-      :problems (as-written written (concat (problems/check registry body opts) (args/arg-problems registry body opts)))
+      :problems (as-written written (concat (problems/check registry body opts) (args/arg-problems registry body opts) (args/literal-problems registry body opts)))
       :tables (query/tables registry body opts)
       :document-columns (args/document-columns registry body opts)})))
 
@@ -310,6 +310,10 @@
                     (str (pr-str value) " reaches column " (column-name column) " as a typed string, which its type " type " does not take"
                          " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar);"
                          " write " (cast-form (pr-str value) type)))
+   :literal-type (fn [{:keys [function value sent type]}]
+                   (str (pr-str value) " goes to " function " as a parameter, which pgjdbc sends as " sent ", a type " function
+                        " takes there through no implicit conversion; write it into the SQL, " (pr-str [:inline value])
+                        ", or cast it, " (if type (cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]"))))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"

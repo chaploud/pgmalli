@@ -512,6 +512,80 @@
     ;; the others' values join a CHECK's list: its base type
     [o (query/nullable (accepted-type registry (query/beyond-list registry (:schema r)) :common opts))]))
 
+(defn- call-arg-type
+  "What a value takes at argument i of a call PostgreSQL may resolve to candidates os, ss the
+   schemas of the types they take there: a value of each type, which a :pg/type of one would
+   misname; nil may go there too."
+  [registry ss os i opts]
+  (let [;; anyarray there (&&, @>): an array of the type it binds alone, no array PostgreSQL would convert
+        opts (cond-> opts
+               (some #(= "anyarray" (get (:args %) i)) os) (assoc ::jdbc/array-use :whole)
+               ;; anycompatible: of the common type the argument takes part in deciding (array_append(int[], bigint))
+               (some #(str/starts-with? (str (get (:args %) i)) "anycompatible") os) (assoc ::common-type true))]
+    (cond (empty? ss) nil
+          (next ss) (query/nullable
+                     ;; beside others, a type pgmalli does not type (pg_lsn for +) takes a PGobject, not any value
+                     (shape/either (shape/distinct-kinds
+                                    (classes-joined (for [s ss, x (shape/alternatives (accepted-type registry s :call opts))]
+                                                      (if (= :any (shape/head x)) jdbc/pg-object (unlabel x)))))
+                                   :any))
+          :else (query/nullable (accepted-type registry (first ss) :call opts)))))
+
+(defn- sent-literal
+  "The value of x where HoneySQL sends it as a parameter (2, \"a\", [:lift 2]) of a class the one
+   sending sends typed; nil for another x, or under sql/format's :inline."
+  [x opts]
+  (let [v (if (and (vector? x) (= :lift (first x)) (= 2 (count x))) (second x) x)]
+    (when (and (or (number? v) (string? v) (boolean? v))
+               (string? (jdbc/sent-type v opts)))
+      v)))
+
+(defn- refuses?
+  "Whether argument schema t refuses literal v."
+  [registry t v]
+  (not (try (m/validate t v {:registry (merge registry/base (::query/schemas registry))}) (catch Exception _ true))))
+
+(defn- literal-comparison-problems
+  "Of a number or a boolean compared with a column or a typed expression, as compared-arg-type
+   types an argument there ([:= :nick 1]: character varying = bigint does not exist); a string's
+   is an :uncast-string, a label list's an :enum-literal."
+  [registry ps opts]
+  (for [[op side value chain] (syntax/comparison-sides ps)
+        :let [v (sent-literal value opts)]
+        :when (and (some? v) (not (string? v)))
+        :let [s (some-> (query/side-schema registry chain side opts) (#(query/compared-schema registry % op)))]
+        :when (and s (empty? (query/enum-values registry s)) (refuses? registry (accepted-type registry s :compare opts) v))]
+    {:kind :literal-type :function (name op) :value v :sent (jdbc/sent-type v opts)
+     :type (:pg/type (shape/column-props s))}))
+
+(defn- literal-call-problems
+  "Of each literal of a call at an argument that refuses it (call-arg-type), the call's literals
+   taken as its arguments are: [:round :price 2] sends 2 as a Long, a bigint, which
+   round(numeric, integer) does not take."
+  [registry ps opts]
+  (for [{:keys [x chain clause]} (syntax/expression-nodes ps)
+        :let [[_ n args :as parts] (when-not (or (syntax/comparison? x) (query/type-call registry chain x opts)) (syntax/call-parts x))]
+        :when (and n (some #(sent-literal % opts) args)
+                   (not (and (= "unnest" n) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by])))))
+        :let [ins (mapv #(if (sent-literal % opts) :free (:type (query/expression-type registry chain % opts))) args)
+              os (query/reached registry opts parts)]
+        [i a] (map-indexed vector args)
+        :let [v (sent-literal a opts)]
+        :when (some? v)
+        :let [ss (map types/type-schema (resolve/argument-types ins i os))
+              t (when (every? some? ss) (call-arg-type registry ss os i opts))]
+        :when (and t (refuses? registry t v))]
+    (cond-> {:kind :literal-type :function n :value v :sent (jdbc/sent-type v opts)}
+      (= 1 (count ss)) (assoc :type (:pg/type (shape/column-props (first ss)))))))
+
+(defn literal-problems
+  "A :literal-type problem of each literal HoneySQL sends as a parameter where an argument there
+   would refuse it: PostgreSQL resolves the call or the comparison by the type pgjdbc sends it as."
+  [registry body opts]
+  (vec (for [[_ _ _ ps] (query/once registry query/statement-positions body opts)
+             p (concat (literal-comparison-problems registry ps opts) (literal-call-problems registry ps opts))]
+         p)))
+
 (defn- call-args
   "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve
    the call to take there, as a value of each type sent picks one; nil may go there too. Where
@@ -537,20 +611,7 @@
                                                  inss))
                                   [ins] (range (count ins)))
               refused? (and (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
-              ;; anyarray there (&&, @>): an array of the type it binds alone, no array PostgreSQL would convert
-              opts (cond-> opts
-                     (some #(= "anyarray" (get (:args %) i)) os) (assoc ::jdbc/array-use :whole)
-                     ;; anycompatible: of the common type the argument takes part in deciding (array_append(int[], bigint))
-                     (some #(str/starts-with? (str (get (:args %) i)) "anycompatible") os) (assoc ::common-type true))
-              ;; a value of each type, which a :pg/type of one would misname
-              t (cond (empty? ss) nil
-                      (next ss) (query/nullable
-                                 ;; beside others, a type pgmalli does not type (pg_lsn for +) takes a PGobject, not any value
-                                 (shape/either (shape/distinct-kinds
-                                                (classes-joined (for [s ss, x (shape/alternatives (accepted-type registry s :call opts))]
-                                                                  (if (= :any (shape/head x)) jdbc/pg-object (unlabel x)))))
-                                               :any))
-                      :else (query/nullable (accepted-type registry (first ss) :call opts)))]
+              t (call-arg-type registry ss os i opts)]
         :when (or refused? (and t (every? some? ss)))]
     (if refused?
       [a (or (some-> t typed-only) (jdbc/typed-where #(resolve/takes-at? ins i os %))) {:typed-only n}]

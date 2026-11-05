@@ -311,6 +311,7 @@ The problems it reports:
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal outside an enum type's labels, or outside a CHECK's list when written into the column or compared with `=`, `IN` or `IS NOT DISTINCT FROM`; with `:allowed` |
 | `:uncast-string` | a string literal (or `[:lift "s"]`), which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...); not under `:format {:inline true}`. A named argument is typed as `:args` types it |
+| `:literal-type` | a literal HoneySQL sends as a parameter (`[:round :price 2]`'s `2`, a `Long` sent as `bigint`) to a function's or an operator's argument that takes no value of its class there, as an argument would refuse it; with `:function`, `:sent`, and `:type` where one type is meant; not under `:format {:inline true}` |
 | `:undetermined-type` | an argument where PostgreSQL takes its type from the value alone (`[:cardinality :?ids]`, `concat`'s `"any"`), whose other uses take only values sent untyped (a keyword label) or nil; with `:function`, and `:type` where the other uses name one |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
