@@ -88,6 +88,8 @@
       (is (= [:no-operator] (kinds w)) (str (pr-str w) ": dmood = unknown, = mood and = dmood do not exist")))
     (doseq [w [[:= [:cast :m :mood] [:inline "sad"]] [:= :m nil] [:is-distinct-from :m nil] [:= [:coalesce :m [:inline "ok"]] [:inline "ok"]]]]
       (is (= [] (kinds w)) (pr-str w)))
+    (is (m/validate (:x (:args (h/analyze reg {:select [[[:coalesce :m :?x] :c]] :from [:t]}))) :sad {:registry reg})
+        "resolved beside it, coalesce(dmood, ?) takes a label sent untyped")
     (is (= ["PostgreSQL has no = for m, of domain dmood over enum mood; compare the enum: [:cast :m :mood]"]
            (h/humanize (:problems (h/analyze reg {:select [:k] :from [:t] :where [:= :m [:inline "sad"]]})))))))
 
