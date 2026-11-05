@@ -6,9 +6,7 @@ Issues and pull requests are welcome.
 
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
 need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the image).
-`bb test`, `bb test:jvm`, `bb test:matrix`, `bb test:floor`, `bb test:all`, `bb oracle`, `bb docs:example`,
-`bb catalog`, `bb harvest`, `bb sweep`, `bb upstream` and `bb mutate --db` need it; `bb lint`, `bb test:nodb`,
-`bb test:docs` and `bb fixture` do not.
+`bb tasks` says which tasks need it.
 
 ## Tests
 

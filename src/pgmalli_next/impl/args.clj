@@ -780,7 +780,7 @@
 (defn arg-problems
   "An :undetermined-type problem of each argument at a position PostgreSQL takes its type from
    the value alone (cardinality(?), concat(?)), whose other uses take only values sent untyped
-   (a date sent as a LocalDate, a keyword label) or nil."
+   (a keyword label) or nil."
   [registry body opts]
   (vec (for [[k p] (:untyped (query/once registry analysis body opts))]
          (into {:kind :undetermined-type :arg k} (remove (comp nil? val)) p))))

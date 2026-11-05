@@ -39,6 +39,9 @@ $ export PGDATABASE=pgmalli_example
 $ clojure -M -m pgmalli-next.main generate
 pgmalli-next: no pgmalli-next.edn here; using the defaults (schema public, files in resources/pgmalli-next)
 wrote resources/pgmalli-next/public.edn (schema public; tables: 4, views: 0, enums: 1, domains: 0; unrendered: 1, diagnostics: 0)
+public: unrendered (1), left out of the schemas:
+  public.posts likes_within_views: CHECK (likes <= views)
+    to silence it, add to pgmalli-next.edn :overrides {"likes_within_views" {:skip "<why>"}}
 done: files written: 1; commit them, and run `clojure -M -m pgmalli-next.main check` in CI
 ```
 
@@ -304,7 +307,10 @@ An INSERT must carry the columns its insert schema requires:
 ;; => [{:kind :missing-required-column, :table "public.users", :column :group_id}]
 ```
 
-The problems it reports:
+`:problems` and `:args` refuse nothing PostgreSQL runs or takes, but for the rules of
+[stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql), each saying what to send
+or write instead; what they do not catch is [not checked](docs/queries.md#not-checked). The
+problems it reports:
 
 | `:kind` | for |
 |---|---|
@@ -430,6 +436,9 @@ pgmalli-next: no pgmalli-next.edn here; using the defaults (schema public, files
 public :pg.public/groups :motto
   file: nil
   db:   [:maybe [:string {:pg/type "text"}]]
+public: unrendered (1), left out of the schemas:
+  public.posts likes_within_views: CHECK (likes <= views)
+    to silence it, add to pgmalli-next.edn :overrides {"likes_within_views" {:skip "<why>"}}
 stale: public (differences: 1); run `clojure -M -m pgmalli-next.main generate` and commit the files
 ```
 

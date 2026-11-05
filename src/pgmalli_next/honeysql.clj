@@ -324,7 +324,7 @@
    :undetermined-type (fn [{:keys [arg function type]}]
                         (let [x (keyword (str "?" (name arg)))]
                           (str "argument " arg " goes to " function ", which takes its type from the value sent, but every value"
-                               " its other uses take is sent untyped (a LocalDate, a keyword label) or is nil, which PostgreSQL"
+                               " its other uses take is sent untyped (a keyword label) or is nil, which PostgreSQL"
                                " cannot type there (could not determine data type of parameter $n, or could not determine polymorphic type);"
                                " cast it in the query: " (if type (cast-form x type) (str "[:cast " x " <the type meant>]")))))})
 
