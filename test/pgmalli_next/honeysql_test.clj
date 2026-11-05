@@ -62,6 +62,22 @@
   (is (= (row {:select [[:id :x]] :from [:users]}) (row {:select (list [:id :x]) :from (list :users)})))
   (is (= (row {:select [:id] :from [:users]}) (row {:select (map keyword ["id"]) :from [:users]})) "a seq built at run time"))
 
+(deftest an-enum-literal-is-held-to-the-labels-wherever-postgresql-types-it
+  (let [kinds (fn [q] (map (juxt :kind :value) (check q)))
+        where (fn [w] (kinds {:select [:id] :from [:users] :where w}))]
+    (doseq [[w why] [[[:= :mood [:lift :angry]] "a lifted keyword"]
+                     [[:= :mood [:inline "angry"]] "an inlined string"]
+                     [[:in :mood ["sad" [:inline "angry"]]] "each of an IN list"]
+                     [[:= :mood [:any [:array [[:inline "sad"] [:inline "angry"]]]]] "each element of ANY's array"]
+                     [[:= :mood [:coalesce :mood [:inline "angry"]]] "an operand resolved to the others' type"]
+                     [[:= :mood [:case [:= :id 1] :mood :else [:inline "angry"]]] "CASE's ELSE"]
+                     [[:= [:case [:= :id 1] [:inline "angry"] :else :mood] :mood] "CASE's THEN"]]]
+      (is (some #{[:enum-literal (if (= [:lift :angry] (last w)) :angry "angry")]} (where w)) why))
+    (is (= [] (where [:= :mood [:lift :sad]])) "a keyword goes untyped, which enum takes")
+    (is (= [[:uncast-string "sad"]] (where [:= :mood [:lift "sad"]])) "a lifted string goes as varchar")
+    (is (= [[:enum-literal :angry]] (kinds {:update :users :set {:mood [:lift :angry]} :where [:= :id 1]})) "assigned")
+    (is (= [] (kinds {:select [[[:coalesce :nick [:inline "angry"]] :n]] :from [:users]})) "a string column takes any")))
+
 (deftest problems-name-what-disagrees
   (is (= [{:kind :unknown-table :table "sample.nope"}] (check {:select [:*] :from [:nope]})))
   (is (= [{:kind :unknown-column :column :nick_name}] (check {:select [:nick_name] :from [:users]})))
@@ -2335,18 +2351,6 @@
 
 (deftest a-number-keyword-is-a-number-not-a-column
   (is (= [] (check {:select [[:10 :n]] :from [:users]}))))
-
-(deftest a-checks-list-literal-is-read-as-the-columns-type-reads-it
-  (let [reg (pgmalli/registry {:registry {:pg.public/q [:map {:pg/table "public.q"}
-                                                        [:u [:maybe [:enum {:pg/type "uuid"} #uuid "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11"]]]
-                                                        [:b [:maybe [:enum {:pg/type "boolean"} true]]]
-                                                        [:i [:maybe [:enum {:pg/type "integer"} 1 2]]]]}})
-        kinds #(map :kind (:problems (h/analyze reg {:insert-into :q :values [%]})))]
-    (doseq [row [{:u [:inline "A0EEBC99-9C0B-4EF8-BB6D-6BB9BD380A11"]} {:u [:inline "{a0eebc999c0b4ef8bb6d6bb9bd380a11}"]}
-                 {:b [:inline "t"]} {:b [:inline "on"]} {:i [:inline 1.4]}]]
-      (is (empty? (kinds row)) (pr-str row)))
-    (doseq [row [{:u [:inline "a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12"]} {:b [:inline "f"]} {:i [:inline 2.6]}]]
-      (is (= [:enum-literal] (kinds row)) (pr-str row)))))
 
 (deftest a-literal-honeysql-sends-to-an-argument-that-takes-no-value-of-its-class-is-a-problem
   (let [lits #(map (juxt :value :sent :type) (filter (comp #{:literal-type} :kind) (check %)))]

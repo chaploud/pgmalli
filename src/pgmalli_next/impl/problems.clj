@@ -289,79 +289,66 @@
   [registry s assigned? types]
   (when-let [t (query/slot-type registry s)] (boolean (some #(accept/accepts? t % (if assigned? :assign :compare)) types))))
 
-(defn- parse-number
-  "The number string v is as PostgreSQL reads a numeric input: spaces around it, PostgreSQL 16's
-   underscores between digits or after a base prefix, and 0x, 0o and 0b integers; nil for none."
-  [v]
-  (let [t (str/replace (str/trim v) #"(?<=[0-9a-fA-FxXoObB])_(?=[0-9a-fA-F])" "")
-        [_ sign base digits] (re-matches #"([+-]?)0([xXoObB])([0-9a-fA-F]+)" t)]
-    (try (if base
-           (cond-> (bigint (BigInteger. ^String digits (int (case (str/lower-case base) "x" 16 "o" 8 "b" 2)))) (= "-" sign) -)
-           (bigdec t))
-         (catch NumberFormatException _ nil))))
+(defn- literal
+  "{:value v :text t :sent? bool} of a literal x as HoneySQL writes it: a string (bare, [:lift s]
+   or [:inline s]), a keyword lifted ([:lift :sad], which the one sending sends untyped as its
+   text t, :ns/a's ns/a) or a number; :sent? where a string goes as a parameter (not under
+   :inline, which inlines [:lift s] too), which the one sending sends as varchar. nil for another x (a bare keyword is a column)."
+  [x opts]
+  (cond (string? x) {:value x :sent? (not (:inline (:format opts)))}
+        (number? x) {:value x}
+        (and (vector? x) (= :lift (first x)) (string? (second x))) {:value (second x) :sent? (not (:inline (:format opts)))}
+        (and (vector? x) (= :lift (first x)) (keyword? (second x))) {:value (second x) :text (subs (str (second x)) 1)}
+        (and (vector? x) (= :inline (first x)) (string? (second x))) {:value (second x)}))
 
-(defn- read-uuid
-  "s as uuid's input reads it: any case, in braces, with or without its hyphens; nil for no uuid."
-  [s]
-  (let [h (str/lower-case (str/replace (str/replace s #"^\{|\}$" "") "-" ""))]
-    (when (re-matches #"[0-9a-f]{32}" h)
-      (parse-uuid (str (subs h 0 8) "-" (subs h 8 12) "-" (subs h 12 16) "-" (subs h 16 20) "-" (subs h 20))))))
-
-(defn- read-boolean
-  "s as boolean's input reads it (t, true, yes, on, 1, a unique prefix, any case, trimmed); nil for none."
-  [s]
-  (let [w (str/lower-case (str/trim s))]
-    (cond (or (= "1" w) (= "on" w) (and (seq w) (or (str/starts-with? "true" w) (str/starts-with? "yes" w)))) true
-          (or (= "0" w) (#{"of" "off"} w) (and (seq w) (or (str/starts-with? "false" w) (str/starts-with? "no" w)))) false)))
-
-(defn- label=
-  "Whether literal v is label l as PostgreSQL reads it: a number of the same value (rounded?,
-   assigned to an integer type, rounded), or a string, which it reads as the label's type ('1'
-   is 1, 't' true, a uuid in any spelling)."
-  [l v rounded?]
-  (or (= l v)
-      (and (number? l) (number? v) (== l v))
-      (and rounded? (integer? l) (number? v) (not (integer? v))
-           (== l (.setScale (bigdec v) 0 java.math.RoundingMode/HALF_UP)))
-      (and (number? l) (string? v) (some-> (parse-number v) (== l)))
-      (and (uuid? l) (string? v) (= l (read-uuid v)))
-      (and (boolean? l) (string? v) (= l (read-boolean v)))))
-
-(defn- string-problems
-  "Literals outside an enum type's labels, compared or assigned, or outside a CHECK's list,
-   assigned or under equality-ops; and a string literal HoneySQL sends as a parameter (not
-   inlined, not cast; [:lift s] too), which the one sending sends as varchar, to a column
-   PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar). A
-   named argument is args/arg-types', which types it by the class sent."
+(defn- literal-problems
+  "Of each literal (literal) where a value of a column or an expression of an enum type goes,
+   one place for every position PostgreSQL types it at: a side of a comparison (each of an IN
+   list, each element of [:any [:array ...]]), an assignment, an operand resolved to the
+   others' type (coalesce, greatest, least, nullif, CASE's values), and a string cast to one. A literal no label is an
+   :enum-literal, however it is sent; a string or keyword sent as a parameter to a column
+   PostgreSQL takes no such string for (enum = varchar does not exist, nor inet = varchar) an
+   :uncast-string. A named argument is args/arg-types', which types it by the class sent."
   [registry ps opts]
-  (let [uses (concat (for [[op side value chain] (syntax/comparison-sides ps)
+  (let [operands (fn [v] (cond (and (vector? v) (= :any (first v)) (vector? (second v)) (= :array (first (second v))) (vector? (second (second v))))
+                               (second (second v))
+                               (and (vector? v) (not (keyword? (first v)))) v
+                               :else [v]))
+        uses (concat (for [[op side value chain] (syntax/comparison-sides ps)
                            :when (not (syntax/like-ops op))
                            :let [s (query/side-schema registry chain side opts)]
-                           :when (or s (syntax/column-keyword? side))]
-                       {:col side :value value :op op :schema s})
+                           :when s
+                           x (operands value)]
+                       {:column side :x x :schema s})
                      (for [{:keys [assign x target] :as a} (syntax/assignments ps) :when (seq target)
-                           :let [{s :schema} (query/assigned-column registry a)]]
-                       {:col assign :value x :assigned? true :schema s}))]
-    (for [{:keys [col assigned?] s :schema :as use} uses
-          :let [lifted? #(and (vector? %) (= :lift (first %)) (string? (second %)))
-                unlift #(if (lifted? %) (second %) %)
-                value (let [v (:value use)] (if (and (vector? v) (not (keyword? (first v)))) (mapv unlift v) (unlift v)))
-                strings? (or (string? value) (and (vector? value) (every? string? value)))
-                numbers? (or (number? value) (and (vector? value) (seq value) (every? number? value)))
-                values (cond (or strings? numbers?) (if (vector? value) value [value])
-                             (and (vector? value) (#{:cast :inline} (first value)) (or (string? (second value)) (number? (second value)))) [(second value)])
-                allowed (when s (query/enum-values registry s))
-                uncast (when (and s strings? (not (:inline (:format opts))) (not (takes-string? registry s assigned? (jdbc/string-sends opts))))
-                         (uncast-type registry s))]
-          :when (seq values)
-          v values
-          :let [rounded? (and assigned? (= :integer (:value (types/entry (shape/type-name (shape/column-props s))))))
-                invalid? (and allowed (not (some #(label= % v rounded?) allowed)))]
-          p [(when invalid? {:kind :enum-literal :column col :value v :allowed allowed})
-             ;; a value outside the enum fails however it is sent
-             (when (and uncast (not invalid?)) {:kind :uncast-string :column col :value v :type uncast})]
-          :when p]
-      p)))
+                           :let [{s :schema} (query/assigned-column registry a)]
+                           :when s]
+                       {:column assign :x x :schema s :assigned? true})
+                     (for [{:keys [x chain]} (syntax/expression-nodes ps)
+                           :let [os (query/resolving-operands x)]
+                           :when (some #(literal % opts) os)
+                           :let [typed (remove #(literal % opts) os)
+                                 s (:schema (query/common registry (map #(query/expression-type registry chain % opts) typed)))]
+                           :when s
+                           x os]
+                       {:column (or (first (filter syntax/column-keyword? typed)) (first typed)) :x x :schema s})
+                     ;; a string cast to an enum type: [:cast "sad" :mood]
+                     (for [{:keys [x chain]} (syntax/expression-nodes ps)
+                           :when (and (vector? x) (= :cast (first x)) (string? (second x)))
+                           :let [s (:schema (query/expression-type registry chain x opts))]
+                           :when (query/enum-values registry s)]
+                       {:column (nth x 2) :x [:inline (second x)] :schema s}))]
+    (for [{:keys [column x assigned?] s :schema} uses
+           :let [{:keys [value text sent?]} (literal x opts)]
+           :when (some? value)
+           :let [allowed (query/enum-values registry s)
+                 invalid? (and allowed (not (some #{(or text value)} allowed)))
+                 uncast (when (and sent? (not invalid?) (not (takes-string? registry s assigned? (jdbc/string-sends opts))))
+                          (uncast-type registry s))]
+           p [(when invalid? {:kind :enum-literal :column column :value value :allowed allowed})
+              (when uncast {:kind :uncast-string :column column :value value :type uncast})]
+           :when p]
+       p)))
 
 (defn- problems
   "The problems of one statement (README.md's table of :kind), scope the statement's (from
@@ -386,7 +373,7 @@
                      meant (assoc :did-you-mean meant)))
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
-                 (string-problems registry ps opts)))))
+                 (literal-problems registry ps opts)))))
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so

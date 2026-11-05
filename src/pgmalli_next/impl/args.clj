@@ -451,19 +451,12 @@
          (for [{:keys [arg columns]} (query/once registry populate-documents body opts)]
            {(syntax/param-key arg) columns})))
 
-(defn- resolving-operands
-  "The operands x has PostgreSQL resolves to one type: coalesce's, greatest's, least's,
-   nullif's, CASE's values."
-  [x]
-  (cond (or (query/common-type-functions (syntax/called x)) (= "nullif" (syntax/called x))) (rest x)
-        (and (vector? x) (= :case (first x)) (even? (count (rest x)))) (map second (partition 2 (rest x)))))
-
 (defn- resolving-args
   "coalesce(?, col), CASE ... ELSE col and the like: PostgreSQL resolves an argument to the
    others' type; nil is a value there."
   [registry ps opts]
   (for [{:keys [x chain]} (syntax/expression-nodes ps)
-        :let [operands (resolving-operands x)]
+        :let [operands (query/resolving-operands x)]
         :when (some syntax/param-key operands)
         :let [r (query/common registry (map #(query/expression-type registry chain % opts) (remove syntax/param-key operands)))]
         :when (:schema r)

@@ -732,6 +732,13 @@
   "The functions whose arguments PostgreSQL resolves to one type, and that returns it."
   #{"coalesce" "greatest" "least"})
 
+(defn resolving-operands
+  "The operands x has PostgreSQL resolves to one type: coalesce's, greatest's, least's,
+   nullif's, CASE's values."
+  [x]
+  (cond (or (common-type-functions (syntax/called x)) (= "nullif" (syntax/called x))) (rest x)
+        (and (vector? x) (= :case (first x)) (even? (count (rest x)))) (map second (partition 2 (rest x)))))
+
 (defn- using-joins
   "{:merges {column {:tables [alias ...] :schema s :nullable? bool}} :missing [{:column c :table
    t} ...]} of a statement's JOIN ... USING, each
