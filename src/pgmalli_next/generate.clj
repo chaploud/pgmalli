@@ -46,7 +46,7 @@
 (defn generate!
   "Writes the generated file of config's schemas to its :out (where no file or a generated one
    is), and prints what deserves a look: the columns left out, a diagnostic above :info. Returns
-   {:out path :unrendered [entry ...] :diagnostics [diagnostic ...]}, as check returns them."
+   {:out path :unrendered [entry ...] :diagnostics [diagnostic ...]}, check's two with :out."
   [config]
   (binding [*print-namespace-maps* false]
     (let [out (files/generate! config)

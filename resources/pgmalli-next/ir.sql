@@ -180,7 +180,7 @@ functions AS (
            'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(u.n, pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = u.t), NULL)) ORDER BY u.i)
                                 FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
                                 WHERE u.m IN ('o', 'b', 't')),
-                               (SELECT pg_catalog.json_agg(pg_catalog.json_build_array(a.attname, pg_catalog.format_type(a.atttypid, NULL)) ORDER BY a.attnum)
+                               (SELECT pg_catalog.json_agg(pg_catalog.json_build_array(a.attname, pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = a.atttypid), NULL)) ORDER BY a.attnum)
                                 FROM pg_catalog.pg_type rt JOIN pg_catalog.pg_attribute a ON a.attrelid = rt.typrelid
                                 WHERE rt.oid = p.prorettype AND a.attnum > 0 AND NOT a.attisdropped))
          ) AS fn,

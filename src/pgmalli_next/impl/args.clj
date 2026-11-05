@@ -189,7 +189,7 @@
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
       ;; an array of a domain (d[]) is compared with a d[] alone: no Java array goes as one
-      (and (= :compare context) (some-> (query/domain-of s) types/element))
+      (and (= :compare held-in) (some-> (query/domain-of s) types/element))
       (jdbc/array-pg-object (query/domain-of s) :whole)
       ;; compared, assigned, a function's argument or a :common operand, of a type whose values
       ;; pgmalli does not type and pgjdbc reads as a PGobject (a geometric, network or timespan one:

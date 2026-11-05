@@ -86,7 +86,7 @@
         kinds (fn [w] (map :kind (:problems (h/analyze reg {:select [:k] :from [:t] :where w}))))]
     (doseq [w [[:= :m [:inline "sad"]] [:in :m [[:inline "sad"]]] [:= :m :k] [:<> [:inline "sad"] :m] [:= :m :?x]]]
       (is (= [:no-operator] (kinds w)) (str (pr-str w) ": dmood = unknown, = mood and = dmood do not exist")))
-    (doseq [w [[:= [:cast :m :mood] [:inline "sad"]] [:= :m nil] [:= [:coalesce :m [:inline "ok"]] [:inline "ok"]]]]
+    (doseq [w [[:= [:cast :m :mood] [:inline "sad"]] [:= :m nil] [:is-distinct-from :m nil] [:= [:coalesce :m [:inline "ok"]] [:inline "ok"]]]]
       (is (= [] (kinds w)) (pr-str w)))
     (is (= ["PostgreSQL has no = for m, of domain dmood over enum mood; compare the enum: [:cast :m :mood]"]
            (h/humanize (:problems (h/analyze reg {:select [:k] :from [:t] :where [:= :m [:inline "sad"]]})))))))
@@ -105,6 +105,8 @@
   (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:vector {:pg/type "integer[]" :pg/domain "dint[]"} :pg/integer]]]}})
         x (:x (:args (h/analyze reg {:select [:n] :from [:t] :where [:= :n :?x]})))]
     (is (not (m/validate x (int-array [1]) {:registry reg})) "dint[] = integer[] does not exist")
+    (is (m/validate (:x (:args (h/analyze reg {:select [[[:coalesce :n :?x] :c]] :from [:t]}))) (int-array [1]) {:registry reg})
+        "beside it in coalesce, an integer[] resolves to it")
     (is (re-find #"PGobject of type dint\[\]" (pr-str x)))))
 
 (deftest a-lifted-string-is-inlined-under-inline-which-an-enum-takes

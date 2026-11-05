@@ -148,7 +148,7 @@
   "Writes the config's file, where no file or a generated one is. Returns its path."
   [c]
   (let [f (io/file (:out (config c)))]
-    (when (and (.exists f) (not (str/starts-with? (slurp f) header)))
+    (when (and (.exists f) (or (.isDirectory f) (not (str/starts-with? (slurp f) header))))
       (error/fail! :pgmalli.error/invalid-config (str ":out " f " is a file generate! did not write; give :out a path of its own") {:given (str f)}))
     (let [{:keys [path data]} (generated c)]
       (io/make-parents f)

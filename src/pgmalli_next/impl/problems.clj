@@ -356,8 +356,9 @@
   [registry ps opts]
   (distinct
    (for [[op side other chain] (syntax/comparison-sides ps)
-         ;; HoneySQL writes = and <> with NULL as IS [NOT] NULL
-         :when (not (and (#{:= :<> :not= :!=} op) (syntax/null-value? other (:format opts))))
+         ;; HoneySQL writes = and <> with NULL as IS [NOT] NULL; PostgreSQL reads IS [NOT] DISTINCT
+         ;; FROM NULL as one
+         :when (not (and (or (#{:= :<> :not= :!=} op) (syntax/distinct-ops op)) (syntax/null-value? other (:format opts))))
          :let [s (query/side-schema registry chain side opts)
                t (when s (query/slot-type registry s))]
          :when (and (vector? t) (:domain? (get t 2)))]
