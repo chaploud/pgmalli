@@ -47,7 +47,7 @@
       (testing "a missing file is missing"
         (is (= {:pgmalli/error :pgmalli.error/stale :missing out :stale nil} (select-keys (refusal config) [:pgmalli/error :missing :stale]))))
       (testing "generate, read back, validate"
-        (is (= out (generate/generate! config)))
+        (is (= out (:out (generate/generate! config))))
         (let [data (registry/read-generated-file out)
               reg (pgmalli/registry data)]
           (is (= data (:data (files/generated config))))

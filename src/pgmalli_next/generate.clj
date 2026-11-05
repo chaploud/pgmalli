@@ -51,8 +51,9 @@
            "): a query's pg_catalog functions and types are typed as PostgreSQL " (last versions) " has them"))))
 
 (defn generate!
-  "Writes the generated file of config's schemas to its :out, and prints what it holds. Returns
-   the path."
+  "Writes the generated file of config's schemas to its :out (where no file is, or one it wrote),
+   and prints what it holds. Returns {:out path :unrendered [entry ...] :diagnostics
+   [diagnostic ...]}, as check returns them."
   [config]
   (binding [*print-namespace-maps* false]
     (let [out (files/generate! config)
@@ -61,7 +62,7 @@
       (println "wrote" out (str "(" (counts data) ")"))
       (print-diagnostics (:diagnostics data))
       (print-unrendered (:unrendered data))
-      out)))
+      {:out out :unrendered (not-empty (:unrendered data)) :diagnostics (not-empty (:diagnostics data))})))
 
 (defn diff
   "[difference ...] between two generated data maps, as check's :stale reports them
@@ -73,7 +74,7 @@
 (defn check
   "What CI checks, reading the database once with the config generate! takes: prints how the file
    at :out differs from what the database yields now, and throws when it does (:pgmalli/error
-   :pgmalli.error/stale, ex-data {:missing path :stale [difference ...]}), so clojure -X exits
+   :pgmalli.error/stale, ex-data {:out path :missing path :stale [difference ...]}), so clojure -X exits
    non-zero. Else returns {:unrendered [entry ...] :diagnostics [diagnostic ...]}, each nil when
    it has nothing.
 
@@ -94,6 +95,6 @@
                      (if missing
                        (str "no generated file at " missing "; run pgmalli-next.generate/generate! with the same map and commit it")
                        (str "stale (differences: " (count stale) "); run pgmalli-next.generate/generate! with the same map and commit the file"))
-                     {:missing missing :stale stale}))
+                     {:out (:out (files/config config)) :missing missing :stale stale}))
       (println "ok: the file of" (str/join ", " (:schemas (files/config config))) "matches the database")
       {:unrendered unrendered :diagnostics diagnostics})))

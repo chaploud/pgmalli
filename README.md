@@ -122,11 +122,11 @@ JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sq
 
 (generate/generate! {:schemas ["public" "app"]
                      :db {:jdbc-url "jdbc:postgresql://localhost/app_dev" :user "app" :password "secret"}})
-;; => "resources/pgmalli-next.edn"
+;; => {:out "resources/pgmalli-next.edn", :unrendered nil, :diagnostics nil}
 ```
 
-One file holds every schema in `:schemas`. `generate!` prints what it wrote, the diagnostics
-and the columns left out ([docs/types.md](docs/types.md#the-generated-file)). Generating needs a
+One file holds every schema in `:schemas`. `generate!` writes over no file but one it wrote,
+and prints and returns the diagnostics and the columns left out ([docs/types.md](docs/types.md#the-generated-file)). Generating needs a
 [supported PostgreSQL](#supported-versions).
 
 `(pgmalli/registry)` reads `pgmalli-next.edn` from the classpath. Where `:out` is elsewhere,

@@ -42,7 +42,7 @@
 
 (deftest a-config-of-the-wrong-shape-says-the-shape
   (doseq [[c says] [["public" #"should be a map, such as \{:schemas"]
-                    [{:schemas []} #"\{:schemas \[\"should be a vector of schema names, such as \[\\\"public\\\"\]\"\]\}$"]
+                    [{:schemas "public"} #"should be a vector of schema names"]
                     [{:db "postgres://localhost/app"} #":db \[\"should be a map: psql's keys"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (files/config c)) (pr-str c))))
 
@@ -50,3 +50,18 @@
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:dbb {:password "s3cret"}})))]
     (is (not (re-find #"s3cret" (pr-str (ex-data e)))))
     (is (not (re-find #"s3cret" (str e))))))
+
+(deftest generate-writes-over-no-file-it-did-not-write
+  (let [path (str (doto (java.io.File/createTempFile "pgmalli-not-generated" ".edn") (spit "{:paths [\"src\"]}")))]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is a file generate! did not write; give :out a path of its own"
+                          (generate/generate! {:out path :db {:psql "/nonexistent/psql"}}))
+        "refused before the database is read")
+    (is (= "{:paths [\"src\"]}" (slurp path)))))
+
+(deftest an-override-key-is-a-columns-keyword-checked-before-the-database-is-read
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be a column's keyword, :schema.table/column"
+                        (files/config {:overrides {"users.email" :string}}))))
+
+(deftest schemas-name-each-schema-once
+  (doseq [s [[] ["public" "public"]]]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should name at least one schema, each once" (files/config {:schemas s})) (pr-str s))))
