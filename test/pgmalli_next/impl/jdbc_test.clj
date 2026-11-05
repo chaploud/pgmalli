@@ -8,7 +8,7 @@
             [pgmalli-next.sample :refer [registry]]))
 
 (deftest a-domain-over-a-date-or-timestamp-takes-what-is-sent-as-its-base
-  (let [reg (pgmalli/registry {:registry {:pg.public/at [:and [:time/instant {:pg/type "timestamptz"}] [:fn {:pg/constraint "c"} 'any?]]
+  (let [reg (pgmalli/registry {:registry {:pg.public/at [:and [:time/instant {:pg/type "timestamptz"}] [:fn {:pg/constraint "c"} any?]]
                                           :pg.public/day [:time/local-date {:pg/type "date"}]}})
         schemas (shape/schemas-of reg)
         takes? (fn [k v] (m/validate (jdbc/column-write-type schemas [:ref k] {}) v {:registry reg}))]

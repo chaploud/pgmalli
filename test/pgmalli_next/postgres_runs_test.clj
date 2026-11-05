@@ -383,9 +383,12 @@
         (let [q (insert :typed [:u :d :ts :tz :t])
               row {:u (java.util.UUID/randomUUID) :d (java.time.LocalDate/now) :ts (java.time.LocalDateTime/now)
                    :tz (java.time.Instant/now) :t (java.time.LocalTime/now)}]
-          (doseq [row [row (assoc row :tz (java.time.OffsetDateTime/now)) (assoc row :tz (java.time.LocalDate/now))]]
+          (doseq [row [row (assoc row :tz (java.time.OffsetDateTime/now))]]
             (is (some? (runs! q {:rows [row]} {})))
-            (is (accepted? reg q {:rows [row]} {})))))
+            (is (accepted? reg q {:rows [row]} {})))
+          (let [row (assoc row :tz (java.time.LocalDate/now))]
+            (is (some? (runs! q {:rows [row]} {})))
+            (is (not (accepted? reg q {:rows [row]} {})) "a date's text to a timestamptz reads in the session's time zone"))))
       (testing "the whole row of the UPDATE's table"
         (let [q {:update [:positions :p] :set {:sort_order {:select [:r.sort_order] :from [[[:jsonb_populate_record :p [:cast :?row :jsonb]] :r]]}}
                  :where [:= :p.id 1]}]
