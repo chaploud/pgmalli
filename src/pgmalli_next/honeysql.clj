@@ -301,7 +301,7 @@
    :missing-required-column (fn [{:keys [table column]}]
                               (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"))
    :values-arity (fn [{:keys [row columns values]}]
-                   (str ":values row " row " has " values " values for " columns " :columns; give each row as many values as :columns"))
+                   (str ":values row " row " has " values (if (= 1 values) " value" " values") " for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column value allowed]}]
                    (str (pr-str value) " is no value of " (column-name column) "; it takes " (str/join ", " (map pr-str allowed))))
    :uncast-string (fn [{:keys [column value type]}]

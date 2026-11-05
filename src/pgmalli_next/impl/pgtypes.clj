@@ -104,13 +104,22 @@
   (m/-simple-schema
    {:type :pg/array
     :compile (fn [{:pg/keys [classes]} [child] options]
-               (let [valid? (m/validator child options)]
+               (let [valid? (m/validator child options)
+                     ;; the arrays whose elements t takes, as their component class's value tells
+                     boxed {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Double/TYPE Double Float/TYPE Float Boolean/TYPE Boolean}
+                     fits (for [[^Class c] accept/classes
+                                :let [e (some-> c .getComponentType) v (get accept/values (get boxed e e))]
+                                :when (and (array-class? c) (some? v) (or (nil? classes) (contains? classes (.getName c)))
+                                           (try (valid? v) (catch Exception _ false)))]
+                            (.getSimpleName c))]
                  {:pred (fn [v] (or (sql-array? v)
                                     (let [c (class v)]
                                       (boolean (and (array-class? c)
                                                     (or (nil? classes) (contains? classes (.getName ^Class c)))
                                                     (some->> (elements v) (every? valid?)))))))
-                  :type-properties {:error/message "should be a typed Java array (long-array, (into-array String [...])) or a java.sql.Array of such elements; a vector goes as jsonb"}
+                  :type-properties {:error/message (if (seq fits)
+                                                     (str "should be a Java array (" (str/join ", " (distinct fits)) ") or a java.sql.Array of its elements; a vector goes as jsonb")
+                                                     "should be a typed Java array or a java.sql.Array of its elements; a vector goes as jsonb")}
                   :min 1 :max 1}))}))
 
 (def int-ranges

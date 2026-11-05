@@ -390,9 +390,11 @@
         keys-of (fn [fact] (map :columns (remove :partial? (filter (comp #{fact} :fact) tfacts))))]
     (concat
             (:diagnostics checks)
-            (for [[col r] rendered :when (impossible? (:schema r))]
-              {:kind :contradiction :severity :error :column col
-               :message (str "no value fits column " col ": its CHECKs contradict each other")})
+            (for [[col r] rendered :when (impossible? (:schema r))
+                  :let [cs (:pg/constraints (shape/column-props (shape/non-null (:schema r))))]]
+              (cond-> {:kind :contradiction :severity :error :column col
+                       :message (str "no value fits column " col ": its CHECKs" (when (seq cs) (str " " (str/join ", " cs))) " contradict each other")}
+                (seq cs) (assoc :constraints (vec cs))))
             (for [f tfacts :when (and (= :table-check (:fact f)) (false? (:expr f)))
                   :let [c (:constraint f) partitions? (str/ends-with? (str c) " (partitions)")]]
               {:kind (if partitions? :no-partition :check-false) :severity :warning :constraint c
@@ -403,14 +405,9 @@
             (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))]
               {:kind :row-trigger :severity :info :trigger (:name f)
                :message (str "trigger " (:name f) " runs for every inserted row: its code may reject or change rows the schema accepts")})
-            (for [f tfacts :when (= :exclude (:fact f))
-                  :let [eq (keep #(when (and (:column %) (= "=" (:op %))) (:column %)) (:elements f))
-                        kept? (and (seq eq) (not (:partial? f)) (every? :column (:elements f)))]]
+            (for [f tfacts :when (= :exclude (:fact f))]
               {:kind :exclude :severity :info :constraint (:constraint f)
-               :message (str "EXCLUDE " (:constraint f) " is not checked by the schemas"
-                             (if kept?
-                               (str "; datasets keep its = columns " (pr-str (vec eq)) " distinct, so their rows never conflict")
-                               "; datasets may generate rows it refuses"))})
+               :message (str "EXCLUDE " (:constraint f) " is not checked by the schemas: a row it refuses still validates")})
             (for [f tfacts :when (= :not-enforced (:fact f))]
               {:kind :not-enforced :severity :info :constraint (:constraint f)
                :message (str (:constraint f) " is NOT ENFORCED: the database never checks it, so the schema does not either")})
