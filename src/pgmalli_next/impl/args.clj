@@ -507,9 +507,15 @@
           (vector? k) (when (= :fn (first k)) k)
           (or (keyword? k) (symbol? k)) k)))
 
+(defn- enum-head
+  "[:enum] of enum x, its properties too: x but its labels."
+  [x]
+  (subvec x 0 (if (map? (second x)) 2 1)))
+
 (def ^:private classes-of
   "The classes of accept/values whose value alternative x's kind takes, by name; of a PGobject
-   predicate, its class; of an enum, its labels' classes; ::untold where they cannot be told."
+   predicate, its class; of an enum, its labels' classes; of an array, ::array; ::untold where
+   they cannot be told."
   (memoize
    (fn [x]
      (let [x (unlabel x)
@@ -523,18 +529,18 @@
                      ::untold))))))
 
 (defn- meet
-  "The alternatives of a and b whose values the other takes too, each keeping its own label: of
+  "The alternatives of a and b whose values the other takes too, a's label kept of two alike: of
    two that share a class of accept/values, the one within the other (its classes among the
-   other's, which checks nothing beyond its kind), an enum's labels the other takes, else both
-   ([:and x y]); for two arrays, an array of the elements both take. () where none share a class; nil where the classes of one
-   cannot be told."
+   other's, the other checking nothing beyond its kind), an enum's labels the other takes, else
+   both ([:and x y]); for two arrays, an array of the elements both take. () where none share a
+   class; nil where the classes of one cannot be told."
   [a b]
   (let [array? #(= :pg/array (shape/head %))
         plain? #(let [u (unlabel %)] (or (keyword? u) (symbol? u) (= u (bare u))))
         within? (fn [y cx cy] (and (every? cy cx) (plain? y)))
         enum? #(and (vector? %) (= :enum (first %)))
         ;; an enum's labels the other takes: of its classes (cy), or among its labels
-        labels (fn [x keep?] (let [ls (filter keep? (shape/entries x))] (when (seq ls) (into (subvec x 0 (if (map? (second x)) 2 1)) ls))))
+        labels (fn [x keep?] (let [ls (filter keep? (shape/entries x))] (when (seq ls) (into (enum-head x) ls))))
         elements (fn [x y]
                    (let [[ex ey] [(last x) (last y)]
                          m (cond (query/untyped? ey) [ex]
@@ -557,11 +563,13 @@
                       (and (enum? y) (plain? x)) (labels y #(cx (.getName (class %))))
                       :else [:and x y]))]
     (when-not (some #{::untold} pairs)
-      ;; an enum's labels kept of two alternatives are one enum
-      (let [ps (distinct (remove nil? pairs))
-            head #(subvec % 0 (if (map? (second %)) 2 1))
-            enums (group-by head (filter enum? ps))]
-        (distinct (for [p ps] (if (enum? p) (into (head p) (distinct (mapcat shape/entries (enums (head p))))) p)))))))
+      ;; an enum's labels kept of two alternatives are one enum; of two alike but for their label, the first
+      (let [ps (remove nil? pairs)
+            enums (group-by enum-head (filter enum? ps))]
+        (->> ps
+             (map #(if (enum? %) (into (enum-head %) (distinct (mapcat shape/entries (enums (enum-head %))))) %))
+             (reduce (fn [[out seen] p] (let [u (unlabel p)] (if (seen u) [out seen] [(conj out p) (conj seen u)]))) [[] #{}])
+             first)))))
 
 (defn- both-uses
   "The type of an argument two of its uses type a and b: PostgreSQL types a parameter once, so
@@ -569,17 +577,10 @@
   [a b]
   (let [nullable? (every? #(or (query/untyped? %) (shape/maybe? %)) [a b])
         [a b] (map shape/non-null [a b])
-        ;; every alternative of x is one of y's, but for the :pg/type it names, or an array where y
-        ;; takes an array of any elements
-        within? (fn [x y]
-                  (let [ys (set (map unlabel (shape/alternatives y)))]
-                    (every? #(or (ys %) (and (ys [:pg/array :any]) (= :pg/array (shape/head %))))
-                            (map unlabel (shape/alternatives x)))))
         t (cond (query/untyped? a) b
                 (query/untyped? b) a
-                (within? b a) b
-                (within? a b) a
-                :else (if-let [m (seq (meet a b))] (shape/either m nil) (into [:and] (sort-by pr-str [a b]))))]
+                ;; uses with no value in common, or whose common values cannot be told: each use's (describe's a & b)
+                :else (if-let [m (seq (meet a b))] (shape/either m nil) (into [:and {:pgmalli/uses true}] (sort-by pr-str [a b]))))]
     (cond-> t nullable? query/nullable)))
 
 (defn- typed-only
@@ -592,7 +593,7 @@
       :and (some->> (typed-only (shape/domain-base t)) constantly (shape/update-base t))
       :or (some-> (seq (keep typed-only (shape/alternatives t))) (shape/either nil))
       :enum (let [ls (remove keyword? (shape/entries t))]
-              (when (seq ls) (into (vec (take (- (count t) (count (shape/entries t))) t)) ls)))
+              (when (seq ls) (into (enum-head t) ls)))
       (when-not (jdbc/untyped-kinds (shape/kind t)) t))))
 
 (defn- analysis

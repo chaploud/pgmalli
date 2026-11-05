@@ -24,11 +24,13 @@
    :return-rejections; where row-schema names or types a column
    otherwise than the ResultSet's metadata, :column-mismatches (and how many it types,
    :columns-typed). arg-matrix sends fixed values as each argument beside each column of the
-   schema and of a column of each type pgmalli-next.impl.types lists, whatever arg-types says of it.
+   schema and of a column of each type pgmalli-next.impl.types lists, whatever arg-types says of it;
+   shared-args sends each argument of several uses of the corpus a value every use's own schema
+   takes, and fails where the argument's schema refuses one PostgreSQL takes.
 
    bb oracle [seed] [mutants-per-query] prints the counts and every case but the agreeing ones;
    pgmalli-next.oracle-test holds the false positives, the return rejections, the column mismatches
-   and arg-matrix's failures at none, and the columns typed near as many as they were."
+   and arg-failures at none, and the columns typed near as many as they were."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
             [clojure.pprint :as pp]
@@ -629,7 +631,7 @@
   (merge accept/values
          {java.time.ZonedDateTime (java.time.ZonedDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
           java.time.Duration (java.time.Duration/ofSeconds 1) java.time.Period (java.time.Period/ofDays 1)
-          java.sql.Date (java.sql.Date/valueOf "2026-01-01") java.sql.Time (java.sql.Time/valueOf "01:00:00")
+          java.sql.Date (java.sql.Date/valueOf "2026-01-01")
           java.sql.Timestamp (java.sql.Timestamp/valueOf "2026-01-01 00:00:00")
           clojure.lang.PersistentArrayMap {"a" "b"}
           org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))}))
@@ -640,8 +642,8 @@
    Boolean/TYPE Boolean Character/TYPE Character})
 
 (defn value
-  "A value of class c: of values, or an array of one element; throws for another class, so a
-   class added to accept/class-types gets one here."
+  "A value of class c: of values, or an array of one element; throws for another class, (accept-test
+   holds accept/values to accept/classes)."
   [^Class c]
   (if (.isArray c)
     (let [e (.getComponentType c)]
@@ -947,8 +949,8 @@
                                   :pg (or pg :ok)}))))))))))
 
 (defn- each-use
-  "q with each place of an argument of several uses its own argument, :?k__i of the i-th, and
-   {k [k__i ...]} of those arguments."
+  "q with each place of each argument its own argument, :?k__i of the i-th, and {k [k__i ...]}
+   of the arguments of several uses."
   [q]
   (let [n (atom {})
         own (fn [k] (let [i (get (swap! n update k (fnil inc -1)) k)] (keyword (str (name k) "__" i))))
@@ -960,14 +962,14 @@
     [q' (into {} (for [[k c] @n :when (pos? c)] [k (mapv #(keyword (str (name k) "__" %)) (range (inc c)))]))]))
 
 (defn shared-args
-  "Each argument of several uses in a corpus query, sent each of matrix-values: :shared where
-   every use's own schema (each-use's, which arg-matrix holds to PostgreSQL) takes the value, the
-   argument's schema refuses it, and PostgreSQL takes it. nil is left out: it is taken only where
-   every use takes it, or the query tests it for NULL."
+  "Each argument of several uses in a corpus query, sent each of matrix-values but nil, and a
+   PGobject of interval and of inet: :shared where every use's own schema (each-use's) takes the
+   value, the argument's schema refuses it, and PostgreSQL takes it. nil is taken only where every
+   use takes it, or the query tests it for NULL."
   [db]
   (let [registry (registry db)
         pg (fn [t v] (doto (org.postgresql.util.PGobject.) (.setType t) (.setValue v)))
-        ;; a PGobject of each type pgmalli does not type that pgjdbc reads as one, beside values' json
+        ;; PGobjects of types beside values' json
         vs (concat (remove nil? (matrix-values (with-open [conn (jdbc/get-connection (test-db/datasource db))]
                                                  (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified)))))
                    [(pg "interval" "1 day") (pg "inet" "127.0.0.1")])
@@ -992,8 +994,13 @@
              {:kind :shared :id id :arg k :sql (first sqlvec) :value v :class (some-> v class .getName)
               :schema (m/form (m/schema s {:registry registry}))})))))
 
+(defn arg-failures
+  "arg-matrix's failures and shared-args'."
+  [db]
+  (into (arg-matrix db) (shared-args db)))
+
 (defn arg-failure-text
-  "An arg-matrix failure as bb oracle and pgmalli-next.oracle-test print it."
+  "An arg-failures failure as bb oracle and pgmalli-next.oracle-test print it."
   [{:keys [kind table column context type sql value sent schema pg id arg] cls :class}]
   (case kind
     :shared
@@ -1022,7 +1029,7 @@
       (fn []
         (test-db/exec-sql! schema-sql)
         (let [results (run test-db/*db* seed per-query)
-              fs (into (arg-matrix test-db/*db*) (shared-args test-db/*db*))
+              fs (arg-failures test-db/*db*)
               failed? (or (seq fs) (some (some-fn (comp seq :return-rejections) (comp seq :column-mismatches)
                                                   (comp #{:false-positive :timeout} :outcome))
                                          results))]

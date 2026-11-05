@@ -142,7 +142,11 @@
                                               ;; [expr direction], an item of an ORDER BY inside OVER or an aggregate, is no
                                               ;; call: its expression alone names a column
                                               :let [ordered? (and (vector? x) (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x))))))
-                                                    [kind _ args] (if ordered? [:order [] [(first x)]] (when-not (syntax/comparison? x) (syntax/call-parts x)))]
+                                                    ;; [:cast x t]: x alone, t a type's name
+                                                    cast? (and (vector? x) (= :cast (first x)) (= 3 (count x)))
+                                                    [kind _ args] (cond ordered? [:order [] [(first x)]]
+                                                                        cast? [:cast [] [(second x)]]
+                                                                        :else (when-not (syntax/comparison? x) (syntax/call-parts x)))]
                                               :when kind
                                               a args
                                               :when (syntax/column-keyword? a format)]

@@ -54,7 +54,7 @@
    [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
 (def values
-  "A value of each class of classes that is no array, by class."
+  "A value of each class of classes with a schema (a byte[] too), by class."
   (into {} (filter (comp some? key))
         {Long 1 Integer (int 1) Short (short 1) Byte (byte 1) java.math.BigDecimal 1M clojure.lang.BigInt 1N
          java.math.BigInteger (biginteger 1) Double 1.0 Float (float 1) Boolean true String "a" Character \a

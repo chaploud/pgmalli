@@ -998,7 +998,7 @@
         "a comma binds looser than JOIN: the right join attaches to the last FROM item; an inner join after it nulls nothing")))
 
 (deftest a-typed-use-wins-over-a-driver-object
-  (is (= {:x [:and bigint-cmp [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]]} (:args (h/analyze docs {:select [:id] :from [:docs] :where [:and [:= :meta :?x] [:= :id :?x]]})))
+  (is (= {:x [:and {:pgmalli/uses true} bigint-cmp [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]]} (:args (h/analyze docs {:select [:id] :from [:docs] :where [:and [:= :meta :?x] [:= :id :?x]]})))
       "a jsonb compared: the values sent as jsonb"))
 
 (deftest a-set-operations-row-keeps-a-null-columns-key
@@ -2822,6 +2822,7 @@
       "HoneySQL writes the target's :groups/id as groups.id")
   (is (= [:nope] (map :column (check {:select-distinct-on [[:id :nope] :nick] :from [:users]}))) "DISTINCT ON's expressions are no [expr alias]")
   (is (= [:nik] (map :column (check {:select [:id] :from [:users] :group-by [[:upper :nik]]}))) "a call in GROUP BY is checked")
+  (is (= [:nik] (map :column (check {:select [[[:cast :nik :text] :x]] :from [:users]}))) "a column cast is checked, the type's name no column")
   (let [q {:select [:id] :from [:users] :where [:in :id {:nest {:select [:nope] :from [:users]}}]}]
     (is (= {:select [:nope] :from [:users]} (get-in q (:in (first (check q))))) ":in reaches the statement through :nest")))
 

@@ -91,8 +91,7 @@
                         (or (type-label p) (describe schemas (last s)))))
       (= :and head) (let [n (some #(when (and (vector? %) (= :pg/numeric (first %))) (second %)) children)
                           label (or (type-label p) (describe schemas (first children)))
-                          ;; an argument's uses whose common values are not told: each use's
-                          uses? (and (nil? p) (every? #(and (vector? %) (#{:or :maybe :pg/array} (first %))) children))]
+                          uses? (:pgmalli/uses p)]
                       (cond
                         ;; numeric(p,s) keeps its typmod in a [:pg/numeric ...] part, not in :pg/type
                         (and n (= "numeric" label)) (str "numeric(" (:precision n) "," (:scale n) ")")

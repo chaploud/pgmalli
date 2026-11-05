@@ -4,7 +4,7 @@
    them: the corpus, seeded mutants of it and the queries generated from the oracle schema's
    catalog, against a real PostgreSQL, sent inlined and as parameters (see pgmalli-next.oracle; bb
    oracle for the misses as well). arg-types takes each value PostgreSQL takes for an argument
-   but those the stricter rule leaves out (pgmalli-next.oracle/arg-matrix). JVM only: babashka has
+   but those the stricter rule leaves out (pgmalli-next.oracle/arg-matrix, shared-args). JVM only: babashka has
    no JDBC, so bb test does not list it."
   (:require [clojure.edn :as edn]
             [clojure.string :as str]
@@ -23,7 +23,7 @@
        " PGMALLI_ORACLE_MUTANTS=" mutants " clojure -M:test -n pgmalli-next.oracle-test"))
 
 (def ^:private results (delay (oracle/run *db* seed mutants)))
-(def ^:private arg-failures (delay (into (oracle/arg-matrix *db*) (oracle/shared-args *db*))))
+(def ^:private arg-failures (delay (oracle/arg-failures *db*)))
 
 (def pending
   "False rejections the oracle finds in src that src does not fix yet, held out of the failing
