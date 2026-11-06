@@ -1553,6 +1553,7 @@
    else the statement holds."
   [registry stmt opts]
   (or (counted-rows registry stmt opts)
-      (when (map? stmt)
+      ;; raw SQL may write rows past the limit (UNION ALL after it)
+      (when (and (map? stmt) (not (contains? stmt :raw)))
         (when-let [n (some->> (seq (keep #(row-limit stmt %) [:limit :fetch])) (apply min))]
           {:min 0 :max n}))))
