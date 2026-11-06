@@ -581,8 +581,9 @@ to one for each row of an INSERT's `:values` with RETURNING; of a set operation,
 members' under `:union-all` and at most that under `:union`, at most the fewest under
 `:intersect`, at most the first's under `:except`; at most `:limit` or `:fetch` (a number, or `[:inline n]`), whatever else the statement holds. A function that may return a set (one that does, of
 `pg_catalog` as `generate_series` or of a generated schema, or one the registry has none of) in the select list, ORDER
-BY, GROUP BY or `:values`, or a GROUP BY with ROLLUP, CUBE or GROUPING SETS, which add groups,
-makes it say nothing but a limit. Where it is one
+BY, GROUP BY or `:values`, raw SQL (`:raw`), or a GROUP BY with ROLLUP, CUBE or GROUPING SETS,
+which add groups, makes it say nothing but a limit; any other expression or clause changes no
+count. Where it is one
 row, `{:result :one}` drops the `[:maybe]`:
 
 ```clojure

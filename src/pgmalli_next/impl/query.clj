@@ -1259,36 +1259,23 @@
       (cond-> {:kind :duplicate-column :column k :items (mapv items (distinct (map (comp ::item meta) es)))}
         (seq path) (assoc :in path)))))
 
-(def ^:private row-count-keys
-  "The clauses row-count reads, and those that change no count."
-  (into #{:select :select-distinct :from :where :group-by :having :order-by :limit :offset :fetch :with :returning
-          :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :using :for :join-by :with-recursive}
-        (concat syntax/join-keys syntax/set-operation-keys)))
+(def ^:private grammar-calls
+  "Names HoneySQL writes as a call that are SQL's grammar, no function of pg_proc."
+  (into #{"exists" "not_exists" "any" "some" "all" "nullif"} common-type-functions))
 
 (defn- plain-value?
-  "Whether x yields one value per row: a column, a constant, DEFAULT, a subquery, EXISTS, a
-   cast, CASE, coalesce, greatest, least or nullif of them, or a call of them to an operator or a
-   function that returns no set, of pg_catalog or a generated schema (generate_series and unnest
-   return more rows; a function the registry has none of may)."
+  "Whether x yields one value per row: it calls no function that may return a set, one that does
+   (generate_series, unnest) or one the registry has none of, and writes no raw SQL, which may.
+   A subquery is one value (an error where it gives more rows) or EXISTS's, of rows of its own."
   [registry opts x]
-  ;; :%f.a is HoneySQL's f(a)
-  (or (and (keyword? x) (not (syntax/shorthand-fn x))) (syntax/constant? x) (nil? x) (= [:default] x)
-      ;; a scalar subquery is one value, or an error where it gives more rows
-      (map? x) (and (vector? x) (#{:exists :not-exists} (first x)) (map? (second x)))
-      ;; a literal, a list of them too ([:inline ["a" "b"]], an IN list)
-      (and (vector? x) (#{:inline :lift :param} (first x)))
-      (and (vector? x) (= :cast (first x)) (plain-value? registry opts (second x)))
-      ;; an aggregate's FILTER (WHERE ...): one value of the aggregate's
-      (and (vector? x) (= :filter (first x)) (plain-value? registry opts (second x)))
-      ;; grammar, not functions of pg_catalog: ANY(array) is one value as the comparison it is in
-      (and (vector? x) (or (#{:case :case-expr :and :or :not :any :some :all :is :is-not :between :not-between :composite :distinct} (first x))
-                           (common-type-functions (syntax/called x)) (= "nullif" (syntax/called x)))
-           (every? #(plain-value? registry opts %) (rest x)))
-      (and (vector? x) (#{:in :not-in} (first x)) (= 3 (count x))
-           (let [[_ a b] x] (and (plain-value? registry opts a) (or (plain-value? registry opts b) (and (sequential? b) (every? #(plain-value? registry opts %) b))))))
-      (boolean (when-let [[kind _ args :as parts] (syntax/call-parts x)]
-                 (and (or (= :operators kind) (not (resolve/set-returning? (reached registry opts parts))))
-                      (every? #(plain-value? registry opts %) args))))))
+  (cond (map? x) true
+        (and (vector? x) (= :raw (first x))) false
+        (or (vector? x) (and (keyword? x) (syntax/shorthand-fn x)))
+        (let [[kind :as parts] (syntax/call-parts x)]
+          (and (not (and (= :functions kind) (not (grammar-calls (second parts))) (resolve/set-returning? (reached registry opts parts))))
+               (or (keyword? x) (every? #(plain-value? registry opts %) (rest x)))))
+        (sequential? x) (every? #(plain-value? registry opts %) x)
+        :else true))
 
 (defn- aggregated?
   "Whether x holds a call of an aggregate of its own level: one in a subquery, or in a window
@@ -1395,8 +1382,8 @@
 (defn- counted-rows
   "row-count's count from the statement's data, nil where it cannot tell."
   [registry stmt opts]
-  ;; a clause this does not read may change the count
-  (when (and (map? stmt) (every? row-count-keys (keys stmt)))
+  ;; raw SQL may say anything
+  (when (and (map? stmt) (not (contains? stmt :raw)))
     (let [write? (some #(contains? stmt %) syntax/write-keys)
           op (some #(when (contains? stmt %) %) syntax/set-operation-keys)
           members (get stmt op)
@@ -1437,8 +1424,8 @@
 
 (defn row-count
   "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
-   any part may be a function that returns a set (plain-value?), or GROUP BY has ROLLUP, CUBE or
-   GROUPING SETS, it tells nothing but a limit. One of a SELECT with an aggregate of its level and
+   any part may be a function that returns a set or raw SQL (plain-value?), or GROUP BY has
+   ROLLUP, CUBE or GROUPING SETS, it tells nothing but a limit; another clause changes no count. One of a SELECT with an aggregate of its level and
    no GROUP BY, at most one with HAVING; at most one of a SELECT, UPDATE or DELETE of one row
    (unique-row?), and of a SELECT without FROM (one group of its one row under GROUP BY); as many
    as a VALUES list has rows, up to as many of an INSERT returning (a trigger, a rule or ON
