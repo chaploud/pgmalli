@@ -1305,52 +1305,54 @@
       (cond-> (map :columns (remove #(or (:where %) (:deferrable %)) (:pg/unique props)))
         (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props))))))
 
-(defn- one-row-items
-  "Whether each of items, [item condition] of a FROM item and the condition binding it, gives one
-   row at most to each row of the others: its condition holds a key's columns equal to values
-   (unique-keys), a value being a constant or a column of a table known so already (the first
-   of known aliases, the other items as they are found to be). Equal to NULL, which HoneySQL
-   writes IS NULL, a column NOT NULL alone holds it."
-  [registry known items {:keys [format] :as opts}]
-  (loop [known (set known) left items]
-    (if (empty? left)
-      true
-      (let [bound? (fn [[item c]]
-                     (let [[table alias] (syntax/table-ref item opts)
-                           columns (when table (table-columns registry table))
-                           value? #(or (syntax/constant? %)
-                                       (and (syntax/column-keyword? %) (contains? known (first (syntax/split-column % format)))))
-                           equal (set (for [x (tree-seq #(and (vector? %) (= :and (first %))) rest c)
-                                            :when (and (vector? x) (= := (first x)) (= 3 (count x)))
-                                            [a b] [[(second x) (nth x 2)] [(nth x 2) (second x)]]
-                                            :when (and (syntax/column-keyword? a) (value? b))
-                                            :let [[q col] (syntax/split-column a format)]
-                                            :when (and (or (nil? q) (= q alias))
-                                                       (not (and (syntax/null-value? b nil) (shape/maybe? (get columns col [:maybe :any])))))]
-                                        col))]
-                       (when (and table (some #(every? equal %) (unique-keys registry table)))
-                         alias)))
-            found (keep (fn [e] (when-let [a (bound? e)] [e a])) left)]
-        (when (seq found)
-          (recur (into known (map second found)) (remove (set (map first found)) left)))))))
+(defn- equalities
+  "[a b] and [b a] of each = among condition c's conjuncts, an AND inside an AND too."
+  [c]
+  (for [x (tree-seq #(and (vector? %) (= :and (first %))) rest c)
+        :when (and (vector? x) (= := (first x)) (= 3 (count x)))
+        pair [[(second x) (nth x 2)] [(nth x 2) (second x)]]]
+    pair))
 
 (defn- unique-row?
-  "Whether statement stmt reads one row at most: its one table (no CTE of its name) a row by its
-   WHERE (one-row-items), and each other it reads, joined (JOIN or LEFT JOIN by its ON) or listed
-   (DELETE's USING, UPDATE's FROM, by the WHERE), a row for that row."
+  "Whether statement stmt reads one row at most: every table it reads (its one, the ones it joins
+   by JOIN or LEFT JOIN, DELETE's USING, UPDATE's FROM; no CTE of a table's name) is held to one
+   row by a key (unique-keys) whose columns are each equal to one value: a constant, a scalar
+   subquery, or a column of a table so held, or equal to one (r.a = t.a, t.a = ?), found until
+   no more is. The equalities are the WHERE's and an inner join's ON's; a LEFT JOIN's ON holds its
+   own table's columns alone. Equal to NULL, which HoneySQL writes IS NULL, a column NOT NULL
+   alone is held."
   [registry stmt write? {:keys [format] :as opts}]
   (let [ctes (into (syntax/cte-names stmt format) (::ctes opts))
-        [base & listed] (if write? (concat (syntax/write-targets stmt) (syntax/from-items stmt [:using :from])) (syntax/from-items stmt [:from]))
+        listed (if write? (concat (syntax/write-targets stmt) (syntax/from-items stmt [:using :from])) (syntax/from-items stmt [:from]))
         joined (syntax/joins stmt)
-        written (nth (syntax/table-ref base opts) 2 nil)]
-    (boolean (and base (not (contains? ctes written))
+        items (for [x (concat listed (map second joined))
+                    :let [[table alias written] (syntax/table-ref x opts)]]
+                {:table (when-not (contains? ctes written) table) :alias alias
+                 :columns (when table (table-columns registry table))})
+        by-alias (into {} (map (juxt :alias identity)) items)
+        column (fn [k] (when (syntax/column-keyword? k)
+                         (let [[q col] (syntax/split-column k format)
+                               owners (if q (filter #(= q (:alias %)) items) (filter #(contains? (:columns %) col) items))]
+                           (when (= 1 (count owners)) [(:alias (first owners)) col]))))
+        general (concat (equalities (:where stmt)) (mapcat (fn [[k _ c]] (when (#{:join :inner-join} k) (equalities c))) joined))
+        own (for [[k t c] joined :when (= :left-join k) :let [alias (second (syntax/table-ref t opts))] pair (equalities c)] [alias pair])
+        held-by (fn [held [a b]]
+                  (when-let [[alias col :as ac] (column a)]
+                    (when (if (syntax/null-value? b nil)
+                            (not (shape/maybe? (get-in by-alias [alias :columns col] [:maybe :any])))
+                            (or (syntax/constant? b) (map? b) (contains? held (column b))))
+                      ac)))
+        one-row? (fn [held {:keys [table alias]}]
+                   (and table (some (fn [ks] (every? #(contains? held [alias %]) ks)) (unique-keys registry table))))
+        step (fn [held]
+               (let [held (into held (keep #(held-by held %)) general)
+                     held (into held (keep (fn [[alias pair]] (let [ac (held-by held pair)] (when (= alias (first ac)) ac)))) own)]
+                 (into held (for [{:keys [alias columns] :as item} items :when (one-row? held item), c (keys columns)] [alias c]))))
+        held (loop [h #{}] (let [h' (step h)] (if (= h h') h (recur h'))))]
+    (boolean (and (seq items)
                   (not (some #(contains? stmt %) [:cross-join :join-by]))
                   (every? (comp #{:join :left-join :inner-join} first) joined)
-                  (not-any? #(contains? ctes (nth (syntax/table-ref % opts) 2 nil)) (concat listed (map second joined)))
-                  (one-row-items registry [] [[base (:where stmt)]] opts)
-                  (one-row-items registry [(second (syntax/table-ref base opts))]
-                                 (concat (for [t listed] [t (:where stmt)]) (for [[_ t c] joined] [t c]))
-                                 opts)))))
+                  (every? #(one-row? held %) items)))))
 
 (defn- derived-count
   "{:min 0 :max n} of a SELECT reading one FROM item alone, a subquery or a CTE of the statement,

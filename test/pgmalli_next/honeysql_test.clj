@@ -1965,6 +1965,20 @@
   (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:not [:is-distinct-from :id :?v]]]}))
       "nil where both take it"))
 
+(deftest a-statement-reads-one-row-where-each-table-is-held-to-one-by-a-key
+  (let [reg (pgmalli/registry {:registry {:pg.public/p [:map {:pg/table "public.p" :pg/primary-key ["gid" "rid"]} [:gid [:int {:pg/type "bigint"}]] [:rid [:int {:pg/type "bigint"}]]]
+                                          :pg.public/r [:map {:pg/table "public.r" :pg/primary-key ["id"] :pg/unique [{:columns ["gid" "rkey"]}]}
+                                                        [:id [:int {:pg/type "bigint"}]] [:gid [:int {:pg/type "bigint"}]] [:rkey [:string {:pg/type "text"}]]]
+                                          :pg.public/u [:map {:pg/table "public.u"} [:gid [:int {:pg/type "bigint"}]]]}})
+        rows #(:rows (h/analyze reg % {}))]
+    (is (= {:min 0 :max 1} (rows {:select [:p.gid] :from [:p] :join [:r [:and [:= :r.id :p.rid] [:= :r.gid :p.gid]]] :where [:and [:= :p.gid :?g] [:= :r.rkey :?k]]}))
+        "the joined table held first, by a column equal to one held: the first table by its column")
+    (is (nil? (rows {:select [:p.gid] :from [:p] :join [:r [:= :r.id :p.rid]] :where [:= :p.gid :?g]})) "each held by the other alone: neither")
+    (is (= {:min 0 :max 1} (rows {:select [:p.gid] :from [:p] :where [:and [:= :p.gid :?g] [:= :p.rid {:select [:gid] :from [:u]}]]}))
+        "a scalar subquery is one value")
+    (doseq [w [[:in :p.rid {:select [:gid] :from [:u]}] [:= :p.rid [:any {:select [:gid] :from [:u]}]]]]
+      (is (nil? (rows {:select [:p.gid] :from [:p] :where [:and [:= :p.gid :?g] w]})) (str (pr-str w) " is many")))))
+
 (deftest an-argument-of-a-function-taking-an-enum-type-is-a-label-of-it
   (let [reg (pgmalli/registry {:schemas ["public"]
                                :functions {"public" {"claim" [{:args ["bigint" "kind"] :result "bigint" :set true}]}}
