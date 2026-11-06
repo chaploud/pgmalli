@@ -14,7 +14,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-entries type-call)
+(declare derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-count row-entries type-call)
 
 (defn- versions
   "The versions of the catalog snapshot the registry's generated schemas are of: their file's
@@ -1331,15 +1331,8 @@
       :intersect (when (seq maxes) {:min 0 :max (apply min maxes)})
       (:except :except-all) (some->> (:max (first counts)) (hash-map :min 0 :max)))))
 
-(defn row-count
-  "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
-   any part may be a function that returns a set (plain-value?), or GROUP BY has ROLLUP, CUBE or
-   GROUPING SETS, it tells nothing but a limit. One of a SELECT with an aggregate of its level and
-   no GROUP BY, at most one with HAVING; at most one of a SELECT, UPDATE or DELETE of one row
-   (unique-row?), and of a SELECT without FROM (one group of its one row under GROUP BY); as many
-   as a VALUES list has rows, up to as many of an INSERT returning (a trigger, a rule or ON
-   CONFLICT may skip one); of a set operation, as set-operation-count counts its members'; at most
-   :limit or :fetch, from none where a parameter gives the limit or OFFSET skips some."
+(defn- counted-rows
+  "row-count's count from the statement's data, nil where it cannot tell."
   [registry stmt opts]
   ;; a clause this does not read may change the count
   (when (and (map? stmt) (every? row-count-keys (keys stmt)))
@@ -1379,3 +1372,19 @@
               ;; a trigger, a rule or ON CONFLICT may skip a row a write's SELECT gives
               (or unbounded-limit? (contains? stmt :offset) (and write? (:returning stmt))) (assoc :min 0))]
       (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
+
+(defn row-count
+  "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
+   any part may be a function that returns a set (plain-value?), or GROUP BY has ROLLUP, CUBE or
+   GROUPING SETS, it tells nothing but a limit. One of a SELECT with an aggregate of its level and
+   no GROUP BY, at most one with HAVING; at most one of a SELECT, UPDATE or DELETE of one row
+   (unique-row?), and of a SELECT without FROM (one group of its one row under GROUP BY); as many
+   as a VALUES list has rows, up to as many of an INSERT returning (a trigger, a rule or ON
+   CONFLICT may skip one); of a set operation, as set-operation-count counts its members'; at most
+   :limit or :fetch, from none where a parameter gives the limit or OFFSET skips some, whatever
+   else the statement holds."
+  [registry stmt opts]
+  (or (counted-rows registry stmt opts)
+      (when (map? stmt)
+        (when-let [n (some->> (seq (filter #(and (integer? %) (<= 0 %)) (map stmt [:limit :fetch]))) (apply min))]
+          {:min 0 :max n}))))

@@ -1705,6 +1705,8 @@
     (is (not (map? (second (ret {:select [:nick] :from [:users] :where [:= :id [:+ :score 1]]} {}))))
         "a key equal to an expression of the row matches many")
     (is (= 5 (:max (second (ret {:select [:nick] :from [:users] :limit 5} {})))))
+    (is (= 1 (:max (second (ret {:select-distinct-on [[:mood] :nick] :from [:users] :limit 1} {})))) "a limit whatever else the statement holds")
+    (is (= 2 (:max (second (ret {:select [[[:unnest [:array [1 2 3]]] :x]] :from [:users] :limit 2} {})))) "a function returning a set too")
     (is (= {:max 1 :min 1} (second (ret {:select [[[:exists {:select [1] :from [:users] :where [:= :id :?id]}] :authorized]]} {})))
         "a SELECT without FROM: one row, EXISTS one value")
     (is (= {:max 1 :min 1} (second (ret {:select [[[:not [:exists {:select [1] :from [:users] :where [:= :id :?id]}]] :v]]} {})))
