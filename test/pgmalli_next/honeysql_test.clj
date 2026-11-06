@@ -8,6 +8,7 @@
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
+            [malli.registry :as mr]
             [malli.experimental.time :as time]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
@@ -375,6 +376,18 @@
       (is (= plain (v x)) (str (pr-str x) ": a value PostgreSQL computes is no part of the column's shape")))
     (is (= [:any {:pg/type "jsonb"}] (v [:coalesce :doc [:inline "{}"]])) "a literal beside it need not be of its shape")
     (is (= [:any {:pg/type "jsonb"}] (v [:coalesce :doc :raw])) "nor another column")))
+
+(deftest a-shape-an-override-names-is-the-shape-of-its-name
+  (let [reg (mr/composite-registry
+             (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d"}
+                                                         [:o [:ref {:pg/type "jsonb"} :app/options]]
+                                                         [:rs [:ref {:pg/type "jsonb"} :app/rows]]]}})
+             {:app/options [:map [:bundle :string] [:keep :int]] :app/rows [:vector [:ref :app/row]] :app/row [:map [:k :string]]})
+        v #(last (last (:row (h/analyze reg {:select [[% :v]] :from [:d]} {}))))]
+    (is (= [:maybe [:map {:pg/type "jsonb"} [:keep :int]]] (v [:- :o [:inline "bundle"]])))
+    (is (= [:maybe [:int {:pg/type "jsonb"}]] (v [:-> :o [:inline "keep"]])))
+    (is (= [:maybe [:map {:pg/type "jsonb"} [:k :string]]] (v [:-> :rs [:inline 0]])))
+    (is (= [:maybe [:map {:pg/type "jsonb"} [:k :string]]] (v [:jsonb_array_elements :rs])))))
 
 (deftest min-max-and-nullif-of-a-reg-array-are-not-oid
   (let [reg (pgmalli/registry {:registry {:pg.public/rels [:map {:pg/table "public.rels"}

@@ -5,6 +5,7 @@
    What HoneySQL data says without a registry is pgmalli-next.impl.hsyntax; the arguments'
    types pgmalli-next.impl.args; the problems pgmalli-next.impl.problems."
   (:require [clojure.string :as str]
+            [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
@@ -868,12 +869,24 @@
      [:functions "json_array_elements"] element
      [:functions "jsonb_array_elements"] element}))
 
+(defn- json-shape
+  "Shape s of a json or jsonb value without NULL, through the references of the registry's
+   schemas ([:ref k], k) to the schema they name."
+  [registry s]
+  (let [schemas (::schemas registry)]
+    (loop [s (shape/non-null s) seen #{}]
+      (let [k (cond (and (vector? s) (= :ref (first s))) (last s) (and (keyword? s) (namespace s)) s)
+            target (when (and k (not (seen k))) (get schemas k))]
+        (if target
+          (recur (shape/non-null (cond-> target (m/schema? target) m/form)) (conj seen k))
+          s)))))
+
 (defn- json-part-schema
   "The schema of the part of a json or jsonb value of shape s that call n (kind) of args, of result
    type t, takes (json-parts); nil for another call or shape."
-  [kind n args s t]
+  [registry kind n args s t]
   (when-let [f (json-parts [kind n])]
-    (some-> (f (shape/non-null s) (second args)) (shape/merge-props {:pg/type t}))))
+    (some-> (f (json-shape registry s) (second args)) (shape/merge-props {:pg/type t}))))
 
 (defn- call-type
   "The expression type of a call (call-parts), its arguments of expression types ts."
@@ -888,7 +901,7 @@
           schema (if-let [shape (and catalog? (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
                    (or (when (and (json-types t) (json-types (:type (first ts))))
-                         (json-part-schema kind (name n) args (:schema (first ts)) t))
+                         (json-part-schema registry kind (name n) args (:schema (first ts)) t))
                        (when (= "anyarray" (:result o))
                          (some (fn [[d m]] (when (#{"anyelement" "anynonarray"} d) (domain-array (:schema m))))
                                (map vector (:args o) ts)))
