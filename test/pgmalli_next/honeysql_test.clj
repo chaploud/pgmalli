@@ -1477,8 +1477,8 @@
          (h/schema-problems {:ns 'pgmalli-next.honeysql-test}))))
 
 (deftest a-function-alias-is-not-held-to-the-columns-it-lists
-  (is (= [{:kind :unknown-column :column :t.name}] (check {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]}))
-      "PostgreSQL reads t.name as name(t)"))
+  (is (= [{:kind :unknown-column :column :t.nope}] (check {:select [:t.nope] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]})))
+  (is (= [] (check {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]})) "PostgreSQL reads t.name as name(t)"))
 
 (deftest write-enum-names-what-an-extension-sends-for-an-enum
   (let [types #(update-vals (args % opts) m/form)]
@@ -1969,6 +1969,12 @@
       "whatever the order")
   (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:not [:is-distinct-from :id :?v]]]}))
       "nil where both take it"))
+
+(deftest a-tables-name-dot-a-string-type-is-its-row-cast-to-it
+  (let [problems #(map (juxt :kind :column) (:problems (h/analyze registry % opts)))]
+    (is (= [] (problems {:select [:u.text :u.varchar] :from [[:users :u]]})) "text(u), varchar(u)")
+    (is (= [[:unknown-column :u.txt]] (problems {:select [:u.txt] :from [[:users :u]]})))
+    (is (= [[:unknown-column :x.text]] (problems {:select [:x.text] :from [[:users :u]]})) "of a table of the query alone")))
 
 (deftest a-statement-reads-one-row-where-each-table-is-held-to-one-by-a-key
   (let [reg (pgmalli/registry {:registry {:pg.public/p [:map {:pg/table "public.p" :pg/primary-key ["gid" "rid"]} [:gid [:int {:pg/type "bigint"}]] [:rid [:int {:pg/type "bigint"}]]]

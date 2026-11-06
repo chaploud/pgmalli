@@ -62,6 +62,15 @@
   (let [[a column] (syntax/split-column col format)]
     (boolean (and (nil? a) (some #(and (map? %) (contains? % column)) (syntax/chain scope))))))
 
+(defn- row-cast?
+  "Whether a qualified :t.x reads, where t names a table of the scope that has no column x, as
+   PostgreSQL's functional notation x(t) of a type x a row converts to: its row cast to text,
+   name, varchar or bpchar (docs 8.16.5, 10.3)."
+  [scope col format]
+  (let [[a column] (syntax/split-column col format)]
+    (boolean (and a (#{"text" "name" "varchar" "bpchar"} column)
+                  (some #(and (map? %) (contains? % a)) (syntax/chain scope))))))
+
 (defn- near-columns
   "Up to three columns of the scope's tables spelled close to col's name, qualified as col is:
    what it likely meant."
@@ -174,7 +183,8 @@
                   ;; :t.* names a table of the scope, unless the data does not show them all
                   (let [[a] (syntax/split-column col format)]
                     (and (syntax/star? col) a (not (some #{:open} (syntax/chain scope))) (not-any? #(and (map? %) (contains? % a)) (syntax/chain scope))))
-                  (nil? (query/resolve-column registry scope col)))
+                  (and (nil? (query/resolve-column registry scope col))
+                       (or (identical? scope target) (not (row-cast? scope col format)))))
           :let [hits (query/column-hits registry scope col)]]
       (if (< 1 (count hits))
         (if (apply = (map first hits))
