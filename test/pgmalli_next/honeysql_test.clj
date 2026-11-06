@@ -1984,6 +1984,13 @@
     (is (nil? (rows {:select [:p.gid] :from [:p] :join [:r [:= :r.id :p.rid]] :where [:= :p.gid :?g]})) "each held by the other alone: neither")
     (is (= {:min 0 :max 1} (rows {:select [:p.gid] :from [:p] :where [:and [:= :p.gid :?g] [:= :p.rid {:select [:gid] :from [:u]}]]}))
         "a scalar subquery is one value")
+    (is (= {:min 0 :max 1} (rows {:select [:g.gid] :from [[{:select [:gid [[:count :*] :n]] :from [:u] :group-by [:gid]} :g]] :where [:= :g.gid :?g]}))
+        "a subquery's GROUP BY columns are a key of its rows")
+    (is (= {:min 0 :max 1} (rows {:select [:gid [[:count :*] :n]] :from [:u] :group-by [:gid] :having [:= :gid :?g]})) "a group by its HAVING")
+    (is (nil? (rows {:select [:gid [[:count :*] :n]] :from [:u] :group-by [:gid]})))
+    (is (= {:min 0 :max 1} (rows {:select [:d.gid] :from [[{:select-distinct-on [[:gid] :gid] :from [:u]} :d]] :where [:= :d.gid :?g]})) "DISTINCT ON's")
+    (is (= {:min 0 :max 1} (rows {:with [[:h {:delete-from :r :where [:= :id :?id] :returning [:gid]}]] :select [:h.gid :p.rid] :from [:h] :join [:p [:and [:= :p.gid :h.gid] [:= :p.rid 1]]]}))
+        "a CTE of a row at most, joined to a table by its key")
     (doseq [w [[:in :p.rid {:select [:gid] :from [:u]}] [:= :p.rid [:any {:select [:gid] :from [:u]}]]]]
       (is (nil? (rows {:select [:p.gid] :from [:p] :where [:and [:= :p.gid :?g] w]})) (str (pr-str w) " is many")))))
 

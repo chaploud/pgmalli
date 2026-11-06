@@ -1306,29 +1306,70 @@
         pair [[(second x) (nth x 2)] [(nth x 2) (second x)]]]
     pair))
 
+(defn- output-labels
+  "The labels of the columns statement stmt returns, by its select items or RETURNING; nil where
+   one is * or of no label told."
+  [stmt opts]
+  (let [ls (for [x (syntax/selected-items stmt)]
+             (cond (and (vector? x) (= 2 (count x))) (when (syntax/alias? (second x)) (syntax/alias-label (second x) opts))
+                   (and (syntax/column-keyword? x) (not (syntax/star? x))) (second (syntax/split-column x (:format opts)))))]
+    (when (and (seq ls) (every? some? ls)) (vec ls))))
+
+(defn- result-keys
+  "The label sets a row statement stmt returns is held to one by: the empty set where it returns
+   one row at most, its GROUP BY's columns, its DISTINCT ON's, its DISTINCT's output; nil where it
+   tells none."
+  [registry stmt opts]
+  (when-let [ls (output-labels stmt opts)]
+    (let [format (:format opts)
+          unqualified #(when (syntax/column-keyword? %) (second (syntax/split-column % format)))
+          ;; a column selected as itself: its label
+          labels (into {} (keep (fn [[x l]] (when-let [c (unqualified (syntax/bare x))] [c l]))) (map vector (syntax/selected-items stmt) ls))
+          of (fn [ks] (let [r (map #(labels (unqualified %)) ks)] (when (and (seq ks) (every? some? r)) (vec r))))]
+      (seq (remove nil? [(when (some-> (row-count registry stmt opts) :max (<= 1)) [])
+                         (when (:select-distinct stmt) ls)
+                         (of (syntax/distinct-on-expressions stmt))
+                         (of (syntax/vectorish (:group-by stmt)))])))))
+
+(defn- derived-statement
+  "The statement FROM item x of stmt (written its name, nil for a subquery) reads: a subquery's,
+   or a CTE's of stmt; nil for another."
+  [stmt x written format]
+  (cond (and (vector? x) (map? (first x))) (first x)
+        written (some #(when (= written (syntax/cte-name % format)) (second %)) (syntax/cte-entries stmt))))
+
 (defn- held-items
-  "[item held?] of each item statement stmt reads (its one, the ones it joins by JOIN or LEFT JOIN,
-   DELETE's USING, UPDATE's FROM), in that order, held? whether a table (no CTE of a table's name)
-   gives one row at most for a row of the others: a key (unique-keys) whose columns are each equal
-   to one value, a constant, a scalar subquery, or a column of a table so held, or equal to one
-   (r.a = t.a, t.a = ?), found until no more is. The equalities are the WHERE's and an inner join's
-   ON's; a LEFT JOIN's ON holds its own table's columns alone. Equal to NULL, which HoneySQL
-   writes IS NULL, a column NOT NULL alone is held. nil for a join of another kind (RIGHT, FULL,
-   CROSS)."
+  "{:items [[item held?] ...] :held columns :column f} of statement stmt: each item it reads (its
+   one, the ones it joins by JOIN or LEFT JOIN, DELETE's USING, UPDATE's FROM), in that order,
+   held? whether it gives one row at most for a row of the others: a key of it whose columns are
+   each equal to one value, a constant, a scalar subquery, or a column of an item so held, or equal
+   to one (r.a = t.a, t.a = ?), found until no more is. A table's keys are unique-keys (no CTE of
+   a table's name); a subquery's or a CTE's its result-keys, the empty one where it returns a row
+   at most. The equalities are the WHERE's, the HAVING's and an inner join's ON's; a LEFT JOIN's ON
+   holds its own item's columns alone. Equal to NULL, which HoneySQL writes IS NULL, a table's
+   column NOT NULL alone is held. :held the [alias column] so held, :column the [alias column] a
+   column keyword names. nil for a join of another kind (RIGHT, FULL, CROSS)."
   [registry stmt write? {:keys [format] :as opts}]
   (let [ctes (into (syntax/cte-names stmt format) (::ctes opts))
+        inner-opts (update opts ::ctes into (keep #(syntax/cte-name % format) (syntax/cte-entries stmt)))
         listed (if write? (concat (syntax/write-targets stmt) (syntax/from-items stmt [:using :from])) (syntax/from-items stmt [:from]))
         joined (syntax/joins stmt)
         items (for [x (concat listed (map second joined))
-                    :let [[table alias written] (syntax/table-ref x opts)]]
-                {:table (when-not (contains? ctes written) table) :alias alias
-                 :columns (when table (table-columns registry table))})
+                    :let [[table alias written] (syntax/table-ref x opts)
+                          table (when-not (contains? ctes written) table)
+                          inner (when-not table (derived-statement stmt x written format))]]
+                (cond table {:alias alias :columns (table-columns registry table) :keys (unique-keys registry table)}
+                      (map? inner) (let [ks (result-keys registry inner inner-opts)]
+                                     {:alias alias :keys ks
+                                      :columns (into {} (map #(vector % [:maybe :any])) (output-labels inner inner-opts))})
+                      :else {:alias alias}))
         by-alias (into {} (map (juxt :alias identity)) items)
         column (fn [k] (when (syntax/column-keyword? k)
                          (let [[q col] (syntax/split-column k format)
                                owners (if q (filter #(= q (:alias %)) items) (filter #(contains? (:columns %) col) items))]
                            (when (= 1 (count owners)) [(:alias (first owners)) col]))))
-        general (concat (equalities (:where stmt)) (mapcat (fn [[k _ c]] (when (#{:join :inner-join} k) (equalities c))) joined))
+        general (concat (equalities (:where stmt)) (equalities (:having stmt))
+                        (mapcat (fn [[k _ c]] (when (#{:join :inner-join} k) (equalities c))) joined))
         own (for [[k t c] joined :when (= :left-join k) :let [alias (second (syntax/table-ref t opts))] pair (equalities c)] [alias pair])
         held-by (fn [held [a b]]
                   (when-let [[alias col :as ac] (column a)]
@@ -1336,36 +1377,37 @@
                             (not (shape/maybe? (get-in by-alias [alias :columns col] [:maybe :any])))
                             (or (syntax/constant? b) (map? b) (contains? held (column b))))
                       ac)))
-        one-row? (fn [held {:keys [table alias]}]
-                   (and table (some (fn [ks] (every? #(contains? held [alias %]) ks)) (unique-keys registry table))))
+        one-row? (fn [held {:keys [alias keys]}] (some (fn [ks] (every? #(contains? held [alias %]) ks)) keys))
         step (fn [held]
                (let [held (into held (keep #(held-by held %)) general)
                      held (into held (keep (fn [[alias pair]] (let [ac (held-by held pair)] (when (= alias (first ac)) ac)))) own)]
-                 (into held (for [{:keys [alias columns] :as item} items :when (one-row? held item), c (keys columns)] [alias c]))))
+                 (into held (for [{:keys [alias columns] :as item} items :when (one-row? held item), c (clojure.core/keys columns)] [alias c]))))
         held (loop [h #{}] (let [h' (step h)] (if (= h h') h (recur h'))))]
     (when (and (not (some #(contains? stmt %) [:cross-join :join-by]))
                (every? (comp #{:join :left-join :inner-join} first) joined))
-      (map (fn [x item] [x (boolean (one-row? held item))]) (concat listed (map second joined)) items))))
+      {:items (map (fn [x item] [x (boolean (one-row? held item))]) (concat listed (map second joined)) items)
+       :held held
+       :column column})))
 
 (defn- unique-row?
-  "Whether statement stmt reads one row at most: every item it reads is a table held to one row
-   (held-items)."
+  "Whether statement stmt reads one row at most: every item it reads is held to one row
+   (held-items), or the columns its GROUP BY or DISTINCT ON groups by are each held to one value."
   [registry stmt write? opts]
-  (let [hs (held-items registry stmt write? opts)]
-    (boolean (and (seq hs) (every? second hs)))))
+  (let [{:keys [items held column]} (held-items registry stmt write? opts)
+        by (seq (or (syntax/distinct-on-expressions stmt) (syntax/vectorish (:group-by stmt))))]
+    (boolean (or (and (seq items) (every? second items))
+                 (and by column (every? #(contains? held (column %)) by))))))
 
 (defn- derived-count
   "{:min 0 :max n} of a SELECT whose first FROM item, a subquery or a CTE of the statement, returns
    n rows at most (row-count, its CTEs those of the statement too), each other item it reads held
    to one row for a row of it (held-items); nil otherwise."
   [registry stmt {:keys [format] :as opts}]
-  (let [[[item] & others] (held-items registry stmt false opts)
-        entries (syntax/cte-entries stmt)
+  (let [[[item] & others] (:items (held-items registry stmt false opts))
         written (when (or (keyword? item) (and (vector? item) (keyword? (first item)))) (nth (syntax/table-ref item opts) 2 nil))
-        inner (cond (and (vector? item) (map? (first item))) (first item)
-                    written (some #(when (= written (syntax/cte-name % format)) (second %)) entries))]
-    (when (and inner (map? inner) (every? second others))
-      (some->> (:max (row-count registry inner (update opts ::ctes into (keep #(syntax/cte-name % format) entries))))
+        inner (derived-statement stmt item written format)]
+    (when (and (map? inner) (every? second others))
+      (some->> (:max (row-count registry inner (update opts ::ctes into (keep #(syntax/cte-name % format) (syntax/cte-entries stmt)))))
                (hash-map :min 0 :max)))))
 
 (defn- set-operation-count
@@ -1425,7 +1467,9 @@
                         fromless? {:min (if (or (contains? stmt :where) having?) 0 1) :max 1}
                         (and rows (not write?) (every? vector? rows)) {:min (count rows) :max (count rows)}
                         (and rows (:insert-into stmt) (:returning stmt)) {:min 0 :max (count rows)}
-                        (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items)) {:min 0 :max 1}
+                        (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items))
+                        ;; a subquery or a CTE it reads may return fewer (LIMIT 0)
+                        {:min 0 :max (min 1 (:max (when-not write? (derived-count registry stmt opts)) 1))}
                         (not write?) (derived-count registry stmt opts))
           m (cond-> counted
               limit (update :max #(min (or % limit) limit))

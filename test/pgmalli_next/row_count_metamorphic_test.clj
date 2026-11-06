@@ -55,6 +55,9 @@
              [:inline-limit (inline-limit q) same]
              [:limit (when-not (contains? q :limit) (assoc q :limit 2)) #(= (min 2 (:max before)) (:max %))]
              [:left-join-by-key (when (and (:from q) (not (contains? q :with))) (update q :left-join (fnil into []) [[:lookups :lk_x] [:= :lk_x.lookup_id 1]])) same-max]
+             [:left-join-derived-by-key (when (and (:from q) (not (contains? q :with)))
+                                          (update q :left-join (fnil into []) [[{:select [:lookup_id] :from [:lookups] :group-by [:lookup_id]} :dk_x] [:= :dk_x.lookup_id 1]]))
+              same-max]
              [:subquery {:select [:*] :from [[q :w_x]]} same-max]
              [:cte (when-not (contains? q :with) {:with [[:w_x q]] :select [:*] :from [:w_x]}) same-max]])))
 

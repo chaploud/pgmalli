@@ -572,10 +572,12 @@ most one with a WHERE or HAVING); a subquery
 or EXISTS in the select list is one value; at most one of a statement on one table (no CTE of its name, no table
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
 index (neither partial nor DEFERRABLE) equal to a value, and of one joining (JOIN or LEFT JOIN) or
-listing (DELETE's `:using`, UPDATE's `:from`) other tables, each so held to one row, found from
-any table until no more is: a key's columns each equal to a constant, an argument, a scalar
+listing (DELETE's `:using`, UPDATE's `:from`) other tables, subqueries or CTEs, each so held to
+one row, found from any of them until no more is: a key's columns (a subquery's or a CTE's: its
+GROUP BY's, DISTINCT ON's or DISTINCT's columns, none where it returns a row at most; of the
+statement's own GROUP BY or DISTINCT ON, its rows') each equal to a constant, an argument, a scalar
 subquery (not IN's or `= ANY`'s), a column of a table so held, or a column equal to one of those
-(`r.gid = p.gid` and `p.gid = ?`), by the WHERE or an inner join's ON (a LEFT JOIN's ON holds
+(`r.gid = p.gid` and `p.gid = ?`), by the WHERE, the HAVING or an inner join's ON (a LEFT JOIN's ON holds
 its own table's columns alone); at most as many as
 a subquery or a CTE a SELECT reads first returns, each other table it reads so held to one row; one for each row of a VALUES list, up
 to one for each row of an INSERT's `:values` with RETURNING; of a set operation, the sum of its
