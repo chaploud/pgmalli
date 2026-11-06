@@ -1201,7 +1201,7 @@
 (def ^:private row-count-keys
   "The clauses row-count reads, and those that change no count."
   (into #{:select :select-distinct :from :where :group-by :having :order-by :limit :offset :fetch :with :returning
-          :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :for :join-by}
+          :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :using :for :join-by}
         (concat syntax/join-keys syntax/set-operation-keys)))
 
 (defn- plain-value?
@@ -1232,30 +1232,62 @@
   (boolean (or (when-let [parts (syntax/call-parts x)] (and (= :functions (first parts)) (resolve/aggregate? (reached registry opts parts))))
                (and (vector? x) (not= :over (first x)) (some #(aggregated? registry opts %) x)))))
 
+(defn- unique-keys
+  "The column sets a key holds a row of table to one: its primary key and UNIQUE keys, neither
+   partial nor DEFERRABLE; none of a table others inherit, whose rows a key does not span."
+  [registry table]
+  (let [props (table-props registry table)]
+    (when-not (:pg/inherited props)
+      ;; a partial UNIQUE index holds over some rows alone; a DEFERRABLE key may be checked only at commit
+      (cond-> (map :columns (remove #(or (:where %) (:deferrable %)) (:pg/unique props)))
+        (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props))))))
+
+(defn- one-row-items
+  "Whether each of items, [item condition] of a FROM item and the condition binding it, gives one
+   row at most to each row of the others: its condition holds a key's columns equal to values
+   (unique-keys), a value being a constant or a column of a table known so already (the first
+   of known aliases, the other items as they are found to be). Equal to NULL, which HoneySQL
+   writes IS NULL, a column NOT NULL alone holds it."
+  [registry known items {:keys [format] :as opts}]
+  (loop [known (set known) left items]
+    (if (empty? left)
+      true
+      (let [bound? (fn [[item c]]
+                     (let [[table alias] (syntax/table-ref item opts)
+                           columns (when table (table-columns registry table))
+                           value? #(or (syntax/constant? %)
+                                       (and (syntax/column-keyword? %) (contains? known (first (syntax/split-column % format)))))
+                           equal (set (for [x (if (and (vector? c) (= :and (first c))) (rest c) [c])
+                                            :when (and (vector? x) (= := (first x)) (= 3 (count x)))
+                                            [a b] [[(second x) (nth x 2)] [(nth x 2) (second x)]]
+                                            :when (and (syntax/column-keyword? a) (value? b))
+                                            :let [[q col] (syntax/split-column a format)]
+                                            :when (and (or (nil? q) (= q alias))
+                                                       (not (and (syntax/null-value? b nil) (shape/maybe? (get columns col [:maybe :any])))))]
+                                        col))]
+                       (when (and table (some #(every? equal %) (unique-keys registry table)))
+                         alias)))
+            found (keep (fn [e] (when-let [a (bound? e)] [e a])) left)]
+        (when (seq found)
+          (recur (into known (map second found)) (remove (set (map first found)) left)))))))
+
 (defn- unique-row?
-  "Whether statement stmt on the one table of targets (no CTE of its name, no table inheriting it)
-   reads one row at most: its WHERE holds the columns of its primary key or a UNIQUE key, neither
-   partial nor DEFERRABLE, equal to a value; to NULL, which HoneySQL writes IS NULL, a column
-   NOT NULL alone."
-  [registry stmt targets {:keys [format] :as opts}]
-  (let [[table alias written] (when (= 1 (count targets)) (syntax/table-ref (first targets) opts))
-        ;; a CTE of the table's name hides it
-        table (when-not (and written (contains? (syntax/cte-names stmt format) written)) table)
-        where (:where stmt)
-        columns (when table (table-columns registry table))
-        equal (set (for [c (if (and (vector? where) (= :and (first where))) (rest where) [where])
-                         :when (and (vector? c) (= := (first c)) (= 3 (count c)))
-                         [a b] [[(second c) (nth c 2)] [(nth c 2) (second c)]]
-                         :when (and (syntax/column-keyword? a) (syntax/constant? b))
-                         :let [[q col] (syntax/split-column a format)]
-                         :when (and (or (nil? q) (= q alias))
-                                    (not (and (syntax/null-value? b nil) (shape/maybe? (get columns col [:maybe :any])))))]
-                     col))
-        props (when table (table-props registry table))
-        ;; a partial UNIQUE index holds over some rows alone; a DEFERRABLE key may be checked only at commit
-        key-columns (cond-> (map :columns (remove #(or (:where %) (:deferrable %)) (:pg/unique props)))
-                      (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props)))]
-    (boolean (and (not (:pg/inherited props)) (some #(every? equal %) key-columns)))))
+  "Whether statement stmt reads one row at most: its one table (no CTE of its name) a row by its
+   WHERE (one-row-items), and each other it reads, joined (JOIN or LEFT JOIN by its ON) or listed
+   (DELETE's USING, UPDATE's FROM, by the WHERE), a row for that row."
+  [registry stmt write? {:keys [format] :as opts}]
+  (let [ctes (syntax/cte-names stmt format)
+        [base & listed] (if write? (concat (syntax/write-targets stmt) (syntax/from-items stmt [:using :from])) (syntax/from-items stmt [:from]))
+        joined (syntax/joins stmt)
+        written (nth (syntax/table-ref base opts) 2 nil)]
+    (boolean (and base (not (contains? ctes written))
+                  (not (some #(contains? stmt %) [:cross-join :join-by]))
+                  (every? (comp #{:join :left-join :inner-join} first) joined)
+                  (not-any? #(contains? ctes (nth (syntax/table-ref % opts) 2 nil)) (concat listed (map second joined)))
+                  (one-row-items registry [] [[base (:where stmt)]] opts)
+                  (one-row-items registry [(second (syntax/table-ref base opts))]
+                                 (concat (for [t listed] [t (:where stmt)]) (for [[_ t c] joined] [t c]))
+                                 opts)))))
 
 (defn- set-operation-count
   "{:min n :max m} of the rows of set operation k (:union ...) of members of counts (row-count's,
@@ -1293,7 +1325,7 @@
           groups (syntax/vectorish (:group-by stmt))
           rows (when (and (vector? (:values stmt)) (not (:select (syntax/insert-parts stmt)))) (:values stmt))
           plain? (every? #(plain-value? registry opts %) (concat items order groups (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
-          unique? (unique-row? registry stmt (if write? (syntax/write-targets stmt) (syntax/table-items stmt)) opts)
+          unique? (unique-row? registry stmt write? opts)
           bound #(let [n (get stmt %)] (when (and (integer? n) (<= 0 n)) n))
           limit (some->> (seq (keep bound [:limit :fetch])) (apply min))
           ;; a limit only a parameter tells may be 0

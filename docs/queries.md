@@ -566,7 +566,9 @@ limit a parameter gives), and of a SELECT without FROM, its one row one group un
 most one with a WHERE or HAVING); a subquery
 or EXISTS in the select list is one value; at most one of a statement on one table (no CTE of its name, no table
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
-index (neither partial nor DEFERRABLE) equal to a value; one for each row of a VALUES list, up
+index (neither partial nor DEFERRABLE) equal to a value, and of one joining (JOIN or LEFT JOIN by
+its ON) or listing (DELETE's `:using`, UPDATE's `:from`, by the WHERE) other tables, each by
+such a key equal to a value or to a column of a table so held to one row; one for each row of a VALUES list, up
 to one for each row of an INSERT's `:values` with RETURNING; of a set operation, the sum of its
 members' under `:union-all` and at most that under `:union`, at most the fewest under
 `:intersect`, at most the first's under `:except`; at most `:limit` or `:fetch`. A function that may return a set (one that does, of
