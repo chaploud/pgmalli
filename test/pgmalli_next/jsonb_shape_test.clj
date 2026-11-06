@@ -2,14 +2,14 @@
   "A jsonb column's shape (an override's) is the same given as itself or as [:ref k] beside the
    registry's k, and travels to the part of it a call takes, as json-parts tells, and to no other
    call of the catalog."
-  (:require [clojure.test :refer [deftest is]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is]]
             [clojure.walk :as walk]
             honey.sql.pg-ops
             [malli.registry :as mr]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.query :as query]
-            [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -56,7 +56,8 @@
 (defn- typed-null
   "NULL cast to type t, which picks the overload taking t; nil for a type no value is cast to."
   [t]
-  (when-not (or (resolve/polymorphic t) (= "\"any\"" t) (#{"internal" "cstring"} t))
+  ;; anyelement, anyarray, anycompatible...: a polymorphic type, no type a value is cast to
+  (when-not (or (str/starts-with? t "any") (= "\"any\"" t) (#{"internal" "cstring"} t))
     [:cast nil [:raw t]]))
 
 (deftest no-call-of-the-catalog-but-json-parts-takes-the-shape
