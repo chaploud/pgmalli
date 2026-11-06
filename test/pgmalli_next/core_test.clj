@@ -110,6 +110,24 @@
   (let [data (generated {:db *db*} schema)]
     [(pgmalli/registry data) data]))
 
+(deftest an-operator-returning-a-set-or-of-no-overload-tells-no-row-count
+  (let [reg (pgmalli/registry {:schemas ["public"]
+                               :operators {"public" {"###" [{:args ["integer" "integer"] :result "integer" :set true}]
+                                                     "%%%" [{:args ["integer" "integer"] :result "integer"}]}}
+                               :registry {:pg.public/t [:map {:pg/table "public.t" :pg/primary-key ["id"]} [:id [:int {:pg/type "integer"}]]]}})
+        rows #(:rows (h/analyze reg {:select [[[(keyword %) :id 3] :n]] :from [:t] :where [:= :id 1]} {:schema "public"}))]
+    (is (nil? (rows "###")))
+    (is (nil? (rows "<<<>>>")) "an operator the registry has none of may")
+    (is (= {:min 0 :max 1} (rows "%%%")))))
+
+(deftest an-operator-of-a-function-returning-a-set-returns-rows-of-its-own
+  (when *db*
+    (let [[reg data] (registry-of "so" "CREATE SCHEMA so; CREATE TABLE so.t (id int PRIMARY KEY);
+                                        CREATE FUNCTION so.upto(a int, b int) RETURNS SETOF int LANGUAGE sql AS 'SELECT generate_series(a, b)';
+                                        CREATE OPERATOR so.### (LEFTARG = int, RIGHTARG = int, FUNCTION = so.upto);")]
+      (is (= {"###" [{:args ["integer" "integer"] :result "integer" :set true}]} (get-in data [:operators "so"])))
+      (is (nil? (:rows (h/analyze reg {:select [[[(keyword "###") :id 3] :n]] :from [:t] :where [:= :id 1]} {:schema "so"}))) "a row count it does not tell"))))
+
 (deftest a-partial-indexs-predicate-is-told-where-each-condition-is-read-alone
   (when *db*
     (let [[reg] (registry-of "pi" "CREATE SCHEMA pi;

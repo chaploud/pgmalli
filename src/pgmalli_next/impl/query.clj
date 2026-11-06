@@ -1268,8 +1268,9 @@
   (into #{"exists" "not_exists" "any" "some" "all" "nullif"} common-type-functions))
 
 (defn- plain-value?
-  "Whether x yields one value per row: it calls no function that may return a set, one that does
-   (generate_series, unnest) or one the registry has none of, and writes no raw SQL, which may.
+  "Whether x yields one value per row: it calls no function or operator that may return a set, one
+   that does (generate_series, unnest) or one the registry has none of, and writes no raw SQL,
+   which may.
    A subquery is one value (an error where it gives more rows) or EXISTS's, of rows of its own."
   [registry opts x]
   (cond (map? x) true
@@ -1278,9 +1279,12 @@
         (and (vector? x) (= :cast (first x))) (plain-value? registry opts (second x))
         (or (vector? x) (and (keyword? x) (syntax/shorthand-fn x)))
         (let [[kind :as parts] (syntax/call-parts x)
-              ;; an operator of any number of operands (AND of three), no function
-              function? (and (= :functions kind) (not (and (vector? x) (keyword? (first x)) (syntax/operator? (first x)))))]
-          (and (not (and function? (not (grammar-calls (second parts))) (resolve/set-returning? (reached registry opts parts))))
+              ;; an operator of any number of operands (AND of three) is no function: grammar
+              function? (and (= :functions kind) (not (and (vector? x) (keyword? (first x)) (syntax/operator? (first x)))))
+              ;; an operator is its function's call: one that returns a set too (CREATE OPERATOR of a
+              ;; set-returning function), or one the registry has none of
+              call? (or (and function? (not (grammar-calls (second parts)))) (= :operators kind))]
+          (and (not (and call? (resolve/set-returning? (reached registry opts parts))))
                (or (keyword? x) (every? #(plain-value? registry opts %) (rest x)))))
         (sequential? x) (every? #(plain-value? registry opts %) x)
         :else true))

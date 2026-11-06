@@ -109,9 +109,9 @@
     columns (assoc :columns (mapv vec columns))))
 
 (defn operator-overload
-  "An operator's overload, of {:args :result :btree} as ir.sql and the catalog's query read it."
-  [{:keys [args result btree]}]
-  (cond-> {:args (vec args) :result result} btree (assoc :btree true)))
+  "An operator's overload, of {:args :result :set :btree} as ir.sql and the catalog's query read it."
+  [{:keys [args result set btree]}]
+  (cond-> {:args (vec args) :result result} set (assoc :set true) btree (assoc :btree true)))
 
 (defn facts
   "Facts of one schema, ordered by type name, table name, column name and constraint name.

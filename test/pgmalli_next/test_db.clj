@@ -14,6 +14,9 @@
 ;; what the namespaces run after it format.
 (doseq [[n] (:operators @types/catalog)]
   (when-not (sql/registered-op? (keyword n)) (sql/register-op! (keyword n))))
+;; and the operators of the tests' own schemas
+(doseq [n ["###" "%%%" "<<<>>>"]]
+  (when-not (sql/registered-op? (keyword n)) (sql/register-op! (keyword n))))
 
 (def ^:dynamic *db* nil)
 (def ^:dynamic *container* nil)

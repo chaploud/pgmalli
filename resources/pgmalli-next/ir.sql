@@ -246,6 +246,8 @@ operators AS (
                         ELSE pg_catalog.json_build_array(pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprleft), NULL),
                                                          pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprright), NULL)) END,
            'result', pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprresult), NULL),
+           -- its function returns a set, as a function's 'set'
+           'set', (SELECT p.proretset FROM pg_catalog.pg_proc p WHERE p.oid = o.oprcode),
            -- a comparison: an operator of a btree operator family, or its negator
            'btree', EXISTS (SELECT 1 FROM pg_catalog.pg_amop a JOIN pg_catalog.pg_am am ON am.oid = a.amopmethod
                             WHERE a.amopopr IN (o.oid, o.oprnegate) AND am.amname = 'btree')

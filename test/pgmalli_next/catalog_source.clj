@@ -36,6 +36,7 @@
                                                      'args', CASE WHEN o.oprleft = 0 THEN json_build_array(format_type(o.oprright, NULL))
                                                                   ELSE json_build_array(format_type(o.oprleft, NULL), format_type(o.oprright, NULL)) END,
                                                      'result', format_type(o.oprresult, NULL),
+                                                     'set', (SELECT p.proretset FROM pg_proc p WHERE p.oid = o.oprcode),
                                                      'btree', EXISTS (SELECT 1 FROM pg_amop a WHERE a.amopopr IN (o.oid, o.oprnegate) AND a.amopmethod = (SELECT oid FROM pg_am WHERE amname = 'btree'))) ORDER BY o.oprname)
                    FROM pg_operator o WHERE o.oprnamespace = 'pg_catalog'::regnamespace))")
 
