@@ -1693,6 +1693,8 @@
     (is (= {:max 1} (second (ret {:select [[1 :x]] :where [:= 1 :?n]} {}))) "WHERE may leave none")
     (is (not (map? (second (ret {:select [:u.nick] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :where [:= :u.id :?id]} {}))))
         "a join may repeat a row")
+    (is (= 1 (:max (second (ret {:select [[[:in :id [1 2]] :a] [[:or [:= :score 1] [:not [:= :id [:any :?ids]]]] :b]] :from [:users] :where [:= :id :?id]} {}))))
+        "an expression of the row's values is one value of it")
     (is (= :maybe (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :returning [:id]} {:result :one})))
         "an INSERT returns up to a row for each of its rows: a trigger, a rule or ON CONFLICT may skip one")
     (is (= :maybe (first (ret {:insert-into :users :values [{:group_id 1 :mood "sad" :score 1}] :on-conflict [] :do-nothing true :returning [:id]} {:result :one})))

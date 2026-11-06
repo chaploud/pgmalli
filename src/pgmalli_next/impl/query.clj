@@ -1215,9 +1215,12 @@
       ;; a scalar subquery is one value, or an error where it gives more rows
       (map? x) (and (vector? x) (#{:exists :not-exists} (first x)) (map? (second x)))
       (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? registry opts (second x)))
-      ;; grammar, not functions of pg_catalog
-      (and (vector? x) (or (#{:case :case-expr} (first x)) (common-type-functions (syntax/called x)) (= "nullif" (syntax/called x)))
+      ;; grammar, not functions of pg_catalog: ANY(array) is one value as the comparison it is in
+      (and (vector? x) (or (#{:case :case-expr :and :or :not :any :some :all :is :is-not :between :not-between} (first x))
+                           (common-type-functions (syntax/called x)) (= "nullif" (syntax/called x)))
            (every? #(plain-value? registry opts %) (rest x)))
+      (and (vector? x) (#{:in :not-in} (first x)) (= 3 (count x))
+           (let [[_ a b] x] (and (plain-value? registry opts a) (if (sequential? b) (every? #(plain-value? registry opts %) b) (plain-value? registry opts b)))))
       (boolean (when-let [[kind _ args :as parts] (syntax/call-parts x)]
                  (and (or (= :operators kind) (not (resolve/set-returning? (reached registry opts parts))))
                       (every? #(plain-value? registry opts %) args))))))
