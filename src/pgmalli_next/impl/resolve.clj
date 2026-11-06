@@ -290,8 +290,8 @@
 (defn argument-types
   "The types a parameter at position i of a call with arguments of types ins (as call takes
    them, :free there) among overloads os may be resolved to: the one each candidate it may
-   resolve to takes there, as a value of a type of its own picks one; nil where one is
-   polymorphic, \"any\" or not told."
+   resolve to takes there (an enum type [:enum name]), as a value of a type of its own picks one;
+   nil where one is polymorphic, \"any\" or not told."
   [ins i os]
   (when (and (seq os) (every? some? ins))
     (in-every-version
@@ -300,7 +300,7 @@
        (let [cs (candidates os (count ins))
              ts (distinct (for [c (contenders cs ins)]
                             (when-not (:ambiguous c) (bound (nth (:decls c) i) (bind (:decls c) ins)))))]
-         (when (and (seq ts) (every? #(and (string? %) (not (polymorphic %)) (not= "\"any\"" %)) ts))
+         (when (and (seq ts) (every? #(or (vector? %) (and (string? %) (not (polymorphic %)) (not= "\"any\"" %))) ts))
            (set ts)))))))
 
 (defn untyped-refused?

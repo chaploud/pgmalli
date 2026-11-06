@@ -368,7 +368,7 @@
         calls (into {} (for [{:keys [x chain]} nodes :let [c (query/type-call registry chain x opts)] :when c] [c x]))
         call-type (fn [call]
                     (let [os (query/reached registry opts (syntax/call-parts call))]
-                      (some->> (for [s (map types/type-schema (resolve/argument-types [:free] 0 os)) :when s
+                      (some->> (for [s (map #(query/named-type-schema registry opts %) (resolve/argument-types [:free] 0 os)) :when s
                                      a (shape/alternatives (shape/non-null (accepted-type registry s :call opts)))]
                                  (unlabel a))
                                seq shape/distinct-kinds)))]
@@ -615,7 +615,7 @@
         ;; unnest(a, b) in FROM is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
         :let [all-ins (if (syntax/param-key a) param-ins literal-ins)
               [ins i] (if (and (= "unnest" n) (next args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth all-ins j)] 0] [all-ins j])
-              ss (map types/type-schema (resolve/argument-types ins i os))
+              ss (map #(query/named-type-schema registry opts %) (resolve/argument-types ins i os))
               ;; another parameter of the call is of a type its value picks: refused whatever type it is
               sibling-ins (reduce (fn [inss j] (if (and (not= j i) (= :free (nth ins j)))
                                                  (let [ts (resolve/argument-types ins j os)]

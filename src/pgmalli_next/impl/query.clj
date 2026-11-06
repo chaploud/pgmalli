@@ -888,12 +888,13 @@
         (number? x) (of-type "numeric")))
 
 (defn named-type-schema
-  "The column schema of a value of type n (as cast-target names it, \"x[]\" an array): a type of
-   pg_catalog, or an enum type of the registry, read as a column of it is; nil for another (a
-   domain, which the registry holds no entry of)."
+  "The column schema of a value of type n (as cast-target names it, \"x[]\" an array, or as
+   pgmalli-next.impl.resolve names an enum type): a type of pg_catalog, or an enum type of the
+   registry, read as a column of it is; nil for another (a domain, which the registry holds no
+   entry of)."
   [registry opts n]
-  (or (types/type-schema (types/cast-name n))
-      (let [e (types/element n)]
+  (or (when (string? n) (types/type-schema (types/cast-name n)))
+      (let [e (when (string? n) (types/element n))]
         (when-let [s (own-type-schema registry (or e n) (:schema opts))]
           (if e [:vector {:pg/type n} s] s)))))
 

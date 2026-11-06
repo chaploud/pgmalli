@@ -1902,6 +1902,15 @@
   (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:not [:is-distinct-from :id :?v]]]}))
       "nil where both take it"))
 
+(deftest an-argument-of-a-function-taking-an-enum-type-is-a-label-of-it
+  (let [reg (pgmalli/registry {:schemas ["public"]
+                               :functions {"public" {"claim" [{:args ["bigint" "kind"] :result "bigint" :set true}]}}
+                               :registry {:pg.public/kind [:enum "a" "b"]}})
+        p (:p (:args (h/analyze reg {:select [:t] :from [[[:public.claim :?n :?p] :t]]} {:schema "public"})))]
+    (is (m/validate p :a {:registry reg}))
+    (is (not (m/validate p :c {:registry reg})))
+    (is (not (m/validate p "a" {:registry reg})) "a String goes as varchar, which claim(bigint, kind) does not take")))
+
 (deftest an-enum-arrays-argument-assigned-is-a-pgobject-of-the-enum-array-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/feel [:enum "a" "b"]
                                           :pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
