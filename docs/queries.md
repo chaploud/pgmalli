@@ -141,9 +141,6 @@ Give `h/analyze` the options you give `sql/format`, as `:format`:
 A table with a BEFORE row trigger for the statement (`:pg/before-triggers`) gets neither
 `:not-null-violation` nor `:missing-required-column`: the trigger may fill the row.
 
-Read, `:t.text` (or `name`, `varchar`, `bpchar`) where `t` has no column of that name is `t`'s
-row cast to the type, as PostgreSQL reads `text(t)`: no `:unknown-column`.
-
 A target `:a.b` (`{:set {:p.x 1}}`, `INSERT INTO t (p.x)`) is the field `b` of the composite
 column `a`, as PostgreSQL reads it: `a` must be a column of the table, and what goes into the
 field is not checked.
@@ -704,6 +701,10 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   `:not-null-violation`, even when it would touch no row or no row conflicts.
 - An `INSERT INTO t (cols) SELECT` leaving out a NOT NULL column of no default: a
   `:missing-required-column`, even when the SELECT would return no row.
+- `:t.name`, `:t.text`, `:t.varchar` or `:t.bpchar` where `t`, a table of the query, has no
+  column of that name: an `:unknown-column`. PostgreSQL reads it as `name(t)`, `t`'s whole row
+  converted to the type, which returns the row's text without a word; almost always a column
+  `t` lacks (`u.name` for `u.nick`). For the row's text, write `[:cast :t :text]`.
 - Columns of one label in the row a query returns (`{:select [:q.id :s.id] ...}`, or `*` over
   two tables that each have `id`): a `:duplicate-column`. PostgreSQL returns them all, but
   next.jdbc's `as-unqualified-maps` reads them into one key, keeping the last column's value

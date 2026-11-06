@@ -320,7 +320,8 @@
    literal outside an enum's labels where PostgreSQL never evaluates it (the statement may still
    run through OR or CASE); a literal sent typed that PostgreSQL converts on assignment alone;
    NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails once a row
-   is touched or conflicts, or left out of one by an INSERT ... SELECT, once it returns a row; a label the result set's columns (labels, a delay) have
+   is touched or conflicts, or left out of one by an INSERT ... SELECT, once it returns a row;
+   t.name of a t with no column name, which PostgreSQL reads as t's row converted to name; a label the result set's columns (labels, a delay) have
    more than once. listed: listed of the schema; the column is one of a relation query names."
   [listed id query labels p]
   (case (:kind p)
@@ -339,6 +340,8 @@
     :not-null-violation (contains? #{:set :do-update-set} (:clause p))
     ;; an INSERT ... SELECT's, even where the SELECT returns no row
     :missing-required-column (boolean (:select (syntax/insert-parts query)))
+    ;; t.name, which PostgreSQL reads as name(t), t's row converted
+    :unknown-column (let [c (:column p)] (boolean (and (keyword? c) (re-find #"\.(text|name|varchar|bpchar)$" (name c)))))
     false))
 
 (defn- outcome [{:keys [pg]} problems by-design?]
