@@ -426,11 +426,11 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   its value as a `PGobject`), and a function in FROM,
   whose columns (its OUT arguments, or one named after the alias; `ordinality` under
   `WITH ORDINALITY`; the names its alias lists, `[:r {:columns [:v]}]` or
-  `[:r [:composite :v]]`) are of no table. Under `WITH ORDINALITY` HoneySQL writes an alias's
-  list in two pairs of parentheses (`R ((v, n))`), which PostgreSQL refuses: name no columns
-  there, and read `value` (a function's of one column, named after it) and `ordinality`. A list
-  of column types (`{:with-columns ...}`) is a function's returning record alone (a
-  `:column-definition-list` otherwise); of `jsonb_populate_record`, `json_populate_record` and
+  `[:r [:composite :v]]`, and under `WITH ORDINALITY` as HoneySQL writes them there, a call:
+  `[[:with-ordinality [:jsonb_array_elements :j] [:r :v :n]]]`, `R(v, n)`) are of no table;
+  without names, a function of one column's is `value` and `ordinality`. A list of column types
+  (`{:with-columns ...}`) is a function's returning record alone (a `:column-definition-list`
+  otherwise); of `jsonb_populate_record`, `json_populate_record` and
   their `recordset` of a table's row type (`NULL::t`, or an alias's whole row), the table's
   columns, nullable. pgmalli reads the functions, operators and implicit casts
   from a snapshot of `pg_catalog` (`resources/pgmalli-next/impl/catalog.edn`) of the PostgreSQL versions it

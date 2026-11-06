@@ -1485,6 +1485,9 @@
         element [:maybe [:map {:pg/type "jsonb"} [:k :string]]]]
     (doseq [listed [{:columns [:v]} [:composite :v]]]
       (is (= [:map [:v element]] (:row (a listed))) (pr-str listed)))
+    (is (= [:map [:v element] [:n [:int {:pg/type "bigint"}]]]
+           (:row (h/analyze reg {:select [:r.v :r.n] :from [:d [[:with-ordinality [:jsonb_array_elements :items] [:r :v :n]]]]} {})))
+        "under WITH ORDINALITY, the alias as a call, as HoneySQL writes it there")
     (is (= [{:kind :column-definition-list :function "jsonb_array_elements" :alias "r"}]
            (:problems (h/analyze reg {:select [:r.value] :from [:d [[:jsonb_array_elements :items] [:r {:with-columns [[:value :jsonb]]}]]]} {})))
         "column types of a function returning no record, which PostgreSQL refuses")

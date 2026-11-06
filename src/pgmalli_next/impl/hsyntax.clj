@@ -257,6 +257,16 @@
   (let [cs (cond (map? m) (:columns m) (and (vector? m) (= :composite (first m))) (rest m))]
     (when (and (sequential? cs) (every? #(or (keyword? %) (string? %)) cs)) cs)))
 
+(defn alias-columns
+  "[alias listed] of the alias of a FROM item, listed the names it lists of the item's columns
+   (listed-columns: [:r {:columns [:v]}], [:r [:composite :v]]); under WITH ORDINALITY, whose
+   right side HoneySQL writes as an expression, as a call ([:r :v :n] is R(v, n)); nil listed
+   for none."
+  [al ordinality?]
+  (cond (and ordinality? (vector? al) (alias? (first al)) (next al) (every? alias? (rest al))) [(first al) (rest al)]
+        (and (vector? al) (alias? (first al))) [(first al) (listed-columns (second al))]
+        :else [al nil]))
+
 (defn- raw-relation
   "The table keyword [:raw s] names where s is the grammar's relation_expr of an unquoted name
    (ONLY t, t *, schema.t), which PostgreSQL folds; nil for another x."
@@ -311,7 +321,8 @@
         ;; [[:with-ordinality [:f args...] alias]]: f WITH ORDINALITY alias, named after the function
         ;; without one
         (and (nil? b) (vector? a) (= :with-ordinality (first a)))
-        (let [[_ f al] a]
+        (let [[_ f al] a
+              [al] (alias-columns al true)]
           [nil (cond (alias? al) (alias-name al)
                      (and (vector? f) (keyword? (first f))) (last-part (first f))
                      :else "with_ordinality")
@@ -484,7 +495,8 @@
   (when (vector? item)
     (let [[a b] item
           [f ordinality? al] (if (and (vector? a) (= :with-ordinality (first a))) [(second a) true (get a 2)] [a false b])
-          [al m] (if (and (vector? al) (alias? (first al))) [(first al) (second al)] [al nil])]
+          m (when (and (vector? al) (alias? (first al)) (not (and ordinality? (alias? (second al))))) (second al))
+          [al] (alias-columns al ordinality?)]
       (when (and (vector? f) (called f))
         [f al m ordinality?]))))
 

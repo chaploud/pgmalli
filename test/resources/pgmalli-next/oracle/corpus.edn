@@ -1404,5 +1404,7 @@
  [:partial-key-held {:select [:id] :from [:tickets] :where [:and [:= :kind "bug"] [:= :state "open"]]}]
  [:partial-key-left-out {:select [:id] :from [:tickets] :where [:= :kind "bug"]}]
  [:latest-of-each-group {:select [:p.id] :from [[:posts :p]] :where [:= :p.id {:select [[[:max :q.id]]] :from [[:posts :q]] :where [:= :q.user_id :p.user_id]}]}]
+ [:ordinality-alias-call {:select [:r.v :r.n] :from [[[:with-ordinality [:jsonb_array_elements [:cast [:inline "[1, 2]"] :jsonb]] [:r :v :n]]]]}]
+ [:ordinality-unnamed {:select [:r.value :r.ordinality] :from [[[:with-ordinality [:jsonb_array_elements [:cast [:inline "[1, 2]"] :jsonb]] :r]]]}]
  [:composed-delete-using {:delete-from :post_tags :using [:tags] :where [:and [:= :tags.id :post_tags.tag_id] [:= :post_tags.post_id 1] [:= :tags.name "x"]] :returning [:post_tags.tag_id]}]
 ]
