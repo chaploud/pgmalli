@@ -1401,5 +1401,8 @@
  [:composed-scalar-sub-key {:select [:id] :from [:users] :where [:= :id {:select [:user_id] :from [:posts] :where [:= :id 1]}] :for :update}]
  [:composed-case-in {:select [[[:case [:in :mood [:inline ["happy" "sad"]]] [:inline "known"] :else [:inline "other"]] :m]] :from [:users] :where [:= :id 1]}]
  [:composed-not-exists {:select [[[:not [:exists {:select [1] :from [:users] :where [:= :id 1]}]] :free]]}]
+ [:partial-key-held {:select [:id] :from [:tickets] :where [:and [:= :kind "bug"] [:= :state "open"]]}]
+ [:partial-key-left-out {:select [:id] :from [:tickets] :where [:= :kind "bug"]}]
+ [:latest-of-each-group {:select [:p.id] :from [[:posts :p]] :where [:= :p.id {:select [[[:max :q.id]]] :from [[:posts :q]] :where [:= :q.user_id :p.user_id]}]}]
  [:composed-delete-using {:delete-from :post_tags :using [:tags] :where [:and [:= :tags.id :post_tags.tag_id] [:= :post_tags.post_id 1] [:= :tags.name "x"]] :returning [:post_tags.tag_id]}]
 ]

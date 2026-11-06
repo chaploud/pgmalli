@@ -78,6 +78,22 @@
              [:subquery {:select [:*] :from [[q :w_x]]} same-max]
              [:cte (when-not (contains? q :with) {:with [[:w_x q]] :select [:*] :from [:w_x]}) same-max]])))
 
+(deftest no-query-returns-more-rows-than-its-count-says
+  ;; the rewrites' too, on rows a key's premises do not hold for (schema.sql): a count a rewrite
+  ;; keeps wrongly in both is no failure of the rewrites, only of what PostgreSQL returns
+  (when *db*
+    (let [registry (oracle/registry *db*)
+          fs (plain-functions registry)
+          cases (distinct (for [[i [id q opts]] (map-indexed vector oracle/corpus)
+                                :when (select? q)
+                                :let [before (:rows (h/analyze registry q opts))]
+                                :when (:max before)
+                                [rewrite q'] (cons [:corpus q] (map (juxt first second) (rewrites fs q before i)))]
+                            {:id (keyword (str (name id) "--" (name rewrite))) :query q' :opts opts}))
+          over (for [r (oracle/run-cases *db* cases 42) :when (seq (:return-rejections r))] (select-keys r [:id :format :sql :return-rejections]))]
+      (is (seq cases))
+      (is (empty? over) (with-out-str (doseq [o over] (prn o)))))))
+
 (deftest a-row-count-holds-under-rewrites-that-keep-it
   (when *db*
     (let [registry (oracle/registry *db*)

@@ -28,8 +28,15 @@ INSERT INTO users (group_id, nick, name, mood, score) VALUES (1, 'a', 'A', 'happ
 INSERT INTO posts (user_id, title) VALUES (1, 't1'), (2, 't2');
 INSERT INTO tags (name) VALUES ('x'), ('y');
 INSERT INTO post_tags VALUES (1, 1), (2, 2);
+INSERT INTO users (group_id, nick, name, mood, score) VALUES (1, 'c', NULL, 'sad', 2), (2, 'a', 'A', 'happy', 3);
+INSERT INTO posts (user_id, title) VALUES (1, 't3');
+INSERT INTO post_tags VALUES (1, 2);
 INSERT INTO notes (body) VALUES ('n1');
 INSERT INTO tickets (state, kind) VALUES ('open', 'bug'), ('closed', NULL);
+-- rows a row count's premises do not hold for: a group of two users, a nick twice, a NULL name, a
+-- user's two posts, a post's two tags, a kind twice outside a partial unique index's predicate
+CREATE UNIQUE INDEX tickets_open_kind ON tickets (kind) WHERE state = 'open';
+INSERT INTO tickets (state, kind) VALUES ('closed', 'bug');
 INSERT INTO profiles (rank, tag, feel) VALUES (1, 'a', 'happy');
 INSERT INTO hosts (ip, flags, doc) VALUES ('10.0.0.1', B'1010', '{}');
 INSERT INTO nums (s, i, b, n, d, r, vc, lvl, moods) VALUES (2, 3, 4, 1.25, 2.5, 0.5, 'v', 2, '{happy}'), (1, NULL, NULL, NULL, NULL, NULL, NULL, 1, NULL);
