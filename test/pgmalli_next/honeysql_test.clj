@@ -1973,6 +1973,19 @@
   (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:not [:is-distinct-from :id :?v]]]}))
       "nil where both take it"))
 
+(deftest a-partial-unique-index-is-a-key-where-the-where-holds-its-predicate
+  (let [reg (pgmalli/registry {:registry {:pg.public/st [:enum "active" "gone"]
+                                          :pg.public/t [:map {:pg/table "public.t" :pg/primary-key ["id"]
+                                                              :pg/unique [{:columns ["g"] :index true :where [[:= "status" "active"] [:is-null "gone_at"]]}
+                                                                          {:columns ["n"] :index true :where true}]}
+                                                        [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]] [:n [:int {:pg/type "integer"}]]
+                                                        [:status [:ref {:pg/type "st"} :pg.public/st]] [:gone_at [:maybe [:any {:pg/type "timestamptz"}]]]]}})
+        rows #(:rows (h/analyze reg {:select [:id] :from [:t] :where %} {}))]
+    (is (= {:min 0 :max 1} (rows [:and [:= :g :?g] [:and [:= :status [:cast "active" :st]] [:= :gone_at nil]]])))
+    (is (nil? (rows [:and [:= :g :?g] [:= :status [:cast "active" :st]]])) "the predicate's every condition")
+    (is (nil? (rows [:and [:= :g :?g] [:= :status "gone"] [:= :gone_at nil]])) "of its value")
+    (is (nil? (rows [:= :n :?n])) "a predicate the generated file does not tell is none")))
+
 (deftest a-statement-reads-one-row-where-each-table-is-held-to-one-by-a-key
   (let [reg (pgmalli/registry {:registry {:pg.public/p [:map {:pg/table "public.p" :pg/primary-key ["gid" "rid"]} [:gid [:int {:pg/type "bigint"}]] [:rid [:int {:pg/type "bigint"}]]]
                                           :pg.public/r [:map {:pg/table "public.r" :pg/primary-key ["id"] :pg/unique [{:columns ["gid" "rkey"]}]}

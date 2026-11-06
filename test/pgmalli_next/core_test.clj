@@ -58,9 +58,9 @@
               "the CHECKs are the database's")
           (is (not (m/validate :pg.public/users {:id 1 :mood "angry" :age 1 :nick "n" :closed_at nil} {:registry reg})) "an enum's labels hold")
           (is (m/validate :pg.public.users/insert {:id 1 :nick "n"} {:registry reg}) "defaults and nullable columns may be omitted")
-          (is (= [{:columns ["age"] :index true} {:columns ["age"] :index true :where true} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}]
+          (is (= [{:columns ["age"] :index true} {:columns ["age"] :index true :where [[:is-null "closed_at"]]} {:columns ["closed_at"] :index true} {:columns ["nick"] :index true}]
                  (:pg/unique (second (:pg.public/users reg))))
-              "unique indexes over plain columns count, key columns only, even one named as a constraint is, a partial one marked; expression ones do not")
+              "unique indexes over plain columns count, key columns only, even one named as a constraint is, a partial one with its predicate; expression ones do not")
           (is (m/validate :pg.public/prices {:id 1 :p1 99.95M} {:registry reg}) "numeric(3,1)'s precision is the database's")
           (is (= [] (:problems (h/analyze reg {:select [:k :v] :from [:parted_low] :where [:= :k :?k]})))
               "a query reads a partition by name, a row of its table")

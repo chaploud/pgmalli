@@ -17,7 +17,9 @@
      :exclude      EXCLUDE constraint                     {:method :partial? :elements [{:column :op}]}
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
                                                            :index? (from a unique index, not a constraint)
-                                                           :partial? (the index has a predicate) :deferrable?}
+                                                           :partial? (the index has a predicate)
+                                                           :predicate (its predicate, where ir.sql reads it: [[:= column value] [:is-null column] ...])
+                                                           :deferrable?}
      :references   FOREIGN KEY                            {:columns :match (:simple or :full) :to {:schema :table :columns} :valid? (false for NOT VALID)}
      :not-enforced a NOT ENFORCED FOREIGN KEY             {:constraint :input} (nothing to render)
      :trigger      a row-level trigger left enabled       {:name :before :insert :update :delete} (nothing to render)
@@ -75,7 +77,7 @@
       (and max_length (:typmod (types/entry bare)))
       (conj (merge base {:fact :max-length :max max_length})))))
 
-(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial exclude deferrable]}]
+(defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial predicate exclude deferrable]}]
   (case type
     "EXCLUDE" [(merge base {:fact :exclude :constraint cname :method (:method exclude) :partial? (boolean (:partial exclude))
                             :elements (mapv #(select-keys % [:column :op]) (:elements exclude))})]
@@ -83,6 +85,7 @@
     ;; an invalid unique index (a CREATE INDEX CONCURRENTLY that failed) holds nothing
     "UNIQUE" (when-not (and index (false? is_valid))
                [(cond-> (merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index) :partial? (boolean partial)})
+                  predicate (assoc :predicate (mapv (fn [[op & more]] (into [(keyword op)] more)) predicate))
                   deferrable (assoc :deferrable? true))])
     ;; NOT ENFORCED: the database never checks it, so it is not a reference, only noted
     "FOREIGN KEY" (if (false? is_enforced)

@@ -91,8 +91,9 @@
                                            (false? (:nulls-distinct? f)) (assoc :nulls-distinct false)
                                            ;; from a unique index rather than a constraint
                                            (:index? f) (assoc :index true)
-                                           ;; a partial index: unique among the rows its predicate holds for
-                                           (:partial? f) (assoc :where true)
+                                           ;; a partial index: unique among the rows its predicate holds for, the
+                                           ;; predicate where ir.sql reads it
+                                           (:partial? f) (assoc :where (or (:predicate f) true))
                                            (:deferrable? f) (assoc :deferrable true)))))
             :pg/foreign-keys (not-empty (vec (for [f (sort-by :constraint (filter (comp #{:references} :fact) tfacts))]
                                                (cond-> {:columns (:columns f)

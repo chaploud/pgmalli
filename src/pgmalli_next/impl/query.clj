@@ -1293,14 +1293,41 @@
                (and (vector? x) (not= :over (first x)) (some #(aggregated? registry opts %) x)))))
 
 (defn- unique-keys
-  "The column sets a key holds a row of table to one: its primary key and UNIQUE keys, neither
-   partial nor DEFERRABLE; none of a table others inherit, whose rows a key does not span."
-  [registry table]
+  "The column sets a key holds a row of table to one: its primary key and UNIQUE keys, not
+   DEFERRABLE (checked only at commit), a partial one where holds? takes its predicate (it holds
+   over the rows the predicate does alone); none of a table others inherit, whose rows a key does
+   not span."
+  [registry table holds?]
   (let [props (table-props registry table)]
     (when-not (:pg/inherited props)
-      ;; a partial UNIQUE index holds over some rows alone; a DEFERRABLE key may be checked only at commit
-      (cond-> (map :columns (remove #(or (:where %) (:deferrable %)) (:pg/unique props)))
+      (cond-> (map :columns (remove #(or (:deferrable %) (let [w (:where %)] (and w (not (and (vector? w) (holds? w))))))
+                                    (:pg/unique props)))
         (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props))))))
+
+(defn- literal-value
+  "The value literal x writes ([:inline v], a cast of one), or x."
+  [x]
+  (if (and (vector? x) (#{:inline :cast} (first x))) (recur (second x)) x))
+
+(defn- predicate-holds?
+  "Whether condition c (a WHERE) holds each of a partial index's predicate conditions ([:= column
+   value], [:is-null column]) of the table of alias, whose columns are columns: the same = of a
+   literal of the value, or IS NULL, among its conjuncts."
+  [c alias columns conds format]
+  (let [conjuncts (tree-seq #(and (vector? %) (= :and (first %))) rest c)
+        of? (fn [k col] (and (syntax/column-keyword? k)
+                             (let [[q n] (syntax/split-column k format)]
+                               (and (= col n) (if q (= q alias) (contains? columns n))))))
+        same? (fn [a b] (if (and (number? a) (number? b)) (== a b) (= a b)))]
+    (every? (fn [[op col v]]
+              (some (fn [x]
+                      (and (vector? x) (= 3 (count x))
+                           (case op
+                             :is-null (and (#{:= :is} (first x)) (some (fn [[a b]] (and (of? a col) (nil? b))) [[(nth x 1) (nth x 2)] [(nth x 2) (nth x 1)]]))
+                             := (and (= := (first x)) (some (fn [[a b]] (and (of? a col) (same? v (literal-value b)))) [[(nth x 1) (nth x 2)] [(nth x 2) (nth x 1)]]))
+                             false)))
+                    conjuncts))
+            conds)))
 
 (defn- equalities
   "[a b] and [b a] of each = among condition c's conjuncts, an AND inside an AND too."
@@ -1362,7 +1389,9 @@
                     :let [[table alias written] (syntax/table-ref x opts)
                           table (when-not (contains? ctes written) table)
                           inner (when-not table (derived-statement stmt x written format))]]
-                (cond table {:alias alias :columns (table-columns registry table) :keys (unique-keys registry table)}
+                (cond table (let [columns (table-columns registry table)]
+                              {:alias alias :columns columns
+                               :keys (unique-keys registry table #(predicate-holds? (:where stmt) alias columns % format))})
                       (map? inner) (let [ks (result-keys registry inner inner-opts)]
                                      {:alias alias :keys ks
                                       :columns (into {} (map #(vector % [:maybe :any])) (output-labels inner inner-opts))})

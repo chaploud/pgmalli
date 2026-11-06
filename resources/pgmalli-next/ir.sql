@@ -100,9 +100,45 @@ cons AS (
            'is_valid', i.indisvalid,
            'nulls_not_distinct', i.indnullsnotdistinct,
            'partial', i.indpred IS NOT NULL,
+           'predicate', pred.conds,
            'index', true
          ) AS con
   FROM pg_catalog.pg_index i
+  -- a predicate of col = a string or integer constant and col IS NULL, ANDed: each read from the
+  -- text pg_get_expr writes, and taken where quote_ident and quote_literal write that text back
+  LEFT JOIN LATERAL (
+    WITH e AS (SELECT pg_catalog.pg_get_expr(i.indpred, i.indrelid) AS e),
+    parts AS (
+      SELECT u.p, u.n
+      FROM e, pg_catalog.unnest(CASE WHEN e.e LIKE '((%))' THEN pg_catalog.string_to_array(pg_catalog.substr(e.e, 2, pg_catalog.length(e.e) - 2), ' AND ')
+                                     ELSE ARRAY[e.e] END) WITH ORDINALITY u(p, n)),
+    parsed AS (
+      SELECT parts.n, parts.p, a.attname AS col,
+             parts.p ~ ' IS NULL\)$' AS is_null,
+             s.m[1] AS lit, s.m[2] AS typ, d.m[1] AS num
+      FROM parts
+      LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum > 0 AND NOT a.attisdropped
+        AND pg_catalog.quote_ident(a.attname) = (pg_catalog.regexp_match(parts.p, '^\((.+?) (IS NULL|= )'))[1]
+      LEFT JOIN LATERAL (SELECT pg_catalog.regexp_match(parts.p, '^\(.+? = ''((?:[^'']|'''')*)''::([A-Za-z_][A-Za-z0-9_."]*)\)$') AS m) s ON true
+      LEFT JOIN LATERAL (SELECT pg_catalog.regexp_match(parts.p, '^\(.+? = (-?[0-9]+)\)$') AS m) d ON true),
+    read AS (
+      SELECT n, p, col,
+             CASE WHEN is_null THEN pg_catalog.json_build_array('is-null', col)
+                  WHEN num IS NOT NULL THEN pg_catalog.json_build_array('=', col, num::numeric)
+                  -- a negative integer is written as a string cast ('-3'::integer)
+                  WHEN lit ~ '^-?[0-9]+$' AND typ IN ('integer', 'bigint', 'smallint') THEN pg_catalog.json_build_array('=', col, lit::numeric)
+                  WHEN lit IS NOT NULL THEN pg_catalog.json_build_array('=', col, pg_catalog.replace(lit, '''''', ''''))
+             END AS cond,
+             CASE WHEN is_null THEN '(' || pg_catalog.quote_ident(col) || ' IS NULL)'
+                  WHEN num IS NOT NULL THEN '(' || pg_catalog.quote_ident(col) || ' = ' || num || ')'
+                  WHEN lit IS NOT NULL THEN '(' || pg_catalog.quote_ident(col) || ' = ' || pg_catalog.quote_literal(pg_catalog.replace(lit, '''''', '''')) || '::' || typ || ')'
+             END AS written
+      FROM parsed)
+    SELECT CASE WHEN bool_and(r.col IS NOT NULL AND r.written = r.p)
+                     AND (SELECT CASE WHEN count(*) = 1 THEN min(r2.p) ELSE '(' || pg_catalog.string_agg(r2.p, ' AND ' ORDER BY r2.n) || ')' END FROM read r2) = (SELECT e FROM e)
+                THEN pg_catalog.json_agg(r.cond ORDER BY r.n) END AS conds
+    FROM read r
+  ) pred ON i.indpred IS NOT NULL
   JOIN pg_catalog.pg_class ic ON ic.oid = i.indexrelid
   JOIN pg_catalog.pg_class c ON c.oid = i.indrelid
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

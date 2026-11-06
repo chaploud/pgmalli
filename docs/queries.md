@@ -571,7 +571,8 @@ limit a parameter gives), and of a SELECT without FROM, its one row one group un
 most one with a WHERE or HAVING); a subquery
 or EXISTS in the select list is one value; at most one of a statement on one table (no CTE of its name, no table
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
-index (neither partial nor DEFERRABLE) equal to a value, and of one joining (JOIN or LEFT JOIN) or
+index (not DEFERRABLE; a partial one where the WHERE holds each condition of its predicate the
+generated file tells, the same `=` or `IS NULL`) equal to a value, and of one joining (JOIN or LEFT JOIN) or
 listing (DELETE's `:using`, UPDATE's `:from`) other tables, subqueries or CTEs, each so held to
 one row, found from any of them until no more is: a key's columns (a subquery's or a CTE's: its
 GROUP BY's, DISTINCT ON's or DISTINCT's columns, none where it returns a row at most; of the
