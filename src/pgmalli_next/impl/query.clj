@@ -1226,7 +1226,7 @@
 (def ^:private row-count-keys
   "The clauses row-count reads, and those that change no count."
   (into #{:select :select-distinct :from :where :group-by :having :order-by :limit :offset :fetch :with :returning
-          :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :using :for :join-by}
+          :insert-into :columns :values :on-conflict :on-constraint :do-nothing :do-update-set :update :set :delete-from :using :for :join-by :with-recursive}
         (concat syntax/join-keys syntax/set-operation-keys)))
 
 (defn- plain-value?
@@ -1239,13 +1239,15 @@
   (or (and (keyword? x) (not (syntax/shorthand-fn x))) (syntax/constant? x) (nil? x) (= [:default] x)
       ;; a scalar subquery is one value, or an error where it gives more rows
       (map? x) (and (vector? x) (#{:exists :not-exists} (first x)) (map? (second x)))
-      (and (vector? x) (#{:inline :lift :param :cast} (first x)) (plain-value? registry opts (second x)))
+      ;; a literal, a list of them too ([:inline ["a" "b"]], an IN list)
+      (and (vector? x) (#{:inline :lift :param} (first x)))
+      (and (vector? x) (= :cast (first x)) (plain-value? registry opts (second x)))
       ;; grammar, not functions of pg_catalog: ANY(array) is one value as the comparison it is in
-      (and (vector? x) (or (#{:case :case-expr :and :or :not :any :some :all :is :is-not :between :not-between} (first x))
+      (and (vector? x) (or (#{:case :case-expr :and :or :not :any :some :all :is :is-not :between :not-between :composite :distinct} (first x))
                            (common-type-functions (syntax/called x)) (= "nullif" (syntax/called x)))
            (every? #(plain-value? registry opts %) (rest x)))
       (and (vector? x) (#{:in :not-in} (first x)) (= 3 (count x))
-           (let [[_ a b] x] (and (plain-value? registry opts a) (if (sequential? b) (every? #(plain-value? registry opts %) b) (plain-value? registry opts b)))))
+           (let [[_ a b] x] (and (plain-value? registry opts a) (or (plain-value? registry opts b) (and (sequential? b) (every? #(plain-value? registry opts %) b))))))
       (boolean (when-let [[kind _ args :as parts] (syntax/call-parts x)]
                  (and (or (= :operators kind) (not (resolve/set-returning? (reached registry opts parts))))
                       (every? #(plain-value? registry opts %) args))))))
@@ -1282,7 +1284,7 @@
                            columns (when table (table-columns registry table))
                            value? #(or (syntax/constant? %)
                                        (and (syntax/column-keyword? %) (contains? known (first (syntax/split-column % format)))))
-                           equal (set (for [x (if (and (vector? c) (= :and (first c))) (rest c) [c])
+                           equal (set (for [x (tree-seq #(and (vector? %) (= :and (first %))) rest c)
                                             :when (and (vector? x) (= := (first x)) (= 3 (count x)))
                                             [a b] [[(second x) (nth x 2)] [(nth x 2) (second x)]]
                                             :when (and (syntax/column-keyword? a) (value? b))
