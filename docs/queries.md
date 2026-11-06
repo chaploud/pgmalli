@@ -698,6 +698,8 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   written.
 - An UPDATE, or an ON CONFLICT DO UPDATE, writing NULL into a NOT NULL column: a
   `:not-null-violation`, even when it would touch no row or no row conflicts.
+- An `INSERT INTO t (cols) SELECT` leaving out a NOT NULL column of no default: a
+  `:missing-required-column`, even when the SELECT would return no row.
 - Columns of one label in the row a query returns (`{:select [:q.id :s.id] ...}`, or `*` over
   two tables that each have `id`): a `:duplicate-column`. PostgreSQL returns them all, but
   next.jdbc's `as-unqualified-maps` reads them into one key, keeping the last column's value

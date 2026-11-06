@@ -46,6 +46,7 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.accept :as accept]
+            [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as pjdbc]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.test-db :as test-db])
@@ -319,7 +320,7 @@
    literal outside an enum's labels where PostgreSQL never evaluates it (the statement may still
    run through OR or CASE); a literal sent typed that PostgreSQL converts on assignment alone;
    NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails once a row
-   is touched or conflicts; a label the result set's columns (labels, a delay) have
+   is touched or conflicts, or left out of one by an INSERT ... SELECT, once it returns a row; a label the result set's columns (labels, a delay) have
    more than once. listed: listed of the schema; the column is one of a relation query names."
   [listed id query labels p]
   (case (:kind p)
@@ -336,6 +337,8 @@
     :literal-type (boolean (and (:type p) (accept/accepts? (:type p) (:sent p) :assign) (not (accept/holds? (:type p) (:sent p) :assign))))
     ;; an UPDATE's SET or ON CONFLICT DO UPDATE's, even where it touches no row or none conflicts
     :not-null-violation (contains? #{:set :do-update-set} (:clause p))
+    ;; an INSERT ... SELECT's, even where the SELECT returns no row
+    :missing-required-column (boolean (:select (syntax/insert-parts query)))
     false))
 
 (defn- outcome [{:keys [pg]} problems by-design?]
