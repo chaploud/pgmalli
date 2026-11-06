@@ -134,8 +134,11 @@ cons AS (
                   WHEN lit IS NOT NULL THEN '(' || pg_catalog.quote_ident(col) || ' = ' || pg_catalog.quote_literal(pg_catalog.replace(lit, '''''', '''')) || '::' || typ || ')'
              END AS written
       FROM parsed)
-    SELECT CASE WHEN bool_and(r.col IS NOT NULL AND r.written = r.p)
-                     AND (SELECT CASE WHEN count(*) = 1 THEN min(r2.p) ELSE '(' || pg_catalog.string_agg(r2.p, ' AND ' ORDER BY r2.n) || ')' END FROM read r2) = (SELECT e FROM e)
+    -- the whole predicate written back from the conditions read: a part read as none (NULL) makes
+    -- it no match, which bool_and, skipping NULLs, would not
+    SELECT CASE WHEN bool_and(r.cond IS NOT NULL AND r.written IS NOT NULL AND r.written = r.p)
+                     AND count(*) = count(r.written)
+                     AND (SELECT CASE WHEN count(*) = 1 THEN min(r2.written) ELSE '(' || pg_catalog.string_agg(r2.written, ' AND ' ORDER BY r2.n) || ')' END FROM read r2) = (SELECT e FROM e)
                 THEN pg_catalog.json_agg(r.cond ORDER BY r.n) END AS conds
     FROM read r
   ) pred ON i.indpred IS NOT NULL

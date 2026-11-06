@@ -1984,7 +1984,13 @@
     (is (= {:min 0 :max 1} (rows [:and [:= :g :?g] [:and [:= :status [:cast "active" :st]] [:= :gone_at nil]]])))
     (is (nil? (rows [:and [:= :g :?g] [:= :status [:cast "active" :st]]])) "the predicate's every condition")
     (is (nil? (rows [:and [:= :g :?g] [:= :status "gone"] [:= :gone_at nil]])) "of its value")
-    (is (nil? (rows [:= :n :?n])) "a predicate the generated file does not tell is none")))
+    (is (nil? (rows [:= :n :?n])) "a predicate the generated file does not tell is none"))
+  (doseq [w [[[:= "kind" "x"] [nil]] [[:= "kind" "x"] [:= "kind"]] [[:= "kind" "x"] [:in "status" ["a"]]] [[:= "kind" "x"] [:= "status" nil]]]]
+    (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/primary-key ["id"] :pg/unique [{:columns ["g"] :index true :where w}]}
+                                                          [:id [:int {:pg/type "integer"}]] [:g [:int {:pg/type "integer"}]] [:kind [:string {:pg/type "text"}]]
+                                                          [:status [:string {:pg/type "text"}]]]}})]
+      (is (nil? (:rows (h/analyze reg {:select [:id] :from [:t] :where [:and [:= :g 1] [:= :kind "x"] [:= :status nil]]} {})))
+          (str (pr-str w) ": a condition of a form it does not know makes the index no key")))))
 
 (deftest a-statement-reads-one-row-where-each-table-is-held-to-one-by-a-key
   (let [reg (pgmalli/registry {:registry {:pg.public/p [:map {:pg/table "public.p" :pg/primary-key ["gid" "rid"]} [:gid [:int {:pg/type "bigint"}]] [:rid [:int {:pg/type "bigint"}]]]

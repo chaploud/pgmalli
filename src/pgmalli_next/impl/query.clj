@@ -1292,6 +1292,16 @@
   (boolean (or (when-let [parts (syntax/call-parts x)] (and (= :functions (first parts)) (resolve/aggregate? (reached registry opts parts))))
                (and (vector? x) (not= :over (first x)) (some #(aggregated? registry opts %) x)))))
 
+(defn- predicate-condition?
+  "Whether c is a condition of a partial index's predicate the generated file tells: [:= column
+   value] of a string or a number, or [:is-null column]; a predicate holding another is none."
+  [c]
+  (and (vector? c) (string? (second c))
+       (case (first c)
+         := (and (= 3 (count c)) (let [v (nth c 2)] (or (string? v) (number? v))))
+         :is-null (= 2 (count c))
+         false)))
+
 (defn- unique-keys
   "The column sets a key holds a row of table to one: its primary key and UNIQUE keys, not
    DEFERRABLE (checked only at commit), a partial one where holds? takes its predicate (it holds
@@ -1300,7 +1310,7 @@
   [registry table holds?]
   (let [props (table-props registry table)]
     (when-not (:pg/inherited props)
-      (cond-> (map :columns (remove #(or (:deferrable %) (let [w (:where %)] (and w (not (and (vector? w) (holds? w))))))
+      (cond-> (map :columns (remove #(or (:deferrable %) (let [w (:where %)] (and w (not (and (vector? w) (every? predicate-condition? w) (holds? w))))))
                                     (:pg/unique props)))
         (and (:pg/primary-key props) (not (:pg/primary-key-deferrable props))) (conj (:pg/primary-key props))))))
 

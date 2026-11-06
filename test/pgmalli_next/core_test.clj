@@ -110,6 +110,22 @@
   (let [data (generated {:db *db*} schema)]
     [(pgmalli/registry data) data]))
 
+(deftest a-partial-indexs-predicate-is-told-where-each-condition-is-read-alone
+  (when *db*
+    (let [[reg] (registry-of "pi" "CREATE SCHEMA pi;
+                                  CREATE TABLE pi.t (id int PRIMARY KEY, g int, kind text, status text, gone_at timestamptz, n int);
+                                  CREATE UNIQUE INDEX pi_any ON pi.t (g) WHERE kind = 'x' AND status = ANY (ARRAY['queued', 'running']);
+                                  CREATE UNIQUE INDEX pi_in ON pi.t (g) WHERE kind = 'x' AND status IN ('queued', 'running');
+                                  CREATE UNIQUE INDEX pi_or ON pi.t (g) WHERE kind = 'x' AND (status = 'a' OR status = 'b');
+                                  CREATE UNIQUE INDEX pi_read ON pi.t (n) WHERE kind = 'x' AND gone_at IS NULL;")
+          rows #(:rows (h/analyze reg {:select [:id] :from [:t] :where %} {:schema "pi"}))]
+      (is (= [{:columns ["g"] :index true :where true} {:columns ["g"] :index true :where true} {:columns ["g"] :index true :where true}
+              {:columns ["n"] :index true :where [[:= "kind" "x"] [:is-null "gone_at"]]}]
+             (:pg/unique (second (:pg.pi/t reg))))
+          "a predicate with a condition of another form (= ANY, IN, OR) is no predicate told")
+      (is (nil? (rows [:and [:= :g 1] [:= :kind "x"] [:= :status "queued"]])) "nor a key")
+      (is (= {:min 0 :max 1} (rows [:and [:= :n 1] [:= :kind "x"] [:= :gone_at nil]]))))))
+
 (deftest a-schemas-functions-are-the-ones-sql-calls-built-as-pg-catalogs-are
   (when *db*
     (let [[_ data] (registry-of "fx" "CREATE SCHEMA fx;
