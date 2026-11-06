@@ -1278,6 +1278,8 @@
       ;; a literal, a list of them too ([:inline ["a" "b"]], an IN list)
       (and (vector? x) (#{:inline :lift :param} (first x)))
       (and (vector? x) (= :cast (first x)) (plain-value? registry opts (second x)))
+      ;; an aggregate's FILTER (WHERE ...): one value of the aggregate's
+      (and (vector? x) (= :filter (first x)) (plain-value? registry opts (second x)))
       ;; grammar, not functions of pg_catalog: ANY(array) is one value as the comparison it is in
       (and (vector? x) (or (#{:case :case-expr :and :or :not :any :some :all :is :is-not :between :not-between :composite :distinct} (first x))
                            (common-type-functions (syntax/called x)) (= "nullif" (syntax/called x)))
@@ -1382,6 +1384,14 @@
       :intersect (when (seq maxes) {:min 0 :max (apply min maxes)})
       (:except :except-all) (some->> (:max (first counts)) (hash-map :min 0 :max)))))
 
+(defn- row-limit
+  "The number of rows clause k (:limit, :fetch) of stmt allows, written in the query (n, or
+   [:inline n], which HoneySQL writes as n alike); nil for another (a parameter)."
+  [stmt k]
+  (let [n (get stmt k)
+        n (if (and (vector? n) (= :inline (first n))) (second n) n)]
+    (when (and (integer? n) (<= 0 n)) n)))
+
 (defn- counted-rows
   "row-count's count from the statement's data, nil where it cannot tell."
   [registry stmt opts]
@@ -1397,7 +1407,7 @@
           rows (when (and (vector? (:values stmt)) (not (:select (syntax/insert-parts stmt)))) (:values stmt))
           plain? (every? #(plain-value? registry opts %) (concat items order groups (mapcat #(cond (map? %) (vals %) (sequential? %) % :else [%]) rows)))
           unique? (unique-row? registry stmt write? opts)
-          bound #(let [n (get stmt %)] (when (and (integer? n) (<= 0 n)) n))
+          bound #(row-limit stmt %)
           limit (some->> (seq (keep bound [:limit :fetch])) (apply min))
           ;; a limit only a parameter tells may be 0
           unbounded-limit? (some #(and (contains? stmt %) (not (bound %))) [:limit :fetch])
@@ -1438,5 +1448,5 @@
   [registry stmt opts]
   (or (counted-rows registry stmt opts)
       (when (map? stmt)
-        (when-let [n (some->> (seq (filter #(and (integer? %) (<= 0 %)) (map stmt [:limit :fetch]))) (apply min))]
+        (when-let [n (some->> (seq (keep #(row-limit stmt %) [:limit :fetch])) (apply min))]
           {:min 0 :max n}))))

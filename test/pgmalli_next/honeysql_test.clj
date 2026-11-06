@@ -1748,6 +1748,11 @@
         "an aggregate of DISTINCT values: one row")
     (is (= {:min 1 :max 1} (second (ret {:with-recursive [[:r {:select [[1 :n]]}]] :select [[[:count :*] :n]] :from [:r]} {})))
         "of a recursive CTE too")
+    (is (= {:min 1 :max 1} (second (ret {:select [[[:filter [:count :*] {:where [:= :id 1]}] :n]] :from [:users]} {})))
+        "an aggregate with FILTER: one row")
+    (is (= {:min 1 :max 1} (second (ret {:select [[[:count [:case [:and [:= :id 1] [:not [:= :score 2]]] 1]] :n]] :from [:users]} {})))
+        "an aggregate of an expression of the row's values")
+    (is (= {:max 2} (second (ret {:select [:id] :from [:users] :limit [:inline 2] :offset [:inline 1]} {}))) "an inline limit, which HoneySQL writes as the number")
     (let [latest {:select [:id :score] :from [:users] :order-by [[:score :desc]] :limit 1}]
       (is (= {:max 1} (second (ret {:select [:l.id] :from [[latest :l]] :where [:= :l.score 1]} {})))
           "a subquery alone in FROM: as many rows as it at most")
