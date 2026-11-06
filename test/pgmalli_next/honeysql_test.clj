@@ -2003,6 +2003,11 @@
     (is (nil? (rows {:select [:p.gid] :from [:p] :join [:r [:= :r.id :p.rid]] :where [:= :p.gid :?g]})) "each held by the other alone: neither")
     (is (= {:min 0 :max 1} (rows {:select [:p.gid] :from [:p] :where [:and [:= :p.gid :?g] [:= :p.rid {:select [:gid] :from [:u]}]]}))
         "a scalar subquery is one value")
+    (doseq [sub [{:select [[[:max :x.rid]]] :from [[:p :x]] :where [:= :x.gid :p.gid]}
+                 {:select [[[:max :rid]]] :from [:u] :where [:= :u.gid :gid]}
+                 {:select [:rid]}]]
+      (is (nil? (rows {:select [:p.gid] :from [:p] :where [:and [:= :p.gid :?g] [:= :p.rid sub]]}))
+          (str (pr-str sub) " reads a column of the row around it: a value for each row, as the latest of each group")))
     (is (= {:min 0 :max 1} (rows {:select [:g.gid] :from [[{:select [:gid [[:count :*] :n]] :from [:u] :group-by [:gid]} :g]] :where [:= :g.gid :?g]}))
         "a subquery's GROUP BY columns are a key of its rows")
     (is (= {:min 0 :max 1} (rows {:select [:gid [[:count :*] :n]] :from [:u] :group-by [:gid] :having [:= :gid :?g]})) "a group by its HAVING")

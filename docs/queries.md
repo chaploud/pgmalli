@@ -577,7 +577,8 @@ listing (DELETE's `:using`, UPDATE's `:from`) other tables, subqueries or CTEs, 
 one row, found from any of them until no more is: a key's columns (a subquery's or a CTE's: its
 GROUP BY's, DISTINCT ON's or DISTINCT's columns, none where it returns a row at most; of the
 statement's own GROUP BY or DISTINCT ON, its rows') each equal to a constant, an argument, a scalar
-subquery (not IN's or `= ANY`'s), a column of a table so held, or a column equal to one of those
+subquery reading no column of the statement (a correlated one is a value for each row; not
+IN's or `= ANY`'s), a column of a table so held, or a column equal to one of those
 (`r.gid = p.gid` and `p.gid = ?`), by the WHERE, the HAVING or an inner join's ON (a LEFT JOIN's ON holds
 its own table's columns alone); at most as many as
 a subquery or a CTE a SELECT reads first returns, each other table it reads so held to one row; one for each row of a VALUES list, up

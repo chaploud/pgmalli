@@ -1347,6 +1347,26 @@
         pair [[(second x) (nth x 2)] [(nth x 2) (second x)]]]
     pair))
 
+(defn- uncorrelated?
+  "Whether subquery q reads no column of items, the items of a statement around it ({:alias
+   :columns}): no name in it qualified by an alias of them it does not define itself, and no
+   name of a column of them its own tables lack, where it reads only tables, whose columns are
+   told. A correlated scalar subquery is a value for each row around it, not one value."
+  [registry q items {:keys [format] :as opts}]
+  (let [refs (for [st (syntax/statements q), x (syntax/table-items st)] (syntax/table-ref x opts))
+        ;; an alias hides its table's name
+        inner-aliases (set (map second refs))
+        inner-columns (when (every? first refs) (set (mapcat (fn [[table]] (keys (table-columns registry table))) refs)))
+        outer-aliases (set (map :alias items))
+        outer-columns (set (mapcat (comp keys :columns) items))]
+    (not-any? (fn [k]
+                (when (syntax/column-keyword? k format)
+                  (let [[qual n] (syntax/split-column k format)]
+                    (if qual
+                      (and (outer-aliases qual) (not (inner-aliases qual)))
+                      (and (outer-columns n) (not (and inner-columns (inner-columns n))))))))
+              (filter keyword? (tree-seq coll? seq q)))))
+
 (defn- output-labels
   "The labels of the columns statement stmt returns, by its select items or RETURNING; nil where
    one is * or of no label told."
@@ -1418,7 +1438,7 @@
                   (when-let [[alias col :as ac] (column a)]
                     (when (if (syntax/null-value? b nil)
                             (not (shape/maybe? (get-in by-alias [alias :columns col] [:maybe :any])))
-                            (or (syntax/constant? b) (map? b) (contains? held (column b))))
+                            (or (syntax/constant? b) (and (map? b) (uncorrelated? registry b items opts)) (contains? held (column b))))
                       ac)))
         one-row? (fn [held {:keys [alias keys]}] (some (fn [ks] (every? #(contains? held [alias %]) ks)) keys))
         step (fn [held]
