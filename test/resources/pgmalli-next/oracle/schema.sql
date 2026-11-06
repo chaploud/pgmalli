@@ -6,6 +6,8 @@ CREATE TABLE tags (id serial PRIMARY KEY, name text NOT NULL UNIQUE);
 CREATE TABLE post_tags (post_id bigint NOT NULL REFERENCES posts(id), tag_id int NOT NULL REFERENCES tags(id), PRIMARY KEY (post_id, tag_id));
 CREATE TABLE audits (id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY, note text NOT NULL DEFAULT 'n', note_upper text GENERATED ALWAYS AS (upper(note)) STORED);
 CREATE TABLE notes (id serial PRIMARY KEY, body text NOT NULL, owner text NOT NULL);
+-- names no other table has: a join to it by its key names no column of the others
+CREATE TABLE lookups (lookup_id int PRIMARY KEY, lookup_note text);
 CREATE FUNCTION fill_owner() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.owner := coalesce(NEW.owner, current_user); RETURN NEW; END $$;
 CREATE TRIGGER notes_owner BEFORE INSERT ON notes FOR EACH ROW EXECUTE FUNCTION fill_owner();
 CREATE TABLE tickets (id serial PRIMARY KEY, state varchar(16) NOT NULL DEFAULT 'open' CHECK (state IN ('open', 'closed')), kind text CHECK (kind IN ('bug', 'task')));
