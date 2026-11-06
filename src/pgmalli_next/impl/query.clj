@@ -1326,7 +1326,7 @@
    WHERE (one-row-items), and each other it reads, joined (JOIN or LEFT JOIN by its ON) or listed
    (DELETE's USING, UPDATE's FROM, by the WHERE), a row for that row."
   [registry stmt write? {:keys [format] :as opts}]
-  (let [ctes (syntax/cte-names stmt format)
+  (let [ctes (into (syntax/cte-names stmt format) (::ctes opts))
         [base & listed] (if write? (concat (syntax/write-targets stmt) (syntax/from-items stmt [:using :from])) (syntax/from-items stmt [:from]))
         joined (syntax/joins stmt)
         written (nth (syntax/table-ref base opts) 2 nil)]
@@ -1338,6 +1338,19 @@
                   (one-row-items registry [(second (syntax/table-ref base opts))]
                                  (concat (for [t listed] [t (:where stmt)]) (for [[_ t c] joined] [t c]))
                                  opts)))))
+
+(defn- derived-count
+  "{:min 0 :max n} of a SELECT reading one FROM item alone, a subquery or a CTE of the statement,
+   that returns n rows at most (row-count, its CTEs those of the statement too); nil otherwise."
+  [registry stmt {:keys [format] :as opts}]
+  (let [[item & more] (syntax/from-items stmt [:from])
+        entries (syntax/cte-entries stmt)
+        written (when (or (keyword? item) (and (vector? item) (keyword? (first item)))) (nth (syntax/table-ref item opts) 2 nil))
+        inner (cond (and (vector? item) (map? (first item))) (first item)
+                    written (some #(when (= written (syntax/cte-name % format)) (second %)) entries))]
+    (when (and inner (map? inner) (nil? more) (empty? (syntax/joins stmt)) (not-any? #(contains? stmt %) [:using :cross-join]))
+      (some->> (:max (row-count registry inner (update opts ::ctes into (keep #(syntax/cte-name % format) entries))))
+               (hash-map :min 0 :max)))))
 
 (defn- set-operation-count
   "{:min n :max m} of the rows of set operation k (:union ...) of members of counts (row-count's,
@@ -1388,7 +1401,8 @@
                         fromless? {:min (if (or (contains? stmt :where) having?) 0 1) :max 1}
                         (and rows (not write?) (every? vector? rows)) {:min (count rows) :max (count rows)}
                         (and rows (:insert-into stmt) (:returning stmt)) {:min 0 :max (count rows)}
-                        (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items)) {:min 0 :max 1})
+                        (and unique? (not (:insert-into stmt)) (or (not write?) (:returning stmt)) (every? #(plain-value? registry opts %) items)) {:min 0 :max 1}
+                        (not write?) (derived-count registry stmt opts))
           m (cond-> counted
               limit (update :max #(min (or % limit) limit))
               (and limit (not counted)) (assoc :min 0)

@@ -572,7 +572,8 @@ or EXISTS in the select list is one value; at most one of a statement on one tab
 inheriting it) whose WHERE holds the columns of its primary key or of a UNIQUE constraint or
 index (neither partial nor DEFERRABLE) equal to a value, and of one joining (JOIN or LEFT JOIN by
 its ON) or listing (DELETE's `:using`, UPDATE's `:from`, by the WHERE) other tables, each by
-such a key equal to a value or to a column of a table so held to one row; one for each row of a VALUES list, up
+such a key equal to a value or to a column of a table so held to one row; at most as many as
+a subquery or a CTE a SELECT reads alone (one FROM item, no join) returns; one for each row of a VALUES list, up
 to one for each row of an INSERT's `:values` with RETURNING; of a set operation, the sum of its
 members' under `:union-all` and at most that under `:union`, at most the fewest under
 `:intersect`, at most the first's under `:except`; at most `:limit` or `:fetch`, whatever else the statement holds. A function that may return a set (one that does, of
