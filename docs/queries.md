@@ -576,7 +576,7 @@ any table until no more is: a key's columns each equal to a constant, an argumen
 subquery (not IN's or `= ANY`'s), a column of a table so held, or a column equal to one of those
 (`r.gid = p.gid` and `p.gid = ?`), by the WHERE or an inner join's ON (a LEFT JOIN's ON holds
 its own table's columns alone); at most as many as
-a subquery or a CTE a SELECT reads alone (one FROM item, no join) returns; one for each row of a VALUES list, up
+a subquery or a CTE a SELECT reads first returns, each other table it reads so held to one row; one for each row of a VALUES list, up
 to one for each row of an INSERT's `:values` with RETURNING; of a set operation, the sum of its
 members' under `:union-all` and at most that under `:union`, at most the fewest under
 `:intersect`, at most the first's under `:except`; at most `:limit` or `:fetch` (a number, or `[:inline n]`), whatever else the statement holds. A function that may return a set (one that does, of

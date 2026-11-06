@@ -1302,14 +1302,15 @@
         pair [[(second x) (nth x 2)] [(nth x 2) (second x)]]]
     pair))
 
-(defn- unique-row?
-  "Whether statement stmt reads one row at most: every table it reads (its one, the ones it joins
-   by JOIN or LEFT JOIN, DELETE's USING, UPDATE's FROM; no CTE of a table's name) is held to one
-   row by a key (unique-keys) whose columns are each equal to one value: a constant, a scalar
-   subquery, or a column of a table so held, or equal to one (r.a = t.a, t.a = ?), found until
-   no more is. The equalities are the WHERE's and an inner join's ON's; a LEFT JOIN's ON holds its
-   own table's columns alone. Equal to NULL, which HoneySQL writes IS NULL, a column NOT NULL
-   alone is held."
+(defn- held-items
+  "[item held?] of each item statement stmt reads (its one, the ones it joins by JOIN or LEFT JOIN,
+   DELETE's USING, UPDATE's FROM), in that order, held? whether a table (no CTE of a table's name)
+   gives one row at most for a row of the others: a key (unique-keys) whose columns are each equal
+   to one value, a constant, a scalar subquery, or a column of a table so held, or equal to one
+   (r.a = t.a, t.a = ?), found until no more is. The equalities are the WHERE's and an inner join's
+   ON's; a LEFT JOIN's ON holds its own table's columns alone. Equal to NULL, which HoneySQL
+   writes IS NULL, a column NOT NULL alone is held. nil for a join of another kind (RIGHT, FULL,
+   CROSS)."
   [registry stmt write? {:keys [format] :as opts}]
   (let [ctes (into (syntax/cte-names stmt format) (::ctes opts))
         listed (if write? (concat (syntax/write-targets stmt) (syntax/from-items stmt [:using :from])) (syntax/from-items stmt [:from]))
@@ -1338,21 +1339,28 @@
                      held (into held (keep (fn [[alias pair]] (let [ac (held-by held pair)] (when (= alias (first ac)) ac)))) own)]
                  (into held (for [{:keys [alias columns] :as item} items :when (one-row? held item), c (keys columns)] [alias c]))))
         held (loop [h #{}] (let [h' (step h)] (if (= h h') h (recur h'))))]
-    (boolean (and (seq items)
-                  (not (some #(contains? stmt %) [:cross-join :join-by]))
-                  (every? (comp #{:join :left-join :inner-join} first) joined)
-                  (every? #(one-row? held %) items)))))
+    (when (and (not (some #(contains? stmt %) [:cross-join :join-by]))
+               (every? (comp #{:join :left-join :inner-join} first) joined))
+      (map (fn [x item] [x (boolean (one-row? held item))]) (concat listed (map second joined)) items))))
+
+(defn- unique-row?
+  "Whether statement stmt reads one row at most: every item it reads is a table held to one row
+   (held-items)."
+  [registry stmt write? opts]
+  (let [hs (held-items registry stmt write? opts)]
+    (boolean (and (seq hs) (every? second hs)))))
 
 (defn- derived-count
-  "{:min 0 :max n} of a SELECT reading one FROM item alone, a subquery or a CTE of the statement,
-   that returns n rows at most (row-count, its CTEs those of the statement too); nil otherwise."
+  "{:min 0 :max n} of a SELECT whose first FROM item, a subquery or a CTE of the statement, returns
+   n rows at most (row-count, its CTEs those of the statement too), each other item it reads held
+   to one row for a row of it (held-items); nil otherwise."
   [registry stmt {:keys [format] :as opts}]
-  (let [[item & more] (syntax/from-items stmt [:from])
+  (let [[[item] & others] (held-items registry stmt false opts)
         entries (syntax/cte-entries stmt)
         written (when (or (keyword? item) (and (vector? item) (keyword? (first item)))) (nth (syntax/table-ref item opts) 2 nil))
         inner (cond (and (vector? item) (map? (first item))) (first item)
                     written (some #(when (= written (syntax/cte-name % format)) (second %)) entries))]
-    (when (and inner (map? inner) (nil? more) (empty? (syntax/joins stmt)) (not-any? #(contains? stmt %) [:using :cross-join]))
+    (when (and inner (map? inner) (every? second others))
       (some->> (:max (row-count registry inner (update opts ::ctes into (keep #(syntax/cte-name % format) entries))))
                (hash-map :min 0 :max)))))
 
