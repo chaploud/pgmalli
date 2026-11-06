@@ -313,7 +313,8 @@
   [registry item chain opts]
   (let [[a b] (if (vector? item) item [item])
         [f ordinality? al] (if (and (vector? a) (= :with-ordinality (first a))) [(second a) true (get a 2)] [a false b])
-        [al listed] (if (and (vector? al) (map? (second al))) [(first al) (syntax/listed-columns (second al))] [al nil])
+        ;; the names an alias lists, as a VALUES' alias lists them ({:columns [...]} or [:composite ...])
+        [al listed] (if (and (vector? al) (syntax/alias? (first al))) [(first al) (syntax/listed-columns (second al))] [al nil])
         [kind n args :as parts] (when (vector? f) (syntax/call-parts f))
         renamed (fn [cs] (vec (map-indexed (fn [i [c s]] [(if (< i (count listed)) (syntax/ident-name (nth listed i) (:format opts)) c) s]) cs)))
         populated (when (and (not ordinality?) (or (nil? listed) (sequential? listed)))

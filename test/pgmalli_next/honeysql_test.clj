@@ -1479,6 +1479,13 @@
   (is (= [{:kind :unknown-column :column :nik :did-you-mean [:nick] :var #'a-broken-query-fn}]
          (h/schema-problems {:ns 'pgmalli-next.honeysql-test}))))
 
+(deftest a-function-in-from-takes-the-names-its-alias-lists
+  (let [reg (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d"} [:items [:vector {:pg/type "jsonb"} [:map [:k :string]]]]]}})
+        a #(h/analyze reg {:select [:r.v] :from [:d [[:jsonb_array_elements :items] [:r %]]]} {})
+        element [:maybe [:map {:pg/type "jsonb"} [:k :string]]]]
+    (doseq [listed [{:columns [:v]} [:composite :v]]]
+      (is (= [:map [:v element]] (:row (a listed))) (pr-str listed)))))
+
 (deftest a-function-alias-is-not-held-to-the-columns-it-lists
   (is (= [{:kind :unknown-column :column :t.name}] (check {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]}))
       "PostgreSQL reads t.name as name(t), almost always a mistake: reported (docs/queries.md, Stricter than PostgreSQL)"))
