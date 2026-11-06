@@ -105,7 +105,9 @@ cons AS (
          ) AS con
   FROM pg_catalog.pg_index i
   -- a predicate of col = a string or integer constant and col IS NULL, ANDed: each read from the
-  -- text pg_get_expr writes, and taken where quote_ident and quote_literal write that text back
+  -- text pg_get_expr writes, and taken where quote_ident and quote_literal write that text back;
+  -- a column cast to a type it converts to binary coercibly (varchar's text: no value changes)
+  -- read as the column
   LEFT JOIN LATERAL (
     WITH e AS (SELECT pg_catalog.pg_get_expr(i.indpred, i.indrelid) AS e),
     parts AS (
@@ -114,11 +116,16 @@ cons AS (
                                      ELSE ARRAY[e.e] END) WITH ORDINALITY u(p, n)),
     parsed AS (
       SELECT parts.n, parts.p, a.attname AS col,
+             CASE WHEN c.m IS NULL THEN pg_catalog.quote_ident(a.attname) ELSE '(' || pg_catalog.quote_ident(a.attname) || ')::' || c.m[2] END AS lhs,
              parts.p ~ ' IS NULL\)$' AS is_null,
              s.m[1] AS lit, s.m[2] AS typ, d.m[1] AS num
       FROM parts
+      LEFT JOIN LATERAL (SELECT (pg_catalog.regexp_match(parts.p, '^\((.+?) (IS NULL|= )'))[1] AS lhs) l ON true
+      LEFT JOIN LATERAL (SELECT pg_catalog.regexp_match(l.lhs, '^\((.+)\)::([a-z][a-z ]*)$') AS m) c ON true
       LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum > 0 AND NOT a.attisdropped
-        AND pg_catalog.quote_ident(a.attname) = (pg_catalog.regexp_match(parts.p, '^\((.+?) (IS NULL|= )'))[1]
+        AND pg_catalog.quote_ident(a.attname) = COALESCE(c.m[1], l.lhs)
+        AND (c.m IS NULL OR EXISTS (SELECT 1 FROM pg_catalog.pg_cast k
+                                    WHERE k.castsource = a.atttypid AND k.casttarget = pg_catalog.to_regtype(c.m[2]) AND k.castmethod = 'b'))
       LEFT JOIN LATERAL (SELECT pg_catalog.regexp_match(parts.p, '^\(.+? = ''((?:[^'']|'''')*)''::([A-Za-z_][A-Za-z0-9_."]*)\)$') AS m) s ON true
       LEFT JOIN LATERAL (SELECT pg_catalog.regexp_match(parts.p, '^\(.+? = (-?[0-9]+)\)$') AS m) d ON true),
     read AS (
@@ -129,9 +136,9 @@ cons AS (
                   WHEN lit ~ '^-?[0-9]+$' AND typ IN ('integer', 'bigint', 'smallint') THEN pg_catalog.json_build_array('=', col, lit::numeric)
                   WHEN lit IS NOT NULL THEN pg_catalog.json_build_array('=', col, pg_catalog.replace(lit, '''''', ''''))
              END AS cond,
-             CASE WHEN is_null THEN '(' || pg_catalog.quote_ident(col) || ' IS NULL)'
-                  WHEN num IS NOT NULL THEN '(' || pg_catalog.quote_ident(col) || ' = ' || num || ')'
-                  WHEN lit IS NOT NULL THEN '(' || pg_catalog.quote_ident(col) || ' = ' || pg_catalog.quote_literal(pg_catalog.replace(lit, '''''', '''')) || '::' || typ || ')'
+             CASE WHEN is_null THEN '(' || lhs || ' IS NULL)'
+                  WHEN num IS NOT NULL THEN '(' || lhs || ' = ' || num || ')'
+                  WHEN lit IS NOT NULL THEN '(' || lhs || ' = ' || pg_catalog.quote_literal(pg_catalog.replace(lit, '''''', '''')) || '::' || typ || ')'
              END AS written
       FROM parsed)
     -- the whole predicate written back from the conditions read: a part read as none (NULL) makes

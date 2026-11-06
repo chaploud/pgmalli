@@ -64,7 +64,7 @@ The table's map carries:
 | `:pg/table` | `"public.users"` (`:pg/view` for a view, and `:pg/materialized true` for a materialized one) |
 | `:pg/primary-key` | `["id"]` |
 | `:pg/primary-key-deferrable` | `true`: the primary key is DEFERRABLE, so it may be checked only at commit |
-| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, for a partial one `:where` its predicate where it is equalities of a column to a string or integer and `IS NULL`s, ANDed (`[[:= "status" "active"] [:is-null "deleted_at"]]`), `true` otherwise, `:deferrable true` for a DEFERRABLE one; an invalid unique index is left out |
+| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, for a partial one `:where` its predicate where it is equalities of a column (a `varchar` too, which PostgreSQL casts to `text` there) to a string or integer and `IS NULL`s, ANDed (`[[:= "status" "active"] [:is-null "deleted_at"]]`), `true` otherwise, `:deferrable true` for a DEFERRABLE one; an invalid unique index is left out |
 | `:pg/inherited` | `true`: other tables inherit it (not as partitions), so a query reads their rows too |
 | `:pg/partitions` | a partitioned table's partitions of its schema, at any depth; the registry holds a row schema of each by its name, the table's but for `:pg/table`, which a query reads or writes by name |
 | `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |
