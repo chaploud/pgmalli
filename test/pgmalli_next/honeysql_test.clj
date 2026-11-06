@@ -1479,12 +1479,17 @@
   (is (= [{:kind :unknown-column :column :nik :did-you-mean [:nick] :var #'a-broken-query-fn}]
          (h/schema-problems {:ns 'pgmalli-next.honeysql-test}))))
 
-(deftest a-function-in-from-takes-the-names-its-alias-lists
+(deftest a-function-in-from-takes-the-names-its-alias-lists-and-no-types-but-of-record
   (let [reg (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d"} [:items [:vector {:pg/type "jsonb"} [:map [:k :string]]]]]}})
         a #(h/analyze reg {:select [:r.v] :from [:d [[:jsonb_array_elements :items] [:r %]]]} {})
         element [:maybe [:map {:pg/type "jsonb"} [:k :string]]]]
     (doseq [listed [{:columns [:v]} [:composite :v]]]
-      (is (= [:map [:v element]] (:row (a listed))) (pr-str listed)))))
+      (is (= [:map [:v element]] (:row (a listed))) (pr-str listed)))
+    (is (= [{:kind :column-definition-list :function "jsonb_array_elements" :alias "r"}]
+           (:problems (h/analyze reg {:select [:r.value] :from [:d [[:jsonb_array_elements :items] [:r {:with-columns [[:value :jsonb]]}]]]} {})))
+        "column types of a function returning no record, which PostgreSQL refuses")
+    (is (= [] (:problems (h/analyze reg {:select [:w.k] :from [[[:jsonb_to_record :?doc] [:w {:with-columns [[:k :text]]}]]]} {})))
+        "of one returning record")))
 
 (deftest a-function-alias-is-not-held-to-the-columns-it-lists
   (is (= [{:kind :unknown-column :column :t.name}] (check {:select [:t.name] :from [[[:unnest [:array [1 2]]] [:t {:columns [:x]}]]]}))

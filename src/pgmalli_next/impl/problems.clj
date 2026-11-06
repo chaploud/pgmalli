@@ -281,6 +281,20 @@
          :when (and (vector? t) (:domain? (get t 2)))]
      {:kind :no-operator :column side :op op :domain (query/domain-of s) :type (second t)})))
 
+(defn- column-definition-problems
+  "{:kind :column-definition-list :function f :alias a} for each function in FROM of a statement
+   whose alias writes a column definition list ({:with-columns ...}) where no candidate of it
+   returns record, as PostgreSQL takes one for alone: of no type, a list of names
+   ([:r {:columns [:v]}]) renames its columns."
+  [registry stmt opts]
+  (for [item (syntax/table-items stmt)
+        :when (syntax/column-definitions item)
+        :let [[f al] (syntax/function-alias item)
+              [kind n :as parts] (syntax/call-parts f)
+              os (when (= :functions kind) (query/reached registry opts parts))]
+        :when (and (seq os) (not-any? #(= "record" (:result %)) os))]
+    {:kind :column-definition-list :function n :alias (syntax/alias-label al opts)}))
+
 (defn- problems
   "The problems of one statement (README.md's table of :kind), scope the statement's (from
    scope) or, for a nested statement, the chain of its own and the enclosing ones."
@@ -304,19 +318,20 @@
                      meant (assoc :did-you-mean meant)))
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
-                 (operator-problems registry ps opts)))))
+                 (operator-problems registry ps opts)
+                 (column-definition-problems registry stmt opts)))))
 
 (defn- unread-clauses
   "{:kind :unread-clause :clause k} for a clause the query uses that is read nowhere here, so
    what it does goes unjudged: in the query map and every statement, and in a map of
    HoneySQL's clauses alone ({:table :t}, a clause registered with register-clause!). The rows of
    :values, :set and :do-update-set are maps of columns, not of clauses, though a subquery in
-   them is read, as is the column definition list of an alias (syntax/defined-columns)."
+   them is read, as is the column definition list of a function's alias (syntax/column-definitions)."
   [body]
   (let [clauses (set (sql/clause-order))
         rows (set (for [st (syntax/statements body)
                         r (concat (when (vector? (:values st)) (:values st)) [(:set st) (:do-update-set st)]
-                                  (for [item (syntax/table-items st) :when (syntax/defined-columns item nil)] (second (second item))))
+                                  (for [item (syntax/table-items st) :when (syntax/column-definitions item)] (nth (syntax/function-alias item) 2)))
                         :when (map? r)]
                     r))
         maps (tree-seq syntax/branch? seq body)]

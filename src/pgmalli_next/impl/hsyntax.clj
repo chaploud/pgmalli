@@ -476,6 +476,25 @@
         [(ident-name c format)
          (when-let [n (cast-target t)] (case array nil n :array (types/array-of n) nil))]))))
 
+(defn function-alias
+  "[call alias alias-map ordinality?] of a FROM item of a function ([[:f args] alias],
+   [[:with-ordinality [:f args] alias]]), alias-map the map an alias writes beside its name
+   ([:r {:columns [:v]}], [:r {:with-columns [[:v :jsonb]]}]); nil for another item."
+  [item]
+  (when (vector? item)
+    (let [[a b] item
+          [f ordinality? al] (if (and (vector? a) (= :with-ordinality (first a))) [(second a) true (get a 2)] [a false b])
+          [al m] (if (and (vector? al) (alias? (first al))) [(first al) (second al)] [al nil])]
+      (when (and (vector? f) (called f))
+        [f al m ordinality?]))))
+
+(defn column-definitions
+  "The column definition list ({:with-columns [[column type] ...]}) the alias of a function's FROM
+   item writes, which PostgreSQL takes of a function returning record alone; nil for none."
+  [item]
+  (let [[_ _ m] (function-alias item)]
+    (when (and (map? m) (contains? m :with-columns)) (:with-columns m))))
+
 (defn standalone
   "Statement inner as a query of its own: itself where it reads no CTE of ctes (those its place
    in query body sees), else under the entries of the one :with of body that define them, up to

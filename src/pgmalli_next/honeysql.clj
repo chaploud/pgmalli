@@ -326,6 +326,10 @@
                     (if did-you-mean
                       (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))
                       (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand")))
+   :column-definition-list (fn [{:keys [function alias]}]
+                             (str "the alias " alias " of " function " lists column types, which PostgreSQL takes of a function returning record"
+                                  " alone (a column definition list is only allowed for functions returning record); name the columns with no type: "
+                                  (pr-str [(keyword alias) {:columns [:v]}])))
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))
    :undetermined-type (fn [{:keys [arg function type]}]
                         (let [x (keyword (str "?" (name arg)))]

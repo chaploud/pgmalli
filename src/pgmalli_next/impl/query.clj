@@ -322,7 +322,9 @@
     (if populated
       ;; the columns of the row type, NULL where the document lacks a key
       (renamed (for [[c s] populated] [c (some-> s nullable)]))
-      (when (and (= :functions kind) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
+      ;; a column definition list where the function returns no record PostgreSQL refuses
+      ;; (:column-definition-list): no column of it told
+      (when (and (= :functions kind) (not (syntax/column-definitions item)) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
         ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)), its columns each named unnest
         (when-let [rs (let [rs (for [as (if (and (= "unnest" n) (next args)) (map vector args) [args])]
                                  (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) as) (reached registry opts parts)))]
