@@ -1274,9 +1274,13 @@
   [registry opts x]
   (cond (map? x) true
         (and (vector? x) (= :raw (first x))) false
+        ;; the type a cast names ([:raw "text[]"]) is no expression
+        (and (vector? x) (= :cast (first x))) (plain-value? registry opts (second x))
         (or (vector? x) (and (keyword? x) (syntax/shorthand-fn x)))
-        (let [[kind :as parts] (syntax/call-parts x)]
-          (and (not (and (= :functions kind) (not (grammar-calls (second parts))) (resolve/set-returning? (reached registry opts parts))))
+        (let [[kind :as parts] (syntax/call-parts x)
+              ;; an operator of any number of operands (AND of three), no function
+              function? (and (= :functions kind) (not (and (vector? x) (keyword? (first x)) (syntax/operator? (first x)))))]
+          (and (not (and function? (not (grammar-calls (second parts))) (resolve/set-returning? (reached registry opts parts))))
                (or (keyword? x) (every? #(plain-value? registry opts %) (rest x)))))
         (sequential? x) (every? #(plain-value? registry opts %) x)
         :else true))

@@ -3,6 +3,7 @@
    change it as SQL defines: no PostgreSQL verdict, the properties alone. JVM only (the oracle
    schema's registry is generated from PostgreSQL)."
   (:require [clojure.test :refer [deftest is use-fixtures]]
+            [clojure.walk :as walk]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.types :as types]
@@ -42,6 +43,20 @@
     (let [cs (if (and (vector? w) (= :and (first w))) (rest w) [w])]
       (assoc q :where [:and [:and (last cs)] (into [:and] (reverse (butlast cs)))]))))
 
+(defn- three-operands
+  "q with each AND and OR of two operands of three, and an item of an AND and an OR of three added
+   to its select list."
+  [q]
+  (let [q (walk/prewalk #(if (and (vector? %) (#{:and :or} (first %)) (= 3 (count %))) (conj % (second %)) %) q)]
+    (cond-> q (vector? (:select q)) (update :select conj [[:or [:and [:= 1 1] [:= 2 2] [:= 3 3]] [:= 1 2] [:= 2 3]] :three_x]))))
+
+(defn- array-cast-arguments
+  "q with each named argument cast to an array type ([:cast :?x [:raw \"text[]\"]]), which
+   HoneySQL writes only so."
+  [q]
+  (let [q' (walk/postwalk #(if (and (keyword? %) (= \? (first (name %)))) [:cast % [:raw "text[]"]] %) q)]
+    (when (not= q q') q')))
+
 (defn- inline-limit [q] (when (integer? (:limit q)) (assoc q :limit [:inline (:limit q)])))
 
 (defn- rewrites
@@ -51,6 +66,8 @@
         same-max #(= (:max before) (:max %))]
     (remove (comp nil? second)
             [[:wrapped-items (wrapped-items fs q i) same]
+             [:three-operands (three-operands q) same]
+             [:array-cast-arguments (array-cast-arguments q) same]
              [:nested-and (nested-and q) same]
              [:inline-limit (inline-limit q) same]
              [:limit (when-not (contains? q :limit) (assoc q :limit 2)) #(= (min 2 (:max before)) (:max %))]
