@@ -355,6 +355,23 @@
                                                       [:paths [:maybe [:vector {:pg/type "text[]"} [:string {:pg/type "text"}]]]]
                                                       [:meta [:map {:pg/type "jsonb"} [:a :int]]]]}}))
 
+(deftest a-value-taken-from-a-shaped-jsonb-column-is-of-the-part-it-takes
+  (let [reg (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d"}
+                                                        [:items [:vector {:pg/type "jsonb"} [:map [:k :string]]]]
+                                                        [:doc [:map {:pg/type "jsonb"} [:a [:vector :int]] [:b :string]]]
+                                                        [:raw [:any {:pg/type "jsonb"}]]]}})
+        v #(last (last (:row (h/analyze reg {:select [[% :v]] :from [:d]} {}))))
+        element [:maybe [:map {:pg/type "jsonb"} [:k :string]]]
+        plain [:maybe [:any {:pg/type "jsonb"}]]]
+    (is (= element (v [:-> :items [:inline 0]])) "an array's element")
+    (is (= element (v [:jsonb_array_elements :items])))
+    (is (= [:maybe [:vector {:pg/type "jsonb"} :int]] (v [:-> :doc [:inline "a"]])) "a map's key's")
+    (doseq [x [[:-> :doc [:inline "zz"]] [:- [:-> :items [:inline 0]] [:inline "k"]] [:#> :doc [:inline "{a}"]] [:jsonb_path_query :doc [:inline "$.a"]]
+               [:|| :items :items] [:to_jsonb :items]]]
+      (is (= plain (v x)) (str (pr-str x) ": a value PostgreSQL computes is no part of the column's shape")))
+    (is (= [:any {:pg/type "jsonb"}] (v [:coalesce :doc [:inline "{}"]])) "a literal beside it need not be of its shape")
+    (is (= [:any {:pg/type "jsonb"}] (v [:coalesce :doc :raw])) "nor another column")))
+
 (deftest min-max-and-nullif-of-a-reg-array-are-not-oid
   (let [reg (pgmalli/registry {:registry {:pg.public/rels [:map {:pg/table "public.rels"}
                                                            [:rs [:vector {:pg/type "regclass[]"} [:any {:pg/type "regclass"}]]]]}})

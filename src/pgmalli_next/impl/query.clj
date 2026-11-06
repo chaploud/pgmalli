@@ -698,13 +698,16 @@
   [m t]
   (and (= t (:type m)) (= (if (vector? t) (second t) t) (canonical-type m)) (not (scalar-domain (:schema m)))))
 
+(def ^:private json-types #{"json" "jsonb"})
+
 (defn- result-schema
   "The schema of a value of resolver type t computed from inputs (expression types): an input's
-   where it is of t (a domain's base type, an enum's labels; without bounds), else t's."
+   where it is of t (a domain's base type, an enum's labels; without bounds), else t's. A json or
+   jsonb input's shape (an override's) is no shape of a value computed from it."
   [t inputs]
   (or (some #(let [s (domain-base-type (:schema %))]
                ;; a typmod reads otherwise (bit(1) a Boolean), which a value computed from others may not keep
-               (when (and (= t (:type %)) (not (str/includes? (str (:pg/type (shape/column-props s))) "("))
+               (when (and (= t (:type %)) (not (json-types t)) (not (str/includes? (str (:pg/type (shape/column-props s))) "("))
                           (not (:pg/max-length (shape/column-props s))))
                  (loose s)))
             inputs)
@@ -724,7 +727,9 @@
         {:type t
          ;; inputs all of one domain resolve to it (select_common_type); with another, to its base type
          :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %))) (comp domain-of :schema)) typed))
-                          (or (own-type? (first typed) (:type (first typed))) (= (count typed) (count ms))))
+                          (or (own-type? (first typed) (:type (first typed))) (= (count typed) (count ms)))
+                          ;; json or jsonb values of one shape alone
+                          (or (not (json-types t)) (and (= (count typed) (count ms)) (apply = (map (comp shape/non-null :schema) typed)))))
                    (cond->> (:schema (first typed)) (next ms) computed-of-one-type)
                    (result-schema t typed))}))))
 
@@ -829,9 +834,27 @@
                                                 ["_object_agg" :map] ["_object" :map]]]
              [(str p f) shape])))
 
+(defn- json-part-schema
+  "The schema of the part of a json or jsonb value of shape s (an override's) that call n (kind)
+   of args, of result type t, takes: an element of an array's (-> an integer,
+   json_array_elements, jsonb_array_elements), a key's of a map's (-> a string literal, the
+   key); nil for another call or shape."
+  [kind n args s t]
+  (let [s (some-> s shape/non-null)
+        array? (#{:vector :sequential} (shape/head s))
+        a (second args)
+        inline (when (and (vector? a) (= :inline (first a))) (second a))
+        k (if (string? a) a (when (string? inline) inline))
+        ;; an inline integer: HoneySQL sends a number as a bigint, which -> takes none of
+        part (cond (and (= [:operators "->"] [kind n]) array? (integer? inline)) (last s)
+                   (and (= :functions kind) (#{"json_array_elements" "jsonb_array_elements"} n) array?) (last s)
+                   (and (= [:operators "->"] [kind n]) k (= :map (shape/head s)))
+                   (some (fn [e] (let [[ek _ es] (shape/entry-parts e)] (when (= k (name ek)) es))) (shape/entries s)))]
+    (some-> part (shape/merge-props {:pg/type t}))))
+
 (defn- call-type
   "The expression type of a call (call-parts), its arguments of expression types ts."
-  [registry [kind n :as parts] ts opts]
+  [registry [kind n args :as parts] ts opts]
   (when-let [{t :result o :overload} (let [ins (mapv :type ts) os (reached registry opts parts)]
                                        (if (every? some? ins)
                                          (resolve/call kind n ins os)
@@ -841,7 +864,9 @@
     (let [catalog? (= "pg_catalog" (:schema o))
           schema (if-let [shape (and catalog? (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
-                   (or (when (= "anyarray" (:result o))
+                   (or (when (and (json-types t) (json-types (:type (first ts))))
+                         (json-part-schema kind (name n) args (:schema (first ts)) t))
+                       (when (= "anyarray" (:result o))
                          (some (fn [[d m]] (when (#{"anyelement" "anynonarray"} d) (domain-array (:schema m))))
                                (map vector (:args o) ts)))
                        ;; array_agg of arrays adds a dimension, which an array type does not name
