@@ -367,6 +367,9 @@
         plain [:maybe [:any {:pg/type "jsonb"}]]]
     (is (= element (v [:-> :items [:inline 0]])) "an array's element")
     (is (= element (v [:jsonb_array_elements :items])))
+    (is (= [[:value element] [:ordinality [:int {:pg/type "bigint"}]]]
+           (rest (:row (h/analyze reg {:select [:e.value :e.ordinality] :from [:d [[:with-ordinality [:jsonb_array_elements :items]] :e]]} {}))))
+        "a function in FROM, as in the select list")
     (is (= [:maybe [:vector {:pg/type "jsonb"} :int]] (v [:-> :doc [:inline "a"]])) "a map's key's")
     (is (= [:maybe [:map {:pg/type "jsonb"} [:b :string]]] (v [:- :doc [:inline "a"]])) "a map without the key -")
     (is (= [:maybe [:map {:pg/type "jsonb"}]] (v [:- [:-> :items [:inline 0]] [:array [[:inline "k"]]]])) "or without the keys of an ARRAY")

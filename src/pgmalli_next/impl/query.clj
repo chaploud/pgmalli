@@ -327,12 +327,16 @@
                                  (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) as) (reached registry opts parts)))]
                         (when (every? some? rs) rs))]
           (let [label (if (and (syntax/alias? al) (nil? (next rs))) (syntax/alias-label al opts) n)
-                cs (mapcat (fn [{t :result o :overload}] (or (seq (:columns o)) (when-not (= "record" t) [[label t]]))) rs)
-                cs (cond-> (vec cs) ordinality? (conj ["ordinality" "bigint"]))
+                cs (vec (mapcat (fn [{t :result o :overload}] (or (seq (:columns o)) (when-not (= "record" t) [[label t]]))) rs))
+                ;; a function of one column: of the type its call is in a select list (a jsonb shape's
+                ;; part, an enum's labels), which expression-type tells for both
+                one (when (and (= 1 (count cs)) (nil? (next rs))) (:schema (expression-type registry chain f opts)))
+                cs (cond-> cs ordinality? (conj ["ordinality" "bigint"]))
                 own #(own-type-schema registry % (:schema (:overload (first rs))))]
             (when (and (seq cs) (every? #(or (types/category (second %)) (own (second %))) cs))
-              (renamed (for [[c ct] cs]
-                         [c (when-let [s (or (when (string? ct) (types/type-schema ct)) (own ct))] (cond->> s (not= "ordinality" c) (vector :maybe)))])))))))))
+              (renamed (for [[i [c ct]] (map-indexed vector cs)]
+                         [c (when-let [s (or (when (and one (zero? i)) (shape/non-null one)) (when (string? ct) (types/type-schema ct)) (own ct))]
+                              (cond->> s (not= "ordinality" c) (vector :maybe)))])))))))))
 
 (defn- typed-scope
   "sc with :types ({column schema}, a column whose type is not told nil) on the subqueries and CTEs of stmt whose SELECT types its columns, read as a query of their own,
