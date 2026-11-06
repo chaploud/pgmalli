@@ -330,6 +330,11 @@
             (cond-> (shape/either (shape/distinct-kinds (mapcat (comp shape/alternatives shape/non-null) [assigned cast])) :any)
               (shape/maybe? assigned) query/nullable)))))))
 
+(defn- cast-type-name
+  "Type name n as format_type writes it (int8 is bigint, varchar[] character varying[])."
+  [n]
+  (if-let [e (types/element n)] (types/array-of (types/canonical-name e)) (types/canonical-name n)))
+
 (defn- cast-args
   "[:cast :?x :timestamptz]: what PostgreSQL casts to the type, its ranges left out where every
    use of the cast is compared; nil too unless every use of the
@@ -387,7 +392,9 @@
                     (= (get compared x 0) (uses x)) query/loose
                     (< (get refusing x 0) (uses x)) query/nullable)]]
       (if (or (syntax/param-key k) elements?)
-        [k (if elements? (cast-arrays registry s t opts) t)]
+        [k (if elements?
+             (cast-arrays registry s t opts)
+             (cond-> t (and (vector? t) (= :cast (first x))) (vary-meta assoc ::cast (some-> (syntax/cast-target (nth x 2)) cast-type-name))))]
         ;; a literal cast to an enum type: its labels
         [(literal-key k {:type (query/enum-type registry s) :function "CAST" :schema s}) t]))))
 
@@ -395,8 +402,12 @@
   "An argument assigned to a column; unnest(?), of a typed array (unnest(unknown) is ambiguous),
    or an unnest's column, each element assigned to it."
   [registry ps opts]
-  (for [{:keys [x chain assign] :as a} (syntax/assignments ps)
-        :let [t (assigned-type registry a :assign opts)
+  (for [{:keys [x chain assign event] :as a} (syntax/assignments ps)
+        :let [{c :schema :keys [table nullable?]} (query/assigned-column registry a)
+              ;; a NOT NULL column a BEFORE row trigger may fill: nil goes there for it alone
+              triggers (when (and c nullable? (not (shape/maybe? c))) (get-in (query/table-props registry table) [:pg/before-triggers event]))
+              t (assigned-type registry a :assign opts)
+              t (cond-> t (and triggers (vector? t)) (vary-meta assoc ::before-triggers triggers))
               u (array-arg x #{:unnest})
               [k elements?] (if u [u true] (value-arg registry chain x))
               s (when (and (not k) (literal x)) (:schema (query/assigned-column registry a)))]
@@ -745,6 +756,26 @@
               (when (seq ls) (into (enum-head t) ls)))
       (when-not (jdbc/untyped-kinds (shape/kind t)) t))))
 
+(defn- with-facts
+  "Argument schema t with the facts every use of it in uses ([x t] ...) shares, beside the type
+   they relax, for a caller who knows more to narrow it by: :pgmalli/cast, the type each casts it
+   to, on the array ([:pg/array ...]) or the values the cast takes; :pgmalli/before-triggers, the
+   BEFORE row triggers each NOT NULL column it is assigned to has, on that column's type inside
+   the [:maybe ...] they make it."
+  [t uses]
+  (let [shared (fn [k] (let [vs (map #(get (meta (second %)) k) uses)]
+                         (when (and (seq vs) (every? some? vs) (apply = vs)) (first vs))))
+        cast (shared ::cast)
+        triggers (shared ::before-triggers)
+        in-maybe (fn [s f] (if (= :maybe (shape/head s)) (assoc s (dec (count s)) (f (last s))) (f s)))
+        on-cast (fn [s p] (if (and (= :or (shape/head s)) (some #(= :pg/array (shape/head %)) (shape/entries s)))
+                            (into (subvec s 0 (- (count s) (count (shape/entries s))))
+                                  (map #(if (= :pg/array (shape/head %)) (shape/merge-props % p) %) (shape/entries s)))
+                            (shape/merge-props s p)))]
+    (cond-> t
+      cast (in-maybe #(on-cast % {:pgmalli/cast cast}))
+      (and triggers (= :maybe (shape/head t))) (in-maybe #(shape/merge-props % {:pgmalli/before-triggers triggers})))))
+
 (defn- analysis
   "{:args {arg schema} :untyped {arg {:function f :type t}}} of arg-types, an argument at a position PostgreSQL
    takes its type from the value alone (call-args' :typed-only) with :pgmalli/type-from-value,
@@ -774,7 +805,8 @@
                                         :else (reduce both-uses (left k) (map second only)))]]
                       [k (cond-> (if (= :any t)
                                    [:any {:pgmalli/untyped (if (typed-keys k) :type :position)}]
-                                   (cond-> t (and (null-tested k) (not only)) query/nullable))
+                                   (-> (cond-> t (and (null-tested k) (not only)) query/nullable)
+                                       (with-facts (filter #(= k (syntax/param-key (first %))) typed))))
                            only (shape/merge-props {:pgmalli/type-from-value (:typed-only (get (first only) 2))}))]))
      :untyped (into {} (for [[k uses] only-typed :when (nil? (left k))]
                          [k {:function (:typed-only (get (first uses) 2))

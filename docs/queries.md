@@ -205,7 +205,7 @@ rounds it (a value at exactly half a unit past may round out of range):
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:> :created_at [:cast :?since :timestamptz]]}))
-;; => {:since [:or [:time/instant #:pg{:type "timestamp with time zone"}] :time/offset-date-time :string :time/local-date :time/local-date-time :keyword]}
+;; => {:since [:or #:pgmalli{:cast "timestamp with time zone"} [:time/instant #:pg{:type "timestamp with time zone"}] :time/offset-date-time :string :time/local-date :time/local-date-time :keyword]}
 ```
 
 PostgreSQL types a parameter once, so an argument of several uses takes the values each of them
@@ -366,6 +366,13 @@ carries `:pgmalli/type-from-value`, the function's name, for a sender of its own
 array as untyped text, `'{1,2}'`) to tell. Where its other uses take only values sent untyped
 (an enum column's keyword label), it is an `:undetermined-type` problem: cast it in the query
 (`[:cast :?m :mood]`, `[:cast :?ids [:raw "bigint[]"]]`).
+
+Two more facts an argument's schema carries for a sender who knows more than the database tells
+and would narrow it: where every use of it is a cast to one type, `:pgmalli/cast`, that type as
+PostgreSQL names it (`"bigint[]"` of `[:raw "int8[]"]`), on the values the cast takes (an array's
+`[:pg/array ...]`); where every use assigns it to a NOT NULL column a BEFORE row trigger may
+fill, which makes it nullable, `:pgmalli/before-triggers`, the triggers' names, on the column's
+type inside the `[:maybe ...]`.
 
 ```clojure
 (let [t (:suffix (:args (h/analyze registry {:select [[[:concat :email :?suffix] :s]] :from [:users]})))]

@@ -705,7 +705,7 @@
 (deftest an-insert-select-assigns-its-items-to-the-columns-listed
   (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
     (is (= {:g int4
-            :m [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]
+            :m [:enum {:pg/type "mood" :pgmalli/cast "mood"} "happy" "sad" :happy :sad]
             :s [:pg/array {:pgmalli/type-from-value "unnest"} int4]
             :n nick-assigned}
            (args q opts))
@@ -746,15 +746,15 @@
 
 (deftest a-cast-argument-takes-what-postgresql-casts
   (let [args #(:args (h/analyze registry % opts))
-        cast-to-bigint [:or bigint 'decimal? 'integer? :double 'float? :string 'bytes? :keyword pg-object]]
+        cast-to-bigint [:or {:pgmalli/cast "bigint"} bigint 'decimal? 'integer? :double 'float? :string 'bytes? :keyword pg-object]]
     (is (= {:x cast-to-bigint} (args {:select [:id] :from [:users] :where [:= :id [:cast :?x :bigint]]}))
         "compared: NULL never matches")
     (is (= {:x [:maybe cast-to-bigint]} (args {:select [[[:cast :?x :bigint] :n]]})) "selected: NULL is a value")
     (let [{:keys [x n]} (args {:insert-into [[:users [:score :nick]] {:select [[[:cast :?x :bigint]] [[:cast :?n :text]]]}]})]
       (is (= cast-to-bigint x) "assigned to a NOT NULL column: no NULL")
       (is (= :maybe (first n)) "assigned to a nullable one: NULL"))
-    (is (= {:x [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]} (args {:select [:id] :from [:users] :where [:= :mood [:cast :?x :mood]]})))
-    (is (= {:x [:maybe [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]]} (args {:select [[[:cast :?x :mood] :m]]}))
+    (is (= {:x [:enum {:pg/type "mood" :pgmalli/cast "mood"} "happy" "sad" :happy :sad]} (args {:select [:id] :from [:users] :where [:= :mood [:cast :?x :mood]]})))
+    (is (= {:x [:maybe [:enum {:pg/type "mood" :pgmalli/cast "mood"} "happy" "sad" :happy :sad]]} (args {:select [[[:cast :?x :mood] :m]]}))
         "cast, an enum's labels as strings")))
 
 (deftest limit-and-offset-take-nil-for-none
@@ -1398,7 +1398,7 @@
         "an argument too is untyped under stringtype=unspecified")))
 
 (deftest an-argument-cast-to-an-enum-is-of-the-enum
-  (is (= {:m [:enum {:pg/type "mood"} "happy" "sad" :happy :sad]}
+  (is (= {:m [:enum {:pg/type "mood" :pgmalli/cast "mood"} "happy" "sad" :happy :sad]}
          (update-vals (args {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]}) m/form))))
 
 (deftest kebab-and-camel-names-as-postgresql-folds-them
@@ -1503,7 +1503,7 @@
     (is (= [:enum {:default :happy :pg/default "happy" :pg/type "mood"} :happy :sad]
            (:m (types {:select [:id] :from [:users] :where [:= :mood :?m]})))
         "the enum's labels kept, as keywords")
-    (is (= [:enum {:pg/type "mood"} "happy" "sad" :happy :sad] (:m (types {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]})))
+    (is (= [:enum {:pg/type "mood" :pgmalli/cast "mood"} "happy" "sad" :happy :sad] (:m (types {:select [:id] :from [:users] :where [:= :mood [:cast :?m :mood]]})))
         "an argument cast to an enum, as strings too")))
 
 (deftest keywords-sent-untyped-take-a-columns-labels
@@ -1988,6 +1988,20 @@
       "whatever the order")
   (is (= {:v [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:is-distinct-from :id :?v] [:not [:is-distinct-from :id :?v]]]}))
       "nil where both take it"))
+
+(deftest an-argument-carries-the-cast-and-the-triggers-every-use-of-it-shares
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill_g"]}}
+                                                        [:id [:int {:pg/type "bigint"}]] [:g [:int {:pg/type "bigint"}]] [:n [:maybe [:int {:pg/type "bigint"}]]]]}})
+        args #(:args (h/analyze reg % {}))
+        p (fn [s k] (some k (keep shape/props (tree-seq vector? seq s))))]
+    (is (= "bigint[]" (p (:ids (args {:select [[[:unnest [:cast :?ids [:raw "int8[]"]]] :x]]})) :pgmalli/cast)) "as PostgreSQL names the type")
+    (is (= :pg/array (first (some #(when (:pgmalli/cast (shape/props %)) %) (tree-seq vector? seq (:ids (args {:select [[[:unnest [:cast :?ids [:raw "bigint[]"]]] :x]]}))))))
+        "on the array, its elements the values the cast takes")
+    (is (nil? (p (:x (args {:select [:id] :from [:t] :where [:or [:= :id [:cast :?x :bigint]] [:= :g :?x]]})) :pgmalli/cast)) "every use a cast")
+    (is (nil? (p (:x (args {:select [:id] :from [:t] :where [:or [:= :id [:cast :?x :bigint]] [:= :g [:cast :?x :integer]]]})) :pgmalli/cast)) "to one type")
+    (let [{:keys [g n]} (args {:insert-into :t :values [{:id 1 :g :?g :n :?n}]})]
+      (is (= [:maybe [:int {:pg/type "bigint" :pgmalli/before-triggers ["fill_g"]}]] g) "the NOT NULL column's type, made nullable by the triggers")
+      (is (nil? (p n :pgmalli/before-triggers)) "a nullable column's is nullable of itself"))))
 
 (deftest a-partial-unique-index-is-a-key-where-the-where-holds-its-predicate
   (let [reg (pgmalli/registry {:registry {:pg.public/st [:enum "active" "gone"]
@@ -2874,8 +2888,8 @@
 
 (deftest a-cast-type-is-read-as-honeysql-writes-it-upper-case-a-dash-a-space-which-postgresql-folds
   (let [q #(args {:select [:id] :from [:users] :where [:= :mood [:cast :?x %]]})]
-    (is (= [:enum {:pg/type "mood"} "happy" "sad" :happy :sad] (:x (q :mood)) (:x (q :MOOD))))
-    (is (= [:enum {:pg/type "sample.mood"} "happy" "sad" :happy :sad] (:x (q :sample.Mood)))))
+    (is (= [:enum {:pg/type "mood" :pgmalli/cast "mood"} "happy" "sad" :happy :sad] (:x (q :mood)) (:x (q :MOOD))))
+    (is (= [:enum {:pg/type "sample.mood" :pgmalli/cast "sample.mood"} "happy" "sad" :happy :sad] (:x (q :sample.Mood)))))
   (is (= [:any {:pgmalli/untyped :position}] (:x (args {:select [[[:cast :?x :my-mood] :m]]})))
       "MY MOOD names no type"))
 
