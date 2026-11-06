@@ -834,23 +834,46 @@
                                                 ["_object_agg" :map] ["_object" :map]]]
              [(str p f) shape])))
 
+(defn- json-key-literal
+  "The key a json operator's argument a names, written in the query: a string or an inline one."
+  [a]
+  (cond (string? a) a
+        (and (vector? a) (= :inline (first a)) (string? (second a))) (second a)))
+
+(def ^:private json-parts
+  "What part of a json or jsonb value of a shape (an override's, without NULL) a call takes, as
+   PostgreSQL defines it, by [kind name]: f of the shape and the call's second argument, nil where
+   its shape is not told. -> an inline integer (HoneySQL sends a number as a bigint, which ->
+   takes none of) an array's element, -> a key a map's value of it; - a key, or an ARRAY of keys,
+   the map without them, a map-of as it is; json_array_elements and jsonb_array_elements an
+   array's element."
+  (let [array? #(#{:vector :sequential} (shape/head %))
+        element (fn [s _] (when (array? s) (last s)))
+        keys-of (fn [a] (if-let [k (json-key-literal a)]
+                          [k]
+                          (when (and (vector? a) (= :array (first a)) (sequential? (second a)))
+                            (let [ks (map json-key-literal (second a))] (when (every? some? ks) ks)))))]
+    {[:operators "->"] (fn [s a]
+                         (cond (and (array? s) (vector? a) (= :inline (first a)) (integer? (second a))) (last s)
+                               (= :map (shape/head s))
+                               (when-let [k (json-key-literal a)]
+                                 (some (fn [e] (let [[ek _ es] (shape/entry-parts e)] (when (= k (name ek)) es))) (shape/entries s)))))
+     [:operators "-"] (fn [s a]
+                        (when-let [ks (some-> (keys-of a) set)]
+                          (case (shape/head s)
+                            :map (into [:map (into {} (remove (fn [[k]] (or (= "pg" (namespace k)) (= :default k)))) (shape/props s))]
+                                       (remove (fn [e] (ks (name (first e)))) (shape/entries s)))
+                            :map-of s
+                            nil)))
+     [:functions "json_array_elements"] element
+     [:functions "jsonb_array_elements"] element}))
+
 (defn- json-part-schema
-  "The schema of the part of a json or jsonb value of shape s (an override's) that call n (kind)
-   of args, of result type t, takes: an element of an array's (-> an integer,
-   json_array_elements, jsonb_array_elements), a key's of a map's (-> a string literal, the
-   key); nil for another call or shape."
+  "The schema of the part of a json or jsonb value of shape s that call n (kind) of args, of result
+   type t, takes (json-parts); nil for another call or shape."
   [kind n args s t]
-  (let [s (some-> s shape/non-null)
-        array? (#{:vector :sequential} (shape/head s))
-        a (second args)
-        inline (when (and (vector? a) (= :inline (first a))) (second a))
-        k (if (string? a) a (when (string? inline) inline))
-        ;; an inline integer: HoneySQL sends a number as a bigint, which -> takes none of
-        part (cond (and (= [:operators "->"] [kind n]) array? (integer? inline)) (last s)
-                   (and (= :functions kind) (#{"json_array_elements" "jsonb_array_elements"} n) array?) (last s)
-                   (and (= [:operators "->"] [kind n]) k (= :map (shape/head s)))
-                   (some (fn [e] (let [[ek _ es] (shape/entry-parts e)] (when (= k (name ek)) es))) (shape/entries s)))]
-    (some-> part (shape/merge-props {:pg/type t}))))
+  (when-let [f (json-parts [kind n])]
+    (some-> (f (shape/non-null s) (second args)) (shape/merge-props {:pg/type t}))))
 
 (defn- call-type
   "The expression type of a call (call-parts), its arguments of expression types ts."

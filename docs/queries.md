@@ -436,8 +436,9 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   not polymorphic (`count`, `jsonb_build_object`). Read parsed, a function of `pg_catalog` that
   builds a `json` or `jsonb` object is a map, one that builds an array (`jsonb_agg`) a sequential.
   Of a `json` or `jsonb` column an override shapes, `->` of an integer literal and
-  `json_array_elements` or `jsonb_array_elements` of a sequential is its element's shape, `->` of a string a map's key's;
-  any other call's value, and coalesce or CASE of it with another value, is of no shape.
+  `json_array_elements` or `jsonb_array_elements` of a sequential is its element's shape, `->` of a string a map's key's,
+  `-` of a string or an ARRAY of strings a map's without those keys (a map-of's as it is); any
+  other call's value, and coalesce or CASE of it with another value, is of no shape.
 - A call of a function or an operator of a generated schema, from the file's `:functions` and
   `:operators` ([types.md](types.md#the-generated-file)). pgmalli takes the search path to be
   `pg_catalog`, then `:schema`, as PostgreSQL puts `pg_catalog` first when the path does not
