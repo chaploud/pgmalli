@@ -1707,6 +1707,8 @@
     (is (= 5 (:max (second (ret {:select [:nick] :from [:users] :limit 5} {})))))
     (is (= {:max 1 :min 1} (second (ret {:select [[[:exists {:select [1] :from [:users] :where [:= :id :?id]}] :authorized]]} {})))
         "a SELECT without FROM: one row, EXISTS one value")
+    (is (= {:max 1 :min 1} (second (ret {:select [[[:not [:exists {:select [1] :from [:users] :where [:= :id :?id]}]] :v]]} {})))
+        "NOT EXISTS too")
     (is (= {:max 1} (second (ret {:select [[1 :x]] :where [:= 1 :?n]} {}))) "WHERE may leave none")
     (is (= 1 (:max (second (ret {:select [:u.nick] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]] :where [:= :u.id :?id]} {}))))
         "a join on the joined table's key equal to a column of the row: a row for that row")
