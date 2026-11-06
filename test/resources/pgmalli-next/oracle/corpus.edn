@@ -1391,4 +1391,15 @@
  ;; a whole array compared: the column's array type alone
  [:ints-equal-array {:select [:id] :from [:kinds] :where [:= :ints :?xs]}]
  [:bigs-overlap-array {:select [:id] :from [:kinds] :where [:&& :bigs :?xs]}]
+ ;; queries composed of parts: conditions ANDed inside ANDs, aggregates with FILTER, DISTINCT ON
+ ;; in a CTE, a subquery alone in FROM, tables joined by their keys
+ [:composed-nested-and {:select [:u.id :u.nick] :from [[:users :u]] :where [:and [:and [:= :u.id 1] [:= :u.group_id 2]] [:and [:<> :u.score 0]]]}]
+ [:composed-filter-agg {:select [[[:filter [:count :*] {:where [:= :mood [:inline "happy"]]}] :happy] [[:count [:distinct :group_id]] :groups]] :from [:users] :where [:= :group_id 1]}]
+ [:composed-cte-distinct-on {:with [[:latest {:select-distinct-on [[:user_id] :user_id :id :title] :from [:posts] :order-by [:user_id [:created_at :desc]]}]] :select [:l.title] :from [[:latest :l]] :where [:= :l.user_id 1] :limit 1}]
+ [:composed-latest-sub {:select [:latest.id] :from [[{:select [:id :score] :from [:users] :where [:= :group_id 1] :order-by [[:score :desc]] :limit 1} :latest]] :where [:and [:= :latest.score 3] [:exists {:select [1] :from [:posts] :where [:= :posts.user_id :latest.id]}] [:not [:exists {:select [1] :from [:notes]}]]]}]
+ [:composed-join-by-keys {:select [:pt.post_id] :from [[:post_tags :pt]] :join [[:tags :t] [:= :t.id :pt.tag_id]] :where [:and [:= :pt.post_id 1] [:= :t.name "x"]]}]
+ [:composed-scalar-sub-key {:select [:id] :from [:users] :where [:= :id {:select [:user_id] :from [:posts] :where [:= :id 1]}] :for :update}]
+ [:composed-case-in {:select [[[:case [:in :mood [:inline ["happy" "sad"]]] [:inline "known"] :else [:inline "other"]] :m]] :from [:users] :where [:= :id 1]}]
+ [:composed-not-exists {:select [[[:not [:exists {:select [1] :from [:users] :where [:= :id 1]}]] :free]]}]
+ [:composed-delete-using {:delete-from :post_tags :using [:tags] :where [:and [:= :tags.id :post_tags.tag_id] [:= :post_tags.post_id 1] [:= :tags.name "x"]] :returning [:post_tags.tag_id]}]
 ]
