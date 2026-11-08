@@ -3693,4 +3693,6 @@
       (is (= [{:kind :literal-type :value (-> q pr-str (str/includes? "#{1}") (if #{1} '(1 2))) :sent nil}] (problems q)) (pr-str q)))
     (is (= 1 (count (problems {:update :t :set {:j [:lift '(1 2)]}}))) "once where a slot reports it")
     (is (= [] (problems {:select [:n] :from [:t] :where [:in :n [:lift '(1 2)]]})) "IN, written a list of its elements")
-    (is (= [] (problems {:select [[[:lift [1 2]] :x]]})) "a vector, sent as jsonb")))
+    (is (= [] (problems {:select [[[:lift [1 2]] :x]]})) "a vector, sent as jsonb")
+    (is (= ["(1 2) is sent as a parameter, which pgjdbc sends no PersistentList as; send a vector (jsonb) or a Java array (an array type)"]
+           (h/humanize (problems {:select [[[:lift '(1 2)] :x]]}))))))

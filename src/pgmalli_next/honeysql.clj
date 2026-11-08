@@ -504,7 +504,7 @@
                          x (if printed? (shown value) (str "<the " (.getSimpleName (class value)) ">"))]
                      (cond
                        (not sent)
-                       (str (shown value) " goes to " to " as a parameter, which pgjdbc sends no " (.getSimpleName (class value))
+                       (str (shown value) (if to (str " goes to " to " as a parameter") " is sent as a parameter") ", which pgjdbc sends no " (.getSimpleName (class value))
                             " as; send a vector (jsonb) or a Java array (an array type)")
                        ;; of the type taken, out of the values the schema holds it to (an override's shape)
                        (= sent type)
