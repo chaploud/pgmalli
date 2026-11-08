@@ -2136,8 +2136,18 @@
 (deftest a-not-null-key-compared-with-null-matches-at-most-one-row
   (is (= {:max 1} (second (last (h/query-schema registry [:db] {:select [:nick] :from [:users] :where [:= :id nil]} opts))))))
 
-(deftest trim-names-its-column-btrim
-  (is (= [] (check {:select [:s.btrim] :from [[{:select [[[:trim :nick]]] :from [:users]} :s]]}))))
+(deftest sql-syntax-is-the-function-the-grammar-calls-and-names-its-column-after
+  (is (= [] (check {:select [:s.btrim] :from [[{:select [[[:trim :nick]]] :from [:users]} :s]]})))
+  (is (= [:map [:btrim [:maybe text]] [:ltrim [:maybe text]] [:rtrim [:maybe text]] [:pg_collation_for [:maybe text]]]
+         (row {:select [[[:trim :!both "x" :!from :nick]] [[:trim :!leading "x" :!from :nick]] [[:trim :!trailing :!from :nick]] [[:collation-for :nick]]] :from [:users]})))
+  (is (= [:map [:p [:maybe int4]]] (row {:select [[[:position [:in "a" :nick]] :p]] :from [:users]})))
+  (testing "POSITION(? IN t) is position(t, ?): ? a string, no IN list"
+    (is (= [] (check {:select [[[:position [:in :?a :nick]] :p]] :from [:users]})))
+    (is (m/validate (:a (args {:select [[[:position [:in :?a :nick]] :p]] :from [:users]})) "a" malli-opts))
+    (is (= [{:kind :unknown-column :column :nope}] (check {:select [[[:position [:in :nope :nick]] :p]] :from [:users]}))))
+  (is (= [{:kind :unknown-column :column :nope :in [:select 0 0 1 1]}]
+         (mapv #(dissoc % :did-you-mean) (check {:select [[[:position [:in {:select [:nick] :from [:users] :where [:= :nope 1]} :nick]] :p]] :from [:users]})))
+      "a statement in [:in a b] is at its path as written"))
 
 (deftest an-alias-list-renames-the-first-columns-alone
   (is (= [] (check {:select [:u.nick :u.a] :from [[:users [:u {:columns [:a]}]]]})))

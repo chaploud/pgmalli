@@ -924,17 +924,53 @@
   [h]
   (boolean (or (operator-syntax h) (not (re-find #"^[A-Za-z_]" (name h))) (sql/registered-op? h))))
 
+(def system-calls
+  "The SQL syntax HoneySQL writes as a call that PostgreSQL's grammar (gram.y, SystemFuncName)
+   reads as a call of another function, by [name first-word] of the call as HoneySQL names it
+   ([:trim :!leading ...] is [\"trim\" \"leading\"]): [function word], the function it calls and
+   names its column after, and the word whose arguments after it come first (TRIM(LEADING x
+   FROM s) is ltrim(s, x), POSITION(a IN b) position(b, a))."
+  {["trim" nil] ["btrim" "from"]
+   ["trim" "both"] ["btrim" "from"]
+   ["trim" "leading"] ["ltrim" "from"]
+   ["trim" "trailing"] ["rtrim" "from"]
+   ["collation_for" nil] ["pg_collation_for"]
+   ["position" nil] ["position" "in"]})
+
+(defn- word
+  "The first SQL word keyword-word? x is written as, lower case (:!leading-from is LEADING
+   FROM: leading)."
+  [x]
+  (when (keyword-word? x) (first (str/split (folded (subs (name x) 1)) #"_"))))
+
+(defn- system-call
+  "system-calls' [function word] of a call x, by its name n."
+  [n x]
+  (or (system-calls [n (word (second x))]) (system-calls [n nil])))
+
 (defn- function-name
   "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it;
-   TRIM is btrim, which PostgreSQL's grammar calls it."
+   of a call of no word, the function system-calls says it is."
   [s]
   (let [n (last-part s)]
-    (if (= "trim" n) "btrim" n)))
+    (or (first (system-calls [n nil])) n)))
 
 (defn called
-  "The function name of a call [:f ...]; nil for anything else."
+  "The function name of a call [:f ...] (system-calls': [:trim :!leading ...] is ltrim); nil for
+   anything else."
   [x]
-  (when (and (vector? x) (keyword? (first x))) (function-name (name (first x)))))
+  (when (and (vector? x) (keyword? (first x)))
+    (let [n (last-part (name (first x)))]
+      (or (first (system-call n x)) n))))
+
+(defn- call-arguments
+  "The arguments PostgreSQL calls the function of call x with: x's but its words (:!from), those
+   after the word system-calls names first."
+  [x]
+  (let [[_ w] (when (keyword? (first x)) (system-call (last-part (name (first x))) x))
+        xs (rest x)
+        [before after] (split-with #(not (and w (= w (word %)))) xs)]
+    (remove keyword-word? (if (seq after) (concat (rest after) before) xs))))
 
 (defn expression-name
   "The column name PostgreSQL gives a select expression with no alias: a function's name, case
@@ -949,7 +985,7 @@
         (keyword? x) (some-> (sql-value x) name)
         (not (and (vector? x) (keyword? (first x)))) nil
         :else (let [[h a] x]
-                (cond (= :. h) (some-> (last x) (#(when (and (keyword? %) (not= :* %)) (function-name (name %)))))
+                (cond (= :. h) (some-> (last x) (#(when (and (keyword? %) (not= :* %)) (last-part (name %)))))
                       (operator? h) "?column?"
                       (#{:case :case-expr} h) (let [e (some #(when (= :else (first %)) (second %)) (partition-all 2 (if (= :case h) (rest x) (drop 2 x))))
                                                     n (cond (nil? e) "case"
@@ -960,7 +996,7 @@
                       (= :cast h) (cond (column-keyword? a) (second (split-column a format))
                                         (vector? a) (let [n (expression-name a format)] (when-not (#{"?column?" "case"} n) n)))
                       (sql/registered-fn? h) nil
-                      :else (function-name (name h))))))
+                      :else (called x)))))
 
 (defn item-expression
   "The expression of a select item with no alias: [x] is x."
@@ -1040,9 +1076,17 @@
   [x]
   (and (vector? x) (= 2 (count x)) (array-comparisons (first x))))
 
+(defn- position-in?
+  "Whether x is [:position [:in a b]], which HoneySQL writes POSITION(a IN b), as [:position a
+   :!in b]."
+  [x]
+  (and (vector? x) (= 2 (count x)) (keyword? (first x)) (= "position" (last-part (name (first x))))
+       (vector? (second x)) (= 3 (count (second x))) (= :in (first (second x)))))
+
 (defn- as-vectors
   "x with each seq a vector, as HoneySQL reads a sequential (what map builds); and {:table t},
-   TABLE t, as the SELECT * FROM t it is (docs 7.2.1); {:nest q}, (q), as q; a function's argument
+   TABLE t, as the SELECT * FROM t it is (docs 7.2.1); {:nest q}, (q), as q; [:position [:in a b]]
+   as [:position a :!in b]; a function's argument
    {:distinct x :order-by [...]} as [:order-by [:distinct x] ...]; an :at-time-zone zone named by
    a keyword as the string it is: the SQL HoneySQL writes of each.
    The rows of :values, :set and :do-update-set are maps of columns, not statements."
@@ -1060,6 +1104,7 @@
           ;; HoneySQL writes a zone it names (:UTC, :?z) as a string literal
           (and (vector? x) (= :at-time-zone (first x)) (= 3 (count x)) (ident? (nth x 2)))
           (as-vectors (assoc x 2 [:inline (name (nth x 2))]))
+          (position-in? x) (let [[_ [_ a b]] x] (as-vectors [(first x) a :!in b]))
           (and (vector? x) (keyword? (first x)))
           (into [(first x)] (map #(let [v (as-vectors %)]
                                     (if (and (map? %) (contains? % :distinct) (every? #{:distinct :order-by} (keys %)))
@@ -1080,12 +1125,13 @@
 
 (defn written-path
   "path, a path in what query! reads of body, as a path in body as written: through each
-   {:nest q} as-vectors reads as q."
+   {:nest q} as-vectors reads as q, and each [:position [:in a b]] it reads as [:position a :!in b]."
   [body path]
   (let [nest? #(and (map? %) (= [:nest] (keys %)))]
     (loop [node body [i :as more] path out []]
       (cond (nest? node) (recur (:nest node) more (conj out :nest))
             (empty? more) out
+            (and (position-in? node) ({1 1 3 2} i)) (let [j ({1 1 3 2} i)] (recur (get-in node [1 j]) (rest more) (conj out 1 j)))
             :else (recur (if (and (map? node) (int? i)) (nth (seq node) i nil) (get node i)) (rest more) (conj out i))))))
 
 (defn query!
@@ -1129,12 +1175,11 @@
    anything else."
   [x]
   (let [h (when (vector? x) (first x))
-        fname (or (called x) (shorthand-fn x))
+        fname (or (called x) (some-> (shorthand-fn x) function-name))
         ;; :%abs.1 is ABS(1); a word between the arguments (TRIM(LEADING FROM s)) is none, and
         ;; EXTRACT's field before it (:year) a name, no column
-        args (remove keyword-word?
-                     (cond (shorthand-fn x) (map #(if (re-matches #"\d+" %) [:inline (parse-long %)] (keyword %)) (rest (str/split (subs (str x) 2) #"\.")))
-                           (vector? x) (rest x)))
+        args (cond (shorthand-fn x) (map #(if (re-matches #"\d+" %) [:inline (parse-long %)] (keyword %)) (rest (str/split (subs (str x) 2) #"\.")))
+                   (vector? x) (call-arguments x))
         args (if (and (= "extract" fname) (keyword? (first args)) (not (keyword-word? (first args))))
                (cons [:inline (name (first args))] (rest args))
                args)]

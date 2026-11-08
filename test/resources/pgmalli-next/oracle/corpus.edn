@@ -495,6 +495,10 @@
  [:alias-list-partial-values {:select [:v.a :v.column2] :from [[{:values [[1 "x"]]} [:v {:columns [:a]}]]]}]
  [:trim-unaliased {:select [[[:trim :nick]]] :from [:users]}]
  [:trim-sub {:select [:s.btrim] :from [[{:select [[[:trim :nick]]] :from [:users]} :s]]}]
+ ;; gram.y's SystemFuncName: the function each form calls names its column
+ [:trim-forms-sub {:select [:s.btrim :s.ltrim :s.rtrim :s.pg_collation_for]
+                   :from [[{:select [[[:trim :!both "x" :!from :nick]] [[:trim :!leading "x" :!from :nick]] [[:trim :!trailing :!from :nick]] [[:collation-for :nick]]] :from [:users]} :s]]}]
+ [:position-in {:select [[[:position [:in "a" :nick]] :p] [[:position [:in :?a :nick]] :q]] :from [:users] :where [:> [:position [:in :?a :nick]] 0]}]
  ;; a value computed from a CHECK's list holds values beyond it
  [:check-in-coalesce-sub {:select [:s.id] :from [[{:select [:id [[:coalesce :kind "none"] :k]] :from [:tickets]} :s]] :where [:= :s.k "none"]}]
  [:check-in-coalesce {:select [:id] :from [:tickets] :where [:= [:coalesce :kind "none"] "none"]}]
