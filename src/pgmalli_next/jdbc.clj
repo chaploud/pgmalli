@@ -21,12 +21,10 @@
 (defn- parse-json
   "A json or jsonb column's text as data; nesting past what the thread's stack holds (PostgreSQL
    stores jsonb thousands deep) an error naming the column, not a StackOverflowError."
-  [s ^ResultSet rs i]
+  [s label]
   (try (json/read-str s :key-fn keyword)
        (catch StackOverflowError _
-         (error/fail! :pgmalli.error/fault
-                      (str "column " (.getColumnLabel (.getMetaData rs) (int i)) " holds a JSON document nested too deep to read")
-                      {:given (.getColumnLabel (.getMetaData rs) (int i))}))))
+         (error/fail! :pgmalli.error/fault (str "column " label " holds a JSON document nested too deep to read") {:given label}))))
 
 (defn- instant
   "A timestamptz as an Instant; pgjdbc reads infinity as OffsetDateTime's MAX and MIN, which no
@@ -51,34 +49,37 @@
 (defn- reader
   "(fn [^ResultSet rs i]) reading column i, of type t and java.sql.Types type, as pgjdbc names them,
    as the one reading reads it (an array's element is column 2 of its result set); enums the
-   names of enum types, which pgjdbc returns as a VARCHAR."
-  [t sql-type enums]
+   names of enum types, which pgjdbc returns as a VARCHAR; label the column's, which an error names."
+  [t sql-type enums label]
   ;; a type pgjdbc names "schema"."name" is no pg_catalog type
   (let [entry (when-not (str/starts-with? t "\"") (types/entry t))]
     ;; an enum of the name of a pg_catalog type (date) on the search_path is named as that type, a
     ;; VARCHAR, as no json or date or time type is
-    (cond (= Types/VARCHAR sql-type) (if (contains? enums t)
+    ;; a composite type is a STRUCT whatever its name (a jsonb or date of the search_path's schema)
+    (cond (= Types/STRUCT sql-type) (fn [^ResultSet rs i] (.getObject rs (int i)))
+          (= Types/VARCHAR sql-type) (if (contains? enums t)
                                        (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
                                        (fn [^ResultSet rs i] (.getString rs (int i))))
           (types/json? (:name entry)) (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
-                                                             (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) (parse-json rs i))))
+                                                             (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) (parse-json label))))
           (by-kind (:schema entry)) (by-kind (:schema entry))
           (= :text (:read entry)) (fn [^ResultSet rs i] (when-some [s (.getString rs (int i))] (doto (PGobject.) (.setType (:name entry)) (.setValue s))))
           :else (fn [^ResultSet rs i]
                   (let [v (.getObject rs (int i))]
-                    (if (instance? Array v) (read-array v enums) v))))))
+                    (if (instance? Array v) (read-array v enums label) v))))))
 
 (defn- readers
-  "The reader of each column of a result set's metadata."
-  [^ResultSetMetaData md enums]
-  (mapv #(reader (.getColumnTypeName md (int %)) (.getColumnType md (int %)) enums) (range 1 (inc (.getColumnCount md)))))
+  "The reader of each column of a result set's metadata, labelled as label says of column i (an
+   array's elements as the array's column)."
+  [^ResultSetMetaData md enums label]
+  (mapv #(reader (.getColumnTypeName md (int %)) (.getColumnType md (int %)) enums (label %)) (range 1 (inc (.getColumnCount md)))))
 
 (defn- read-array
   "The elements of a java.sql.Array as a vector, each read as a column of the element type, an
    element array (a multi-dimensional array's) as a vector likewise."
-  [^Array a enums]
+  [^Array a enums label]
   (with-open [r (.getResultSet a)]
-    (let [read (nth (readers (.getMetaData r) enums) 1)]
+    (let [read (nth (readers (.getMetaData r) enums (constantly label)) 1)]
       (loop [acc (transient [])]
         (if (.next r)
           (recur (conj! acc (read r 2)))
@@ -92,7 +93,8 @@
   [registry]
   (let [enums (shape/enum-type-names registry)]
     (with-meta (fn [^ResultSet rs opts]
-                 (let [rd (readers (.getMetaData rs) enums)]
+                 (let [md (.getMetaData rs)
+                       rd (readers md enums #(.getColumnLabel md (int %)))]
                    ((rs/builder-adapter rs/as-unqualified-maps (fn [_ r i] ((nth rd (dec i)) r i))) rs opts)))
       ;; the enums pgmalli-next.impl.jdbc/builder! holds against the registry rows are typed with
       {::builder enums})))

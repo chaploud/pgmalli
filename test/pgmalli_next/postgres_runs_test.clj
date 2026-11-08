@@ -559,7 +559,9 @@
     (let [deep (str (apply str (repeat 5000 "[")) (apply str (repeat 5000 "]")))
           e (on-small-stack #(jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" deep] {:builder-fn (builder {})}))]
       (is (instance? clojure.lang.ExceptionInfo e) (pr-str (class e)))
-      (is (= [:pgmalli.error/fault "doc"] [(:pgmalli/error (ex-data e)) (:given (ex-data e))])))))
+      (is (= [:pgmalli.error/fault "doc"] [(:pgmalli/error (ex-data e)) (:given (ex-data e))]))
+      (is (= "docs" (:given (ex-data (on-small-stack #(jdbc/execute-one! (datasource) ["SELECT ARRAY[?::jsonb] AS docs" deep] {:builder-fn (builder {})})))))
+          "an array's element, named as the array's column"))))
 
 (deftest a-document-json-holds-not-is-refused-not-sent-as-another
   (when *db*
@@ -632,3 +634,10 @@
     (let [row (jdbc/execute-one! (datasource) ["SELECT '1000.5'::money AS m, ARRAY['12.34'::money] AS ms"] {:builder-fn (builder {})})]
       (is (= ["money" "money"] [(.getType ^PGobject (:m row)) (.getType ^PGobject (first (:ms row)))]))
       (is (= {:ok true} (jdbc/execute-one! (datasource) ["SELECT ?::money = '1000.5'::money AS ok" (:m row)]))))))
+
+(deftest a-composite-of-a-pg-catalog-types-name-reads-as-the-drivers-object
+  (when *db*
+    (jdbc/execute! (datasource) ["CREATE TYPE public.jsonb AS (a int)"])
+    (try
+      (is (instance? PGobject (:c (jdbc/execute-one! (datasource) ["SELECT ROW(1)::public.jsonb AS c"] {:builder-fn (builder {})}))))
+      (finally (jdbc/execute! (datasource) ["DROP TYPE public.jsonb"])))))
