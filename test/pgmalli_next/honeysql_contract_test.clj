@@ -39,7 +39,7 @@
   (let [known (apply set/union (map second clause-lists))]
     (doseq [c (sort (disj (set/difference (set (sql/clause-order)) known) ::mine))]
       (is (nil? c) (str honeysql " registers clause " c " that pgmalli neither reads, ignores nor reports: add it to "
-                        "read-clauses or ignored-clauses in src/pgmalli_next/impl/problems.clj, or reported-clauses in "
+                        "read-clauses or ignored-clauses in src/pgmalli_next/impl/hsyntax.clj, or reported-clauses in "
                         "test/pgmalli_next/honeysql_contract_test.clj")))))
 
 (deftest every-clause-pgmalli-lists-is-honeysqls

@@ -727,6 +727,16 @@
        (keyword? (first item)) [(first item) nil]
        (alias? (second item)) [nil (second item)]))))
 
+(def grouping-sets
+  "The calls of GROUP BY that add groups whose grouped columns are NULL, their items GROUP BY's."
+  #{:rollup :cube :grouping-sets})
+
+(defn rows-from?
+  "Whether a FROM item's call of function n on args is ROWS FROM (unnest(a), unnest(b)) to
+   PostgreSQL, a call of each argument: unnest of more than one."
+  [n args]
+  (boolean (and (= "unnest" n) (next args))))
+
 (def in-ops #{:in :not-in})
 
 (def like-ops #{:like :ilike :not-like :not-ilike})

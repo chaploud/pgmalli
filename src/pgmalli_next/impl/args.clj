@@ -558,9 +558,9 @@
           :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 
 (defn- refuses?
-  "Whether argument schema t refuses literal v."
+  "Whether argument schema t refuses literal v; not where malli cannot tell (validate throws)."
   [registry t v]
-  (not (try (m/validate t v {:registry (merge registry/base (::query/schemas registry))}) (catch Exception _ true))))
+  (false? (try (m/validate t v {:registry (merge registry/base (::query/schemas registry))}) (catch Exception _ nil))))
 
 (defn- uncast-type
   "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
@@ -632,9 +632,8 @@
               os (query/reached registry opts parts)]
         [j a] (map-indexed vector args)
         :when (or (syntax/param-key a) (sent-typed? a opts))
-        ;; unnest(a, b) in FROM is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
         :let [all-ins (if (syntax/param-key a) param-ins literal-ins)
-              [ins i] (if (and (= "unnest" n) (next args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth all-ins j)] 0] [all-ins j])
+              [ins i] (if (and (syntax/rows-from? n args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth all-ins j)] 0] [all-ins j])
               ss (map #(query/named-type-schema registry opts %) (resolve/argument-types ins i os))
               ;; another parameter of the call is of a type its value picks: refused whatever type it is
               sibling-ins (reduce (fn [inss j] (if (and (not= j i) (= :free (nth ins j)))

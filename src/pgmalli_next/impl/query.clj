@@ -325,7 +325,7 @@
       ;; (:column-definition-list): no column of it told
       (when (and (= :functions kind) (not (syntax/column-definitions item)) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
         ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)), its columns each named unnest
-        (when-let [rs (let [rs (for [as (if (and (= "unnest" n) (next args)) (map vector args) [args])]
+        (when-let [rs (let [rs (for [as (if (syntax/rows-from? n args) (map vector args) [args])]
                                  (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) as) (reached registry opts parts)))]
                         (when (every? some? rs) rs))]
           (let [label (if (and (syntax/alias? al) (nil? (next rs))) (syntax/alias-label al opts) n)
@@ -705,8 +705,6 @@
   [m t]
   (and (= t (:type m)) (= (if (vector? t) (second t) t) (canonical-type m)) (not (scalar-domain (:schema m)))))
 
-(def ^:private json-types #{"json" "jsonb"})
-
 (defn- result-schema
   "The schema of a value of resolver type t computed from inputs (expression types): an input's
    where it is of t (a domain's base type, an enum's labels; without bounds), else t's. A json or
@@ -714,7 +712,7 @@
   [t inputs]
   (or (some #(let [s (domain-base-type (:schema %))]
                ;; a typmod reads otherwise (bit(1) a Boolean), which a value computed from others may not keep
-               (when (and (= t (:type %)) (not (json-types t)) (not (str/includes? (str (:pg/type (shape/column-props s))) "("))
+               (when (and (= t (:type %)) (not (types/json? t)) (not (str/includes? (str (:pg/type (shape/column-props s))) "("))
                           (not (:pg/max-length (shape/column-props s))))
                  (loose s)))
             inputs)
@@ -736,7 +734,7 @@
          :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %))) (comp domain-of :schema)) typed))
                           (or (own-type? (first typed) (:type (first typed))) (= (count typed) (count ms)))
                           ;; json or jsonb values of one shape alone
-                          (or (not (json-types t)) (and (= (count typed) (count ms)) (apply = (map (comp shape/non-null :schema) typed)))))
+                          (or (not (types/json? t)) (and (= (count typed) (count ms)) (apply = (map (comp shape/non-null :schema) typed)))))
                    (cond->> (:schema (first typed)) (next ms) computed-of-one-type)
                    (result-schema t typed))}))))
 
@@ -904,9 +902,9 @@
                                          (when-let [r (resolve/fixed-result (count ins) os)]
                                            {:result (:result r) :overload (dissoc r :result)})))]
     (let [catalog? (= "pg_catalog" (:schema o))
-          schema (if-let [shape (and catalog? (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
+          schema (if-let [shape (and catalog? (= :functions kind) (types/json? t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
-                   (or (when (and (json-types t) (json-types (:type (first ts))))
+                   (or (when (and (types/json? t) (types/json? (:type (first ts))))
                          (json-part-schema registry kind (name n) args (:schema (first ts)) t))
                        (when (= "anyarray" (:result o))
                          (some (fn [[d m]] (when (#{"anyelement" "anynonarray"} d) (domain-array (:schema m))))
@@ -1083,7 +1081,7 @@
   "Whether stmt's GROUP BY has ROLLUP, CUBE or GROUPING SETS, which add groups whose grouped
    columns are NULL; :raw there may be one."
   [stmt]
-  (boolean (some #(and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))) (syntax/vectorish (:group-by stmt)))))
+  (boolean (some #(and (vector? %) (or (syntax/grouping-sets (first %)) (= :raw (first %)))) (syntax/vectorish (:group-by stmt)))))
 
 (defn- select-row
   "The entries of the row a SELECT returns, in order, a label selected twice twice, each with

@@ -16,6 +16,7 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.accept :as accept]
+            [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as pjdbc]
             [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.types :as types]
@@ -168,8 +169,9 @@
 
 (def ^:private values
   "SQL words, json builders, literals, parameters, scalar subqueries, a parenthesized call, aggregates with ORDER BY."
-  [:current_timestamp :current_date :current_time :localtimestamp :localtime :true :false
-   :current_user :session_user [:now] :%now [:count :*] :%count.*
+  (concat
+   (sort (keys syntax/sql-value-types))
+   [[:now] :%now [:count :*] :%count.*
    [:jsonb_build_object "a" (col "integer")] [:json_build_object "a" (col "integer")] [:jsonb_build_array (col "integer")] [:json_build_array (col "integer")]
    [:jsonb_agg (col "integer")] [:json_agg (col "integer")] [:jsonb_object_agg "a" (col "integer")] [:json_object_agg "a" (col "integer")]
    [:jsonb_object [:raw "'{a,b}'::text[]"]] [:json_object [:raw "'{a,b}'::text[]"]]
@@ -179,7 +181,7 @@
    [:lift 1] [:lift (int 1)] [:lift (short 1)] [:lift 10000000000] [:lift 1.5M] [:lift 1.5] [:lift (float 1.5)]
    {:select [[[:max (col "integer")]]] :from [:u]} {:select [(col "text")] :from [:u]} [[:count (col "integer")]]
    [:array_agg [:order-by (col "integer") (col "text")]] [:string_agg (col "text") [:order-by [:inline ","] (col "integer")]]
-   [:lift 1N] [:lift "s"] [:lift true] [:lift (java.util.UUID/randomUUID)] [:lift (java.time.LocalDate/of 2026 1 1)]])
+   [:lift 1N] [:lift "s"] [:lift true] [:lift (java.util.UUID/randomUUID)] [:lift (java.time.LocalDate/of 2026 1 1)]]))
 
 (deftest words-json-builders-literals-and-parameters-are-typed-as-postgresql-types-them
   (when *db*
@@ -197,11 +199,11 @@
      (for [f [:sum :avg :min :max :count]] [f a])
      [[:case [:= 1 1] a :else n] [:case [:= 1 1] a :else [:inline 1]] [:case [:= 1 1] a :else [:+ a 1]] [:case [:= 1 1] a]
       [:case [:= 1 1] ts :else [:now]]
-      [:trim b] [:lower b] [:upper b] [:length b] [:abs a] [:pg_catalog.now] [:now] :%now :%count.*
+      [:trim b] [:trim :!leading "x" :!from b] [:trim :!trailing :!from b] [:collation-for b] [:position [:in "a" b]] [:lower b] [:upper b] [:length b] [:abs a] [:pg_catalog.now] [:now] :%now :%count.*
       [:cast a :text] [:cast [:lower b] :text] [:cast [:inline 1] :integer] [:array [a]]
       [:+ a 1] [:= a a] [:inline 1] [:inline "s"] [:inline true] 1 "s" [:lift 1]
-      :current_date :current_timestamp :current_user :true
-      [:jsonb_build_object "a" a] [:json_agg a]])))
+      [:jsonb_build_object "a" a] [:json_agg a]]
+     (sort (keys syntax/sql-value-types)))))
 
 (deftest an-unaliased-expression-is-named-as-postgresql-names-it
   (when *db*

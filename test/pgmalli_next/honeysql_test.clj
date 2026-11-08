@@ -12,6 +12,7 @@
             [malli.experimental.time :as time]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
+            [pgmalli-next.impl.args :as args]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
@@ -3237,3 +3238,7 @@
       "a map's entries are clauses, no call")
   (is (= [] (check {:select [:u.id] :from [[:users :u] [[:with-ordinality [:upper :u.nick] [:x :v :n]]]]})) "an alias is no call")
   (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from [:users] :where [:= [:cardinality [:array [:nope]]] 1]})) "ARRAY[...]'s elements"))
+
+(deftest a-literal-a-schema-cannot-judge-is-not-refused
+  (is (false? (#'args/refuses? registry [:ref :pg.nowhere/x] "a")))
+  (is (true? (#'args/refuses? registry :int "a"))))

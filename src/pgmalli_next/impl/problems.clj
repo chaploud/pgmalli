@@ -158,7 +158,7 @@
                                               a args
                                               ;; ROLLUP's, CUBE's and GROUPING SETS' items are GROUP BY's: an output column too
                                               :when (and (syntax/column-keyword? a format)
-                                                         (not (and (= :group-by clause) (vector? x) (#{:rollup :cube :grouping-sets} (first x))
+                                                         (not (and (= :group-by clause) (vector? x) (syntax/grouping-sets (first x))
                                                                    (output-column? stmt a format)
                                                                    (empty? (query/column-hits registry chain a)))))]
                                           [a chain])
