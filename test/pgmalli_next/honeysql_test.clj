@@ -3292,3 +3292,8 @@
          (h/humanize (check {:update :users :set {:score nil}}))))
   (is (str/ends-with? (first (h/humanize [{:kind :column-definition-list :function "f" :alias "r" :columns [:k :v]}]))
                       "name the columns with no type: [:r {:columns [:k :v]}]")))
+
+(deftest a-from-item-that-is-no-call-names-no-column
+  (is (= [] (check {:select [:id] :from [[[:only :users]]]})) "ONLY (t) is the table t")
+  (is (= [] (check {:select [:g.name :s.n] :from [[:groups :g]] :left-join [[[:join [:users :u] {:cross-join [[[:generate_series 1 :g.id] [:s {:columns [:n]}]]]}]] [:= :u.group_id :g.id]]}))
+      "a function inside a parenthesized join sees the tables before the join"))

@@ -854,6 +854,14 @@
    :expression?."
   #{:insert-into :columns :update :delete-from :truncate :for :lock :do-nothing :on-constraint})
 
+(defn- item-call
+  "The call of a FROM or join item t (clause-parts' sees) whose arguments are expressions: its
+   function's (function-alias); none of a parenthesized join, nor of [:only t], ONLY (t), which
+   HoneySQL writes as a call and the grammar reads as the table t."
+  [t sees]
+  (let [[f] (function-alias t)]
+    (when-not (or (= :group sees) (= :only (first f))) f)))
+
 (def ^:private call-written?
   "Whether the loaded HoneySQL writes [:f x] as clause k's whole value as the call f(x) (WHERE),
    not as a list of f and x (GROUP BY f, x)."
@@ -869,7 +877,7 @@
    (one of :values, :set, an item of FROM or a join), item? for a node right in it (an item of a
    select list, [expr alias], or of ORDER BY, [expr direction], which is no call), expression?
    for one an expression is written of: of a table item of FROM or a join (clause-parts' :outer,
-   :lateral or :group but :values), its function's call alone (function-alias); of a join's
+   :lateral or :group but :values), item-call's alone; of a join's
    [:using ...], none; of another part, every one but in expressionless-clauses. A value written to a column is
    besides {:x value :assign column :event e :target scope}: e the write (:insert, :update),
    scope the target table's. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
@@ -906,7 +914,7 @@
                  item? (and (#{:outer :lateral :group} sees) (not (#{:values :insert-into} k)))
                  using? (and (vector? v) (= :using (first v)))
                  node (fn [x] (if item?
-                                (nodes k x c false (first (function-alias x)) false)
+                                (nodes k x c false (item-call x sees) false)
                                 (nodes k x c (not (or using? (expressionless-clauses k))) nil (and (nil? i) (identical? x v)))))]
            p (if (some #{k} join-keys)
                [(node v)]
