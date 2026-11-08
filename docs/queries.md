@@ -705,8 +705,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   a value past the column's range, though PostgreSQL takes it where the SELECT
   returns no row: `SELECT ?x WHERE NOT EXISTS (...)`, which skips a duplicate, writes the nil
   and fails where there is none. Test the argument for NULL where nil means "write nothing":
-  `{:select [:?x] :where [:is-not [:cast :?x :integer] nil]}` (cast: PostgreSQL refuses a NULL
-  parameter in a bare `? IS NOT NULL`, whose type nothing tells).
+  `{:select [:?x] :where [:is-not [:cast :?x :integer] nil]}` (cast, [as above](#the-types-of-the-arguments)).
 - <a id="stricter-untyped"></a>A value sent untyped, assigned or compared, where its text is not of the column's type's
   category: a keyword to a `bigint`, `uuid` or `date` column (`:1`, `:2020-01-01`), which
   PostgreSQL reads through the type's input. Taking them would put `:keyword` on every argument.

@@ -66,7 +66,7 @@ What each type comes back as:
 | an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions); an array of a domain's elements as pgjdbc returns them, `PGobject`s of the domain |
 | `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer a `Long` (a `BigInt` past it), a fraction a `Double`, booleans and strings as they are |
 | an enum type, a domain over one | its label, a keyword (`:active`), of an enum type of the registry `builder` is given; another enum's a `String` |
-| every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` a `Double`, an `interval` a `PGInterval` (an interval holds months, days and a time at once, which neither a `Duration` nor a `Period` holds alone), `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |
+| every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` or infinity a `Double`, an `interval` a `PGInterval` (an interval holds months, days and a time at once, which neither a `Duration` nor a `Period` holds alone), `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |
 
 `builder` reads where next.jdbc builds a row (`execute!`, `execute-one!`). `plan`'s `(:col
 row)` builds none and reads the column as pgjdbc returns it (a `java.sql.Timestamp`, a

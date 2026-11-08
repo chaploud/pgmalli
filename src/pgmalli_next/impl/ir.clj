@@ -102,11 +102,11 @@
   [db]
   (when (contains? db :jdbc-url)
     (error/fail! :pgmalli.error/invalid-config
-                 ":db's :jdbc-url is no longer read: the URL is :jdbcUrl, as next.jdbc names it"
+                 ":db's :jdbc-url is not read: the URL is :jdbcUrl, as next.jdbc names it"
                  {:given [:jdbc-url] :did-you-mean [:jdbcUrl]}))
   (when (contains? db :db)
     (error/fail! :pgmalli.error/invalid-config
-                 ":db's :db is no longer read: the database name is :dbname, as next.jdbc and libpq name it"
+                 ":db's :db is not read: the database name is :dbname, as next.jdbc and libpq name it"
                  {:given [:db] :did-you-mean [:dbname]}))
   (let [via (cond (contains? db :datasource) :datasource (contains? db :jdbcUrl) :jdbc :else :psql)
         stray (remove (conj (db-keys via) :schema) (keys db))]

@@ -1,7 +1,7 @@
 (ns pgmalli-next.core
   "The application side of pgmalli: the schemas generated from PostgreSQL schemas (the file on
    the classpath as pgmalli-next.edn), read and used. Generation and freshness, which need
-   psql, are pgmalli-next.generate; HoneySQL queries checked and typed, pgmalli-next.honeysql."
+   psql or a JDBC driver, are pgmalli-next.generate; HoneySQL queries checked and typed, pgmalli-next.honeysql."
   (:require [clojure.string :as str]
             [malli.core :as m]
             [pgmalli-next.impl.describe :as d]

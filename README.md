@@ -151,7 +151,7 @@ have schemas of their own:
 |---|---|
 | a row read through `pgmalli-next.jdbc/builder` | `as-read` ([below](#rows-read-through-nextjdbc)) |
 | a row your code writes in `:values` or `:set` | `h/values-schema`, `h/set-schema` ([queries](docs/queries.md#a-row-written-into-a-table)) |
-| a row of the database's types: test data's, another system's | the registry's row, `/insert` and `/update` schemas (here) |
+| a row of the database's types: another system's (an export, a message) | the registry's row, `/insert` and `/update` schemas (here) |
 
 ```clojure
 (m/validate :pg.public/users

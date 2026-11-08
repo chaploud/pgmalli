@@ -149,13 +149,13 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo re (ir/from-db db)) (pr-str db))))
 
 (deftest the-database-name-is-dbname-and-the-old-key-names-it
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db's :db is no longer read: the database name is :dbname"
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db's :db is not read: the database name is :dbname"
                                 (ir/from-db {:host "h" :db "app"})))]
     (is (= [:dbname] (:did-you-mean (ex-data e))))
     (is (not (str/includes? (pr-str (ex-data e)) "app")))))
 
 (deftest the-jdbc-url-is-next-jdbcs-jdbcUrl-and-the-old-key-names-it
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db's :jdbc-url is no longer read: the URL is :jdbcUrl"
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db's :jdbc-url is not read: the URL is :jdbcUrl"
                                 (ir/from-db {:jdbc-url "jdbc:postgresql://h/app" :user "u" :password "s3cret"})))]
     (is (= [:jdbcUrl] (:did-you-mean (ex-data e))))
     (is (not (str/includes? (pr-str (ex-data e)) "s3cret")))))

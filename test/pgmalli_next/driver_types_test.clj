@@ -18,12 +18,12 @@
     (when *db*
       (with-open [con (jdbc/get-connection (datasource))] (oracle/matrix-schema! con))
       ;; beside the row of samples, one of NULLs (a domain's default where it refuses NULL) and
-      ;; one of NaN and Infinity
+      ;; two of NaN and infinities
       (exec-sql! "CREATE TYPE matrix.mood AS ENUM ('a', 'b');
                   ALTER TABLE matrix.types ADD e matrix.mood;
                   UPDATE matrix.types SET e = 'a';
                   INSERT INTO matrix.types DEFAULT VALUES;
-                  INSERT INTO matrix.types (c_numeric, c_real, c_double_precision) VALUES ('NaN', 'NaN', 'Infinity');
+                  INSERT INTO matrix.types (c_numeric, c_real, c_double_precision) VALUES ('NaN', 'NaN', 'Infinity'), ('Infinity', 'Infinity', '-Infinity');
                   CREATE VIEW matrix.v AS SELECT * FROM matrix.types;"))
     (f)))
 

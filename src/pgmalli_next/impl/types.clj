@@ -13,7 +13,7 @@
                  :string but which takes no varchar: bit's varbit (which keeps its length), bit
                  varying itself
      :read       what pgjdbc returns instead of :schema's values: a schema, :bit (a Boolean
-                 for bit(1), else a PGobject), :or-double (a Double for NaN)
+                 for bit(1), else a PGobject), :or-double (a Double for NaN or an infinity)
      :extension  the extension that adds the type, outside pg_catalog
 
    catalog is what PostgreSQL's own catalog says of pg_catalog's types (typcategory,

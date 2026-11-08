@@ -5,7 +5,7 @@ branch of pgmalli: these would be issues there. Move them to issues, or delete t
 work goes back.
 
 None of these refuses what PostgreSQL takes. Each lets through something PostgreSQL refuses
-(it fails when the query runs), or leaves a type untold. Fix one, then delete its entry.
+(it fails when the query runs), leaves a type untold, or tells a type other than the value read. Fix one, then delete its entry.
 
 - An enum named `text`, `name` or `varchar` in a schema on the session's search_path reads as a
   `String` (`pgmalli-next.jdbc/builder`), while its row type says keyword labels: pgjdbc names it
