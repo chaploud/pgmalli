@@ -3420,3 +3420,7 @@
   (is (= [{:kind :written-otherwise :op (keyword "~~~") :call true}] (check {:select [:id] :from [:users] :where [(keyword "~~~") :nick "a"]}))
       "an operator HoneySQL has not registered, written ~~~(nick, ?)")
   (is (= [] (check {:select [:id] :from [:users] :where [:in :mood [[:lift :happy] [:lift :sad]]]}))))
+
+(deftest an-argument-to-a-not-null-column-of-a-type-pgmalli-does-not-type-takes-no-nil
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:x [:some {:pg/type "xml"}]]]}})]
+    (is (not (m/validate (:x (:args (h/analyze reg {:insert-into :t :values [{:x :?x}]}))) nil {:registry reg})))))

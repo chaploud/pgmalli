@@ -821,7 +821,8 @@
   "The type of an argument two of its uses type a and b: PostgreSQL types a parameter once, so
    a value goes where each use takes it; a use that types nothing takes any, nil too."
   [a b]
-  (let [nullable? (every? #(or (query/untyped? %) (shape/maybe? %)) [a b])
+  (let [;; a NOT NULL column's untyped value ([:some]) takes no nil
+        nullable? (every? #(or (= :any (shape/head %)) (shape/maybe? %)) [a b])
         [a b] (map shape/non-null [a b])
         t (cond (query/untyped? a) b
                 (query/untyped? b) a
