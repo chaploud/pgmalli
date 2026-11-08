@@ -232,8 +232,9 @@
           (and (= :pg/class h) (empty? (pgtypes/class-values (shape/entries t)))) nil
           ;; held to classes ([:and float? [:pg/class "java.lang.Float"]]): those classes' values
           (and (= :and h) (some #(= :pg/class (shape/head %)) (shape/entries t)))
-          (when-let [vs (seq (mapcat #(when (= :pg/class (shape/head %)) (pgtypes/class-values (shape/entries %))) (shape/entries t)))]
-            (shape/merge-props t {:gen/elements (vec vs)}))
+          (let [cs (set (mapcat #(when (= :pg/class (shape/head %)) (shape/entries %)) (shape/entries t)))]
+            (cond (= #{"java.lang.Float"} cs) (shape/merge-props t {:gen/schema [:double {:min -1e6 :max 1e6}] :gen/fmap float})
+                  :else (when-let [vs (seq (pgtypes/class-values cs))] (shape/merge-props t {:gen/elements (vec vs)}))))
           (#{:any :some} h) nil
           (= :maybe h) (if-let [x (generated-values r own (last t))] [:maybe x] :nil)
           ;; of alternatives one of which is any value, the type is untold: none generated

@@ -93,7 +93,7 @@
               e (if (and (seq more) (not (query/untyped? element)))
                   (cond-> (shape/either (concat (shape/alternatives (shape/non-null element)) more) element) (shape/maybe? element) query/nullable)
                   element)]]
-    [q (walk/postwalk-replace {:pgmalli/element e} schema)]))
+    [q (walk/postwalk-replace {:pgmalli/element e} schema) c]))
 
 (defn- labelled-type
   "The type of an argument where a value of own, an enum type's labels, goes, alts the [type
@@ -280,7 +280,9 @@
             specials (concat (when (special? t) [numeric-special])
                              ;; a numeric[]'s too, of a Java array of them alone (float8[] to numeric[] by element)
                              (when (and (string? t) (special? (types/element t)))
-                               (distinct (map second (arrays-sent opts #{"double precision[]"} numeric-special)))))
+                               ;; of its own class, as an array of no value is typed (jdbc/array-type)
+                               (distinct (for [[_ s ^Class c] (arrays-sent opts #{"double precision[]"} numeric-special)]
+                                           (cond-> s (and c (= :pg/array (shape/head s))) (shape/merge-props {:pg/empty-classes #{(.getName c)}}))))))
             all (cond->> (one-per-kind opts (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
                   ;; inlined, a literal is of a type by its value, whatever its class
                   (and (= :call held-in) (not (::common-type opts)) (not (:inline (:format opts)))) (keep #(class-held % t takes? opts)))

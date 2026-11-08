@@ -3533,3 +3533,10 @@
         ok? (fn [col] (m/validate (:x (:args (h/analyze reg {:update :t :set {col :?x}}))) \a {:registry reg}))]
     (is (ok? :c))
     (is (not (ok? :t)) "PostgreSQL takes it as varchar: docs/queries.md#stricter-character")))
+
+(deftest a-numeric-arrays-empty-array-is-of-a-class-sent-as-a-number-type
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ns [:vector {:pg/type "numeric[]"} 'decimal?]] [:r [:double {:pg/type "real"}]]]}})
+        t (:x (:args (h/analyze reg {:update :t :set {:ns :?x}})))]
+    (is (m/validate t (into-array Double []) {:registry reg}))
+    (is (not (m/validate t (into-array String []) {:registry reg})) "an empty String[] goes as varchar[]")
+    (is (< 1 (count (distinct (map :r (mg/sample (h/values-schema reg :t) {:registry reg :size 20 :seed 1}))))) "a real generates Floats of many values")))
