@@ -389,7 +389,8 @@ array as untyped text, `'{1,2}'`) to tell. Where its other uses take only values
 Two more facts an argument's schema carries for a sender who knows more than the database tells
 and would narrow it: where every use of it is a cast to one type, `:pgmalli/cast`, that type as
 PostgreSQL names it (`"bigint[]"` of `[:raw "int8[]"]`), on the values the cast takes (an array's
-`[:pg/array ...]`); where every use assigns it to a NOT NULL column a BEFORE row trigger may
+`[:pg/array ...]`, with `:pgmalli/element`, the type of its elements, `[:int {:pg/type "bigint"}]`,
+an enum's labels `[:enum {:pg/type "mood"} ...]`, as a `PGobject`'s of an array type); where every use assigns it to a NOT NULL column a BEFORE row trigger may
 fill, which makes it nullable, `:pgmalli/before-triggers`, the triggers' names, on the column's
 type inside the `[:maybe ...]`, and so on a `jsonb_populate_record` document's key of that column.
 

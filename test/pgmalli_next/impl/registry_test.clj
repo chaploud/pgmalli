@@ -202,7 +202,7 @@
 (deftest a-large-stack-is-held-by-its-thread-whoever-stops-waiting-for-it
   (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
         big (apply str (repeat 1000000 "a"))
-        permits (.availablePermits ^java.util.concurrent.Semaphore @#'pgmalli-next.impl.pgtypes/large-stacks)
+        permits (.availablePermits ^java.util.concurrent.Semaphore @(requiring-resolve 'pgmalli-next.impl.pgtypes/large-stacks))
         peak (atom 0)
         watching (future (dotimes [_ 400]
                            (swap! peak max (count (filter #(= "pgmalli-re" (.getName ^Thread %)) (keys (Thread/getAllStackTraces)))))

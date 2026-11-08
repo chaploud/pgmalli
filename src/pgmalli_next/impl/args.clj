@@ -508,7 +508,14 @@
       (if (or (syntax/param-key k) elements?)
         [k (if elements?
              (cast-arrays registry s t opts)
-             (cond-> t (and (vector? t) (= :cast (first x))) (vary-meta assoc ::cast (some-> (syntax/cast-target (nth x 2)) types/canonical-name))))]
+             (cond-> t (and (vector? t) (= :cast (first x)))
+               (vary-meta assoc
+                          ::cast (some-> (syntax/cast-target (nth x 2)) types/canonical-name)
+                          ;; an enum's its labels, as a PGobject's :pgmalli/element names them
+                          ::cast-element (when-let [es (some->> (syntax/cast-target (nth x 2)) types/element (query/named-type-schema registry opts) shape/non-null)]
+                                           (if-let [ls (seq (query/enum-values registry es))]
+                                             (into [:enum (select-keys (shape/column-props es) [:pg/type])] ls)
+                                             es)))))]
         ;; a literal cast to an enum type: its labels
         [(literal-key k {:type (query/enum-type registry s) :function "CAST" :schema s}) t]))))
 
@@ -890,13 +897,15 @@
 (defn- with-facts
   "Argument schema t with the facts every use of it in uses ([x t] ...) shares, beside the type
    they relax, for a caller who knows more to narrow it by: :pgmalli/cast, the type each casts it
-   to, on the array ([:pg/array ...]) or the values the cast takes; :pgmalli/before-triggers, the
+   to, on the array ([:pg/array ...]) or the values the cast takes, and on the array, of a cast to
+   an array type, :pgmalli/element, the type of its elements; :pgmalli/before-triggers, the
    BEFORE row triggers each NOT NULL column it is assigned to has, on that column's type inside
    the [:maybe ...] they make it."
   [t uses]
   (let [shared (fn [k] (let [vs (map #(get (meta (second %)) k) uses)]
                          (when (and (seq vs) (every? some? vs) (apply = vs)) (first vs))))
         cast (shared ::cast)
+        element (shared ::cast-element)
         triggers (shared ::before-triggers)
         in-maybe (fn [s f] (if (= :maybe (shape/head s)) (assoc s (dec (count s)) (f (last s))) (f s)))
         on-cast (fn [s p] (if (and (= :or (shape/head s)) (some #(= :pg/array (shape/head %)) (shape/entries s)))
@@ -904,7 +913,7 @@
                                   (map #(if (= :pg/array (shape/head %)) (shape/merge-props % p) %) (shape/entries s)))
                             (shape/merge-props s p)))]
     (cond-> t
-      cast (in-maybe #(on-cast % {:pgmalli/cast cast}))
+      cast (in-maybe #(on-cast % (cond-> {:pgmalli/cast cast} element (assoc :pgmalli/element element))))
       (and triggers (= :maybe (shape/head t))) (in-maybe #(shape/merge-props % {:pgmalli/before-triggers triggers})))))
 
 (defn- analysis

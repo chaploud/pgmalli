@@ -2018,6 +2018,9 @@
     (is (= "bigint[]" (p (:ids (args {:select [[[:unnest [:cast :?ids [:raw "int8[]"]]] :x]]})) :pgmalli/cast)) "as PostgreSQL names the type")
     (is (= :pg/array (first (some #(when (:pgmalli/cast (shape/props %)) %) (tree-seq vector? seq (:ids (args {:select [[[:unnest [:cast :?ids [:raw "bigint[]"]]] :x]]}))))))
         "on the array, its elements the values the cast takes")
+    (is (= [:int {:pg/type "bigint"}] (some #(when (= :pg/array (shape/head %)) (:pgmalli/element (shape/props %)))
+                                            (tree-seq vector? seq (:ids (args {:select [:id] :from [:t] :where [:= :id [:any [:cast :?ids [:raw "bigint[]"]]]]})))))
+        "and the type of its elements")
     (is (nil? (p (:x (args {:select [:id] :from [:t] :where [:or [:= :id [:cast :?x :bigint]] [:= :g :?x]]})) :pgmalli/cast)) "every use a cast")
     (is (nil? (p (:x (args {:select [:id] :from [:t] :where [:or [:= :id [:cast :?x :bigint]] [:= :g [:cast :?x :integer]]]})) :pgmalli/cast)) "to one type")
     (let [{:keys [g n]} (args {:insert-into :t :values [{:id 1 :g :?g :n :?n}]})]
