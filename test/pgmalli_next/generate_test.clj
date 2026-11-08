@@ -5,6 +5,7 @@
             [clojure.test :refer [deftest is]]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.generate :as generate]
+            [pgmalli-next.impl.diff :as diff]
             [pgmalli-next.impl.files :as files]))
 
 (deftest a-migration-read-from-two-files
@@ -96,3 +97,12 @@
 (deftest schemas-name-each-schema-once
   (doseq [s [[] ["public" "public"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should name at least one schema, each once" (files/config {:schemas s})) (pr-str s))))
+
+(deftest check-warns-of-a-version-newer-than-pgmalli-knows-as-generate-does
+  (with-redefs [diff/check (constantly {:database-version "PostgreSQL 99"})]
+    (is (re-find #"^warning: PostgreSQL 99 is newer than the versions this pgmalli knows" (with-out-str (generate/check {}))))))
+
+(deftest the-db-map-names-no-schema-the-config-does
+  (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:db {:schema "app"}})))]
+    (is (= [":db's :schema is not read: the schemas generated are :schemas, such as {:schemas [\"public\"]}" [:schemas]]
+           [(ex-message e) (:did-you-mean (ex-data e))]))))

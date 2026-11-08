@@ -14,13 +14,6 @@
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.types :as types]))
 
-(defn- print-unrendered [facts]
-  (when (seq facts)
-    (println (str "unrendered (" (count facts) "), left out of the schemas:"))
-    (doseq [{:keys [table column type]} facts]
-      (println (str "  " table " " column ": type " type))
-      (println (str "    to keep it, add to :overrides {" (keyword table column) " <malli schema>}")))))
-
 (defn- print-difference [{:keys [name key schema column property order file db]}]
   (println (str/join " " (remove nil? [(some-> key pr-str) schema (some-> name pr-str) (some-> column pr-str) (some-> property pr-str)
                                        (when order "column order")])))
@@ -32,9 +25,20 @@
    catalog snapshot has it."
   [database-version]
   (let [versions (:versions @types/catalog)]
-    (when-not (some #(= database-version (str "PostgreSQL " %)) versions)
+    (when-not (some #{(types/label-version database-version)} versions)
       (str database-version " is newer than the versions this pgmalli knows (" (str/join ", " versions)
-           "): a query's pg_catalog functions and types are typed as PostgreSQL " (last versions) " has them"))))
+           "): a query's pg_catalog functions and types are typed as " (types/version-label (last versions)) " has them"))))
+
+(defn- print-generated
+  "What generate! and check print of the data read from the database: a version newer than
+   pgmalli knows, and the columns left out."
+  [{:keys [database-version unrendered]}]
+  (when-let [w (version-warning database-version)] (println "warning:" w))
+  (when (seq unrendered)
+    (println (str "unrendered (" (count unrendered) "), left out of the schemas:"))
+    (doseq [{:keys [table column type]} unrendered]
+      (println (str "  " table " " column ": type " type))
+      (println (str "    to keep it, add to :overrides {" (keyword table column) " <malli schema>}")))))
 
 (defn generate!
   "Writes the generated file of config's schemas to its :out (where no file or a generated one
@@ -44,8 +48,7 @@
   (binding [*print-namespace-maps* false]
     (let [out (files/generate! config)
           data (registry/read-generated-file out)]
-      (when-let [w (version-warning (:database-version data))] (println "warning:" w))
-      (print-unrendered (:unrendered data))
+      (print-generated data)
       {:out out :unrendered (not-empty (:unrendered data)) :diagnostics (not-empty (:diagnostics data))})))
 
 (defn diff
@@ -71,9 +74,9 @@
    leaves out."
   [config]
   (binding [*print-namespace-maps* false]
-    (let [{:keys [missing stale unrendered diagnostics]} (diff/check config)]
+    (let [{:keys [missing stale unrendered diagnostics] :as checked} (diff/check config)]
       (doseq [d stale] (print-difference d))
-      (print-unrendered unrendered)
+      (print-generated checked)
       (when (or missing stale)
         (error/fail! :pgmalli.error/stale
                      (if missing
