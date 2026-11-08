@@ -15,7 +15,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-count row-entries type-call)
+(declare derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached registry-type row-count row-entries type-call)
 
 (defn- versions
   "The versions of the catalog snapshot the registry's generated schemas are of: their file's
@@ -125,6 +125,22 @@
   [registry table format]
   (boolean (and (syntax/quoted? format) (not= table (syntax/folded table))
                 (some #{(syntax/folded table)} (known-tables registry)))))
+
+(defn type-suggestions
+  "The enum types (\"schema.name\") of the registry of name n in a schema other than schema, which
+   a cast to n there may mean where schema has no type of that name the registry tells of: no
+   enum, no table's row type, no domain one of its columns is of. nil for none."
+  [registry n schema]
+  (let [mine (into #{} (concat (for [t (known-tables registry) :let [[s tn] (str/split t #"\." 2)] :when (= s schema)
+                                     x (cons tn (keep (comp :pg/domain shape/column-props second) (column-entries registry t)))]
+                                 x)))]
+    (when-not (or (mine n) (registry-type registry (keyword n) {:schema schema}))
+      (some->> (for [[k v] (::schemas registry)
+                     :when (and (keyword? k) (vector? v) (= :enum (first v)))
+                     :let [[s tn] (shape/schema-and-name k)]
+                     :when (and (= n tn) (not= s schema))]
+                 (str s "." tn))
+               sort seq vec))))
 
 (defn table-suggestions
   "Up to three tables or views of the registry (\"schema.table\") a table it lacks may mean:
@@ -325,7 +341,7 @@
       ;; (:column-definition-list): no column of it told
       (when (and (= :functions kind) (not (syntax/column-definitions item)) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))
         ;; unnest(a, b) is ROWS FROM (unnest(a), unnest(b)), its columns each named unnest
-        (when-let [rs (let [rs (for [as (if (and (= "unnest" n) (next args)) (map vector args) [args])]
+        (when-let [rs (let [rs (for [as (if (syntax/rows-from? n args) (map vector args) [args])]
                                  (resolve/call kind n (mapv #(:type (expression-type registry chain % opts)) as) (reached registry opts parts)))]
                         (when (every? some? rs) rs))]
           (let [label (if (and (syntax/alias? al) (nil? (next rs))) (syntax/alias-label al opts) n)
@@ -573,6 +589,18 @@
           ;; an expression's value of an enum type (coalesce(tier, ?)): its labels with the type's name, which no base type has
           (and (= :enum (shape/head base)) n (nil? (types/entry n))) n)))
 
+(defn cast-type-name
+  "The name a query under opts' :schema casts to column schema s's type by: its :pg/type,
+   qualified by the schema of the registry's type s refers to ([:ref ... :pg.billing/state])
+   where that is not :schema and the name is neither qualified nor pg_catalog's."
+  [s {:keys [schema]}]
+  (let [n (:pg/type (shape/column-props s))
+        k (some #(when (and (vector? %) (= :ref (first %))) (last %)) (tree-seq coll? seq s))
+        [sch] (when k (shape/schema-and-name k))]
+    (if (and n sch (not= sch schema) (not (str/includes? n ".")) (nil? (types/entry (or (types/element n) n))))
+      (str sch "." n)
+      n)))
+
 (defn slot-type
   "The type of a column schema as pgmalli-next.impl.accept names it: [:enum name] for an enum type
    (or a domain over one), a domain's base type, \"x[]\" for an array; nil for a type it does
@@ -705,8 +733,6 @@
   [m t]
   (and (= t (:type m)) (= (if (vector? t) (second t) t) (canonical-type m)) (not (scalar-domain (:schema m)))))
 
-(def ^:private json-types #{"json" "jsonb"})
-
 (defn- result-schema
   "The schema of a value of resolver type t computed from inputs (expression types): an input's
    where it is of t (a domain's base type, an enum's labels; without bounds), else t's. A json or
@@ -714,7 +740,7 @@
   [t inputs]
   (or (some #(let [s (domain-base-type (:schema %))]
                ;; a typmod reads otherwise (bit(1) a Boolean), which a value computed from others may not keep
-               (when (and (= t (:type %)) (not (json-types t)) (not (str/includes? (str (:pg/type (shape/column-props s))) "("))
+               (when (and (= t (:type %)) (not (types/json? t)) (not (str/includes? (str (:pg/type (shape/column-props s))) "("))
                           (not (:pg/max-length (shape/column-props s))))
                  (loose s)))
             inputs)
@@ -736,7 +762,7 @@
          :schema (if (and (seq typed) (apply = (map (juxt :type #(:pg/type (shape/column-props (:schema %))) (comp domain-of :schema)) typed))
                           (or (own-type? (first typed) (:type (first typed))) (= (count typed) (count ms)))
                           ;; json or jsonb values of one shape alone
-                          (or (not (json-types t)) (and (= (count typed) (count ms)) (apply = (map (comp shape/non-null :schema) typed)))))
+                          (or (not (types/json? t)) (and (= (count typed) (count ms)) (apply = (map (comp shape/non-null :schema) typed)))))
                    (cond->> (:schema (first typed)) (next ms) computed-of-one-type)
                    (result-schema t typed))}))))
 
@@ -904,9 +930,9 @@
                                          (when-let [r (resolve/fixed-result (count ins) os)]
                                            {:result (:result r) :overload (dissoc r :result)})))]
     (let [catalog? (= "pg_catalog" (:schema o))
-          schema (if-let [shape (and catalog? (= :functions kind) (#{"json" "jsonb"} t) (json-shapes n))]
+          schema (if-let [shape (and catalog? (= :functions kind) (types/json? t) (json-shapes n))]
                    (if (= :map shape) [:map {:pg/type t}] [:sequential {:pg/type t} :any])
-                   (or (when (and (json-types t) (json-types (:type (first ts))))
+                   (or (when (and (types/json? t) (types/json? (:type (first ts))))
                          (json-part-schema registry kind (name n) args (:schema (first ts)) t))
                        (when (= "anyarray" (:result o))
                          (some (fn [[d m]] (when (#{"anyelement" "anynonarray"} d) (domain-array (:schema m))))
@@ -1083,7 +1109,7 @@
   "Whether stmt's GROUP BY has ROLLUP, CUBE or GROUPING SETS, which add groups whose grouped
    columns are NULL; :raw there may be one."
   [stmt]
-  (boolean (some #(and (vector? %) (#{:rollup :cube :grouping-sets :raw} (first %))) (syntax/vectorish (:group-by stmt)))))
+  (boolean (some #(and (vector? %) (or (syntax/grouping-sets (first %)) (= :raw (first %)))) (syntax/vectorish (:group-by stmt)))))
 
 (defn- select-row
   "The entries of the row a SELECT returns, in order, a label selected twice twice, each with
@@ -1198,7 +1224,7 @@
    INSERT writes ({:insert-into :t :columns [...] :select [...] :returning [...]})."
   [stmt]
   (cond-> stmt
-    (some #(contains? stmt %) syntax/write-keys) (dissoc :select :select-distinct :select-distinct-on :select-top :select-distinct-top)))
+    (some #(contains? stmt %) syntax/write-keys) (#(apply dissoc % syntax/select-clauses))))
 
 (defn- row-entries
   "The entries of the row of the statement at path in a query, in order, a label twice where its
@@ -1339,7 +1365,7 @@
               (some (fn [x]
                       (and (vector? x) (= 3 (count x))
                            (case op
-                             :is-null (and (#{:= :is} (first x)) (some (fn [[a b]] (and (of? a col) (nil? b))) [[(nth x 1) (nth x 2)] [(nth x 2) (nth x 1)]]))
+                             :is-null (let [[a negated?] (syntax/null-test x format)] (and (false? negated?) (of? a col)))
                              := (and (= := (first x)) (some (fn [[a b]] (and (of? a col) (same? v (literal-value b)))) [[(nth x 1) (nth x 2)] [(nth x 2) (nth x 1)]]))
                              false)))
                     conjuncts))
@@ -1442,7 +1468,7 @@
         own (for [[k t c] joined :when (= :left-join k) :let [alias (second (syntax/table-ref t opts))] pair (equalities c)] [alias pair])
         held-by (fn [held [a b]]
                   (when-let [[alias col :as ac] (column a)]
-                    (when (if (syntax/null-value? b nil)
+                    (when (if (syntax/null-test [:= a b] format)
                             (not (shape/maybe? (get-in by-alias [alias :columns col] [:maybe :any])))
                             (or (syntax/constant? b) (and (map? b) (uncorrelated? registry b items opts)) (contains? held (column b))))
                       ac)))

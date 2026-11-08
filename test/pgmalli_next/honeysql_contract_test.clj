@@ -39,7 +39,7 @@
   (let [known (apply set/union (map second clause-lists))]
     (doseq [c (sort (disj (set/difference (set (sql/clause-order)) known) ::mine))]
       (is (nil? c) (str honeysql " registers clause " c " that pgmalli neither reads, ignores nor reports: add it to "
-                        "read-clauses or ignored-clauses in src/pgmalli_next/impl/problems.clj, or reported-clauses in "
+                        "read-clauses or ignored-clauses in src/pgmalli_next/impl/hsyntax.clj, or reported-clauses in "
                         "test/pgmalli_next/honeysql_contract_test.clj")))))
 
 (deftest every-clause-pgmalli-lists-is-honeysqls
@@ -75,6 +75,22 @@
     (is (= ["\"null\""] (sql/format :null {:quoted-always #"^null$"}))))
   (is (= ["NULL"] (sql/format :NULL)) "a keyword is written as spelt")
   (is (= ["INSERT INTO t AS u (a) VALUES (?)" 1] (sql/format {:insert-into [[:t :u] [:a]] :values [[1]]}))))
+
+(deftest join-by-keys-are-honeysqls-join-by-aliases
+  (let [theirs (some-> (resolve 'honey.sql/join-by-aliases) deref)
+        written (fn [clause v] (first (sql/format {:select [:a] :from [:t] clause v})))]
+    (doseq [a (sort (keys (merge theirs syntax/join-by-keys)))
+            :let [k (get syntax/join-by-keys a a)
+                  v (if (= :cross-join k) [:j] [:j true])]]
+      (is (= (written :join-by [a v]) (written k v))
+          (str honeysql " writes :join-by's " a " otherwise than " k ": update join-by-keys in src/pgmalli_next/impl/hsyntax.clj")))))
+
+(deftest null-test-is-the-is-null-honeysql-writes
+  (is (= [[:a false] [:a false] [:a true] [:a true] [:a false] [:a true] [:a false]]
+         (map #(syntax/null-test % nil) [[:= :a nil] [:= nil :a] [:<> :a nil] [:not= nil :a] [:is :a nil] [:is-not :a nil] [:is :a [:inline nil]]])))
+  (is (= [nil nil nil nil nil] (map #(syntax/null-test % nil) [[:= :a :null] [:= :a [:inline nil]] [:< :a nil] [:is nil :a] [:= :a :b]]))
+      "a = NULL compares, NULL IS a is no SQL")
+  (is (nil? (syntax/null-test [:is :a :null] {:quoted true})) "under :quoted :null is a column"))
 
 (deftest sql-format-writes-values-maps-as-write-problems-reads-them
   (let [message (str honeysql " writes :values maps differently: update write-problems in src/pgmalli_next/impl/problems.clj, "

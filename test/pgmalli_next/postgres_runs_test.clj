@@ -4,6 +4,7 @@
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
+            [malli.generator :as mg]
             [next.jdbc :as jdbc]
             [next.jdbc.prepare :as prepare]
             [next.jdbc.result-set :as rs]
@@ -550,3 +551,43 @@
     (is (= {:t java.time.LocalTime/MAX :tt java.time.OffsetTime/MAX}
            (jdbc/execute-one! (datasource) ["SELECT '24:00'::time AS t, '24:00+05'::timetz AS tt"] {:builder-fn (builder {})}))
         "pgjdbc reads a timetz of 24:00 as OffsetTime/MAX, whatever its offset")))
+
+(deftest a-row-values-schema-and-set-schema-generate-is-written
+  ;; the docs' example tables and matrix.types, of every type, written into copies without their
+  ;; constraints (LIKE), whose keys, CHECKs and foreign keys no generated row keeps; a table a BEFORE
+  ;; trigger fills
+  (when *db*
+    (exec-sql! (str "CREATE SCHEMA ex; SET search_path TO ex; " (slurp "docs/example/schema.sql")
+                    " CREATE SCHEMA exw; CREATE TABLE exw.groups (LIKE ex.groups INCLUDING ALL EXCLUDING CONSTRAINTS EXCLUDING INDEXES);"
+                    " CREATE TABLE exw.users (LIKE ex.users INCLUDING ALL EXCLUDING CONSTRAINTS EXCLUDING INDEXES);"
+                    " CREATE TABLE exw.posts (LIKE ex.posts INCLUDING ALL EXCLUDING CONSTRAINTS EXCLUDING INDEXES);"
+                    " CREATE TABLE exw.events (LIKE ex.events INCLUDING ALL EXCLUDING CONSTRAINTS EXCLUDING INDEXES);"
+                    " CREATE TABLE ex.filled (id int, slug text NOT NULL, name text NOT NULL);"
+                    " CREATE FUNCTION ex.fill() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.slug := coalesce(NEW.slug, 's'); RETURN NEW; END $$;"
+                    " CREATE TRIGGER fill BEFORE INSERT OR UPDATE ON ex.filled FOR EACH ROW EXECUTE FUNCTION ex.fill();"
+                    " CREATE TABLE exw.filled (LIKE ex.filled);"
+                    " CREATE TRIGGER fill BEFORE INSERT OR UPDATE ON exw.filled FOR EACH ROW EXECUTE FUNCTION ex.fill();"))
+    (with-open [con (jdbc/get-connection (datasource))]
+      ((requiring-resolve 'pgmalli-next.oracle/matrix-schema!) con)
+      (jdbc/execute! con ["CREATE TABLE exw.types (LIKE matrix.types INCLUDING DEFAULTS)"]))
+    (let [reg (pgmalli/registry (generated {:db *db*} "ex" "matrix"))
+          written (fn [q]
+                    (with-open [con (jdbc/get-connection (datasource))]
+                      (.setAutoCommit con false)
+                      (try (jdbc/execute! con (sql/format q)) nil
+                           (catch Exception e (ex-message e))
+                           (finally (.rollback con)))))]
+      (doseq [[schema table target] [["ex" :groups :exw.groups] ["ex" :users :exw.users] ["ex" :posts :exw.posts] ["ex" :events :exw.events]
+                                   ["ex" :filled :exw.filled] ["matrix" :types :exw.types]]
+              [f q] [[h/values-schema #(hash-map :insert-into target :values [%])]
+                     [h/set-schema #(hash-map :update target :set % :where [:= 1 0])]]
+              :let [s (f reg table {:schema schema})
+                    rows (try (doall (mg/sample s {:registry reg :size 10 :seed 7}))
+                              (catch Exception e (is (nil? e) (str table " generates nothing: " (ex-message e)))))]
+              row rows
+              ;; matrix's domains are CHECK (VALUE IS NOT NULL), which no schema tells; and the
+              ;; columns of DEBT.md's types taking values PostgreSQL refuses
+              :let [row (into {} (remove #(re-find #"^da?_|^[ca]_(oid|reg|character$)|^a_(varchar|char)_" (name (key %)))) row)]
+              :when (seq row)]
+        (is (m/validate s row {:registry reg}))
+        (is (nil? (written (q row))) (str table " " (pr-str row)))))))

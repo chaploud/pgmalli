@@ -12,6 +12,8 @@
             [malli.experimental.time :as time]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
+            [pgmalli-next.impl.args :as args]
+            [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.shape :as shape]
@@ -1086,7 +1088,7 @@
     (is (every? #(ok? v %) [{:group_id 1 :score 0} {:group_id 1 :score 0 :updated_at nil :nick_upper :default}]))
     (is (not-any? #(ok? v %) [{:score 0} {:group_id nil :score 0} {:group-id 1 :score 0}])
         "the kebab spelling is not the key a row is read with")
-    (is (= {:group-id ["disallowed key"]} (me/humanize (m/explain v {:group-id 1 :group_id 1 :score 0} {:registry registry}))))
+    (is (= {:group-id ["disallowed key: the column is :group_id, the key a row is read with"]} (me/humanize (m/explain v {:group-id 1 :group_id 1 :score 0} {:registry registry}))))
     (is (every? #(ok? s %) [{:group_id 2} {:nick_upper :default}]))
     (is (not-any? #(ok? s %) [{} {:group-id 2} {:nope 1}]))
     (is (every? #(ok? v %) (mg/sample v {:registry registry :seed 1})))
@@ -1481,7 +1483,7 @@
 
 (deftest each-problem-reads-as-what-to-do
   (is (= ["unknown column nik; did you mean: nick"
-          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:cast \"sad\" :mood]"]
+          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:lift :sad]"]
          (h/humanize (check {:select [:nik] :from [:users] :where [:= :mood "sad"]} opts))))
   (is (every? string? (h/humanize [{:kind :something-new}])) "a kind with no sentence still prints"))
 
@@ -1500,7 +1502,7 @@
     (is (= [:map [:v element] [:n [:int {:pg/type "bigint"}]]]
            (:row (h/analyze reg {:select [:r.v :r.n] :from [:d [[:with-ordinality [:jsonb_array_elements :items] [:r :v :n]]]]} {})))
         "under WITH ORDINALITY, the alias as a call, as HoneySQL writes it there")
-    (is (= [{:kind :column-definition-list :function "jsonb_array_elements" :alias "r"}]
+    (is (= [{:kind :column-definition-list :function "jsonb_array_elements" :alias "r" :columns [:value]}]
            (:problems (h/analyze reg {:select [:r.value] :from [:d [[:jsonb_array_elements :items] [:r {:with-columns [[:value :jsonb]]}]]]} {})))
         "column types of a function returning no record, which PostgreSQL refuses")
     (is (= [] (:problems (h/analyze reg {:select [:w.k] :from [[[:jsonb_to_record :?doc] [:w {:with-columns [[:k :text]]}]]]} {})))
@@ -2098,11 +2100,12 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])" "should be [:lift v], v one of :happy :sad"]}
+    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a java.lang.String is none of these" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
-    (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %)) (vals r)))
-                  (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))
-        "generated as the values a column takes")))
+    (let [rows (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30}))]
+      (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %) (not= :lift (first %))) (vals r))) rows)
+          "generated as the values a column takes, [:lift v] and DEFAULT")
+      (is (some (fn [r] (some #(= [:lift :sad] %) (vals r))) rows) "an enum's label as [:lift :label]"))))
 
 (deftest an-enum-column-takes-its-labels-as-keywords-not-as-strings
   (let [o opts
@@ -2136,8 +2139,18 @@
 (deftest a-not-null-key-compared-with-null-matches-at-most-one-row
   (is (= {:max 1} (second (last (h/query-schema registry [:db] {:select [:nick] :from [:users] :where [:= :id nil]} opts))))))
 
-(deftest trim-names-its-column-btrim
-  (is (= [] (check {:select [:s.btrim] :from [[{:select [[[:trim :nick]]] :from [:users]} :s]]}))))
+(deftest sql-syntax-is-the-function-the-grammar-calls-and-names-its-column-after
+  (is (= [] (check {:select [:s.btrim] :from [[{:select [[[:trim :nick]]] :from [:users]} :s]]})))
+  (is (= [:map [:btrim [:maybe text]] [:ltrim [:maybe text]] [:rtrim [:maybe text]] [:pg_collation_for [:maybe text]]]
+         (row {:select [[[:trim :!both "x" :!from :nick]] [[:trim :!leading "x" :!from :nick]] [[:trim :!trailing :!from :nick]] [[:collation-for :nick]]] :from [:users]})))
+  (is (= [:map [:p [:maybe int4]]] (row {:select [[[:position [:in "a" :nick]] :p]] :from [:users]})))
+  (testing "POSITION(? IN t) is position(t, ?): ? a string, no IN list"
+    (is (= [] (check {:select [[[:position [:in :?a :nick]] :p]] :from [:users]})))
+    (is (m/validate (:a (args {:select [[[:position [:in :?a :nick]] :p]] :from [:users]})) "a" malli-opts))
+    (is (= [{:kind :unknown-column :column :nope}] (check {:select [[[:position [:in :nope :nick]] :p]] :from [:users]}))))
+  (is (= [{:kind :unknown-column :column :nope :in [:select 0 0 1 1]}]
+         (mapv #(dissoc % :did-you-mean) (check {:select [[[:position [:in {:select [:nick] :from [:users] :where [:= :nope 1]} :nick]] :p]] :from [:users]})))
+      "a statement in [:in a b] is at its path as written"))
 
 (deftest an-alias-list-renames-the-first-columns-alone
   (is (= [] (check {:select [:u.nick :u.a] :from [[:users [:u {:columns [:a]}]]]})))
@@ -3180,3 +3193,108 @@
              (:problems (h/analyze reg {:update :t :set {:m :ok} :where [:= :id 1]}))))
       (is (re-find #"in :set for m: HoneySQL writes a keyword there as a column"
                    (first (h/humanize (:problems (h/analyze reg {:update :t :set {:m :ok} :where [:= :id 1]})))))))))
+
+(def ^:private a-call-in-each-clause
+  "A query whose clause (the key) holds a call naming the column :nope, which no table has."
+  (let [e [:upper :nope]
+        set-op (fn [k] {k [{:select [[e]] :from [:users]} {:select [:nick] :from [:users]}]})
+        joined (fn [k] {:select [:users.id] :from [:users] k [:groups [:= e "a"]]})]
+    (merge (into {} (for [k [:union :union-all :intersect :except :except-all]] [k (set-op k)]))
+           (into {} (for [k [:join :left-join :right-join :inner-join :outer-join :full-join]] [k (joined k)]))
+           {:select {:select [[e]] :from [:users]}
+            :select-distinct {:select-distinct [[e]] :from [:users]}
+            :select-distinct-on {:select-distinct-on [[e] :id] :from [:users]}
+            :select-top {:select-top [1 [e]] :from [:users]}
+            :select-distinct-top {:select-distinct-top [1 [e]] :from [:users]}
+            :with {:with [[:c {:select [[e]] :from [:users]}]] :select [:*] :from [:c]}
+            :with-recursive {:with-recursive [[:c {:select [[e]] :from [:users]}]] :select [:*] :from [:c]}
+            :from {:select [:id] :from [:users [e :x]]}
+            :using {:delete-from :users :using [[e :x]]}
+            :cross-join {:select [:id] :from [:users] :cross-join [[e :x]]}
+            :join-by {:select [:users.id] :from [:users] :join-by [:join [:groups [:= e "a"]]]}
+            :where {:select [:id] :from [:users] :where [:= e "a"]}
+            :having {:select [:id] :from [:users] :group-by [:id] :having [:= e "a"]}
+            :group-by {:select [:id] :from [:users] :group-by [e]}
+            :order-by {:select [:id] :from [:users] :order-by [[e :desc]]}
+            :limit {:select [:id] :from [:users] :limit [:abs :nope]}
+            :offset {:select [:id] :from [:users] :offset [:abs :nope]}
+            :fetch {:select [:id] :from [:users] :fetch [:abs :nope]}
+            :values {:insert-into :users :values [{:nick e}]}
+            :set {:update :users :set {:nick e}}
+            :on-conflict {:insert-into :users :values [{:nick "a"}] :on-conflict [e] :do-nothing true}
+            :do-update-set {:insert-into :users :values [{:nick "a"}] :on-conflict [:nick] :do-update-set {:nick e}}
+            :returning {:delete-from :users :returning [[e]]}
+            :window {:select [:id] :from [:users] :window {:w {:partition-by [[e]]}}}
+            :partition-by {:select [:id] :from [:users] :partition-by [[e]]}
+            :frame {:select [[[:over [[:sum :score] {:order-by [:id] :frame [:rows [[:abs :nope] :preceding]]} :s]]]] :from [:users]}})))
+
+(deftest a-column-a-call-names-is-told-in-every-clause-but-the-expressionless
+  (is (= (sort (remove syntax/expressionless-clauses (into syntax/read-clauses syntax/ignored-clauses)))
+         (sort (keys a-call-in-each-clause)))
+      "a clause analyze reads or ignores holds expressions, with a query in a-call-in-each-clause, or is in hsyntax/expressionless-clauses")
+  (doseq [[k q] a-call-in-each-clause]
+    (is (some #(= :nope (:column %)) (check q)) (str k " " (pr-str q))))
+  (is (= [] (check {:select [:u.id] :from [[:users :u]] :join [[:groups :g] [:using :id]]})) "USING lists columns")
+  (is (= [] (filter #(= :unknown-column (:kind %)) (check {:insert-into :groups :values [{:name "a"}] :on-conflict {:on-constraint :groups_pkey} :do-nothing true})))
+      "a map's entries are clauses, no call")
+  (is (= [] (check {:select [:u.id] :from [[:users :u] [[:with-ordinality [:upper :u.nick] [:x :v :n]]]]})) "an alias is no call")
+  (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from [:users] :where [:= [:cardinality [:array [:nope]]] 1]})) "ARRAY[...]'s elements"))
+
+(deftest a-literal-a-schema-cannot-judge-is-not-refused
+  (is (false? (#'args/refuses? registry [:ref :pg.nowhere/x] "a")))
+  (is (true? (#'args/refuses? registry :int "a"))))
+
+(def ^:private two-schemas
+  (pgmalli/registry {:schemas ["app" "billing"]
+                     :registry {:pg.app/mood [:enum "happy" "sad"]
+                                :pg.app/dmood [:enum "x"]
+                                :pg.billing/state [:enum "draft" "sent" "in progress"]
+                                :pg.billing/invoices [:map {:pg/table "billing.invoices"}
+                                                      [:id [:int {:pg/type "bigint"}]]
+                                                      [:state [:ref {:pg/type "state"} :pg.billing/state]]
+                                                      [:states [:maybe [:vector {:pg/type "state[]"} [:ref {:pg/type "state"} :pg.billing/state]]]]
+                                                      [:payer_mood [:maybe [:ref {:pg/type "app.mood"} :pg.app/mood]]]]}}))
+
+(deftest a-type-a-problem-names-is-qualified-where-the-query-reads-another-schema
+  (let [say #(h/humanize (:problems (h/analyze two-schemas %1 %2)))]
+    (is (= [{:kind :uncast-string :column :state :value "sent" :type "billing.state"}]
+           (:problems (h/analyze two-schemas {:select [:id] :from [:billing.invoices] :where [:= :state "sent"]}))))
+    (is (= {:type "state"} (select-keys (first (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :state "sent"]} {:schema "billing"}))) [:type])))
+    (testing "an enum's label goes as [:lift :label], as values-schema says; one no keyword spells, cast"
+      (is (str/ends-with? (first (say {:select [:id] :from [:billing.invoices] :where [:= :state "sent"]} {})) "write [:lift :sent]"))
+      (is (str/ends-with? (first (say {:select [:id] :from [:billing.invoices] :where [:= :state "in progress"]} {})) "write [:cast \"in progress\" :billing.state]"))
+      (is (= [] (:problems (h/analyze two-schemas {:select [:id] :from [:billing.invoices] :where [:= :state [:lift :sent]]})))))
+    (is (= "billing.state[]" (:type (first (:problems (h/analyze two-schemas {:update :billing.invoices :set {:states [:lift ["sent"]]}})))))))
+  (testing "a cast to a type of no schema the query reads, which an enum of another has the name of"
+    (is (= [{:kind :unknown-type :type "mood" :did-you-mean ["app.mood"]}]
+           (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :payer_mood [:cast "happy" :mood]]} {:schema "billing"}))))
+    (is (= [{:kind :unknown-type :type "mood[]" :did-you-mean ["app.mood[]"]}]
+           (:problems (h/analyze two-schemas {:select [[[:cast :?m [:raw "mood[]"]] :m]]} {:schema "billing"}))))
+    (is (= [] (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :payer_mood [:cast "happy" :app.mood]]} {:schema "billing"}))))
+    (is (= [] (:problems (h/analyze two-schemas {:select [[[:cast "x" :thing] :t]]} {:schema "billing"}))) "a type the registry tells nothing of")
+    (is (= [] (:problems (h/analyze two-schemas {:select [[[:cast "happy" :mood] :t]]} {:schema "app"}))))))
+
+(deftest a-value-of-no-literal-syntax-is-held-as-a-literal-is
+  (let [t (java.time.Instant/parse "2026-01-01T00:00:00Z")]
+    (is (= [{:kind :literal-type :function "updated_at" :column :updated_at :value t :sent "timestamp with time zone" :type "timestamp"}]
+           (check {:update :users :set {:updated_at t} :where [:= :id 1]})))
+    (is (= [:literal-type] (map :kind (check {:update :users :set {:born [:lift t]} :where [:= :id 1]}))))
+    (is (= [] (check {:update :users :set {:closed_at t :updated_at (java.time.LocalDateTime/of 2026 1 1 0 0)} :where [:= :id 1]})))
+    (is (= [] (check {:select [:id] :from [:users] :where [:> :updated_at t]})) "compared, timestamp converts to timestamptz implicitly")
+    (is (= ["a java.time.Instant (2026-01-01T00:00:00Z) goes to column updated_at as a parameter, which pgjdbc sends as timestamp with time zone, a type column updated_at takes there through no implicit conversion; cast it, [:cast <the Instant> :timestamp]"]
+           (h/humanize (check {:update :users :set {:updated_at t} :where [:= :id 1]}))))))
+
+(deftest a-write-problem-says-what-to-write
+  (is (= ["INSERT into sample.users lacks score, which is NOT NULL with no default; give every row a value of score"]
+         (h/humanize (check {:insert-into :users :values [{:group_id 1}]}))))
+  (is (= ["NULL written into sample.users.score, which is NOT NULL; write a value, or [:default] where the column has a default"]
+         (h/humanize (check {:insert-into :users :values [{:group_id 1 :score nil}]}))))
+  (is (= ["NULL written into sample.users.score, which is NOT NULL; write a value"]
+         (h/humanize (check {:update :users :set {:score nil}}))))
+  (is (str/ends-with? (first (h/humanize [{:kind :column-definition-list :function "f" :alias "r" :columns [:k :v]}]))
+                      "name the columns with no type: [:r {:columns [:k :v]}]")))
+
+(deftest a-from-item-that-is-no-call-names-no-column
+  (is (= [] (check {:select [:id] :from [[[:only :users]]]})) "ONLY (t) is the table t")
+  (is (= [] (check {:select [:g.name :s.n] :from [[:groups :g]] :left-join [[[:join [:users :u] {:cross-join [[[:generate_series 1 :g.id] [:s {:columns [:n]}]]]}]] [:= :u.group_id :g.id]]}))
+      "a function inside a parenthesized join sees the tables before the join"))

@@ -123,7 +123,7 @@
                                                          " (sent as " (str/join " or " (distinct (map second in))) ", which PostgreSQL takes as " t "); "
                                                          (str/join ", " (map #(str (named %) " goes as " (second %)) out))
                                                          ", which it does not convert to " t " implicitly: send " (when hint (str hint " or "))
-                                                         "cast the parameter, [:cast <parameter> :" (str/replace t " " "-") "]")}]
+                                                         "cast the parameter, " (syntax/cast-form "<parameter>" t))}]
                          cs)]))))
 
 (defn- class-names [a] (when (and (= :and (shape/head a)) (= :pg/class (shape/head (last a)))) (shape/entries (last a))))
@@ -216,7 +216,7 @@
             ;; numeric's NaN and infinities, which the one reading reads as a Double: PostgreSQL
             ;; assigns them exactly, as no other Double
             specials (when (and (= :assign context) (= :or-double (:read (types/entry t))))
-                       [[:and [:double {:pg/type "numeric"}]
+                       [[:and {:gen/elements [##NaN ##Inf ##-Inf]} [:double {:pg/type "numeric"}]
                          [:fn {:error/message "should be a Double NaN or infinity alone, which numeric holds as it is"} #(or (Double/isNaN %) (Double/isInfinite %))]]])
             all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
                   (and (= :call held-in) (not (::common-type opts))) (keep #(class-held % t takes? opts)))
@@ -236,16 +236,18 @@
     (syntax/distinct-ops op) query/nullable))
 
 (defn- literal
-  "{:value v} of a literal x, a value written in the query: a string or a number, bare or
-   [:lift v] (HoneySQL sends it as a parameter, sql/format's :inline aside), a boolean (bare,
-   HoneySQL writes TRUE or FALSE), [:lift :kw] (sent untyped as its text, :text, :ns/a's ns/a),
-   [:lift coll] (a map or a vector, sent as the one sending sends its class: jsonb), or
-   [:inline s] (written into the SQL, :inline); nil for another x (a bare keyword is a column)."
+  "{:value v} of a literal x, a value written in the query: a string, a number or another value
+   of no HoneySQL syntax (an Instant, a UUID), bare or [:lift v] (HoneySQL sends it as a
+   parameter, sql/format's :inline aside), a boolean (bare, HoneySQL writes TRUE or FALSE),
+   [:lift :kw] (sent untyped as its text, :text, :ns/a's ns/a), [:lift coll] (a map or a vector,
+   sent as the one sending sends its class: jsonb), or [:inline s] (written into the SQL,
+   :inline); nil for another x (a bare keyword is a column)."
   [x]
-  (let [v (when (and (vector? x) (= 2 (count x))) (second x))]
-    (cond (or (string? x) (number? x) (boolean? x)) {:value x}
+  (let [v (when (and (vector? x) (= 2 (count x))) (second x))
+        value? #(not (or (nil? %) (keyword? %) (symbol? %) (coll? %)))]
+    (cond (value? x) {:value x}
           (= :lift (when (vector? x) (first x)))
-          (cond (or (string? v) (number? v) (boolean? v) (coll? v)) {:value v}
+          (cond (or (value? v) (coll? v)) {:value v}
                 (keyword? v) {:value v :text (subs (str v) 1)})
           (and (= :inline (when (vector? x) (first x))) (string? v)) {:value v :inline true})))
 
@@ -557,19 +559,25 @@
                                    :any))
           :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 
+(defn malli-options
+  "The malli options a schema of registry r (an argument's, a row's) is validated under."
+  [r]
+  {:registry (merge registry/base (::query/schemas r))})
+
 (defn- refuses?
-  "Whether argument schema t refuses literal v."
+  "Whether argument schema t refuses literal v; not where malli cannot tell (validate throws)."
   [registry t v]
-  (not (try (m/validate t v {:registry (merge registry/base (::query/schemas registry))}) (catch Exception _ true))))
+  (false? (try (m/validate t v (malli-options registry)) (catch Exception _ nil))))
 
 (defn- uncast-type
-  "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
-   type of types' :cast (bit takes varbit, which keeps its length), or any other type types
-   has; nil for a string type (text, varchar, char, name, citext) or a type types lacks."
-  [registry s]
+  "The type to cast a string to for column s: an enum type (or a domain over one, as
+   query/cast-type-name names it under opts), an array, a type of types' :cast (bit takes
+   varbit, which keeps its length), or any other type types has; nil for a string type (text,
+   varchar, char, name, citext) or a type types lacks."
+  [registry s opts]
   (let [p (shape/column-props s)
         e (types/entry (shape/type-name p))]
-    (or (query/enum-type registry s)
+    (or (when (query/enum-type registry s) (query/cast-type-name s opts))
         (when e
           (cond (types/element (:pg/type p)) (types/array-of (:name e))
                 (:cast e) (name (:cast e))
@@ -607,12 +615,12 @@
           (and labels (not (coll? value)) (not (some #{(or text value)} labels)))
           (cond-> {:kind :enum-literal :value value :allowed labels} column (assoc :column column) type (assoc :type type))
           (and (sent-typed? x opts) refused?)
-          (let [u (when (and s (string? value)) (uncast-type registry s))]
+          (let [u (when (and s (string? value)) (uncast-type registry s opts))]
             (if u
               (cond-> {:kind :uncast-string :value value :type u} column (assoc :column column) (not column) (assoc :function function))
               (cond-> {:kind :literal-type :function function :value value :sent (literal-sent-type x opts)}
                 (= :assign context) (assoc :column column)
-                (some-> s shape/column-props :pg/type) (assoc :type (:pg/type (shape/column-props s)))))))))
+                (some-> s shape/column-props :pg/type) (assoc :type (query/cast-type-name s opts))))))))
 
 (defn- call-args
   "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve
@@ -632,9 +640,8 @@
               os (query/reached registry opts parts)]
         [j a] (map-indexed vector args)
         :when (or (syntax/param-key a) (sent-typed? a opts))
-        ;; unnest(a, b) in FROM is ROWS FROM (unnest(a), unnest(b)) to PostgreSQL: each argument its own call
         :let [all-ins (if (syntax/param-key a) param-ins literal-ins)
-              [ins i] (if (and (= "unnest" n) (next args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth all-ins j)] 0] [all-ins j])
+              [ins i] (if (and (syntax/rows-from? n args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth all-ins j)] 0] [all-ins j])
               ss (map #(query/named-type-schema registry opts %) (resolve/argument-types ins i os))
               ;; another parameter of the call is of a type its value picks: refused whatever type it is
               sibling-ins (reduce (fn [inss j] (if (and (not= j i) (= :free (nth ins j)))
@@ -656,10 +663,8 @@
    refuses (42P18): tested so under sql/format's :inline alone, or cast ([:= [:cast :?x t] nil])."
   [ps {:keys [format]}]
   (for [{:keys [x]} (syntax/expression-nodes ps)
-        :when (and (vector? x) (= 3 (count x)) (#{:= :<> :not= :!= :is :is-not} (first x)))
-        :let [[_ a b] x]
-        [v other] [[a b] [b a]]
-        :when (syntax/null-value? other format)
+        :let [[v] (syntax/null-test x format)]
+        :when v
         :let [cast? (and (vector? v) (= :cast (first v)) (= 3 (count v)))
               k (syntax/param-key (if cast? (second v) v))]
         :when (and k (or cast? (:inline format)))]

@@ -9,6 +9,7 @@
    take the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
+            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.args :as args]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
@@ -119,6 +120,29 @@
         k (jdbc/row-key n)]
     (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
+(defn- lift-message
+  "The :error/fn of [:tuple [:= :lift] t], a column's [:lift v]: v one of t's labels, or as the
+   column takes it; and the class of a value given bare, which no message of the column's others
+   names."
+  [{:keys [schema value]} _]
+  (let [labels (let [e (shape/and-base (shape/non-null (malli.core/form (last (malli.core/children schema)))))]
+                 (when (= :enum (shape/head e)) (shape/entries e)))
+        c (class value)]
+    (str "should be [:lift v], v " (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it")
+         (when-not (or (nil? value) (vector? value))
+           (str "; " (if (#{\A \E \I \O \U} (first (.getSimpleName c))) "an " "a ") (.getName c) " is none of these")))))
+
+(defn- extra-key-message
+  "The :error/fn of a written row's map: of a key no column has, the column's key it spells
+   otherwise (:group-id for :group_id), which HoneySQL writes as that column but a row is not
+   read with; nil for another error."
+  [{:keys [schema type in]} _]
+  (let [k (last in)
+        kebab #(when (keyword? %) (keyword (str/replace (name %) "_" "-")))]
+    (when-let [c (and (= :malli.core/extra-key type) (keyword? k)
+                      (some #(when (and (not= % k) (= k (kebab %))) %) (map first (malli.core/children schema))))]
+      (str "disallowed key: the column is " (pr-str c) ", the key a row is read with"))))
+
 (def ^:private not-one-value
   "What HoneySQL writes in :values or :set as something else than one value: a keyword as a
    column, a Clojure vector or sequence as a row of parameters, (?, ?), which no column takes, a
@@ -139,14 +163,44 @@
     (:any :some) [:and t [:not not-one-value]]
     t))
 
+(defn- java-array
+  "A Java array of the elements of v, of the first class the one sending sends as an array
+   (accept/classes, of no primitive) that valid? takes; nil for none."
+  [valid? v]
+  (some (fn [[^Class c]]
+          (when (and c (.isArray c) (not (.isPrimitive (.getComponentType c))))
+            (when-let [a (try (into-array (.getComponentType c) v) (catch Exception _ nil))]
+              (when (valid? a) a))))
+        accept/classes))
+
+(def ^:private json-scalar
+  "What generation makes of a value a map or a vector holds that may be any (jsonb's [:map-of
+   :some :any]): a value JSON holds as itself."
+  [:or :string :int :boolean :nil])
+
 (defn- generated-values
-  "t without the values of a class alone (a PGobject), which malli does not generate; nil where
-   nothing is left."
-  [t]
-  (cond (and (= :fn (shape/head t)) (:pg/class (shape/column-props t))) nil
-        (= :maybe (shape/head t)) (if-let [x (generated-values (last t))] [:maybe x] :nil)
-        (= :or (shape/head t)) (some-> (seq (keep generated-values (shape/alternatives t))) (shape/either t))
-        :else t))
+  "t without the values malli generates nothing the one sending sends of: a class alone (a
+   PGobject), any value (:any, :some: of a type pgmalli does not type, alone or among
+   alternatives); its Java arrays
+   ([:pg/array e]) generated as one of the elements e generates (java-array), of registry r, and
+   the maps and vectors of any values (jsonb's) as JSON holds them (json-scalar); nil where nothing
+   is left."
+  [r t]
+  (let [h (shape/head t)]
+    (cond (and (= :fn h) (:pg/class (shape/column-props t))) nil
+          (#{:any :some} h) nil
+          (= :maybe h) (if-let [x (generated-values r (last t))] [:maybe x] :nil)
+          ;; of alternatives one of which is any value, the type is untold: none generated
+          (= :or h) (when-not (some #(#{:any :some} (shape/head %)) (shape/alternatives t))
+                      (some-> (seq (keep #(generated-values r %) (shape/alternatives t))) (shape/either t)))
+          (= :and h) (when-let [b (generated-values r (shape/and-base t))] (shape/update-and-base t (constantly b)))
+          (= :pg/array h)
+          (when-let [e (generated-values r (last t))]
+            (let [valid? (malli.core/validator t (args/malli-options r))]
+              (shape/merge-props t {:gen/schema [:vector {:min 1 :max 3} e] :gen/fmap #(java-array valid? %)})))
+          (and (#{:map-of :vector :sequential} h) (#{:any :some} (shape/head (last t))))
+          (shape/merge-props t {:gen/schema (if (= :map-of h) [:map-of {:max 3} :string json-scalar] [:vector {:max 3} json-scalar])})
+          :else t)))
 
 (def ^:private sql-word-schema
   "[:fn] of what HoneySQL writes as NULL or DEFAULT (word) under format, one per format so that
@@ -176,32 +230,40 @@
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::query/schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
           triggered? (query/filled-by-trigger? (shape/row-props s) (keyword derived))
-          ;; [key required? type generated] of each column, generated the values it takes that
-          ;; malli generates (nil for none)
+          ;; [plain lift lifted] of column c, nullable? where NULL may go there: plain its values as
+          ;; HoneySQL writes them in a map (a keyword is a column), lift [:lift v] of lifted's
+          typed (fn [k c nullable?]
+                  (let [assigned #(cond-> (args/accepted-type r c :assign %) nullable? query/nullable)
+                        a (assigned (assoc opts ::args/keywords-columns true))
+                        ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
+                        alts (remove nil? [(one-value a)
+                                           (when nullable? (sql-word-schema :null (:format opts)))
+                                           (when (fills k) default)])
+                        lifted (assigned opts)]
+                    [(when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
+                     ;; [:lift v] sends v as one parameter, a keyword label and a map too
+                     [:tuple {:error/fn lift-message} [:= :lift] lifted]
+                     lifted]))
+          ;; [key required? type generated generated-required?] of each column, generated the values
+          ;; it takes that malli generates (nil for none): of a column a trigger may fill, as
+          ;; without the trigger, which fills what it fills alone
           columns (concat
                    (for [[k props c] written
-                         :let [assigned #(cond-> (args/accepted-type r c :assign %) (or (shape/maybe? c) triggered?) query/nullable)
-                               a (assigned (assoc opts ::args/keywords-columns true))
-                               ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
-                               alts (remove nil? [(one-value a)
-                                                 (when (or (shape/maybe? c) triggered?) (sql-word-schema :null (:format opts)))
-                                                 (when (fills k) default)])
-                               plain (when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
-                               lifted (assigned opts)
-                               labels (let [e (shape/and-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))
-                               ;; [:lift v] sends v as one parameter, a keyword label and a map too
-                               lift [:tuple {:error/message (str "should be [:lift v], v "
-                                                                 (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
-                                     [:= :lift] lifted]]]
+                         :let [[plain lift] (typed k c (or (shape/maybe? c) triggered?))
+                               [gen-plain _ gen-lifted] (typed k c (shape/maybe? c))
+                               gen (some->> [(some->> gen-plain (generated-values r))
+                                             (some->> gen-lifted (generated-values r) (vector :tuple [:= :lift]))]
+                                            (remove nil?) seq (#(if (next %) (into [:or] %) (first %))))]]
                      [(written-key k opts) (not (or (:optional props) triggered?))
-                      (if plain [:or plain lift] lift)
-                      (some-> plain generated-values)])
+                      (if plain [:or lift plain] lift)
+                      gen
+                      (not (:optional props))])
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-                     [(written-key k opts) false default default]))
+                     [(written-key k opts) false default default false]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
-          row (into [:map {:closed true}] (for [[k required? t] columns] (entry k required? t)))
+          row (into [:map {:closed true :error/fn extra-key-message}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
-          generated (into [:map] (for [[k required? t g] columns :when (or g required?)] (entry k required? (or g t))))
+          generated (into [:map] (for [[k _ t g required?] columns :when (or g required?)] (entry k required? (or g t))))
           nonempty [:not [:= nil {}]]
           non-empty #(if (= "update" derived) [:and % nonempty] %)]
       (shape/merge-props (non-empty row) {:gen/schema (non-empty generated)}))))
@@ -245,16 +307,6 @@
   "c as HoneySQL writes it in SQL: :u/nick as u.nick."
   [c]
   (cond (and (keyword? c) (namespace c)) (str (namespace c) "." (name c)) (keyword? c) (name c) :else (str c)))
-
-(defn- cast-form
-  "[:cast x t] as HoneySQL writes a cast to type t: t by its short name, as a keyword where one
-   spells it (:timestamptz), else as [:raw t] (\"bigint[]\", \"timestamp(3)\", a quoted name)."
-  [x t]
-  ;; format_type writes a typmod inside the name: timestamp(3) without time zone
-  (let [typmod (re-find #"\([^)]*\)" t)
-        [_ base brackets] (re-matches #"(.*?)((?:\[\])*)" (str/trim (str/replace t #"\([^)]*\)" "")))
-        n (str (types/short-name base) typmod brackets)]
-    (str "[:cast " x " " (if (re-matches #"[a-z_][a-z0-9_]*" n) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
 
 (defn- field-target-text
   "The sentence of an assigned target qualified by its table or alias, a field of a column to PostgreSQL."
@@ -309,33 +361,45 @@
                                 (str "list the columns of " x " instead, giving one an alias of its own")
                                 (str "give one an alias of its own: " (pr-str [(if (keyword? x) x (first x)) alias]))))))
    :missing-required-column (fn [{:keys [table column]}]
-                              (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"))
+                              (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"
+                                   "; give every row a value of " (column-name column)))
    :values-arity (fn [{:keys [row columns values]}]
                    (str ":values row " row " has " values (if (= 1 values) " value" " values") " for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column type value allowed]}]
                    (str (pr-str value) " is no value of " (if column (column-name column) (str "type " type)) "; it takes " (str/join ", " (map pr-str allowed))))
    :no-operator (fn [{:keys [column op domain type]}]
                   (str "PostgreSQL has no " (if (#{:in :not-in} op) "=" (name op)) " for " (column-name column) ", of domain " domain " over enum " type
-                       "; compare the enum: " (pr-str [:cast column (keyword (str/replace type " " "-"))])))
+                       "; compare the enum: " (syntax/cast-form (pr-str column) type)))
    :uncast-string (fn [{:keys [column function value type]}]
                     (str (pr-str value) " reaches " (cond (keyword? column) (str "column " (column-name column))
                                                           column (pr-str column)
                                                           :else (str "an argument of " function))
                          " as a typed string, which its type " type " does not take"
-                         " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar);"
-                         " write " (cast-form (pr-str value) type)))
+                         " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write "
+                         ;; an enum's label: sent untyped, as values-schema says
+                         (if (and (nil? (types/entry type)) (re-matches #"[A-Za-z_][\w-]*" value))
+                           (pr-str [:lift (keyword value)])
+                           (syntax/cast-form (pr-str value) type))))
    :literal-type (fn [{:keys [function column value sent type]}]
-                   (let [to (if column (str "column " (column-name column)) function)]
+                   (let [to (if column (str "column " (column-name column)) function)
+                         ;; a value of no literal syntax (an Instant) by its class
+                         printed? (or (string? value) (number? value) (boolean? value) (coll? value) (uuid? value))
+                         x (if printed? (pr-str value) (str "<the " (.getSimpleName (class value)) ">"))]
                      (if-not sent
                        (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends no " (.getSimpleName (class value))
                             " as; send a vector (jsonb) or a Java array (an array type)")
-                     (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
+                     (str (if printed? (pr-str value) (str "a " (.getName (class value)) " (" value ")")) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
                           " takes there through no implicit conversion; "
                           (if (coll? value)
                             ;; jsonb, which casts to no array or enum
                             (str "send the value of " (or type "the type meant") " itself (an array as a Java array, (into-array ...); a label as [:lift :label])")
-                            (str "cast it, " (if type (cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]"))))))))
-   :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
+                            (str "cast it, " (if type (syntax/cast-form x type) (str "[:cast " x " <the type meant>]"))))))))
+   :unknown-type (fn [{:keys [type did-you-mean]}]
+                   (str "type " type " is in neither pg_catalog nor the query's schema" (error/did-you-mean (str/join " or " did-you-mean))
+                        "; qualify it, " (syntax/cast-form "x" (first did-you-mean)) ", or pass that schema as :schema"))
+   :not-null-violation (fn [{:keys [table column clause]}]
+                         (str "NULL written into " table "." (column-name column) ", which is NOT NULL; write a value"
+                              (when (= :values clause) ", or [:default] where the column has a default")))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))
@@ -343,17 +407,17 @@
                     (if did-you-mean
                       (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))
                       (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand")))
-   :column-definition-list (fn [{:keys [function alias]}]
+   :column-definition-list (fn [{:keys [function alias columns]}]
                              (str "the alias " alias " of " function " lists column types, which PostgreSQL takes of a function returning record"
                                   " alone (a column definition list is only allowed for functions returning record); name the columns with no type: "
-                                  (pr-str [(keyword alias) {:columns [:v]}])))
+                                  (pr-str [(keyword alias) {:columns columns}])))
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))
    :undetermined-type (fn [{:keys [arg function type]}]
                         (let [x (keyword (str "?" (name arg)))]
                           (str "argument " arg " goes to " function ", which takes its type from the value sent, but every value"
                                " its other uses take is sent untyped (a keyword label) or is nil, which PostgreSQL"
                                " cannot type there (could not determine data type of parameter $n, or could not determine polymorphic type);"
-                               " cast it in the query: " (if type (cast-form x type) (str "[:cast " x " <the type meant>]")))))})
+                               " cast it in the query: " (if type (syntax/cast-form x type) (str "[:cast " x " <the type meant>]")))))})
 
 (defn humanize
   "A sentence for each problem of analyze's :problems (or of query-schema's :pgmalli/problems):

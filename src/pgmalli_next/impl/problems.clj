@@ -5,7 +5,8 @@
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.query :as query]
-            [pgmalli-next.impl.shape :as shape]))
+            [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types]))
 
 (defn- output-column?
   "Whether a bare :col of :order-by or :group-by may mean an output column of stmt."
@@ -102,22 +103,18 @@
   "The directions HoneySQL writes after an ORDER BY item ([:score :desc])."
   #{:asc :desc :nulls-first :nulls-last :asc-nulls-first :asc-nulls-last :desc-nulls-first :desc-nulls-last})
 
-(def ^:private expression-clauses
-  "The clauses whose values are expressions, whose calls' arguments name columns."
-  #{:select :select-distinct :select-distinct-on :where :having :group-by :order-by :set :values
-    :do-update-set :returning :window :frame :limit :offset})
-
 (defn- listed-expressions
   "The expressions x lists where HoneySQL writes a list of ORDER BY's items, each expr or [expr
    direction], no call: a window's :partition-by and :order-by ({:partition-by [:a]}, in OVER or
-   WINDOW), an aggregate's [:order-by e items...] and [:distinct e] (HoneySQL writes no more), and a frame's bound
-   [offset :preceding]; nil for another x."
+   WINDOW), an aggregate's [:order-by e items...] and [:distinct e] (HoneySQL writes no more), a frame's bound
+   [offset :preceding], and the elements of [:array [e ...]]; nil for another x."
   [x clause]
   (cond (and (map? x) (some #{:partition-by :order-by} (keys x)) (not (syntax/statement? x)))
         (map syntax/bare (mapcat #(syntax/vectorish (get x %)) [:partition-by :order-by]))
         (not (vector? x)) nil
         (= :order-by (first x)) (cons (second x) (map syntax/bare (drop 2 x)))
         (= :distinct (first x)) [(second x)]
+        (and (= :array (first x)) (sequential? (second x))) (second x)
         (and (= :frame clause) (= 2 (count x)) (#{:preceding :following} (second x))) [(first x)]
         (and (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x)))))) [(first x)]))
 
@@ -149,11 +146,9 @@
                                         ;; a column a call's argument names ([:upper :email]), in a clause of expressions;
                                         ;; an item of SELECT, ORDER BY or RETURNING is [expression alias|direction], no call
                                         ;; the value of a list clause ([:a :b] of ORDER BY) is its items, no call
-                                        (for [{:keys [x chain item? top? clause condition?]} (syntax/expression-nodes ps)
+                                        (for [{:keys [x chain item? clause expression?]} (syntax/expression-nodes ps)
                                               :let [items? (or (syntax/select-list-clauses clause) (= :order-by clause))]
-                                              :when (and (or (expression-clauses clause) (and condition? (not (and top? (vector? x) (= :using (first x))))))
-                                                         (not (and top? (or items? (#{:group-by :window :frame} clause))))
-                                                         (not (and item? items?)))
+                                              :when (and expression? (not (and item? items?)))
                                               :let [listed (listed-expressions x clause)
                                                     ;; [:cast x t]: x alone, t a type's name
                                                     cast? (and (vector? x) (= :cast (first x)) (= 3 (count x)))
@@ -164,7 +159,7 @@
                                               a args
                                               ;; ROLLUP's, CUBE's and GROUPING SETS' items are GROUP BY's: an output column too
                                               :when (and (syntax/column-keyword? a format)
-                                                         (not (and (= :group-by clause) (vector? x) (#{:rollup :cube :grouping-sets} (first x))
+                                                         (not (and (= :group-by clause) (vector? x) (syntax/grouping-sets (first x))
                                                                    (output-column? stmt a format)
                                                                    (empty? (query/column-hits registry chain a)))))]
                                           [a chain])
@@ -278,19 +273,34 @@
   [registry ps opts]
   (distinct
    (for [[op side other chain] (syntax/comparison-sides ps)
-         ;; HoneySQL writes = and <> with NULL as IS [NOT] NULL; PostgreSQL reads IS [NOT] DISTINCT
-         ;; FROM NULL as one
-         :when (not (and (or (#{:= :<> :not= :!=} op) (syntax/distinct-ops op)) (syntax/null-value? other (:format opts))))
+         ;; PostgreSQL reads IS [NOT] DISTINCT FROM NULL as IS [NOT] NULL
+         :when (not (or (syntax/null-test [op side other] (:format opts))
+                        (and (syntax/distinct-ops op) (syntax/null-value? other (:format opts)))))
          :let [s (query/side-schema registry chain side opts)
                t (when s (query/slot-type registry s))]
          :when (and (vector? t) (:domain? (get t 2)))]
-     {:kind :no-operator :column side :op op :domain (query/domain-of s) :type (second t)})))
+     {:kind :no-operator :column side :op op :domain (query/domain-of s) :type (query/cast-type-name s opts)})))
+
+(defn- type-problems
+  "{:kind :unknown-type :type n :did-you-mean [...]} of each cast to an unqualified type name n
+   that names no type pg_catalog or the :schema has, but an enum type of another schema
+   (query/type-suggestions)."
+  [registry ps {:keys [schema] :as opts}]
+  (distinct
+   (for [{:keys [x]} (syntax/expression-nodes ps)
+         :when (and (vector? x) (= :cast (first x)) (= 3 (count x)))
+         :let [n (syntax/cast-target (nth x 2))]
+         :when (and n (not (str/includes? n ".")) (nil? (query/named-type-schema registry opts n)))
+         :let [e (types/element n)
+               meant (some->> (query/type-suggestions registry (or e n) schema) (mapv #(cond-> % e types/array-of)))]
+         :when meant]
+     {:kind :unknown-type :type n :did-you-mean meant})))
 
 (defn- column-definition-problems
-  "{:kind :column-definition-list :function f :alias a} for each function in FROM of a statement
+  "{:kind :column-definition-list :function f :alias a :columns [c ...]} for each function in FROM of a statement
    whose alias writes a column definition list ({:with-columns ...}) where no candidate of it
    returns record, as PostgreSQL takes one for alone: of no type, a list of names
-   ([:r {:columns [:v]}]) renames its columns."
+   ([:r {:columns [:v]}]) renames its columns. columns, the names the list gives."
   [registry stmt opts]
   (for [item (syntax/table-items stmt)
         :when (syntax/column-definitions item)
@@ -298,7 +308,8 @@
               [kind n :as parts] (syntax/call-parts f)
               os (when (= :functions kind) (query/reached registry opts parts))]
         :when (and (seq os) (not-any? #(= "record" (:result %)) os))]
-    {:kind :column-definition-list :function n :alias (syntax/alias-label al opts)}))
+    {:kind :column-definition-list :function n :alias (syntax/alias-label al opts)
+     :columns (mapv #(keyword (syntax/ident-name (first %) (:format opts))) (syntax/column-definitions item))}))
 
 (defn- problems
   "The problems of one statement (README.md's table of :kind), scope the statement's (from
@@ -324,6 +335,7 @@
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
                  (operator-problems registry ps opts)
+                 (type-problems registry ps opts)
                  (column-definition-problems registry stmt opts)))))
 
 (defn- unread-clauses
