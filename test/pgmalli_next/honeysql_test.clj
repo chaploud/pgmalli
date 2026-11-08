@@ -3658,8 +3658,10 @@
     (is (thrown? clojure.lang.ExceptionInfo (mg/generate (h/values-schema reg :t {:format {:inline true}}) {:registry reg :seed 1})))))
 
 (deftest a-required-date-array-written-generates
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:vector {:pg/type "date[]"} :time/local-date]]]}})]
-    (is (every? #(m/validate (h/values-schema reg :t) % {:registry reg}) (mg/sample (h/values-schema reg :t) {:registry reg :size 10 :seed 1})))))
+  ;; babashka has no java.sql.Date, which a date[]'s Java array is of
+  (when-not (System/getProperty "babashka.version")
+   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:vector {:pg/type "date[]"} :time/local-date]]]}})]
+    (is (every? #(m/validate (h/values-schema reg :t) % {:registry reg}) (mg/sample (h/values-schema reg :t) {:registry reg :size 10 :seed 1}))))))
 
 (deftest a-required-column-generating-nothing-names-itself-failing
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:any {:pg/type "interval"}]]]}})
