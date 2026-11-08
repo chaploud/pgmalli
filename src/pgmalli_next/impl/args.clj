@@ -114,8 +114,8 @@
     (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
                       ;; pgjdbc reads an xml as a java.sql.SQLXML, which it sends as xml
                       (when (and (= "xml" t) (not inline?)) [jdbc/sqlxml])
-                      (for [[x p] rows
-                            :when (and (string? p) (not= p t) (accept/holds? t p context))
+                      (for [[x p c] rows
+                            :when (and (not= p t) (accept/takes? t p c context))
                             a (shape/alternatives x)]
                         (cond-> (unlabel a) (and oid (accept/number-type? p)) (within p "oid" oid)))))))
 

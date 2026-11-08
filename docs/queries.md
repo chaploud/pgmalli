@@ -716,10 +716,12 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   returns no row: `SELECT ?x WHERE NOT EXISTS (...)`, which skips a duplicate, writes the nil
   and fails where there is none. Test the argument for NULL where nil means "write nothing":
   `{:select [:?x] :where [:is-not [:cast :?x :integer] nil]}` (cast, [as above](#the-types-of-the-arguments)).
-- <a id="stricter-untyped"></a>A value sent untyped, assigned or compared, where its text is not of the column's type's
-  category: a keyword to a `bigint`, `uuid` or `date` column (`:1`, `:2020-01-01`), which
-  PostgreSQL reads through the type's input. Taking them would put `:keyword` on every argument.
-  Send the value of the column's type (`1`), or cast it in the query.
+- <a id="stricter-untyped"></a>An argument sent untyped (a keyword), assigned, compared or beside
+  a column in `coalesce` or CASE, to a column of a type of no string or enum category: a `bigint`,
+  `uuid`, `date`, `tsvector`, `xml` or range column (`:1`, `:2020-01-01`, `:a`), which PostgreSQL
+  reads through the type's input. Taking them would put `:keyword` on every argument. Send the
+  value of the column's type (`1`, a `PGobject`), or cast it in the query. stricter.edn pins each
+  type this leaves out, by the class sent (`clojure.lang.Keyword`).
 - An `Instant` (a `timestamptz`) assigned to a `timestamp` or a `date` column, and a
   `LocalDateTime` (a `timestamp`) to a `date` one: PostgreSQL converts it on assignment alone,
   in the session's time zone, which pgjdbc sets to the JVM's, so the value written changes with
@@ -778,8 +780,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - A value where no column's type reaches, an argument there being `[:any {:pgmalli/untyped
   :position}]`: an item of `INSERT ... SELECT`'s select list, an element of `[:array ...]`, and
   coalesce or CASE of values alone (`[:coalesce "a" 1]`).
-- A value beside a column of `xml`, which has no `=`, or of `"char"`, which coalesce and CASE
-  match with no `character varying`.
+- A value beside a column of `"char"`, which coalesce and CASE match with no `character varying`.
 - A call returning a domain over an enum type compared (`[:= [:f :m] "ok"]`): its value is of
   the enum type, which a column of the domain is not (`:no-operator`).
 - A raw FROM item of SQL beyond a name (`[[:raw "jsonb_array_elements(doc) AS e(v)"]]`) is not

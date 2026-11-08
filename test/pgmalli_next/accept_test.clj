@@ -97,6 +97,7 @@
   (let [pairs (for [[t accepted-t] targets, sent sents
                     [context sql] {:compare (str "SELECT 1 FROM probe_target WHERE " (column t) " = $1")
                                    :assign (str "INSERT INTO probe_target (" (column t) ") VALUES ($1)")
+                                   :common (str "SELECT coalesce(" (column t) ", $1) FROM probe_target")
                                    :cast (str "SELECT CAST($1 AS " t ")")}]
                 {:t t :accepted-t accepted-t :sent sent :context context
                  :sql (str "PREPARE probe(" (if (= :unknown sent) "unknown" sent) ") AS " sql)})]
@@ -108,16 +109,23 @@
 
 (def ^:private stricter-file "test/resources/pgmalli-next/stricter.edn")
 
+(def ^:private untyped-classes
+  "The classes the one sending sends untyped (a Keyword), whose text accept/reads? reads by class."
+  (for [[c t] accept/class-types :when (= :unknown t)] c))
+
 (defn- stricter
   "{[sent context] [t ...]}: of verdicts vs, where PostgreSQL takes a parameter sent compared or
-   assigned that holds? leaves out (docs/queries.md \"Stricter than PostgreSQL\")."
+   assigned that accept/takes? leaves out (docs/queries.md \"Stricter than PostgreSQL\"); one sent
+   untyped by each class sent so, keyed by the class's name as a symbol, as reads? reads it by class."
   [vs]
   (into (sorted-map-by #(compare (pr-str %1) (pr-str %2)))
         (update-vals (group-by (juxt :sent :context)
-                               (filter (fn [{:keys [accepted-t sent context taken]}]
-                                         (and taken (not= :cast context)
-                                              (not (accept/holds? accepted-t (if (= "feel" sent) [:enum "feel"] sent) context))))
-                                       vs))
+                               ;; a type accept answers not for (an extension's) takes any argument
+                               (for [{:keys [accepted-t sent context taken] :as v} vs
+                                     :when (and taken (not= :cast context) (accept/answers? accepted-t))
+                                     c (if (= :unknown sent) untyped-classes [nil])
+                                     :when (not (accept/takes? accepted-t (if (= "feel" sent) [:enum "feel"] sent) c context))]
+                                 (cond-> v c (assoc :sent (symbol (.getName ^Class c))))))
                      #(vec (sort (map :t %))))))
 
 (defn- triples [m] (set (for [[[sent context] ts] m t ts] [sent context t])))
@@ -131,7 +139,7 @@
                     pair (str (pr-str sent) " " context " " t)]]
         ;; accepts? may take what PostgreSQL refuses (PostgreSQL 18 casts bytea and the integers), never the
         ;; other way; a type it does not answer for (answers? false) types its arguments :any
-        (when (and taken (accept/answers? accepted-t)) (is (accept/accepts? accepted-t sent-t context) (str "PostgreSQL takes " pair)))
+        (when (and taken (accept/answers? accepted-t) (not= :common context)) (is (accept/accepts? accepted-t sent-t context) (str "PostgreSQL takes " pair)))
         ;; a type with no = (json, point, xml) compares with nothing, its own type neither
         (when (and (not= :cast context) (accept/holds? accepted-t sent-t context) (not (and (= :compare context) (not (compares-itself t)))))
           (is taken (str "PostgreSQL refuses " pair))))
@@ -155,7 +163,7 @@
   [sent context t]
   (let [base #(if (= "positive" %) "integer" %)
         [s c] (if (and (types/element sent) (types/element t)) [(types/element sent) (types/element t)] [sent t])]
-    (cond (= :unknown sent) "stricter-untyped"
+    (cond (symbol? sent) (when-not (accept/reads? (base c) (resolve sent) context) "stricter-untyped")
           (and (= :assign context)
                (or (some #{"a" "i"} (types/cast-contexts s (base c))) (@#'accept/string-type? c)))
           "stricter-assignment")))

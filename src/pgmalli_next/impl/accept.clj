@@ -262,8 +262,17 @@
         :compare (and (string? t) (string? sent) (compares? t sent))
         :common (and (string? t) (string? sent) (some? (resolve/common-type [t sent])))
         (and (string? t) (string? sent) (or (types/implicit? sent t) (and (= :assign context) (contains? unchanged-assignments (if (types/element t) [(types/element sent) (types/element t)] [sent t]))))))
-      (and (string-type? t) (string-type? sent))
+      ;; resolved with t, two of a type pgmalli's catalog holds no casts of (citext) by text or varchar
+      ;; alone, which it converts to and from: coalesce(citext, name) has no type
+      (and (string-type? t) (string-type? sent)
+           (or (not= :common context) (some? (resolve/common-type [t sent])) (some #{"text" "character varying"} [t sent])))
       (and (= :unknown sent)
            (or (not (#{:compare :call :common} context))
                (string-type? t)
                (if (vector? t) (or (= :common context) (not (:domain? (get t 2)))) (compares? t t))))))
+
+(defn takes?
+  "Whether a value of class c, sent as type sent, goes where a value of type t does in context:
+   holds?, and, sent untyped, its text read there (reads?, docs/queries.md#stricter-untyped)."
+  [t sent ^Class c context]
+  (and (holds? t sent context) (or (not= :unknown sent) (reads? t c context))))

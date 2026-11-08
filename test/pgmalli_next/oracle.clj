@@ -1031,9 +1031,10 @@
                                   elements? (and assign? (string? t) (types/element t) (string? sent) (types/element sent))
                                   held-t (cond elements? (types/element t) (and compared-type (not assign?)) compared-type :else t)
                                   held-sent (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
-                                  takes? (and sent (or (not= :unknown sent) (accept/reads? t (class v) (if cast? :cast :assign))) (if cast?
-                                                     (accept/accepts? t sent :cast)
-                                                     (and (accept/holds? held-t held-sent (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare))
+                                  held-context (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare)
+                                  takes? (and sent (if cast?
+                                                     (and (or (not= :unknown sent) (accept/reads? t (class v) :cast)) (accept/accepts? t sent :cast))
+                                                     (and (accept/takes? held-t held-sent (class v) held-context)
                                                           ;; compared and cast to the column's type: the cast too
                                                           (or (not= :compared-and-cast context) (accept/accepts? t sent :cast)))))
                                   ;; left out by a rule of docs/queries.md "Stricter than PostgreSQL" that PostgreSQL's
@@ -1041,7 +1042,8 @@
                                   ;; a class the one sending sends nowhere (docs/queries.md#what-your-application-sends)
                                   pinned? (or (nil? sent)
                                               (and cast? (not takes?))
-                                              (contains? (get stricter [held-sent (if assign? :assign :compare)]) held-t))
+                                              ;; one sent untyped, pinned by its class, as accept/reads? reads it
+                                              (contains? (get stricter [(if (= :unknown held-sent) (symbol (.getName (class v))) held-sent) held-context]) held-t))
                                   refused? (not (try (m/validate s arg) (catch Exception _ false)))
                                   row-refused? (written-refuses opts table column context v)
                                   ;; NULL in a NOT NULL column fails once a row is written; the table may have none
@@ -1052,8 +1054,6 @@
                                   ;; sent untyped, or nil, where PostgreSQL takes the type from the value
                                   untyped-there? (and (#{:compared-and-any :compared-and-polymorphic} context) (or (nil? v) (= :unknown sent)))
                                   explained? (or (and (some? v) (not takes?) pinned?)
-                                                 ;; a value sent untyped whose text accept/reads? leaves out (docs/queries.md#stricter-untyped)
-                                                 (and (some? v) (= :unknown sent) (not takes?))
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))
