@@ -237,7 +237,7 @@ refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]} {:format {:inline true}}))
-;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]]}
+;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float? :string]]}
 ```
 
 ```clojure
@@ -322,6 +322,12 @@ by the one sending, `pgmalli-next.jdbc/install-sending!`
 | a map, a vector | `jsonb` |
 | a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`); a `java.sql.Date[]` a `date[]`, a `java.sql.Timestamp[]` a `timestamptz[]` (pgjdbc sends no array of java.time's; a `java.sql.Time[]`, a `timetz[]` of the JVM's offset, is sent nowhere) |
 | a `PGobject` | the type it names |
+
+Under `{:format {:inline true}}`, `sql/format` writes each argument into the SQL, so an
+argument takes what it writes as a literal (`pgmalli-next.impl.accept/inline-classes`): a
+`String`, quoted, which any type's input reads, a `UUID` likewise, a number, a boolean; no
+keyword, which it writes as a name, nor a date, a map or a `PGobject`, which it writes as their
+text unquoted.
 
 Another class (a set, a list, a symbol; a `java.util.Date`, which pgjdbc refuses, and java.sql's
 `Date`, `Time` and `Timestamp`, whose text pgjdbc writes in the JVM's time zone) is sent nowhere. `pgmalli-next.impl.accept/classes` holds

@@ -40,8 +40,7 @@ sends](queries.md#what-your-application-sends) lists: `Instant/MAX` and `MIN` as
 `-infinity`, a map and a vector written with data.json (an `Instant` and java.time's dates and
 times as their ISO-8601 text, a `UUID` and a keyword as their text). Every other class goes as
 pgjdbc's `setObject` sends it. Call it once, before sending arguments: without it, pgjdbc refuses
-a keyword, a map and a vector (`Can't infer the SQL type to use for an instance of
-clojure.lang.Keyword`). It throws where another extension already holds a class pgmalli sends
+a keyword, a map and a vector (a `PSQLException` of SQLState `07006`, which names the class). It throws where another extension already holds a class pgmalli sends
 (`next.jdbc.date-time`'s `LocalDate`), which would go otherwise than pgmalli types it; one made
 after it is not seen, so call it after loading the namespaces that extend `SettableParameter`. An application that sends its own way uses `builder` alone,
 and types its arguments from the facts pgmalli gives a sender of its own ([what your
@@ -75,9 +74,8 @@ row)` builds none and reads the column as pgjdbc returns it (a `java.sql.Timesta
 the row there (`(next.jdbc.result-set/datafiable-row row ds {})`), or convert the column where
 your application knows its type.
 
-A json or jsonb column's schema is the parsed value's, as an
-[override](../README.md#overrides) shapes it: one override for what is read and what is
-written. An enum it refers to holds its labels as strings, as JSON does. An override that types a JSON number takes what `builder` parses (above): an integer
+Under an [override](../README.md#overrides), an enum a json column's shape refers to holds its
+labels as strings, as JSON does, and a JSON number is what `builder` parses (above): an integer
 `integer?`, a fraction `double?`.
 
 ```clojure

@@ -226,23 +226,28 @@ There are two ways to check a row read from the database:
 
 ## Generating test data
 
-`mg/generate` gives a row of the table's types, strings within their `varchar(n)`'s length
-([what the database checks](docs/types.md#names-in-the-registry) aside):
+`mg/generate` of `h/values-schema` gives a row HoneySQL writes and PostgreSQL takes, each value
+as your application sends it (`[:lift v]` an enum's label or a json document), strings within
+their `varchar(n)`'s length ([what the database checks](docs/types.md#names-in-the-registry)
+aside):
 
 ```clojure
-(m/validate :pg.public.posts/insert
-            (mg/generate :pg.public.posts/insert {:registry registry :seed 1})
-            {:registry registry})
+(require '[pgmalli-next.honeysql :as h])
+
+(let [row (h/values-schema registry :events)]
+  (m/validate row (mg/generate row {:registry registry :seed 1}) {:registry registry}))
 ;; => true
 ```
 
+Insert it as `{:insert-into :events :values [row]}`.
+
+The registry's `/insert` schema generates the database's types (a label a string, a document a
+map), what another system holds rather than what HoneySQL sends.
+
 ## Checking HoneySQL queries
 
-`h/analyze` reads HoneySQL query data against the registry, with no database. It returns the
-types of the query's arguments (`:args`), the row it returns (`:row`), how many rows where the
-data tells (`:rows`), the problems PostgreSQL would report (`:problems`), the tables it reads
-and writes (`:tables`) and the columns it uses of a `jsonb_populate_record` document
-(`:document-columns`, [queries](docs/queries.md#document-columns)):
+`h/analyze` reads HoneySQL query data against the registry, with no database: the arguments'
+types, the row, the problems PostgreSQL would report and more ([queries](docs/queries.md)):
 
 ```clojure
 (require '[pgmalli-next.honeysql :as h])
@@ -324,10 +329,7 @@ Check every query of a project in one test:
       (is (= [] problems) (str k ": " (h/humanize problems))))))
 ```
 
-[docs/queries.md](docs/queries.md) covers subqueries, CTEs, the types of the
-arguments and of the row, a row written into a table (`h/values-schema`, `h/set-schema`),
-the tables a query reads and writes (`:tables`), the `:params` map of `sql/format`, the
-options, and what pgmalli checks more strictly than PostgreSQL or not at all.
+[docs/queries.md](docs/queries.md) covers the rest.
 
 ## Function schemas for queries
 
@@ -494,8 +496,8 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 1. the keys of the map `generate!` and `check` take
 2. the generated file and the registry names
 3. the kinds of `:unrendered` entries and of `h/analyze`'s problems
-4. the public functions of `pgmalli-next.core`, `pgmalli-next.generate`, `pgmalli-next.honeysql`
-   and `pgmalli-next.jdbc`, and their options
+4. the public vars of `pgmalli-next.core`, `pgmalli-next.generate`, `pgmalli-next.honeysql`
+   and `pgmalli-next.jdbc`, and the options of their functions
 5. the `:pgmalli/error` kinds of the errors pgmalli throws
 6. what `check` throws where the file is stale or missing
 

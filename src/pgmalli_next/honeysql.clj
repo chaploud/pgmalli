@@ -58,8 +58,8 @@
    :tables    {:reads #{\"schema.table\" ...} :writes #{...}}, aliases and CTEs resolved
    :document-columns
               {arg #{column ...}} for every argument that is the document of a
-              jsonb_populate_record, jsonb_to_record and the like
-              (docs/queries.md#document-columns)
+              jsonb_populate_record, jsonb_to_record and the like, nil where a use names no
+              column in particular (docs/queries.md#document-columns)
 
    Names resolve as PostgreSQL resolves them. query-schema builds a function schema of it.
    Options: docs/queries.md#options. Throws when body is no HoneySQL data: SQL already

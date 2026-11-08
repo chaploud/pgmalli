@@ -39,7 +39,7 @@ empty scalar subquery; its documentation calls this a defect not to rely on.
 
 pgmalli's own schema types are in the registry too: `:pg/bytes`, `:pg/smallint`,
 `:pg/integer`, `:pg/array` and `:pg/class`. Some of malli's are replaced: `:string` counts
-characters, `:double` with `:pg/type "real"` keeps to a real's range, `:re` matches a
+characters (code points, as `length` does; malli's counts UTF-16 units), `:double` with `:pg/type "real"` keeps to a real's range, `:re` matches a
 value its regex runs out of the thread's stack on (a long one) on a larger stack, where
 malli's throws, and malli.experimental.time's types (`:time/instant` ...) carry an error
 message (`"should be a java.time.Instant"`), which malli.error has none of.
@@ -79,7 +79,7 @@ spelling.
 
 | PostgreSQL | malli |
 |---|---|
-| NOT NULL | no `[:maybe ...]` |
+| NOT NULL | no `[:maybe ...]`; a type of `:any` is `:some` |
 | a column of an enum type (an array of one) | `[:ref :pg.<schema>/<type>]` (`[:vector [:ref ...]]`) |
 | a column of a domain | its base type's, with `:pg/domain` |
 | `smallint`, `integer` | `:pg/smallint`, `:pg/integer` (bounded to the type's range) |
@@ -98,15 +98,11 @@ spelling.
 | `bit(n)`, `bit varying(n)` | `:string` of 0s and 1s (`:pg/max-length n`) |
 | `citext` | `:string` |
 | `inet`, `cidr`, `macaddr`, `money`, `xml`, `tsvector`, geometric, range, multirange, `reg*` and other types | `[:any {:pg/type "..."}]` |
-| a composite type, a type pgmalli does not support, a domain over an array of a domain (pgjdbc reads its elements as objects of the element's domain) | `[:any {:pg/type "..."}]` (`[:some ...]` when NOT NULL), listed in `:unrendered` |
+| a composite type, a type pgmalli does not support, a domain over an array of a domain (pgjdbc reads its elements as objects of the element's domain) | `[:any {:pg/type "..."}]`, listed in `:unrendered` |
 
-An enum of another schema (`wh.stock.k` of type `catalog.kind`) is `[:any]` (`[:some]` when
-NOT NULL) in the file, as each schema is read alone; its `:unrendered` entry names the schema
+An enum of another schema (`wh.stock.k` of type `catalog.kind`) is `[:any]` in the file, as each schema is read alone; its `:unrendered` entry names the schema
 (`:type-schema "catalog"`). Generated with both schemas in `:schemas`, the registry reads the
 column as of that type, an array of it too, and `:unrendered` leaves it out.
-
-`:string`'s `:min` and `:max` count characters (code points), as `length` does; malli's own
-`:string` counts UTF-16 units.
 
 A row schema differs from PostgreSQL where an array's elements are NULL: PostgreSQL takes NULL
 elements, a row schema refuses them. What a row is read as (`as-read`, `analyze`'s `:row`) takes
@@ -136,8 +132,8 @@ yet are listed under `unsupported` in
 ## jsonb columns
 
 A jsonb column is `:any`: its keys and their types are the application's. An override of the column
-(`{:overrides {:public.evidence/payload [:map [:course :string]]}}`) gives it one shape, read
-and written ([Overrides](../README.md#overrides)). For shapes that depend on another column,
+(`{:overrides {:public.evidence/payload [:map [:course :string]]}}`) gives it one shape
+([Overrides](../README.md#overrides)). For shapes that depend on another column,
 write them as malli and join them to the generated schema, with no copy of either:
 
 ```clojure
@@ -191,14 +187,13 @@ PRIMARY KEY, UNIQUE, FOREIGN KEY and EXCLUDE constraints, unique indexes over pl
 row-level triggers and enum types. A domain is read as its base type, with its NOT NULL and
 DEFAULT.
 
-An EXCLUDE is a table property, not a check: a row it would reject validates all the same,
-and each EXCLUDE is listed in `:diagnostics`. A row a trigger would reject validates too; a
-row-level INSERT trigger is listed in `:diagnostics`.
+An EXCLUDE or a trigger is not enforced: a row it would reject validates
+([diagnostics](#the-generated-file)).
 
 Not read: other indexes, policies and privileges, and what [above](#names-in-the-registry) leaves
 to the database.
 
-A generated column is left to the database.
+A generated column's expression is not evaluated; `:pg/generated` holds its SQL.
 
 ## Registries
 
