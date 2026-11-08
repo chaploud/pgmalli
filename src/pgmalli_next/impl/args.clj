@@ -184,9 +184,8 @@
         alts (concat
               (for [p sent
                     a (if (= :unknown p)
-                        ;; under :inline, a String is a quoted literal, which every type's input reads (a
-                        ;; UUID's text as its class's reads)
-                        (jdbc/sent-as opts :unknown #(or (and (:inline (:format opts)) (= String %)) (accept/reads? t % context)))
+                        ;; under :inline, a String or a UUID is a quoted literal, which every type's input reads
+                        (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/reads? t % context)))
                         (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
                     :when (and (not (query/untyped? a))
                                (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a)))))]

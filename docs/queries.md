@@ -237,7 +237,7 @@ refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]} {:format {:inline true}}))
-;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float? :string]]}
+;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float? :string :uuid]]}
 ```
 
 ```clojure
@@ -718,9 +718,9 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   cast it in the query where the conversion is meant. Compared, a `timestamptz` and a
   `timestamp` or a `date` convert implicitly, in that time zone too
   ([the session's time zone](reading-rows.md#the-sessions-time-zone)).
-- <a id="stricter-oid"></a>A negative integer to an `oid` column: PostgreSQL reads an
-  `integer` as the `oid` of its bits (`-1` as `4294967295`), which is almost always a mistake. An
-  `oid` takes 0 to 4294967295.
+- <a id="stricter-oid"></a>A negative integer to an `oid` column or one of an alias of `oid`
+  (`regclass`, `regproc` ...): PostgreSQL reads an `integer` as the `oid` of its bits (`-1` as
+  `4294967295`), which is almost always a mistake. They take 0 to 4294967295.
 - A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
   one: taking it would put `char?` on every string argument (a `"char"` column takes a `varchar`
   on assignment alone, cut to its first byte). Send `(str c)`.

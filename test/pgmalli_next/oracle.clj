@@ -950,7 +950,7 @@
                           :when (not (or (and (nil? v) (compared-contexts context))
                                          (and (nil? v) notnull (#{:update :insert :insert-select} context))
                                          ;; docs/queries.md#stricter-oid
-                                         (and (= "oid" held-t) (integer? v) (neg? v))
+                                         (and (string? held-t) (or (= "oid" held-t) (str/starts-with? held-t "reg")) (integer? v) (neg? v))
                                          (and (string? lit) (contains? (get stricter [lit (if assign? :assign :compare)]) held-t))))
                           :let [sqlvec (try (sql/format query (assoc fmt :params {:x v})) (catch Exception _ nil))]
                           :when (and sqlvec (nil? (refusal conn sqlvec column (and (nil? v) notnull))))]
