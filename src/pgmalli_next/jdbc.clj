@@ -5,9 +5,14 @@
    Your application adds next.jdbc and pgjdbc."
   (:require [clojure.data.json :as json]
             [clojure.string :as str]
+            [clojure.walk :as walk]
             [next.jdbc.prepare :as prepare]
             [next.jdbc.result-set :as rs]
-            [pgmalli-next.impl.shape :as shape])
+            [pgmalli-next.impl.accept :as accept]
+            [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.resolve :as resolve]
+            [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types])
   (:import (java.sql Array PreparedStatement ResultSet ResultSetMetaData Types)
            (java.time Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneOffset)
            (org.postgresql.util PGobject)))
@@ -25,60 +30,47 @@
     OffsetDateTime/MIN Instant/MIN
     (.toInstant v)))
 
-(defn- schema-and-name
-  "[schema name] of each type registry key k may be (shape/schema-key's): a string key's \"/\" may
-   be either name's."
-  [k]
-  (cond (and (qualified-keyword? k) (str/starts-with? (namespace k) "pg.")) [[(subs (namespace k) 3) (name k)]]
-        (and (string? k) (str/starts-with? k "pg."))
-        (let [x (subs k 3)]
-          (for [i (range (count x)) :when (= \/ (.charAt ^String x i))
-                :let [sn [(subs x 0 i) (subs x (inc i))]]
-                :when (= k (apply shape/schema-key sn))]
-            sn))))
+(def ^:private by-kind
+  "(fn [^ResultSet rs i]) reading a column of a type of each schema kind (types/types') as the one
+   reading reads it, through pgjdbc's java.time reading."
+  {:time/instant (fn [^ResultSet rs i] (some-> (.getObject rs (int i) OffsetDateTime) instant))
+   :time/local-date-time (fn [^ResultSet rs i] (.getObject rs (int i) LocalDateTime))
+   :time/local-date (fn [^ResultSet rs i] (.getObject rs (int i) LocalDate))
+   :time/local-time (fn [^ResultSet rs i] (.getObject rs (int i) LocalTime))
+   :time/offset-time (fn [^ResultSet rs i] (.getObject rs (int i) OffsetTime))})
 
-(defn- enum-names
-  "The names pgjdbc gives the enum types of registry: the type's name where the session's
-   search_path finds it, \"schema\".\"name\" otherwise (a quote in a name as it is)."
-  [registry]
-  ;; ponytail: an unqualified name is taken for the enum whichever schema holds it; a type of that
-  ;; name the search_path finds first in another schema reads as the enum's labels
-  (set (for [[k s] (shape/schemas-of registry)
-             :when (and (vector? s) (= :enum (first s)))
-             [schema n] (schema-and-name k)
-             x [n (str "\"" schema "\".\"" n "\"")]]
-         x)))
-
-(declare array-reader)
+(declare read-array)
 
 (defn- reader
-  "(fn [^ResultSet rs i]) reading column i of type t (as pgjdbc names it) as the one reading reads
-   it, an element of an array at index 2 of its result set; enums the names of enum types."
-  [t enums]
-  (case t
-    "timestamptz" (fn [^ResultSet rs i] (some-> (.getObject rs (int i) OffsetDateTime) instant))
-    "timestamp" (fn [^ResultSet rs i] (.getObject rs (int i) LocalDateTime))
-    "date" (fn [^ResultSet rs i] (.getObject rs (int i) LocalDate))
-    "time" (fn [^ResultSet rs i] (.getObject rs (int i) LocalTime))
-    "timetz" (fn [^ResultSet rs i] (.getObject rs (int i) OffsetTime))
-    ("json" "jsonb") (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
-                                             (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) parse-json)))
-    (cond (contains? enums t) (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
+  "(fn [^ResultSet rs i]) reading column i, of type t and java.sql.Types type, as pgjdbc names them,
+   as the one reading reads it (an array's element is column 2 of its result set); enums the
+   names of enum types, which pgjdbc returns as a VARCHAR."
+  [t sql-type enums]
+  ;; a type pgjdbc names "schema"."name" is no pg_catalog type
+  (let [entry (when-not (str/starts-with? t "\"") (types/entry t))]
+    (cond (types/json? (:name entry)) (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
+                                                             (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) parse-json)))
+          (by-kind (:schema entry)) (by-kind (:schema entry))
+          (and (= Types/VARCHAR sql-type) (contains? enums t)) (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
           :else (fn [^ResultSet rs i]
                   (let [v (.getObject rs (int i))]
-                    (if (instance? Array v) ((array-reader enums) v) v))))))
+                    (if (instance? Array v) (read-array v enums) v))))))
 
-(defn- array-reader
-  "(fn [java.sql.Array]) of its elements as a vector, each read as a column of the element type,
-   an element array (a multi-dimensional array's) as a vector likewise."
-  [enums]
-  (fn read-array [^Array a]
-    (with-open [r (.getResultSet a)]
-      (let [read (reader (.getColumnTypeName (.getMetaData r) 2) enums)]
-        (loop [acc (transient [])]
-          (if (.next r)
-            (recur (conj! acc (read r 2)))
-            (persistent! acc)))))))
+(defn- readers
+  "The reader of each column of a result set's metadata."
+  [^ResultSetMetaData md enums]
+  (mapv #(reader (.getColumnTypeName md (int %)) (.getColumnType md (int %)) enums) (range 1 (inc (.getColumnCount md)))))
+
+(defn- read-array
+  "The elements of a java.sql.Array as a vector, each read as a column of the element type, an
+   element array (a multi-dimensional array's) as a vector likewise."
+  [^Array a enums]
+  (with-open [r (.getResultSet a)]
+    (let [read (nth (readers (.getMetaData r) enums) 1)]
+      (loop [acc (transient [])]
+        (if (.next r)
+          (recur (conj! acc (read r 2)))
+          (persistent! acc))))))
 
 (defn builder
   "The :builder-fn pgmalli types rows as: next.jdbc's as-unqualified-maps, each column read as
@@ -86,19 +78,12 @@
 
    (jdbc/execute! ds (sql/format q) {:builder-fn (pgmalli-next.jdbc/builder registry)})"
   [registry]
-  (let [enums (enum-names registry)
-        ;; [metadata readers] of the last result set: its columns are read alike in every row
-        last-read (volatile! nil)
-        readers (fn [^ResultSetMetaData md]
-                  (let [[m rd] @last-read]
-                    (if (identical? m md)
-                      rd
-                      (let [rd (mapv #(reader (.getColumnTypeName md (int %)) enums) (range 1 (inc (.getColumnCount md))))]
-                        (vreset! last-read [md rd])
-                        rd))))]
-    (vary-meta (rs/builder-adapter rs/as-unqualified-maps
-                                   (fn [builder ^ResultSet r i] ((nth (readers (:rsmeta builder)) (dec i)) r i)))
-               assoc ::builder true)))
+  (let [enums (shape/enum-type-names registry resolve/type-name?)]
+    (with-meta (fn [^ResultSet rs opts]
+                 (let [rd (readers (.getMetaData rs) enums)]
+                   ((rs/builder-adapter rs/as-unqualified-maps (fn [_ r i] ((nth rd (dec i)) r i))) rs opts)))
+      ;; the enums pgmalli-next.impl.jdbc/builder! holds against the registry rows are typed with
+      {::builder enums})))
 
 ;;; sending: pgjdbc's setObject, which sends java.time's types typed (a LocalDateTime as a
 ;;; timestamp, a LocalDate as a date, an OffsetDateTime as a timestamptz), an Instant as an
@@ -109,9 +94,20 @@
 (defn- write-temporal [x ^java.io.Writer out _options]
   (if (instance? java.time.temporal.Temporal x)
     (json/write (str x) out)
-    (throw (Exception. (str "Don't know how to write JSON of " (class x))))))
+    (error/fail! :pgmalli.error/invalid-options
+                 (str "a map or vector goes as jsonb, which holds no " (.getName (class x)) ": send its text, or the value as its own argument")
+                 {:given (.getName (class x))})))
 
-(defn- jsonb [x] (doto (PGobject.) (.setType "jsonb") (.setValue (json/write-str x :default-write-fn write-temporal))))
+(defn- json-text
+  "A keyword's text, its namespace kept (:n/a as n/a), as the one sending sends a keyword alone;
+   data.json writes its name alone."
+  [x]
+  (if (keyword? x) (subs (str x) 1) x))
+
+(defn- jsonb [x]
+  (doto (PGobject.)
+    (.setType "jsonb")
+    (.setValue (json/write-str (walk/postwalk json-text x) :default-write-fn write-temporal))))
 
 (defn- offset-date-time
   "An Instant as an OffsetDateTime in UTC; infinity as OffsetDateTime's MAX and MIN, which pgjdbc
@@ -122,17 +118,31 @@
     Instant/MIN OffsetDateTime/MIN
     (OffsetDateTime/ofInstant v ZoneOffset/UTC)))
 
+(def ^:private sending
+  "The extension install-sending! makes: {class set-parameter}, each flagged as pgmalli's (a
+   namespace loaded again makes other functions)."
+  (update-vals {Instant (fn [v ^PreparedStatement s ^long i] (.setObject s i (offset-date-time v)))
+                clojure.lang.Keyword (fn [k ^PreparedStatement s ^long i] (.setObject s i (subs (str k) 1) Types/OTHER))
+                clojure.lang.IPersistentMap (fn [m ^PreparedStatement s ^long i] (.setObject s i (jsonb m)))
+                clojure.lang.IPersistentVector (fn [v ^PreparedStatement s ^long i] (.setObject s i (jsonb v)))}
+               #(with-meta % {::sending true})))
+
 (defn install-sending!
-  "Extends next.jdbc's SettableParameter for the whole JVM: an Instant goes as a timestamptz, a
-   keyword untyped as its text (:ns/a as ns/a), a map and a vector as jsonb. Call it once,
-   before sending arguments."
+  "Extends next.jdbc's SettableParameter, for the whole JVM, for the classes
+   docs/reading-rows.md#the-one-reading-and-sending lists. Call it once, before sending arguments.
+   Throws where another extension of it holds a class pgmalli sends (accept/classes'), which
+   would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own."
   []
-  (extend-protocol prepare/SettableParameter
-    Instant
-    (set-parameter [v ^PreparedStatement s ^long i] (.setObject s i (offset-date-time v)))
-    clojure.lang.Keyword
-    (set-parameter [k ^PreparedStatement s ^long i] (.setObject s i (subs (str k) 1) Types/OTHER))
-    clojure.lang.IPersistentMap
-    (set-parameter [m ^PreparedStatement s ^long i] (.setObject s i (jsonb m)))
-    clojure.lang.IPersistentVector
-    (set-parameter [v ^PreparedStatement s ^long i] (.setObject s i (jsonb v)))))
+  (let [sent (into (set (keys sending)) (filter class?) (map first accept/classes))
+        others (sort-by str (for [[c {f :set-parameter}] (:impls prepare/SettableParameter)
+                                  :when (and (sent c) (not (::sending (meta f))))]
+                              c))]
+    (when (seq others)
+      (error/fail! :pgmalli.error/other-sending
+                   (str "install-sending!: next.jdbc's SettableParameter is already extended for "
+                        (str/join ", " (map #(.getName ^Class %) others))
+                        ", which pgmalli types as pgjdbc's setObject or install-sending! sends them; drop that extension"
+                        " (next.jdbc.date-time extends Instant, LocalDate and LocalDateTime when it loads)")
+                   {:given (mapv #(.getName ^Class %) others)})))
+  (doseq [[c f] sending]
+    (extend c prepare/SettableParameter {:set-parameter f})))

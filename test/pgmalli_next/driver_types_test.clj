@@ -47,6 +47,8 @@
                     rows (jdbc/execute! con (sql/format q) {:builder-fn (builder registry)})
                     opts {:schema "matrix"}]]
         (testing table
+          ;; every column of the first row holds a value: a column read as nil would pass its [:maybe]
+          (is (= [] (keep (fn [[k v]] (when (nil? v) k)) (first rows))))
           (is (= [] (vec (distinct (disagreements registry [:sequential read] rows)))))
           (is (= [] (vec (distinct (disagreements registry (last (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))) rows))))))))))
 

@@ -181,6 +181,17 @@
   [k]
   (let [[ns n] (if (keyword? k) [(namespace k) (name k)] (str/split k #"/" 2))] [(subs ns 3) n]))
 
+(defn enum-type-names
+  "The names pgjdbc may give each enum type of registry: \"schema\".\"name\" (a quote in a name as
+   it is), and its name, where the session's search_path finds it; but a pg_catalog type's name
+   (type-name? tells it), which names that type."
+  [registry type-name?]
+  (set (for [[k s] (schemas-of registry)
+             :when (and (generated-name? k) (vector? s) (= :enum (first s)))
+             :let [[schema n] (schema-and-name k)]
+             x (cond-> [(str "\"" schema "\".\"" n "\"")] (not (type-name? n)) (conj n))]
+         x)))
+
 (defn table-key
   "\"public.users\" -> :pg.public/users: schema-key over a qualified name."
   [table]

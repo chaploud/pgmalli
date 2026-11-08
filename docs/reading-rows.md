@@ -19,7 +19,8 @@ pgmalli types rows as one reading builds them and arguments as one sending sends
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-(require '[next.jdbc :as jdbc]
+(require '[honey.sql :as sql]
+         '[next.jdbc :as jdbc]
          '[pgmalli-next.jdbc :as pgmalli-jdbc])
 
 (pgmalli-jdbc/install-sending!)
@@ -31,24 +32,26 @@ pgmalli types rows as one reading builds them and arguments as one sending sends
 
 `builder` is next.jdbc's `as-unqualified-maps`, each column read by its type as below. It
 extends no protocol: what your application extends `next.jdbc.result-set/ReadableColumn` with
-reads no column it builds. Pass it wherever your application reads rows. It reads an enum of
-the registry it is given as a keyword: give it the registry the rows are typed with.
+reads no column it builds. Pass it wherever your application reads rows, made of the registry
+the rows are typed with.
 
 `install-sending!` extends next.jdbc's `SettableParameter` for the whole JVM, for four classes:
 an `Instant` goes as a `timestamptz` (`Instant/MAX` and `MIN` as `infinity` and `-infinity`),
 a keyword untyped as its text (`:ns/a` as `ns/a`), a map and a vector as `jsonb`, written with
-data.json (an `Instant`, a `UUID` and java.time's dates and times as their ISO-8601 text). Every
-other class goes as pgjdbc's `setObject` sends it ([what your application
-sends](queries.md#what-your-application-sends)). Call it once, before sending arguments. An
-application that sends its own way uses `builder` alone, and types its arguments from the facts
-pgmalli gives for a sender of its own ([what your application
-sends](queries.md#what-your-application-sends)).
+data.json (an `Instant`, a `UUID` and java.time's dates and times as their ISO-8601 text, a
+keyword as its text). Every other class goes as pgjdbc's `setObject` sends it. Call it once,
+before sending arguments: without it, pgjdbc refuses a keyword, a map and a vector (`Can't infer
+the SQL type to use for an instance of clojure.lang.Keyword`). It throws where another
+extension holds a class pgmalli sends (`next.jdbc.date-time`'s `LocalDate`), which would go
+otherwise than pgmalli types it. An application that sends its own way uses `builder` alone,
+and types its arguments from the facts pgmalli gives a sender of its own ([what your
+application sends](queries.md#what-your-application-sends)).
 
 A row's keys are its columns' names as PostgreSQL labels them, unqualified (`:group_id`), and a
 NULL column keeps its key. A query's row has the keys of its labels likewise
 ([queries](queries.md#the-row-a-query-returns)). A row written into a table has the same keys
-([a row written into a table](queries.md#a-row-written-into-a-table)): a column has one key,
-read and written, so a row read is written back as it is. Another spelling, such as kebab-case
+([a row written into a table](queries.md#a-row-written-into-a-table), which lists the values
+written otherwise than read): a column has one key, read and written. Another spelling, such as kebab-case
 keys (`:group-id`, which HoneySQL writes to the same column), is your application's to convert,
 both ways, where it takes and gives the row.
 
@@ -61,22 +64,21 @@ What each type comes back as:
 | `date` | `java.time.LocalDate`; `infinity` `LocalDate/MAX`, `-infinity` `MIN` |
 | `time` | `java.time.LocalTime` |
 | `timetz` | `java.time.OffsetTime` |
-| an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions) |
+| an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions); an array of a domain's elements as pgjdbc returns them, `PGobject`s of the domain |
 | `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer a `Long` (a `BigInt` past it), a fraction a `Double`, booleans and strings as they are |
 | an enum type, a domain over one | its label, a keyword (`:active`), of an enum type of the registry `builder` is given; another enum's a `String` |
 | every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` a `Double`, an `interval` a `PGInterval` (an interval holds months, days and a time at once, which neither a `Duration` nor a `Period` holds alone), `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |
 
-`builder` reads a column by its type, which next.jdbc's builders see where they build a row
-(`execute!`, `execute-one!`). `plan`'s `(:col row)` reads the column as pgjdbc returns it (a
-`java.sql.Timestamp`, a `java.sql.Array`, a json's `PGobject`): build the row with the builder
-there (`(rs/datafiable-row row ds jdbc-opts)`), or convert the column where your application
-knows its type.
+`builder` reads where next.jdbc builds a row (`execute!`, `execute-one!`). `plan`'s `(:col
+row)` builds none and reads the column as pgjdbc returns it (a `java.sql.Timestamp`, a
+`java.sql.Array`, a json's `PGobject`, an enum's `String`): build the row with the builder there
+(`(next.jdbc.result-set/datafiable-row row ds jdbc-opts)`), or convert the column where your
+application knows its type.
 
 A json or jsonb column's schema is the parsed value's, as an
 [override](../README.md#overrides) shapes it: one override for what is read and what is
-written. An override that types a JSON number takes what a JSON parser returns: an integer
-`integer?`, a fraction `double?`: data.json, which `builder` parses with, gives a `Long` or a
-`BigInt` and a `Double`.
+written. An override that types a JSON number takes what `builder` parses (above): an integer
+`integer?`, a fraction `double?`.
 
 ```clojure
 (m/validate (pgmalli/as-read registry :pg.public/users)
@@ -117,9 +119,8 @@ An option pgmalli does not know is an error that suggests the intended name:
 ## The options of next.jdbc
 
 pgmalli passes over the keys of `:jdbc` it does not read, so the map your application passes
-to next.jdbc goes as it is. `:builder-fn` there is a builder `pgmalli-next.jdbc/builder` made, or
-the symbol `pgmalli-next.jdbc/builder`, which names it where pgmalli-next.jdbc does not load (in
-babashka, which has no pgjdbc); another builder, `:label-fn` or `:qualifier-fn` is an error
-naming the one builder. A key spelled close
+to next.jdbc goes as it is. `:builder-fn` there is one `pgmalli-next.jdbc/builder` returned, of
+the registry the function is given (one of a registry of other enums reads an enum as a
+`String`); another builder, `:label-fn` or `:qualifier-fn` is an error. A key spelled close
 to one pgmalli reads and read by no next.jdbc function (`:return-key`) is an error naming the
 key meant.

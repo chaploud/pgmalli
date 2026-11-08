@@ -5,6 +5,7 @@
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
+            [next.jdbc.prepare :as prepare]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
@@ -49,7 +50,7 @@
 
 (def ^:private builder-of
   ;; the schema's enum types are the fixture's: one registry per database
-  (memoize (fn [_db] (builder (registry)))))
+  (memoize (fn [db] (builder (pgmalli/registry (generated {:db db} "public" "app"))))))
 
 (defn- runs!
   "Runs q with params and opts' :format, rolled back; throws what PostgreSQL refuses."
@@ -505,3 +506,18 @@
                                     {:builder-fn (builder-of *db*)}))
             "an Instant's MAX and MIN go as infinity, which no OffsetDateTime in UTC holds")))))
 
+
+(deftest install-sending-refuses-another-extension-of-a-class-pgmalli-sends
+  (let [install! (requiring-resolve 'pgmalli-next.jdbc/install-sending!)
+        protocol #'prepare/SettableParameter]
+    (install!)
+    (is (nil? (install!)) "its own extension again")
+    (extend java.util.UUID prepare/SettableParameter
+      {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setString s i (str v)))})
+    (try
+      (let [e (is (thrown? clojure.lang.ExceptionInfo (install!)))]
+        (is (= :pgmalli.error/other-sending (:pgmalli/error (ex-data e))))
+        (is (= ["java.util.UUID"] (:given (ex-data e)))))
+      (finally
+        (alter-var-root protocol update :impls dissoc java.util.UUID)
+        (-reset-methods @protocol)))))

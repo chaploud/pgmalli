@@ -20,6 +20,7 @@
    :pgmalli.error/db-unavailable :cognitect.anomalies/unavailable
    :pgmalli.error/psql-missing :cognitect.anomalies/unavailable
    :pgmalli.error/stale :cognitect.anomalies/conflict
+   :pgmalli.error/other-sending :cognitect.anomalies/conflict
    :pgmalli.error/fault :cognitect.anomalies/fault})
 
 (defn fail!

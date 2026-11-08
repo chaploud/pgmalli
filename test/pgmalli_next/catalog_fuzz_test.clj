@@ -18,7 +18,7 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.pipeline :as pipeline]
-            [pgmalli-next.test-db :as test-db :refer [generated *db* exec-sql! sql-literal with-postgres]]
+            [pgmalli-next.test-db :refer [builder generated *db* exec-sql! sql-literal with-postgres]]
             [pgmalli-next.test-seed :as ts])
   (:import (java.time Duration Instant LocalDate LocalDateTime LocalTime OffsetTime)))
 
@@ -286,7 +286,7 @@
                (for [t (:tables model)
                      [n k] (cond-> [[(:name t) (table-key schema t)]] (:view t) (conj [(str (:name t) "_v") (shape/schema-key schema (str (:name t) "_v"))]))
                      :let [read (pgmalli/as-read reg k {})]
-                     row (jdbc/execute! tx [(str "SELECT * FROM " (q schema) "." (q n))] {:builder-fn (test-db/builder reg)})
+                     row (jdbc/execute! tx [(str "SELECT * FROM " (q schema) "." (q n))] {:builder-fn (builder reg)})
                      :when (not (m/validate read row opts))]
                  {:kind :read-back :table n :row row :message (pr-str (me/humanize (m/explain read row opts)))}))))))))))
 

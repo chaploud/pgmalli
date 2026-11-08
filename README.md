@@ -179,8 +179,9 @@ These schemas hold the database's types. For a row your code builds and HoneySQL
 `h/values-schema` and `h/set-schema` type each column as an argument, with what your
 application sends ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 
-A `numeric` column takes a BigDecimal (`10M`); a long such as `10` fails. Enum values are
-strings:
+A `numeric` column takes a BigDecimal (`10M`); a long such as `10` fails. An enum's schema
+takes its labels as strings, as PostgreSQL names them; a row read holds them as keywords, which
+`as-read` types ([docs/types.md](docs/types.md)):
 
 ```clojure
 (m/validate :pg.public/user_status "closed" {:registry registry})
@@ -198,7 +199,8 @@ error to the people using your application, word it yourself.
 ## Rows read through next.jdbc
 
 pgjdbc does not return the registry's types. pgmalli types rows as `pgmalli-next.jdbc/builder`
-builds them and arguments as `pgmalli-next.jdbc/install-sending!` sends them
+builds them and arguments as `pgmalli-next.jdbc/install-sending!` sends them: call
+`(install-sending!)` once, and pass next.jdbc `{:builder-fn (builder registry)}`
 ([docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending)). `as-read` gives the
 row as the builder builds it, to validate results as they come back:
 
@@ -284,7 +286,7 @@ problems it reports:
 | `:unknown-table` | a table the registry lacks; `:did-you-mean` lists a table of that name in another schema first; `:quoted` true where, under `:quoted`, the name folded to lower case is a table of the registry |
 | `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`); with `:clause` where a clause names it: `:using` (`:side` `:left`, `:right` or `:both`, `:table` the joined one), `:on-conflict` (`:table`; `:constraint` where a vector headed by `:on-constraint` names one), `:values` (a keyword value, which HoneySQL writes as a column; `:table` the table written, `:target` the value's key, absent past a positional row's columns), `:set`, `:do-update-set`, `:columns` or `:values` without `:table` (an assigned target qualified by its table or alias: a field of a column to PostgreSQL); `:outside-join` true where an ON inside a parenthesized join names a table of the statement outside it; `:did-you-mean` where a column is spelled close; `:quoted` true where, under `:quoted`, the name folded to lower case is a column |
 | `:ambiguous-column` | an unqualified column of two tables, or a column a subquery or CTE has several of, with `:candidates` (that one alone) |
-| `:duplicate-column` | columns of one label in the row a query returns, which `as-unqualified-maps` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
+| `:duplicate-column` | columns of one label in the row a query returns, which `pgmalli-next.jdbc/builder` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
@@ -495,14 +497,15 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 1. the keys of the map `generate!` and `check` take
 2. the generated file and the registry names
 3. the kinds of `:unrendered` entries and of `h/analyze`'s problems
-4. the public functions of `pgmalli-next.core`, `pgmalli-next.generate` and `pgmalli-next.honeysql`, and
-   their options
+4. the public functions of `pgmalli-next.core`, `pgmalli-next.generate`, `pgmalli-next.honeysql`
+   and `pgmalli-next.jdbc`, and their options
 5. the `:pgmalli/error` kinds of the errors pgmalli throws
 6. what `check` throws where the file is stale or missing
 
 | `:pgmalli/error` | when |
 |---|---|
 | `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` or `:overrides` too), a schema the database lacks, or an `:out` file generate! did not write |
+| `:pgmalli.error/other-sending` | `install-sending!`: next.jdbc's `SettableParameter` already extended for a class pgmalli sends, by another (`next.jdbc.date-time`'s `LocalDate`), with `:given` the classes |
 | `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
 | `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |

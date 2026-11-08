@@ -5,6 +5,7 @@
             [clojure.test :refer [deftest is use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
+            [malli.error :as me]
             [next.jdbc :as jdbc]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
@@ -88,8 +89,9 @@
                  {:delete-from :tags :returning [:id]}
                  {:truncate :tags}]
               return-keys [nil true ["name"]]
-              :let [opts (cond-> {} return-keys (assoc :jdbc {:return-keys return-keys}))
-                    jdbc-opts (assoc (:jdbc opts) :builder-fn (builder registry))
+              :let [jdbc-opts (cond-> {:builder-fn (builder registry)} return-keys (assoc :return-keys return-keys))
+                    ;; the map the application passes next.jdbc, its builder too
+                    opts {:jdbc jdbc-opts}
                     [_ row] (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))
                     [_ one] (m/children (m/schema (h/query-schema registry [] q (assoc opts :result :one)) {:registry registry}))]]
         (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
@@ -177,7 +179,7 @@
 
 (deftest a-null-column-keeps-its-key
   (when *db*
-    (let [row (jdbc/execute-one! (datasource) ["SELECT NULL::int AS group_id"] {:builder-fn (builder (pgmalli/registry {:registry {}}))})]
+    (let [row (jdbc/execute-one! (datasource) ["SELECT NULL::int AS group_id"] {:builder-fn (builder {})})]
       (is (= {:group_id nil} row)))))
 
 (deftest jdbc-leaves-a-pooled-connection-as-it-was
@@ -199,13 +201,28 @@
 (deftest an-enum-reads-as-its-labels-as-keywords-whatever-its-schema-and-name
   (when *db*
     (exec-sql! "CREATE SCHEMA \"Odd s\";
-                CREATE TYPE \"Odd s\".\"a\"\"q\" AS ENUM ('it''s', 'b c');
+                CREATE TYPE \"Odd s\".\"a\"\"q\" AS ENUM ('it''s', 'b c', 'n/a');
+                CREATE TYPE \"Odd s\".\"text\" AS ENUM ('t');
+                CREATE TYPE \"Odd s\".pair AS ENUM ('p');
+                CREATE TYPE pair AS (a int);
                 CREATE TYPE feeling AS ENUM ('ok');
                 CREATE DOMAIN feeling_d AS feeling;
-                CREATE TABLE \"Odd s\".e (id int PRIMARY KEY, q \"Odd s\".\"a\"\"q\", qs \"Odd s\".\"a\"\"q\"[], f feeling, fd feeling_d, fs feeling[]);
-                INSERT INTO \"Odd s\".e VALUES (1, 'it''s', '{\"b c\", NULL}', 'ok', 'ok', '{ok}');")
+                CREATE TABLE \"Odd s\".e (id int PRIMARY KEY, q \"Odd s\".\"a\"\"q\", qs \"Odd s\".\"a\"\"q\"[], f feeling, fd feeling_d, fs feeling[],
+                                           ff feeling[], tz timestamptz[], t \"Odd s\".\"text\", s text, p pair, j json[]);
+                INSERT INTO \"Odd s\".e VALUES (1, 'n/a', '{\"b c\", NULL}', 'ok', 'ok', '{ok}', '{{ok,NULL},{ok,ok}}',
+                                                ARRAY[ARRAY['infinity'::timestamptz, '2026-01-01Z']], 't', 's', ROW(1), ARRAY['{\"a\": 1}'::json, NULL]);")
     (let [registry (pgmalli/registry (generated {:db *db*} "public" "Odd s"))
           row (jdbc/execute-one! (datasource) ["SELECT * FROM \"Odd s\".e"] {:builder-fn (builder registry)})]
-      (is (= {:id 1 :q (keyword "it's") :qs [(keyword "b c") nil] :f :ok :fd :ok :fs [:ok]} row)
-          "a type of a schema off the search_path is named \"schema\".\"name\", a domain's column as its base type")
-      (is (m/validate (pgmalli/as-read registry "pg.Odd s/e") row {:registry registry})))))
+      (is (= {:id 1 :q (keyword "n/a") :qs [(keyword "b c") nil] :f :ok :fd :ok :fs [:ok] :ff [[:ok nil] [:ok :ok]]
+              :tz [[java.time.Instant/MAX (java.time.Instant/parse "2026-01-01T00:00:00Z")]] :t :t :s "s" :j [{:a 1} nil]}
+             (dissoc row :p))
+          "a type of a schema off the search_path is named \"schema\".\"name\", a domain's column as its base type, a pg_catalog type's name its own")
+      (is (instance? org.postgresql.util.PGobject (:p row)) "a composite type of the enum's name on the search_path is no enum")
+      ;; a multi-dimensional array's type is one-dimensional (PostgreSQL's type does not say the dimensions)
+      (let [read (pgmalli/as-read registry "pg.Odd s/e")
+            row (assoc row :p nil :ff nil :tz nil)]
+        (is (m/validate read row {:registry registry}) (pr-str (me/humanize (m/explain read row {:registry registry})))))
+      (is (= {:q (keyword "n/a") :j {(keyword "n/a") ["n/a"]}}
+             (jdbc/execute-one! (datasource) ["SELECT ?::\"Odd s\".\"a\"\"q\" AS q, ?::jsonb AS j" (:q row) {(:q row) [(:q row)]}]
+                                {:builder-fn (builder registry)}))
+          "a label of a / goes as its text, alone and in a jsonb document"))))

@@ -9,6 +9,7 @@
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.pgtypes :as pgtypes]
+            [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -77,18 +78,32 @@
   (str "pgmalli types rows as pgmalli-next.jdbc/builder builds them, keyed by the columns' names;"
        " pass it to next.jdbc as {:builder-fn (pgmalli-next.jdbc/builder registry)}"))
 
-(def ^:private the-extension
+(def ^:private reading-rows-doc
   "https://github.com/chaploud/pgmalli-next/blob/main/docs/reading-rows.md#the-one-reading-and-sending")
 
-(def ^:private one-reading (str "pgmalli types rows as pgmalli-next.jdbc/builder reads them (" the-extension ")"))
+(def ^:private one-reading (str "pgmalli types rows as pgmalli-next.jdbc/builder reads them (" reading-rows-doc ")"))
 
-(def ^:private one-sending (str "pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them (" the-extension ")"))
+(def ^:private one-sending (str "pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them (" reading-rows-doc ")"))
 
 (defn- the-builder?
-  "Whether f is a builder pgmalli-next.jdbc/builder made, or that function's symbol, which names
-   it where pgmalli-next.jdbc does not load (babashka, which has no pgjdbc)."
+  "Whether f is a builder pgmalli-next.jdbc/builder made: it carries the names of the enums it reads
+   as keywords (pgmalli-next.jdbc does not load where pgjdbc is not)."
   [f]
-  (or (= 'pgmalli-next.jdbc/builder f) (and (fn? f) (true? (:pgmalli-next.jdbc/builder (meta f))))))
+  (set? (:pgmalli-next.jdbc/builder (meta f))))
+
+(defn builder!
+  "opts when their :jdbc's :builder-fn, if any, reads the enums of registry as keywords: one made
+   of another registry reads an enum it lacks as a String, which the types say is a keyword."
+  [registry opts]
+  (when-let [enums (:pgmalli-next.jdbc/builder (meta (:builder-fn (:jdbc opts))))]
+    (let [ours (shape/enum-type-names registry resolve/type-name?)]
+      (when (not= enums ours)
+        (error/fail! :pgmalli.error/invalid-options
+                     (str "pgmalli options: :jdbc's :builder-fn was made of a registry of other enums ("
+                          (str/join ", " (sort (into (remove ours enums) (remove enums ours))))
+                          "): pass (pgmalli-next.jdbc/builder registry) of the registry the rows are typed with")
+                     {:given (sort (into (remove ours enums) (remove enums ours)))}))))
+  opts)
 
 (defn options!
   "opts when the function they go to takes them, the options of ks (option-entries' keys, in
@@ -124,10 +139,10 @@
         (error/fail! :pgmalli.error/invalid-options
                      (str "pgmalli options: :format's " (pr-str k) " is no sql/format option pgmalli reads" (error/did-you-mean meant))
                      {:given [k] :did-you-mean [meant]}))
-      (when-let [given (not-empty (select-keys (when (map? jdbc) jdbc) [:builder-fn :label-fn :qualifier-fn]))]
-        (when-not (and (= [:builder-fn] (keys given)) (the-builder? (:builder-fn given)))
-          (fail! (str ":jdbc's " (str/join ", " (keys given)) " is not read: " builder-only)
-                 given))))
+      (when-let [given (not-empty (cond-> (select-keys (when (map? jdbc) jdbc) [:builder-fn :label-fn :qualifier-fn])
+                                    (the-builder? (:builder-fn jdbc)) (dissoc :builder-fn)))]
+        (fail! (str ":jdbc's " (str/join ", " (keys given)) " is not read: " builder-only)
+               given)))
     (error/checked! (options-schema ks) opts)
     opts))
 
@@ -386,16 +401,22 @@
     (cond-> (read-type (cond-> s d (assoc (dec (count s)) [:any {:pg/type d}])) pgjdbc?)
       d (shape/merge-props {:pg/domain (str d "[]")}))))
 
+(defn keyword-enum
+  "[:enum props ...] of labels as keywords; a default among props (malli's default-value
+   transformer fills it) a keyword label too."
+  [props labels]
+  (let [p (cond-> props (string? (:default props)) (update :default keyword))]
+    (into (cond-> [:enum] (seq p) (conj p)) (map keyword labels))))
+
 (defn- keyword-labels
-  "s with each reference to an enum type of schemas as the type's labels as keywords, as the one
-   reading reads them."
+  "s with each reference to an enum type of the registry's schemas as the type's labels as
+   keywords, as the one reading reads a column of the type; a json column's, whose values are
+   JSON's (an override's reference too), as it is."
   [schemas s]
   (clojure.walk/postwalk (fn [f]
-                           (let [target (shape/ref-target schemas f)]
-                             (if (= :enum (shape/head target))
-                               ;; a default (malli's default-value transformer fills it) a label read
-                               (let [p (when (map? (second f)) (cond-> (second f) (string? (:default (second f))) (update :default keyword)))]
-                                 (into (cond-> [:enum] p (conj p)) (map keyword (shape/entries target))))
+                           (let [target (when-not (types/json? (pg-type s)) (shape/ref-target schemas f))]
+                             (if (and (= :enum (shape/head target)) (shape/generated-name? (last f)))
+                               (keyword-enum (shape/props f) (shape/entries target))
                                f)))
                          s))
 

@@ -140,7 +140,7 @@
 
 (def ^:private unqualified
   ;; the catalog's arrays read as vectors
-  {:builder-fn (test-db/builder (pgmalli/registry {:registry {}}))})
+  {:builder-fn (test-db/builder {})})
 
 (defn- schemas
   "The oracle schema's schemas: all but PostgreSQL's own and the argument matrix's."
@@ -383,9 +383,9 @@
   "Where the return schema of query-schema refuses what next.jdbc returned for sqlvec (rows,
    what execute! returned, and execute-one!, run and rolled back), or the keys of row-schema's
    map are not those of the result set's columns (key-mismatch, as :result :keys)."
-  [registry ^java.sql.Connection conn {:keys [query]} opts arg-keys sqlvec rows]
+  [registry ^java.sql.Connection conn read {:keys [query]} opts arg-keys sqlvec rows]
   (vec (for [[result run] [[:many (constantly rows)]
-                           [:one #(jdbc/execute-one! conn sqlvec {:builder-fn (test-db/builder registry)})]
+                           [:one #(jdbc/execute-one! conn sqlvec read)]
                            [:keys nil]]
              :let [opts (cond-> opts (= :one result) (assoc :result :one))
                    r (try (if run
@@ -622,7 +622,7 @@
                         :else
                         (let [{:keys [result] :as v} (cond-> (verdict conn read sqlvec) (= :params mode) (uncast-string (:verdict @before)))
                               problems (vec (remove #(= :unread-clause (:kind %)) (:problems (h/analyze registry query opts))))
-                              returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result))
+                              returned (when result (return-rejections registry conn read c opts (vec (keys args)) sqlvec result))
                               {described :mismatches typed :typed} (when result (column-mismatches registry conn doms query opts sqlvec))
                               r (merge c (dissoc v :result)
                                        {:return-rejections returned :column-mismatches described :columns-typed typed :format mode :sql (first sqlvec) :params (vec (rest sqlvec))

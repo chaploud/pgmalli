@@ -85,16 +85,12 @@
   [own alts strings? keywords?]
   (let [props (shape/props own)
         labels (shape/entries own)
-        keywords? (and keywords? (some #(:keyword (shape/value-classes (second %))) alts))
-        sent (concat (when strings? labels) (when keywords? (map keyword labels)))
-        ;; a default (malli's default-value transformer fills it) as one of the labels sent
-        d (:default props)
-        props (cond (or (nil? d) (some #{d} sent)) props
-                    keywords? (assoc props :default (keyword d))
-                    :else (dissoc props :default))]
-    (cond (empty? sent) (if-let [t (:pg/type props)] (jdbc/typed-pg-object t) jdbc/pg-object)
-          (= sent labels) own
-          :else (into (cond-> [:enum] (seq props) (conj props)) sent))))
+        keywords? (and keywords? (some #(:keyword (shape/value-classes (second %))) alts))]
+    (cond (not (or strings? keywords?)) (if-let [t (:pg/type props)] (jdbc/typed-pg-object t) jdbc/pg-object)
+          (not keywords?) own
+          (not strings?) (jdbc/keyword-enum props labels)
+          :else (let [e (jdbc/keyword-enum props labels)]
+                  (into (cond-> [:enum] (shape/props e) (conj (shape/props e))) (concat labels (shape/entries e)))))))
 
 (defn- untyped-type-values
   "The values of a type whose own pgmalli does not type (interval, inet), s its schema: a

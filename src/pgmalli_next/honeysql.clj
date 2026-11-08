@@ -28,7 +28,7 @@
   ([registry opts ks]
    (if (::query/schemas registry)
      [registry opts]
-     (let [opts (jdbc/options! opts ks)]
+     (let [opts (jdbc/builder! registry (jdbc/options! opts ks))]
        [(assoc (query/reading registry) ::query/format (:format opts)) opts])))
   ([registry body opts ks]
    (if (::query/schemas registry)
@@ -294,7 +294,7 @@
                                      (let [a (if (syntax/column-keyword? x) (str/replace (name x) "." "_") label)]
                                        (keyword (cond (not= a label) a (re-matches #"[a-z_][a-z0-9_]*" a) (str a "_2") :else "column_2"))))]
                          (str (str/join " and " (map pr-str items)) (if (next items) " make" " makes") " several columns labelled " label
-                              "; next.jdbc's as-unqualified-maps reads them into one key " column ", keeping the last one's value; "
+                              "; pgmalli-next.jdbc/builder reads them into one key " column ", keeping the last one's value; "
                               (if star?
                                 (str "list the columns of " x " instead, giving one an alias of its own")
                                 (str "give one an alias of its own: " (pr-str [(if (keyword? x) x (first x)) alias]))))))

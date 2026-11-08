@@ -46,7 +46,7 @@
    Throws when an option is unknown, or name is no table's or view's row schema."
   ([registry name] (as-read registry name {}))
   ([registry name opts]
-   (let [opts (jdbc/options! opts [:schema :jdbc])]
+   (let [opts (jdbc/builder! registry (jdbc/options! opts [:schema :jdbc]))]
      (when (contains? (:jdbc opts) :return-keys)
        (error/fail! :pgmalli.error/invalid-options
                     "as-read reads no :return-keys, a write's RETURNING: the row it gives is the table's whole row"

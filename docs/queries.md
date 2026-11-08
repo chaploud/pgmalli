@@ -723,7 +723,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   `t` lacks (`u.name` for `u.nick`). For the row's text, write `[:cast :t :text]`.
 - Columns of one label in the row a query returns (`{:select [:q.id :s.id] ...}`, or `*` over
   two tables that each have `id`): a `:duplicate-column`. PostgreSQL returns them all, but
-  next.jdbc's `as-unqualified-maps`, which `pgmalli-next.jdbc/builder` is, reads them into one key, keeping the last column's value
+  `pgmalli-next.jdbc/builder` reads them into one key, keeping the last column's value
   without a word. Give each an alias of its own (`[:s.id :s_id]`). The row is a statement's,
   a set operation's first member's (whose labels name its columns), or RETURNING's; a
   subquery's or a CTE's columns count where `*` returns them.

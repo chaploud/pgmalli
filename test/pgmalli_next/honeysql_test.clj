@@ -14,6 +14,7 @@
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
+            [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.sample :refer [registry]]))
 
@@ -326,7 +327,7 @@
 (deftest columns-of-one-label-are-a-duplicate-column-as-the-builder-keeps-one
   (let [join {:from [[:users :q]] :join [[:groups :s] [:= :s.id :q.group_id]]}]
     (is (= [{:kind :duplicate-column :column :id :items [:q.id :s.id]}] (check (merge join {:select [:q.id :s.id]}))))
-    (is (= [":q.id and :s.id make several columns labelled id; next.jdbc's as-unqualified-maps reads them into one key :id, keeping the last one's value; give one an alias of its own: [:s.id :s_id]"]
+    (is (= [":q.id and :s.id make several columns labelled id; pgmalli-next.jdbc/builder reads them into one key :id, keeping the last one's value; give one an alias of its own: [:s.id :s_id]"]
            (h/humanize (check (merge join {:select [:q.id :s.id]})))))
     (is (= [] (check (merge join {:select [:q.id [:s.id :s_id]]}))))
     (is (= [{:kind :duplicate-column :column :id :items [:*]}] (check (merge join {:select [:*]}))) "a star's columns")
@@ -832,14 +833,24 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be the map of options you pass to next.jdbc" (h/analyze registry {:select [:id] :from [:users]} {:jdbc []}))))
 
 (deftest a-builder-other-than-pgmallis-is-an-error-naming-it
-  (doseq [jdbc [{:builder-fn 'next.jdbc.result-set/as-unqualified-maps} {:builder-fn (fn [_ _])} {:label-fn str/lower-case} {:qualifier-fn str/lower-case}]]
-    (let [e (try (row {:select [:id] :from [:users]} (assoc opts :jdbc jdbc)) nil (catch clojure.lang.ExceptionInfo e e))]
-      (is (re-find #"is not read: pgmalli types rows as pgmalli-next.jdbc/builder builds them" (str (ex-message e))) (pr-str jdbc))
-      (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))))
-  (doseq [b ['pgmalli-next.jdbc/builder (with-meta (fn [_ _]) {:pgmalli-next.jdbc/builder true})]]
+  (let [pgmallis (with-meta (fn [_ _]) {:pgmalli-next.jdbc/builder (shape/enum-type-names registry resolve/type-name?)})]
+    (doseq [[jdbc refused] [[{:builder-fn 'next.jdbc.result-set/as-unqualified-maps} ":builder-fn"]
+                            [{:builder-fn 'pgmalli-next.jdbc/builder} ":builder-fn"]
+                            [{:builder-fn (fn [_ _])} ":builder-fn"]
+                            [{:label-fn str/lower-case} ":label-fn"]
+                            [{:builder-fn pgmallis :qualifier-fn str/lower-case} ":qualifier-fn"]]]
+      (let [e (try (row {:select [:id] :from [:users]} (assoc opts :jdbc jdbc)) nil (catch clojure.lang.ExceptionInfo e e))]
+        (is (= (str ":jdbc's " refused " is not read: pgmalli types rows as pgmalli-next.jdbc/builder builds them")
+               (re-find #":jdbc's .* builds them" (str (ex-message e))))
+            (pr-str jdbc))
+        (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))))
     (is (= (row {:select [:id] :from [:users]})
-           (row {:select [:id] :from [:users]} (assoc opts :jdbc {:builder-fn b})))
-        "pgmalli's builder, as the map an application passes next.jdbc holds it, or its symbol where pgmalli-next.jdbc does not load")))
+           (row {:select [:id] :from [:users]} (assoc opts :jdbc {:builder-fn pgmallis})))
+        "pgmalli's builder, as the map an application passes next.jdbc holds it")
+    (let [e (try (row {:select [:id] :from [:users]} (assoc opts :jdbc {:builder-fn (vary-meta pgmallis update :pgmalli-next.jdbc/builder disj "mood")}))
+                 nil (catch clojure.lang.ExceptionInfo e e))]
+      (is (re-find #"was made of a registry of other enums \(mood\)" (str (ex-message e)))
+          "a builder of another registry reads an enum it lacks as a String"))))
 
 (deftest a-derived-tables-and-a-set-operations-columns-are-typed
   (is (= [:map [:pending [:boolean {:pg/type "boolean"}]] [:all [:maybe [:boolean {:pg/type "boolean"}]]]]
