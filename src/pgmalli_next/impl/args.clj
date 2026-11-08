@@ -569,14 +569,15 @@
    them; in place of the collections a json or jsonb value of the parameter takes there (bare, a
    value sent as the function's json or jsonb; cast, what the cast takes), or nil. A key is
    required, its value not nil, where an INSERT ... SELECT writes the column of that name of
-   the row type's table straight from it and NULL may not go there
+   the row type's table straight from it, or through a derived table selecting it, and NULL may
+   not go there
    (assigned-column). columns, the set of the columns the statements reading the call's alias
    name of it (resolved as a column of it, in the statement or one nested in it); nil where a
    use names none in particular: a star, its whole row, :raw, or a list of columns renaming
    them."
   [registry body opts]
   (for [sps [(query/once registry query/statement-positions body opts)]
-        [_ c _ ps] sps
+        [stmt c _ ps] sps
         {:keys [x chain]} (syntax/expression-nodes ps)
         :let [{:keys [table set? type json arg] :as call} (query/populate-call registry chain x opts)]
         :when arg
@@ -600,13 +601,35 @@
                                 :let [{:keys [column opaque?] from :table} (query/resolve-column registry chain y)]
                                 :when (and opaque? (= alias from))]
                             (keyword column))))
+              ;; {output column, call's column} of the statement's select items that are columns of
+              ;; the call: a statement over it as a derived table (FROM (SELECT j.a ... LIMIT n) r) writes r.a
+              through (when alias
+                        (into {} (for [item (syntax/selected-items stmt)
+                                       :let [[col] (syntax/select-parts item opts)
+                                             {:keys [column opaque?] from :table} (when (syntax/column-keyword? col) (query/resolve-column registry c col))]
+                                       :when (and opaque? (= alias from))]
+                                   [(syntax/item-name item opts) column])))
+              ;; [assignment column] of each write of a column of the call, straight or through a
+              ;; derived table of the statement
+              writes (concat
+                      (for [a (syntax/assignments ps) :when (and alias (syntax/column-keyword? (:x a)))
+                            :let [{:keys [column opaque?] from :table} (query/resolve-column registry (:chain a) (:x a))]
+                            :when (and opaque? (= alias from))]
+                        [a column])
+                      (for [[s2 _ _ ps2] sps
+                            :let [ds (set (for [i (syntax/from-items s2 [:from]) :when (and (vector? i) (identical? stmt (first i)))]
+                                            (second (syntax/table-ref i opts))))]
+                            :when (seq ds)
+                            a (syntax/assignments ps2) :when (syntax/column-keyword? (:x a))
+                            :let [{:keys [column] from :table} (query/resolve-column registry (:chain a) (:x a))
+                                  inner (get through column)]
+                            :when (and (ds from) inner)]
+                        [a inner]))
               ;; {column nullable?} of the columns of the document the statement writes, a NOT NULL
               ;; column a BEFORE row trigger may fill with the triggers' names
-              written (into {} (for [{c :x event :event :as a} (syntax/assignments ps)
-                                     :when (and alias (syntax/column-keyword? c))
-                                     :let [{:keys [column opaque?] from :table} (query/resolve-column registry (:chain a) c)
-                                           {written :column t :table :keys [nullable? schema]} (query/assigned-column registry a)]
-                                     :when (and opaque? (= alias from) (or (nil? table) (= table t)) schema (= column written))]
+              written (into {} (for [[{event :event :as a} column] writes
+                                     :let [{written :column t :table :keys [nullable? schema]} (query/assigned-column registry a)]
+                                     :when (and (or (nil? table) (= table t)) schema (= column written))]
                                  [column (if (not nullable?)
                                            false
                                            (or (when-not (shape/maybe? schema) (shape/before-triggers (query/table-props registry t) event)) true))]))
