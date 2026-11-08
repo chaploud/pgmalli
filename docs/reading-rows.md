@@ -40,7 +40,8 @@ sends](queries.md#what-your-application-sends) lists: `Instant/MAX` and `MIN` as
 `-infinity`, a map and a vector written with data.json (an `Instant` and java.time's dates and
 times as their ISO-8601 text, a `UUID` and a keyword as their text). Every other class goes as
 pgjdbc's `setObject` sends it. Call it once, before sending arguments: without it, pgjdbc refuses
-a keyword, a map and a vector (a `PSQLException` of SQLState `07006`, which names the class). It throws where another extension already holds a class pgmalli sends
+a keyword and a vector (a `PSQLException` of SQLState `07006`, which names the class) and sends a
+map as `hstore` (an error naming hstore where that extension is not installed). It throws where another extension already holds a class pgmalli sends
 (`next.jdbc.date-time`'s `LocalDate`), which would go otherwise than pgmalli types it; one made
 after it is not seen, so call it after loading the namespaces that extend `SettableParameter`. An application that sends its own way uses `builder` alone,
 and types its arguments from the facts pgmalli gives a sender of its own ([what your
@@ -53,6 +54,10 @@ NULL column keeps its key. A query's row has the keys of its labels likewise
 written otherwise than read): a column has one key, read and written. Another spelling, such as kebab-case
 keys (`:group-id`, which HoneySQL writes to the same column), is your application's to convert,
 both ways, where it takes and gives the row.
+
+A row read through another builder is not the one `as-read` types: next.jdbc's default qualifies
+every key (`:users/id`, each missing), and its values are pgjdbc's classes (a `java.sql.Timestamp`,
+an enum a `String`). Read it through `builder`.
 
 What each type comes back as:
 
