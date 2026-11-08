@@ -26,7 +26,9 @@
   [[:quoted :boolean] [:inline :boolean] [:quoted-snake :boolean]
    [:dialect [:and :keyword [:fn {:error/message "should be a dialect HoneySQL registers (:ansi, :mysql, :oracle ...)"} registered-dialect?]]]
    [:quoted-always [:fn {:error/message "should be a regex (#\"^null$\")"} #(instance? java.util.regex.Pattern %)]]
-   [:values-default-columns [:or set? sequential?]]])
+   [:values-default-columns [:or set? sequential?]]
+   ;; false: [:= a nil] is a = NULL, not a IS NULL
+   [:transform-null-equals :boolean]])
 
 (def ^:private option-entries
   "Each option pgmalli takes. :jdbc and :format are the maps an application passes to next.jdbc

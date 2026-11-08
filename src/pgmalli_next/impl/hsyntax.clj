@@ -1125,12 +1125,14 @@
 
 (def ^:private null-test-sql
   "Of [op v x] (left?) or [op x v], v a null-value?, whether the loaded HoneySQL writes it as x IS
-   NOT NULL (true) or x IS NULL (false); nil for neither (x = NULL, NULL IS x)."
-  (memo/bounded (fn [op v left?]
-             (when-let [[_ negated] (try (re-matches #"(?i)pgmalli_x IS (NOT )?NULL"
-                                                     (first (sql/format-expr (if left? [op v :pgmalli_x] [op :pgmalli_x v]))))
-                                         (catch Exception _ nil))]
-               (some? negated)))))
+   NOT NULL (true) or x IS NULL (false), under sql/format's :transform-null-equals tne (which
+   format-expr does not read); nil for neither (x = NULL, NULL IS x)."
+  (memo/bounded (fn [op v left? tne]
+                  (when-let [[_ negated] (try (re-matches #"(?i)SELECT pgmalli_x IS (NOT )?NULL"
+                                                          (first (sql/format {:select [[(if left? [op v :pgmalli_x] [op :pgmalli_x v])]]}
+                                                                             (if (some? tne) {:transform-null-equals tne} {}))))
+                                              (catch Exception _ nil))]
+                    (some? negated)))))
 
 (defn null-test
   "[operand negated?] of x where HoneySQL writes it as operand IS NULL (negated? false) or IS NOT
@@ -1141,7 +1143,7 @@
     (let [[op a b] x]
       (some (fn [[v operand left?]]
               (when (null-value? v format)
-                (when-some [negated? (null-test-sql op v left?)] [operand negated?])))
+                (when-some [negated? (null-test-sql op v left? (:transform-null-equals format))] [operand negated?])))
             [[b a false] [a b true]]))))
 
 (defn truth-value?

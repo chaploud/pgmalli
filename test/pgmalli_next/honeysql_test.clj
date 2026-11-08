@@ -3450,3 +3450,11 @@
     (is (= [false true true true false false false]
            (map #(m/validate t % {:registry reg}) [3.5e38 1.5 (float 1.5) 1 1E39M 1E400M (clojure.core/bigint 1e39)]))
         "a Double past it, and a BigDecimal or a BigInt past it, which PostgreSQL converts to a real and refuses")))
+
+(deftest a-null-test-is-read-as-transform-null-equals-has-honeysql-write-it
+  ;; HoneySQL 2.4 reads no :transform-null-equals
+  (when (= "SELECT x WHERE a = NULL" (first (sql/format {:select [:x] :where [:= :a nil]} {:transform-null-equals false})))
+    (is (= [] (check {:select [:id] :from [:users] :where [:= :nick nil]})))
+    (is (not= (args {:select [:id] :from [:users] :where [:or [:= :?n nil] [:= :id :?n]]})
+              (args {:select [:id] :from [:users] :where [:or [:= :?n nil] [:= :id :?n]]} {:format {:transform-null-equals false}}))
+        "false: ? = NULL, which tests nothing for NULL")))

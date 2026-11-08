@@ -578,7 +578,7 @@ applies to the names not yet cached alone; pass them in `:format`.
 |---|---|
 | `:schema "app"` | the schema of unqualified tables, the one your connection's `search_path` names |
 | `:jdbc` | the options you pass to next.jdbc ([reading-rows.md](reading-rows.md#the-options-of-nextjdbc)); its `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
-| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them |
+| `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake`, `:quoted-always` and `:transform-null-equals` are read, a name (an alias, a key of `:values`) and a NULL test (`[:= a nil]`) as the loaded HoneySQL writes it under them |
 | `:result :one` | `h/query-schema`'s alone: the return is what `execute-one!` returns |
 
 ## Function schemas
