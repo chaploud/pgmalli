@@ -3479,3 +3479,7 @@
         "a keyword goes as its text, which the column gets")
     (is (every? #(re-find #"@" (let [e (:e %)] (if (vector? e) (name (second e)) e))) (mg/sample v {:registry greg :size 20 :seed 3}))
         "generated within the check")))
+
+(deftest a-literal-of-the-columns-type-out-of-its-shape-says-so
+  (let [said (first (h/humanize (:problems (h/analyze docs {:update :docs :set {:meta [:lift {:a "x"}]} :where [:= :id 1]}))))]
+    (is (str/includes? said "its own type, but is none of the values its schema takes") said)))

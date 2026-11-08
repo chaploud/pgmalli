@@ -438,9 +438,15 @@
                          ;; a value of no literal syntax (an Instant) by its class
                          printed? (or (string? value) (number? value) (boolean? value) (coll? value) (uuid? value))
                          x (if printed? (shown value) (str "<the " (.getSimpleName (class value)) ">"))]
-                     (if-not sent
+                     (cond
+                       (not sent)
                        (str (shown value) " goes to " to " as a parameter, which pgjdbc sends no " (.getSimpleName (class value))
                             " as; send a vector (jsonb) or a Java array (an array type)")
+                       ;; of the type taken, out of the values the schema holds it to (an override's shape)
+                       (= sent type)
+                       (str (shown value) " goes to " to " as " sent ", its own type, but is none of the values its schema takes"
+                            " (an override's shape, a range): write one it takes")
+                       :else
                      (str (if printed? (shown value) (str "a " (.getName (class value)) " (" value ")")) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
                           " takes there through no implicit conversion; "
                           (if (coll? value)
