@@ -10,6 +10,9 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
+            [pgmalli-next.impl.registry :as registry]
+            [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types]
             [pgmalli-next.oracle :as oracle]
             [pgmalli-next.small-stack :refer [on-small-stack]]
             [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! with-postgres]])
@@ -641,3 +644,17 @@
     (try
       (is (instance? PGobject (:c (jdbc/execute-one! (datasource) ["SELECT ROW(1)::public.jsonb AS c"] {:builder-fn (builder {})}))))
       (finally (jdbc/execute! (datasource) ["DROP TYPE public.jsonb"])))))
+
+(deftest each-sql-value-word-is-of-the-type-postgresql-gives-it
+  (when *db*
+    (doseq [[w t] types/sql-words]
+      (is (= t (:t (jdbc/execute-one! (datasource) [(str "SELECT pg_typeof(" w ")::text AS t")]))) w))))
+
+(deftest a-sequences-row-has-the-columns-postgresql-reads-of-one
+  (when *db*
+    (jdbc/execute! (datasource) ["CREATE SEQUENCE IF NOT EXISTS seq_columns"])
+    (let [row (get (#'registry/sequence-rows {:sequences {"public" ["seq_columns"]}}) :pg.public/seq_columns)
+          md (with-open [c (jdbc/get-connection (datasource))]
+               (let [m (.getMetaData (.executeQuery (.createStatement c) "SELECT * FROM seq_columns"))]
+                 (vec (for [i (range 1 (inc (.getColumnCount m)))] [(keyword (.getColumnLabel m i)) (types/canonical-name (.getColumnTypeName m i))]))))]
+      (is (= md (for [[k _ s] (shape/column-entries row)] [k (:pg/type (shape/column-props s))]))))))
