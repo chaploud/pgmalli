@@ -236,7 +236,7 @@
 
 (deftest every-table-has-the-system-columns
   (is (= [] (check {:delete-from :users :where [:in :ctid {:select [:ctid] :from [:users] :where [:= :xmin 1]}]})))
-  (is (= {:t [:int {:pg/type "oid"}]} (args {:select [:id] :from [:users] :where [:= :tableoid :?t]}))))
+  (is (= {:t [:int {:min 0 :max 4294967295 :pg/type "oid"}]} (args {:select [:id] :from [:users] :where [:= :tableoid :?t]}))))
 
 (deftest an-unqualified-pg-name-is-pg-catalogs-first
   (is (= [] (check {:select [:pg_class.relname] :from [:pg_class] :join [:pg_roles [:= :pg_class.relowner :pg_roles.oid]]}))
@@ -3424,3 +3424,10 @@
 (deftest an-argument-to-a-not-null-column-of-a-type-pgmalli-does-not-type-takes-no-nil
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:x [:some {:pg/type "xml"}]]]}})]
     (is (not (m/validate (:x (:args (h/analyze reg {:insert-into :t :values [{:x :?x}]}))) nil {:registry reg})))))
+
+(deftest a-number-to-an-oid-is-held-to-oids-range-wherever-it-goes
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:o [:int {:pg/type "oid" :min 0 :max 4294967295}]] [:rc [:any {:pg/type "regclass"}]]]}})
+        t #(:x (:args (h/analyze reg %)))]
+    (doseq [q [{:select [:*] :from [:t] :where [:= :o :?x]} {:select [:*] :from [:t] :where [:= :rc :?x]}
+               {:select [[[:coalesce :o :?x] :c]] :from [:t]} {:select [[[:coalesce :rc :?x] :c]] :from [:t]}]]
+      (is (= [false false true] (map #(m/validate (t q) % {:registry reg}) [-1 4294967296 1])) (pr-str q)))))

@@ -931,11 +931,12 @@
 
 (defn- matrix-format [quoted?] (if quoted? {:quoted true} {}))
 
-(defn- negative-oid?
-  "Whether v is a negative integer to an oid alias, or an array of one, held-t
-   (docs/queries.md#stricter-oid)."
+(defn- out-of-oid-range?
+  "Whether v is an integer outside oid's range to an oid or an alias of it, or an array of one,
+   held-t (docs/queries.md#stricter-oid)."
   [held-t v]
-  (and (string? held-t) (let [e (or (types/element held-t) held-t)] (or (= "oid" e) (types/oid-alias? e))) (integer? v) (neg? v)))
+  (and (string? held-t) (let [e (or (types/element held-t) held-t)] (or (= "oid" e) (types/oid-alias? e))) (integer? v)
+       (let [[lo hi] (:range (types/types "oid"))] (not (<= lo v hi)))))
 
 (def ^:private inline-refusals
   "The SQLSTATEs of PostgreSQL refusing an inlined literal: its type (type-refusals), or the SQL
@@ -981,7 +982,7 @@
                             :when (not (or (and (nil? v) (compared-contexts context))
                                            (and (nil? v) notnull (#{:update :insert :insert-select} context))
                                            ;; docs/queries.md#stricter-oid
-                                           (negative-oid? held-t v)
+                                           (out-of-oid-range? held-t v)
                                            (and (not taken?) (string? lit) (contains? (get stricter [lit (if assign? :assign :compare)]) held-t))))
                             :let [sqlvec (try (sql/format query (assoc fmt :params {:x arg})) (catch Exception _ nil))
                                   pg (when sqlvec (refusal conn sqlvec column (and (nil? v) notnull)))]
@@ -1054,7 +1055,7 @@
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))
-                                                 (negative-oid? held-t v)
+                                                 (out-of-oid-range? held-t v)
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
                                   rule? (and takes? (not cast?) (not untyped-there?) (not= "polymorphic" (namespace context)))]

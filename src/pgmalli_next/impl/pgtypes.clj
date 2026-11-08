@@ -92,8 +92,10 @@
                  {:pred (fn [v] (or (sql-array? v)
                                     (let [c (class v)
                                           es (when (accept/array-class? c) (elements v))
-                                          ;; a long[][]'s type is a long[]'s
-                                          n (when es (.getName ^Class (loop [^Class c c] (if (.isArray (.getComponentType c)) (recur (.getComponentType c)) c))))]
+                                          ;; a long[][]'s type is a long[]'s; a byte[][]'s is its own, a byte[] a bytea
+                                          n (when es (.getName ^Class (loop [^Class c c]
+                                                                        (let [e (.getComponentType c)]
+                                                                          (if (and (.isArray e) (not= e accept/bytes-class)) (recur e) c)))))]
                                       (boolean (and es
                                                     (or (nil? classes) (contains? classes n))
                                                     (or (nil? empty-classes) (some some? es) (contains? empty-classes n))

@@ -683,9 +683,10 @@
 (defn loose
   "A column type without the bounds a comparison need not keep (lengths, ranges): its
    kind and :pg/type, each alternative's of an :or. A type with other children (an enum) stays:
-   PostgreSQL refuses a value outside an enum, even compared."
+   PostgreSQL refuses a value outside an enum, even compared; so does an oid's range, as no
+   operator compares an oid with another number, which converts to an oid."
   [t]
-  (if-not (vector? t)
+  (if (or (not (vector? t)) (let [n (some-> (shape/props t) :pg/type types/entry :name)] (or (= "oid" n) (types/oid-alias? n))))
     t
     (let [h (first t)
           p (shape/props t)

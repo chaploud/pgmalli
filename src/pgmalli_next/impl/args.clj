@@ -103,14 +103,14 @@
         inline? (:inline (:format opts))
         rows (jdbc/write-rows opts false)
         untyped (when inline? (for [[x p] rows :when (= :unknown p) a (shape/alternatives x)] a))
-        ;; a number goes to an oid alias (regclass, regproc) as an oid, within oid's range; resolved
-        ;; with it (coalesce, CASE), which converts it only where a row reaches it, any
+        ;; a number goes to an oid alias (regclass, regproc) as an oid, within oid's range, wherever
+        ;; it goes (docs/queries.md#stricter-oid)
         oid (when (types/oid-alias? t) (types/type-schema "oid"))]
     (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
                       (for [[x p] rows
                             :when (and (string? p) (not= p t) (accept/holds? t p context))
                             a (shape/alternatives x)]
-                        (cond-> (unlabel a) (and oid (accept/number-type? p) (not= :common context)) (within p "oid" oid)))))))
+                        (cond-> (unlabel a) (and oid (accept/number-type? p)) (within p "oid" oid)))))))
 
 (defn- class-held
   "A function's argument's alternative a held to the classes of its schema the one sending sends
@@ -242,7 +242,8 @@
                        (remove #(= :string (shape/kind %)) own-alts))
             ;; a number held to a number column's range, which PostgreSQL checks after converting it
             alts (for [[p a] alts] (cond-> a
-                                     (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
+                                     ;; an oid's compared too: no operator compares it with another number, which converts to it
+                                     (and (or (not= :compare context) (= "oid" t)) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             ;; numeric's NaN and infinities, which the one reading reads as a Double: PostgreSQL
