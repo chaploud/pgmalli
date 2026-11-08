@@ -127,6 +127,19 @@
                 clojure.lang.IPersistentVector (fn [v ^PreparedStatement s ^long i] (.setObject s i (jsonb v)))}
                #(with-meta % {::sending true})))
 
+(defn- dispatched
+  "The function a value of class c is sent by: SettableParameter's impls as a protocol dispatches,
+   the class, its superclasses, then the most specific of its interfaces."
+  [^Class c]
+  (let [impls (:impls prepare/SettableParameter)
+        impl #(:set-parameter (get impls %))]
+    (or (some impl (take-while #(and % (not= Object %)) (iterate #(.getSuperclass ^Class %) c)))
+        (some->> (filter impl (disj (supers c) Object))
+                 seq
+                 (reduce (fn [^Class a ^Class b] (if (.isAssignableFrom a b) b a)))
+                 impl)
+        (impl Object))))
+
 (defn install-sending!
   "Extends next.jdbc's SettableParameter, for the whole JVM, for the classes
    docs/reading-rows.md#the-one-reading-and-sending lists. Call it once, before sending arguments.
@@ -134,10 +147,14 @@
    which would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own;
    one made after it is not seen."
   []
-  (let [sent (into (set (keys sending)) (filter class?) (map first accept/classes))
-        others (sort-by str (for [[c {f :set-parameter}] (:impls prepare/SettableParameter)
-                                  :when (and (sent c) (not (::sending (meta f))))]
-                              c))]
+  (let [;; a map and a vector go as their classes, which an extension of a superclass reaches first
+        sent (concat (keys sending) (filter class? (map first accept/classes))
+                     [clojure.lang.PersistentArrayMap clojure.lang.PersistentHashMap clojure.lang.PersistentTreeMap clojure.lang.PersistentVector])
+        default (get-in (:impls prepare/SettableParameter) [Object :set-parameter])
+        others (sort-by str (distinct (for [c sent
+                                            :let [f (dispatched c)]
+                                            :when (and f (not= default f) (not (::sending (meta f))))]
+                                        c)))]
     (when (seq others)
       (error/fail! :pgmalli.error/other-sending
                    (str "install-sending!: next.jdbc's SettableParameter is already extended for "

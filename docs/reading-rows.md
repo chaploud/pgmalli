@@ -62,8 +62,8 @@ What each type comes back as:
 | `timestamp` | `java.time.LocalDateTime`; `infinity` `LocalDateTime/MAX`, `-infinity` `MIN` |
 | `timestamptz` | `java.time.Instant`; `infinity` `Instant/MAX`, `-infinity` `MIN` |
 | `date` | `java.time.LocalDate`; `infinity` `LocalDate/MAX`, `-infinity` `MIN` |
-| `time` | `java.time.LocalTime` |
-| `timetz` | `java.time.OffsetTime` |
+| `time` | `java.time.LocalTime`; `24:00` `LocalTime/MAX` |
+| `timetz` | `java.time.OffsetTime`; `24:00` `OffsetTime/MAX`, as pgjdbc reads it, its offset lost (`-18:00`), which PostgreSQL refuses written back |
 | an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions); an array of a domain's elements as pgjdbc returns them, `PGobject`s of the domain |
 | `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer a `Long` (a `BigInt` past it), a fraction a `Double`, booleans and strings as they are |
 | an enum type, a domain over one | its label, a keyword (`:active`), of an enum type of the registry `builder` is given; another enum's a `String` |

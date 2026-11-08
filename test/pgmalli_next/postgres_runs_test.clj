@@ -520,4 +520,18 @@
         (is (= ["java.util.UUID"] (:given (ex-data e)))))
       (finally
         (alter-var-root protocol update :impls dissoc java.util.UUID)
+        (-reset-methods @protocol)))
+    (extend Number prepare/SettableParameter
+      {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setString s i (str v)))})
+    (try
+      (let [e (is (thrown? clojure.lang.ExceptionInfo (install!)))]
+        (is (some #{"java.lang.Long"} (:given (ex-data e))) "a superclass's extension, which a Long goes through"))
+      (finally
+        (alter-var-root protocol update :impls dissoc Number)
         (-reset-methods @protocol)))))
+
+(deftest a-time-of-24-reads-as-the-java-time-types-max
+  (when *db*
+    (is (= {:t java.time.LocalTime/MAX :tt java.time.OffsetTime/MAX}
+           (jdbc/execute-one! (datasource) ["SELECT '24:00'::time AS t, '24:00+05'::timetz AS tt"] {:builder-fn (builder {})}))
+        "pgjdbc reads a timetz of 24:00 as OffsetTime/MAX, whatever its offset")))
