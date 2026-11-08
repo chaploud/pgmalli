@@ -102,22 +102,18 @@
   "The directions HoneySQL writes after an ORDER BY item ([:score :desc])."
   #{:asc :desc :nulls-first :nulls-last :asc-nulls-first :asc-nulls-last :desc-nulls-first :desc-nulls-last})
 
-(def ^:private expression-clauses
-  "The clauses whose values are expressions, whose calls' arguments name columns."
-  #{:select :select-distinct :select-distinct-on :where :having :group-by :order-by :set :values
-    :do-update-set :returning :window :frame :limit :offset})
-
 (defn- listed-expressions
   "The expressions x lists where HoneySQL writes a list of ORDER BY's items, each expr or [expr
    direction], no call: a window's :partition-by and :order-by ({:partition-by [:a]}, in OVER or
-   WINDOW), an aggregate's [:order-by e items...] and [:distinct e] (HoneySQL writes no more), and a frame's bound
-   [offset :preceding]; nil for another x."
+   WINDOW), an aggregate's [:order-by e items...] and [:distinct e] (HoneySQL writes no more), a frame's bound
+   [offset :preceding], and the elements of [:array [e ...]]; nil for another x."
   [x clause]
   (cond (and (map? x) (some #{:partition-by :order-by} (keys x)) (not (syntax/statement? x)))
         (map syntax/bare (mapcat #(syntax/vectorish (get x %)) [:partition-by :order-by]))
         (not (vector? x)) nil
         (= :order-by (first x)) (cons (second x) (map syntax/bare (drop 2 x)))
         (= :distinct (first x)) [(second x)]
+        (and (= :array (first x)) (sequential? (second x))) (second x)
         (and (= :frame clause) (= 2 (count x)) (#{:preceding :following} (second x))) [(first x)]
         (and (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x)))))) [(first x)]))
 
@@ -149,11 +145,9 @@
                                         ;; a column a call's argument names ([:upper :email]), in a clause of expressions;
                                         ;; an item of SELECT, ORDER BY or RETURNING is [expression alias|direction], no call
                                         ;; the value of a list clause ([:a :b] of ORDER BY) is its items, no call
-                                        (for [{:keys [x chain item? top? clause condition?]} (syntax/expression-nodes ps)
+                                        (for [{:keys [x chain item? clause expression?]} (syntax/expression-nodes ps)
                                               :let [items? (or (syntax/select-list-clauses clause) (= :order-by clause))]
-                                              :when (and (or (expression-clauses clause) (and condition? (not (and top? (vector? x) (= :using (first x))))))
-                                                         (not (and top? (or items? (#{:group-by :window :frame} clause))))
-                                                         (not (and item? items?)))
+                                              :when (and expression? (not (and item? items?)))
                                               :let [listed (listed-expressions x clause)
                                                     ;; [:cast x t]: x alone, t a type's name
                                                     cast? (and (vector? x) (= :cast (first x)) (= 3 (count x)))

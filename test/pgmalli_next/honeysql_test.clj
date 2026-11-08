@@ -12,6 +12,7 @@
             [malli.experimental.time :as time]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
+            [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.shape :as shape]
@@ -3190,3 +3191,49 @@
              (:problems (h/analyze reg {:update :t :set {:m :ok} :where [:= :id 1]}))))
       (is (re-find #"in :set for m: HoneySQL writes a keyword there as a column"
                    (first (h/humanize (:problems (h/analyze reg {:update :t :set {:m :ok} :where [:= :id 1]})))))))))
+
+(def ^:private a-call-in-each-clause
+  "A query whose clause (the key) holds a call naming the column :nope, which no table has."
+  (let [e [:upper :nope]
+        set-op (fn [k] {k [{:select [[e]] :from [:users]} {:select [:nick] :from [:users]}]})
+        joined (fn [k] {:select [:users.id] :from [:users] k [:groups [:= e "a"]]})]
+    (merge (into {} (for [k [:union :union-all :intersect :except :except-all]] [k (set-op k)]))
+           (into {} (for [k [:join :left-join :right-join :inner-join :outer-join :full-join]] [k (joined k)]))
+           {:select {:select [[e]] :from [:users]}
+            :select-distinct {:select-distinct [[e]] :from [:users]}
+            :select-distinct-on {:select-distinct-on [[e] :id] :from [:users]}
+            :select-top {:select-top [1 [e]] :from [:users]}
+            :select-distinct-top {:select-distinct-top [1 [e]] :from [:users]}
+            :with {:with [[:c {:select [[e]] :from [:users]}]] :select [:*] :from [:c]}
+            :with-recursive {:with-recursive [[:c {:select [[e]] :from [:users]}]] :select [:*] :from [:c]}
+            :from {:select [:id] :from [:users [e :x]]}
+            :using {:delete-from :users :using [[e :x]]}
+            :cross-join {:select [:id] :from [:users] :cross-join [[e :x]]}
+            :join-by {:select [:users.id] :from [:users] :join-by [:join [:groups [:= e "a"]]]}
+            :where {:select [:id] :from [:users] :where [:= e "a"]}
+            :having {:select [:id] :from [:users] :group-by [:id] :having [:= e "a"]}
+            :group-by {:select [:id] :from [:users] :group-by [e]}
+            :order-by {:select [:id] :from [:users] :order-by [[e :desc]]}
+            :limit {:select [:id] :from [:users] :limit [:abs :nope]}
+            :offset {:select [:id] :from [:users] :offset [:abs :nope]}
+            :fetch {:select [:id] :from [:users] :fetch [:abs :nope]}
+            :values {:insert-into :users :values [{:nick e}]}
+            :set {:update :users :set {:nick e}}
+            :on-conflict {:insert-into :users :values [{:nick "a"}] :on-conflict [e] :do-nothing true}
+            :do-update-set {:insert-into :users :values [{:nick "a"}] :on-conflict [:nick] :do-update-set {:nick e}}
+            :returning {:delete-from :users :returning [[e]]}
+            :window {:select [:id] :from [:users] :window {:w {:partition-by [[e]]}}}
+            :partition-by {:select [:id] :from [:users] :partition-by [[e]]}
+            :frame {:select [[[:over [[:sum :score] {:order-by [:id] :frame [:rows [[:abs :nope] :preceding]]} :s]]]] :from [:users]}})))
+
+(deftest a-column-a-call-names-is-told-in-every-clause-but-the-expressionless
+  (is (= (sort (remove syntax/expressionless-clauses (into syntax/read-clauses syntax/ignored-clauses)))
+         (sort (keys a-call-in-each-clause)))
+      "a clause analyze reads or ignores holds expressions, with a query in a-call-in-each-clause, or is in hsyntax/expressionless-clauses")
+  (doseq [[k q] a-call-in-each-clause]
+    (is (some #(= :nope (:column %)) (check q)) (str k " " (pr-str q))))
+  (is (= [] (check {:select [:u.id] :from [[:users :u]] :join [[:groups :g] [:using :id]]})) "USING lists columns")
+  (is (= [] (filter #(= :unknown-column (:kind %)) (check {:insert-into :groups :values [{:name "a"}] :on-conflict {:on-constraint :groups_pkey} :do-nothing true})))
+      "a map's entries are clauses, no call")
+  (is (= [] (check {:select [:u.id] :from [[:users :u] [[:with-ordinality [:upper :u.nick] [:x :v :n]]]]})) "an alias is no call")
+  (is (= [{:kind :unknown-column :column :nope}] (check {:select [:id] :from [:users] :where [:= [:cardinality [:array [:nope]]] 1]})) "ARRAY[...]'s elements"))

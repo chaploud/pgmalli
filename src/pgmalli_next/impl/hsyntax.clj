@@ -166,7 +166,7 @@
 (defn keyword-word?
   "Whether HoneySQL writes keyword x as an SQL word between a call's arguments (:!from)."
   [x]
-  (boolean (and (keyword? x) (nil? (namespace x)) (str/starts-with? (name x) "!"))))
+  (and (keyword? x) (nil? (namespace x)) (str/starts-with? (name x) "!")))
 
 (defn value-keyword?
   "Whether HoneySQL writes keyword v as a value, not a column: a parameter, a call (:%now), an
@@ -830,35 +830,53 @@
             (and (sequential? node) (int? i)) (recur (nth (vec node) i nil) more)
             :else false))))
 
+(def expressionless-clauses
+  "The clauses analyze reads or ignores whose values hold no expression, but tables, columns,
+   names or words (UPDATE t, FOR UPDATE OF t, ON CONSTRAINT c): positions marks no node of them
+   :expression?."
+  #{:insert-into :columns :update :delete-from :truncate :for :lock :do-nothing :on-constraint})
+
+(def ^:private call-written?
+  "Whether the loaded HoneySQL writes [:f x] as clause k's whole value as the call f(x) (WHERE),
+   not as a list of f and x (GROUP BY f, x)."
+  (memoize (fn [k] (boolean (try (str/includes? (first (sql/format {k [:upper :pgmalli_x]})) "UPPER(pgmalli_x)")
+                                 (catch Exception _ false))))))
+
 (defn positions
   "The expression positions of statement stmt, one read for the problems and the arguments' types: {:x node
-   :clause k :chain scopes :negated? bool :top? bool :item? bool :condition? bool} for every node of every clause sql/format writes, in
+   :clause k :chain scopes :negated? bool :top? bool :item? bool :expression? bool} for every node of every clause sql/format writes, in
    its order, as a walk of each clause's value meets them, not descending into the statements nested in it, scopes the chain clause-parts says the node is read in,
    negated? under an odd number of :not through :and and :or alone ([:not [:= :a 1]] is a <> 1;
    CASE or a function's argument under NOT is not negated), top? for the clause's value itself
    (one of :values, :set, an item of FROM or a join), item? for a node right in it (an item of a
-   select list, [expr alias], or of ORDER BY, [expr direction], which is no call). A value written to a column is
+   select list, [expr alias], or of ORDER BY, [expr direction], which is no call), expression?
+   for one an expression is written of: of a table item of FROM or a join (clause-parts' :outer,
+   :lateral or :group but :values), its function's call alone (function-alias); of a join's
+   [:using ...], none; of another part, every one but in expressionless-clauses. A value written to a column is
    besides {:x value :assign column :event e :target scope}: e the write (:insert, :update),
    scope the target table's. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
    its items go to those columns by position."
   [stmt chain outer feed {:keys [format] :as opts}]
-  (let [nodes (fn nodes [k x c]
-                (letfn [(walk [x neg? top? item?]
-                          (lazy-seq
-                           (cons {:x x :clause k :chain c :negated? neg? :top? top? :item? item?}
-                                 (when (and (branch? x) (not (statement? x)))
-                                   (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
-                                     (if (and top? (= :select-distinct-on k) (vector? x))
-                                       ;; DISTINCT ON's expressions, then the select list's items
-                                       (let [[es items] (distinct-on-parts x)]
-                                         (concat (mapcat #(walk % neg? false false) es) (mapcat #(walk % neg? false true) items)))
-                                       ;; a window's :frame ([:rows :between :unbounded-preceding :current-row]) is its own clause
-                                       (mapcat #(if (and (map? x) (= :frame (key %))) (nodes :frame (val %) c) (walk % neg? false top?))
-                                               ;; [expr alias], an item of a select list: the alias (:%count.c too) is no expression
-                                               (if (and item? (select-list-clauses k) (vector? x) (= 2 (count x)) (alias? (second x)))
-                                                 [(first x)]
-                                                 (seq x)))))))))]
-                  (walk x false true false)))
+  (let [nodes (fn nodes [k x c expression? call whole?]
+                (letfn [(walk [x neg? top? item? expression?]
+                          (let [expression? (or expression? (and (some? call) (identical? x call)))
+                                ;; a clause's value HoneySQL writes as a list (GROUP BY a, b), not a call
+                                listed? (and whole? top? (vector? x) (not (call-written? k)))]
+                            (lazy-seq
+                             (cons {:x x :clause k :chain c :negated? neg? :top? top? :item? item? :expression? (and expression? (not listed?))}
+                                   (when (and (branch? x) (not (statement? x)))
+                                     (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
+                                       (if (and top? (= :select-distinct-on k) (vector? x))
+                                         ;; DISTINCT ON's expressions, then the select list's items
+                                         (let [[es items] (distinct-on-parts x)]
+                                           (concat (mapcat #(walk % neg? false false expression?) es) (mapcat #(walk % neg? false true expression?) items)))
+                                         ;; a window's :frame ([:rows :between :unbounded-preceding :current-row]) is its own clause
+                                         (mapcat #(if (and (map? x) (= :frame (key %))) (nodes :frame (val %) c expression? nil true) (walk % neg? false top? expression?))
+                                                 ;; [expr alias], an item of a select list: the alias (:%count.c too) is no expression
+                                                 (if (and item? (select-list-clauses k) (vector? x) (= 2 (count x)) (alias? (second x)))
+                                                   [(first x)]
+                                                   (seq x))))))))))]
+                  (walk x false true false expression?)))
         target (target-scope chain stmt opts)
         written (group-by #(nth % 3) (writes stmt))
         assigned (fn [clause c]
@@ -866,17 +884,21 @@
                      {:x v :assign col :event event :target target :chain c :clause clause}))]
     (concat
      (for [[[k i] v sees] (clause-parts stmt)
-           :let [c (part-chain sees v chain outer opts)]
+           :let [c (part-chain sees v chain outer opts)
+                 item? (and (#{:outer :lateral :group} sees) (not (#{:values :insert-into} k)))
+                 using? (and (vector? v) (= :using (first v)))
+                 node (fn [x] (if item?
+                                (nodes k x c false (first (function-alias x)) false)
+                                (nodes k x c (not (or using? (expressionless-clauses k))) nil (and (nil? i) (identical? x v)))))]
            p (if (some #{k} join-keys)
-               ;; a join's condition, after its table item
-               [(cond->> (nodes k v c) (and (int? i) (odd? i)) (map #(assoc % :condition? true)))]
+               [(node v)]
                (case k
                (:insert-into :columns) nil
-               :values (concat (for [row (when (vector? v) v), x (cond (map? row) (vals row) (vector? row) row)] (nodes k x c))
+               :values (concat (for [row (when (vector? v) v), x (cond (map? row) (vals row) (vector? row) row)] (node x))
                                [(assigned :values c)])
-               :set (concat (map #(nodes k % c) (when (map? v) (vals v))) [(assigned :set c)])
-               :do-update-set (concat (map #(nodes k % c) (second (do-update-parts v))) [(assigned :do-update-set c)])
-               [(nodes k v c)]))
+               :set (concat (map node (when (map? v) (vals v))) [(assigned :set c)])
+               :do-update-set (concat (map node (second (do-update-parts v))) [(assigned :do-update-set c)])
+               [(node v)]))
            e p]
        e)
      ;; a star or :raw makes columns the data does not count, but of unnest(?, ...) alone, a
@@ -957,9 +979,9 @@
 
 (defn called
   "The function name of a call [:f ...] (system-calls': [:trim :!leading ...] is ltrim); nil for
-   anything else."
+   anything else, a map's entry too ({:on-constraint :c}'s, a clause's)."
   [x]
-  (when (and (vector? x) (keyword? (first x)))
+  (when (and (vector? x) (not (map-entry? x)) (keyword? (first x)))
     (let [n (last-part (name (first x)))]
       (or (first (system-call n x)) n))))
 
@@ -1183,7 +1205,7 @@
         args (if (and (= "extract" fname) (keyword? (first args)) (not (keyword-word? (first args))))
                (cons [:inline (name (first args))] (rest args))
                args)]
-    (cond (not (or h fname)) nil
+    (cond (or (map-entry? x) (not (or h fname))) nil
           ;; name => value, a named argument: no operator
           (= :=> h) nil
           (= :at-time-zone h) (let [[_ v z] x] [:functions "timezone" [z v]])
