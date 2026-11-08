@@ -165,7 +165,7 @@
         [s c] (if (and (types/element sent) (types/element t)) [(types/element sent) (types/element t)] [sent t])]
     (cond (symbol? sent) (when-not (accept/reads? (base c) (resolve sent) context) "stricter-untyped")
           (and (= :assign context)
-               (or (some #{"a" "i"} (types/cast-contexts s (base c))) (@#'accept/string-type? c)))
+               (or (some #{"a" "i"} (types/cast-contexts s (base c))) (accept/string-type? c)))
           "stricter-assignment")))
 
 (deftest every-pair-stricter-than-postgresql-is-a-rule-of-the-docs
@@ -304,3 +304,20 @@
       (is (contains? (types-of v) (pgjdbc/inline-type v)) (pr-str v)))
     (doseq [v not-inlined]
       (is (empty? (types-of v)) (pr-str v)))))
+
+(deftest every-pair-stricter-edn-pins-is-one-args-refuses
+  ;; the record is of the decision, not of one input to it: a value of a class sent as the pair's
+  ;; type, to a column of its column type, is refused there
+  (let [pairs (triples (edn/read-string (slurp stricter-file)))
+        query {:assign {:update :t :set {:c :?x}} :compare {:select [:c] :from [:t] :where [:= :c :?x]}
+               :common {:select [[[:coalesce :c :?x] :v]] :from [:t]}}]
+    (doseq [[sent context t] pairs
+            :when (and (types/types t) (not (types/element t)))
+            :let [s (types/type-schema t)
+                  reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c s]]}})
+                  vs (if (symbol? sent)
+                       [:a]
+                       (for [[c st] accept/class-types :when (= sent st) :let [v (get accept/values c)] :when (some? v)] v))]
+            v vs]
+      (is (not (m/validate (:x (:args (h/analyze reg (query context)))) v {:registry reg}))
+          (str (pr-str v) " " context " " t ": pinned in " stricter-file ", taken by args")))))

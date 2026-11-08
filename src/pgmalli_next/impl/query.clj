@@ -687,7 +687,7 @@
    PostgreSQL refuses a value outside an enum, even compared; so does an oid's range, as no
    operator compares an oid with another number, which converts to an oid."
   [t]
-  (if (or (not (vector? t)) (let [n (some-> (shape/props t) :pg/type types/entry :name)] (or (= "oid" n) (types/oid-alias? n))))
+  (if (or (not (vector? t)) (types/oid-like? (some-> (shape/props t) :pg/type types/entry :name)))
     t
     (let [h (first t)
           p (shape/props t)

@@ -3346,7 +3346,7 @@
 (deftest a-map-or-a-vector-of-values-written-to-a-column-is-a-problem
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]
                                                          [:doc [:maybe [:any {:pg/type "jsonb"}]]] [:p [:maybe [:any {:pg/type "pair"}]]] [:n [:maybe [:int {:pg/type "integer"}]]]
-                                                         [:s [:maybe [:string {:pg/type "text"}]]]]}})
+                                                         [:s [:maybe [:string {:pg/type "text"}]]] [:ci [:maybe [:string {:pg/type "citext"}]]]]}})
         problems #(:problems (h/analyze reg %))]
     (is (= [{:kind :unlifted-value :table "public.t" :column :tags :clause :set :value ["a" "b"] :type "text[]"}]
            (problems {:update :t :set {:tags ["a" "b"]}})))
@@ -3354,7 +3354,7 @@
            (h/humanize (problems {:insert-into :t :values [{:doc {:a 1}}]}))))
     (is (= [] (problems {:update :t :set {:n [1] :p [1 2] :doc [:lift {:a 1}]}}))
         "(?) is one value; a row type's column may take a row")
-    (is (= [] (problems {:update :t :set {:s ["a" "b"]}})) "a string column takes the row's text, (a,b)")
+    (is (= [] (problems {:update :t :set {:s ["a" "b"] :ci ["a" "b"]}})) "a string column takes the row's text, (a,b), an extension's of strings too")
     (is (= [] (problems {:insert-into :t :values [{:n {:values [[1]]}}]})) "VALUES is a subquery")))
 
 (deftest distinct-on-reads-an-output-column-as-order-by-does
@@ -3447,9 +3447,9 @@
 (deftest a-number-to-a-real-is-held-to-single-precisions-range-whatever-its-class
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:r [:double {:pg/type "real"}]]]}})
         t (:x (:args (h/analyze reg {:update :t :set {:r :?x}})))]
-    (is (= [false true true true false false false]
+    (is (= [false false true true false false false]
            (map #(m/validate t % {:registry reg}) [3.5e38 1.5 (float 1.5) 1 1E39M 1E400M (clojure.core/bigint 1e39)]))
-        "a Double past it, and a BigDecimal or a BigInt past it, which PostgreSQL converts to a real and refuses")))
+        "a Double, which goes as double precision, which PostgreSQL rounds on assignment alone; a BigDecimal or a BigInt past its range, which PostgreSQL converts to a real and refuses")))
 
 (deftest a-null-test-is-read-as-transform-null-equals-has-honeysql-write-it
   ;; HoneySQL 2.4 reads no :transform-null-equals

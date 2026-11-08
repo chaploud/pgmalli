@@ -38,7 +38,8 @@
    "character varying" {:aliases ["varchar" "char varying" "national character varying" "national char varying" "nchar varying"] :schema :string :typmod :max-length}
    "character" {:aliases ["char" "bpchar" "national character" "national char" "nchar"] :schema :string :typmod :max-length}
    "name" {:schema :string}
-   "\"char\"" {:schema :string}
+   ;; one byte: PostgreSQL keeps a longer string's first alone, without a word
+   "\"char\"" {:schema [:string {:max 1}]}
    "bit" {:schema :string :typmod :bits :cast :varbit :read :bit}
    "bit varying" {:aliases ["varbit"] :schema :string :typmod :max-bits :cast (keyword "bit varying") :read :any}
    "boolean" {:aliases ["bool"] :schema :boolean}
@@ -304,6 +305,11 @@
    implicitly, as pg_cast holds it."
   [t]
   (contains? @oid-aliases t))
+
+(defn oid-like?
+  "Whether type t is oid or an alias of it: a number goes to it as an oid, within oid's range."
+  [t]
+  (or (= "oid" t) (oid-alias? t)))
 
 (def ^:private contexts
   (delay (reduce (fn [m [from to c]] (update m [from to] (fnil conj #{}) c)) {} (:casts @catalog))))

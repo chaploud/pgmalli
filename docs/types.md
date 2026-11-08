@@ -91,7 +91,8 @@ is escaped by a `\` (`"pg.a\.b/t"`). Names keep the database's spelling.
 | `bigint` | `:int` |
 | `numeric`, `numeric(p, s)` | `decimal?` |
 | `real`, `double precision` | `:double` |
-| `text`, `varchar(n)`, `char(n)`, `name`, `"char"` | `:string` (`:pg/max-length n`) |
+| `text`, `varchar(n)`, `char(n)`, `name` | `:string` (`:pg/max-length n`) |
+| `"char"` | `[:string {:max 1}]`: PostgreSQL keeps a longer string's first byte alone |
 | `boolean` | `:boolean` |
 | `uuid` | `:uuid` |
 | `date`, `time`, `timetz` | `:time/local-date`, `:time/local-time`, `:time/offset-time` |

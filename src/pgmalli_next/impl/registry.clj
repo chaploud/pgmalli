@@ -134,6 +134,9 @@
                                 (= :max-bits typmod) {:gen/schema [:vector {:min 1 :max (min 8 (or n 8))} [:enum "0" "1"]] :gen/fmap #(apply str %)}
                                 ;; within a varchar(n)'s n, which the schema does not check: the database refuses a longer value
                                 (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) (min 24 (or n 24)))}))
+                ;; a real: a Float within the range a value of one is held to
+                :double (when (= "real" (:name (types/entry (shape/type-name p))))
+                          {:gen/schema [:double {:min -1e6 :max 1e6}] :gen/fmap float})
                 :time/instant {:gen/min (java.time.Instant/parse "2025-01-01T00:00:00Z") :gen/max (java.time.Instant/parse "2025-12-31T23:59:59Z")}
                 :time/local-date-time {:gen/min (java.time.LocalDateTime/parse "2025-01-01T00:00:00") :gen/max (java.time.LocalDateTime/parse "2025-12-31T23:59:59")}
                 :time/local-date {:gen/min (java.time.LocalDate/parse "2025-01-01") :gen/max (java.time.LocalDate/parse "2025-12-31")}

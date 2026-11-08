@@ -2,6 +2,7 @@
   "The problems analyze reports of a query (README.md's table of :kind)."
   (:require [clojure.string :as str]
             [honey.sql :as sql]
+            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.query :as query]
@@ -269,7 +270,7 @@
                            ;; a column of a type accept answers for takes not (one of a row type may take the row,
                            ;; one of a string type the row's text)
                            (and (or (and (map? v) (not (syntax/statement? v)) (not (contains? v :values)))
-                                    (and (vector? v) (next v) (not (keyword? (first v))) (not= "S" (types/category (query/slot-type registry s)))))
+                                    (and (vector? v) (next v) (not (keyword? (first v))) (not (accept/string-type? (query/slot-type registry s)))))
                                 (query/slot-type registry s))
                            {:kind :unlifted-value :table table :column col :clause clause :value v :type (query/cast-type-name s opts)})]
              :when p]

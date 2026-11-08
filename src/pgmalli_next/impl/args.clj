@@ -56,6 +56,8 @@
    first, so a fraction is held to the bounds half a unit wider."
   [a p t own]
   (let [base (shape/and-base own)
+        ;; of several (an inlined column's literals), the one of the bounds
+        base (or (when (= :or (shape/head base)) (some #(when (some (or (shape/props %) {}) [:min :max]) %) (shape/alternatives base))) base)
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
         [min max] (if (and (accept/integer-type? t) (not (accept/integer-type? p))) [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))]
@@ -110,7 +112,7 @@
         untyped (when inline? (for [[x p] rows :when (= :unknown p) a (shape/alternatives x)] a))
         ;; a number goes to an oid alias (regclass, regproc) as an oid, within oid's range, wherever
         ;; it goes (docs/queries.md#stricter-oid)
-        oid (when (types/oid-alias? t) (types/type-schema "oid"))]
+        oid (when (types/oid-like? t) (types/type-schema "oid"))]
     (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
                       ;; pgjdbc reads an xml as a java.sql.SQLXML, which it sends as xml
                       (when (and (= "xml" t) (not inline?)) [jdbc/sqlxml])
@@ -235,7 +237,9 @@
       ;; what it holds (a map or a vector, sent as jsonb, to json: accept/unchanged-assignments), not any value
       ;; under sql/format's :inline, of any type but cast: the quoted text its input reads
       (and (string? t) (query/untyped? own) (not es)
-           (or (and (#{:compare :assign} context) (#{"G" "I" "T" "N" "R" "U"} (types/category t)) (not= "json" t)) (and (= :assign context) (= "json" t))
+           (or (and (#{:compare :assign} context) (#{"G" "I" "T" "N" "R" "U"} (types/category t)) (not= "json" t))
+               ;; json: assigned, or beside a json column in coalesce or CASE (which resolves no other type to json)
+               (and (or (= :assign context) (= :common held-in)) (= "json" t))
                (and (:inline (:format opts)) (not (#{:cast :json} context)))))
       (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
@@ -248,10 +252,15 @@
             own-alts (if (or (= :cast context) (some #(or (= t %) (accept/accepts? t % context)) (jdbc/string-sends opts)))
                        own-alts
                        (remove #(= :string (shape/kind %)) own-alts))
+            ;; assigned to a real, a Double goes as double precision, which PostgreSQL rounds to it on
+            ;; assignment alone (docs/queries.md#stricter-assignment): a Float
+            own-alts (if (and (= "real" t) (= :assign context))
+                       (map #(if (= :double (shape/head %)) [:and % [:pg/class "java.lang.Float"]] %) own-alts)
+                       own-alts)
             ;; a number held to a number column's range, which PostgreSQL checks after converting it
             alts (for [[p a] alts] (cond-> a
                                      ;; an oid's compared too: no operator compares it with another number, which converts to it
-                                     (and (or (not= :compare context) (= "oid" t)) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
+                                     (and (or (not= :compare context) (types/oid-like? t)) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             ;; numeric's NaN and infinities, which the one reading reads as a Double: PostgreSQL

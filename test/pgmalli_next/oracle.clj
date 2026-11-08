@@ -931,12 +931,18 @@
 
 (defn- matrix-format [quoted?] (if quoted? {:quoted true} {}))
 
-(defn- out-of-oid-range?
-  "Whether v is an integer outside oid's range to an oid or an alias of it, or an array of one,
-   held-t (docs/queries.md#stricter-oid)."
+(defn- out-of-range?
+  "Whether v is a number outside the range of type held-t (types/types' :range; an alias of
+   oid's, docs/queries.md#stricter-oid), or of an array's element type, which PostgreSQL refuses
+   where a row reaches it, or a string longer than a \"char\"'s one, which it cuts
+   (docs/queries.md#stricter-assignment)."
   [held-t v]
-  (and (string? held-t) (let [e (or (types/element held-t) held-t)] (or (= "oid" e) (types/oid-alias? e))) (integer? v)
-       (let [[lo hi] (:range (types/types "oid"))] (not (<= lo v hi)))))
+  (let [e (when (string? held-t) (or (types/element held-t) held-t))
+        [lo hi] (:range (types/types (if (types/oid-like? e) "oid" e)))]
+    (boolean (some #(or (and lo (number? %) (not (<= lo % hi)))
+                        (and (= "\"char\"" e) (string? %) (< 1 (count %))))
+                   ;; a Java array's elements
+                   (if (some-> v class .isArray) (seq v) [v])))))
 
 (def ^:private inline-refusals
   "The SQLSTATEs of PostgreSQL refusing an inlined literal: its type (type-refusals), or the SQL
@@ -982,7 +988,7 @@
                             :when (not (or (and (nil? v) (compared-contexts context))
                                            (and (nil? v) notnull (#{:update :insert :insert-select} context))
                                            ;; docs/queries.md#stricter-oid
-                                           (out-of-oid-range? held-t v)
+                                           (out-of-range? held-t v)
                                            (and (not taken?) (string? lit) (contains? (get stricter [lit (if assign? :assign :compare)]) held-t))))
                             :let [sqlvec (try (sql/format query (assoc fmt :params {:x arg})) (catch Exception _ nil))
                                   pg (when sqlvec (refusal conn sqlvec column (and (nil? v) notnull)))]
@@ -1057,7 +1063,7 @@
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))
-                                                 (out-of-oid-range? held-t v)
+                                                 (out-of-range? held-t v)
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
                                   rule? (and takes? (not cast?) (not untyped-there?) (not= "polymorphic" (namespace context)))]

@@ -152,7 +152,7 @@
 
 ;;; what PostgreSQL takes
 
-(defn- string-type?
+(defn string-type?
   "Whether t is of PostgreSQL's string category, or an extension's type of strings."
   [t]
   (or (= "S" (types/category t)) (types/extension-string? t)))
@@ -237,8 +237,10 @@
 
 (def unchanged-assignments
   "[from to] of the casts PostgreSQL makes on assignment alone (pg_cast's castcontext 'a') that
-   change no value: jsonb to json, the same document."
-  #{["jsonb" "json"]})
+   change no value they do not refuse: jsonb to json, the same document; a wider integer to a
+   narrower one, which refuses a value past its range (a number assigned is held to the
+   column's range); varchar to \"char\", of one character (the column's own string is held to one)."
+  #{["jsonb" "json"] ["bigint" "integer"] ["bigint" "smallint"] ["integer" "smallint"] ["character varying" "\"char\""]})
 
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type; one PostgreSQL converts to
