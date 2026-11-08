@@ -326,12 +326,15 @@
                          " write " (cast-form (pr-str value) type)))
    :literal-type (fn [{:keys [function column value sent type]}]
                    (let [to (if column (str "column " (column-name column)) function)]
+                     (if-not sent
+                       (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends no " (.getSimpleName (class value))
+                            " as; send a vector (jsonb) or a Java array (an array type)")
                      (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
                           " takes there through no implicit conversion; "
                           (if (coll? value)
                             ;; jsonb, which casts to no array or enum
                             (str "send the value of " (or type "the type meant") " itself (an array as a Java array, (into-array ...); a label as [:lift :label])")
-                            (str "cast it, " (if type (cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]")))))))
+                            (str "cast it, " (if type (cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]"))))))))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"

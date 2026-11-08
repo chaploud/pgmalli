@@ -338,9 +338,10 @@ value sent untyped goes where its text is of the column's type's category: a key
 string column as a string, to an enum as its labels. It goes to a
 `bytea` or `"char"` column, whose input takes any text, and to an extension's type pgmalli does
 not type (compared, one whose `=` pgmalli's catalog holds, `citext`). Cast, a keyword goes to
-any type, as a string does. A jsonb column takes a map and a
-vector, held to the shape an [override](../README.md#overrides) gives it; a json or interval column, where pgmalli knows only the driver's object, takes a
-`PGobject`.
+any type, as a string does. A jsonb column takes a map and a vector, held to the shape an
+[override](../README.md#overrides) gives it, and a json column assigned them too (sent as jsonb,
+which PostgreSQL assigns to json as it is); a json or interval column, where pgmalli knows only
+the driver's object, takes a `PGobject`.
 
 An array argument takes a Java array, the column's element type in its elements' place: a
 vector goes as `jsonb`, no array. Compared (`[:= :id [:any :?ids]]`), it takes the elements its
@@ -682,7 +683,8 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-assignment"></a>An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
   `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
-  time off), and a number assigned to a `text` column PostgreSQL converts through its text.
+  time off; a `numeric` column takes a `Double` NaN or infinity alone, which it holds as it is),
+  and a number assigned to a `text` column PostgreSQL converts through its text.
   Cast it in the query (`[:cast :?n :bigint]`) where the conversion is meant. A value of a
   `jsonb_populate_record` document likewise takes its column's own values, which
   PostgreSQL reads through the column type's input: no number to a `boolean` column (PostgreSQL

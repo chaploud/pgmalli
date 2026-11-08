@@ -437,8 +437,8 @@ but for a type the driver reads as an object of its own: an `inet`, read as a PG
 `hstore` as a `java.util.Map`), stays that object where it is read; the `:public.hosts/ip`
 override above holds for what is written. A json or jsonb column is read parsed
 ([the one reading](docs/reading-rows.md#the-one-reading-and-sending)), so its shape holds for
-what is read, and an argument to a jsonb column takes it for a map and a vector, which go as
-`jsonb`; a json column's argument is the driver's object. `generate!` checks every key against
+what is read, and an argument to a json or jsonb column takes it for a map and a vector, which go as
+`jsonb` (PostgreSQL assigns one to a json column as it is). `generate!` checks every key against
 the schemas generated: a key must name a column, and a value must be a malli schema (a
 qualified name passes, as your registry's). An error names the key meant; a type key (`:inet`)
 names the columns of the type to override instead.

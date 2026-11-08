@@ -234,4 +234,6 @@
         (jdbc/execute! c ["SET search_path = \"Odd s\", public"])
         (is (= {:d :d1 :i :i1 :real_d (java.time.LocalDate/of 2026 1 1)}
                (jdbc/execute-one! c ["SELECT * FROM named"] {:builder-fn (builder (pgmalli/registry (generated {:db *db*} "public" "Odd s")))}))
-            "an enum named as a pg_catalog type pgjdbc returns otherwise than a VARCHAR")))))
+            "an enum named as a pg_catalog type pgjdbc returns otherwise than a VARCHAR")
+        (is (= {:d "d1"} (jdbc/execute-one! c ["SELECT d FROM named"] {:builder-fn (builder {})}))
+            "an enum of no registry the builder is given, named as a date, its label a String")))))

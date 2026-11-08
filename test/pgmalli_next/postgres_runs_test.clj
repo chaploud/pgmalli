@@ -529,6 +529,13 @@
       (finally
         (alter-var-root protocol update :impls dissoc Number)
         (-reset-methods @protocol)))
+    (let [next-jdbcs (get-in (:impls @protocol) [Object :set-parameter])]
+      (extend Object prepare/SettableParameter
+        {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setObject s i v))})
+      (try
+        (is (thrown? clojure.lang.ExceptionInfo (install!)) "an application's extension of Object, which every class pgmalli sends reaches")
+        (finally
+          (extend Object prepare/SettableParameter {:set-parameter next-jdbcs}))))
     (extend clojure.lang.IPersistentCollection prepare/SettableParameter
       {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setString s i (str v)))})
     (try

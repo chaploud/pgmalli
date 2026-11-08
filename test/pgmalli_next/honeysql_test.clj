@@ -969,10 +969,10 @@
                                                         [:j [:any {:pg/type "json"}]]
                                                         [:ip [:maybe [:any {:pg/type "inet"}]]]]}})]
     (doseq [[o default] [[{} :default] [{:format {:quoted true}} [:default]]]
-            [f row] [[h/values-schema {:id 1 :j "{}"}] [h/set-schema {}]]
+            [f row] [[h/values-schema {:id 1 :j [:lift {}]}] [h/set-schema {}]]
             :let [ok? #(m/validate (f reg :t o) (merge row %) {:registry reg})]]
-      (is (every? ok? [{:j "{}"} {:ip nil}]))
-      (is (not-any? ok? [{:j :k} {:ip :k} {:j [1 2]} {:ip '("a")} {:j (list 1)}]) (pr-str f o))
+      (is (every? ok? [{:j [:lift {}]} {:j [:lift [1]]} {:ip nil}]) "a json document as jsonb, which PostgreSQL assigns to json")
+      (is (not-any? ok? [{:j "{}"} {:j :k} {:ip :k} {:j [1 2]} {:ip '("a")} {:j (list 1)}]) (pr-str f o))
       (is (not (ok? {:ip "10.0.0.1"})) "a String goes as varchar, which an inet column does not take: a PGobject of inet")
       (is (ok? {:ip default}) "HoneySQL's DEFAULT where the database fills a column"))))
 
@@ -1701,7 +1701,8 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (h/values-schema registry :users {:schema "sample" :nope 1})))
     (is (= [:map [:s [:string {:pg/type "character varying"}]]] (row {:select [["s" :s]] :from [:users]} {:schema "sample"}))
         "a String goes as varchar by default")
-    (is (= {:x [:any {:pg/type "json"}]} (:args (h/analyze reg {:update :t :set {:j :?x}} {}))))))
+    (is (= {:x [:or (jdbc/typed-pg-object "json") [:map-of :some :any] [:vector :any]]} (:args (h/analyze reg {:update :t :set {:j :?x}} {})))
+        "a json column takes a PGobject of json, and a map and a vector sent as jsonb, which PostgreSQL assigns to it")))
 
 (deftest each-rule-of-a-row-written-holds
   (is (m/validate (h/values-schema registry :pg.sample/users {:schema "sample"})

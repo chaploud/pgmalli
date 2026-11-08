@@ -47,8 +47,11 @@
   [t sql-type enums]
   ;; a type pgjdbc names "schema"."name" is no pg_catalog type
   (let [entry (when-not (str/starts-with? t "\"") (types/entry t))]
-    ;; an enum of the name of a pg_catalog type (date) on the search_path is named as that type
-    (cond (and (= Types/VARCHAR sql-type) (contains? enums t)) (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
+    ;; an enum of the name of a pg_catalog type (date) on the search_path is named as that type, a
+    ;; VARCHAR, as no json or date or time type is
+    (cond (= Types/VARCHAR sql-type) (if (contains? enums t)
+                                       (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
+                                       (fn [^ResultSet rs i] (.getString rs (int i))))
           (types/json? (:name entry)) (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
                                                              (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) parse-json)))
           (by-kind (:schema entry)) (by-kind (:schema entry))
@@ -99,10 +102,10 @@
                  {:given (.getName (class x))})))
 
 (defn- json-text
-  "A keyword's text, its namespace kept (:n/a as n/a), as the one sending sends a keyword alone;
-   data.json writes its name alone."
+  "A keyword's or a symbol's text, its namespace kept (:n/a as n/a), as the one sending sends a
+   keyword alone; data.json writes its name alone."
   [x]
-  (if (keyword? x) (subs (str x) 1) x))
+  (cond (keyword? x) (subs (str x) 1) (symbol? x) (str x) :else x))
 
 (defn- jsonb [x]
   (doto (PGobject.)
@@ -148,19 +151,20 @@
   []
   (let [impls (:impls prepare/SettableParameter)
         ours? #(::sending (meta %))
-        default (get-in impls [Object :set-parameter])
+        ;; next.jdbc's own, which an application's extension of Object replaces
+        next-jdbc? #(str/starts-with? (.getName (class %)) "next.jdbc.prepare$")
         ;; as values will be sent once this extension is made: a map and a vector by their classes
         after (merge impls (update-vals sending #(hash-map :set-parameter %)))
         sent (concat (filter class? (map first accept/classes))
-                     [Instant clojure.lang.Keyword clojure.lang.PersistentArrayMap clojure.lang.PersistentHashMap
-                      clojure.lang.PersistentTreeMap clojure.lang.PersistentVector])
+                     [Instant clojure.lang.Keyword]
+                     (map class [{} (zipmap (range 9) (range 9)) (sorted-map) [] (subvec [1] 0) (first {1 1})]))
         others (sort-by str (distinct (concat (for [c (keys sending)
                                                     :let [f (get-in impls [c :set-parameter])]
                                                     :when (and f (not (ours? f)))]
                                                 c)
                                               (for [c sent
                                                     :let [f (dispatched after c)]
-                                                    :when (and f (not= default f) (not (ours? f)))]
+                                                    :when (and f (not (next-jdbc? f)) (not (ours? f)))]
                                                 c))))]
     (when (seq others)
       (error/fail! :pgmalli.error/other-sending

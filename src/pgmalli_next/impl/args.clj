@@ -191,10 +191,13 @@
       (jdbc/array-pg-object (query/domain-of s) :whole)
       ;; compared, assigned, a function's argument or a :common operand, of a type whose values
       ;; pgmalli does not type and pgjdbc reads as a PGobject or a String (a geometric, network,
-      ;; timespan or numeric one: inet, interval, regclass, money), a PGobject of it and what
-      ;; converts to it, not any value
-      (and (string? t) (query/untyped? own) (not es) (#{:compare :assign} context) (#{"G" "I" "T" "N"} (types/category t)))
-      (shape/either (untyped-type-values registry s held-in opts) :any)
+      ;; timespan or numeric one: inet, interval, regclass, money; or json), a PGobject of it and
+      ;; what converts to it (a map or a vector, sent as jsonb, to json), not any value
+      (and (string? t) (query/untyped? own) (not es) (or (and (#{:compare :assign} context) (#{"G" "I" "T" "N"} (types/category t))) (and (= :assign context) (= "json" t))))
+      (shape/either (concat (untyped-type-values registry s held-in opts)
+                            ;; jsonb, which PostgreSQL assigns to json as it is (castcontext 'a', no value changed)
+                            (when (= "json" t) (jdbc/sent-as opts "jsonb")))
+                    :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
       (= :enum (shape/kind own))
       (labelled-type own alts (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
@@ -210,8 +213,14 @@
                                      (and (not= :compare context) (accept/number-type? t) (accept/number-type? p)) (within p t own)))
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
+            ;; numeric's NaN and infinities, which the one reading reads as a Double: PostgreSQL
+            ;; assigns them exactly, as no other Double
+            specials (when (and (= :assign context) (= :or-double (:read (types/entry t))))
+                       [[:and [:double {:pg/type "numeric"}]
+                         [:fn {:error/message "should be a Double NaN or infinity alone, which numeric holds as it is"} #(or (Double/isNaN %) (Double/isInfinite %))]]])
             all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
-                  (and (= :call held-in) (not (::common-type opts))) (keep #(class-held % t takes? opts)))]
+                  (and (= :call held-in) (not (::common-type opts))) (keep #(class-held % t takes? opts)))
+            all (concat all specials)]
         (cond (or (= all own-alts) (empty? all)) own (next all) (into [:or] all) :else (first all))))))
 
 (defn- compared-type
@@ -591,7 +600,11 @@
         refused? (if slot
                    (and (string? value) (not-any? #(accept/accepts? slot % context) (jdbc/string-sends opts)))
                    (refuses? registry t value))]
-    (cond (and labels (not (coll? value)) (not (some #{(or text value)} labels)))
+    (cond ;; a set or a list, which the one sending sends nowhere (pgjdbc infers no type of it)
+          (and (coll? value) (not (:inline (:format opts))) (nil? (jdbc/sent-type value opts)))
+          (cond-> {:kind :literal-type :function function :value value :sent nil}
+            (= :assign context) (assoc :column column))
+          (and labels (not (coll? value)) (not (some #{(or text value)} labels)))
           (cond-> {:kind :enum-literal :value value :allowed labels} column (assoc :column column) type (assoc :type type))
           (and (sent-typed? x opts) refused?)
           (let [u (when (and s (string? value)) (uncast-type registry s))]
