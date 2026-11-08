@@ -187,9 +187,15 @@
 
 (defn branch?
   "Whether a walk of query data goes into x: a collection, but not a value HoneySQL passes as it
-   is ([:lift x], [:inline x]), whose maps are data, not statements or clauses."
+   is ([:lift x], [:inline x]), whose maps are data, not statements or clauses (a map's entry of a
+   column named lift is walked)."
   [x]
-  (and (coll? x) (not (and (vector? x) (#{:lift :inline} (first x))))))
+  (and (coll? x) (or (map-entry? x) (not (and (vector? x) (#{:lift :inline} (first x)))))))
+
+(defn given
+  "v as the query gave it: [:lift s]'s seq s, which as-vectors reads as a vector."
+  [v]
+  (or (::given (meta v)) v))
 
 (defn statement?
   "A query map; one holding only a set operation is one too, its members statements of their own."

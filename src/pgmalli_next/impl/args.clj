@@ -733,7 +733,7 @@
                    (and (string? value) (not-any? #(accept/accepts? slot % context) (jdbc/string-sends opts)))
                    (refuses? registry t value))]
     (cond ;; a set or a list, which the one sending sends nowhere (pgjdbc infers no type of it)
-          (and (coll? value) (not (:inline (:format opts))) (nil? (jdbc/sent-type value opts)))
+          (and (coll? value) (not (:inline (:format opts))) (nil? (jdbc/sent-type (syntax/given value) opts)))
           (cond-> {:kind :literal-type :function function :value value :sent nil}
             (= :assign context) (assoc :column column))
           (and labels (not (coll? value)) (not (some #{(or text value)} labels)))

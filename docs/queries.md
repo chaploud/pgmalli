@@ -290,7 +290,7 @@ parameter, `v` of the column's type: an enum label goes as `[:lift :active]`, as
 writes a bare keyword as a column, and a json document as `[:lift {:a 1}]`, as it writes a map
 as a subquery. A vector or list not headed by `:lift` is a row of parameters, which no column
 takes, but `[x]` or `(x)`, which HoneySQL writes `(?)`, `x`. `mg/generate` gives values and `[:lift v]`, a NOT NULL column a trigger may fill a value
-too, and leaves out an optional column of whose values malli generates none (a `PGobject`, a type
+too, and of an optional column of whose values malli generates none NULL or nothing (a `PGobject`, a type
 pgmalli does not type, a date under `:inline`): of a required one it fails, its error's
 `:schema` naming the column (`:pgmalli/no-values`).
 Validate a row under the registry (`{:registry registry}`):
@@ -742,7 +742,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   generic plan does only where a row reaches it. They take 0 to 4294967295.
 - <a id="stricter-inline-in"></a>Under `{:format {:inline true}}`, an argument in `:in`: sql/format writes
   a collection in it as its printed text (`IN [1, 2]` of a vector, `IN (1 2)` of a list), which
-  PostgreSQL refuses, though `IN (1)` of a list of one number or Boolean runs.
+  PostgreSQL refuses, though `IN (1)` of a list of one integer, finite float or Boolean runs.
   Write the list in the query.
 - <a id="stricter-json-keys"></a>A map `install-sending!` sends as `jsonb` with two keys of one text
   (`:a` and `"a"`, `:n/a` and `'n/a`): PostgreSQL keeps the last of them, which is the map's hash

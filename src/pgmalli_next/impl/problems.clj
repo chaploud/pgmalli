@@ -440,14 +440,15 @@
 (defn- written-inline
   "{:kind :written-otherwise :lifted v} of each [:lift v] of a collection or a map, which
    sql/format's :inline writes as its printed text ([1, 2], {a: 1}), no SQL; but a list of one
-   number or Boolean, written (1), its text SQL's."
+   integer, finite float or Boolean, written (1), its text SQL's."
   [body format]
   (when (:inline format)
     (distinct (for [x (tree-seq syntax/branch? seq body)
                     :let [v (when (and (vector? x) (not (map-entry? x)) (= :lift (first x)) (= 2 (count x))) (second x))
-                          given (or (::syntax/given (meta v)) v)]
+                          given (syntax/given v)]
                     :when (and (coll? v)
-                               (not (and (list? given) (= 1 (count given))
+                               ;; a seq HoneySQL prints its elements of (not a lazy one, printed by its class)
+                               (not (and (seq? given) (not (instance? clojure.lang.LazySeq given)) (= 1 (count given))
                                          (let [e (first given)]
                                            (or (instance? Long e) (instance? Integer e) (instance? Short e) (instance? Byte e) (boolean? e)
                                                (and (or (double? e) (float? e)) (Double/isFinite (double e))))))))]

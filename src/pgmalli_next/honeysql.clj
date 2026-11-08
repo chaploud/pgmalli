@@ -215,6 +215,9 @@
                                                   java.time.LocalDate (java.sql.Date/valueOf ^java.time.LocalDate %)
                                                   java.time.LocalDateTime (java.sql.Timestamp/valueOf ^java.time.LocalDateTime %)
                                                   java.time.Instant (java.sql.Timestamp/from ^java.time.Instant %)
+                                                  java.util.Date (if (= java.sql.Date (.getComponentType c))
+                                                                   (java.sql.Date. (.getTime ^java.util.Date %))
+                                                                   (java.sql.Timestamp. (.getTime ^java.util.Date %)))
                                                   %)
                                                v))
                               (catch Exception _ nil))]

@@ -3660,8 +3660,12 @@
 (deftest a-required-date-array-written-generates
   ;; babashka has no java.sql.Date, which a date[]'s Java array is of
   (when-not (System/getProperty "babashka.version")
-   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:vector {:pg/type "date[]"} :time/local-date]]]}})]
-    (is (every? #(m/validate (h/values-schema reg :t) % {:registry reg}) (mg/sample (h/values-schema reg :t) {:registry reg :size 10 :seed 1}))))))
+    (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                          [:d [:vector {:pg/type "date[]"} :time/local-date]]
+                                                          [:e [:vector {:pg/type "date[]"} :time/local-date]]
+                                                          [:ts [:vector {:pg/type "timestamp with time zone[]"} :time/instant]]]}})
+          v (h/values-schema reg :t)]
+      (is (every? #(m/validate v (mg/generate v {:registry reg :seed % :size 10}) {:registry reg}) (range 40))))))
 
 (deftest a-required-column-generating-nothing-names-itself-failing
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:any {:pg/type "interval"}]]]}})
@@ -3671,4 +3675,11 @@
 (deftest a-lifted-list-to-an-operator-is-typed-as-a-vector-is
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})]
     (is (= [:literal-type] (map :kind (:problems (h/analyze reg {:select [[[:-> :j [:lift '(1)]] :x]] :from [:t]})))))))
+
+(deftest a-lifted-seq-is-sent-as-given
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]] [:n [:int {:pg/type "integer"}]] [:lift [:maybe [:int {:pg/type "integer"}]]]]}})
+        problems #(:problems (h/analyze reg %1 %2))]
+    (is (= [:literal-type] (map :kind (problems {:update :t :set {:j [:lift '(1 2)]}} {}))) "which pgjdbc sends not, as it does a vector")
+    (is (= [] (problems {:select [:n] :from [:t] :where [:in :n [:lift (seq [1])]]} {:format {:inline true}})) "a seq of one, written (1)")
+    (is (= [{:kind :written-otherwise :lifted [1 2]}] (problems {:update :t :set {:lift [:lift [1 2]]}} {:format {:inline true}})) "of a column named lift")))
 
