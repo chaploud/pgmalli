@@ -528,6 +528,14 @@
         (is (some #{"java.lang.Long"} (:given (ex-data e))) "a superclass's extension, which a Long goes through"))
       (finally
         (alter-var-root protocol update :impls dissoc Number)
+        (-reset-methods @protocol)))
+    (extend clojure.lang.IPersistentCollection prepare/SettableParameter
+      {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setString s i (str v)))})
+    (try
+      (is (nil? (install!)) "an interface its own IPersistentMap and IPersistentVector are more specific than")
+      (is (= {:t "object"} (jdbc/execute-one! (datasource) ["SELECT jsonb_typeof(?) AS t" {:a 1}])))
+      (finally
+        (alter-var-root protocol update :impls dissoc clojure.lang.IPersistentCollection)
         (-reset-methods @protocol)))))
 
 (deftest a-time-of-24-reads-as-the-java-time-types-max

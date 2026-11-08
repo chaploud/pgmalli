@@ -128,11 +128,10 @@
                #(with-meta % {::sending true})))
 
 (defn- dispatched
-  "The function a value of class c is sent by: SettableParameter's impls as a protocol dispatches,
-   the class, its superclasses, then the most specific of its interfaces."
-  [^Class c]
-  (let [impls (:impls prepare/SettableParameter)
-        impl #(:set-parameter (get impls %))]
+  "The function a value of class c is sent by under SettableParameter's impls, as a protocol
+   dispatches: the class, its superclasses, then the most specific of its interfaces."
+  [impls ^Class c]
+  (let [impl #(:set-parameter (get impls %))]
     (or (some impl (take-while #(and % (not= Object %)) (iterate #(.getSuperclass ^Class %) c)))
         (some->> (filter impl (disj (supers c) Object))
                  seq
@@ -147,14 +146,22 @@
    which would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own;
    one made after it is not seen."
   []
-  (let [;; a map and a vector go as their classes, which an extension of a superclass reaches first
-        sent (concat (keys sending) (filter class? (map first accept/classes))
-                     [clojure.lang.PersistentArrayMap clojure.lang.PersistentHashMap clojure.lang.PersistentTreeMap clojure.lang.PersistentVector])
-        default (get-in (:impls prepare/SettableParameter) [Object :set-parameter])
-        others (sort-by str (distinct (for [c sent
-                                            :let [f (dispatched c)]
-                                            :when (and f (not= default f) (not (::sending (meta f))))]
-                                        c)))]
+  (let [impls (:impls prepare/SettableParameter)
+        ours? #(::sending (meta %))
+        default (get-in impls [Object :set-parameter])
+        ;; as values will be sent once this extension is made: a map and a vector by their classes
+        after (merge impls (update-vals sending #(hash-map :set-parameter %)))
+        sent (concat (filter class? (map first accept/classes))
+                     [Instant clojure.lang.Keyword clojure.lang.PersistentArrayMap clojure.lang.PersistentHashMap
+                      clojure.lang.PersistentTreeMap clojure.lang.PersistentVector])
+        others (sort-by str (distinct (concat (for [c (keys sending)
+                                                    :let [f (get-in impls [c :set-parameter])]
+                                                    :when (and f (not (ours? f)))]
+                                                c)
+                                              (for [c sent
+                                                    :let [f (dispatched after c)]
+                                                    :when (and f (not= default f) (not (ours? f)))]
+                                                c))))]
     (when (seq others)
       (error/fail! :pgmalli.error/other-sending
                    (str "install-sending!: next.jdbc's SettableParameter is already extended for "
