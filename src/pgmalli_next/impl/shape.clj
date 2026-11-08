@@ -163,7 +163,9 @@
       (str sch "." n "/" suffix))))
 
 (defn plain?
-  "Whether an identifier needs no quoting, so it can be a keyword."
+  "Whether an identifier reads as a keyword (letters of either case, digits, _, no digit first):
+   a row key or a registry name of it is a keyword, a string otherwise. Upper case needs quoting
+   in PostgreSQL all the same (hsyntax/keyword-name?)."
   [s]
   (re-matches #"[A-Za-z_][A-Za-z0-9_]*" s))
 

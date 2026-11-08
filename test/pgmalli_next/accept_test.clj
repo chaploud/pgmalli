@@ -212,10 +212,10 @@
           (is (casts? s t) (str s " to " t)))))))
 
 (deftest the-schema-of-each-class-sent-takes-its-values
+  ;; a value of every class with a schema (accept/values), a new class too
   (doseq [:let [registry (pgmalli/registry {:registry {}})]
-          v [1 (int 1) (short 1) 1M 1N (biginteger 1) 1.0 (float 1) true "1" (java.util.UUID/randomUUID) (.getBytes "a")
-             (java.time.LocalDate/of 2026 1 1) (java.time.LocalTime/of 1 0) (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC)
-             (java.time.LocalDateTime/of 2026 1 1 0 0) (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
+          v (vals accept/values)
+          :when (or (not (.isArray (class v))) (= accept/bytes-class (class v)))]
     (is (some (fn [[s t]] (and (= t (pgjdbc/sent-type v {})) (m/validate s v {:registry registry}))) (pgjdbc/write-rows {} false))
         (str (class v) " goes as its type"))))
 

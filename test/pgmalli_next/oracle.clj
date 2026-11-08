@@ -156,7 +156,7 @@
 (defn- quoted-name?
   "Whether a name is PostgreSQL's only when quoted."
   [n]
-  (not (re-matches #"[a-z_][a-z0-9_]*" n)))
+  (not (syntax/keyword-name? n)))
 
 (defn- relations
   "Each column of the oracle schema's tables, views and partitioned tables (no partition: the
