@@ -561,11 +561,14 @@
       (is (instance? clojure.lang.ExceptionInfo e) (pr-str (class e)))
       (is (= [:pgmalli.error/fault "doc"] [(:pgmalli/error (ex-data e)) (:given (ex-data e))])))))
 
-(deftest a-map-of-two-keys-of-one-json-text-is-refused-not-sent-as-one
+(deftest a-document-json-holds-not-is-refused-not-sent-as-another
   (when *db*
-    (doseq [m [{:role "user" "role" "admin"} {:a/role 1 'a/role 2} {1 :x "1" :y}]]
+    (doseq [[m says] [[{:role "user" "role" "admin"} #"two keys of text"] [{:a/role 1 'a/role 2} #"two keys of text"] [{1 :x "1" :y} #"two keys of text"]
+                      [{:a ##NaN} #"NaN"] [[Float/POSITIVE_INFINITY] #"infinity"] [{nil 1} #"nil key"]]]
       (let [e (is (thrown? clojure.lang.ExceptionInfo (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" {:m m}])) (pr-str m))]
-        (is (re-find #"two keys of it are" (str (ex-message e))))))))
+        (is (re-find says (str (ex-message e))) (pr-str m))))
+    (let [deep (reduce (fn [v _] [v]) [] (range 5000))]
+      (is (instance? clojure.lang.ExceptionInfo (on-small-stack #(jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" deep]))) "nested deeper than the stack walks"))))
 
 (deftest a-time-of-24-reads-as-the-java-time-types-max
   (when *db*
@@ -623,3 +626,9 @@
     (is (ok? :ts (into-array java.sql.Timestamp [])))
     (is (not (ok? :ts (into-array Long []))) "pgjdbc sends an empty Long[] as bigint[], which timestamptz[] takes not")
     (is (not (ok? :ts (into-array Long [nil]))) "nor one of NULLs alone")))
+
+(deftest money-reads-as-a-pgobject-of-its-text-which-it-is-written-back-as
+  (when *db*
+    (let [row (jdbc/execute-one! (datasource) ["SELECT '1000.5'::money AS m, ARRAY['12.34'::money] AS ms"] {:builder-fn (builder {})})]
+      (is (= ["money" "money"] [(.getType ^PGobject (:m row)) (.getType ^PGobject (first (:ms row)))]))
+      (is (= {:ok true} (jdbc/execute-one! (datasource) ["SELECT ?::money = '1000.5'::money AS ok" (:m row)]))))))

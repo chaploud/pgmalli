@@ -727,6 +727,9 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-oid"></a>A negative integer to an `oid` column or one of an alias of `oid`
   (`regclass`, `regproc` ...): PostgreSQL reads an `integer` as the `oid` of its bits (`-1` as
   `4294967295`), which is almost always a mistake. They take 0 to 4294967295.
+- <a id="stricter-json-keys"></a>A map `install-sending!` sends as `jsonb` with two keys of one text
+  (`:a` and `"a"`, `:n/a` and `'n/a`): PostgreSQL keeps the last of them, which is the map's hash
+  order's, not the application's. Sending it is an error; keep one key.
 - A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
   one: taking it would put `char?` on every string argument (a `"char"` column takes a `varchar`
   on assignment alone, cut to its first byte). Send `(str c)`.

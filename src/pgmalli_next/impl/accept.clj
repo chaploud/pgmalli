@@ -11,6 +11,26 @@
 
 ;;; what an application sends
 
+(defn json-key-text
+  "The text of key k of a map the one sending writes as jsonb: a keyword's or a symbol's with its
+   namespace (:n/a as n/a), as it sends a keyword alone; another's its str."
+  [k]
+  (cond (keyword? k) (subs (str k) 1) (symbol? k) (str k) :else (str k)))
+
+(defn json-problem
+  "Why the one sending cannot write document x (a map or a vector) as jsonb, nil where it can: a
+   map of two keys of one text (:a and \"a\"), of which the document would keep one, a nil key,
+   a NaN or an infinity, which JSON has not, or nesting deeper than the stack walks."
+  [x]
+  (letfn [(walk [v]
+            (cond (map? v) (or (when (contains? v nil) "a nil key, which JSON has not")
+                               (some (fn [[t n]] (when (> n 1) (str "two keys of text " (pr-str t) ", of which the document would keep one")))
+                                     (frequencies (map json-key-text (keys v))))
+                               (some walk (vals v)))
+                  (coll? v) (some walk v)
+                  (and (or (double? v) (float? v)) (or (Double/isNaN (double v)) (Double/isInfinite (double v)))) "a NaN or an infinity, which JSON has not"))]
+    (try (walk x) (catch StackOverflowError _ "nesting deeper than the stack walks"))))
+
 (defn- array "The class of an array of c." [c] (class (make-array c 0)))
 (defn- named "The class named n; nil where the runtime has none." [n] (try (Class/forName n) (catch Throwable _ nil)))
 (defn- array-of "The class of an array of c; nil where the runtime makes none." [c] (try (array c) (catch Throwable _ nil)))

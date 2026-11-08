@@ -13,6 +13,9 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
   `ResultSetMetaData`. Off the search_path it is named `"schema"."text"` and reads as keywords.
 - A column of a `NOT NULL NOT VALID` constraint (PostgreSQL 18) is nullable, as rows from
   before it may hold NULL, so a write takes nil there too, which PostgreSQL refuses.
+- A map or a vector to a `json` or `jsonb` column is not checked for what the one sending
+  refuses to write (accept/json-problem): two keys of one text (`:a` and `"a"`), a nil key, a NaN
+  or an infinity. Sending it is an error of `:pgmalli.error/invalid-options`.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: the
   registry keeps no length of either. PostgreSQL refuses the value (`value too long`).

@@ -63,6 +63,7 @@
           (types/json? (:name entry)) (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
                                                              (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) (parse-json rs i))))
           (by-kind (:schema entry)) (by-kind (:schema entry))
+          (= :text (:read entry)) (fn [^ResultSet rs i] (when-some [s (.getString rs (int i))] (doto (PGobject.) (.setType (:name entry)) (.setValue s))))
           :else (fn [^ResultSet rs i]
                   (let [v (.getObject rs (int i))]
                     (if (instance? Array v) (read-array v enums) v))))))
@@ -110,29 +111,21 @@
                  {:given (.getName (class x))})))
 
 (defn- json-text
-  "A keyword's or a symbol's text, its namespace kept (:n/a as n/a), as the one sending sends a
-   keyword alone; data.json writes its name alone."
+  "A keyword's or a symbol's text as accept/json-key-text writes it, which data.json writes its
+   name alone of; another value as it is."
   [x]
-  (cond (keyword? x) (subs (str x) 1) (symbol? x) (str x) :else x))
-
-(defn- one-text-per-key!
-  "x, where no map in it has two keys of one JSON text (:role, \"role\" and 'role are all
-   \"role\"), of which the document would keep one."
-  [x]
-  (walk/prewalk (fn [v]
-                  (when (map? v)
-                    (when-let [k (some (fn [[k n]] (when (> n 1) k)) (frequencies (map #(let [t (json-text %)] (if (string? t) t (str t))) (keys v))))]
-                      (error/fail! :pgmalli.error/invalid-options
-                                   (str "a map goes as jsonb, whose keys are text: two keys of it are " (pr-str k) "; keep one")
-                                   {:given k})))
-                  v)
-                x))
+  (if (or (keyword? x) (symbol? x)) (accept/json-key-text x) x))
 
 (defn- jsonb [x]
-  (one-text-per-key! x)
+  (when-let [why (accept/json-problem x)]
+    (error/fail! :pgmalli.error/invalid-options (str "a map or a vector goes as jsonb, which holds no document of " why)
+                 {:given (.getName (class x))}))
   (doto (PGobject.)
     (.setType "jsonb")
-    (.setValue (json/write-str (walk/postwalk json-text x) :default-write-fn write-temporal))))
+    (.setValue (try (json/write-str (walk/postwalk json-text x) :default-write-fn write-temporal)
+                    (catch StackOverflowError _
+                      (error/fail! :pgmalli.error/invalid-options "a map or a vector goes as jsonb, which pgmalli writes no document of nested deeper than the stack walks"
+                                   {:given (.getName (class x))}))))))
 
 (defn- offset-date-time
   "An Instant as an OffsetDateTime in UTC; infinity as OffsetDateTime's MAX and MIN, which pgjdbc

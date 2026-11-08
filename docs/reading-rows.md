@@ -38,7 +38,8 @@ reads no column it builds. Pass it wherever your application reads rows.
 keywords, maps and vectors, sent as [what your application
 sends](queries.md#what-your-application-sends) lists: `Instant/MAX` and `MIN` as `infinity` and
 `-infinity`, a map and a vector written with data.json (an `Instant` and java.time's dates and
-times as their ISO-8601 text, a `UUID` and a keyword as their text; a map with two keys of one text, `:a` and `"a"`, an error, as the document would keep one). Every other class goes as
+times as their ISO-8601 text, a `UUID` and a keyword as their text; a map with two keys of one text, `:a` and `"a"`, an error, as the document would keep one, and
+so a nil key, a NaN and an infinity, which JSON has not). Every other class goes as
 pgjdbc's `setObject` sends it. Call it once, before sending arguments: without it, pgjdbc refuses
 a keyword and a vector (a `PSQLException` of SQLState `07006`, which names the class) and sends a
 map as `hstore` (an error naming hstore where that extension is not installed). It throws where another extension already holds a class pgmalli sends
@@ -69,6 +70,7 @@ What each type comes back as:
 | `time` | `java.time.LocalTime`; `24:00` `LocalTime/MAX` |
 | `timetz` | `java.time.OffsetTime`; `24:00` `OffsetTime/MAX`, as pgjdbc reads it, its offset lost (`-18:00`), which PostgreSQL refuses written back |
 | an array | a vector of its elements, each read as above, NULL nil; a multi-dimensional array a vector of vectors, which pgmalli types as one-dimensional (PostgreSQL's type does not say the dimensions); an array of a domain's elements as pgjdbc returns them, `PGobject`s of the domain |
+| `money` | a `PGobject` of `money`, its text (`$1,000.50`, as the server's `lc_monetary` writes it), which pgjdbc's `Double` neither holds exactly nor reads past 999.99 |
 | `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer a `Long` (a `BigInt` past it), a fraction a `Double`, booleans and strings as they are; a document nested deeper than the thread's stack holds a `:pgmalli.error/fault` naming the column |
 | an enum type, a domain over one | its label, a keyword (`:active`), of an enum type of the registry `builder` is given; another enum's a `String` |
 | every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` or infinity a `Double`, an `interval` a `PGInterval` (an interval holds months, days and a time at once, which neither a `Duration` nor a `Period` holds alone), `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`) |

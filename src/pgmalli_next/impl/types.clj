@@ -13,7 +13,9 @@
                  :string but which takes no varchar: bit's varbit (which keeps its length), bit
                  varying itself
      :read       what pgjdbc returns instead of :schema's values: a schema, :bit (a Boolean
-                 for bit(1), else a PGobject), :or-double (a Double for NaN or an infinity)
+                 for bit(1), else a PGobject), :or-double (a Double for NaN or an infinity),
+                 :text (a PGobject of the type of its text, as pgmalli-next.jdbc/builder reads
+                 money: pgjdbc's Double cannot hold it, and refuses its text past 999.99)
      :extension  the extension that adds the type, outside pg_catalog
 
    catalog is what PostgreSQL's own catalog says of pg_catalog's types (typcategory,
@@ -55,7 +57,7 @@
    "cidr" {:schema :any :literals ["10.0.0.0/8" "192.168.1.0/24" "2001:db8::/32"]}
    "macaddr" {:schema :any :literals ["08:00:2b:01:02:03" "08-00-2b-01-02-04"]}
    "macaddr8" {:schema :any :literals ["08:00:2b:01:02:03:04:05"]}
-   "money" {:schema :any :literals ["12.34" "0.00" "-5.50"]}
+   "money" {:schema :any :literals ["12.34" "0.00" "-5.50"] :read :text}
    "xml" {:schema :any :literals ["<a/>" "<a b=\"1\">x</a>"]}
    "tsvector" {:schema :any :literals ["'a' 'b'" "'fat':2 'rat':3"]}
    "tsquery" {:schema :any :literals ["'a' & 'b'" "'fat' | 'rat'"]}
