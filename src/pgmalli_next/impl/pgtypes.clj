@@ -88,9 +88,8 @@
     :compile (fn [{:pg/keys [classes]} [child] options]
                (let [valid? (m/validator child options)
                      ;; the arrays whose elements t takes, as their component class's value tells
-                     boxed {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Double/TYPE Double Float/TYPE Float Boolean/TYPE Boolean}
                      fits (for [[^Class c] accept/classes
-                                :let [e (some-> c .getComponentType) v (get accept/values (get boxed e e))]
+                                :let [e (some-> c .getComponentType) v (get accept/values (get accept/boxed e e))]
                                 :when (and (array-class? c) (some? v) (or (nil? classes) (contains? classes (.getName c)))
                                            (try (valid? v) (catch Exception _ false)))]
                             (.getSimpleName c))]
@@ -106,7 +105,7 @@
 
 (def int-ranges
   "The range each integer type pgmalli registers holds."
-  (into {} (for [e (vals types/types) :when (and (:range e) (= "pg" (namespace (:schema e))))] [(:schema e) (:range e)])))
+  (into {} (for [e (vals types/types) :when (and (:range e) (qualified-keyword? (:schema e)) (= "pg" (namespace (:schema e))))] [(:schema e) (:range e)])))
 
 (defn- bounded-int
   "A schema type for an integer type of PostgreSQL: its range, narrowed by :min and :max

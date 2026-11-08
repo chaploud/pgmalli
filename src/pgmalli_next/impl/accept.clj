@@ -17,6 +17,11 @@
 
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
 
+(def boxed
+  "The boxed class of each primitive one."
+  {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Byte/TYPE Byte Double/TYPE Double Float/TYPE Float
+   Boolean/TYPE Boolean Character/TYPE Character})
+
 (def classes
   "[class type schema categories]: the one sending (pgmalli-next.jdbc/install-sending!), the
    type a value of class goes to PostgreSQL as, :unknown for one sent untyped, which PostgreSQL

@@ -658,18 +658,13 @@
           clojure.lang.PersistentArrayMap {"a" "b"}
           org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))}))
 
-(def boxed
-  "The boxed class of each primitive one."
-  {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Byte/TYPE Byte Double/TYPE Double Float/TYPE Float
-   Boolean/TYPE Boolean Character/TYPE Character})
-
 (defn value
   "A value of class c: of values, or an array of one element; throws for another class, (accept-test
    holds accept/values to accept/classes)."
   [^Class c]
   (if (.isArray c)
     (let [e (.getComponentType c)]
-      (doto (java.lang.reflect.Array/newInstance e 1) (java.lang.reflect.Array/set 0 (value (get boxed e e)))))
+      (doto (java.lang.reflect.Array/newInstance e 1) (java.lang.reflect.Array/set 0 (value (get accept/boxed e e)))))
     (or (values c) (throw (ex-info "no value of the class" {:class c})))))
 
 (defn- matrix-values

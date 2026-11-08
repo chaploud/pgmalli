@@ -28,13 +28,13 @@
    "integer" {:aliases ["int4" "int"] :schema :pg/integer :value :integer :range [-2147483648 2147483647]}
    ;; a bigint is exactly a long
    "bigint" {:aliases ["int8"] :schema :int :value :integer :range [Long/MIN_VALUE Long/MAX_VALUE]}
-   "oid" {:schema [:int {:min 0 :max 4294967295}] :value :integer}
+   "oid" (let [[lo hi :as range] [0 4294967295]] {:schema [:int {:min lo :max hi}] :value :integer :range range})
    "numeric" {:aliases ["decimal" "dec"] :schema 'decimal? :value :exact :read :or-double}
    "real" {:aliases ["float4"] :schema :double :value :float :read 'float?}
    "double precision" {:aliases ["float8" "float"] :schema :double :value :float}
    "text" {:schema :string}
-   "character varying" {:aliases ["varchar"] :schema :string :typmod :max-length}
-   "character" {:aliases ["char" "bpchar"] :schema :string :typmod :max-length}
+   "character varying" {:aliases ["varchar" "char varying" "national character varying" "national char varying" "nchar varying"] :schema :string :typmod :max-length}
+   "character" {:aliases ["char" "bpchar" "national character" "national char" "nchar"] :schema :string :typmod :max-length}
    "name" {:schema :string}
    "\"char\"" {:schema :string}
    "bit" {:schema :string :typmod :bits :cast :varbit :read :bit}

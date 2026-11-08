@@ -1,5 +1,7 @@
 (ns pgmalli-next.impl.render-test
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is testing]]
             [malli.core :as m]
             [malli.experimental.time :as time]
             [malli.generator :as mg]
@@ -8,7 +10,8 @@
             [pgmalli-next.impl.render :as r]
             [pgmalli-next.impl.pgtypes :as pgtypes]
             [pgmalli-next.impl.registry :as reg]
-            [pgmalli-next.impl.shape :as shape]))
+            [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types]))
 
 (def ^:private schema
   {:name "public"
@@ -276,3 +279,23 @@
         props (second (:pg.public/t (:registry (r/rendered (p/facts {:name "public" :types {} :tables {"t" table}})))))]
     (is (true? (:pg/primary-key-deferrable props)))
     (is (= [{:columns ["k"] :deferrable true}] (:pg/unique props)) "an invalid unique index holds nothing")))
+
+(deftest docs-types-tables-of-column-types-and-extensions-are-types-types
+  (let [doc (slurp "docs/types.md")
+        section #(second (re-find (re-pattern (str "(?s)\\n## " % "\\n(.*?)\\n## ")) doc))
+        code #(map second (re-seq #"`([^`]+)`" %))
+        ;; [:any {:pg/type "..."}] is :any of the type named
+        schema #(let [x (edn/read-string %)] (if (and (vector? x) (= [:pg/type] (keys (second x)))) (first x) x))
+        rows (for [[_ l r] (re-seq #"(?m)^\| (.*?) \| (.*?) \|$" (section "Column types"))
+                   :let [es (keep types/entry (code l))
+                         ss (map schema (code (first (str/split r #" \("))))]
+                   :when (seq es)]
+               [es ss])]
+    (is (< 10 (count rows)))
+    (doseq [[es ss] rows, [e s] (map vector es (if (= 1 (count ss)) (repeat (first ss)) ss))]
+      (is (= (:schema e) s) (str (:name e) " is " (pr-str (:schema e)) " in types/types, " (pr-str s) " in docs/types.md")))
+    (is (= #{} (set (for [[n e] types/types :when (not= :any (:schema e)) :when (not-any? #(= n (:name %)) (mapcat first rows))] n)))
+        "every type of a schema of its own has a row")
+    (is (= (set (keep :extension (vals types/types)))
+           (set (code (str/replace (second (re-find #"(?s)extension is in:\s(.*?)\.\s" (section "Extensions"))) #"\(`[^`]*`\)" ""))))
+        "the extensions docs/types.md lists")))

@@ -11,6 +11,8 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.catalog-source :as source]
             [pgmalli-next.core :as pgmalli]
+            [pgmalli-next.impl.query :as query]
+            [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.test-db :as test-db :refer [*db* datasource]]))
 
@@ -148,3 +150,37 @@
               ;; but one the grammar reads as another type (char is character's, "char" quoted)
               :when (and n (not= n t) (not-any? (fn [[t2 e]] (and (not= t t2) (some #{n} (:aliases e)))) types/types))]
         (is (some #{n} aliases) (str t "'s typname " n " is not among its :aliases in pgmalli-next.impl.types"))))))
+
+(def ^:private grammar-spellings
+  "The spellings of a type gram.y reads as another type's name (SQL's own: INT, DEC, FLOAT, CHAR
+   VARYING, NATIONAL CHARACTER ...), which no catalog holds: a cast may spell a type so."
+  ["int" "integer" "smallint" "bigint" "real" "float" "double precision" "dec" "decimal" "numeric" "boolean"
+   "char" "character" "varchar" "char varying" "character varying" "national character" "national char" "nchar"
+   "national character varying" "national char varying" "nchar varying" "bit varying"
+   "time" "time without time zone" "time with time zone" "timestamp" "timestamp without time zone" "timestamp with time zone"])
+
+(deftest every-name-and-alias-of-a-type-is-one-postgresql-reads-as-it
+  (when *db*
+    (let [ds (datasource)
+          read-as #(:t (jdbc/execute-one! ds ["SELECT format_type(to_regtype(?), NULL) AS t" %] {:builder-fn rs/as-unqualified-maps}))]
+      (doseq [[t e] types/types :when (not (:extension e)), n (cons t (:aliases e))]
+        (is (= t (read-as n)) (str n " of " t " in pgmalli-next.impl.types is not a name PostgreSQL reads as " t)))
+      (doseq [n grammar-spellings]
+        (is (= (read-as n) (:name (types/entry n))) (str "PostgreSQL reads " n " as " (read-as n) ": add it to that type's :aliases in pgmalli-next.impl.types"))))))
+
+(deftest the-types-pgjdbc-names-as-varchar-are-shapes-varchar-names
+  (when *db*
+    (with-open [conn (jdbc/get-connection (datasource))]
+      (let [info (.getTypeInfo ^org.postgresql.PGConnection (.unwrap conn org.postgresql.PGConnection))
+            names (map :typname (jdbc/execute! conn ["SELECT typname FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace AND typtype = 'b'"]
+                                               {:builder-fn rs/as-unqualified-maps}))]
+        (is (= (set (filter #(= java.sql.Types/VARCHAR (.getSQLType info ^String %)) names)) @#'shape/varchar-names))))))
+
+(deftest the-system-columns-are-a-tables-columns-of-negative-attnum
+  (when *db*
+    (let [ds (datasource)]
+      (jdbc/execute! ds ["CREATE TABLE sys_cols (id int)"])
+      (is (= (into {} (for [[c s] query/system-columns] [c (:pg/type (shape/column-props s))]))
+             (into {} (map (juxt :attname :t))
+                   (jdbc/execute! ds ["SELECT attname, format_type(atttypid, NULL) AS t FROM pg_attribute WHERE attrelid = 'sys_cols'::regclass AND attnum < 0"]
+                                  {:builder-fn rs/as-unqualified-maps})))))))
