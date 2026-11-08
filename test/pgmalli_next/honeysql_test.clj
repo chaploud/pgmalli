@@ -411,8 +411,11 @@
 
 (deftest an-array-columns-argument-is-an-array
   (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
-    (is (= {:paths [:maybe [:pg/array text]] :meta [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]} (select-keys (:args (h/analyze docs body)) [:paths :meta]))
-        "an assigned array is a Java array: a vector goes as jsonb")
+    (is (= {:paths [:maybe [:or [:pg/array {:pg/empty-classes #{"[Ljava.lang.String;"}} [:maybe text]]
+                            (shape/merge-props pg-object {:error/message "should be a PGobject of type text[]" :pgmalli/describe "PGobject of text[]" :pgmalli/element text})]]
+            :meta [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]}
+           (select-keys (:args (h/analyze docs body)) [:paths :meta]))
+        "an assigned array is a Java array of elements or NULLs, or a PGobject of the array type: a vector goes as jsonb")
     (is (= "PGobject of text[]" (pgmalli/describe docs (:p (:args (h/analyze docs {:select [:id] :from [:docs] :where [:= :paths :?p]})))))
         "compared, an array of text[]'s type alone, which no Java array goes as (a String[] goes as varchar[])")))
 
@@ -3406,3 +3409,4 @@
         e (try (h/values-schema reg :t) nil (catch clojure.lang.ExceptionInfo e e))]
     (is (= [:a.t] (:did-you-mean (ex-data e))))
     (is (str/includes? (ex-message e) "write :a.t"))))
+

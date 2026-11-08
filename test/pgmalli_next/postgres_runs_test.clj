@@ -612,3 +612,14 @@
               :when (seq row)]
         (is (m/validate s row {:registry reg}))
         (is (nil? (written (q row))) (str table " " (pr-str row)))))))
+
+(deftest an-array-column-takes-null-elements-a-pgobject-and-an-empty-array-of-its-type-alone
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                       [:is [:vector {:pg/type "integer[]"} :pg/integer]]
+                                                       [:ts [:vector {:pg/type "timestamp with time zone[]"} [:time/instant {:pg/type "timestamp with time zone"}]]]]}})
+        ok? (fn [c v] (m/validate (:x (:args (h/analyze reg {:update :t :set {c :?x}}))) v {:registry reg}))]
+    (is (ok? :is (into-array Integer [(int 1) nil])) "PostgreSQL's arrays hold NULLs")
+    (is (ok? :is (pg-object "integer[]" "{1,NULL}")))
+    (is (ok? :ts (into-array java.sql.Timestamp [])))
+    (is (not (ok? :ts (into-array Long []))) "pgjdbc sends an empty Long[] as bigint[], which timestamptz[] takes not")
+    (is (not (ok? :ts (into-array Long [nil]))) "nor one of NULLs alone")))

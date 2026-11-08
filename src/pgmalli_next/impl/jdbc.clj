@@ -401,21 +401,32 @@
                       t)))
         alts (distinct (for [[s sent c] (write-rows opts true) :when (takes? sent)
                              a (shape/alternatives s)]
-                         (cond-> (clojure.walk/postwalk-replace {:pgmalli/element (element sent c)} a)
-                           ;; elements alike (a long[]'s and an Integer[]'s), the array's class tells the type sent
-                           (and (= :whole use) (instance? Class c) (= :pg/array (shape/head a)))
-                           (shape/merge-props {:pg/classes #{(.getName ^Class c)}}))))
+                         (cond-> (clojure.walk/postwalk-replace {:pgmalli/element (let [e (element sent c)] (if (and (::null-elements opts) (not (shape/maybe? e))) [:maybe e] e))} a)
+                           ;; pgjdbc types an array by its class: compared whole, the classes of the
+                           ;; types taken alone; assigned (or beside a column), where its elements
+                           ;; tell nothing (none, or NULLs alone), as elements of a value go where
+                           ;; their class's would
+                           (and (instance? Class c) (= :pg/array (shape/head a)) (#{:whole :assign :common} use))
+                           (shape/merge-props {(if (= :whole use) :pg/classes :pg/empty-classes) #{(.getName ^Class c)}}))))
         ;; arrays of like elements (a long[] and a Long[]) one alternative, of both classes
-        alts (if (= :whole use)
-               (let [like #(if (and (= :pg/array (shape/head %)) (map? (second %))) (update % 1 dissoc :pg/classes) %)]
-                 (for [[_ as] (group-by like alts)]
-                   (if (next as) (shape/merge-props (first as) {:pg/classes (into #{} (mapcat (comp :pg/classes shape/props)) as)}) (first as))))
-               alts)]
+        alts (let [ks [:pg/classes :pg/empty-classes]
+                   like #(if (and (= :pg/array (shape/head %)) (map? (second %))) (update % 1 (fn [p] (apply dissoc p ks))) %)]
+               (for [[_ as] (group-by like alts)]
+                 (if (next as)
+                   (shape/merge-props (first as) (into {} (for [k ks :let [cs (into #{} (mapcat (comp k shape/props)) as)] :when (seq cs)] [k cs])))
+                   (first as))))]
     (cond (:inline (:format opts))
           (if (= :unnest use)
             (inline-none "unnest of the quoted text sql/format's :inline writes is ambiguous to PostgreSQL (unnest(unknown)): write the array in the query, or cast it")
             (shape/either (sent-as opts :unknown) :any))
-          (seq alts) (shape/either (cond-> alts (some #{pg-object} (shape/alternatives (shape/non-null t))) (concat [pg-object])) :any)
+          ;; a PGobject of the array type too, its text ('{1,NULL}') what the type's input reads
+          (seq alts) (shape/either (cond-> alts
+                                     (and p (#{:assign :whole :common} use)) (concat [(let [a (types/array-of (types/short-name (or elem p)))]
+                                                                           (shape/merge-props pg-object {:error/message (str "should be a PGobject of type " a)
+                                                                                                         :pgmalli/describe (str "PGobject of " a)
+                                                                                                         :pgmalli/element (shape/non-null t)}))])
+                                     (and (not p) (some #{pg-object} (shape/alternatives (shape/non-null t)))) (concat [pg-object]))
+                                   :any)
           ;; no Java array of the type (text[]'s compared, String[] going as varchar[]; an enum's; a
           ;; time[]'s, json[]'s or box[]'s wherever it goes): a PGobject of it, which PostgreSQL takes
           ;; as the array type it names, its elements t's
@@ -431,8 +442,9 @@
    where read-type has the driver's object (:any)."
   [schema opts]
   (if (array-column? schema)
-    ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?)
-    (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema))) (::array-use opts :assign))
+    ;; the elements' type is the column's, where their schema names none (numeric[]'s decimal?);
+    ;; an element of an array column's value may be NULL
+    (array-type (write-type (last schema) opts) (assoc opts ::element-type (types/element (pg-type schema)) ::null-elements true) (::array-use opts :assign))
     (let [k (shape/kind schema)
           t (driver-type schema true)
           ;; a date or time column takes the java.time value its type is, which the one reading

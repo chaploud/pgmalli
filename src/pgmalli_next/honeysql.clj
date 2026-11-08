@@ -218,7 +218,8 @@
           (and (= :and h) (not= k (shape/kind own)) (some #(= :fn (shape/head %)) (rest (shape/entries t)))) nil
           (= :and h) (when-let [b (generated-values r own (shape/and-base t))] (shape/update-and-base t (constantly b)))
           (= :pg/array h)
-          (when-let [e (generated-values r (when (= :vector (shape/head own)) (last own)) (last t))]
+          ;; of elements but NULL, an array of NULLs alone telling nothing of its type
+          (when-let [e (generated-values r (when (= :vector (shape/head own)) (last own)) (shape/non-null (last t)))]
             (let [valid? (malli.core/validator t (args/malli-options r))]
               (shape/merge-props t {:gen/schema [:vector {:min 1 :max 3} e] :gen/fmap #(java-array valid? %)})))
           (and (#{:map-of :vector :sequential} h) (#{:any :some} (shape/head (last t))))

@@ -77,10 +77,11 @@
   "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a Java array of a
    class the one sending sends as an array type (accept/classes: long[], Long[], String[] ...; not
    a byte[], a bytea, nor Object[]) of t's, of one of the classes :pg/classes names where it names
-   some, or a java.sql.Array, whose elements are not read."
+   some, and of :pg/empty-classes where it holds no value but NULL (pgjdbc types it by its class
+   alone), or a java.sql.Array, whose elements are not read."
   (m/-simple-schema
    {:type :pg/array
-    :compile (fn [{:pg/keys [classes]} [child] options]
+    :compile (fn [{:pg/keys [classes empty-classes]} [child] options]
                (let [valid? (m/validator child options)
                      ;; the arrays whose elements t takes, as their component class's value tells
                      fits (for [[^Class c] accept/classes
@@ -89,10 +90,14 @@
                                            (try (valid? v) (catch Exception _ false)))]
                             (.getSimpleName c))]
                  {:pred (fn [v] (or (sql-array? v)
-                                    (let [c (class v)]
-                                      (boolean (and (accept/array-class? c)
-                                                    (or (nil? classes) (contains? classes (.getName ^Class c)))
-                                                    (some->> (elements v) (every? valid?)))))))
+                                    (let [c (class v)
+                                          es (when (accept/array-class? c) (elements v))
+                                          ;; a long[][]'s type is a long[]'s
+                                          n (when es (.getName ^Class (loop [^Class c c] (if (.isArray (.getComponentType c)) (recur (.getComponentType c)) c))))]
+                                      (boolean (and es
+                                                    (or (nil? classes) (contains? classes n))
+                                                    (or (nil? empty-classes) (some some? es) (contains? empty-classes n))
+                                                    (every? valid? es))))))
                   :type-properties {:error/message (if (seq fits)
                                                      (str "should be a Java array (" (str/join ", " (distinct fits)) ") or a java.sql.Array of its elements; a vector goes as jsonb")
                                                      (str "should be a Java array"

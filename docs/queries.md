@@ -266,9 +266,11 @@ by the column's name (`:group_id`), the one key a row is read with
 ([the one reading](reading-rows.md#the-one-reading-and-sending)), so a row read is written back as it is, but for an enum
 column, read as a keyword, which HoneySQL writes in `:values` and `:set` as a column (write its
 label as `[:lift :happy]`), a json or jsonb column, read as a map or a vector, which HoneySQL
-writes there as a subquery or a row of parameters (write `[:lift m]`), a `bit(1)` column, read as
-a `Boolean` (write a `PGobject` of `bit`), and an array column, read as a vector (write a Java
-array); another
+writes there as a subquery or a row of parameters (write `[:lift m]`; a scalar document, read as a
+string or a number, a `PGobject` of `jsonb`), a `bit(1)` column, read as a `Boolean` (write a
+`PGobject` of `bit`), and an array column, read as a vector (write a Java array, its NULLs nil, or
+a `PGobject` of the array type, the one way for a type no Java array goes as: an enum's, json's,
+time's ...); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
