@@ -1,7 +1,8 @@
 # Changelog
 
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
-break what [Stability](README.md#stability) lists.
+break what [Stability](README.md#stability) lists. pgmalli-next has no release yet; the versions
+below were released as `io.github.chaploud/pgmalli`.
 
 ## 0.3.3 (2026-11-03)
 

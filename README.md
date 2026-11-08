@@ -33,9 +33,8 @@ default `:paths` is `["src"]` alone), and an alias that generates it:
 ```
 
 To try it, create an empty database, load `docs/example/schema.sql` into it from a clone of
-this repository, then generate in your project. pgmalli reads the database with `psql`, so
-psql's own settings apply (`PGHOST`, `PGDATABASE`, `PGUSER` ...), or `:db`
-([Generating](#generating)):
+this repository, then generate in your project ([Generating](#generating) has how pgmalli
+reaches the database):
 
 ```shell
 $ createdb pgmalli_example
@@ -95,8 +94,10 @@ Depend on a commit of this repository in `deps.edn`'s `:deps`:
 io.github.chaploud/pgmalli-next {:git/url "https://github.com/chaploud/pgmalli-next" :git/sha "<commit>"}
 ```
 
-Applications need only the generated file. On babashka, put the same coordinate in `bb.edn`'s
-`:deps`; everything but JDBC works there.
+pgmalli depends on malli, test.check and data.json. Add HoneySQL for `pgmalli-next.core` and
+`pgmalli-next.honeysql`, and next.jdbc and pgjdbc for `pgmalli-next.jdbc` ([Supported
+versions](#supported-versions) has the oldest each takes); generating needs none of them, but
+pgjdbc for a `:db` with `:jdbcUrl`. On babashka, put the same coordinate in `bb.edn`'s `:deps`.
 
 ## Generating
 
@@ -144,7 +145,14 @@ pass its data:
 ## Validating rows and writes
 
 For each table the registry holds three schemas: the row, what an INSERT may carry, and
-what an UPDATE may set.
+what an UPDATE may set. They hold the database's types; a row read and a row your code writes
+have schemas of their own:
+
+| to check | use |
+|---|---|
+| a row read through `pgmalli-next.jdbc/builder` | `as-read` ([below](#rows-read-through-nextjdbc)) |
+| a row your code writes in `:values` or `:set` | `h/values-schema`, `h/set-schema` ([queries](docs/queries.md#a-row-written-into-a-table)) |
+| a row of the database's types: test data's, another system's | the registry's row, `/insert` and `/update` schemas (here) |
 
 ```clojure
 (m/validate :pg.public/users
@@ -154,8 +162,8 @@ what an UPDATE may set.
 ;; => true
 ```
 
-An INSERT schema is closed. It leaves out identity ALWAYS and generated columns, and makes
-defaulted and nullable columns optional:
+An INSERT schema is closed and leaves out what the database writes
+([types.md](docs/types.md#names-in-the-registry)):
 
 ```clojure
 (-> (m/explain :pg.public.posts/insert
@@ -165,8 +173,7 @@ defaulted and nullable columns optional:
 ;; => {:id ["disallowed key"], :title_upper ["disallowed key"]}
 ```
 
-An UPDATE schema takes the columns an INSERT may carry, each optional, and no NOT NULL column
-takes nil.
+An UPDATE schema takes the same columns, each optional:
 
 ```clojure
 (m/validate :pg.public.users/update {:nick "ann"} {:registry registry})
@@ -175,10 +182,6 @@ takes nil.
 (m/validate :pg.public.users/update {:email nil} {:registry registry})
 ;; => false
 ```
-
-These schemas hold the database's types. For a row your code builds and HoneySQL sends,
-`h/values-schema` and `h/set-schema` type each column as an argument, with what your
-application sends ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 
 A `numeric` column takes a BigDecimal (`10M`); a long such as `10` fails. An enum's schema
 takes its labels as strings ([docs/types.md](docs/types.md)):
@@ -471,11 +474,6 @@ A `[:ref ...]` to your own schema needs a registry holding it:
 | babashka | the latest (what CI runs), for everything but JDBC |
 
 CI tests the oldest versions listed here.
-
-pgmalli depends on malli, test.check and data.json. HoneySQL, next.jdbc
-and pgjdbc are yours to add: `pgmalli-next.core` and `pgmalli-next.honeysql` load HoneySQL,
-`pgmalli-next.jdbc` next.jdbc and pgjdbc; generating needs none of them, but pgjdbc for a `:db`
-with `:jdbcUrl`.
 
 ## Limits
 
