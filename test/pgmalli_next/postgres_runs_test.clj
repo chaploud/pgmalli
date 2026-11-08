@@ -670,3 +670,13 @@
         (is (= {:id 1 :j nil :jj nil} row))
         (is (m/validate (pgmalli/as-read reg :pg.public/jn) row {:registry reg})))
       (finally (jdbc/execute! (datasource) ["DROP TABLE jn"])))))
+
+(deftest an-inlined-row-values-schema-generates-is-written
+  (when *db*
+    (let [reg (pgmalli/registry (generated {:db *db*} "public" "app"))
+          q #(sql/format {:insert-into :accounts :values [%]} {:inline true})]
+      (doseq [row (mg/sample (h/values-schema reg :accounts {:format {:inline true}}) {:registry reg :size 30 :seed 3})]
+        ;; a key or a CHECK is the database's to hold (docs/types.md)
+        (is (nil? (try (jdbc/with-transaction [tx (datasource) {:rollback-only true}] (jdbc/execute! tx (q row)) nil)
+                       (catch java.sql.SQLException e (when-not (#{"23505" "23503" "23514"} (.getSQLState e)) (ex-message e)))))
+            (pr-str row))))))

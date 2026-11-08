@@ -255,9 +255,11 @@
           (and (= :keyword k) (= :string (shape/kind own)) (:gen/max hints))
           (shape/merge-props t {:gen/schema [:string {:min 1 :max (:gen/max hints)}] :gen/fmap keyword})
           (and (keyword? k) (= "time" (namespace k)) (not= k (shape/kind own))) nil
-          ;; the text of a type of no string values (a regclass's), its input reads: one of its literals
-          (and (= :string k) (not= :string (shape/kind own)) (some-> own shape/column-props shape/type-name types/entry :literals))
-          (shape/merge-props t {:gen/elements (-> own shape/column-props shape/type-name types/entry :literals)})
+          ;; the text of a type of no string values (a regclass's, any type's under :inline, a UUID's
+          ;; too), its input reads: one of its literals, none where it has none
+          (and (#{:string :uuid} k) (not= k (shape/kind own)) (not= :enum (shape/kind own)) (some? own))
+          (when-let [ls (some-> own shape/column-props shape/type-name types/entry :literals)]
+            (shape/merge-props t {:gen/elements ls}))
           :else t)))
 
 (def ^:private sql-word-schema
