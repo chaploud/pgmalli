@@ -318,16 +318,19 @@
                            (pr-str [:lift (keyword value)])
                            (syntax/cast-form (pr-str value) type))))
    :literal-type (fn [{:keys [function column value sent type]}]
-                   (let [to (if column (str "column " (column-name column)) function)]
+                   (let [to (if column (str "column " (column-name column)) function)
+                         ;; a value of no literal syntax (an Instant) by its class
+                         printed? (or (string? value) (number? value) (boolean? value) (coll? value) (uuid? value))
+                         x (if printed? (pr-str value) (str "<the " (.getSimpleName (class value)) ">"))]
                      (if-not sent
                        (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends no " (.getSimpleName (class value))
                             " as; send a vector (jsonb) or a Java array (an array type)")
-                     (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
+                     (str (if printed? (pr-str value) (str "a " (.getName (class value)) " (" value ")")) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
                           " takes there through no implicit conversion; "
                           (if (coll? value)
                             ;; jsonb, which casts to no array or enum
                             (str "send the value of " (or type "the type meant") " itself (an array as a Java array, (into-array ...); a label as [:lift :label])")
-                            (str "cast it, " (if type (syntax/cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]"))))))))
+                            (str "cast it, " (if type (syntax/cast-form x type) (str "[:cast " x " <the type meant>]"))))))))
    :unknown-type (fn [{:keys [type did-you-mean]}]
                    (str "type " type " is in neither pg_catalog nor the query's schema" (error/did-you-mean (str/join " or " did-you-mean))
                         "; qualify it, " (syntax/cast-form "x" (first did-you-mean)) ", or pass that schema as :schema"))

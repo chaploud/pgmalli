@@ -3272,3 +3272,13 @@
     (is (= [] (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :payer_mood [:cast "happy" :app.mood]]} {:schema "billing"}))))
     (is (= [] (:problems (h/analyze two-schemas {:select [[[:cast "x" :thing] :t]]} {:schema "billing"}))) "a type the registry tells nothing of")
     (is (= [] (:problems (h/analyze two-schemas {:select [[[:cast "happy" :mood] :t]]} {:schema "app"}))))))
+
+(deftest a-value-of-no-literal-syntax-is-held-as-a-literal-is
+  (let [t (java.time.Instant/parse "2026-01-01T00:00:00Z")]
+    (is (= [{:kind :literal-type :function "updated_at" :column :updated_at :value t :sent "timestamp with time zone" :type "timestamp"}]
+           (check {:update :users :set {:updated_at t} :where [:= :id 1]})))
+    (is (= [:literal-type] (map :kind (check {:update :users :set {:born [:lift t]} :where [:= :id 1]}))))
+    (is (= [] (check {:update :users :set {:closed_at t :updated_at (java.time.LocalDateTime/of 2026 1 1 0 0)} :where [:= :id 1]})))
+    (is (= [] (check {:select [:id] :from [:users] :where [:> :updated_at t]})) "compared, timestamp converts to timestamptz implicitly")
+    (is (= ["a java.time.Instant (2026-01-01T00:00:00Z) goes to column updated_at as a parameter, which pgjdbc sends as timestamp with time zone, a type column updated_at takes there through no implicit conversion; cast it, [:cast <the Instant> :timestamp]"]
+           (h/humanize (check {:update :users :set {:updated_at t} :where [:= :id 1]}))))))

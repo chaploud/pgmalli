@@ -236,16 +236,18 @@
     (syntax/distinct-ops op) query/nullable))
 
 (defn- literal
-  "{:value v} of a literal x, a value written in the query: a string or a number, bare or
-   [:lift v] (HoneySQL sends it as a parameter, sql/format's :inline aside), a boolean (bare,
-   HoneySQL writes TRUE or FALSE), [:lift :kw] (sent untyped as its text, :text, :ns/a's ns/a),
-   [:lift coll] (a map or a vector, sent as the one sending sends its class: jsonb), or
-   [:inline s] (written into the SQL, :inline); nil for another x (a bare keyword is a column)."
+  "{:value v} of a literal x, a value written in the query: a string, a number or another value
+   of no HoneySQL syntax (an Instant, a UUID), bare or [:lift v] (HoneySQL sends it as a
+   parameter, sql/format's :inline aside), a boolean (bare, HoneySQL writes TRUE or FALSE),
+   [:lift :kw] (sent untyped as its text, :text, :ns/a's ns/a), [:lift coll] (a map or a vector,
+   sent as the one sending sends its class: jsonb), or [:inline s] (written into the SQL,
+   :inline); nil for another x (a bare keyword is a column)."
   [x]
-  (let [v (when (and (vector? x) (= 2 (count x))) (second x))]
-    (cond (or (string? x) (number? x) (boolean? x)) {:value x}
+  (let [v (when (and (vector? x) (= 2 (count x))) (second x))
+        value? #(not (or (nil? %) (keyword? %) (symbol? %) (coll? %)))]
+    (cond (value? x) {:value x}
           (= :lift (when (vector? x) (first x)))
-          (cond (or (string? v) (number? v) (boolean? v) (coll? v)) {:value v}
+          (cond (or (value? v) (coll? v)) {:value v}
                 (keyword? v) {:value v :text (subs (str v) 1)})
           (and (= :inline (when (vector? x) (first x))) (string? v)) {:value v :inline true})))
 
