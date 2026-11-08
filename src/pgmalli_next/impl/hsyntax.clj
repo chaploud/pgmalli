@@ -645,6 +645,11 @@
       (let [c (subs (str x) 1)]
         (when (str/starts-with? c "?") (keyword (subs c 1)))))))
 
+(defn lifted-coll?
+  "Whether x is [:lift coll] of a collection, which HoneySQL writes in IN as a list of its elements."
+  [x]
+  (and (vector? x) (= :lift (first x)) (= 2 (count x)) (or (sequential? (second x)) (set? (second x)))))
+
 (defn query-args [body] (set (keep param-key (tree-seq branch? seq body))))
 
 (defn shorthand-fn

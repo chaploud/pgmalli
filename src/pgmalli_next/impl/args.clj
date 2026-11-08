@@ -61,7 +61,7 @@
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
         [min max] (if (and (accept/integer-type? t) (not (accept/integer-type? p))) [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))]
-    (cond (types/single-precision? t) (if (= :double (shape/head a))
+    (cond (types/single-precision? t) (if (and (= :double (shape/head a)) (types/single-precision? (:pg/type (shape/props a))))
                          a
                          [:and a [:fn {:error/message "should be within a real's range"} pgtypes/real-number?]])
           (empty? bounds) a
@@ -374,12 +374,13 @@
 (defn- compared-literals
   "The literals of value compared with a side: itself, each of an IN list, each of an IN's
    [:lift coll], which HoneySQL writes as a list of its elements, each element of
-   [:any [:array [...]]]."
-  [op value]
+   [:any [:array [...]]]; under sql/format's :inline, no [:lift coll], which it writes as no list
+   (IN [1, 2])."
+  [op value inline?]
   (filter literal (cond (and (vector? value) (= :any (first value)) (vector? (second value)) (= :array (first (second value))) (sequential? (second (second value))))
                         (second (second value))
-                        (and (syntax/in-ops op) (vector? value) (= :lift (first value)) (= 2 (count value)) (or (sequential? (second value)) (set? (second value))))
-                        (map #(vector :lift %) (second value))
+                        (and (syntax/in-ops op) (syntax/lifted-coll? value))
+                        (when-not inline? (map #(vector :lift %) (second value)))
                         (and (syntax/in-ops op) (vector? value) (not (keyword? (first value)))) value
                         :else [value])))
 
@@ -390,7 +391,7 @@
   (for [[op side value chain] (syntax/comparison-sides ps)
         :let [x (array-arg value)
               [k elements?] (if x [x false] (value-arg registry chain value))
-              lits (when-not k (compared-literals op value))]
+              lits (when-not k (compared-literals op value (:inline (:format opts))))]
         :when (or (seq lits) (and k (not (and elements? (or (syntax/in-ops op) (second (value-arg registry chain side)))))))
         entry (if (seq lits)
                 (let [s (query/side-schema registry chain side opts)]

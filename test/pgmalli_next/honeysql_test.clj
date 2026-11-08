@@ -3623,3 +3623,21 @@
         rows (mg/sample (h/values-schema reg :t {:format {:inline true}}) {:registry reg :size 100 :seed 1})
         v #(if (vector? %) (second %) %)]
     (is (every? #(and (< (abs (double (v (:n %)))) 1000) (< (abs (double (v (:s %)))) 0.001)) rows))))
+
+(deftest a-string-in-columns-is-written-as-parameters
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} ["Name" [:string {:pg/type "text"}]] [:n [:int {:pg/type "integer"}]]]}})]
+    (is (= "INSERT INTO t (?, n) VALUES (?, ?)" (first (sql/format {:insert-into :t :columns ["Name" :n] :values [["z" 2]]}))) "HoneySQL's")
+    (is (some #{{:kind :written-otherwise :column "Name" :columns true}}
+              (:problems (h/analyze reg {:insert-into :t :columns ["Name" :n] :values [["z" 2]]}))))))
+
+(deftest an-in-of-a-lifted-collection-inlined-is-no-list
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:int {:pg/type "integer"}]]]}})
+        q {:select [:n] :from [:t] :where [:in :n [:lift [1 2]]]}]
+    (is (= "SELECT n FROM t WHERE n IN [1, 2]" (first (sql/format q {:inline true}))) "HoneySQL's")
+    (is (= [{:kind :written-otherwise :op :in :lifted true}] (:problems (h/analyze reg q {:format {:inline true}}))))))
+
+(deftest a-double-to-a-real-inlined-is-held-to-a-reals-range
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:r [:double {:pg/type "real"}]]]}})
+        x (:x (:args (h/analyze reg {:insert-into :t :values [{:r :?x}]} {:format {:inline true}})))]
+    (is (= [true false] (map #(m/validate x % {:registry reg}) [1.5 1e40])))))
+

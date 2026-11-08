@@ -437,19 +437,32 @@
          :when (and (contains? st s) (select-first? w s))]
      {:kind :written-otherwise :clause w :before s})))
 
+(defn- written-inline
+  "{:kind :written-otherwise :op :in :lifted true} of each IN of a [:lift coll], which sql/format's
+   :inline writes as the collection's text (IN [1, 2]), no list."
+  [body format]
+  (when (:inline format)
+    (distinct (for [x (tree-seq syntax/branch? seq body)
+                    :when (and (vector? x) (syntax/in-ops (first x)) (syntax/lifted-coll? (nth x 2 nil)))]
+                {:kind :written-otherwise :op (first x) :lifted true}))))
+
 (defn- written-keywords
   "{:kind :written-otherwise :column k} of each column a write names by keyword k (:values,
    :set, :columns, the target's list) that HoneySQL writes unquoted as a word PostgreSQL reads as a keyword (order,
    user), not as the column, or by a string it writes as another name."
   [body format]
   (distinct
-   (for [st (syntax/statements body)
-         k (concat (map first (syntax/writes st (constantly nil))) (vals (:written (syntax/insert-parts st))) (when (sequential? (:columns st)) (:columns st)))
+   (concat
+    ;; a string in a statement's :columns, which HoneySQL writes as parameters, one per character
+    (for [st (syntax/statements body) :when (sequential? (:columns st)) k (:columns st) :when (string? k)]
+      {:kind :written-otherwise :column k :columns true})
+    (for [st (syntax/statements body)
+         k (concat (map first (syntax/writes st (constantly nil))) (vals (:written (syntax/insert-parts st))) (when (sequential? (:columns st)) (remove string? (:columns st))))
          :when (or (keyword? k) (string? k))
          :let [[text quoted?] (syntax/formatted-name k format false)]
          ;; a string HoneySQL writes as another name (a.b as "a"."b", a-b as a_b under :quoted-snake)
          :when (if (string? k) (not= k text) (and (not quoted?) (types/reserved-word? text)))]
-     {:kind :written-otherwise :column k})))
+     {:kind :written-otherwise :column k}))))
 
 (defn check
   "[problem ...] of a query against the registry; [] when there are none. A problem in a nested
@@ -462,4 +475,4 @@
                         (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
                       chains)]
     (vec (concat found (query/duplicate-columns registry body opts) (return-key-problems registry body (second (first chains)) opts)
-                 (unread-clauses sent-body) (written-otherwise sent-body) (written-first sent-body) (written-keywords sent-body (:format opts))))))
+                 (unread-clauses sent-body) (written-otherwise sent-body) (written-first sent-body) (written-keywords sent-body (:format opts)) (written-inline sent-body (:format opts))))))

@@ -58,3 +58,11 @@ something PostgreSQL takes, leaves a type untold, or tells a type other than the
   is not checked.
 - A `BigDecimal` or a `BigInt` beside a `real` column in `coalesce` or CASE, which PostgreSQL
   resolves to `real`, is not held to a real's range.
+- A call named as a type of a parameter (`[:bool :?x]`, `int4(?)`) is typed as a cast, so it
+  takes nil and a keyword, while PostgreSQL resolves the call's overloads for an untyped
+  parameter (`function bool(unknown) is not unique`; `date(?)` is `date(timestamptz)`).
+- A call named as a type PostgreSQL's grammar keeps as a keyword (`[:int :n]`, `:numeric`,
+  `:varchar`, `:timestamp`), which HoneySQL writes unquoted and PostgreSQL does not parse, is
+  typed as a cast.
+- A cast PostgreSQL added in a version later than the registry's (`bytea` to `integer`, 18) is
+  taken: `types/cast-contexts` holds every version's.

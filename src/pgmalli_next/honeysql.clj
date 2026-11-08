@@ -517,8 +517,14 @@
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))
-   :written-otherwise (fn [{:keys [op dropped call column clause before param]}]
+   :written-otherwise (fn [{:keys [op dropped call column clause before param columns] :as p}]
                         (cond
+                          (:lifted p)
+                          (str (pr-str [op :x [:lift [1 2]]]) " is written under :inline as the collection's text, x " (str/upper-case (str/replace (name op) "-" " ")) " [1, 2], no list:"
+                               " write the list in the query, " (pr-str [op :x [1 2]]))
+                          columns
+                          (str (pr-str column) " in :columns is written as parameters, one per character, not as a column:"
+                               " list the columns in the target, {:insert-into [:t [" (pr-str column) " ...]]}")
                           param
                           (str "a vector headed by " (pr-str param) " is written as a call of a function " (subs (str param) 2) ", not as the parameter:"
                                " write the parameter alone, or a list of them in :in as [:lift coll]")
@@ -529,7 +535,7 @@
                           (str (pr-str column) " is written as another name, " (first (syntax/formatted-name column nil false)) ": HoneySQL writes no key of a map as the column")
                           column
                           (str (pr-str column) " is written " (name column) ", a word PostgreSQL reads as a keyword, not as a column:"
-                               " write it as a string, " (pr-str (name column)) ", which HoneySQL quotes, or quote names ({:format {:quoted true}})")
+                                " write it as a string, " (pr-str (name column)) ", which HoneySQL quotes (in :columns, list the columns in the target, {:insert-into [:t [" (pr-str (name column)) " ...]]}), or quote names ({:format {:quoted true}})")
                           call
                           (str (pr-str [op :a :b]) " is written as a call of a function " (name op) "(a, b), which PostgreSQL has not:"
                                " HoneySQL has not registered the operator; load honey.sql.pg-ops, or register it with sql/register-op!")
