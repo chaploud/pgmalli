@@ -136,8 +136,9 @@
     (doseq [url ["postgres://u:s3cret@localhost:1/x" "postgresql://u:s3cret@localhost:1/x"]]
       (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is no URL of PostgreSQL's JDBC driver" (ir/from-db {:jdbcUrl url})))]
         (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) (str "libpq's URL is not printed: " url))))
-    (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db {:jdbcUrl "JDBC:postgresql://localhost:1/nope?password=s3cret"})))]
-      (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) "nor an upper-case one"))))
+    (doseq [url ["JDBC:postgresql://localhost:1/nope?password=s3cret" "jdbc:postgresql://u:pa/s3cret@localhost:1/x" "jdbc:postgresql://u:p@s3cret@localhost:1/x"]]
+      (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db {:jdbcUrl url})))]
+        (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) (str "nor of an upper-case scheme, or a user and password before the host: " url))))))
 
 (deftest jdbc-reads-what-psql-reads
   ;; babashka has no java.sql
@@ -169,3 +170,9 @@
 (deftest a-next-jdbc-db-spec-says-to-drop-its-dbtype
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db keys \[:dbtype\] are next.jdbc's, which pgmalli does not read .*; drop them"
                         (ir/from-db {:dbtype "postgresql" :dbname "app" :host "h" :psql "/nonexistent/psql"}))))
+
+(deftest a-uri-or-a-conninfo-in-dbname-or-host-is-refused-unechoed
+  (doseq [db [{:dbname "postgresql://u:s3cret@localhost/x"} {:host "postgres://u:s3cret@h/x"} {:dbname "host=h password=s3cret dbname=x"}]]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db db)))]
+      (is (= :pgmalli.error/invalid-config (:pgmalli/error (ex-data e))))
+      (is (not (str/includes? (pr-str (ex-message e) (ex-data e)) "s3cret")) (pr-str db)))))

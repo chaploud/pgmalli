@@ -80,7 +80,8 @@
                                                    (str "cannot run psql (" psql "): " (ex-message e)
                                                         "; install the PostgreSQL client, set :db :psql to its path, or give :db :jdbcUrl")
                                                    {:given psql} e)))
-        why (psql-error err)]
+        why (error/without-urls (psql-error err))
+        err (error/without-urls err)]
     (cond (zero? exit) out
           ;; psql exits 2 when it cannot connect, 3 when the script fails
           (= 2 exit) (error/fail! :pgmalli.error/db-unavailable
@@ -107,6 +108,12 @@
     (error/fail! :pgmalli.error/invalid-config
                  ":db's :db is not read: the database name is :dbname, as next.jdbc and libpq name it"
                  {:given [:db] :did-you-mean [:dbname]}))
+  ;; not echoed: libpq takes a :dbname or a :host as a name, so a URI or a conninfo there, which
+  ;; may carry a password, would be in the error
+  (when (some #(re-find #"://|=" (str %)) (map db [:dbname :host]))
+    (error/fail! :pgmalli.error/invalid-config
+                 ":db's :dbname or :host is a URI or a conninfo, which psql reads as a name: give :host, :port, :dbname, :user and :password apart, or :jdbcUrl"
+                 {:given [:dbname :host]}))
   (let [via (cond (contains? db :datasource) :datasource (contains? db :jdbcUrl) :jdbc :else :psql)
         stray (remove (conj (db-keys via) :schema) (keys db))]
     (when (seq stray)

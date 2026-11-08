@@ -8,15 +8,16 @@
 (defn- target
   "host:port/db of a JDBC URL, without its user, password or parameters."
   [url]
-  (let [[_ hosts db] (re-find #"(?i)^jdbc:postgresql://(?:[^@/]*@)?([^/?]*)/?([^?]*)" (str url))]
-    (if hosts (str hosts "/" db) "the :jdbcUrl")))
+  (let [[_ authority db] (re-find #"(?i)^jdbc:postgresql://([^/?]*)/?([^?]*)" (str url))]
+    ;; a user and password before the host (libpq's way, user:p@ss@host) are no host to name
+    (if (and authority (not (str/includes? (str authority "/" db) "@"))) (str authority "/" db) "the :jdbcUrl")))
 
 (defn- without-urls
   "e as a cause that names no URL: DriverManager's \"No suitable driver\" message carries the
    URL, and a URL may carry a password. Its message with every URL (jdbc:..., scheme://...)
    replaced, and its SQLState."
   ^java.sql.SQLException [^java.sql.SQLException e]
-  (java.sql.SQLException. (str/replace (str (ex-message e)) #"(?i)(?:jdbc:|[a-z][a-z0-9+.-]*://)\S+" "the URL") (.getSQLState e)))
+  (java.sql.SQLException. (error/without-urls (ex-message e)) (.getSQLState e)))
 
 (defn- connect [{:keys [jdbcUrl datasource user password]}]
   (if datasource

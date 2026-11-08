@@ -30,6 +30,14 @@
    (throw (ex-info message (assoc data :pgmalli/error kind :cognitect.anomalies/category (or (categories kind) (throw (IllegalArgumentException. (str "no error kind " kind)))))
                    cause))))
 
+(defn without-urls
+  "Text s with every URL (jdbc:..., scheme://...) and conninfo password (password=...) replaced: a
+   URL may carry a password, and messages and ex-data end in logs."
+  [s]
+  (-> (str s)
+      (str/replace #"(?i)(?:jdbc:|[a-z][a-z0-9+.-]*://)\S+" "the URL")
+      (str/replace #"(?i)password\s*=\s*(?:'(?:[^'\\]|\\.)*'|\S+)" "password=...")))
+
 (defn edit-distance
   "The edits from a to b: insertions, deletions, substitutions and swaps of adjacent letters
    (nmae is one edit from name)."
