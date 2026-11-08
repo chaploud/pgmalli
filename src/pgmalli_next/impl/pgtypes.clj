@@ -126,18 +126,28 @@
 
 (def integer-schema (bounded-int :pg/integer))
 
+(def ^:private large-stacks
+  "The matches running on a large stack at once: each stack's memory is reserved as it grows, so an
+   unbounded number of long values validated together would exhaust it."
+  (java.util.concurrent.Semaphore. 2 true))
+
 (defn- found-on-a-large-stack
   "(re-find p x) on a thread whose stack holds it: java.util.regex recurses once per character
    for a regex such as ^([a-z0-9]|-)+$, past a thread's default stack on a long value that
-   PostgreSQL's regex engine matches. true where even that stack runs out: the value is not
-   refused for what java.util.regex cannot tell."
+   PostgreSQL's regex engine matches. false where even that stack runs out: a value too long for
+   java.util.regex to tell is refused, never let through."
   [p x]
-  (let [result (promise)
-        t (Thread. nil #(deliver result (try (some? (re-find p x)) (catch StackOverflowError _ true)))
-                   "pgmalli-re" (* 512 1024 1024))]
-    (.start t)
-    (.join t)
-    @result))
+  (.acquire ^java.util.concurrent.Semaphore large-stacks)
+  (try
+    (let [result (promise)
+          t (Thread. nil #(deliver result (try (some? (re-find p x))
+                                               (catch StackOverflowError _ false)
+                                               (catch Throwable e e)))
+                     "pgmalli-re" (* 256 1024 1024))]
+      (.start t)
+      (.join t)
+      (let [r @result] (if (instance? Throwable r) (throw r) r)))
+    (finally (.release ^java.util.concurrent.Semaphore large-stacks))))
 
 (def re-schema
   "[:re re] as malli's, except a value java.util.regex runs out of stack on is matched on a
@@ -159,7 +169,7 @@
    {:type :pg/class
     :compile (fn [_ names _]
                (let [cs (set names)]
-                 {:pred (fn [v] (contains? cs (.getName (class v))))
+                 {:pred (fn [v] (contains? cs (some-> v class .getName)))
                   :type-properties {:error/message (str "should be one of " (str/join ", " names))
                                     :gen/gen (gen/elements (keep (fn [[c v]] (when (cs (.getName ^Class c)) v)) accept/values))}
                   :min 1 :max Long/MAX_VALUE}))}))

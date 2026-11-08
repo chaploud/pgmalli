@@ -129,7 +129,10 @@
         long-value (apply str (repeat 200000 "a"))]
     (is (thrown? StackOverflowError (re-find #"^([a-z0-9]|-)+$" long-value)) "the thread's own stack runs out")
     (is (m/validate s long-value))
-    (is (not (m/validate s (str long-value "!"))))))
+    (is (not (m/validate s (str long-value "!"))))
+    (let [too-long (str (apply str (repeat 3000000 "a")) "!")]
+      (is (every? false? (pmap #(m/validate s %) (repeat 6 too-long)))
+          "a value too long for the larger stack too is refused, several at once"))))
 
 (deftest a-default-pgmalli-cannot-parse-is-its-sql-and-the-column-optional-in-insert
   (let [reg (registry-of {} [{:name "c" :position 1 :data_type "text" :is_nullable false :default_value "CASE WHEN"}])
