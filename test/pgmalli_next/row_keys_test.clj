@@ -10,7 +10,7 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.ir :as ir]
-            [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! jdbc-url with-postgres]]))
+            [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! jdbcUrl with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -185,7 +185,7 @@
 (deftest jdbc-leaves-a-pooled-connection-as-it-was
   (when *db*
     (let [{:keys [user password]} *db*
-          c (java.sql.DriverManager/getConnection (jdbc-url) user password)
+          c (java.sql.DriverManager/getConnection (jdbcUrl) user password)
           ;; a pool hands the same connection out again: close is a no-op here
           kept (java.lang.reflect.Proxy/newProxyInstance (.getClassLoader java.sql.Connection) (into-array Class [java.sql.Connection])
                                                          (reify java.lang.reflect.InvocationHandler

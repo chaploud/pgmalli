@@ -6,6 +6,7 @@
    schema data, and a malli registry is what registry builds from it."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
+            [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [clojure.walk :as walk]
             [malli.core :as m]
@@ -162,19 +163,23 @@
   (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas))
 
 (defn- with-other-schemas-types
-  "The generated schemas with each :any column whose :pg/type names an enum type of another
+  "The generated schemas with each :any or :some column whose :pg/type names an enum type of another
    schema of the file made a [:ref] to it: generation reads each schema alone, so it types such a
    column :any."
   [schemas]
-  (let [own (fn [t] (when-let [[_ s n] (and (string? t) (re-matches #"([a-z_][a-z0-9_$]*)\.([a-z_][a-z0-9_$]*)" t))]
-                      (let [k (shape/schema-key s n)]
+  (let [;; a name as format_type writes it: plain, or quoted with its quotes doubled
+        ident "(\"(?:[^\"]|\"\")*\"|[a-z_][a-z0-9_$]*)"
+        unquoted #(if (str/starts-with? % "\"") (str/replace (subs % 1 (dec (count %))) "\"\"" "\"") %)
+        own (fn [t] (when-let [[_ s n] (and (string? t) (re-matches (re-pattern (str ident "\\." ident)) t))]
+                      (let [k (shape/schema-key (unquoted s) (unquoted n))]
                         ;; a table's, a view's or a composite type's row is a PGobject
                         (when (some-> (get schemas k) shape/column-entries empty?) k))))
         typed (fn [f]
                 (let [p (when (vector? f) (second f))
                       t (:pg/type p)]
-                  (cond (and (= :any (first f)) (= 2 (count f)) (own t)) [:ref p (own t)]
-                        (and (= :vector (first f)) (= 3 (count f)) (= :any (last f)) (own (types/element t)))
+                  ;; :some, a NOT NULL column's
+                  (cond (and (#{:any :some} (first f)) (= 2 (count f)) (own t)) [:ref p (own t)]
+                        (and (= :vector (first f)) (= 3 (count f)) (#{:any :some} (last f)) (own (types/element t)))
                         [:vector p [:ref (own (types/element t))]]
                         :else f)))]
     (update-vals schemas #(if (shape/row-schema? %) (walk/postwalk (fn [f] (if (and (vector? f) (map? (second f))) (typed f) f)) %) %))))

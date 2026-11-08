@@ -119,18 +119,24 @@
         k (jdbc/row-key n)]
     (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
+(def ^:private not-one-value
+  "What HoneySQL writes in :values or :set as something else than one value: a keyword as a
+   column, a Clojure vector or sequence as a row of parameters, (?, ?), which no column takes, a
+   map as a subquery or a clause."
+  [:or :keyword [:sequential :any] [:map-of :any :any]])
+
 (defn- one-value
-  "t without what HoneySQL writes in :values or :set as something else than one value: a keyword
-   as a column (:default is added after), a Clojure vector or sequence as a row of parameters,
-   (?, ?), which no column takes; a set, or a Java array, is one value."
+  "t without not-one-value's values (:default is added after), nil where nothing is left (a jsonb
+   column's map, a vector); a set, or a Java array, is one value."
   [t]
   (case (shape/head t)
-    :maybe [:maybe (one-value (last t))]
-    :and (shape/update-and-base t one-value)
-    :or (shape/either (remove #(or (= :keyword (shape/kind %)) (#{:vector :sequential} (shape/head %)))
-                              (map one-value (shape/alternatives t)))
-                      t)
-    :any [:and t [:not [:or :keyword [:sequential :any]]]]
+    :maybe (if-let [x (one-value (last t))] [:maybe x] :nil)
+    :and (when (one-value (shape/and-base t)) (shape/update-and-base t one-value))
+    :or (some-> (seq (keep one-value (remove #(or (= :keyword (shape/kind %)) (#{:vector :sequential :map :map-of} (shape/head %)))
+                                             (shape/alternatives t))))
+                (shape/either t))
+    (:map :map-of :vector :sequential) nil
+    (:any :some) [:and t [:not not-one-value]]
     t))
 
 (defn- generated-values
@@ -176,18 +182,20 @@
                    (for [[k props c] written
                          :let [assigned #(cond-> (args/accepted-type r c :assign %) (or (shape/maybe? c) triggered?) query/nullable)
                                a (assigned (assoc opts ::args/keywords-columns true))
-                               t (one-value a)
                                ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
-                               t (if-let [n (when (or (shape/maybe? c) triggered?) (sql-word-schema :null (:format opts)))] [:or t n] t)
-                               plain (if (fills k) [:or t default] t)
+                               alts (remove nil? [(one-value a)
+                                                 (when (or (shape/maybe? c) triggered?) (sql-word-schema :null (:format opts)))
+                                                 (when (fills k) default)])
+                               plain (when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
                                lifted (assigned opts)
-                               labels (let [e (shape/and-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]]
-                     ;; [:lift v] sends v as one parameter, a keyword label too
+                               labels (let [e (shape/and-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))
+                               ;; [:lift v] sends v as one parameter, a keyword label and a map too
+                               lift [:tuple {:error/message (str "should be [:lift v], v "
+                                                                 (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
+                                     [:= :lift] lifted]]]
                      [(written-key k opts) (not (or (:optional props) triggered?))
-                      [:or plain [:tuple {:error/message (str "should be [:lift v], v "
-                                                              (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
-                                  [:= :lift] lifted]]
-                      (generated-values plain)])
+                      (if plain [:or plain lift] lift)
+                      (some-> plain generated-values)])
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(written-key k opts) false default default]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
@@ -274,10 +282,12 @@
                                              (str " in ON CONFLICT: HoneySQL writes a vector as columns; for a constraint write {:on-constraint "
                                                   (keyword (name constraint)) "}")
                                              (str " in ON CONFLICT: " table " lacks it" meant))
-                              :values (if-not table (field-target-text column did-you-mean) (str " in :values" (when target (str " for " (column-name target)))
-                                           ": HoneySQL writes a keyword there as a column; write the value itself"
-                                           " ([:lift " column "] for an enum label, a string for text)"))
-                              (:set :do-update-set :columns) (field-target-text column did-you-mean)
+                              (:values :set :do-update-set) (if (or (and (= :values clause) table) target)
+                                                              (str " in " clause (when target (str " for " (column-name target)))
+                                                                   ": HoneySQL writes a keyword there as a column; write the value itself"
+                                                                   " ([:lift " column "] for an enum label, a string for text)")
+                                                              (field-target-text column did-you-mean))
+                              :columns (field-target-text column did-you-mean)
                               (cond quoted (str "; under :quoted, PostgreSQL looks the name up as written: for the column "
                                                 (syntax/folded (column-name column)) " write :" (syntax/folded (column-name column)))
                                     meant meant
@@ -317,7 +327,11 @@
    :literal-type (fn [{:keys [function column value sent type]}]
                    (let [to (if column (str "column " (column-name column)) function)]
                      (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
-                          " takes there through no implicit conversion; cast it, " (if type (cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]")))))
+                          " takes there through no implicit conversion; "
+                          (if (coll? value)
+                            ;; jsonb, which casts to no array or enum
+                            (str "send the value of " (or type "the type meant") " itself (an array as a Java array, (into-array ...); a label as [:lift :label])")
+                            (str "cast it, " (if type (cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]")))))))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"

@@ -236,6 +236,22 @@
       (is (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "a"} {:registry reg}))
       (exec-sql! "INSERT INTO wh.stock VALUES (1, 'ABC', 'a')"))))
 
+(deftest an-enum-of-another-schema-is-its-type-whatever-its-name-and-nullability
+  (when *db*
+    (exec-sql! "CREATE SCHEMA \"Ot s\"; CREATE SCHEMA uses;
+                CREATE TYPE \"Ot s\".date AS ENUM ('d1'); CREATE TYPE \"Ot s\".\"Mood\" AS ENUM ('q');
+                CREATE TABLE uses.t (id int PRIMARY KEY, d \"Ot s\".date, dn \"Ot s\".date NOT NULL,
+                                     q \"Ot s\".\"Mood\" NOT NULL, qs \"Ot s\".\"Mood\"[] NOT NULL, real date);")
+    (let [reg (pgmalli/registry (generated {:db *db*} "Ot s" "uses"))
+          read (pgmalli/as-read reg :pg.uses/t)]
+      (is (= {:d [:maybe [:enum {:pg/type "\"Ot s\".date"} :d1]]
+              :dn [:enum {:pg/type "\"Ot s\".date"} :d1]
+              :q [:enum {:pg/type "\"Ot s\".\"Mood\""} :q]
+              :qs [:vector {:pg/type "\"Ot s\".\"Mood\"[]"} [:maybe [:enum :q]]]
+              :real [:maybe [:time/local-date {:pg/type "date"}]]}
+             (dissoc (into {} (drop 2 read)) :id))
+          "a date of another schema is no pg_catalog date; a NOT NULL column and a quoted name of one alike"))))
+
 (deftest a-column-override-shapes-reads-and-writes-of-that-column
   (when *db*
     (exec-sql! "CREATE SCHEMA ov; CREATE TABLE ov.jobs (id int PRIMARY KEY, input jsonb NOT NULL, meta jsonb, n int NOT NULL CHECK (n < 100));")
@@ -253,8 +269,10 @@
         (is (= [:int {:min 1 :pg/type "integer"}] (read :n o))))
       (testing "write: the declared shape for a map sent as jsonb"
         (is (= [:or [:map {:pg/type "jsonb"} [:prompt :string]] jdbc/pg-object] (:i (:args (h/analyze reg {:update :jobs :set {:input :?i}} sends)))))
-        (is (m/validate (h/values-schema reg :jobs sends) row {:registry reg}))
-        (is (not (m/validate (h/set-schema reg :jobs sends) {:input {:prompt 1}} {:registry reg})))))
+        ;; HoneySQL writes a map in :values or :set as a subquery: the document is [:lift m]
+        (is (m/validate (h/values-schema reg :jobs sends) (update row :input #(vector :lift %)) {:registry reg}))
+        (is (not (m/validate (h/values-schema reg :jobs sends) row {:registry reg})))
+        (is (not (m/validate (h/set-schema reg :jobs sends) {:input [:lift {:prompt 1}]} {:registry reg})))))
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #":overrides: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"
                           (files/generated {:db *db* :schemas ["ov"] :overrides {:ov.jobs/inptu :map}})))))
 

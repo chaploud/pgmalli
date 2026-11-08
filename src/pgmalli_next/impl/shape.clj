@@ -150,7 +150,8 @@
   [row-name suffix]
   (if (keyword? row-name)
     (keyword (str (namespace row-name) "." (name row-name)) suffix)
-    (str (str/replace-first row-name "/" ".") "/" suffix)))
+    (let [[_ sch n] (re-matches #"(pg\.(?:[^\\/]|\\.)*)/(.*)" row-name)]
+      (str sch "." n "/" suffix))))
 
 (defn plain?
   "Whether an identifier needs no quoting, so it can be a keyword."
@@ -164,11 +165,12 @@
 
 (defn schema-key
   "A table, view or type of a schema as a registry key: :pg.<schema>/<name>, a string key when
-   either name is not a plain identifier."
+   either name is not a plain identifier, a \\ or a / of its schema's name escaped by a \\ (the
+   key read back by schema-and-name alone)."
   [schema-name s]
   (if (and (plain? schema-name) (plain? s))
     (keyword (str "pg." schema-name) s)
-    (str "pg." schema-name "/" s)))
+    (str "pg." (str/replace schema-name #"[\\/]" #(str "\\" %)) "/" s)))
 
 (defn routines-key
   "The registry key of a schema's functions and operators, the generated file's :functions and
@@ -177,9 +179,13 @@
   (keyword "pgmalli.routines" schema-name))
 
 (defn schema-and-name
-  "[schema name] of a registry key: :pg.ins/mood and \"pg.a.b/m\" are [\"ins\" \"mood\"] and [\"a.b\" \"m\"]."
+  "[schema name] of a registry key schema-key made: :pg.ins/mood and \"pg.a.b/m\" are [\"ins\"
+   \"mood\"] and [\"a.b\" \"m\"], \"pg.a\\/b/m\" [\"a/b\" \"m\"]."
   [k]
-  (let [[ns n] (if (keyword? k) [(namespace k) (name k)] (str/split k #"/" 2))] [(subs ns 3) n]))
+  (if (keyword? k)
+    [(subs (namespace k) 3) (name k)]
+    (let [[_ sch n] (re-matches #"pg\.((?:[^\\/]|\\.)*)/(.*)" k)]
+      [(str/replace sch #"\\(.)" "$1") n])))
 
 (def ^:private varchar-names
   "The pg_catalog types pgjdbc returns, as it returns an enum, as a VARCHAR, by these names."

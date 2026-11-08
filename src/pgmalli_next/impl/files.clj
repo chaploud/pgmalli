@@ -24,7 +24,7 @@
                                [:fn {:error/message "should name at least one schema, each once"} #(and (seq %) (apply distinct? %))]]]
    [:out {:optional true} :string]
    [:overrides {:optional true} [:map-of [:keyword {:error/message "should be a column's keyword, :schema.table/column"}] :any]]
-   [:db {:optional true} [:map-of {:error/message "should be a map: psql's keys (:host :port :dbname ...), {:jdbc-url ...} or {:datasource ds}"} :keyword :any]]])
+   [:db {:optional true} [:map-of {:error/message "should be a map: psql's keys (:host :port :dbname ...), {:jdbcUrl ...} or {:datasource ds}"} :keyword :any]]])
 
 (defn config
   "Config with defaults applied. A key or value config-schema does not take is an error."

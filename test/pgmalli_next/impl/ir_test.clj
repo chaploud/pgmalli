@@ -103,8 +103,8 @@
 
 (deftest jdbc-that-cannot-connect-names-the-target-and-keeps-the-cause-without-the-url
   (when-not (System/getProperty "babashka.version")
-    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope: .*; check :db's :jdbc-url"
-                                  (ir/from-db {:jdbc-url "jdbc:postgresql://localhost:1/nope?password=s3cret" :user "u" :password "s3cret"})))]
+    (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect to localhost:1/nope: .*; check :db's :jdbcUrl"
+                                  (ir/from-db {:jdbcUrl "jdbc:postgresql://localhost:1/nope?password=s3cret" :user "u" :password "s3cret"})))]
       (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
       (is (= :cognitect.anomalies/unavailable (:cognitect.anomalies/category (ex-data e))))
       (is (some? (.getSQLState (ex-cause e))) "the cause keeps the SQLState")
@@ -120,13 +120,13 @@
   (when (and *db* (not (System/getProperty "babashka.version")))
     (exec-sql! "CREATE SCHEMA \"o'dd\"\"s\"; CREATE TABLE \"o'dd\"\"s\".t (id int PRIMARY KEY CHECK (id > 0), name text);")
     (let [{:keys [host port dbname user password]} *db*
-          jdbc {:jdbc-url (str "jdbc:postgresql://" host ":" port "/" dbname) :user user :password password :schema "o'dd\"s"}]
+          jdbc {:jdbcUrl (str "jdbc:postgresql://" host ":" port "/" dbname) :user user :password password :schema "o'dd\"s"}]
       (is (= (ir/from-db (assoc *db* :schema "o'dd\"s")) (ir/from-db jdbc)))
       (is (= ["id" "name"] (map :name (get-in (ir/from-db jdbc) [:tables "t" :columns])))))))
 
 (deftest a-db-map-is-one-way-to-the-database
   (doseq [[db re] [[{:jdbc_url "x"} #"do not go with psql"]
-                   [{:jdbc-url "x" :host "h"} #"do not go with jdbc"]
+                   [{:jdbcUrl "x" :host "h"} #"do not go with jdbc"]
                    [{:datasource :ds :user "u"} #"do not go with datasource"]]]
     (is (thrown-with-msg? clojure.lang.ExceptionInfo re (ir/from-db db)) (pr-str db))))
 
@@ -135,6 +135,12 @@
                                 (ir/from-db {:host "h" :db "app"})))]
     (is (= [:dbname] (:did-you-mean (ex-data e))))
     (is (not (str/includes? (pr-str (ex-data e)) "app")))))
+
+(deftest the-jdbc-url-is-next-jdbcs-jdbcUrl-and-the-old-key-names-it
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db's :jdbc-url is no longer read: the URL is :jdbcUrl"
+                                (ir/from-db {:jdbc-url "jdbc:postgresql://h/app" :user "u" :password "s3cret"})))]
+    (is (= [:jdbcUrl] (:did-you-mean (ex-data e))))
+    (is (not (str/includes? (pr-str (ex-data e)) "s3cret")))))
 
 (deftest a-next-jdbc-db-spec-says-to-drop-its-dbtype
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:db keys \[:dbtype\] are next.jdbc's, which pgmalli does not read .*; drop them"

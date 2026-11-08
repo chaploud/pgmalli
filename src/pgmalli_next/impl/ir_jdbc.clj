@@ -8,7 +8,7 @@
   "host:port/db of a JDBC URL, without its user, password or parameters."
   [url]
   (let [[_ hosts db] (re-find #"^jdbc:postgresql://(?:[^@/]*@)?([^/?]*)/?([^?]*)" (str url))]
-    (if hosts (str hosts "/" db) "the :jdbc-url")))
+    (if hosts (str hosts "/" db) "the :jdbcUrl")))
 
 (defn- without-urls
   "e as a cause that names no URL: DriverManager's \"No suitable driver\" message carries the
@@ -17,7 +17,7 @@
   ^java.sql.SQLException [^java.sql.SQLException e]
   (java.sql.SQLException. (str/replace (str (ex-message e)) #"jdbc:\S+" "the URL") (.getSQLState e)))
 
-(defn- connect [{:keys [jdbc-url datasource user password]}]
+(defn- connect [{:keys [jdbcUrl datasource user password]}]
   (if datasource
     (try (.getConnection ^javax.sql.DataSource datasource)
          (catch java.sql.SQLException e
@@ -27,16 +27,16 @@
                           {} c))))
     (do (try (Class/forName "org.postgresql.Driver")
              (catch ClassNotFoundException _
-               (error/fail! :pgmalli.error/invalid-config "PostgreSQL's JDBC driver is not on the classpath: add org.postgresql/postgresql, or give psql settings instead of :jdbc-url")))
-        (try (java.sql.DriverManager/getConnection jdbc-url (doto (java.util.Properties.)
+               (error/fail! :pgmalli.error/invalid-config "PostgreSQL's JDBC driver is not on the classpath: add org.postgresql/postgresql, or give psql settings instead of :jdbcUrl")))
+        (try (java.sql.DriverManager/getConnection jdbcUrl (doto (java.util.Properties.)
                                                               (cond-> user (.setProperty "user" (str user)))
                                                               (cond-> password (.setProperty "password" (str password)))))
              (catch java.sql.SQLException e
                (let [c (without-urls e)]
                  (error/fail! :pgmalli.error/db-unavailable
-                              (str "cannot connect to " (target jdbc-url) ": " (ex-message c)
-                                   "; check :db's :jdbc-url, :user and :password and that PostgreSQL is running")
-                              {:given (target jdbc-url)} c)))))))
+                              (str "cannot connect to " (target jdbcUrl) ": " (ex-message c)
+                                   "; check :db's :jdbcUrl, :user and :password and that PostgreSQL is running")
+                              {:given (target jdbcUrl)} c)))))))
 
 (defn- document [^java.sql.Statement st sql]
   (loop [result? (.execute st sql)]

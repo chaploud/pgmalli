@@ -1,6 +1,6 @@
 (ns pgmalli-next.impl.ir
   "Reads the structure of one schema from pg_catalog through psql, or through JDBC when the db
-   map has :jdbc-url (with :user and :password) or :datasource (a javax.sql.DataSource); the
+   map has :jdbcUrl (with :user and :password) or :datasource (a javax.sql.DataSource); the
    JDBC driver is then the caller's, on the classpath.
 
    psql's connection settings are its own (PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD,
@@ -59,7 +59,7 @@
                                     (catch java.io.IOException e
                                       (error/fail! :pgmalli.error/psql-missing
                                                    (str "cannot run psql (" psql "): " (ex-message e)
-                                                        "; install the PostgreSQL client, set :db :psql to its path, or give :db :jdbc-url")
+                                                        "; install the PostgreSQL client, set :db :psql to its path, or give :db :jdbcUrl")
                                                    {:given psql} e)))
         ;; psql tells each address it tried in turn: the first says it
         first-err (str/replace (or (first (remove str/blank? (str/split-lines (str err)))) "") #"^psql: (error: )?" "")]
@@ -75,18 +75,22 @@
                              {:given schema :exit exit :err err}))))
 
 (def ^:private db-keys
-  {:psql (set (concat (keys env-keys) [:psql])) :jdbc #{:jdbc-url :user :password} :datasource #{:datasource}})
+  {:psql (set (concat (keys env-keys) [:psql])) :jdbc #{:jdbcUrl :user :password} :datasource #{:datasource}})
 
 (defn- via
   "How a db map reads the database, :psql, :jdbc or :datasource; a key none of them takes, or
    keys of two, is an error, since the others would be left out and psql reach the database its
    environment names."
   [db]
+  (when (contains? db :jdbc-url)
+    (error/fail! :pgmalli.error/invalid-config
+                 ":db's :jdbc-url is no longer read: the URL is :jdbcUrl, as next.jdbc names it"
+                 {:given [:jdbc-url] :did-you-mean [:jdbcUrl]}))
   (when (contains? db :db)
     (error/fail! :pgmalli.error/invalid-config
                  ":db's :db is no longer read: the database name is :dbname, as next.jdbc and libpq name it"
                  {:given [:db] :did-you-mean [:dbname]}))
-  (let [via (cond (contains? db :datasource) :datasource (contains? db :jdbc-url) :jdbc :else :psql)
+  (let [via (cond (contains? db :datasource) :datasource (contains? db :jdbcUrl) :jdbc :else :psql)
         stray (remove (conj (db-keys via) :schema) (keys db))]
     (when (seq stray)
       (error/fail! :pgmalli.error/invalid-config
@@ -94,7 +98,7 @@
                           (str ":db keys " (vec stray) " are next.jdbc's, which pgmalli does not read (it reads PostgreSQL alone); drop them")
                           (str ":db keys " (vec stray) " do not go with " (name via)
                                (error/did-you-mean (some #(error/suggest % (db-keys via)) stray))))
-                        "; psql takes " (vec (sort (db-keys :psql))) ", JDBC :jdbc-url :user :password, or :datasource alone")
+                        "; psql takes " (vec (sort (db-keys :psql))) ", JDBC :jdbcUrl :user :password, or :datasource alone")
                    {:given (vec stray) :known (vec (sort (db-keys via)))}))
     (when (and (not= :psql via) (System/getProperty "babashka.version"))
       (error/fail! :pgmalli.error/invalid-config "babashka has no JDBC: give :db psql settings instead, or run on the JVM" {:given via}))
@@ -102,7 +106,7 @@
 
 (defn from-db
   "Structure of the schema named by :schema (default \"public\"). :psql selects the binary;
-   :jdbc-url (with :user and :password) or :datasource reads over JDBC instead."
+   :jdbcUrl (with :user and :password) or :datasource reads over JDBC instead."
   [{:keys [schema] :or {schema "public"} :as db}]
   (let [out (if (= :psql (via db)) (psql-out (assoc db :schema schema)) ((requiring-resolve 'pgmalli-next.impl.ir-jdbc/out) db (jdbc-sql schema)))
         ir (keywordize (json/parse (str/trim out)) false)]

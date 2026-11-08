@@ -71,9 +71,10 @@
                                       (catch Exception _ false)
                                       (finally (.rollback con)))))
               {taken true not-taken false} (group-by #(taken? (key %) (val %)) (dissoc row :id))]
-          ;; an enum's label reads as a keyword, which HoneySQL writes in :values and :set as a column: [:lift v]
+          ;; an enum's label reads as a keyword, a json document as a map, which HoneySQL writes in :values
+          ;; and :set as a column and a subquery: [:lift v]
           (is (= [] (vec (for [[k v] taken
-                               :let [v (if (keyword? v) [:lift v] v)]
+                               :let [v (if (or (keyword? v) (map? v)) [:lift v] v)]
                                :when (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v))))]
                            [k (some-> v class .getName)]))))
           (let [array? #(re-find #"^d?a_" (name %))]

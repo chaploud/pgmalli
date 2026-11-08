@@ -67,6 +67,8 @@
         n (some #(when (= :max-length (:fact %)) (:max %)) facts)
         base (cond override override
                    enum (cond->> [:ref (shape/schema-key schema-name (:type-name enum))] (:array? enum) (vector :vector))
+                   ;; a type of another schema named as a pg_catalog type (s.date) is no pg_catalog type
+                   unknown (if (types/element type) [:vector :any] :any)
                    :else (base-type type))
         s (with-props base {:pg/type type
                             :pg/domain domain

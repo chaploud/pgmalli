@@ -265,8 +265,10 @@ is typed as an argument assigned to it (what your application sends, held to the
 by the column's name (`:group_id`), the one key a row is read with
 ([the one reading](reading-rows.md#the-one-reading-and-sending)), so a row read is written back as it is, but for an enum
 column, read as a keyword, which HoneySQL writes in `:values` and `:set` as a column (write its
-label as `[:lift :happy]`), a `bit(1)` column, read as a `Boolean` (write a `PGobject` of `bit`), and an
-array column, read as a vector (write a Java array); another
+label as `[:lift :happy]`), a json or jsonb column, read as a map or a vector, which HoneySQL
+writes there as a subquery or a row of parameters (write `[:lift m]`), a `bit(1)` column, read as
+a `Boolean` (write a `PGobject` of `bit`), and an array column, read as a vector (write a Java
+array); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
@@ -279,8 +281,9 @@ empty `:set` as `SET` alone, which PostgreSQL refuses.
 A column takes a value, not an expression: write `[:now]`, `[:+ :n 1]` or `:current_timestamp`
 in the query body, not in a row. `[:lift v]` is a value too, which HoneySQL sends as one
 parameter, `v` of the column's type: an enum label goes as `[:lift :active]`, as HoneySQL
-writes a bare keyword as a column. A vector or list not headed by `:lift` is a row of
-parameters, which no column takes. `mg/generate` gives values alone, and leaves out a column
+writes a bare keyword as a column, and a json document as `[:lift {:a 1}]`, as it writes a map
+as a subquery. A vector or list not headed by `:lift` is a row of parameters, which no column
+takes. `mg/generate` gives values alone, and leaves out a column
 of whose values malli generates none (a `PGobject`).
 Validate a row under the registry (`{:registry registry}`):
 

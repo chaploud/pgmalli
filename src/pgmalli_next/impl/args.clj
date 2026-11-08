@@ -230,13 +230,13 @@
   "{:value v} of a literal x, a value written in the query: a string or a number, bare or
    [:lift v] (HoneySQL sends it as a parameter, sql/format's :inline aside), a boolean (bare,
    HoneySQL writes TRUE or FALSE), [:lift :kw] (sent untyped as its text, :text, :ns/a's ns/a),
-   or [:inline s] (written into the SQL, :inline); nil for another x (a bare keyword is a
-   column)."
+   [:lift coll] (a map or a vector, sent as the one sending sends its class: jsonb), or
+   [:inline s] (written into the SQL, :inline); nil for another x (a bare keyword is a column)."
   [x]
   (let [v (when (and (vector? x) (= 2 (count x))) (second x))]
     (cond (or (string? x) (number? x) (boolean? x)) {:value x}
           (= :lift (when (vector? x) (first x)))
-          (cond (or (string? v) (number? v) (boolean? v)) {:value v}
+          (cond (or (string? v) (number? v) (boolean? v) (coll? v)) {:value v}
                 (keyword? v) {:value v :text (subs (str v) 1)})
           (and (= :inline (when (vector? x) (first x))) (string? v)) {:value v :inline true})))
 
@@ -591,7 +591,7 @@
         refused? (if slot
                    (and (string? value) (not-any? #(accept/accepts? slot % context) (jdbc/string-sends opts)))
                    (refuses? registry t value))]
-    (cond (and labels (not (some #{(or text value)} labels)))
+    (cond (and labels (not (coll? value)) (not (some #{(or text value)} labels)))
           (cond-> {:kind :enum-literal :value value :allowed labels} column (assoc :column column) type (assoc :type type))
           (and (sent-typed? x opts) refused?)
           (let [u (when (and s (string? value)) (uncast-type registry s))]

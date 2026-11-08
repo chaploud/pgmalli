@@ -1206,7 +1206,9 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"\{:reslt \[\"disallowed key\"\]\}; did you mean: :result" (h/query-schema registry [] {} {:reslt :one}))))
 
 (deftest a-lifted-value-is-data
-  (is (= [] (check {:select [:id] :from [:users] :where [:= :id [:lift {:select true :update true :delete false}]]})))
+  (is (= [{:kind :literal-type :function "=" :value {:select true :update true :delete false} :sent "jsonb" :type "bigint"}]
+         (check {:select [:id] :from [:users] :where [:= :id [:lift {:select true :update true :delete false}]]}))
+      "its keys no clauses: a map sent as jsonb, which a bigint compares with by no =")
   (is (= [] (check {:select [:id] :from [:users] :where [:= :id [:inline {:table "x" :distinct 1}]]}))))
 
 (deftest a-column-definition-list-is-read-or-left-alone
@@ -1390,7 +1392,7 @@
   (is (= [] (check {:insert-into :users :values [{:x/group_id 1 :x/score 1}]})) "and of an INSERT column")
   (is (= [] (check {:insert-into :users :columns [:group_id :score] :values [{:group_id 1 :score 1 :nope 1}]}))
       "a key the column list lacks is not written")
-  (is (= [{:kind :unknown-column :column :nope}] (check {:update :users :set {:nick :nope} :where [:= :id 1]}))
+  (is (= [{:kind :unknown-column :column :nope :clause :set :target :nick}] (check {:update :users :set {:nick :nope} :where [:= :id 1]}))
       "a keyword assigned is a column")
   (is (= [] (check {:update :users :set {:nick :group_name} :where [:= :id 1]}))))
 
@@ -3151,3 +3153,29 @@
   (doseq [f [{:quoted true} {:quoted-always #"^default$"}]
           :let [v (h/values-schema registry :users (assoc opts :format f))]]
     (is (every? #(m/validate v % {:registry registry}) (mg/sample v {:registry registry :size 20 :seed 3})) (pr-str f))))
+
+(deftest a-row-written-holds-values-as-honeysql-writes-them
+  (let [reg (pgmalli/registry {:schemas ["public"]
+                               :registry {:pg.public/mood [:enum "ok" "sad"]
+                                          :pg.public/t [:map {:pg/table "public.t" :pg/primary-key ["id"]}
+                                                        [:id [:pg/integer {:pg/type "integer"}]]
+                                                        [:j [:maybe [:any {:pg/type "jsonb"}]]]
+                                                        [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]
+                                                        [:m [:maybe [:ref {:pg/type "mood"} :pg.public/mood]]]]}})
+        values (h/values-schema reg :t)
+        set (h/set-schema reg :t)
+        ok? (fn [s row] (m/validate s row {:registry reg}))]
+    (testing "a json document is [:lift m]: HoneySQL writes a map there as a subquery"
+      (is (not (ok? values {:id 1 :j {:a 1}})))
+      (is (not (ok? set {:j {:a 1}})))
+      (is (ok? values {:id 1 :j [:lift {:a 1}]}))
+      (is (ok? set {:j [:lift [1]]})))
+    (testing "a vector lifted to an array column goes as jsonb, which PostgreSQL does not assign"
+      (is (= [{:kind :literal-type :function "tags" :column :tags :value ["a"] :sent "jsonb" :type "text[]"}]
+             (:problems (h/analyze reg {:update :t :set {:tags [:lift ["a"]]} :where [:= :id 1]}))))
+      (is (= [] (:problems (h/analyze reg {:update :t :set {:j [:lift {:a 1}]} :where [:= :id 1]})))))
+    (testing "an enum label in :set is [:lift :ok], as in :values"
+      (is (= [{:kind :unknown-column :column :ok :clause :set :target :m}]
+             (:problems (h/analyze reg {:update :t :set {:m :ok} :where [:= :id 1]}))))
+      (is (re-find #"in :set for m: HoneySQL writes a keyword there as a column"
+                   (first (h/humanize (:problems (h/analyze reg {:update :t :set {:m :ok} :where [:= :id 1]})))))))))

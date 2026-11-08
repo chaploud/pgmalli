@@ -3,7 +3,7 @@
    ir.sql could resolve to instead of pg_catalog's must not run."
   (:require [clojure.test :refer [deftest is use-fixtures]]
             [pgmalli-next.impl.ir :as ir]
-            [pgmalli-next.test-db :refer [*db* exec-sql! jdbc-url with-postgres]]))
+            [pgmalli-next.test-db :refer [*db* exec-sql! jdbcUrl with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -45,7 +45,7 @@
       (is (= #{"mood"} (set (keys (:types ir))))))
     (when-not (System/getProperty "babashka.version")
       (let [{:keys [user password]} *db*
-            ir (ir/from-db {:jdbc-url (jdbc-url) :user user :password password :schema "evil"})]
+            ir (ir/from-db {:jdbcUrl (jdbcUrl) :user user :password password :schema "evil"})]
         (is (= #{"t" "p"} (set (keys (:tables ir)))))))))
 
 (deftest a-schema-name-written-into-the-jdbc-query-stays-one-identifier
@@ -54,5 +54,5 @@
           schema ":'schema'\"; CREATE TABLE public.injected (); COMMIT; --"]
       (is (= :pgmalli.error/invalid-config
              (:pgmalli/error (ex-data (is (thrown? clojure.lang.ExceptionInfo
-                                                   (ir/from-db {:jdbc-url (jdbc-url) :user user :password password :schema schema})))))))
+                                                   (ir/from-db {:jdbcUrl (jdbcUrl) :user user :password password :schema schema})))))))
       (is (not (contains? (:tables (ir/from-db (assoc *db* :schema "public"))) "injected"))))))

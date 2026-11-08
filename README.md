@@ -114,15 +114,16 @@ alias's `:exec-args` and a REPL calls them alike:
 They read the database with `psql`. Without `:db`, psql's own settings apply (`PGHOST`,
 `PGDATABASE`, `PGUSER`, `PGPASSWORD`, `~/.pgpass`). `:db` takes `:host`, `:port`, `:dbname`,
 `:user`, `:password`, `:sslmode` and `:psql`, the psql binary to run; a next.jdbc db-spec is one
-without its `:dbtype`. On the JVM, a `:db` with `:jdbc-url` reads through pgjdbc (PostgreSQL's
-JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sql.DataSource`:
+without its `:dbtype`. On the JVM, a `:db` with `:jdbcUrl` reads through pgjdbc (PostgreSQL's
+JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sql.DataSource`;
+`{:jdbcUrl ... :user ... :password ...}` is a next.jdbc db-spec too (`jdbc/get-datasource` takes it):
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
 (require '[pgmalli-next.generate :as generate])
 
 (generate/generate! {:schemas ["public" "app"]
-                     :db {:jdbc-url "jdbc:postgresql://localhost/app_dev" :user "app" :password "secret"}})
+                     :db {:jdbcUrl "jdbc:postgresql://localhost/app_dev" :user "app" :password "secret"}})
 ;; => {:out "resources/pgmalli-next.edn", :unrendered nil, :diagnostics nil}
 ```
 
@@ -283,7 +284,7 @@ problems it reports:
 | `:kind` | for |
 |---|---|
 | `:unknown-table` | a table the registry lacks; `:did-you-mean` lists a table of that name in another schema first; `:quoted` true where, under `:quoted`, the name folded to lower case is a table of the registry |
-| `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`); with `:clause` where a clause names it: `:using` (`:side` `:left`, `:right` or `:both`, `:table` the joined one), `:on-conflict` (`:table`; `:constraint` where a vector headed by `:on-constraint` names one), `:values` (a keyword value, which HoneySQL writes as a column; `:table` the table written, `:target` the value's key, absent past a positional row's columns), `:set`, `:do-update-set`, `:columns` or `:values` without `:table` (an assigned target qualified by its table or alias: a field of a column to PostgreSQL); `:outside-join` true where an ON inside a parenthesized join names a table of the statement outside it; `:did-you-mean` where a column is spelled close; `:quoted` true where, under `:quoted`, the name folded to lower case is a column |
+| `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`); with `:clause` where a clause names it: `:using` (`:side` `:left`, `:right` or `:both`, `:table` the joined one), `:on-conflict` (`:table`; `:constraint` where a vector headed by `:on-constraint` names one), `:values` (a keyword value, which HoneySQL writes as a column; `:table` the table written, `:target` the value's key, absent past a positional row's columns), `:set` or `:do-update-set` with `:target` (a keyword value likewise, `:target` the column it is assigned to), `:set`, `:do-update-set`, `:columns` or `:values` without `:table` or `:target` (an assigned target qualified by its table or alias: a field of a column to PostgreSQL); `:outside-join` true where an ON inside a parenthesized join names a table of the statement outside it; `:did-you-mean` where a column is spelled close; `:quoted` true where, under `:quoted`, the name folded to lower case is a column |
 | `:ambiguous-column` | an unqualified column of two tables, or a column a subquery or CTE has several of, with `:candidates` (that one alone) |
 | `:duplicate-column` | columns of one label in the row a query returns, which `pgmalli-next.jdbc/builder` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
 | `:missing-required-column` | an INSERT lacking a required column |
@@ -293,7 +294,7 @@ problems it reports:
 | `:enum-literal` | a literal (a string, `[:lift "s"]`, `[:inline "s"]`, `[:lift :kw]`, a number) outside an enum type's labels where PostgreSQL types it as the enum: compared, in an IN list or ANY's array, assigned, beside the enum in `coalesce`, `greatest`, `least`, `nullif` or CASE's values, or cast to it; with `:allowed`, and `:column` (the column, or the expression compared or resolved beside) or, cast, `:type` |
 | `:no-operator` | a comparison of a column of a domain over an enum type, which PostgreSQL compares with no value, not even its own; with `:column`, `:op`, `:domain` and `:type`, the enum to cast the column to |
 | `:uncast-string` | a string literal (or `[:lift "s"]`), which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...), or a function's or an operator's argument there (with `:function` in place of `:column`; `:column` the column, or the expression compared); not under `:format {:inline true}`. A named argument is typed as `:args` types it |
-| `:literal-type` | a literal HoneySQL sends as a parameter (`[:round :price 2]`'s `2`, a `Long` sent as `bigint`) where an argument would refuse it: a function's or an operator's argument, compared, assigned (`:set {:id_uuid 1}`), beside others in `coalesce` or CASE; with `:function` (the function or operator, or the column, also as `:column`, where it is assigned), `:sent`, and `:type` where one type is meant; not under `:format {:inline true}` |
+| `:literal-type` | a literal HoneySQL sends as a parameter (`[:round :price 2]`'s `2`, a `Long` sent as `bigint`; `[:lift ["a"]]`, a vector sent as `jsonb`, to a `text[]` column) where an argument would refuse it: a function's or an operator's argument, compared, assigned (`:set {:id_uuid 1}`), beside others in `coalesce` or CASE; with `:function` (the function or operator, or the column, also as `:column`, where it is assigned), `:sent`, and `:type` where one type is meant; not under `:format {:inline true}` |
 | `:undetermined-type` | an argument where PostgreSQL takes its type from the value alone (`[:cardinality :?ids]`, `concat`'s `"any"`), whose other uses take only values sent untyped (a keyword label) or nil; with `:function`, and `:type` where the other uses name one |
 | `:column-definition-list` | a function in FROM whose alias lists column types (`{:with-columns [[:v :jsonb]]}`), which PostgreSQL takes of a function returning record alone; with `:function` and `:alias`. Name the columns with no type (`[:r {:columns [:v]}]`) |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
@@ -474,7 +475,7 @@ CI tests the oldest versions listed here.
 pgmalli depends on malli, test.check and data.json. HoneySQL, next.jdbc
 and pgjdbc are yours to add: `pgmalli-next.core` and `pgmalli-next.honeysql` load HoneySQL,
 `pgmalli-next.jdbc` next.jdbc and pgjdbc; generating needs none of them, but pgjdbc for a `:db`
-with `:jdbc-url`.
+with `:jdbcUrl`.
 
 ## Limits
 

@@ -159,16 +159,16 @@
   [dbs]
   (exec-in! *container* "postgres" (apply str (for [d dbs] (str "DROP DATABASE IF EXISTS " (:dbname d) " WITH (FORCE);\n")))))
 
-(defn jdbc-url
+(defn jdbcUrl
   "The JDBC URL of db, *db* by default."
-  ([] (jdbc-url *db*))
+  ([] (jdbcUrl *db*))
   ([{:keys [host port dbname]}] (str "jdbc:postgresql://" host ":" port "/" dbname)))
 
 (defn datasource
   "A next.jdbc datasource of db, *db* by default (JVM only: babashka has no next.jdbc)."
   ([] (datasource *db*))
   ([{:keys [user password] :as db}]
-   ((requiring-resolve 'next.jdbc/get-datasource) {:jdbcUrl (jdbc-url db) :user user :password password})))
+   ((requiring-resolve 'next.jdbc/get-datasource) {:jdbcUrl (jdbcUrl db) :user user :password password})))
 
 (defn generated
   "The generated data of schemas, read from the database config's :db names, as generate writes it."

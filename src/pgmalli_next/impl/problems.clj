@@ -127,6 +127,10 @@
                                             (filter syntax/column-keyword? (map (comp syntax/target-column first) (syntax/writes stmt)))))
         ;; a target a.b as written (writes has it as its column a): field b of a column a to PostgreSQL
         written (:written (syntax/insert-parts stmt))
+        ;; a keyword assigned in SET, which HoneySQL writes as a column: the clause and the target column
+        set-values (into {} (for [{:keys [x clause assign]} (syntax/assignments ps)
+                                  :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x format))]
+                              [x {:clause clause :target assign}]))
         dotted (into {} (for [[clause ts] [[:columns (:columns (syntax/insert-parts stmt))]
                                            [:values (let [v (:values stmt)] (when (vector? v) (mapcat keys (filter map? v))))]
                                            [:set (let [st (:set stmt)] (when (map? st) (keys st)))]
@@ -186,6 +190,7 @@
               outside? (and qualifier (contains? (first sc) qualifier) (not (contains? (first scope) qualifier)))
               near (cond outside? nil qualifier meant :else (near-columns registry scope col))]
           (cond-> {:kind :unknown-column :column col}
+            (and (set-values col) (not qualifier)) (merge (set-values col))
             qualifier (assoc :qualifier qualifier)
             outside? (assoc :outside-join true)
             near (assoc :did-you-mean near)
