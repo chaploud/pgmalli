@@ -235,7 +235,7 @@ applies:
 | `:row-trigger` | `:info` | a row-level INSERT trigger, which may reject or change rows |
 | `:exclude` | `:info` | an EXCLUDE constraint, which the schemas do not check |
 | `:redundant-unique` | `:info` | a UNIQUE on the columns of the primary key or of another UNIQUE |
-| `:sequence-named-as-enum` | `:info` | a sequence of the name of an enum type of its schema (created before it): the registry's name is the enum's, and a query of the sequence finds none of its columns |
+| `:sequence-named-as-enum` | `:info` | a sequence of the name of an enum type of its schema (created before it): the registry's name is the enum's, and the sequence's columns are untyped in a query |
 
 An `:unrendered` entry is `{:kind :type :table :column :type}`, with `:type-schema` for a type of
 another schema.

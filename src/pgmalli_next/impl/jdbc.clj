@@ -164,13 +164,17 @@
 
 (def ^:private json-rows (rows-of accept/json-classes))
 
+(def ^:private inline-rows (rows-of accept/inline-classes))
+
 (defn write-rows
   "[schema type class] for each class the one sending sends, in accept/class-types' order, by array?
    an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
-   under ::json, a value of a JSON document as accept/json-classes writes it, no array; a
-   Character under ::characters alone (sends)."
+   under ::json, a value of a JSON document as accept/json-classes writes it, no array; under
+   sql/format's :inline, a value it writes as a literal (accept/inline-classes), no array; a Character
+   under ::characters alone (sends)."
   [opts array?]
   (cond (::json opts) (if array? [] (get json-rows false []))
+        (:inline (:format opts)) (get inline-rows array? [])
         (::characters opts) (get character-rows array? [])
         :else (get sent-rows array? [])))
 
@@ -450,13 +454,16 @@
                                   [pg-object]))
                 :any))
 
-(defn typed-pg-object
-  "pg-object of type t: what it says where a value of t is refused."
-  [t]
-  (shape/merge-props pg-object
-                     {:error/message (str "should be a PGobject of type " t " (a String goes as varchar, which " t
-                                          " does not take)")
-                      :pgmalli/describe (str "PGobject of " (types/short-name t))}))
+(def typed-pg-object
+  "pg-object of type t: what it says where a value of t is refused, why a String is where one is
+   given. Memoized: a type's schema of one call equals the next's."
+  (memoize
+   (fn [t]
+     (shape/merge-props (update pg-object 1 dissoc :error/message)
+                        {:error/fn (fn [{:keys [value]} _]
+                                     (str "should be a PGobject of type " t
+                                          (when (string? value) (str " (a String goes as varchar, which " t " does not take)"))))
+                         :pgmalli/describe (str "PGobject of " (types/short-name t))}))))
 
 (defn column-write-type
   "column-write-type*: a column pgjdbc returns as a PGobject (json, jsonb, citext, bit(n > 1), bit varying)

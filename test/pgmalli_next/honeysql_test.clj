@@ -104,7 +104,9 @@
             :let [x (:x (:args (h/analyze reg q)))]]
       (is (not (m/validate x "1" {:registry reg})) (str (pr-str q) ": bit = character varying does not exist"))
       (is (not (m/validate x true {:registry reg})) "nor does bit take a boolean")
-      (is (re-find #"PGobject of type bit" (pr-str x))))))
+      (is (re-matches #"should be a PGobject of type bit( varying)? \(a String goes as varchar, which bit( varying)? does not take\)"
+                      (first (me/humanize (m/explain (shape/non-null (if (= :or (first x)) (second x) x)) "1" {:registry reg}))))
+          "a String is told why"))))
 
 (deftest an-array-of-a-domain-is-compared-with-a-pgobject-of-the-domains-array-alone
   (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:vector {:pg/type "integer[]" :pg/domain "dint[]"} :pg/integer]]]}})
@@ -2624,9 +2626,7 @@
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
-          :d [:maybe [:or (shape/merge-props jdbc/pg-object {:error/message "should be a PGobject of type interval (a String goes as varchar, which interval does not take)"
-                                                            :pgmalli/describe "PGobject of interval"})
-                      :time/local-time]]
+          :d [:maybe [:or (jdbc/typed-pg-object "interval") :time/local-time]]
           :n [:maybe int-call]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
                             [:< [:+ :closed_at :?d] :current_timestamp]
@@ -2835,7 +2835,8 @@
 (deftest an-argument-tested-for-null-alone-stays-untyped-and-takes-nil-inlined-where-compared-too
   (let [inline (assoc opts :format {:inline true})]
     (is (= {:id [:any {:pgmalli/untyped :position}]} (args {:select [:id] :from [:users] :where [:is :?id nil]} inline)))
-    (is (= {:id [:maybe bigint-cmp]} (args {:select [:id] :from [:users] :where [:or [:<> :?id nil] [:= :id :?id]]} inline)))
+    (is (= {:id [:maybe (conj bigint-cmp :string)]} (args {:select [:id] :from [:users] :where [:or [:<> :?id nil] [:= :id :?id]]} inline))
+        "inlined, a String is a quoted literal, which a bigint's input reads")
     (is (= {:id bigint-cmp} (args {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]})))))
 
 (deftest a-wrong-input-fails-saying-what-to-do
@@ -3298,3 +3299,9 @@
   (is (= [] (check {:select [:id] :from [[[:only :users]]]})) "ONLY (t) is the table t")
   (is (= [] (check {:select [:g.name :s.n] :from [[:groups :g]] :left-join [[[:join [:users :u] {:cross-join [[[:generate_series 1 :g.id] [:s {:columns [:n]}]]]}]] [:= :u.group_id :g.id]]}))
       "a function inside a parenthesized join sees the tables before the join"))
+
+(deftest a-sequence-an-enums-name-hides-is-a-table-of-untold-columns
+  (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/seqenum [:enum "z"]}})]
+    (is (= {:problems [] :row [:map [:last_value [:maybe :any]]]}
+           (select-keys (h/analyze reg {:select [:last_value] :from [:seqenum]}) [:problems :row]))
+        "PostgreSQL holds a sequence and an enum of one name; the registry the enum's")))

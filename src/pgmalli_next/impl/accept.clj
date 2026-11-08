@@ -110,6 +110,17 @@
   "[class type] of classes, in its order."
   (mapv (fn [[c t]] [c t]) classes))
 
+(def inline-classes
+  "[class type] of the values sql/format's :inline writes into the SQL as a literal, as PostgreSQL
+   types it: a String's and a UUID's quoted text untyped, an integer an integer (a value past
+   int4's range is a bigint or a numeric to PostgreSQL), a Double a numeric, a BigDecimal an
+   integer or a numeric as its scale writes it (1M as 1, 1.5M as 1.5), a boolean a boolean; in
+   class-types' order. Another value (a keyword, a date, a map) it writes as no literal."
+  (let [t {String [:unknown] java.util.UUID [:unknown] Long ["integer"] Integer ["integer"] Short ["integer"] Byte ["integer"]
+           clojure.lang.BigInt ["integer"] java.math.BigInteger ["integer"] Double ["numeric"] Float ["numeric"]
+           java.math.BigDecimal ["integer" "numeric"] Boolean ["boolean"]}]
+    (vec (for [[c] class-types x (t c)] [c x]))))
+
 (def json-classes
   "classes as the one sending's jsonb writes a value of class into a JSON document (data.json, an
    ISO-8601 string of a java.time value), which json_populate_record reads into a column through

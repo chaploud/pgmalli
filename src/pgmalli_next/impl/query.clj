@@ -55,7 +55,8 @@
   "[[column-name schema props] ...] of a table (or view) in the registry, in its order, or of
    pg_catalog's; nil when it is not there."
   [registry table]
-  (or (some->> (get (::schemas registry) (shape/table-key table)) shape/column-entries (map (fn [[k _ s]] [(name k) s])))
+  ;; a type's schema of the name (an enum named as a sequence) is no table's
+  (or (some->> (get (::schemas registry) (shape/table-key table)) (#(when (shape/read-row? %) %)) shape/column-entries (map (fn [[k _ s]] [(name k) s])))
       (catalog-columns table (::versions registry))))
 
 (def system-columns
@@ -258,7 +259,9 @@
                  (for [r refs :let [[table alias written listed] (syntax/table-ref r opts)] :when alias
                        :let [cte? (boolean (and written (not (targets r)) (ctes written)))
                              table (when table (catalog-table registry table written))
-                             unknown? (boolean (and table (not cte?) (not (syntax/catalog? table)) (nil? (table-columns registry table))))
+                             ;; a name the registry holds a type of (a sequence an enum's name hides) is opaque, not unknown
+                             unknown? (boolean (and table (not cte?) (not (syntax/catalog? table)) (nil? (table-columns registry table))
+                                                    (not (contains? (::schemas registry) (shape/table-key table)))))
                              _ (when unknown? (unknown-table! registry table))]]
                    [alias (cond-> {:table table :cte? cte?
                                    :opaque? (boolean (or (nil? table) cte? (nil? (table-columns registry table))))

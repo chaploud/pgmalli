@@ -95,14 +95,18 @@
 (defn- untyped-type-values
   "The values of a type whose own pgmalli does not type (interval, inet), s its schema: a
    PGobject, and the values of each type sent that accept/holds? says the type holds in context
-   (a LocalTime for interval)."
+   (a LocalTime for interval); under sql/format's :inline, which writes no PGobject, a String,
+   written as the type's input reads it, and those held."
   [registry s context opts]
   (let [t (query/slot-type registry s)
-        pg-object (jdbc/typed-pg-object t)]
-    (distinct (cons pg-object (for [[x p] (jdbc/write-rows opts false)
-                                         :when (and (string? p) (not= p t) (accept/holds? t p context))
-                                         a (shape/alternatives x)]
-                                     (unlabel a))))))
+        inline? (:inline (:format opts))
+        rows (jdbc/write-rows opts false)
+        untyped (when inline? (for [[x p] rows :when (= :unknown p) a (shape/alternatives x)] a))]
+    (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
+                      (for [[x p] rows
+                            :when (and (string? p) (not= p t) (accept/holds? t p context))
+                            a (shape/alternatives x)]
+                        (unlabel a))))))
 
 (defn- class-held
   "A function's argument's alternative a held to the classes of its schema the one sending sends
@@ -142,7 +146,8 @@
                                   cs (distinct (mapcat class-names same))]
                               [:and {:gen/schema (into [:pg/class] cs)} b (into [:pg/class (shape/props c)] cs)]))))))
 
-(defn accepted-type
+
+(defn- accepted-type*
   "The type of an argument where a value of column schema s goes, in context (:compare, :call,
    :common, :assign, :cast or :json), as docs/queries.md#the-types-of-the-arguments says: its
    own values (jdbc/write-type), and the values of each type sent that the column holds
@@ -177,7 +182,9 @@
         alts (concat
               (for [p sent
                     a (if (= :unknown p)
-                        (jdbc/sent-as opts :unknown #(accept/reads? t % context))
+                        ;; under :inline, a String is a quoted literal, which every type's input reads (a
+                        ;; UUID's text as its class's reads)
+                        (jdbc/sent-as opts :unknown #(or (and (:inline (:format opts)) (= String %)) (accept/reads? t % context)))
                         (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
                     :when (and (not (query/untyped? a))
                                (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a)))))]
@@ -222,6 +229,30 @@
                   (and (= :call held-in) (not (::common-type opts))) (keep #(class-held % t takes? opts)))
             all (concat all specials)]
         (cond (or (= all own-alts) (empty? all)) own (next all) (into [:or] all) :else (first all))))))
+
+(def ^:private inline-kinds
+  "The kinds of value sql/format's :inline writes into the SQL as a literal (jdbc/inline-types)."
+  #{:string :uuid :int :double :boolean :enum 'decimal? 'integer? 'double? 'float? :pg/integer :pg/smallint})
+
+(defn- inline-only
+  "t without the values sql/format's :inline writes as no literal (a keyword as a name, a date, a
+   PGobject or a map as their text unquoted)."
+  [t]
+  (if (or (query/untyped? t) (= :nil (shape/head t)))
+    t
+    (let [inner (shape/non-null t)
+          as (filter #(inline-kinds (shape/kind %)) (shape/alternatives inner))
+          kept (cond (= as (shape/alternatives inner)) inner
+                     (seq as) (shape/either as inner)
+                     :else [:fn {:error/message "should be a value sql/format's :inline writes as a literal (a string, a number, a boolean)"}
+                            (constantly false)])]
+      (if (shape/maybe? t) [:maybe kept] kept))))
+
+(defn accepted-type
+  "accepted-type*; under sql/format's :inline, the values it writes as a literal alone."
+  [registry s held-in opts]
+  (cond-> (accepted-type* registry s held-in opts)
+    (:inline (:format opts)) inline-only))
 
 (defn- compared-type
   "The type of an argument compared with a column by op, t as accepted-type gives it compared

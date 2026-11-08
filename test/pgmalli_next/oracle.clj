@@ -904,6 +904,59 @@
    out, as pgmalli-next.accept-test pins it."
   (update-vals (edn/read-string (slurp "test/resources/pgmalli-next/stricter.edn")) set))
 
+(defn- matrix
+  "{:registry :all-values :places} of the argument matrices: matrix.types made (matrix-schema!),
+   the values matrix-values sends with its enums' and lists' labels, and one place per query of
+   matrix-queries over each column, in the order of its text, so that a run repeats."
+  [db]
+  (let [[cols labels] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
+                        (matrix-schema! conn)
+                        (let [cols (matrix-columns conn)]
+                          [cols (distinct (concat (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified))
+                                                  (filter string? (mapcat :list cols))))]))]
+    {:registry (registry db "matrix")
+     :all-values (matrix-values labels)
+     :places (->> (concat (for [col cols [context q] (matrix-queries col)] (assoc col :context context :query q))
+                          [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}
+                           {:context :truth-test :type "boolean" :query {:select [:*] :from [:users] :where [:is-not :?x true]}}])
+                  (into (sorted-map) (map (juxt (comp pr-str :query) identity)))
+                  vals)}))
+
+(defn- matrix-format [quoted?] (if quoted? {:quoted true} {}))
+
+(defn inline-matrix
+  "The argument matrix under sql/format's :inline, which writes each value into the SQL: each
+   value of matrix-values of a class it writes as a literal (accept/inline-classes) and nil, at
+   each place of a scalar (no IN list, ANY's or unnest's array): :inline where PostgreSQL runs
+   the SQL and the argument's schema under {:format {:inline true}} refuses the value, but nil
+   compared, nil into a NOT NULL column, a negative integer into an oid (docs/queries.md
+   \"Stricter\"), and a literal stricter.edn pins (its type is the literal's, accept/inline-classes')."
+  [db]
+  (let [{:keys [registry all-values places]} (matrix db)
+        inline-type (fn [v] (some (fn [[c t]] (when (instance? c v) t)) accept/inline-classes))
+        values (filter #(or (nil? %) (inline-type %)) all-values)]
+    (into []
+          cat
+          (in-parallel
+           db (remove (comp #{:in :any :unnest :compared-and-any} :context) places)
+           (fn [conn {:keys [context query column notnull compared-type quoted?] t :type :as place}]
+             (let [fmt (assoc (matrix-format quoted?) :inline true)
+                   s (some-> (:x (:args (h/analyze registry query {:format fmt}))) (m/schema {:registry registry}))
+                   assign? (#{:update :insert :insert-select :insert-select-tested :limit} context)
+                   held-t (if (and compared-type (not assign?)) compared-type t)]
+               (vec (for [v values
+                          :let [lit (inline-type v)]
+                          :when (and s (not (m/validate s v)))
+                          :when (not (or (and (nil? v) (compared-contexts context))
+                                         (and (nil? v) notnull (#{:update :insert :insert-select} context))
+                                         ;; docs/queries.md#stricter-oid
+                                         (and (= "oid" held-t) (integer? v) (neg? v))
+                                         (and (string? lit) (contains? (get stricter [lit (if assign? :assign :compare)]) held-t))))
+                          :let [sqlvec (try (sql/format query (assoc fmt :params {:x v})) (catch Exception _ nil))]
+                          :when (and sqlvec (nil? (refusal conn sqlvec column (and (nil? v) notnull))))]
+                      (merge (select-keys place [:table :column :context :type])
+                             {:kind :inline :sql (first sqlvec) :value v :class (some-> v class .getName) :schema (m/form s)})))))))))
+
 (defn arg-matrix
   "Each argument of the queries of matrix-queries, over every column of the oracle schema and
    of matrix.types (matrix-schema!, which it creates first), sent each of matrix-values as
@@ -917,21 +970,9 @@
    :untyped: arg-types throws or gives the argument no schema (:schema says which). :timeout:
    PostgreSQL ran out of time, which says neither. :sent: sent-failures."
   [db]
-  (let [[cols labels] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
-                        (matrix-schema! conn)
-                        (let [cols (matrix-columns conn)]
-                          [cols (distinct (concat (map :enumlabel (jdbc/execute! conn ["SELECT enumlabel FROM pg_enum ORDER BY oid"] unqualified))
-                                                  (filter string? (mapcat :list cols))))]))
-        registry (registry db "matrix")
-        all-values (matrix-values labels)
+  (let [{:keys [registry all-values places]} (matrix db)
         written-refuses (written-refuses registry)
-        fmt #(if % {:quoted true} {})
-        ;; one place per query, in the order of its text, so that a run repeats
-        places (->> (concat (for [col cols [context q] (matrix-queries col)] (assoc col :context context :query q))
-                            [{:context :limit :type "bigint" :query {:select [:*] :from [:users] :limit :?x}}
-                             {:context :truth-test :type "boolean" :query {:select [:*] :from [:users] :where [:is-not :?x true]}}])
-                    (into (sorted-map) (map (juxt (comp pr-str :query) identity)))
-                    vals)]
+        fmt matrix-format]
     (into (with-open [conn (jdbc/get-connection (test-db/datasource db))]
             (.setAutoCommit conn false)
             (sent-failures conn all-values))
@@ -1044,9 +1085,9 @@
               :schema (m/form (m/schema s {:registry registry}))})))))
 
 (defn arg-failures
-  "arg-matrix's failures and shared-args'."
+  "arg-matrix's failures, inline-matrix's and shared-args'."
   [db]
-  (into (arg-matrix db) (shared-args db)))
+  (-> (arg-matrix db) (into (inline-matrix db)) (into (shared-args db))))
 
 (defn arg-failure-text
   "An arg-failures failure as bb oracle and pgmalli-next.oracle-test print it."

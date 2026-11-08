@@ -146,7 +146,7 @@
     (for [f facts :when (and (= :sequence (:fact f)) (enums (:name f)))]
       {:kind :sequence-named-as-enum :severity :info :table (str schema-name "." (:name f))
        :message (str "sequence " schema-name "." (:name f) " has the name of an enum type: " (pr-str (shape/schema-key schema-name (:name f)))
-                     " is the enum's, so a query of the sequence finds none of its columns")})))
+                     " is the enum's, so the sequence's columns are untyped in a query")})))
 
 (defn- render-table [schema-name table tfacts overrides]
   (let [by-column (group-by :column (filter :column tfacts))
