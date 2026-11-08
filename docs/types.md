@@ -77,8 +77,8 @@ The table's map carries:
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
 
 An identifier that is not a plain name (`Order Items`) makes a string key:
-`"pg.public/Order Items"`, `"pg.public.Order Items/insert"`. Names keep the database's
-spelling.
+`"pg.public/Order Items"`, `"pg.public.Order Items/insert"`; a `\`, `/` or `.` of the schema's name
+is escaped by a `\` (`"pg.a\.b/t"`). Names keep the database's spelling.
 
 ## Column types
 

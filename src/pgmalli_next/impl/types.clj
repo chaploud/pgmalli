@@ -89,13 +89,13 @@
    "datemultirange" {:schema :any :literals ["{[2020-01-01,2020-02-01)}" "{[2021-01-01,2021-06-01)}"]}
    "regclass" {:schema :any :literals ["pg_class" "pg_type"]}
    "regtype" {:schema :any :literals ["integer" "text"]}
-   "regrole" {:schema :any :literals ["postgres"]}
+   "regrole" {:schema :any :literals ["pg_monitor"]}
    "regproc" {:schema :any :literals ["now"]}
    "regprocedure" {:schema :any :literals ["now()"]}
    ;; one operator of the name: '+' names several
    "regoper" {:schema :any :literals ["||/" "|/"]}
    "regoperator" {:schema :any :literals ["+(integer,integer)"]}
-   "regnamespace" {:schema :any :literals ["public"]}
+   "regnamespace" {:schema :any :literals ["pg_catalog"]}
    "regconfig" {:schema :any :literals ["english"]}
    "regdictionary" {:schema :any :literals ["simple"]}
    "regcollation" {:schema :any :literals ["\"C\""]}

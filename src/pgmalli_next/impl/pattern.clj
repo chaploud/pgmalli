@@ -120,7 +120,9 @@
    Column positions are not used for ordering because they depend on migration order."
   [schema]
   (let [schema-name (:name schema)
-        enums (into (sorted-map) (keep (fn [[n t]] (when (= "ENUM" (:kind t)) [n (vec (:enum_values t))])) (:types schema)))]
+        ;; an enum of no labels, whose column holds NULL alone, is no [:enum] malli takes: a type
+        ;; pgmalli does not know
+        enums (into (sorted-map) (keep (fn [[n t]] (when (and (= "ENUM" (:kind t)) (seq (:enum_values t))) [n (vec (:enum_values t))])) (:types schema)))]
     (vec
      (concat
       (for [[n vs] enums] {:fact :enum-type :schema schema-name :type-name n :values vs})

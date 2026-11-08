@@ -174,12 +174,12 @@
 
 (defn schema-key
   "A table, view or type of a schema as a registry key: :pg.<schema>/<name>, a string key when
-   either name is not a plain identifier, a \\ or a / of its schema's name escaped by a \\ (the
-   key read back by schema-and-name alone)."
+   either name is not a plain identifier, a \\, a / or a . of its schema's name escaped by a \\
+   (the key read back by schema-and-name alone, and no derived-name of another's)."
   [schema-name s]
   (if (and (plain? schema-name) (plain? s))
     (keyword (str "pg." schema-name) s)
-    (str "pg." (str/replace schema-name #"[\\/]" #(str "\\" %)) "/" s)))
+    (str "pg." (str/replace schema-name #"[\\/.]" #(str "\\" %)) "/" s)))
 
 (defn routines-key
   "The registry key of a schema's functions and operators, the generated file's :functions and

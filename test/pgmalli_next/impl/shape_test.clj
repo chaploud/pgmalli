@@ -26,3 +26,11 @@
                                :seed 42)]
     (is (:pass? result) (pr-str (:shrunk result))))
   (is (not= (shape/schema-key "a/b" "c") (shape/schema-key "a" "b/c")) "a / of the schema's name is escaped"))
+
+(deftest a-derived-name-is-no-row-schemas-key
+  (let [part (gen/fmap #(apply str %) (gen/vector (gen/elements [\a \B \_ \/ \\ \. \space]) 1 5))
+        result (tc/quick-check 2000 (prop/for-all [s part n part s2 part]
+                                      (not= (shape/derived-name (shape/schema-key s n) "insert") (shape/schema-key s2 "insert")))
+                               :seed 42)]
+    (is (:pass? result) (pr-str (:shrunk result))))
+  (is (not= (shape/derived-name (shape/schema-key "public" "Odd Name") "insert") (shape/schema-key "public.Odd Name" "insert"))))

@@ -93,3 +93,9 @@
                                                  :default_value (str "'" s "'::text")}]
                                       :constraints {}}}}))]
     (is (= s (:default (first (filter #(= :column (:fact %)) facts)))))))
+
+(deftest an-enum-of-no-labels-is-a-type-pgmalli-does-not-know
+  (is (= [:column :unknown-type]
+         (map :fact (p/facts {:name "public" :types {"none" {:kind "ENUM" :enum_values []}}
+                              :tables {"t" {:columns [{:name "e" :position 1 :data_type "none" :type_schema "public" :is_nullable true}]
+                                            :constraints {}}}})))))
