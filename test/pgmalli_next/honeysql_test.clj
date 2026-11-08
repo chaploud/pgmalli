@@ -3520,3 +3520,10 @@
     (is (= [{:kind :uncast-string :value "a" :type "text[]" :column :ta}] (problems {:insert-into :t :values [{:ta ["a"]}]}))
         "HoneySQL writes [\"a\"] as (?), a varchar")
     (is (= :unlifted-value (:kind (first (problems {:update :t :set {:ta []}})))) "and [] as (), no value")))
+
+(deftest a-populate-documents-array-holds-what-a-column-of-its-element-type-takes
+  (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "happy" "sad"]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:ma [:maybe [:vector {:pg/type "public.mood[]"} [:ref :pg.public/mood]]]]
+                                                        [:ia [:maybe [:vector {:pg/type "integer[]"} [:int {:pg/type "integer"}]]]]]}})
+        doc (:rows (:args (h/analyze reg {:insert-into [[:t [:ma :ia]] {:select [:ma :ia] :from [[[:jsonb_populate_record [:cast nil :t] :?rows] :r]]}]})))]
+    (is (m/validate doc {:ma [:happy] :ia ["1"]} {:registry reg}) "a keyword label and a number's text, as the one reading reads them back")))

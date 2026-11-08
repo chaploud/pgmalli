@@ -32,6 +32,8 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
 - A composite type of a pg_catalog type's name (`public."date"`) reads as a `PGobject` its
   type named as pgjdbc names it (`"date"`), which PostgreSQL takes back as `pg_catalog`'s type and
   refuses.
+- A `jsonb_populate_record` document's array of more dimensions than one (`{:ia [[1 2] [3 4]]}`)
+  is refused, which PostgreSQL reads: its type is of one dimension, as `as-read`'s.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: no
   schema checks a length, which generation alone keeps to (`:pg/max-length`, the array's for its
