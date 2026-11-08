@@ -75,7 +75,8 @@
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
-      :problems (as-written written (concat (problems/check registry body opts) (args/arg-problems registry body opts) (args/literal-problems registry body opts)))
+      :problems (as-written written (let [ps (concat (problems/check registry body opts) (args/arg-problems registry body opts) (args/literal-problems registry body opts))]
+                                      (concat ps (problems/unsent-lifted body ps opts))))
       :tables (query/tables registry body opts)
       :document-columns (args/document-columns registry body opts)})))
 

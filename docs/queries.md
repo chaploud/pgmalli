@@ -795,6 +795,8 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   `:where`, `:order-by`), which HoneySQL writes unquoted and PostgreSQL refuses: write it as a
   string (`"order"`) or quote names.
 - A string key of a row (`:values`, `:set`) that names no column, which PostgreSQL refuses.
+- `[:any [:lift v]]` of a `v` the one sending sends as no array (a vector, which goes as `jsonb`,
+  a `String`), which PostgreSQL refuses (`op ANY/ALL (array) requires array on right side`).
 - A call returning a domain over an enum type compared (`[:= [:f :m] "ok"]`): its value is of
   the enum type, which a column of the domain is not (`:no-operator`).
 - A raw FROM item of SQL beyond a name (`[[:raw "jsonb_array_elements(doc) AS e(v)"]]`) is not

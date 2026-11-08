@@ -3683,3 +3683,14 @@
     (is (= [] (problems {:select [:n] :from [:t] :where [:in :n [:lift (seq [1])]]} {:format {:inline true}})) "a seq of one, written (1)")
     (is (= [{:kind :written-otherwise :lifted [1 2]}] (problems {:update :t :set {:lift [:lift [1 2]]}} {:format {:inline true}})) "of a column named lift")))
 
+
+(deftest a-lifted-value-pgjdbc-sends-not-is-a-problem-wherever-it-is
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:int {:pg/type "integer"}]] [:j [:any {:pg/type "jsonb"}]]]}})
+        problems #(:problems (h/analyze reg %))]
+    (doseq [q [{:select [:n] :from [:t] :where [:= :n [:any [:lift '(1 2)]]]}
+               {:select [[[:cast [:lift #{1}] :jsonb] :x]]}
+               {:select [[[:lift '(1 2)] :x]]}]]
+      (is (= [{:kind :literal-type :value (-> q pr-str (str/includes? "#{1}") (if #{1} '(1 2))) :sent nil}] (problems q)) (pr-str q)))
+    (is (= 1 (count (problems {:update :t :set {:j [:lift '(1 2)]}}))) "once where a slot reports it")
+    (is (= [] (problems {:select [:n] :from [:t] :where [:in :n [:lift '(1 2)]]})) "IN, written a list of its elements")
+    (is (= [] (problems {:select [[[:lift [1 2]] :x]]})) "a vector, sent as jsonb")))

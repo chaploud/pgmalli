@@ -5,6 +5,7 @@
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
+            [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
@@ -471,6 +472,23 @@
          ;; a string HoneySQL writes as another name (a.b as "a"."b", a-b as a_b under :quoted-snake)
          :when (if (string? k) (not= k text) (and (not quoted?) (types/reserved-word? text)))]
      {:kind :written-otherwise :column k}))))
+
+(defn unsent-lifted
+  "{:kind :literal-type :value v :sent nil} of each [:lift v] of a class the one sending sends
+   nowhere (a list, a set: pgjdbc infers no type of it), wherever it is, but in IN, which HoneySQL
+   writes as a list of its elements, and where a typed slot reports it already (found)."
+  [body found opts]
+  (when-not (:inline (:format opts))
+    (let [reported (set (for [p found :when (and (= :literal-type (:kind p)) (nil? (:sent p)))] (:value p)))]
+      (distinct
+       (for [x (tree-seq syntax/branch? seq body)
+             :when (and (vector? x) (not (map-entry? x)))
+             v (if (and (syntax/in-ops (first x)) (syntax/lifted-coll? (nth x 2 nil)))
+                 []
+                 (keep #(when (and (vector? %) (= :lift (first %)) (= 2 (count %))) (second %)) (if (keyword? (first x)) (rest x) x)))
+             :let [given (syntax/given v)]
+             :when (and (coll? given) (nil? (jdbc/sent-type given opts)) (not (reported v)) (not (reported given)))]
+         {:kind :literal-type :value given :sent nil})))))
 
 (defn check
   "[problem ...] of a query against the registry; [] when there are none. A problem in a nested
