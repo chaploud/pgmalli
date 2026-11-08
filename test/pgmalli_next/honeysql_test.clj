@@ -3636,6 +3636,10 @@
     (is (= "SELECT n FROM t WHERE n IN [1, 2]" (first (sql/format q {:inline true}))) "HoneySQL's")
     (is (= [{:kind :written-otherwise :lifted [1 2]}] (:problems (h/analyze reg q {:format {:inline true}}))))
     (is (= [] (:problems (h/analyze reg {:select [:n] :from [:t] :where [:in :n [:lift '(1)]]} {:format {:inline true}}))) "IN (1) of a list of one")
+    (is (= [[:lifted '("a")] [:lifted [2]]]
+           (map (juxt (constantly :lifted) :lifted)
+                (mapcat #(:problems (h/analyze reg {:select [:n] :from [:t] :where [:in :n [:lift %]]} {:format {:inline true}})) ['("a") (map inc [1])])))
+        "of a string, written (\"a\"), or a lazy seq, written by its class")
     (is (= [{:kind :written-otherwise :lifted {:a 1}}] (:problems (h/analyze reg {:update :t :set {:n [:lift {:a 1}]}} {:format {:inline true}}))) "anywhere")))
 
 (deftest a-double-to-a-real-inlined-is-held-to-a-reals-range
@@ -3652,3 +3656,17 @@
 (deftest a-required-column-of-no-value-generated-fails-to-generate-inlined-too
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:any {:pg/type "interval"}]]]}})]
     (is (thrown? clojure.lang.ExceptionInfo (mg/generate (h/values-schema reg :t {:format {:inline true}}) {:registry reg :seed 1})))))
+
+(deftest a-required-date-array-written-generates
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:vector {:pg/type "date[]"} :time/local-date]]]}})]
+    (is (every? #(m/validate (h/values-schema reg :t) % {:registry reg}) (mg/sample (h/values-schema reg :t) {:registry reg :size 10 :seed 1})))))
+
+(deftest a-required-column-generating-nothing-names-itself-failing
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:any {:pg/type "interval"}]]]}})
+        e (try (mg/generate (h/values-schema reg :t) {:registry reg :seed 1}) nil (catch clojure.lang.ExceptionInfo e e))]
+    (is (= :i (-> e ex-data :data :schema m/form second :pgmalli/no-values)))))
+
+(deftest a-lifted-list-to-an-operator-is-typed-as-a-vector-is
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})]
+    (is (= [:literal-type] (map :kind (:problems (h/analyze reg {:select [[[:-> :j [:lift '(1)]] :x]] :from [:t]})))))))
+

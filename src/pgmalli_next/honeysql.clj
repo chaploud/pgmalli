@@ -205,11 +205,19 @@
 
 (defn- java-array
   "A Java array of the elements of v, of the first class the one sending sends as an array
-   (accept/classes, of no primitive) that valid? takes; nil for none."
+   (accept/classes, of no primitive) that valid? takes, a java.time value as the java.sql one of
+   it (a LocalDate a java.sql.Date); nil for none."
   [valid? v]
   (some (fn [[^Class c]]
           (when (and c (.isArray c) (not (.isPrimitive (.getComponentType c))))
-            (when-let [a (try (into-array (.getComponentType c) v) (catch Exception _ nil))]
+            (when-let [a (try (into-array (.getComponentType c)
+                                          (map #(condp instance? %
+                                                  java.time.LocalDate (java.sql.Date/valueOf ^java.time.LocalDate %)
+                                                  java.time.LocalDateTime (java.sql.Timestamp/valueOf ^java.time.LocalDateTime %)
+                                                  java.time.Instant (java.sql.Timestamp/from ^java.time.Instant %)
+                                                  %)
+                                               v))
+                              (catch Exception _ nil))]
               (when (valid? a) a))))
         accept/classes))
 
@@ -362,7 +370,7 @@
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
           row (into [:map {:closed true :error/fn extra-key-message}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
-          generated (into [:map] (for [[k _ _ g required?] columns :when (or g required?)] (entry k required? (or g [:fn any?]))))
+          generated (into [:map] (for [[k _ _ g required?] columns :when (or g required?)] (entry k required? (or g [:fn {:pgmalli/no-values k} any?]))))
           ;; HoneySQL writes an empty :set as SET alone, an empty row as VALUES (), which PostgreSQL refuses
           non-empty #(vector :and % [:not [:= nil {}]])]
       (shape/merge-props (non-empty row) {:gen/schema (non-empty generated)}))))
