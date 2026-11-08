@@ -29,6 +29,9 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
   text as a number.
 - A temporal foreign key (PostgreSQL 18, `PERIOD`) reads as `:pg/foreign-keys` of its columns,
   equality of each, the period's overlap not told.
+- A composite type of a pg_catalog type's name (`public."date"`) reads as a `PGobject` its
+  type named as pgjdbc names it (`"date"`), which PostgreSQL takes back as `pg_catalog`'s type and
+  refuses.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: no
   schema checks a length, which generation alone keeps to (`:pg/max-length`, the array's for its

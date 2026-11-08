@@ -267,7 +267,7 @@ by the column's name (`:group_id`), the one key a row is read with
 column, read as a keyword, which HoneySQL writes in `:values` and `:set` as a column (write its
 label as `[:lift :happy]`), a json or jsonb column, read as a map or a vector, which HoneySQL
 writes there as a subquery or a row of parameters (write `[:lift m]`; a scalar document, read as a
-string or a number, a `PGobject` of `jsonb`), a `bit(1)` column, read as a `Boolean` (write a
+string or a number, and the document `null`, read as nil, a `PGobject` of `jsonb`), a `bit(1)` column, read as a `Boolean` (write a
 `PGobject` of `bit`), and an array column, read as a vector (write a Java array, its NULLs nil, or
 a `PGobject` of the array type, the one way for a type no Java array goes as: an enum's, json's,
 time's ...); another

@@ -55,8 +55,9 @@
   (let [entry (when-not (str/starts-with? t "\"") (types/entry t))]
     ;; an enum of the name of a pg_catalog type (date) on the search_path is named as that type, a
     ;; VARCHAR, as no json or date or time type is
-    ;; a composite type is a STRUCT whatever its name (a jsonb or date of the search_path's schema)
-    (cond (= Types/STRUCT sql-type) (fn [^ResultSet rs i] (.getObject rs (int i)))
+    ;; a composite type is a STRUCT whatever its name: of one named as a pg_catalog type (a date of
+    ;; the search_path's schema), pgjdbc's getObject reads the text as that type's
+    (cond (= Types/STRUCT sql-type) (fn [^ResultSet rs i] (when-some [s (.getString rs (int i))] (doto (PGobject.) (.setType t) (.setValue s))))
           (= Types/VARCHAR sql-type) (if (contains? enums t)
                                        (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
                                        (fn [^ResultSet rs i] (.getString rs (int i))))

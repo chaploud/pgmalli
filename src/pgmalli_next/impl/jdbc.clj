@@ -292,7 +292,10 @@
   [schema pgjdbc?]
   (let [driver-object [:any {:pg/type (pg-type schema)}]]
     (cond (array-column? schema) (if pgjdbc? driver-object [:vector {:pg/type (pg-type schema)} [:maybe (read-type (element schema) false)]])
-          (types/json? (pg-type schema)) (if pgjdbc? driver-object schema)
+          ;; a NOT NULL one's document null reads as nil, as no override shapes it
+          (types/json? (pg-type schema)) (cond pgjdbc? driver-object
+                                               (= :some (shape/head schema)) (assoc schema 0 :any)
+                                               :else schema)
           (= :time/duration (if (vector? schema) (first schema) schema)) driver-object
           :else (shape/read-time (if pgjdbc? :inst :instant) schema))))
 

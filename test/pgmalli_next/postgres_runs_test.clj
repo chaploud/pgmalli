@@ -638,12 +638,14 @@
       (is (= ["money" "money"] [(.getType ^PGobject (:m row)) (.getType ^PGobject (first (:ms row)))]))
       (is (= {:ok true} (jdbc/execute-one! (datasource) ["SELECT ?::money = '1000.5'::money AS ok" (:m row)]))))))
 
-(deftest a-composite-of-a-pg-catalog-types-name-reads-as-the-drivers-object
+(deftest a-composite-of-a-pg-catalog-types-name-reads-as-a-pgobject-of-its-text
   (when *db*
-    (jdbc/execute! (datasource) ["CREATE TYPE public.jsonb AS (a int)"])
-    (try
-      (is (instance? PGobject (:c (jdbc/execute-one! (datasource) ["SELECT ROW(1)::public.jsonb AS c"] {:builder-fn (builder {})}))))
-      (finally (jdbc/execute! (datasource) ["DROP TYPE public.jsonb"])))))
+    (doseq [n ["jsonb" "date" "interval" "bytea"]]
+      (jdbc/execute! (datasource) [(str "CREATE TYPE public.\"" n "\" AS (a int, b text)")])
+      (try
+        (let [c (:c (jdbc/execute-one! (datasource) [(str "SELECT ROW(1, 'x')::public.\"" n "\" AS c")] {:builder-fn (builder {})}))]
+          (is (= "(1,x)" (.getValue ^PGobject c)) n))
+        (finally (jdbc/execute! (datasource) [(str "DROP TYPE public.\"" n "\"")]))))))
 
 (deftest each-sql-value-word-is-of-the-type-postgresql-gives-it
   (when *db*
@@ -658,3 +660,13 @@
                (let [m (.getMetaData (.executeQuery (.createStatement c) "SELECT * FROM seq_columns"))]
                  (vec (for [i (range 1 (inc (.getColumnCount m)))] [(keyword (.getColumnLabel m i)) (types/canonical-name (.getColumnTypeName m i))]))))]
       (is (= md (for [[k _ s] (shape/column-entries row)] [k (:pg/type (shape/column-props s))]))))))
+
+(deftest a-not-null-json-columns-document-null-reads-as-nil-which-as-read-takes
+  (when *db*
+    (jdbc/execute! (datasource) ["CREATE TABLE jn (id int PRIMARY KEY, j jsonb NOT NULL, jj json NOT NULL); INSERT INTO jn VALUES (1, 'null', 'null')"])
+    (try
+      (let [reg (pgmalli/registry (generated {:db *db*} "public"))
+            row (jdbc/execute-one! (datasource) ["SELECT * FROM jn"] {:builder-fn (builder reg)})]
+        (is (= {:id 1 :j nil :jj nil} row))
+        (is (m/validate (pgmalli/as-read reg :pg.public/jn) row {:registry reg})))
+      (finally (jdbc/execute! (datasource) ["DROP TABLE jn"])))))
