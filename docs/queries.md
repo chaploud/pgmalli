@@ -168,7 +168,7 @@ keyed as in `sql/format`'s `:params`, as the one sending sends them
 | compared with an expression `:row` types, or with a column in a row (`[:< [:composite :a :b] [:composite :?a :?b]]`) | as with a column, of the expression's type |
 | in `:in` | a non-empty vector, list or set of the column's type |
 | cast (`[:cast :?at :timestamptz]`, `[:cast :?ids [:raw "bigint[]"]]` to an array type), or an element of an array cast (`[:array [:?k] :text]`, `ARRAY[?]::text[]`) | what PostgreSQL casts to the type, of what [your application sends](#what-your-application-sends), without the type's range where every use of the cast is compared (PostgreSQL evaluates the cast only where its plan reaches it): a string too, to an array type a Java array of what a cast to its element type takes, or nil (to a domain over an array type any array), an enum type's labels alone, a `bytea` and an integer to each other as PostgreSQL 18 casts them (16 and 17 refuse it); no map or collection sent as `json` or `jsonb` to a type other than those and the string types (PostgreSQL casts a `jsonb` number or boolean, and errors at run time on an object or array); no collection sent untyped (`:unknown`) to a number or boolean type, whose input refuses an array literal (`{1}`; a date, time or `uuid` type reads `{2020-01-01}` past its braces); `:any` for a type whose values pgmalli does not type (json, inet) or an extension's type, whose casts `pg_catalog` does not hold; nil too, unless every use of the cast is compared (NULL matching no row; an operand of `=`, `<`, `IN`, `BETWEEN` ..., not of `IS [NOT] DISTINCT FROM` or with NULL) or assigned where nil may not go (as assigned below) |
-| assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it (under `ON CONFLICT DO UPDATE`, an inserted value only for a BEFORE INSERT trigger, as PostgreSQL checks NOT NULL before the conflict), or the query tests the argument for NULL ([below](#the-types-of-the-arguments)), whatever rows the SELECT of `INSERT ... SELECT` drops; under `[:unnest :?xs]`, an array of it, a Java array ([what your application sends](#what-your-application-sends)) |
+| assigned to a column (`:set`, `:values`, an item of `INSERT INTO t (cols) SELECT`) | the column's type as malli's default registry reads it (a `PGobject` too, as compared), NULL allowed when the column allows it, a BEFORE row trigger for the write may fill it (under `ON CONFLICT DO UPDATE`, an inserted value only for a BEFORE INSERT trigger, as PostgreSQL checks NOT NULL before the conflict), or the query tests the argument for NULL ([below](#null-test)), whatever rows the SELECT of `INSERT ... SELECT` drops; under `[:unnest :?xs]`, an array of it, a Java array ([what your application sends](#what-your-application-sends)) |
 | the document of `jsonb_populate_record`, `json_populate_record` or their `recordset`, bare or cast to `jsonb` or `json`, of a table's or view's row type: `NULL` cast to it (`[[:jsonb_populate_recordset [:cast nil :positions] :?rows] :r]`) or an alias's whole row (`[:jsonb_populate_record :p [:cast :?row :jsonb]]`, `p` the alias of `UPDATE positions p`); or of `jsonb_to_record`, `json_to_record` or their `recordset` in `FROM`, whose alias defines the row's columns (`[[:jsonb_to_recordset :?words] [:w {:with-columns [[:pattern :text] [:role_keys :text :array]]}]]`, each of the type a cast to it names, `:array` an array of it; the row's columns too, nullable) | for a record a map, for a recordset a vector of them, in place of a map or vector the parameter takes there (bare, what goes where the function takes `jsonb` or `json`; cast, what the cast takes), or nil. The map is closed: its keys the names of the row type's columns (`:any` the value of a type pgmalli does not read), each as a keyword or a string (`:sort_order` or `"sort_order"`, not both), each optional, and each value nil or what the column's type's input reads of the JSON value the one sending writes: a `json` or `jsonb` column's value as read (its override's shape), an array column's a sequential of its elements' values or a string, the array's text (`"{1,2}"`); another column's a JSON number (an integer type's input reads no fraction), boolean or string: a `String` of any type, the column's range and enum labels kept, the others where they go untyped or as their type (an `Instant`, a `LocalDate` or a `LocalDateTime` to a date or timestamp column, a `UUID` to a `uuid` one); no `Character` or `PGobject`, which the document does not hold. Where `INSERT INTO t (cols) SELECT` writes a column of `t` from the populated column of its name, a key whose column NULL may not go to is required, its value not nil |
 | an argument of an `unnest` in `FROM` (`[[:unnest :?ids] [:x {:columns [:id]}]]`, `[[:unnest :?ids] :id]`) | a Java array of where its column goes, as an argument there: compared, assigned, or cast (an array of what PostgreSQL casts to the type), in a subquery too. Cast to an array of a column's type (`[[:unnest [:cast :?ns [:raw "varchar[]"]]] [:x {:columns [:n]}]]`, its column assigned to a `varchar(50)` column, a domain over `varchar` too, by `SELECT *` or by name), each element as assigned there, or else as cast to the type (a String to a `bigint`); cast to another type, as cast |
 | an argument of `coalesce`, `greatest` or `least`, or a value of `CASE` (`[:coalesce :?nick :email]`) | the type the other arguments resolve to, and what PostgreSQL resolves with it to one type (one of its category, `select_common_type`), or nil; of `nullif`, what `=` takes beside the other argument, or nil |
@@ -230,7 +230,7 @@ Compare NULL in the query body: `[:= :id nil]` (HoneySQL writes `IS NULL`), or
 ;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]]}
 ```
 
-An argument the query also tests for NULL takes nil whatever its other uses, as an optional
+<a id="null-test"></a>An argument the query also tests for NULL takes nil whatever its other uses, as an optional
 filter does (`NULL IS NULL OR id = NULL`): under `{:format {:inline true}}`, or where the test
 casts it (`[:= [:cast :?id :bigint] nil]`). Sent bare as a parameter it does not: PostgreSQL
 refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
@@ -273,8 +273,8 @@ spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
 DEFAULT too: `[:default]`, or `:default` where the format writes it as the word (not where the format quotes it); one it writes (generated, identity ALWAYS) takes DEFAULT alone. Where a
-BEFORE row trigger runs for the write (`:pg/before-triggers`), every column is optional and
-takes nil: the trigger may fill it. In
+BEFORE row trigger runs for the write, every column is optional and takes nil
+([types](types.md#names-in-the-registry)). In
 `h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
 empty `:set` as `SET` alone, which PostgreSQL refuses.
 
@@ -565,9 +565,9 @@ alias lists).
 
 `h/analyze`, `h/query-schema`, `h/values-schema` and `h/set-schema` take these options; an option a
 function does not read is an error. pgmalli reads what you pass to
-next.jdbc and `sql/format` as you pass it. pgmalli caches how HoneySQL writes a name for each
+next.jdbc and `sql/format` as you pass it. pgmalli caches how HoneySQL writes each name under each
 `:format`, so a global setting (`set-dialect!`, `set-options!`) changed after the first analysis
-is not seen; pass them in `:format`.
+applies to the names not yet cached alone; pass them in `:format`.
 
 | option | for |
 |---|---|
@@ -694,9 +694,9 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-assignment"></a>An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
   `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
-  time off; a `numeric` column takes a `Double` NaN or infinity alone, which it holds as it is,
-  a `numeric[]` one an array of them; a `jsonb` goes to a `json` column, the same document),
-  and a number assigned to a `text` column PostgreSQL converts through its text.
+  time off), and a number assigned to a `text` column PostgreSQL converts through its text. Two
+  assignment casts change nothing and are taken: a `Double` NaN or infinity to a `numeric` column
+  (an array of them to `numeric[]`), and `jsonb` to a `json` column.
   Cast it in the query (`[:cast :?n :bigint]`) where the conversion is meant. A value of a
   `jsonb_populate_record` document likewise takes its column's own values, which
   PostgreSQL reads through the column type's input: no number to a `boolean` column (PostgreSQL

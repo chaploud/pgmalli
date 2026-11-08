@@ -242,7 +242,7 @@
 
 (defn- write-problems
   "Writes PostgreSQL refuses: NULL into a NOT NULL column, a map or a vector of values into a
-   column of a type told (:unlifted-value), and a value other than DEFAULT into a column only
+   column of a type pgmalli types (:unlifted-value), and a value other than DEFAULT into a column only
    the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
    or USER VALUE, which the first writes and the second ignores). A column one map of :values
    lacks and another has is NULL, as HoneySQL writes it, DEFAULT under sql/format's

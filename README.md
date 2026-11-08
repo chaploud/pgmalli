@@ -439,8 +439,8 @@ but for a type the driver reads as an object of its own: an `inet`, read as a PG
 `hstore` as a `java.util.Map`), stays that object where it is read; the `:public.hosts/ip`
 override above holds for what is written. A json or jsonb column is read parsed
 ([the one reading](docs/reading-rows.md#the-one-reading-and-sending)), so its shape holds for
-what is read, and an argument to a json or jsonb column takes it for a map and a vector, which go as
-`jsonb` (PostgreSQL assigns one to a json column as it is). `generate!` checks every key against
+what is read, and for a map or a vector an argument sends ([what your application
+sends](docs/queries.md#what-your-application-sends)). `generate!` checks every key against
 the schemas generated: a key must name a column, and a value must be a malli schema (a
 qualified name passes, as your registry's). An error names the key meant; a type key (`:inet`)
 names the columns of the type to override instead.
@@ -478,9 +478,8 @@ CI tests the oldest versions listed here.
 
 - The registry is the schema at generate time; nothing reads the database at run time
   ([Keeping the file current](#keeping-the-file-current)).
-- A table with a BEFORE row trigger for a write takes nil in every NOT NULL column and leaves
-  every column optional there, as the trigger may fill any
-  ([queries](docs/queries.md#the-types-of-the-arguments)).
+- A table with a BEFORE row trigger for a write takes nil in every column of that write and
+  leaves each optional, as the trigger may fill any ([docs/types.md](docs/types.md#names-in-the-registry)).
 - `h/analyze` reads a query as the data `sql/format` takes: code in it is an error, and each
   variant your code builds is analyzed on its own
   ([docs/queries.md](docs/queries.md#stricter-than-postgresql)).
@@ -502,17 +501,17 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 
 | `:pgmalli/error` | when |
 |---|---|
-| `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` or `:overrides` too), a schema the database lacks, or an `:out` file generate! did not write |
+| `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` or `:overrides` too), a schema the database lacks, or an `:out` that is a symbolic link or a file generate! did not write |
 | `:pgmalli.error/other-sending` | `install-sending!`: next.jdbc's `SettableParameter` already extended for a class pgmalli sends, by another (`next.jdbc.date-time`'s `LocalDate`), with `:given` the classes' names |
 | `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
-| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
+| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a map `install-sending!` cannot send as jsonb (two keys of one text) |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
 | `:pgmalli.error/not-query-data` | a query that is no HoneySQL data: SQL already formatted, or code (a symbol in it) |
 | `:pgmalli.error/not-generated` | a generated file missing from the classpath, or a file that is none (not EDN, or no `:registry` map) |
 | `:pgmalli.error/cannot-generate` | a column of a type pgmalli makes no value of |
 | `:pgmalli.error/db-unavailable`, `psql-missing` | the database, or psql, out of reach |
-| `:pgmalli.error/fault` | pgmalli's own fault (please report it), or reading the catalog failing: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog |
+| `:pgmalli.error/fault` | pgmalli's own fault (please report it), or reading the catalog failing: an [unsupported PostgreSQL](#supported-versions), or a user without access to pg_catalog; or `builder` reading a json or jsonb document nested deeper than the thread's stack holds, naming the column |
 
 Each error's ex-data also carries `:cognitect.anomalies/category`, and `:given`, `:known` and
 `:did-you-mean` (the names probably meant, as a problem of `h/analyze` names them) where they apply.

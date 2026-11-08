@@ -111,8 +111,8 @@
 (defn options!
   "opts when the function they go to takes them, the options of ks (option-entries' keys, in
    order) closed: a misspelt key or value is an error rather than a check silently weakened. An
-   error names what it does not take, with the one meant, and an option pgmalli does not read what
-   does its work."
+   error names what it does not take, with the one meant; an option of no meaning to pgmalli
+   (:write, :stringtype, :compare ...), what does that work instead."
   [opts ks]
   (when-not (or (nil? opts) (map? opts)) (error/checked! (options-schema ks) opts))
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
@@ -249,9 +249,9 @@
                a))))
 
 (defn sent-type
-  "The type a literal value goes to PostgreSQL as: :unknown under sql/format's :inline, which
-   writes it into the SQL; otherwise as the one sending sends its class, nil for a class it does
-   not send."
+  "The type the one sending sends a literal value's class as, nil for a class it does not send;
+   under sql/format's :inline, which sends no parameter, :unknown (inline-type gives the type
+   PostgreSQL gives the literal written)."
   [value {:keys [format]}]
   (if (:inline format)
     :unknown
@@ -300,7 +300,7 @@
    getObject returns them (dates, timestamps and times inst?, an array a java.sql.Array, json a
    PGobject). Either way: an interval a PGInterval, citext,
    bit(n > 1) and bit varying a PGobject (these :any), real a Float, bit(1) a Boolean, numeric
-   a Double for NaN."
+   a Double for NaN and the infinities."
   [schema pgjdbc?]
   (let [t (pg-type schema)
         head (if (vector? schema) (first schema) schema)

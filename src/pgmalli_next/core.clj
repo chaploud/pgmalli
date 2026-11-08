@@ -76,7 +76,7 @@
   "A schema as short data for people and tools to read: a column as its PostgreSQL type
    (\"varchar(40)\", \"timestamptz\"), ? when it takes NULL, (optional) when its key may be
    absent, an enum with its type and labels (\"user_status: active | closed\"); a map as
-   {key description} in column order, a sequence as [description], a function schema as
+   {key description} in the schema's order (by column name), a sequence as [description], a function schema as
    {:args [...] :returns ...} (and :pgmalli/problems, a query schema's). A name, or a reference inside the schema, is read through the registry,
    or that a malli schema was made under.
 
