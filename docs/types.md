@@ -63,11 +63,11 @@ The table's map carries:
 | property | value |
 |---|---|
 | `:pg/table` | `"public.users"` (`:pg/view` for a view, and `:pg/materialized true` for a materialized one) |
-| `:pg/primary-key` | `["id"]` |
+| `:pg/primary-key` | `["id"]`; left out while its index is invalid (a key added `ONLY` to a partitioned table) |
 | `:pg/primary-key-deferrable` | `true`: the primary key is DEFERRABLE, so it may be checked only at commit |
-| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, for a partial one `:where` its predicate where it is equalities of a column (a `varchar` too, which PostgreSQL casts to `text` there) to a string or integer and `IS NULL`s, ANDed (`[[:= "status" "active"] [:is-null "deleted_at"]]`), `true` otherwise, `:deferrable true` for a DEFERRABLE one; an invalid unique index is left out |
+| `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, for a partial one `:where` its predicate where it is equalities of a column (a `varchar` too, which PostgreSQL casts to `text` there) to a string or integer and `IS NULL`s, ANDed (`[[:= "status" "active"] [:is-null "deleted_at"]]`), `true` otherwise, `:deferrable true` for a DEFERRABLE one; one whose index is invalid is left out |
 | `:pg/inherited` | `true`: other tables inherit it (not as partitions), so a query reads their rows too |
-| `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |
+| `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked; a partitioned table's its partitions' too |
 | `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; `:where true` for a partial one |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
 
@@ -120,7 +120,8 @@ takes, a string within its `:pg/max-length`.
 
 The types of these extensions are supported, in whatever schema the extension is in:
 `citext`, `hstore`, `ltree`, `cube`, `seg`, `intarray` (`query_int`) and `isn`. `pgjdbc`
-returns their values as `PGobject`s (`hstore` as a `java.util.Map`), which `as-read` takes.
+returns their values as `PGobject`s (`hstore` as a `java.util.Map`), which `as-read` takes. A type
+of one of their names that the extension did not make (a composite type `citext`) is none of them.
 
 Every type pgmalli supports is one entry of `types` in
 [src/pgmalli_next/impl/types.clj](../src/pgmalli_next/impl/types.clj): its malli schema, the literals

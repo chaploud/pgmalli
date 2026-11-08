@@ -220,9 +220,11 @@
     (let [data (generated {:db *db*} "pt" "pt_old")
           reg (pgmalli/registry data)
           row #(get-in data [:registry %])]
-      (is (= [:map {:pg/table "pt.Parent X" :pg/primary-key ["id"]} [:id [:pg/integer {:pg/type "integer"}]] [:x [:pg/integer {:pg/type "integer"}]]]
+      (is (= [:map {:pg/table "pt.Parent X" :pg/primary-key ["id"] :pg/before-triggers {:insert ["fill"]}}
+              [:id [:pg/integer {:pg/type "integer"}]] [:x [:pg/integer {:pg/type "integer"}]]]
              (row "pg.pt/Parent X"))
-          "the partitioned table names none of its partitions")
+          "the partitioned table names none of its partitions, but the BEFORE triggers a row written to it fires")
+      (is (= [] (:problems (h/analyze reg {:insert-into (keyword "pt.Parent X") :values [{:id 11}]}))) "which may fill it")
       (is (= {:default 7 :pg/default 7 :pg/type "integer"} (shape/column-props (last (last (row "pg.pt/Pq One"))))) "a partition's own DEFAULT")
       (is (m/validate "pg.pt.Pq One/insert" {:id 1} {:registry reg}))
       (is (= {:insert ["fill"]} (:pg/before-triggers (shape/row-props (row :pg.pt/p2)))) "a partition's own BEFORE trigger")
@@ -230,6 +232,43 @@
       (is (seq (:problems (h/analyze reg {:insert-into :pt_old.p0 :values [{:id -1}]}))) "a partition without one may not")
       (is (= [] (:problems (h/analyze reg {:select [:id :x] :from [:pt_old.p0]}))) "a partition in another schema, in its schema")
       (is (= ["id"] (:pg/primary-key (shape/row-props (row :pg.pt_old/p0))))))))
+
+(deftest a-trigger-on-a-partitioned-table-is-its-partitions-once
+  (when *db*
+    (let [[_ data] (registry-of "pc" "CREATE SCHEMA pc; CREATE FUNCTION pc.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+                                      CREATE TABLE pc.p (id int) PARTITION BY RANGE (id); CREATE TABLE pc.p1 PARTITION OF pc.p FOR VALUES FROM (0) TO (10);
+                                      CREATE TRIGGER fill BEFORE INSERT ON pc.p FOR EACH ROW EXECUTE FUNCTION pc.touch();")]
+      (is (= [{:insert ["fill"]} {:insert ["fill"]}] (map #(:pg/before-triggers (shape/row-props (get-in data [:registry %]))) [:pg.pc/p :pg.pc/p1]))))))
+
+(deftest a-trigger-that-fires-for-replication-alone-is-none
+  (when *db*
+    (let [[_ data] (registry-of "rp" "CREATE SCHEMA rp; CREATE FUNCTION rp.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+                                      CREATE TABLE rp.t (id int NOT NULL); CREATE TABLE rp.a (id int NOT NULL);
+                                      CREATE TRIGGER fill BEFORE INSERT ON rp.t FOR EACH ROW EXECUTE FUNCTION rp.touch();
+                                      CREATE TRIGGER fill BEFORE INSERT ON rp.a FOR EACH ROW EXECUTE FUNCTION rp.touch();
+                                      ALTER TABLE rp.t ENABLE REPLICA TRIGGER fill; ALTER TABLE rp.a ENABLE ALWAYS TRIGGER fill;")]
+      (is (nil? (:pg/before-triggers (shape/row-props (get-in data [:registry :pg.rp/t])))))
+      (is (= {:insert ["fill"]} (:pg/before-triggers (shape/row-props (get-in data [:registry :pg.rp/a]))))))))
+
+(deftest a-key-whose-index-is-invalid-is-no-key
+  (when *db*
+    (let [[reg data] (registry-of "ik" "CREATE SCHEMA ik;
+                                        CREATE TABLE ik.p (id int NOT NULL, k int) PARTITION BY RANGE (id); CREATE TABLE ik.p1 PARTITION OF ik.p FOR VALUES FROM (0) TO (10);
+                                        ALTER TABLE ONLY ik.p ADD PRIMARY KEY (id);
+                                        CREATE TABLE ik.u (id int, k int) PARTITION BY RANGE (id); CREATE TABLE ik.u1 PARTITION OF ik.u FOR VALUES FROM (0) TO (10);
+                                        ALTER TABLE ONLY ik.u ADD UNIQUE (id, k);")]
+      (is (= [{:pg/table "ik.p"} {:pg/table "ik.u"}] (map #(shape/row-props (get-in data [:registry %])) [:pg.ik/p :pg.ik/u])))
+      (is (nil? (:rows (h/analyze reg {:select [:*] :from [:p] :where [:= :id 1]} {:schema "ik"})))
+          "ALTER TABLE ONLY leaves the index invalid until each partition's is attached: rows may repeat the key"))))
+
+(deftest a-type-named-as-an-extensions-is-the-extensions-alone-where-the-extension-made-it
+  (when *db*
+    (let [[reg data] (registry-of "xn" "CREATE SCHEMA xn; CREATE EXTENSION IF NOT EXISTS citext SCHEMA public;
+                                        CREATE TYPE xn.citext AS (a int); CREATE TABLE xn.t (c xn.citext, d public.citext);")]
+      (is (= [:maybe [:any {:pg/type "citext"}]] (last (first (shape/column-entries (get-in data [:registry :pg.xn/t]))))))
+      (is (= [{:kind :type :table "xn.t" :column "c" :type "citext"}] (:unrendered data)))
+      (is (= [:maybe [:string {:pg/type "public.citext"}]] (last (second (shape/column-entries (get-in data [:registry :pg.xn/t]))))))
+      (is (m/validate :pg.xn/t {:c nil :d "a"} {:registry reg})))))
 
 (deftest a-unique-index-a-foreign-key-references-is-a-key
   (when *db*

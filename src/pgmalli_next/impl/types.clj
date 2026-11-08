@@ -166,10 +166,13 @@
 
 (defn known?
   "Whether a column type has an entry: a pg_catalog type in pg_catalog (type-schema nil or
-   \"pg_catalog\"), an extension's in whatever schema the extension went to."
-  [type-name type-schema]
+   \"pg_catalog\"), an extension's in whatever schema the extension went to, where the type is
+   that extension's (type-extension, the one pg_depend says made it)."
+  [type-name type-schema type-extension]
   (when-let [e (entry type-name)]
-    (or (:extension e) (nil? type-schema) (= "pg_catalog" type-schema))))
+    (if (:extension e)
+      (= (:extension e) type-extension)
+      (or (nil? type-schema) (= "pg_catalog" type-schema)))))
 
 (defn json?
   "Whether a column of the type holds a JSON document."

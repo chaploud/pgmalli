@@ -19,6 +19,10 @@ WITH RECURSIVE cols AS (
            -- the domain as the column declares it: "d", or "d[]" for an array of one
            'domain', CASE WHEN dom.root IS NOT NULL THEN pg_catalog.format_type(a.atttypid, NULL) END,
            'type_schema', tn.nspname,
+           -- the extension that made the type, which a type of the name another made is not
+           'type_extension', (SELECT x.extname FROM pg_catalog.pg_depend dp JOIN pg_catalog.pg_extension x ON x.oid = dp.refobjid
+                              WHERE dp.classid = 'pg_catalog.pg_type'::pg_catalog.regclass::pg_catalog.oid AND dp.objid = b.oid
+                                AND dp.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass::pg_catalog.oid AND dp.deptype = 'e'),
            'is_nullable', NOT (a.attnotnull OR (e.oid = t.oid AND COALESCE(dom.not_null, false))),
            'default_value', CASE WHEN a.attgenerated = '' THEN COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), CASE WHEN e.oid = t.oid THEN dom.default_value END) END,
            'generated_expr', CASE WHEN a.attgenerated <> '' THEN pg_catalog.pg_get_expr(d.adbin, d.adrelid) END,
@@ -61,7 +65,8 @@ cons AS (
            'columns', (SELECT pg_catalog.json_agg(a.attname ORDER BY ord)
                        FROM pg_catalog.unnest(k.conkey) WITH ORDINALITY AS c(attnum, ord)
                        JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = c.attnum),
-           'is_valid', k.convalidated,
+           -- a key's index is invalid until each partition's is attached (ALTER TABLE ONLY): it holds nothing
+           'is_valid', CASE WHEN k.contype IN ('p', 'u') THEN (SELECT i.indisvalid FROM pg_catalog.pg_index i WHERE i.indexrelid = k.conindid) ELSE k.convalidated END,
            'deferrable', k.condeferrable,
            -- NOT ENFORCED (PostgreSQL 18): conenforced is absent before, hence read through jsonb
            'is_enforced', COALESCE((pg_catalog.to_jsonb(k) ->> 'conenforced'::text)::boolean, true),
@@ -168,12 +173,17 @@ tables AS (
            'columns', (SELECT COALESCE(pg_catalog.json_agg(col ORDER BY attnum), '[]'::json) FROM cols WHERE cols.relid = c.oid),
            -- an index may bear a constraint's name (they are different namespaces), so it is keyed apart
            'constraints', (SELECT COALESCE(pg_catalog.json_object_agg(CASE WHEN (con->>'index'::text)::boolean THEN con->>'name'::text || ' (index)' ELSE con->>'name'::text END, con), '{}'::json) FROM cons WHERE cons.relid = c.oid),
-           -- row-level triggers a user wrote and left enabled: their code may reject or change a row
-           'triggers', (SELECT COALESCE(pg_catalog.json_agg(pg_catalog.json_build_object('name', t.tgname, 'before', (t.tgtype::int4 & 2) = 2,
-                                                                    'insert', (t.tgtype::int4 & 4) = 4, 'update', (t.tgtype::int4 & 16) = 16, 'delete', (t.tgtype::int4 & 8) = 8)
-                                                  ORDER BY t.tgname), '[]'::json)
-                        FROM pg_catalog.pg_trigger t
-                        WHERE t.tgrelid = c.oid AND NOT t.tgisinternal AND t.tgenabled <> 'D' AND (t.tgtype::int4 & 1) = 1),
+           -- row-level triggers a user wrote that fire in a session of the default replication role
+           -- (enabled 'O' or ALWAYS 'A'): their code may reject or change a row. A partitioned
+           -- table's are its partitions' too, which a row written to it fires; one on the table is
+           -- cloned to each partition under its name
+           'triggers', (SELECT COALESCE(pg_catalog.json_agg(pg_catalog.json_build_object('name', t.name, 'before', t.before, 'insert', t.ins, 'update', t.upd, 'delete', t.del)
+                                                  ORDER BY t.name), '[]'::json)
+                        FROM (SELECT DISTINCT t.tgname AS name, (t.tgtype::int4 & 2) = 2 AS before, (t.tgtype::int4 & 4) = 4 AS ins,
+                                     (t.tgtype::int4 & 16) = 16 AS upd, (t.tgtype::int4 & 8) = 8 AS del
+                              FROM pg_catalog.pg_trigger t
+                              WHERE (t.tgrelid = c.oid OR t.tgrelid IN (SELECT pt.relid::pg_catalog.oid FROM pg_catalog.pg_partition_tree(c.oid) pt))
+                                AND NOT t.tgisinternal AND t.tgenabled IN ('O', 'A') AND (t.tgtype::int4 & 1) = 1) t),
            -- a table other tables inherit (not as partitions): a query reads their rows too, which its keys do not span
            'inherited', EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
                                 WHERE i.inhparent = c.oid AND NOT ch.relispartition)

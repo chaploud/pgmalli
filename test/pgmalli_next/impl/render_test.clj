@@ -278,7 +278,12 @@
                              "t_bad (index)" {:name "t_bad" :type "UNIQUE" :columns ["k" "id"] :index true :is_valid false}}}
         props (second (:pg.public/t (:registry (r/rendered (p/facts {:name "public" :types {} :tables {"t" table}})))))]
     (is (true? (:pg/primary-key-deferrable props)))
-    (is (= [{:columns ["k"] :deferrable true}] (:pg/unique props)) "an invalid unique index holds nothing")))
+    (is (= [{:columns ["k"] :deferrable true}] (:pg/unique props)) "an invalid unique index holds nothing")
+    (is (= {:pg/table "public.t"}
+           (second (:pg.public/t (:registry (r/rendered (p/facts {:name "public" :types {}
+                                                                   :tables {"t" (assoc table :constraints {"t_pkey" {:name "t_pkey" :type "PRIMARY KEY" :columns ["id"] :is_valid false}
+                                                                                                           "t_k_key" {:name "t_k_key" :type "UNIQUE" :columns ["k"] :is_valid false}})}}))))))
+        "nor a key whose index is")))
 
 (deftest docs-types-tables-of-column-types-and-extensions-are-types-types
   (let [doc (slurp "docs/types.md")

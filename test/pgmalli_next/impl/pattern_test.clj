@@ -55,12 +55,13 @@
 
 (deftest an-extension-type-is-known-in-its-schema-a-pg-catalog-name-only-in-pg-catalog
   (let [fs (p/facts {:name "public" :types {}
-                     :tables {"t" {:columns [{:name "c" :position 1 :data_type "citext" :type_schema "public" :is_nullable true}
-                                             {:name "l" :position 2 :data_type "ext.ltree" :type_schema "ext" :is_nullable true}
-                                             {:name "p" :position 3 :data_type "point" :type_schema "public" :is_nullable true}]
+                     :tables {"t" {:columns [{:name "c" :position 1 :data_type "citext" :type_schema "public" :type_extension "citext" :is_nullable true}
+                                             {:name "l" :position 2 :data_type "ext.ltree" :type_schema "ext" :type_extension "ltree" :is_nullable true}
+                                             {:name "p" :position 3 :data_type "point" :type_schema "public" :is_nullable true}
+                                             {:name "u" :position 4 :data_type "u.citext" :type_schema "u" :is_nullable true}]
                                    :constraints {}}}})]
-    (is (= [["c" :column] ["l" :column] ["p" :column] ["p" :unknown-type]] (map (juxt :column :fact) fs))
-        "a composite type of the schema named point is not pg_catalog's point")))
+    (is (= [["c" :column] ["l" :column] ["p" :column] ["p" :unknown-type] ["u" :column] ["u" :unknown-type]] (map (juxt :column :fact) fs))
+        "a composite type of the schema named point is not pg_catalog's point, nor one named citext no extension made citext's")))
 
 (deftest keys-and-references
   (let [fs (p/facts {:name "public" :types {}
