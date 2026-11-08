@@ -136,3 +136,22 @@
         c (some #(when (= :c (first %)) %) (m/children (m/deref (m/schema :pg.public/t {:registry reg}))))]
     (is (= {:sql "CASE WHEN"} (:pg/default (m/properties (last c)))))
     (is (m/validate :pg.public.t/insert {} {:registry reg}))))
+
+(deftest a-not-null-column-of-a-type-pgmalli-has-no-value-of-fails-to-generate-naming-it
+  (let [e (is (thrown? clojure.lang.ExceptionInfo
+                       (mg/generate :pg.public/t {:registry (registry-of {} [{:name "p" :position 1 :data_type "pair" :type_schema "public" :is_nullable false}]) :seed 1})))]
+    (is (= ["public.t.p: pgmalli cannot make a value of type pair; give one with :overrides" :pgmalli.error/cannot-generate]
+           [(ex-message e) (:pgmalli/error (ex-data e))])))
+  (is (= {:q nil} (mg/generate :pg.public/t {:registry (registry-of {} [{:name "q" :position 1 :data_type "pair" :type_schema "public" :is_nullable true}]) :seed 1}))
+      "a nullable one is NULL"))
+
+(deftest a-time-type-says-what-it-takes-as-malli-error-says-nothing-of-it
+  (is (= {:closed_at ["should be a java.time.Instant"] :born ["should be a java.time.LocalDate"]}
+         (me/humanize (m/explain :pg.sample/users (assoc user :closed_at 1 :born "2025-01-01") opts)))))
+
+(deftest a-sequence-of-an-enums-name-leaves-the-registrys-name-to-the-enum
+  (let [data (files/assemble "x" [["public" (p/facts {:name "public" :types {"s" {:kind "ENUM" :enum_values ["a"]}} :sequences ["s" "t"] :tables {}})]] {})
+        reg (pgmalli/registry data)]
+    (is (= [{:kind :sequence-named-as-enum :table "public.s"}] (map #(select-keys % [:kind :table]) (:diagnostics data))))
+    (is (= [:enum "a"] (shape/schema-of reg :pg.public/s)))
+    (is (:pg/sequence (shape/row-props (shape/schema-of reg :pg.public/t))))))

@@ -43,7 +43,7 @@
                      d (differences k (get-in before [:registry k]) (get-in after [:registry k]))]
                  d)
                (for [k (distinct (concat (keys before) (keys after)))
-                     :when (and (not (#{:registry :database-version} k)) (not= (get before k) (get after k)))
+                     :when (and (not= :registry k) (not= (get before k) (get after k)))
                      d (if (#{:functions :operators} k)
                          (for [s (sort (distinct (concat (keys (get before k)) (keys (get after k)))))
                                n (sort (distinct (concat (keys (get-in before [k s])) (keys (get-in after [k s])))))

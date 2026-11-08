@@ -1,10 +1,12 @@
 (ns pgmalli-next.impl.pgtypes
   "The schema types pgmalli registers for PostgreSQL's own: a bytea of bounded
    length, the bounded numbers (with the ranges the integer types hold), the arrays the
-   JDBC driver takes and the values of some classes of one schema (:pg/class)."
+   JDBC driver takes, the values of some classes of one schema (:pg/class), and
+   malli.experimental.time's types with an error message each."
   (:require [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [malli.core :as m]
+            [malli.experimental.time :as time]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
@@ -163,8 +165,24 @@
                                     :gen/gen (gen/elements (keep (fn [[c v]] (when (cs (.getName ^Class c)) v)) accept/values))}
                   :min 1 :max Long/MAX_VALUE}))}))
 
+(defn- with-message
+  "Schema type t as it is, with an :error/message: malli.error has none of malli.experimental.time's,
+   which me/humanize then calls an unknown error."
+  [t message]
+  (m/-simple-schema
+   {:type (m/-type t)
+    :type-properties (assoc (m/-type-properties t) :error/message message)
+    :compile (fn [props children opts] {:pred (m/validator (m/-into-schema t props children opts))})}))
+
+(def time-schemas
+  "malli.experimental.time's types, each with a message naming its class (\"should be a
+   java.time.LocalDate\")."
+  (into {} (for [[k t] (time/schemas)]
+             [k (with-message t (str "should be a java.time." (str/join (map str/capitalize (str/split (name k) #"-")))))])))
+
 (def schemas
   "The schema types pgmalli registers, by name."
-  {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
-   :pg/smallint smallint-schema :pg/integer integer-schema :pg/array array-schema
-   :pg/class class-schema})
+  (merge time-schemas
+         {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
+          :pg/smallint smallint-schema :pg/integer integer-schema :pg/array array-schema
+          :pg/class class-schema}))

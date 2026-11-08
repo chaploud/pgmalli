@@ -6,11 +6,9 @@
    schema data, and a malli registry is what registry builds from it."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]
             [clojure.test.check.generators :as gen]
             [clojure.walk :as walk]
             [malli.core :as m]
-            [malli.experimental.time :as time]
             malli.experimental.time.generator
             [malli.util :as mu]
             [pgmalli-next.impl.error :as error]
@@ -160,27 +158,31 @@
 
 (def base
   "The schemas a generated schema or an override names besides the generated ones."
-  (merge (m/default-schemas) (mu/schemas) (time/schemas) pgtypes/schemas))
+  (merge (m/default-schemas) (mu/schemas) pgtypes/schemas))
+
+(defn other-schemas-enum
+  "The key among schemas (the file's :registry) of the enum type t names, a :pg/type of another
+   schema (\"s\".\"Mood\", an array's element's for \"s.e[]\"), nil for none: generation reads each
+   schema alone, so it types a column of one :any."
+  [schemas t]
+  (when-let [[s n] (types/type-parts (or (types/element t) t))]
+    (when s
+      (let [k (shape/schema-key (types/unquoted s) (types/unquoted n))]
+        ;; a table's, a view's or a composite type's row is a PGobject
+        (when (some-> (get schemas k) shape/column-entries empty?) k)))))
 
 (defn- with-other-schemas-types
   "The generated schemas with each :any or :some column whose :pg/type names an enum type of another
-   schema of the file made a [:ref] to it: generation reads each schema alone, so it types such a
-   column :any."
+   schema of the file (other-schemas-enum) made a [:ref] to it."
   [schemas]
-  (let [;; a name as format_type writes it: plain, or quoted with its quotes doubled
-        ident "(\"(?:[^\"]|\"\")*\"|[a-z_][a-z0-9_$]*)"
-        unquoted #(if (str/starts-with? % "\"") (str/replace (subs % 1 (dec (count %))) "\"\"" "\"") %)
-        own (fn [t] (when-let [[_ s n] (and (string? t) (re-matches (re-pattern (str ident "\\." ident)) t))]
-                      (let [k (shape/schema-key (unquoted s) (unquoted n))]
-                        ;; a table's, a view's or a composite type's row is a PGobject
-                        (when (some-> (get schemas k) shape/column-entries empty?) k))))
+  (let [own #(when-not (types/element %) (other-schemas-enum schemas %))
         typed (fn [f]
                 (let [p (when (vector? f) (second f))
                       t (:pg/type p)]
                   ;; :some, a NOT NULL column's
                   (cond (and (#{:any :some} (first f)) (= 2 (count f)) (own t)) [:ref p (own t)]
-                        (and (= :vector (first f)) (= 3 (count f)) (#{:any :some} (last f)) (own (types/element t)))
-                        [:vector p [:ref (own (types/element t))]]
+                        (and (= :vector (first f)) (= 3 (count f)) (#{:any :some} (last f)) (other-schemas-enum schemas t))
+                        [:vector p [:ref (other-schemas-enum schemas t)]]
                         :else f)))]
     (update-vals schemas #(if (shape/row-schema? %) (walk/postwalk (fn [f] (if (and (vector? f) (map? (second f))) (typed f) f)) %) %))))
 
@@ -200,7 +202,7 @@
   ([data]
    (let [d (generated-data data "registry")
          generated (into {} (map (fn [[k s]] [k (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k)))]))
-                         (with-other-schemas-types (merge (:registry d) (sequence-rows d))))]
+                         (with-other-schemas-types (merge (sequence-rows d) (:registry d))))]
      (merge base
             (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
             (into {} (for [s (:schemas d)]

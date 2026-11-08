@@ -74,3 +74,12 @@
     (is (= [[:references ["g"]] [:unique ["g"]] [:primary-key ["id"]]]
            (map (juxt :fact :columns) (filter :constraint fs))) "constraints in name order")
     (is (= {:schema "public" :table "groups" :columns ["id"]} (:to (first (filter (comp #{:references} :fact) fs)))))))
+
+(deftest a-number-default-is-a-number-however-postgresql-writes-it
+  (let [defaults ["-1" "'-1'::integer" "'10000000000'::bigint" "'-1.5'::numeric" "1.5" "'1e+300'::double precision"
+                  "'100000000000000000000'::numeric" "'NaN'::numeric" "'12'::text" "'happy'::mood"]
+        fs (p/facts {:name "public" :types {}
+                     :tables {"t" {:columns (map-indexed (fn [i d] {:name (str "c" (+ 10 i)) :position i :data_type "numeric" :is_nullable true :default_value d}) defaults)
+                                   :constraints {}}}})]
+    (is (= [-1 -1 10000000000 -1.5M 1.5M 1E+300M 100000000000000000000N "NaN" "12" "happy"]
+           (map :default (filter (comp #{:column} :fact) fs))))))

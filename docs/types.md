@@ -38,10 +38,11 @@ A column of a NOT NULL domain is not `[:maybe ...]`, although PostgreSQL stores 
 empty scalar subquery; its documentation calls this a defect not to rely on.
 
 pgmalli's own schema types are in the registry too: `:pg/bytes`, `:pg/smallint`,
-`:pg/integer`, `:pg/array` and `:pg/class`. Three of malli's are replaced: `:string` counts
-characters, `:double` with `:pg/type "real"` keeps to a real's range, and `:re` matches a
+`:pg/integer`, `:pg/array` and `:pg/class`. Some of malli's are replaced: `:string` counts
+characters, `:double` with `:pg/type "real"` keeps to a real's range, `:re` matches a
 value its regex runs out of the thread's stack on (a long one) on a larger stack, where
-malli's throws.
+malli's throws, and malli.experimental.time's types (`:time/instant` ...) carry an error
+message (`"should be a java.time.Instant"`), which malli.error has none of.
 
 ## Properties
 
@@ -102,7 +103,7 @@ spelling.
 An enum of another schema (`wh.stock.k` of type `catalog.kind`) is `[:any]` (`[:some]` when
 NOT NULL) in the file, as each schema is read alone; its `:unrendered` entry names the schema
 (`:type-schema "catalog"`). Generated with both schemas in `:schemas`, the registry reads the
-column as of that type, an array of it too.
+column as of that type, an array of it too, and `:unrendered` leaves it out.
 
 `:string`'s `:min` and `:max` count characters (code points), as `length` does; malli's own
 `:string` counts UTF-16 units.
@@ -234,6 +235,7 @@ applies:
 | `:row-trigger` | `:info` | a row-level INSERT trigger, which may reject or change rows |
 | `:exclude` | `:info` | an EXCLUDE constraint, which the schemas do not check |
 | `:redundant-unique` | `:info` | a UNIQUE on the columns of the primary key or of another UNIQUE |
+| `:sequence-named-as-enum` | `:info` | a sequence of the name of an enum type of its schema (created before it): the registry's name is the enum's, and a query of the sequence finds none of its columns |
 
 An `:unrendered` entry is `{:kind :type :table :column :type}`, with `:type-schema` for a type of
 another schema.

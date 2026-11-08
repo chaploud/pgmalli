@@ -5,7 +5,8 @@
             [clojure.walk :as walk]
             [malli.core :as m]
             [malli.registry :as mr]
-            [pgmalli-next.impl.error :as error]))
+            [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.types :as types]))
 
 (defn- schema-form? [x]
   (or (vector? x) (keyword? x) (string? x) (symbol? x) (fn? x) (map? x) (m/schema? x) (m/into-schema? x)))
@@ -304,6 +305,7 @@
   (walk/postwalk (fn [f] (if (and (= :inst time) (keyword? f) (= "time" (namespace f))) 'inst? f)) schema))
 
 (defn type-name
-  "The type of a column schema without its typmod or array brackets: \"bit(8)[]\" -> \"bit\"."
+  "The type of a column schema without its typmod or array brackets: \"bit(8)[]\" -> \"bit\",
+   \"s.d[]\" -> \"s.d\"."
   [p]
-  (some-> (:pg/type p) (str/replace #"\(.*\)|\[\]" "") str/trim))
+  (when-let [[schema n] (types/type-parts (:pg/type p))] (cond->> n schema (str schema "."))))

@@ -89,6 +89,16 @@
         (is (= [:map [:last_value [:int {:pg/type "bigint"}]] [:is_called [:boolean {:pg/type "boolean"}]]]
                (:row (h/analyze reg {:select [:last_value :is_called] :from [:counter]} {:schema "ft"}))))))))
 
+(deftest generate-and-check-print-what-is-left-out-and-what-differs
+  (when *db*
+    (exec-sql! "CREATE SCHEMA pr; CREATE TYPE pr.pair AS (a int, b int); CREATE TABLE pr.t (id int PRIMARY KEY, p pr.pair);")
+    (let [config {:db *db* :schemas ["pr"] :out (temp-out "pgmalli-pr")}
+          left-out "unrendered (1), left out of the schemas:\n  pr.t p: type pair\n    to keep it, add to :overrides {:pr.t/p <malli schema>}\n"]
+      (is (= left-out (with-out-str (generate/generate! config))))
+      (exec-sql! "ALTER TABLE pr.t ADD COLUMN n text")
+      (is (= (str ":pg.pr/t :n\n  file: nil\n  db:   [:maybe [:string {:pg/type \"text\"}]]\n" left-out)
+             (with-out-str (try (generate/check config) (catch clojure.lang.ExceptionInfo _))))))))
+
 (deftest check-reads-everything-once
   (when *db*
     (let [config {:db *db* :out (temp-out "pgmalli-chk") :schemas ["chk" "chk2"]}]
@@ -109,6 +119,13 @@
   (exec-sql! ddl)
   (let [data (generated {:db *db*} schema)]
     [(pgmalli/registry data) data]))
+
+(deftest an-enum-and-a-sequence-of-one-name-keep-the-enum
+  (when *db*
+    (let [[reg data] (registry-of "se" "CREATE SCHEMA se; CREATE SEQUENCE se.n; CREATE TYPE se.n AS ENUM ('a'); CREATE TABLE se.t (id int PRIMARY KEY, k se.n NOT NULL);")]
+      (is (m/validate :pg.se/t {:id 1 :k "a"} {:registry reg}))
+      (is (not (m/validate :pg.se/t {:id 1 :k "b"} {:registry reg})))
+      (is (= [:sequence-named-as-enum] (map :kind (:diagnostics data)))))))
 
 (deftest an-operator-returning-a-set-or-of-no-overload-tells-no-row-count
   (let [reg (pgmalli/registry {:schemas ["public"]
@@ -266,6 +283,7 @@
     (is (= [{:kind :type :table "wh.stock" :column "k" :type "catalog.kind" :type-schema "catalog"}]
            (:unrendered (generated {:db *db*} "wh")))
         "another schema's domain is its base type, as one of the schema's own is")
+    (is (= [] (:unrendered (generated {:db *db*} "catalog" "wh"))) "an enum of another schema of the file is no column left out")
     (let [config {:db *db* :overrides {:wh.stock/k [:ref :pg.catalog/kind]}}
           reg (pgmalli/registry (:data (files/generated (assoc config :schemas ["catalog" "wh"]))))]
       (is (not (m/validate :pg.wh/stock {:id 1 :sku nil :k nil} {:registry reg})))

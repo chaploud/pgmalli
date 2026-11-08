@@ -134,18 +134,35 @@
 (def ^:private by-name
   (into {} (for [[t e] types, n (cons t (:aliases e))] [n (assoc e :name t)])))
 
-(defn bare-name
-  "A type's name without the schema it is qualified with (a type outside the search path:
-   \"ext.citext\") or its typmod, wherever format_type prints it: \"timestamp(3) with time
-   zone\" is \"timestamp with time zone\", \"bit(8)[]\" \"bit[]\"."
+(defn type-parts
+  "[schema name array?] of a type as format_type prints it (or a cast spells it): the schema it
+   is qualified with (a type outside the search path: ext.citext), nil for none; its name
+   without its typmod, wherever format_type prints it (timestamp(3) with time zone is
+   timestamp with time zone), a quoted one as printed, quotes and all; whether it is an array
+   (bit(8)[]). nil for no string."
   [t]
-  (some-> t (str/replace #"^[^.\"(]+\.|\([^)]*\)" "")))
+  (when-let [[_ schema n brackets] (and (string? t) (re-matches #"(?s)(?:(\"(?:[^\"]|\"\")*\"|[^.\"]+?)\.)?(\"(?:[^\"]|\"\")*\"|[^\"]+?)((?:\[\])*)" t))]
+    [schema (cond-> n (not (str/starts-with? n "\"")) (str/replace #"\([^)]*\)" "")) (boolean (seq brackets))]))
+
+(defn unquoted
+  "An identifier as type-parts gives it, without its quotes: the name its catalog holds."
+  [ident]
+  (if (str/starts-with? ident "\"") (str/replace (subs ident 1 (dec (count ident))) "\"\"" "\"") ident))
+
+(defn bare-name
+  "A type's name without its schema or typmod (type-parts), \"x[]\" for an array:
+   \"public.bit(8)[]\" is \"bit[]\"."
+  [t]
+  (when-let [[_ n array?] (type-parts t)] (cond-> n array? (str "[]"))))
 
 (defn entry
-  "The entry of a type, by its name or an alias, with or without a schema or typmod (the :name
-   it is keyed by added); nil for another type."
+  "The entry of a type, by its name or an alias, without its typmod (the :name it is keyed by
+   added); nil for another type: an array, a type of another schema named as a pg_catalog type
+   (\"s\".date), but an extension's in whatever schema it is."
   [type-name]
-  (by-name (bare-name type-name)))
+  (when-let [[schema n array?] (type-parts type-name)]
+    (when-let [e (when-not array? (by-name n))]
+      (when (or (nil? schema) (= "pg_catalog" schema) (:extension e)) e))))
 
 (defn known?
   "Whether a column type has an entry: a pg_catalog type in pg_catalog (type-schema nil or
@@ -164,11 +181,6 @@
    HoneySQL spells a cast's type (:double-precision)."
   [pred]
   (into {} (for [[n e] by-name :when (pred e)] [(keyword (str/replace n " " "-")) e])))
-
-(defn keywords
-  "The names by-keyword gives."
-  [pred]
-  (set (keys (by-keyword pred))))
 
 (def catalog
   "pg_catalog of the PostgreSQL versions pgmalli supports, from

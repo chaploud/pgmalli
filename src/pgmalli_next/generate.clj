@@ -21,13 +21,6 @@
       (println (str "  " table " " column ": type " type))
       (println (str "    to keep it, add to :overrides {" (keyword table column) " <malli schema>}")))))
 
-(defn- print-diagnostics
-  "The diagnostics above :info; an :info one is data alone, in what generate! and check return."
-  [ds]
-  (when-let [ds (seq (remove #(= :info (:severity %)) ds))]
-    (println (str "diagnostics (" (count ds) "):"))
-    (doseq [d ds] (println (str "  " (name (:severity d)) " " (:table d) ": " (:message d))))))
-
 (defn- print-difference [{:keys [name key schema column property order file db]}]
   (println (str/join " " (remove nil? [(some-> key pr-str) schema (some-> name pr-str) (some-> column pr-str) (some-> property pr-str)
                                        (when order "column order")])))
@@ -45,14 +38,13 @@
 
 (defn generate!
   "Writes the generated file of config's schemas to its :out (where no file or a generated one
-   is), and prints what deserves a look: the columns left out, a diagnostic above :info. Returns
-   {:out path :unrendered [entry ...] :diagnostics [diagnostic ...]}, check's two with :out."
+   is), and prints the columns left out. Returns {:out path :unrendered [entry ...] :diagnostics
+   [diagnostic ...]}, check's two with :out."
   [config]
   (binding [*print-namespace-maps* false]
     (let [out (files/generate! config)
           data (registry/read-generated-file out)]
       (when-let [w (version-warning (:database-version data))] (println "warning:" w))
-      (print-diagnostics (:diagnostics data))
       (print-unrendered (:unrendered data))
       {:out out :unrendered (not-empty (:unrendered data)) :diagnostics (not-empty (:diagnostics data))})))
 
@@ -74,15 +66,14 @@
    A difference names the registry entry (:name) and, for a row schema, the :column,
    :property (of the map, or with :column of that column) or column :order that differ, with the
    :file and :db sides (nil where a side lacks it); a function or operator by :key (:functions or
-   :operators), :schema and :name; the file's other parts (:schemas, :sequences, :unrendered,
-   :diagnostics) as wholes under :key. :missing is :out where no file is there, which :stale then
+   :operators), :schema and :name; the file's other parts (:schemas, :database-version,
+   :sequences, :unrendered, :diagnostics) as wholes under :key. :missing is :out where no file is there, which :stale then
    leaves out."
   [config]
   (binding [*print-namespace-maps* false]
     (let [{:keys [missing stale unrendered diagnostics]} (diff/check config)]
       (doseq [d stale] (print-difference d))
       (print-unrendered unrendered)
-      (print-diagnostics diagnostics)
       (when (or missing stale)
         (error/fail! :pgmalli.error/stale
                      (if missing
