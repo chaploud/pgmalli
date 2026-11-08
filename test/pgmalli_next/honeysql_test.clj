@@ -3491,3 +3491,12 @@
         f (future (h/analyze registry {:select [:id] :from [:users] :where [:= :id nested]} opts))]
     (is (not= ::slow (deref f 20000 ::slow)))
     (future-cancel f)))
+
+(deftest an-override-referring-to-the-users-schema-generates-as-that-schema-does
+  (let [base (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
+                                                         [:id [:int {:pg/type "integer"}]] [:e [:ref {:pg/type "text"} :app/email]]]}})
+        reg (mr/composite-registry
+             base {:app/email [:and {:gen/schema [:string {:min 1 :max 8}] :gen/fmap #(str % "@example.com")} :string [:fn #(str/includes? % "@")]]})
+        rows (mg/sample (h/values-schema reg :t) {:registry reg :size 20 :seed 1})]
+    (is (every? #(let [e (:e %)] (str/ends-with? (if (vector? e) (second e) e) "@example.com")) rows)
+        "a value of it, a NOT NULL column a trigger may fill too")))

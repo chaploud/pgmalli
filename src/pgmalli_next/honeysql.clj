@@ -220,7 +220,12 @@
         own (shape/non-null own)
         hints (select-keys (shape/props own) gen-keys)
         k (shape/kind t)]
-    (cond (and (= :fn h) (not-any? #(= "gen" (namespace %)) (keys (shape/props t)))) nil
+    (cond ;; an override's reference to a schema of the user's registry, inlined in t: generated
+          ;; as that schema generates (portable-data drops its hints)
+          (and (= :ref (shape/head own)) (not (shape/generated-name? (last own)))
+               (some->> (get (::query/schemas r) (last own)) shape/kind (= (shape/kind t))))
+          (shape/merge-props t {:gen/schema [:ref (last own)]})
+          (and (= :fn h) (not-any? #(= "gen" (namespace %)) (keys (shape/props t)))) nil
           (and (= :pg/class h) (empty? (pgtypes/class-values (shape/entries t)))) nil
           ;; held to classes ([:and float? [:pg/class "java.lang.Float"]]): those classes' values
           (and (= :and h) (some #(= :pg/class (shape/head %)) (shape/entries t)))

@@ -239,10 +239,12 @@ aside):
 Insert it as `{:insert-into :events :values [row]}`.
 
 A column whose CHECK (its own or its domain's) the generated values miss takes an
-[override](#overrides) that generates within it, its generator on the whole schema (malli
-generates an `[:and ...]` from its first child): `[:and {:gen/schema [:string {:min 1 :max 8}]
-:gen/fmap #(str % "@example.com")} :string [:fn #(str/includes? % "@")]]` by `[:ref ...]` of
-your registry. A keyword to the column, which goes as its text, is held to it too. A `:re`
+[override](#overrides) that generates within it. The file is EDN, which holds no function, so
+the override refers to a schema of your registry, `{:overrides {:public.users/email
+[:ref :app/email]}}`, with `:app/email` in your registry as `[:and {:gen/schema [:string {:min 1
+:max 8}] :gen/fmap #(str % "@example.com")} :string [:fn #(str/includes? % "@")]]`, its
+generator on the whole schema (malli generates an `[:and ...]` from its first child). A keyword
+to the column, which goes as its text, is held to it too. A `:re`
 override generates only with `com.gfredericks/test.chuck` on the classpath, as malli's `:re` does.
 
 The registry's `/insert` schema generates the database's types (a label a string, a document a
