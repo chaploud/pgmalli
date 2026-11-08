@@ -57,7 +57,7 @@
 (defn- class-fn
   "[:fn] of the values of class name n, pred telling them."
   [n pred]
-  [:fn {:pg/class n :error/message (str "should be an " n)} pred])
+  [:fn {:pg/class n :error/message (str "should be " (error/named n))} pred])
 
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's

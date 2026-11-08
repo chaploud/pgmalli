@@ -185,9 +185,10 @@ a polymorphic one under `:inline`, is one) and `:type` (it is compared with or c
 of: the result of a function the registry lacks, a column of a table it lacks, an extension's
 type). An argument where a value of a type pgmalli does not type goes (compared, assigned, or a
 function's argument as above) takes a `PGobject` where pgjdbc reads one (a geometric, network, timespan or money type, or an
-alias of `oid`: `inet`, `interval`, `money`, `regclass`), which it sends as the type it names, and
-what converts to the type implicitly (a `LocalTime` to `interval`, an integer within `oid`'s range
-to `regclass`); otherwise (cast, `xml`) it is `[:any {:pg/type ...}]`, without `:pgmalli/untyped`:
+alias of `oid`: `inet`, `interval`, `money`, `regclass`), which it sends as the type it names, an
+`xml` one a `java.sql.SQLXML` too (as `builder` reads it), and what converts to the type
+implicitly (a `LocalTime` to `interval`, an integer within `oid`'s range to `regclass`); otherwise
+(cast) it is `[:any {:pg/type ...}]`, without `:pgmalli/untyped`:
 
 ```clojure
 (:args (h/analyze registry {:select [[:?label :label]] :from [:users]}))
@@ -268,9 +269,9 @@ column, read as a keyword, which HoneySQL writes in `:values` and `:set` as a co
 label as `[:lift :happy]`), a json or jsonb column, read as a map or a vector, which HoneySQL
 writes there as a subquery or a row of parameters (write `[:lift m]`; a scalar document, read as a
 string or a number, and the document `null`, read as nil, a `PGobject` of `jsonb`), a `bit(1)` column, read as a `Boolean` (write a
-`PGobject` of `bit`), and an array column, read as a vector (write a Java array, its NULLs nil, or
-a `PGobject` of the array type, the one way for a type no Java array goes as: an enum's, json's,
-time's ...); another
+`PGobject` of `bit`), and an array column, read as a vector (write a Java array, its NULLs nil, a
+`java.sql.Array`, whose elements are not checked, or a `PGobject` of the array type, the one way
+for a type no Java array goes as: an enum's, json's, time's ...); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
 ([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
@@ -735,7 +736,8 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   almost always a mistake, and refuses a `bigint` past the range where it converts it, which a
   generic plan does only where a row reaches it. They take 0 to 4294967295.
 - <a id="stricter-inline-in"></a>Under `{:format {:inline true}}`, an argument in `:in`: sql/format writes
-  a list in it as `IN [1, 2]`, which PostgreSQL refuses, though `IN (1)` of a list of one runs.
+  a collection in it as its printed text (`IN [1, 2]` of a vector, `IN (1 2)` of a list), which
+  PostgreSQL refuses, though `IN (1)` of a list of one runs.
   Write the list in the query.
 - <a id="stricter-json-keys"></a>A map `install-sending!` sends as `jsonb` with two keys of one text
   (`:a` and `"a"`, `:n/a` and `'n/a`): PostgreSQL keeps the last of them, which is the map's hash
