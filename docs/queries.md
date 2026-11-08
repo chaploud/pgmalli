@@ -212,7 +212,7 @@ PostgreSQL types a parameter once, so an argument of several uses takes the valu
 takes: a cast and a comparison, what the comparison takes of what casts. It takes nil only where
 every use does, a NULL test aside (below); a use pgmalli does not type takes any value. Where the
 uses have no value in common, or their common values cannot be told, the schema is `[:and ...]`
-of the uses' (described `a & b`), which takes a value each of them takes.
+of the uses' (`[:and {:pgmalli/uses true} a b]`, described `a & b`), which takes a value each of them takes.
 
 A comparison leaves out a range: PostgreSQL compares a value beyond it and matches no row.
 

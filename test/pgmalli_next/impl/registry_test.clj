@@ -192,3 +192,9 @@
         s (m/schema [:string {:max 1}] {:registry reg})]
     (is (m/validate s "𝟘") "one code point, two UTF-16 units")
     (is (not (m/validate s "ab")))))
+
+(deftest a-long-value-whose-caller-is-interrupted-is-refused-the-interrupt-kept
+  (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
+        r (on-small-stack #(do (.interrupt (Thread/currentThread))
+                               [(m/validate s (apply str (repeat 200000 "a"))) (Thread/interrupted)]))]
+    (is (= [false true] r))))
