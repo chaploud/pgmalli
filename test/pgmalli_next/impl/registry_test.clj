@@ -178,3 +178,11 @@
 (deftest a-default-longer-than-its-columns-length-makes-the-column-required
   (let [reg (registry-of {} [{:name "c" :position 1 :data_type "character varying" :is_nullable false :default_value "'abcdef'::character varying" :max_length 3}])]
     (is (not (m/validate :pg.public.t/insert {} {:registry reg})) "PostgreSQL refuses the default where the row leaves the column out")))
+
+(deftest an-arrays-elements-generate-within-its-element-types-length
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:vs [:vector {:pg/type "character varying[]" :pg/max-length 3} :string]]
+                                                        [:bs [:vector {:pg/type "bit[]" :pg/max-length 4} :string]]]}})
+        rows (mg/sample :pg.public/t {:registry reg :size 30 :seed 1})]
+    (is (every? #(<= (count %) 3) (mapcat :vs rows)) "varchar(3)[]")
+    (is (every? #(re-matches #"[01]{4}" %) (mapcat :bs rows)) "bit(4)[]")))

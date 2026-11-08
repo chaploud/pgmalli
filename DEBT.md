@@ -25,8 +25,9 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
   infinity), are taken: PostgreSQL refuses the one past its maximum and stores the one before its
   minimum as `-infinity`.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
-  and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: the
-  registry keeps no length of either. PostgreSQL refuses the value (`value too long`).
+  and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: no
+  schema checks a length, which generation alone keeps to (`:pg/max-length`, the array's for its
+  elements). PostgreSQL refuses the value (`value too long`).
 - An array of a type pgmalli does not type (`ltree[]`, `isbn13[]`) takes any Java array, a
   `Long[]` too, which PostgreSQL refuses (`column is of type ltree[] but expression is of type
   bigint[]`); values-schema generates no value of it.

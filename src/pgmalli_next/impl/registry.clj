@@ -155,8 +155,14 @@
     (cond
       (and hints (not-any? #(contains? p %) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements]))
       (cond (not (vector? s)) [t hints] (map? (second s)) (assoc s 1 (merge p hints)) :else (into [t hints] (rest s)))
-      ;; an array generates from its element's
-      (and (= :vector t) (vector? s)) (assoc s (dec (count s)) (gen-hints (last s) false where))
+      ;; an array generates from its element's, of the array's element type and length
+      ;; (varchar(n)[]'s n, bit(n)[]'s), which the array's properties hold
+      (and (= :vector t) (vector? s))
+      (let [e (last s)
+            told (shape/merge-props e (cond-> (select-keys p [:pg/max-length])
+                                        (and (not (:pg/type (shape/props e))) (types/element (:pg/type p))) (assoc :pg/type (types/element (:pg/type p)))))
+            hinted (select-keys (shape/props (gen-hints told false where)) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements :gen/fmap])]
+        (assoc s (dec (count s)) (cond-> (gen-hints e false where) (seq hinted) (shape/merge-props hinted))))
       :else s)))
 
 (defn- with-gen-hints
