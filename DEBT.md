@@ -34,6 +34,8 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
   refuses.
 - A `jsonb_populate_record` document's array of more dimensions than one (`{:ia [[1 2] [3 4]]}`)
   is refused, which PostgreSQL reads: its type is of one dimension, as `as-read`'s.
+- A `PGobject` is taken wherever one is, whatever type its `getType` names (one of `point` to an
+  `inet` column, of `jsonb` beside a `json` one in `coalesce`), which PostgreSQL refuses.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: no
   schema checks a length, which generation alone keeps to (`:pg/max-length`, the array's for its

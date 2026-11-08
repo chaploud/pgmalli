@@ -308,17 +308,23 @@
 
 (deftest every-pair-stricter-edn-pins-is-one-args-refuses
   ;; the record is of the decision, not of one input to it: a value of a class sent as the pair's
-  ;; type, to a column of its column type, is refused there
+  ;; type, to a column of its column type (an array's too), is refused there; the pairs of a column
+  ;; type no column schema of types/types makes, named
   (let [pairs (triples (edn/read-string (slurp stricter-file)))
         query {:assign {:update :t :set {:c :?x}} :compare {:select [:c] :from [:t] :where [:= :c :?x]}
-               :common {:select [[[:coalesce :c :?x] :v]] :from [:t]}}]
-    (doseq [[sent context t] pairs
-            :when (and (types/types t) (not (types/element t)))
-            :let [s (types/type-schema t)
-                  reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c s]]}})
-                  vs (if (symbol? sent)
-                       [:a]
-                       (for [[c st] accept/class-types :when (= sent st) :let [v (get accept/values c)] :when (some? v)] v))]
-            v vs]
+               :common {:select [[[:coalesce :c :?x] :v]] :from [:t]}}
+        column (fn [t] (cond (types/types t) (types/type-schema t)
+                             (types/types (types/element t)) [:vector {:pg/type t} (types/type-schema (types/element t))]))
+        value (fn [sent]
+                (if (symbol? sent)
+                  [(get accept/values (resolve sent))]
+                  ;; a type no class goes as goes as a PGobject alone, whose type args reads not (DEBT.md)
+                  (for [[c st] accept/class-types :when (= sent st) :let [v (get accept/values c)] :when (some? v)] v)))
+        checked (for [[sent context t] pairs :when (column t)] [sent context t])]
+    (is (empty? (remove #(or (column %) (= "positive" %) (#{"aclitem" "gtsvector" "refcursor"} (or (types/element %) %))) (map last pairs)))
+        "a column type left unchecked is a domain of the test's (positive) or a type types/types lists not")
+    (doseq [[sent context t] checked
+            :let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c (column t)]]}})]
+            v (value sent)]
       (is (not (m/validate (:x (:args (h/analyze reg (query context)))) v {:registry reg}))
           (str (pr-str v) " " context " " t ": pinned in " stricter-file ", taken by args")))))
