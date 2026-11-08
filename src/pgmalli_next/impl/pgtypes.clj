@@ -146,23 +146,24 @@
    for a regex such as ^([a-z0-9]|-)+$, past a thread's default stack on a long value that
    PostgreSQL's regex engine matches. false where even that stack runs out: a value too long for
    java.util.regex to tell is refused, never let through; so is one whose caller is interrupted
-   waiting (the interrupt kept for it to see)."
+   waiting (the interrupt kept for it to see). The thread holds its permit of large-stacks till it
+   ends, whoever stops waiting for it."
   [p x]
-  (try
-    (.acquire ^java.util.concurrent.Semaphore large-stacks)
+  (let [^java.util.concurrent.Semaphore sem large-stacks
+        result (promise)]
     (try
-      (let [result (promise)
-            t (Thread. nil #(deliver result (try (some? (re-find p x))
-                                                 (catch StackOverflowError _ false)
-                                                 (catch Throwable e e)))
+      (.acquire sem)
+      (let [t (Thread. nil #(try (deliver result (try (some? (re-find p x))
+                                                      (catch StackOverflowError _ false)
+                                                      (catch Throwable e e)))
+                                 (finally (.release sem)))
                        "pgmalli-re" (* 256 1024 1024))]
-        (.start t)
+        (try (.start t) (catch Throwable e (.release sem) (throw e)))
         (.join t)
         (let [r @result] (if (instance? Throwable r) (throw r) r)))
-      (finally (.release ^java.util.concurrent.Semaphore large-stacks)))
-    (catch InterruptedException _
-      (.interrupt (Thread/currentThread))
-      false)))
+      (catch InterruptedException _
+        (.interrupt (Thread/currentThread))
+        false))))
 
 (def re-schema
   "[:re re] as malli's, except a value java.util.regex runs out of stack on is matched on a

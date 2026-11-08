@@ -198,3 +198,14 @@
         r (on-small-stack #(do (.interrupt (Thread/currentThread))
                                [(m/validate s (apply str (repeat 200000 "a"))) (Thread/interrupted)]))]
     (is (= [false true] r))))
+
+(deftest a-large-stack-is-held-by-its-thread-whoever-stops-waiting-for-it
+  (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
+        big (apply str (repeat 1000000 "a"))
+        peak (atom 0)
+        watching (future (dotimes [_ 400]
+                           (swap! peak max (count (filter #(= "pgmalli-re" (.getName ^Thread %)) (keys (Thread/getAllStackTraces)))))
+                           (Thread/sleep 2)))]
+    (dotimes [_ 20] (let [f (future (m/validate s big))] (Thread/sleep 5) (future-cancel f)))
+    @watching
+    (is (<= @peak 2) "callers interrupted waiting leave no more large stacks running than its permits")))
