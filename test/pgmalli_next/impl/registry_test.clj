@@ -69,7 +69,8 @@
         valid? #(m/validate %1 %2 {:registry reg})
         values (h/values-schema reg :pg.public/t)]
     (is (every? #(valid? :pg.public.t/insert %) [{} {:a nil}]) "the trigger may fill the row")
-    (is (every? #(m/validate values %) [{} {:a nil}]))
+    (is (m/validate values {:a nil}))
+    (is (not (m/validate values {})) "HoneySQL writes an empty row as VALUES (), which PostgreSQL refuses")
     (is (not (valid? :pg.public.t/update {:a nil})) "no trigger for an UPDATE")
     (doseq [s [values :pg.public.t/insert]]
       (is (every? #(some? (:a %)) (mg/sample s {:registry reg :size 20 :seed 1}))

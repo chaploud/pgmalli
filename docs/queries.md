@@ -277,8 +277,9 @@ keyword to the column under `:format`, the key is the name as a string
 DEFAULT too: `[:default]`, or `:default` where the format writes it as the word (not where the format quotes it); one it writes (generated, identity ALWAYS) takes DEFAULT alone. Where a
 BEFORE row trigger runs for the write, every column is optional and takes nil
 ([types](types.md#names-in-the-registry)). In
-`h/set-schema` every column is optional and the map has at least one key: HoneySQL writes an
-empty `:set` as `SET` alone, which PostgreSQL refuses.
+`h/set-schema` every column is optional. Either map has at least one key: HoneySQL writes an
+empty `:set` as `SET` alone and an empty row as `VALUES ()`, which PostgreSQL refuses (a row of
+defaults alone is `{:insert-into :t :values :default}`).
 
 A column takes a value, not an expression: write `[:now]`, `[:+ :n 1]` or `:current_timestamp`
 in the query body, not in a row. `[:lift v]` is a value too, which HoneySQL sends as one

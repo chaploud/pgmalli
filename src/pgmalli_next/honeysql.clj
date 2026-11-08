@@ -200,7 +200,8 @@
    the elements e generates (java-array), of registry r, and the maps and vectors of any values
    (jsonb's) as JSON holds them (json-scalar); a value of own's kind within the bounds the
    registry generates own's in (a varchar(n)'s n, 2025's dates), a keyword as short, and no date
-   or time of another kind, which it bounds not, nor a value of another kind held to a
+   or time of another kind, which it bounds not, a string of a type of other values one of its
+   literals (types/types', a regclass's that names a relation), nor a value of another kind held to a
    predicate; nil where nothing is left."
   [r own t]
   (let [h (shape/head t)
@@ -228,6 +229,9 @@
           (and (= :keyword k) (= :string (shape/kind own)) (:gen/max hints))
           (shape/merge-props t {:gen/schema [:string {:min 1 :max (:gen/max hints)}] :gen/fmap keyword})
           (and (keyword? k) (= "time" (namespace k)) (not= k (shape/kind own))) nil
+          ;; the text of a type of no string values (a regclass's), its input reads: one of its literals
+          (and (= :string k) (not= :string (shape/kind own)) (some-> own shape/column-props shape/type-name types/entry :literals))
+          (shape/merge-props t {:gen/elements (-> own shape/column-props shape/type-name types/entry :literals)})
           :else t)))
 
 (def ^:private sql-word-schema
@@ -248,8 +252,8 @@
   "The closed map of the derived schema (\"insert\", \"update\") of table row name (:pg.public/users)
    of registry r as reading reads it: each column typed as an argument assigned to it, optional
    as the derived schema has it, keyed by written-key; one the database may fill takes DEFAULT too, and one
-   it writes DEFAULT alone. update takes a non-empty map: HoneySQL writes an empty :set as SET
-   alone, which PostgreSQL refuses. nil where r has no such schema."
+   it writes DEFAULT alone. A non-empty map: HoneySQL writes an empty :set as SET alone, an empty
+   row as VALUES (), which PostgreSQL refuses. nil where r has no such schema."
   [r name derived opts]
   (when (get (::query/schemas r) (shape/derived-name name derived))
     (let [schemas (::query/schemas r)
@@ -295,8 +299,8 @@
           row (into [:map {:closed true :error/fn extra-key-message}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
           generated (into [:map] (for [[k _ t g required?] columns :when (or g required?)] (entry k required? (or g t))))
-          nonempty [:not [:= nil {}]]
-          non-empty #(if (= "update" derived) [:and % nonempty] %)]
+          ;; HoneySQL writes an empty :set as SET alone, an empty row as VALUES (), which PostgreSQL refuses
+          non-empty #(vector :and % [:not [:= nil {}]])]
       (shape/merge-props (non-empty row) {:gen/schema (non-empty generated)}))))
 
 (defn- written-row

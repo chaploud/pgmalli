@@ -1053,7 +1053,7 @@
   (let [v (h/values-schema registry :pg.sample/users {:schema "sample"})
         s (h/set-schema registry :pg.sample/users {:schema "sample"})
         ok? #(m/validate %1 %2 {:registry registry})]
-    (is (= [:born :closed_at :group_id :group_name :mood :nick :referrer_id :score :seq :total :updated_at :id :nick_upper] (map first (rest (:gen/schema (second v)))))
+    (is (= [:born :closed_at :group_id :group_name :mood :nick :referrer_id :score :seq :total :updated_at :id :nick_upper] (map first (rest (shape/and-base (:gen/schema (second v))))))
         "the columns the database writes last")
     (is (ok? v {:group_id 1 :score 0 :id :default :nick_upper [:default] :total :default}) "HoneySQL's :default where the database fills or writes a column")
     (is (not-any? #(ok? v %) [{:group_id 1 :score 0 :id 1} {:group_id :default :score 0}]) "a value where the database writes a column, :default where it fills none")
@@ -1736,7 +1736,7 @@
     (is (= [:address_line] (keys {:format {:dialect :ansi}})) "a dialect quotes names")
     (is (= [:address_line] (keys {:format {:quoted-always #"^address_line$"}})) ":quoted-always quotes the name HoneySQL writes, - already _"))
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:MixedCase :int]]}})
-        keys #(map first (drop 2 (h/values-schema reg :t %)))]
+        keys #(map first (drop 2 (shape/and-base (h/values-schema reg :t %))))]
     (is (= ["MixedCase"] (keys {})) "unquoted, only a string reaches a column with capitals")
     (is (= [:MixedCase] (keys {:format {:quoted true}})))))
 
