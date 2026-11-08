@@ -272,14 +272,19 @@
 
 (def collection-kinds #{:map :map-of :vector :sequential :set :tuple})
 
+(defn value-kind
+  "kind, the strings' of :re and string?, as an override writes a string column's schema."
+  [t]
+  (let [k (kind t)] (get {:re :string 'string? :string} k k)))
+
 (defn distinct-kinds
   "Alternatives ts, the first of each kind, in their order (an argument's own values come
    first, with their :pg/type and bounds); collections of different contents (two shapes of a
-   json column, the Java arrays of two element classes) are each kept. A :re, a string? are
-   strings' kind, as an override writes them."
+   json column, the Java arrays of two element classes) are each kept, a kind as value-kind
+   names it."
   [ts]
   (first (reduce (fn [[out seen] t]
-                   (let [k (get {:re :string 'string? :string} (kind t) (kind t))
+                   (let [k (value-kind t)
                          k (if (and (or (collection-kinds k) (= :pg/array k)) (vector? t)) [k (vec (entries t))] k)]
                      (if (seen k) [out seen] [(conj out t) (conj seen k)])))
                  [[] #{}] ts)))

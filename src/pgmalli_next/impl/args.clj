@@ -73,7 +73,7 @@
    a column's type, takes of a string where an override or a domain checks it ([:and :string
    ...]), or a \"char\" its one byte: the text is the value the column gets."
   [a own registry]
-  (let [checked (filter #(and (or (= :and (shape/head %)) (:pg/one-byte (shape/props %))) (= :string (shape/kind %))) (shape/alternatives (shape/non-null own)))]
+  (let [checked (filter #(and (or (#{:and :re} (shape/head %)) (:pg/one-byte (shape/props %))) (= :string (shape/value-kind %))) (shape/alternatives (shape/non-null own)))]
     (if (and (seq checked) (= :keyword (shape/kind a)))
       (let [valid? (m/validator (shape/either checked nil) (malli-options registry))]
         [:and a [:fn {:error/message "should be a keyword whose text the column's string takes"} #(valid? (accept/sent-text %))]])

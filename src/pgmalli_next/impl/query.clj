@@ -682,7 +682,7 @@
       (when (and s (empty? (shape/column-entries s))) [k s]))))
 
 (defn loose
-  "A column type without the bounds a comparison need not keep (lengths, ranges): its
+  "A column type without the bounds a comparison need not keep (lengths, ranges, patterns): its
    kind and :pg/type, each alternative's of an :or. A type with other children (an enum) stays:
    PostgreSQL refuses a value outside an enum, even compared; so does an oid's range, as no
    operator compares an oid with another number, which converts to an oid."
@@ -704,6 +704,8 @@
             (#{:vector :sequential :set :pg/array} h) (let [kept (select-keys p [:pg/type :pg/classes :pg/empty-classes :pg/domain])]
                                                         (if (seq kept) [h kept (loose (last t))] [h (loose (last t))]))
             (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
+            ;; an override's pattern, a bound as a length is
+            (= :re h) (if-let [pg (:pg/type p)] [:string {:pg/type pg}] :string)
             (seq children) t
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
 

@@ -3562,6 +3562,10 @@
         reg (mr/composite-registry base {:app/code [:re "^[A-Z]+$"]})
         v (h/values-schema reg :t)]
     (is (= [true false] (map #(m/validate v {:code %} {:registry reg}) ["ABC" "abc"])) "a :re override holds a written String")
+    (is (= [true false] (map #(m/validate (:x (:args (h/analyze reg {:update :t :set {:code :?x}}))) % {:registry reg}) [:ABC :abc])) "a keyword's text too")
+    (is (every? (fn [[w v]] (m/validate (:x (:args (h/analyze reg {:select [:code] :from [:t] :where w}))) v {:registry reg}))
+                [[[:like :code :?x] "A%"] [[:= :code :?x] "abc"]])
+        "compared, the pattern dropped as a length is")
     (is (= "should be [:lift v], v as the column takes it; the value is none the column's schema takes (an override's shape, a range): write one it takes"
            (first (:code (me/humanize (m/explain v {:code "abc"} {:registry reg}))))))))
 

@@ -353,7 +353,8 @@ A class adds to what a column takes where its type is the column's or one it tak
 ([above](#the-types-of-the-arguments)), and in a cast wherever PostgreSQL casts it. A
 value sent untyped goes where its text is of the column's type's category: a keyword to a
 string column as a string, to an enum as its labels. It goes to a
-`bytea` or `"char"` column, whose input takes any text, and to an extension's type pgmalli does
+`bytea` column, whose input takes any text, a `"char"` one, of one byte
+([assigned](#stricter-assignment)), and to an extension's type pgmalli does
 not type (compared, one whose `=` pgmalli's catalog holds, `citext`). Cast, a keyword goes to
 any type, as a string does. A json or jsonb column takes a map and a vector, held to the shape an
 [override](../README.md#overrides) gives it (sent as jsonb, which PostgreSQL assigns to json as it
@@ -703,7 +704,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-assignment"></a>An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
   `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
-  time off, a `String` of more than one byte into a `"char"` column keeps its first), and a value of another type assigned to a string column (`text`, `varchar`, `char(n)`, `name`, `citext`: a number, a `Boolean`, a `UUID`, a date), which PostgreSQL converts through its text. Two
+  time off, a `String`, or a keyword's text, of more than one byte into a `"char"` column keeps its first), and a value of another type assigned to a string column (`text`, `varchar`, `char(n)`, `name`, `citext`: a number, a `Boolean`, a `UUID`, a date), which PostgreSQL converts through its text. Two
   assignment casts change nothing and are taken: a `Double` NaN or infinity to a `numeric` column
   (an array of them to `numeric[]`), and `jsonb` to a `json` column.
   Cast it in the query (`[:cast :?n :bigint]`) where the conversion is meant. A value of a
