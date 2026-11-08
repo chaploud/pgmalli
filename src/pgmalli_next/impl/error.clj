@@ -27,7 +27,7 @@
   ([kind message] (fail! kind message {} nil))
   ([kind message data] (fail! kind message data nil))
   ([kind message data cause]
-   (throw (ex-info message (assoc data :pgmalli/error kind :cognitect.anomalies/category (categories kind :cognitect.anomalies/fault))
+   (throw (ex-info message (assoc data :pgmalli/error kind :cognitect.anomalies/category (or (categories kind) (throw (IllegalArgumentException. (str "no error kind " kind)))))
                    cause))))
 
 (defn edit-distance

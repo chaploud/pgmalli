@@ -3,7 +3,8 @@
    each problem's."
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is]]
-            [pgmalli-next.honeysql :as h]))
+            [pgmalli-next.honeysql :as h]
+            [pgmalli-next.impl.error :as error]))
 
 (defn- made
   "The kinds a map literal {:kind :k ...} of files makes, re the pattern after {:kind :k."
@@ -25,3 +26,15 @@
 (deftest every-diagnostic-kind-is-in-the-types-doc
   (is (= (made ["src/pgmalli_next/impl/render.clj"] " :severity :")
          (table "docs/types.md" "| `:kind` | severity | when |"))))
+
+(deftest every-error-kind-thrown-has-a-category-and-a-row-in-readme
+  (let [thrown (set (for [f (file-seq (java.io.File. "src")) :when (str/ends-with? (str f) ".clj")
+                          k (re-seq #":pgmalli\.error/[a-z-]+" (slurp f))]
+                      (keyword (subs k 1))))
+        lines (drop-while #(not= "| `:pgmalli/error` | when |" %) (str/split-lines (slurp "README.md")))
+        documented (set (for [l (take-while #(str/starts-with? % "|") (drop 2 lines))
+                              :let [cell (second (str/split l #"\|"))]
+                              [_ k] (re-seq #"`(?::pgmalli\.error/)?([a-z-]+)`" cell)]
+                          (keyword "pgmalli.error" k)))]
+    (is (= thrown (set (keys error/categories))) "error/categories")
+    (is (= thrown documented) "the table of :pgmalli/error in README.md")))

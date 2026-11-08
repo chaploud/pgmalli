@@ -413,11 +413,6 @@
             (cond-> (shape/either (shape/distinct-kinds (mapcat (comp shape/alternatives shape/non-null) [assigned cast])) :any)
               (shape/maybe? assigned) query/nullable)))))))
 
-(defn- cast-type-name
-  "Type name n as format_type writes it (int8 is bigint, varchar[] character varying[])."
-  [n]
-  (if-let [e (types/element n)] (types/array-of (types/canonical-name e)) (types/canonical-name n)))
-
 (defn- cast-args
   "[:cast :?x :timestamptz]: what PostgreSQL casts to the type, its ranges left out where every
    use of the cast is compared; nil too unless every use of the
@@ -477,7 +472,7 @@
       (if (or (syntax/param-key k) elements?)
         [k (if elements?
              (cast-arrays registry s t opts)
-             (cond-> t (and (vector? t) (= :cast (first x))) (vary-meta assoc ::cast (some-> (syntax/cast-target (nth x 2)) cast-type-name))))]
+             (cond-> t (and (vector? t) (= :cast (first x))) (vary-meta assoc ::cast (some-> (syntax/cast-target (nth x 2)) types/canonical-name))))]
         ;; a literal cast to an enum type: its labels
         [(literal-key k {:type (query/enum-type registry s) :function "CAST" :schema s}) t]))))
 
@@ -488,7 +483,7 @@
   (for [{:keys [x chain assign event] :as a} (syntax/assignments ps)
         :let [{c :schema :keys [table nullable?]} (query/assigned-column registry a)
               ;; a NOT NULL column a BEFORE row trigger may fill: nil goes there for it alone
-              triggers (when (and c nullable? (not (shape/maybe? c))) (get-in (query/table-props registry table) [:pg/before-triggers event]))
+              triggers (when (and c nullable? (not (shape/maybe? c))) (shape/before-triggers (query/table-props registry table) event))
               t (assigned-type registry a :assign opts)
               t (cond-> t (and triggers (vector? t)) (vary-meta assoc ::before-triggers triggers))
               u (array-arg x #{:unnest})

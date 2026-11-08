@@ -55,7 +55,7 @@
 (defn needs
   "What reading a schema needs of the server, for an error that it failed."
   []
-  (str "pgmalli needs PostgreSQL " (types/oldest-version) " or later and a user that can read pg_catalog"))
+  (str "pgmalli needs " (types/version-label (types/oldest-version)) " or later and a user that can read pg_catalog"))
 
 (defn- psql-error
   "Why psql failed, of its stderr: a line the server wrote (FATAL:), else the last address psql

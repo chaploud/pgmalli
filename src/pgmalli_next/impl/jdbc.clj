@@ -478,7 +478,7 @@
   (let [;; the driver returns the elements of an array of a domain (d[]) as PGobjects
         d (when (array-column? s) (some-> (:pg/domain (shape/column-props s)) types/element))]
     (cond-> (read-type (cond-> s d (assoc (dec (count s)) [:any {:pg/type d}])) pgjdbc?)
-      d (shape/merge-props {:pg/domain (str d "[]")}))))
+      d (shape/merge-props {:pg/domain (types/array-of d)}))))
 
 (defn keyword-enum
   "[:enum props ...] of labels as keywords; a default among props (malli's default-value

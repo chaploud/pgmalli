@@ -121,7 +121,7 @@
   (let [major (parse-long (or (re-find #"\d+" version) "0"))
         oldest (types/oldest-version)]
     (when (< major (parse-long oldest))
-      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL " oldest " or later") {:given version}))
+      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from " (types/version-label oldest) " or later") {:given version}))
     (types/version-label major)))
 
 (defn- read-schema

@@ -968,7 +968,7 @@
 
 (def ^:private operator-syntax
   "HoneySQL's special syntax that writes an SQL operator, whose column PostgreSQL names ?column?."
-  #{:in :not-in :not :between :not-between :inline :lift :param})
+  (into in-ops #{:not :between :not-between :inline :lift :param}))
 
 (defn operator?
   "Whether HoneySQL writes [h ...] as an operator: a name not an identifier (:->, :@>), one

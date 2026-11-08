@@ -3,7 +3,8 @@
    rows of matrix.types (pgmalli-next.oracle/matrix-schema!: every type pgmalli renders, as itself, an
    array, a domain, an array of the domain), read through pgmalli-next.jdbc/builder. JVM only (babashka has
    no java.sql), so bb test does not list it."
-  (:require [clojure.test :refer [deftest is testing use-fixtures]]
+  (:require [clojure.string :as str]
+            [clojure.test :refer [deftest is testing use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
@@ -119,4 +120,4 @@
     (let [e (is (thrown? clojure.lang.ExceptionInfo
                          ((requiring-resolve 'pgmalli-next.impl.ir-jdbc/out) {:datasource (datasource)} "SELECT no_such_column FROM pg_class")))]
       (is (= :pgmalli.error/fault (:pgmalli/error (ex-data e))))
-      (is (re-find #"PostgreSQL 16 or later and a user that can read pg_catalog" (ex-message e))))))
+      (is (str/includes? (ex-message e) ((requiring-resolve 'pgmalli-next.impl.ir/needs)))))))

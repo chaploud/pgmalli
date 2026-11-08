@@ -1066,7 +1066,7 @@
       (= :interval h) (of-type "interval")
       (= :array h) (array-type registry x (when (sequential? (second x)) (map sub (second x))) opts)
       (or (#{:exists :not-exists :is :is-not} h) (syntax/distinct-ops h)) (of-type "boolean")
-      (#{:and :or :not :xor :between :not-between :in :not-in :similar-to :not-similar-to} h) (typed-with-nulls "boolean" (rest x))
+      (or (syntax/in-ops h) (#{:and :or :not :xor :between :not-between :similar-to :not-similar-to} h)) (typed-with-nulls "boolean" (rest x))
       ;; an aggregate's FILTER, an argument's DISTINCT, the ORDER BY after an aggregate's last
       ;; argument (docs 4.2.7)
       (#{:filter :distinct :order-by} h) (sub (second x))

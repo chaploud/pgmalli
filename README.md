@@ -238,6 +238,10 @@ aside):
 
 Insert it as `{:insert-into :events :values [row]}`.
 
+A column whose CHECK (its own or its domain's) the generated values miss takes an
+[override](#overrides) that generates within it; a `:re` override generates only with
+`com.gfredericks/test.chuck` on the classpath, as malli's `:re` does.
+
 The registry's `/insert` schema generates the database's types (a label a string, a document a
 map), what another system holds rather than what HoneySQL sends.
 

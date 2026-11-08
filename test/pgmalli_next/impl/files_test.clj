@@ -3,7 +3,8 @@
   (:require [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [pgmalli-next.impl.files :as files]
-            [pgmalli-next.impl.pattern :as p]))
+            [pgmalli-next.impl.pattern :as p]
+            [pgmalli-next.impl.types :as types]))
 
 (deftest generated-data-must-be-edn
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^generated data is not readable EDN; :overrides must be data" (files/edn-string {:registry {:x [:fn (fn [_] true)]}})))
@@ -60,6 +61,6 @@
 (deftest a-file-names-the-servers-major-version-and-16-is-the-oldest
   (is (= ["PostgreSQL 17" "PostgreSQL 17" "PostgreSQL 19" "PostgreSQL 16"]
          (map files/major-version ["PostgreSQL 17.6" "PostgreSQL 17.6 (Debian 17.6-1.pgdg120+1)" "PostgreSQL 19beta1" "PostgreSQL 16devel"])))
-  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^PostgreSQL 15.4 is older than pgmalli reads: generate from PostgreSQL 16 or later$"
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo (re-pattern (str "^PostgreSQL 15.4 is older than pgmalli reads: generate from PostgreSQL " (types/oldest-version) " or later$"))
                                 (files/major-version "PostgreSQL 15.4")))]
     (is (= :pgmalli.error/fault (:pgmalli/error (ex-data e))))))

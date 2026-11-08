@@ -50,7 +50,7 @@
 (deftest operator-syntax-is-honeysqls-special-syntax
   ;; HoneySQL writes :in and :not-in in format-expr, outside its table
   (when-not (older-than-pinned?)
-    (doseq [op (sort (set/difference @#'syntax/operator-syntax (set (keys @@#'sql/special-syntax)) #{:in :not-in}))]
+    (doseq [op (sort (set/difference @#'syntax/operator-syntax (set (keys @@#'sql/special-syntax)) syntax/in-ops))]
       (is (nil? op) (str honeysql " no longer has special syntax " op ": remove it from operator-syntax in src/pgmalli_next/impl/hsyntax.clj")))))
 
 (deftest sql-format-writes-what-pgmalli-reads

@@ -11,6 +11,7 @@
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.oracle :as oracle]
+            [pgmalli-next.small-stack :refer [on-small-stack]]
             [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! with-postgres]])
   (:import (org.postgresql.util PGobject)))
 
@@ -555,13 +556,8 @@
 
 (deftest a-jsonb-nested-past-the-stack-is-an-error-naming-the-column
   (when *db*
-    ;; read on a thread of a small stack, which 5000 levels overflow whatever the JVM's default
     (let [deep (str (apply str (repeat 5000 "[")) (apply str (repeat 5000 "]")))
-          thrown (promise)
-          t (Thread. nil #(deliver thrown (try (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" deep] {:builder-fn (builder {})}) nil
-                                               (catch Throwable e e)))
-                     "small-stack" (* 256 1024))
-          e (do (.start t) (.join t) @thrown)]
+          e (on-small-stack #(jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" deep] {:builder-fn (builder {})}))]
       (is (instance? clojure.lang.ExceptionInfo e) (pr-str (class e)))
       (is (= [:pgmalli.error/fault "doc"] [(:pgmalli/error (ex-data e)) (:given (ex-data e))])))))
 

@@ -13,7 +13,8 @@
             malli.experimental.time
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
-            [pgmalli-next.sample :refer [opts registry user]]))
+            [pgmalli-next.sample :refer [opts registry user]]
+            [pgmalli-next.small-stack :refer [on-small-stack]]))
 
 (deftest a-registry-of-generated-data
   (is (m/validate :pg.sample/users user opts))
@@ -139,12 +140,12 @@
 (deftest a-regex-running-out-of-the-threads-stack-matches-on-a-larger-one
   (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
         long-value (apply str (repeat 200000 "a"))]
-    (is (thrown? StackOverflowError (re-find #"^([a-z0-9]|-)+$" long-value)) "the thread's own stack runs out")
-    (is (m/validate s long-value))
-    (is (not (m/validate s (str long-value "!"))))
-    (let [too-long (str (apply str (repeat 3000000 "a")) "!")]
-      (is (every? false? (pmap #(m/validate s %) (repeat 6 too-long)))
-          "a value too long for the larger stack too is refused, several at once"))))
+    (is (instance? StackOverflowError (on-small-stack #(re-find #"^([a-z0-9]|-)+$" long-value))) "the thread's own stack runs out")
+    (is (true? (on-small-stack #(m/validate s long-value))))
+    (is (false? (on-small-stack #(m/validate s (str long-value "!")))))
+    (let [too-long (apply str (repeat 3000000 "a"))]
+      (is (every? false? (pmap (fn [v] (on-small-stack #(m/validate s v))) (repeat 6 too-long)))
+          "a value that matches, too long for the larger stack too, is refused, several at once"))))
 
 (deftest a-default-pgmalli-cannot-parse-is-its-sql-and-the-column-optional-in-insert
   (let [reg (registry-of {} [{:name "c" :position 1 :data_type "text" :is_nullable false :default_value "CASE WHEN"}])

@@ -60,7 +60,7 @@
   "Names a mutant puts in place of an identifier, none of the schema's but n, x and a, which
    corpus queries alias with."
   ["nosuch" "n" "x" "a" "zz"])
-(def ^:private row-keys #{:set :do-update-set :values})
+(def ^:private row-keys (conj syntax/assignment-clauses :values))
 
 ;;; mutation
 
@@ -339,7 +339,7 @@
     ;; does not take (docs/queries.md "Stricter than PostgreSQL")
     :literal-type (boolean (and (:type p) (accept/accepts? (:type p) (:sent p) :assign) (not (accept/holds? (:type p) (:sent p) :assign))))
     ;; an UPDATE's SET or ON CONFLICT DO UPDATE's, even where it touches no row or none conflicts
-    :not-null-violation (contains? #{:set :do-update-set} (:clause p))
+    :not-null-violation (contains? syntax/assignment-clauses (:clause p))
     ;; an INSERT ... SELECT's, even where the SELECT returns no row
     :missing-required-column (boolean (:select (syntax/insert-parts query)))
     ;; t.name, which PostgreSQL reads as name(t), t's row converted

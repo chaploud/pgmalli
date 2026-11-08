@@ -2,7 +2,8 @@
   (:require [clojure.java.io :as io]
             [clojure.test :refer [deftest is]]
             [pgmalli-next.impl.pattern :as p]
-            [pgmalli-next.impl.types :as types]))
+            [pgmalli-next.impl.types :as types]
+            [pgmalli-next.small-stack :refer [on-small-stack]]))
 
 (def ^:private schema
   {:name "public"
@@ -87,8 +88,8 @@
 
 (deftest a-long-quoted-default-is-read-without-running-out-of-stack
   (let [s (apply str (repeat 100000 "a"))
-        facts (p/facts {:name "public" :types {}
+        facts (on-small-stack #(p/facts {:name "public" :types {}
                         :tables {"t" {:columns [{:name "c" :position 1 :data_type "text" :type_schema "pg_catalog" :is_nullable true
                                                  :default_value (str "'" s "'::text")}]
-                                      :constraints {}}}})]
+                                      :constraints {}}}}))]
     (is (= s (:default (first (filter #(= :column (:fact %)) facts)))))))
