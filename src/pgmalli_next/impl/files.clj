@@ -148,7 +148,7 @@
                     *print-namespace-maps* false]
             (with-out-str (pp/pprint data)))]
     (when-not (= data (try (edn/read-string s) (catch Exception _ ::unreadable)))
-      (error/fail! :pgmalli.error/invalid-config "generated data is not readable EDN; :overrides must be data such as [:ref name], not functions"))
+      (error/fail! :pgmalli.error/invalid-config "generated data is not readable EDN; :overrides must be data such as [:ref name] or [:re "..."], not functions or regex objects"))
     (str header "; do not edit (adjust :overrides instead)\n" s)))
 
 (defn generate!

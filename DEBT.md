@@ -24,6 +24,11 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
   `LocalDateTime` or `Instant` past PostgreSQL's range (other than the MAX and MIN that mean
   infinity), are taken: PostgreSQL refuses the one past its maximum and stores the one before its
   minimum as `-infinity`.
+- Under `{:format {:inline true}}`, a `String` compared with a column of an alias of `oid`
+  (`regclass`) is taken: PostgreSQL resolves `regclass = unknown` as `oid = oid`, reading the
+  text as a number.
+- A temporal foreign key (PostgreSQL 18, `PERIOD`) reads as `:pg/foreign-keys` of its columns,
+  equality of each, the period's overlap not told.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: no
   schema checks a length, which generation alone keeps to (`:pg/max-length`, the array's for its

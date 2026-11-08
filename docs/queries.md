@@ -734,6 +734,9 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   CASE: PostgreSQL reads an `integer` as the `oid` of its bits (`-1` as `4294967295`), which is
   almost always a mistake, and refuses a `bigint` past the range where it converts it, which a
   generic plan does only where a row reaches it. They take 0 to 4294967295.
+- <a id="stricter-inline-in"></a>Under `{:format {:inline true}}`, an argument in `:in`: sql/format writes
+  a list in it as `IN [1, 2]`, which PostgreSQL refuses, though `IN (1)` of a list of one runs.
+  Write the list in the query.
 - <a id="stricter-json-keys"></a>A map `install-sending!` sends as `jsonb` with two keys of one text
   (`:a` and `"a"`, `:n/a` and `'n/a`): PostgreSQL keeps the last of them, which is the map's hash
   order's, not the application's. Sending it is an error; keep one key.
