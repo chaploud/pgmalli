@@ -41,12 +41,12 @@
   (when *db*
     (exec-sql! shadowing)
     (let [ir (ir/from-db (assoc *db* :schema "evil"))]
-      (is (= #{"t" "p"} (set (keys (:tables ir)))))
+      (is (= #{"t" "p" "p1"} (set (keys (:tables ir)))))
       (is (= #{"mood"} (set (keys (:types ir))))))
     (when-not (System/getProperty "babashka.version")
       (let [{:keys [user password]} *db*
             ir (ir/from-db {:jdbcUrl (jdbcUrl) :user user :password password :schema "evil"})]
-        (is (= #{"t" "p"} (set (keys (:tables ir)))))))))
+        (is (= #{"t" "p" "p1"} (set (keys (:tables ir)))))))))
 
 (deftest a-schema-name-written-into-the-jdbc-query-stays-one-identifier
   (when (and *db* (not (System/getProperty "babashka.version")))

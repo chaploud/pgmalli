@@ -24,7 +24,6 @@
      :not-enforced a NOT ENFORCED FOREIGN KEY             {:constraint :input} (nothing to render)
      :trigger      a row-level trigger left enabled       {:name :before :insert :update :delete} (nothing to render)
      :inherited    a table other tables inherit (not as partitions) {} (nothing to render)
-     :partitions   a partitioned table's partitions        {:names}
      :sequence     a sequence of the schema                {:name}
      :function     a function a query may call            {:name :overload}
      :operator     an operator                            {:name :overload}
@@ -33,48 +32,44 @@
   (:require [clojure.string :as str]
             [pgmalli-next.impl.types :as types]))
 
-(defn- type-ident
-  "[name array?] of a type as format_type prints it: the name the catalog keys it by, a quoted
-   one unquoted, the schema of one outside the search path dropped (\"Mixed Case\"[] -> [\"Mixed Case\" true])."
-  [data-type]
-  (let [[_ t brackets] (re-matches #"(.*?)((?:\[\])*)" data-type)]
-    [(if-let [[_ quoted] (re-matches #"(?:.*\.)?\"((?:[^\"]|\"\")*)\"" t)]
-       (str/replace quoted "\"\"" "\"")
-       (str/replace t #"^[^.]+\." ""))
-     (boolean (seq brackets))]))
+(defn- number-literal [s]
+  (cond (re-matches #"-?\d+" s) (bigint s)
+        (re-matches #"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?" s) (bigdec s)))
 
 (defn- default-literal
   "The value of a default PostgreSQL prints as a literal (42, 1.5, true, 'happy'::mood, a
-   negative number as '-1'::integer); nil for an expression (now(), nextval(...))."
+   number it quotes, cast to a number type: '-1'::integer, '10000000000'::bigint); nil for an
+   expression (now(), nextval(...))."
   [s]
-  (cond (re-matches #"-?\d+" s) (bigint s)
-        (re-matches #"-?\d+\.\d+" s) (bigdec s)
-        (#{"true" "false"} s) (= "true" s)
-        :else (some-> (re-matches #"(?s)'((?:[^']|'')*)'(?:::.+)?" s) second (str/replace "''" "'"))))
+  (cond (#{"true" "false"} s) (= "true" s)
+        (number-literal s) (number-literal s)
+        :else (when-let [[_ quoted t] (re-matches #"(?s)'((?:[^']|'')*)'(?:::(.+))?" s)]
+                (let [v (str/replace quoted "''" "'")]
+                  (or (when (some-> t types/entry types/number-entry?) (number-literal v)) v)))))
 
 (defn- column-facts
   "The :column fact of a column and those of its type."
   [base {cname :name :keys [data_type domain type_schema is_nullable default_value max_length identity generated_expr position]} enums]
-  (let [[ident array?] (type-ident data_type)
+  (let [[_ n array?] (types/type-parts data_type)
+        ident (types/unquoted n)
         base (assoc base :column cname)
         ;; an enum of another schema may share a name with one of this schema's
         enum (when (and (contains? enums ident) (= type_schema (:schema base)))
                (cond-> (merge base {:fact :enum :type-name ident :values (get enums ident)}) array? (assoc :array? true)))
-        lit (some-> default_value default-literal)
-        bare (types/bare-name (str/replace data_type #"\[\]$" ""))]
+        lit (some-> default_value default-literal)]
     (cond-> [(merge base {:fact :column :type data_type :position position :nullable? (boolean is_nullable)}
                     (when domain {:domain domain})
                     (when default_value {:default-sql default_value})
-                    (when (some? lit) {:default (if (integer? lit) (long lit) lit)})
+                    (when (some? lit) {:default (if (and (integer? lit) (<= Long/MIN_VALUE lit Long/MAX_VALUE)) (long lit) lit)})
                     (cond identity {:identity ({"ALWAYS" :always "BY DEFAULT" :default} identity)}
                           (some-> default_value (str/starts-with? "nextval(")) {:identity :serial})
                     (when generated_expr {:generated generated_expr}))]
       enum (conj enum)
       ;; a type of another schema: the schema's facts are read alone, so they cannot refer to it
-      (not (or enum (types/known? bare type_schema)))
+      (not (or enum (types/known? n type_schema)))
       (conj (cond-> (merge base {:fact :unknown-type :type data_type})
               (not (#{nil "pg_catalog" (:schema base)} type_schema)) (assoc :type-schema type_schema)))
-      (and max_length (:typmod (types/entry bare)))
+      (and max_length (:typmod (types/entry n)))
       (conj (merge base {:fact :max-length :max max_length})))))
 
 (defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial predicate exclude deferrable]}]
@@ -98,7 +93,8 @@
 
 (defn function-overload
   "An overload as pgmalli-next.impl.types/catalog holds one, of a function as ir.sql and the catalog's
-   query read it: {:args :result :set :kind :variadic :defaults :non_null :columns}."
+   query read it: {:args :result :set :kind :variadic :defaults :non_null :columns}, :non_null the
+   catalog's alone: a schema's own aggregate may return NULL from its transition function."
   [{:keys [args result set kind variadic defaults non_null columns]}]
   (cond-> {:args (vec args) :result result}
     set (assoc :set true)
@@ -131,7 +127,6 @@
             f (concat (when view? [(assoc base :fact :view :materialized? (= "MATERIALIZED VIEW" (:kind t)))])
                       (for [tr (:triggers t)] (merge base {:fact :trigger} (select-keys tr [:name :before :insert :update :delete])))
                       (when (:inherited t) [(assoc base :fact :inherited)])
-                      (when (seq (:partitions t)) [(assoc base :fact :partitions :names (vec (:partitions t)))])
                       ;; nothing marks a view's column NOT NULL in the catalog, so every one may be NULL
                       (mapcat #(column-facts base (cond-> % view? (assoc :is_nullable true)) enums) (sort-by :name (:columns t)))
                       (mapcat #(key-facts base %) (sort-by :name (vals (:constraints t)))))]

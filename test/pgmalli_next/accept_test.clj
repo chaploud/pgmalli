@@ -25,7 +25,7 @@
 (def ^:private candidates
   "Classes besides class-types' an application may send."
   (concat (keys oracle/values)
-          (for [e (concat (keys oracle/boxed) (vals oracle/boxed) [String java.math.BigDecimal java.math.BigInteger java.util.UUID (Class/forName "[B")
+          (for [e (concat (keys accept/boxed) (vals accept/boxed) [String java.math.BigDecimal java.math.BigInteger java.util.UUID (Class/forName "[B")
                                                      LocalDate LocalTime OffsetTime LocalDateTime OffsetDateTime Instant
                                                      java.sql.Date java.sql.Time java.sql.Timestamp java.util.Date])]
             (class (Array/newInstance ^Class e 0)))))

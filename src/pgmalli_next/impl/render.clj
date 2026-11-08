@@ -107,8 +107,6 @@
                                             (:partial? f) (assoc :where true)))))
             ;; other tables inherit it: a query reads their rows too, which its keys do not span
             :pg/inherited (when (some (comp #{:inherited} :fact) tfacts) true)
-            ;; a query reads or writes a partition by name, a row of this table
-            :pg/partitions (some #(when (= :partitions (:fact %)) (:names %)) tfacts)
             ;; a BEFORE row trigger runs before NOT NULL is checked: it may fill what a write leaves out
             :pg/before-triggers (not-empty (into {} (for [event [:insert :update]
                                                           :let [names (vec (for [f tfacts :when (and (= :trigger (:fact f)) (:before f) (event f))] (:name f)))]
@@ -138,6 +136,17 @@
                      (< (if (:partial? f) 0 1) (count (filter #{(:columns f)} (keys-of :unique)))))]
        {:kind :redundant-unique :severity :info :constraint (:constraint f)
         :message (str (:constraint f) " repeats a key on the same columns " (pr-str (:columns f)))}))))
+
+(defn- sequence-diagnostics
+  "A sequence of the name of one of the schema's enum types, which one registry name holds
+   (PostgreSQL refuses an enum of a relation's name, but not a sequence's, which has no row
+   type): the enum's schema is kept, the sequence's row left out."
+  [schema-name facts]
+  (let [enums (set (for [f facts :when (= :enum-type (:fact f))] (:type-name f)))]
+    (for [f facts :when (and (= :sequence (:fact f)) (enums (:name f)))]
+      {:kind :sequence-named-as-enum :severity :info :table (str schema-name "." (:name f))
+       :message (str "sequence " schema-name "." (:name f) " has the name of an enum type: " (pr-str (shape/schema-key schema-name (:name f)))
+                     " is the enum's, so a query of the sequence finds none of its columns")})))
 
 (defn- render-table [schema-name table tfacts overrides]
   (let [by-column (group-by :column (filter :column tfacts))
@@ -169,4 +178,4 @@
       :operators (overloads facts :operator)
       :sequences (vec (sort (for [f facts :when (= :sequence (:fact f))] (:name f))))
       :unrendered (vec (sort-by order (mapcat :unrendered tables)))
-      :diagnostics (vec (sort-by (juxt :table :constraint :kind) (mapcat :diagnostics tables)))})))
+      :diagnostics (vec (sort-by (juxt :table :constraint :kind) (concat (mapcat :diagnostics tables) (sequence-diagnostics schema-name facts))))})))

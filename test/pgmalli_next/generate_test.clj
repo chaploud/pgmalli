@@ -14,6 +14,37 @@
            (generate/diff before after)))
     (is (= [] (generate/diff before before)))))
 
+(deftest a-difference-names-what-differs-of-an-entry
+  (let [before pgmalli-next.sample/sample-data
+        groups (get-in before [:registry :pg.sample/groups])
+        with #(assoc-in before [:registry :pg.sample/groups] %)]
+    (is (= [{:name :pg.sample/groups :property :pg/primary-key :file ["id"] :db nil}]
+           (generate/diff before (with (update groups 1 dissoc :pg/primary-key))))
+        "a property of the row")
+    (is (= [{:name :pg.sample/groups :column :name :property :pg/type :file "text" :db "varchar"}]
+           (generate/diff before (with (assoc-in groups [3 1 1 :pg/type] "varchar"))))
+        "a property of a column")
+    (is (= [{:name :pg.sample/groups :column :name :file [:string {:pg/type "text"}] :db [:maybe [:string {:pg/type "text"}]]}]
+           (generate/diff before (with (assoc-in groups [3 1] [:maybe [:string {:pg/type "text"}]]))))
+        "a column's schema")
+    (is (= [{:name :pg.sample/groups :order true :file [:id :name] :db [:name :id]}]
+           (generate/diff before (with (assoc groups 2 (groups 3) 3 (groups 2))))))
+    (is (= [{:name :pg.sample/gone :file nil :db [:enum "x"]}]
+           (generate/diff before (assoc-in before [:registry :pg.sample/gone] [:enum "x"])))
+        "an entry added, and removed the other way")
+    (is (= [{:name :pg.sample/groups :file groups :db nil}]
+           (generate/diff before (update before :registry dissoc :pg.sample/groups))))
+    (is (= [{:key :database-version :file "PostgreSQL 17" :db "PostgreSQL 16"} {:key :sequences :file {"sample" []} :db {"sample" ["n"]}}]
+           (generate/diff (assoc before :database-version "PostgreSQL 17" :sequences {"sample" []})
+                          (assoc before :database-version "PostgreSQL 16" :sequences {"sample" ["n"]})))
+        "the server's version, which types a query's pg_catalog calls, and the file's other parts as wholes")))
+
+(deftest generate-writes-no-file-where-out-is-a-directory
+  (let [dir (doto (java.io.File/createTempFile "pgmalli-out" "") .delete .mkdirs)]
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is a file generate! did not write; give :out a path of its own"
+                          (generate/generate! {:out (str dir) :db {:psql "/nonexistent/psql"}})))
+    (is (.isDirectory dir))))
+
 (deftest functions-and-operators-differ-by-name
   (let [now pgmalli-next.sample/other-data
         before (-> now (assoc-in [:functions "other" "gone"] [{:args [] :result "text"}])

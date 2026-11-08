@@ -44,15 +44,18 @@
 (defn assemble
   "The file's data from the rendering of each schema's facts ({schema facts}, in the config's
    order), in reading order: what it is, then what deserves a look, then the schemas, then what
-   was left out."
+   was left out: no column of an enum of another schema of the file, which the registry reads."
   [database-version facts-by-schema overrides]
   (let [rs (for [[s facts] facts-by-schema] [s (sort-maps (render/rendered facts (or overrides {})))])
-        by-schema (fn [k] (into (sorted-map) (for [[s r] rs] [s (get r k)])))]
+        by-schema (fn [k] (into (sorted-map) (for [[s r] rs] [s (get r k)])))
+        schemas (into (sorted-map-by #(compare (str %1) (str %2))) (map (comp :registry second)) rs)]
     (array-map :schemas (mapv first rs) :database-version database-version
                :diagnostics (vec (mapcat (comp :diagnostics second) rs))
-               :registry (into (sorted-map-by #(compare (str %1) (str %2))) (map (comp :registry second)) rs)
+               :registry schemas
                :functions (by-schema :functions) :operators (by-schema :operators) :sequences (by-schema :sequences)
-               :unrendered (vec (mapcat (comp #(map left-out %) :unrendered second) rs)))))
+               :unrendered (vec (for [[_ r] rs, u (:unrendered r)
+                                      :when (not (registry/other-schemas-enum schemas (:type u)))]
+                                  (left-out u))))))
 
 (def ^:private override-registry
   "The base schemas, and any qualified name: a reference to the user's registry, which
@@ -110,11 +113,12 @@
 
 (defn major-version
   "\"PostgreSQL 17\" of the server's \"PostgreSQL 17.6 (Debian ...)\": a minor upgrade changes no
-   schema. A server older than 16 is an error."
+   schema. A server older than the catalog's versions is an error."
   [version]
-  (let [major (parse-long (or (re-find #"\d+" version) "0"))]
-    (when (< major 16)
-      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL 16 or later") {:given version}))
+  (let [major (parse-long (or (re-find #"\d+" version) "0"))
+        oldest (types/oldest-version)]
+    (when (< major (parse-long oldest))
+      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL " oldest " or later") {:given version}))
     (str "PostgreSQL " major)))
 
 (defn- read-schema

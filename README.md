@@ -62,14 +62,13 @@ Load the generated file as a registry and validate an INSERT:
 ```
 
 The schemas hold the columns' types ([what the database checks](docs/types.md#names-in-the-registry)
-aside). malli has no message of the
-`java.time` types; `pgmalli/errors` holds them, for `me/humanize`:
+aside). The registry's `java.time` types carry a message each, which malli has none of:
 
 ```clojure
 (-> (m/explain :pg.public.users/insert
                {:group_id 1 :email "ann@example.com" :closed_at 1}
                {:registry registry})
-    (me/humanize {:errors (merge me/default-errors pgmalli/errors)}))
+    me/humanize)
 ;; => {:closed_at ["should be a java.time.Instant"]}
 ```
 
@@ -130,8 +129,7 @@ JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sq
 
 One file holds every schema in `:schemas`. `generate!` writes over no file but a generated one,
 and returns the diagnostics and the columns left out ([docs/types.md](docs/types.md#the-generated-file)).
-`generate!` and `check` print the columns left out and a diagnostic above `:info`, nothing where
-all is well. Generating needs a
+`generate!` and `check` print the columns left out, nothing where all is well. Generating needs a
 [supported PostgreSQL](#supported-versions).
 
 `(pgmalli/registry)` reads `pgmalli-next.edn` from the classpath. Where `:out` is elsewhere,

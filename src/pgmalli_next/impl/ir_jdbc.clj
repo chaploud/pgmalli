@@ -2,7 +2,8 @@
   "ir.sql over JDBC, apart from pgmalli-next.impl.ir since babashka has no java.sql: loaded only
    when a db map asks for JDBC."
   (:require [clojure.string :as str]
-            [pgmalli-next.impl.error :as error]))
+            [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.ir :as ir]))
 
 (defn- target
   "host:port/db of a JDBC URL, without its user, password or parameters."
@@ -59,8 +60,7 @@
                        (try (restore) (catch Throwable x (.addSuppressed e x)))
                        (if (instance? java.sql.SQLException e)
                          (error/fail! :pgmalli.error/fault
-                                      (str "reading the schema over JDBC failed: " (ex-message (without-urls e))
-                                           "; pgmalli needs PostgreSQL 16 or later and a user that can read pg_catalog")
+                                      (str "reading the schema over JDBC failed: " (ex-message (without-urls e)) "; " (ir/needs))
                                       {} (without-urls e))
                          (throw e))))]
         (restore)

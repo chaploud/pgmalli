@@ -4,8 +4,6 @@
    psql, are pgmalli-next.generate; HoneySQL queries checked and typed, pgmalli-next.honeysql."
   (:require [clojure.string :as str]
             [malli.core :as m]
-            [malli.error :as me]
-            [malli.experimental.time :as time]
             [pgmalli-next.impl.describe :as d]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.jdbc :as jdbc]
@@ -26,7 +24,7 @@
 (defn registry
   "A malli registry of the generated file on the classpath, or of generated data, with the
    insert and update schemas derived from them, malli's default schemas, malli.util and
-   malli.experimental.time.
+   malli.experimental.time (each with an :error/message, which me/humanize says).
 
    (registry)
    (registry (clojure.edn/read-string (slurp \"api/pgmalli-next.edn\")))"
@@ -73,14 +71,6 @@
                             (str "describe: " (pr-str unknown) " is no type malli or the registry knows"
                                  (error/did-you-mean (some->> meant (map pr-str) (str/join " or "))))
                             (cond-> {:given unknown} meant (assoc :did-you-mean (vec meant))))))))))
-
-(def errors
-  "malli.error's :errors for the types of a registry malli has no message of (:time/local-date
-   and the rest of malli.experimental.time's): (me/humanize explanation {:errors (merge
-   me/default-errors pgmalli/errors)})."
-  (into {} (for [k (keys (time/schemas)) :when (not (contains? me/default-errors k))]
-             [k {:error/message (str "should be a java.time."
-                                     (str/join (map str/capitalize (str/split (name k) #"-"))))}])))
 
 (defn describe
   "A schema as short data for people and tools to read: a column as its PostgreSQL type
