@@ -123,6 +123,11 @@
         k (jdbc/row-key n)]
     (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
+(def ^:private in-a-row
+  "What HoneySQL writes a value of a kind as in a row (:values, :set): no value but a column, a
+   row of parameters or a subquery."
+  {:keyword "a column" :vector "a row of parameters, (?, ?)" :map "a subquery"})
+
 (defn- lift-message
   "The :error/fn of [:tuple {:pg/type column-type} [:= :lift] t], a column's [:lift v]: v one of t's labels, or as the
    column takes it; and, of a value given bare, why HoneySQL writes it as no value there (a
@@ -139,11 +144,11 @@
         label (when (or (keyword? value) (string? value)) (some #(when (= (name value) (name %)) (keyword (name %))) labels))]
     (str "should be [:lift v], v " (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it")
          (cond (or (nil? value) (vector? value)) nil
-               (keyword? value) (str "; HoneySQL writes a bare keyword as a column"
+               (keyword? value) (str "; HoneySQL writes a bare keyword as " (in-a-row :keyword)
                                      (cond label (str ": write " (pr-str [:lift label]))
                                            labels ", and the keyword is no label"
                                            :else ": write [:lift v]"))
-               (map? value) "; HoneySQL writes a map there as a subquery: write [:lift <the map>]"
+               (map? value) (str "; HoneySQL writes a map there as " (in-a-row :map) ": write [:lift <the map>]")
                (and labels (string? value)) (str "; a String goes as varchar, which an enum takes not: write the label as a keyword, "
                                                  (if label (pr-str [:lift label]) "[:lift :label]"))
                (and (string? sent) type) (str "; " (error/named (.getName c)) " goes as " sent ", which " type
@@ -178,7 +183,7 @@
                                              (shape/alternatives t))))
                 (shape/either t))
     (:map :map-of :vector :sequential) nil
-    (:any :some) [:and t [:not {:error/message "should be one value: HoneySQL writes a keyword in a row as a column, a vector as a row of parameters, (?, ?), a map as a subquery; write [:lift v]"}
+    (:any :some) [:and t [:not {:error/message (str "should be one value: HoneySQL writes a keyword in a row as " (in-a-row :keyword) ", a vector as " (in-a-row :vector) ", a map as " (in-a-row :map) "; write [:lift v]")}
                           not-one-value]]
     t))
 
@@ -289,7 +294,7 @@
                         lifted (assigned opts)]
                     [(when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
                      ;; [:lift v] sends v as one parameter, a keyword label and a map too
-                     [:tuple {:error/fn lift-message :pg/type (:pg/type (shape/column-props c))} [:= {:error/message "should be :lift, [:lift v]: HoneySQL writes a vector of values as a row of parameters, (?, ?), which no column takes"} :lift] lifted]
+                     [:tuple {:error/fn lift-message :pg/type (:pg/type (shape/column-props c))} [:= {:error/message (str "should be :lift, [:lift v]: HoneySQL writes a vector of values as " (in-a-row :vector) ", which no column takes")} :lift] lifted]
                      lifted]))
           ;; [key required? type generated generated-required?] of each column, generated the values
           ;; it takes that malli generates (nil for none): of a column a trigger may fill, as
@@ -461,7 +466,7 @@
                               (when (= :values clause) ", or [:default] where the column has a default")))
    :unlifted-value (fn [{:keys [table column clause value type]}]
                      (str (shown value) " in " clause " for " table "." (column-name column) ": HoneySQL writes a "
-                          (if (map? value) "map there as a subquery" "vector there as a row of parameters, (?, ?)")
+                          (if (map? value) (str "map there as " (in-a-row :map)) (str "vector there as " (in-a-row :vector)))
                           "; write " (cond (types/json? type) (str (shown [:lift value]) ", sent as one parameter (jsonb)")
                                            (types/element type) (str "a Java array of " type ", (into-array ...)")
                                            :else (str "a value of " type))))

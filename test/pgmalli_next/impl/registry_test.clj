@@ -186,3 +186,9 @@
         rows (mg/sample :pg.public/t {:registry reg :size 30 :seed 1})]
     (is (every? #(<= (count %) 3) (mapcat :vs rows)) "varchar(3)[]")
     (is (every? #(re-matches #"[01]{4}" %) (mapcat :bs rows)) "bit(4)[]")))
+
+(deftest a-strings-length-counts-code-points-as-postgresqls-length-does
+  (let [reg (pgmalli/registry {:registry {}})
+        s (m/schema [:string {:max 1}] {:registry reg})]
+    (is (m/validate s "𝟘") "one code point, two UTF-16 units")
+    (is (not (m/validate s "ab")))))
