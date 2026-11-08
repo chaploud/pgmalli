@@ -9,6 +9,7 @@
    take the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
+            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.args :as args]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
@@ -139,14 +140,44 @@
     (:any :some) [:and t [:not not-one-value]]
     t))
 
+(defn- java-array
+  "A Java array of the elements of v, of the first class the one sending sends as an array
+   (accept/classes, of no primitive) that valid? takes; nil for none."
+  [valid? v]
+  (some (fn [[^Class c]]
+          (when (and c (.isArray c) (not (.isPrimitive (.getComponentType c))))
+            (when-let [a (try (into-array (.getComponentType c) v) (catch Exception _ nil))]
+              (when (valid? a) a))))
+        accept/classes))
+
+(def ^:private json-scalar
+  "What generation makes of a value a map or a vector holds that may be any (jsonb's [:map-of
+   :some :any]): a value JSON holds as itself."
+  [:or :string :int :boolean :nil])
+
 (defn- generated-values
-  "t without the values of a class alone (a PGobject), which malli does not generate; nil where
-   nothing is left."
-  [t]
-  (cond (and (= :fn (shape/head t)) (:pg/class (shape/column-props t))) nil
-        (= :maybe (shape/head t)) (if-let [x (generated-values (last t))] [:maybe x] :nil)
-        (= :or (shape/head t)) (some-> (seq (keep generated-values (shape/alternatives t))) (shape/either t))
-        :else t))
+  "t without the values malli generates nothing the one sending sends of: a class alone (a
+   PGobject), any value (:any, :some: of a type pgmalli does not type, alone or among
+   alternatives); its Java arrays
+   ([:pg/array e]) generated as one of the elements e generates (java-array), of registry r, and
+   the maps and vectors of any values (jsonb's) as JSON holds them (json-scalar); nil where nothing
+   is left."
+  [r t]
+  (let [h (shape/head t)]
+    (cond (and (= :fn h) (:pg/class (shape/column-props t))) nil
+          (#{:any :some} h) nil
+          (= :maybe h) (if-let [x (generated-values r (last t))] [:maybe x] :nil)
+          ;; of alternatives one of which is any value, the type is untold: none generated
+          (= :or h) (when-not (some #(#{:any :some} (shape/head %)) (shape/alternatives t))
+                      (some-> (seq (keep #(generated-values r %) (shape/alternatives t))) (shape/either t)))
+          (= :and h) (when-let [b (generated-values r (shape/and-base t))] (shape/update-and-base t (constantly b)))
+          (= :pg/array h)
+          (when-let [e (generated-values r (last t))]
+            (let [valid? (malli.core/validator t (args/malli-options r))]
+              (shape/merge-props t {:gen/schema [:vector {:min 1 :max 3} e] :gen/fmap #(java-array valid? %)})))
+          (and (#{:map-of :vector :sequential} h) (#{:any :some} (shape/head (last t))))
+          (shape/merge-props t {:gen/schema (if (= :map-of h) [:map-of {:max 3} :string json-scalar] [:vector {:max 3} json-scalar])})
+          :else t)))
 
 (def ^:private sql-word-schema
   "[:fn] of what HoneySQL writes as NULL or DEFAULT (word) under format, one per format so that
@@ -176,32 +207,43 @@
           ;; the columns the database may fill: optional in what an INSERT may carry
           fills (set (for [[k props] (shape/column-entries (get (::query/schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
           triggered? (query/filled-by-trigger? (shape/row-props s) (keyword derived))
-          ;; [key required? type generated] of each column, generated the values it takes that
-          ;; malli generates (nil for none)
+          ;; [plain lift lifted] of column c, nullable? where NULL may go there: plain its values as
+          ;; HoneySQL writes them in a map (a keyword is a column), lift [:lift v] of lifted's
+          typed (fn [k c nullable?]
+                  (let [assigned #(cond-> (args/accepted-type r c :assign %) nullable? query/nullable)
+                        a (assigned (assoc opts ::args/keywords-columns true))
+                        ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
+                        alts (remove nil? [(one-value a)
+                                           (when nullable? (sql-word-schema :null (:format opts)))
+                                           (when (fills k) default)])
+                        lifted (assigned opts)
+                        labels (let [e (shape/and-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]
+                    [(when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
+                     ;; [:lift v] sends v as one parameter, a keyword label and a map too
+                     [:tuple {:error/message (str "should be [:lift v], v "
+                                                  (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
+                      [:= :lift] lifted]
+                     lifted]))
+          ;; [key required? type generated generated-required?] of each column, generated the values
+          ;; it takes that malli generates (nil for none): of a column a trigger may fill, as
+          ;; without the trigger, which fills what it fills alone
           columns (concat
                    (for [[k props c] written
-                         :let [assigned #(cond-> (args/accepted-type r c :assign %) (or (shape/maybe? c) triggered?) query/nullable)
-                               a (assigned (assoc opts ::args/keywords-columns true))
-                               ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
-                               alts (remove nil? [(one-value a)
-                                                 (when (or (shape/maybe? c) triggered?) (sql-word-schema :null (:format opts)))
-                                                 (when (fills k) default)])
-                               plain (when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
-                               lifted (assigned opts)
-                               labels (let [e (shape/and-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))
-                               ;; [:lift v] sends v as one parameter, a keyword label and a map too
-                               lift [:tuple {:error/message (str "should be [:lift v], v "
-                                                                 (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
-                                     [:= :lift] lifted]]]
+                         :let [[plain lift] (typed k c (or (shape/maybe? c) triggered?))
+                               [gen-plain _ gen-lifted] (typed k c (shape/maybe? c))
+                               gen (some->> [(some->> gen-plain (generated-values r))
+                                             (some->> gen-lifted (generated-values r) (vector :tuple [:= :lift]))]
+                                            (remove nil?) seq (#(if (next %) (into [:or] %) (first %))))]]
                      [(written-key k opts) (not (or (:optional props) triggered?))
                       (if plain [:or plain lift] lift)
-                      (some-> plain generated-values)])
+                      gen
+                      (not (:optional props))])
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-                     [(written-key k opts) false default default]))
+                     [(written-key k opts) false default default false]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
           row (into [:map {:closed true}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
-          generated (into [:map] (for [[k required? t g] columns :when (or g required?)] (entry k required? (or g t))))
+          generated (into [:map] (for [[k _ t g required?] columns :when (or g required?)] (entry k required? (or g t))))
           nonempty [:not [:= nil {}]]
           non-empty #(if (= "update" derived) [:and % nonempty] %)]
       (shape/merge-props (non-empty row) {:gen/schema (non-empty generated)}))))

@@ -283,8 +283,9 @@ in the query body, not in a row. `[:lift v]` is a value too, which HoneySQL send
 parameter, `v` of the column's type: an enum label goes as `[:lift :active]`, as HoneySQL
 writes a bare keyword as a column, and a json document as `[:lift {:a 1}]`, as it writes a map
 as a subquery. A vector or list not headed by `:lift` is a row of parameters, which no column
-takes. `mg/generate` gives values alone, and leaves out a column
-of whose values malli generates none (a `PGobject`).
+takes. `mg/generate` gives values and `[:lift v]`, a NOT NULL column a trigger may fill a value
+too, and leaves out a column of whose values malli generates none (a `PGobject`, a type pgmalli
+does not type).
 Validate a row under the registry (`{:registry registry}`):
 
 ```clojure

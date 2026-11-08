@@ -2102,9 +2102,10 @@
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
     (is (= {:mood ["should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])" "should be [:lift v], v one of :happy :sad"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
-    (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %)) (vals r)))
-                  (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30})))
-        "generated as the values a column takes")))
+    (let [rows (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30}))]
+      (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %) (not= :lift (first %))) (vals r))) rows)
+          "generated as the values a column takes, [:lift v] and DEFAULT")
+      (is (some (fn [r] (some #(= [:lift :sad] %) (vals r))) rows) "an enum's label as [:lift :label]"))))
 
 (deftest an-enum-column-takes-its-labels-as-keywords-not-as-strings
   (let [o opts

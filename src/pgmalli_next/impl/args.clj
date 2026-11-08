@@ -216,7 +216,7 @@
             ;; numeric's NaN and infinities, which the one reading reads as a Double: PostgreSQL
             ;; assigns them exactly, as no other Double
             specials (when (and (= :assign context) (= :or-double (:read (types/entry t))))
-                       [[:and [:double {:pg/type "numeric"}]
+                       [[:and {:gen/elements [##NaN ##Inf ##-Inf]} [:double {:pg/type "numeric"}]
                          [:fn {:error/message "should be a Double NaN or infinity alone, which numeric holds as it is"} #(or (Double/isNaN %) (Double/isInfinite %))]]])
             all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
                   (and (= :call held-in) (not (::common-type opts))) (keep #(class-held % t takes? opts)))
@@ -559,10 +559,15 @@
                                    :any))
           :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 
+(defn malli-options
+  "The malli options a schema of registry r (an argument's, a row's) is validated under."
+  [r]
+  {:registry (merge registry/base (::query/schemas r))})
+
 (defn- refuses?
   "Whether argument schema t refuses literal v; not where malli cannot tell (validate throws)."
   [registry t v]
-  (false? (try (m/validate t v {:registry (merge registry/base (::query/schemas registry))}) (catch Exception _ nil))))
+  (false? (try (m/validate t v (malli-options registry)) (catch Exception _ nil))))
 
 (defn- uncast-type
   "The type to cast a string to for column s: an enum type (or a domain over one, as
