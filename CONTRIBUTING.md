@@ -23,7 +23,7 @@ need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` sel
 | `bb oracle [seed] [mutants]` | `h/analyze` against PostgreSQL itself; exit 1 on what `pgmalli-next.oracle-test` fails on |
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
-| `bb test:stricter` | `test/resources/pgmalli-next/stricter.edn` rewritten: where PostgreSQL takes a parameter that `accept/holds?` leaves out |
+| `bb test:stricter` | `test/resources/pgmalli-next/stricter.edn` rewritten: where PostgreSQL takes a parameter that `accept/takes?` leaves out |
 | `bb mutate --file src/...` | which mutants of a source file the tests miss, in a temporary copy of the working tree; `bb tasks` lists its flags |
 
 Before a pull request: `bb test:all`, then read the log of each task that did not exit 0. Each
@@ -98,7 +98,7 @@ and as LIMIT) and is sent a fixed list of values: one of each class of
 `pgmalli-next.impl.accept/class-types`, NULL, numbers at the integer bounds, a fraction, `""`, `"1"`
 and the schema's labels. It fails where PostgreSQL takes a value the argument's schema refuses
 (or, set by UPDATE and INSERT, `set-schema`'s and `values-schema`'s row) and the rules of
-docs/queries.md#stricter-than-postgresql do not leave out, and where `accept/holds?` says a
+docs/queries.md#stricter-than-postgresql do not leave out, and where `accept/takes?` says a
 value goes and PostgreSQL refuses its type. It sends each value as the one sending
 (`pgmalli-next.jdbc/install-sending!`) does, and fails where `sent-type`
 names a type other than PostgreSQL's `pg_typeof` of the value sent. Besides the oracle schema's
@@ -123,8 +123,10 @@ HoneySQL cannot write).
 
 `pgmalli-next.accept-test` holds `accept/accepts?` to PostgreSQL both ways, and `accept/holds?`
 one way: where `holds?` says a value goes, PostgreSQL takes it. Where PostgreSQL takes one that
-`holds?` leaves out, the stricter rule, is pinned in `test/resources/pgmalli-next/stricter.edn`;
-after changing `holds?`, run `bb test:stricter` and read the diff.
+`accept/takes?` leaves out (`holds?`, and of a value sent untyped `reads?`), the stricter rule, is
+pinned in `test/resources/pgmalli-next/stricter.edn`, by the type sent or the class of an untyped
+value and by context, and a test holds args to refuse each pair; after changing either, run
+`bb test:stricter` and read the diff.
 
 `a-query-wrapped-keeps-its-problems` sends no query to PostgreSQL, only reads the oracle
 schema: each case wrapped in a FROM subquery, a CTE or EXISTS must have the problems it had

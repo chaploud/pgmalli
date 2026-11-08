@@ -143,14 +143,14 @@
         ;; a type with no = (json, point, xml) compares with nothing, its own type neither
         (when (and (not= :cast context) (accept/holds? accepted-t sent-t context) (not (and (= :compare context) (not (compares-itself t)))))
           (is taken (str "PostgreSQL refuses " pair))))
-      ;; the other way, where holds? is stricter than PostgreSQL, pinned: a change of it is a choice
+      ;; the other way, where takes? is stricter than PostgreSQL, pinned: a change of it is a choice
       (let [now (stricter vs)]
         (if (System/getenv "PGMALLI_UPDATE_STRICTER")
           (spit stricter-file (with-out-str (println "{") (doseq [[k ts] now] (pr k) (print " ") (prn ts)) (println "}")))
           (let [was (triples (edn/read-string (slurp stricter-file)))
                 [left-out held] (map #(sort-by pr-str %) [(remove was (triples now)) (remove (triples now) was)])]
             (is (and (empty? left-out) (empty? held))
-                (str "where PostgreSQL takes a parameter, holds? leaves out otherwise than " stricter-file
+                (str "where PostgreSQL takes a parameter, takes? leaves out otherwise than " stricter-file
                      " ([sent context column-type]); bb test:stricter rewrites it"
                      (when (seq left-out) (str "\n  now left out: " (str/join " " (map pr-str left-out))))
                      (when (seq held) (str "\n  now held: " (str/join " " (map pr-str held))))))))))))

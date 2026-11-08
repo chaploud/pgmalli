@@ -908,8 +908,8 @@
        (finally (.rollback conn))))
 
 (def ^:private stricter
-  "{[sent context] #{column type}}: where PostgreSQL takes a parameter that accept/holds? leaves
-   out, as pgmalli-next.accept-test pins it."
+  "{[sent context] #{column type}}: where PostgreSQL takes a parameter that accept/takes? leaves
+   out, sent by type or untyped by class, as pgmalli-next.accept-test pins it."
   (update-vals (edn/read-string (slurp "test/resources/pgmalli-next/stricter.edn")) set))
 
 (defn- matrix
@@ -1006,9 +1006,9 @@
    parameters as the one sending sends them. :refused: PostgreSQL takes the value, the argument's schema from
    arg-types refuses it, and the stricter rule of docs/queries.md does not explain it: a type
    sent and a column type stricter.edn pins (under a cast, one accept/accepts? refuses, which
-   accept-test pins to PostgreSQL), a comparison with NULL. A value accept/holds? leaves out is
+   accept-test pins to PostgreSQL), a comparison with NULL. A value accept/takes? leaves out is
    sent to PostgreSQL all the same. :written: as :refused, the schema of the row an UPDATE's :set or an INSERT's
-   :values carries (set-schema, values-schema). :rule: holds? (accepts? under a cast) says
+   :values carries (set-schema, values-schema). :rule: accept/takes? says
    PostgreSQL takes a value there, and PostgreSQL refuses its type (type-refusals).
    :untyped: arg-types throws or gives the argument no schema (:schema says which). :timeout:
    PostgreSQL ran out of time, which says neither. :sent: sent-failures."
