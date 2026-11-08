@@ -172,6 +172,12 @@
                                      (try (some? (re-find p x)) (catch StackOverflowError _ (found-on-a-large-stack p x)))))
                   :min 1 :max 1}))}))
 
+(defn class-values
+  "The values of accept/values of the classes names (\"java.lang.Integer\" ...), which a
+   [:pg/class ...] generates; none of a class pgmalli has no value of (java.sql.SQLXML)."
+  [names]
+  (let [cs (set names)] (keep (fn [[c v]] (when (cs (.getName ^Class c)) v)) accept/values)))
+
 (def ^:private class-schema
   "[:pg/class \"java.lang.Integer\" ...]: a value of one of the classes named, where the classes
    of one schema (:int, a Long's and an Integer's) go as types PostgreSQL takes apart."
@@ -180,8 +186,8 @@
     :compile (fn [_ names _]
                (let [cs (set names)]
                  {:pred (fn [v] (contains? cs (some-> v class .getName)))
-                  :type-properties {:error/message (str "should be one of " (str/join ", " names))
-                                    :gen/gen (gen/elements (keep (fn [[c v]] (when (cs (.getName ^Class c)) v)) accept/values))}
+                  :type-properties (cond-> {:error/message (str "should be one of " (str/join ", " names))}
+                                     (seq (class-values names)) (assoc :gen/gen (gen/elements (class-values names))))
                   :min 1 :max Long/MAX_VALUE}))}))
 
 (defn- with-message

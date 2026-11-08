@@ -13,6 +13,7 @@
             [pgmalli-next.impl.args :as args]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.memo :as memo]
+            [pgmalli-next.impl.pgtypes :as pgtypes]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.problems :as problems]
@@ -215,6 +216,11 @@
         hints (select-keys (shape/props own) gen-keys)
         k (shape/kind t)]
     (cond (and (= :fn h) (not-any? #(= "gen" (namespace %)) (keys (shape/props t)))) nil
+          (and (= :pg/class h) (empty? (pgtypes/class-values (shape/entries t)))) nil
+          ;; held to classes ([:and float? [:pg/class "java.lang.Float"]]): those classes' values
+          (and (= :and h) (some #(= :pg/class (shape/head %)) (shape/entries t)))
+          (when-let [vs (seq (mapcat #(when (= :pg/class (shape/head %)) (pgtypes/class-values (shape/entries %))) (shape/entries t)))]
+            (shape/merge-props t {:gen/elements (vec vs)}))
           (#{:any :some} h) nil
           (= :maybe h) (if-let [x (generated-values r own (last t))] [:maybe x] :nil)
           ;; of alternatives one of which is any value, the type is untold: none generated

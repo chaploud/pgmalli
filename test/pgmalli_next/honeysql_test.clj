@@ -3458,3 +3458,12 @@
     (is (not= (args {:select [:id] :from [:users] :where [:or [:= :?n nil] [:= :id :?n]]})
               (args {:select [:id] :from [:users] :where [:or [:= :?n nil] [:= :id :?n]]} {:format {:transform-null-equals false}}))
         "false: ? = NULL, which tests nothing for NULL")))
+
+(deftest a-populate-documents-key-of-a-column-a-trigger-may-fill-names-the-triggers-as-an-argument-does
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
+                                                        [:group_id [:int {:pg/type "bigint"}]] [:nick [:maybe [:string {:pg/type "text"}]]]]}})
+        doc (-> (:args (h/analyze reg {:insert-into [[:t [:group_id :nick]] {:select [:group_id :nick] :from [[[:jsonb_populate_recordset [:cast nil :t] :?rows] :r]]}]}))
+                :rows shape/non-null shape/alternatives first last shape/and-base)
+        key-type #(shape/non-null (last (some (fn [e] (when (and (vector? e) (= % (first e))) e)) (rest doc))))]
+    (is (= ["fill"] (:pgmalli/before-triggers (shape/props (key-type :group_id)))))
+    (is (nil? (:pgmalli/before-triggers (shape/props (key-type :nick)))) "a nullable column's is nullable of itself")))

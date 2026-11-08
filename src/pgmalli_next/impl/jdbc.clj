@@ -328,6 +328,11 @@
   (class-fn "org.postgresql.util.PGobject"
             (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
+(def sqlxml
+  "A java.sql.SQLXML (pgjdbc's PgSQLXML, which it reads an xml as), by name: pgjdbc sends it as
+   xml."
+  (class-fn "java.sql.SQLXML" (fn [x] (boolean (some #(= "java.sql.SQLXML" (.getName ^Class %)) (supers (class x)))))))
+
 (defn value-kind
   "The kind of alternative a as a value: pgmalli's integer types (:pg/integer) an :int, as malli's is."
   [a]

@@ -112,6 +112,8 @@
         ;; it goes (docs/queries.md#stricter-oid)
         oid (when (types/oid-alias? t) (types/type-schema "oid"))]
     (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
+                      ;; pgjdbc reads an xml as a java.sql.SQLXML, which it sends as xml
+                      (when (and (= "xml" t) (not inline?)) [jdbc/sqlxml])
                       (for [[x p] rows
                             :when (and (string? p) (not= p t) (accept/holds? t p context))
                             a (shape/alternatives x)]
@@ -562,13 +564,20 @@
                                 :let [{:keys [column opaque?] from :table} (query/resolve-column registry chain y)]
                                 :when (and opaque? (= alias from))]
                             (keyword column))))
-              required (set (for [{c :x :as a} (syntax/assignments ps)
-                                  :when (and alias (syntax/column-keyword? c))
-                                  :let [{:keys [column opaque?] from :table} (query/resolve-column registry (:chain a) c)
-                                        {written :column t :table :keys [nullable? schema]} (query/assigned-column registry a)]
-                                  :when (and opaque? (= alias from) (or (nil? table) (= table t)) schema (not nullable?) (= column written))]
-                              column))
-              fields (for [[c cs] columns] [c (if cs (json-field-type registry cs opts) :any) (contains? required c)])
+              ;; {column nullable?} of the columns of the document the statement writes, a NOT NULL
+              ;; column a BEFORE row trigger may fill with the triggers' names
+              written (into {} (for [{c :x event :event :as a} (syntax/assignments ps)
+                                     :when (and alias (syntax/column-keyword? c))
+                                     :let [{:keys [column opaque?] from :table} (query/resolve-column registry (:chain a) c)
+                                           {written :column t :table :keys [nullable? schema]} (query/assigned-column registry a)]
+                                     :when (and opaque? (= alias from) (or (nil? table) (= table t)) schema (= column written))]
+                                 [column (if (not nullable?)
+                                           false
+                                           (or (when-not (shape/maybe? schema) (shape/before-triggers (query/table-props registry t) event)) true))]))
+              fields (for [[c cs] columns
+                           :let [w (get written c)
+                                 t (if cs (json-field-type registry cs opts) :any)]]
+                       [c (cond-> t (vector? w) (shape/merge-props {:pgmalli/before-triggers w})) (false? w)])
               doc (-> [:and
                        (into [:map {:closed true}]
                              (for [[c t req?] fields, k [(keyword c) c]]

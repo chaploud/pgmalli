@@ -390,7 +390,7 @@ and would narrow it: where every use of it is a cast to one type, `:pgmalli/cast
 PostgreSQL names it (`"bigint[]"` of `[:raw "int8[]"]`), on the values the cast takes (an array's
 `[:pg/array ...]`); where every use assigns it to a NOT NULL column a BEFORE row trigger may
 fill, which makes it nullable, `:pgmalli/before-triggers`, the triggers' names, on the column's
-type inside the `[:maybe ...]`.
+type inside the `[:maybe ...]`, and so on a `jsonb_populate_record` document's key of that column.
 
 ```clojure
 (let [t (:suffix (:args (h/analyze registry {:select [[[:concat :email :?suffix] :s]] :from [:users]})))]
