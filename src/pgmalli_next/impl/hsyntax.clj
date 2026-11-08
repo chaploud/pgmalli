@@ -91,12 +91,17 @@
   [stmt ks]
   (for [t (written-items stmt ks)] (if-let [[base] (join-group t)] base t)))
 
+(def join-by-keys
+  "The join key (join-keys', or :cross-join) a join type :join-by names stands for, as HoneySQL
+   aliases it; a join key stands for itself."
+  {:left :left-join :right :right-join :inner :inner-join :outer :outer-join :full :full-join :cross :cross-join})
+
 (defn- join-by-entries
   "[join-key path clauses] of each join of :join-by v, as sql/format reads it (join types and
    their clauses in turn, or maps of them), the join-key its join-keys' (or :cross-join), path
    where its clauses sit in v."
   [v]
-  (let [k #(let [n (keyword (name %))] (get {:left :left-join :right :right-join :inner :inner-join :outer :outer-join :full :full-join :cross :cross-join} n n))]
+  (let [k #(let [n (keyword (name %))] (get join-by-keys n n))]
     (cond (and (vector? v) (every? map? v)) (for [[i m] (map-indexed vector v), [j c] m :when (ident? j)] [(k j) [i j] c])
           (and (vector? v) (even? (count v)) (every? ident? (take-nth 2 v))) (for [i (range 0 (count v) 2)] [(k (nth v i)) [(inc i)] (nth v (inc i))]))))
 

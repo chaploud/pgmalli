@@ -76,6 +76,15 @@
   (is (= ["NULL"] (sql/format :NULL)) "a keyword is written as spelt")
   (is (= ["INSERT INTO t AS u (a) VALUES (?)" 1] (sql/format {:insert-into [[:t :u] [:a]] :values [[1]]}))))
 
+(deftest join-by-keys-are-honeysqls-join-by-aliases
+  (let [theirs (some-> (resolve 'honey.sql/join-by-aliases) deref)
+        written (fn [clause v] (first (sql/format {:select [:a] :from [:t] clause v})))]
+    (doseq [a (sort (keys (merge theirs syntax/join-by-keys)))
+            :let [k (get syntax/join-by-keys a a)
+                  v (if (= :cross-join k) [:j] [:j true])]]
+      (is (= (written :join-by [a v]) (written k v))
+          (str honeysql " writes :join-by's " a " otherwise than " k ": update join-by-keys in src/pgmalli_next/impl/hsyntax.clj")))))
+
 (deftest null-test-is-the-is-null-honeysql-writes
   (is (= [[:a false] [:a false] [:a true] [:a true] [:a false] [:a true] [:a false]]
          (map #(syntax/null-test % nil) [[:= :a nil] [:= nil :a] [:<> :a nil] [:not= nil :a] [:is :a nil] [:is-not :a nil] [:is :a [:inline nil]]])))
