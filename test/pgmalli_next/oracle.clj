@@ -941,7 +941,7 @@
 (defn- out-of-range?
   "Whether v is a number outside the range of type held-t (types/types' :range; an alias of
    oid's, docs/queries.md#stricter-oid), or of an array's element type, which PostgreSQL refuses
-   where a row reaches it, or a string of more than a \"char\"'s one byte (pgtypes/char-value?), which it cuts
+   where a row reaches it, or a string, or a keyword's text, of more than a \"char\"'s one byte (pgtypes/char-value?), which it cuts
    (docs/queries.md#stricter-assignment)."
   [held-t v assign?]
   (let [e (when (string? held-t) (or (types/element held-t) held-t))
@@ -949,7 +949,7 @@
         held? (or assign? (types/oid-like? e))
         [lo hi] (:range (types/types (if (types/oid-like? e) "oid" e)))]
     (boolean (some #(or (and held? lo (number? %) (not (<= lo % hi)))
-                        (and assign? (= "\"char\"" e) (string? %) (not (pgtypes/char-value? %))))
+                        (and assign? (= "\"char\"" e) (or (string? %) (keyword? %)) (not (pgtypes/char-value? (if (keyword? %) (accept/sent-text %) %)))))
                    ;; a Java array's elements
                    (if (some-> v class .isArray) (seq v) [v])))))
 
@@ -1064,9 +1064,9 @@
                                   row-refused? (written-refuses opts table column context v)
                                   ;; NULL in a NOT NULL column fails once a row is written; the table may have none
                                   null-refused? (and (nil? v) notnull (#{:update :insert :insert-select} context))
-                                  ;; a keyword in a written row is a column to HoneySQL, a vector of other than one value
-                                  ;; a row of parameters, a map a subquery
-                                  honeysql? (or (keyword? v) (map? v) (and (vector? v) (not= 1 (count v)) (not (keyword? (first v)))))
+                                  ;; a keyword in a written row is a column to HoneySQL, a vector a row of parameters or
+                                  ;; ([x]) x, a map a subquery
+                                  honeysql? (or (keyword? v) (map? v) (and (vector? v) (not (keyword? (first v)))))
                                   ;; sent untyped, or nil, where PostgreSQL takes the type from the value
                                   untyped-there? (and (#{:compared-and-any :compared-and-polymorphic} context) (or (nil? v) (= :unknown sent)))
                                   explained? (or (and (some? v) (not takes?) pinned?)
