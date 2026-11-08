@@ -3345,14 +3345,17 @@
 
 (deftest a-map-or-a-vector-of-values-written-to-a-column-is-a-problem
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]
-                                                         [:doc [:maybe [:any {:pg/type "jsonb"}]]] [:p [:maybe [:any {:pg/type "pair"}]]] [:n [:maybe [:int {:pg/type "integer"}]]]]}})
+                                                         [:doc [:maybe [:any {:pg/type "jsonb"}]]] [:p [:maybe [:any {:pg/type "pair"}]]] [:n [:maybe [:int {:pg/type "integer"}]]]
+                                                         [:s [:maybe [:string {:pg/type "text"}]]]]}})
         problems #(:problems (h/analyze reg %))]
     (is (= [{:kind :unlifted-value :table "public.t" :column :tags :clause :set :value ["a" "b"] :type "text[]"}]
            (problems {:update :t :set {:tags ["a" "b"]}})))
     (is (= ["{:a 1} in :values for public.t.doc: HoneySQL writes a map there as a subquery; write [:lift {:a 1}], sent as one parameter (jsonb)"]
            (h/humanize (problems {:insert-into :t :values [{:doc {:a 1}}]}))))
     (is (= [] (problems {:update :t :set {:n [1] :p [1 2] :doc [:lift {:a 1}]}}))
-        "(?) is one value; a row type's column may take a row")))
+        "(?) is one value; a row type's column may take a row")
+    (is (= [] (problems {:update :t :set {:s ["a" "b"]}})) "a string column takes the row's text, (a,b)")
+    (is (= [] (problems {:insert-into :t :values [{:n {:values [[1]]}}]})) "VALUES is a subquery")))
 
 (deftest distinct-on-reads-an-output-column-as-order-by-does
   (is (= [] (check {:select-distinct-on [[:s] [:score :s]] :from [:users] :order-by [:s]}))))
@@ -3410,3 +3413,10 @@
     (is (= [:a.t] (:did-you-mean (ex-data e))))
     (is (str/includes? (ex-message e) "write :a.t"))))
 
+
+(deftest a-call-honeysql-writes-otherwise-than-it-reads-is-a-problem
+  (is (= [{:kind :written-otherwise :op :in :dropped 1}] (check {:select [:id] :from [:users] :where [:in :mood [:lift :happy] [:lift :sad]]}))
+      "sql/format writes mood IN ?, :sad dropped")
+  (is (= [{:kind :written-otherwise :op (keyword "~~~") :call true}] (check {:select [:id] :from [:users] :where [(keyword "~~~") :nick "a"]}))
+      "an operator HoneySQL has not registered, written ~~~(nick, ?)")
+  (is (= [] (check {:select [:id] :from [:users] :where [:in :mood [[:lift :happy] [:lift :sad]]]}))))

@@ -266,8 +266,10 @@
                            (and (syntax/null-value? v format) (not (shape/maybe? s)) (not (shape/filled-by-trigger? (query/table-props registry table) how)))
                            {:kind :not-null-violation :table table :column col :clause clause}
                            ;; HoneySQL writes a map as a subquery and a vector of values as a row, (?, ?), which
-                           ;; a column of a type accept answers for takes not (one of a row type may take the row)
-                           (and (or (and (map? v) (not (syntax/statement? v))) (and (vector? v) (next v) (not (keyword? (first v)))))
+                           ;; a column of a type accept answers for takes not (one of a row type may take the row,
+                           ;; one of a string type the row's text)
+                           (and (or (and (map? v) (not (syntax/statement? v)) (not (contains? v :values)))
+                                    (and (vector? v) (next v) (not (keyword? (first v))) (not= "S" (types/category (query/slot-type registry s)))))
                                 (query/slot-type registry s))
                            {:kind :unlifted-value :table table :column col :clause clause :value v :type (query/cast-type-name s opts)})]
              :when p]
@@ -381,6 +383,25 @@
             :when (and cs (not (contains? cs n)) (contains? cs (syntax/folded n)))]
         {:kind :unknown-column :column (keyword n) :did-you-mean [(keyword (syntax/folded n))]}))))
 
+(defn- written-otherwise
+  "{:kind :written-otherwise ...} of each call HoneySQL writes otherwise than its data reads:
+   [:in x a b], whose arguments past a it drops (x IN a), and a name of an operator it has not
+   registered ([:-> a b] without honey.sql.pg-ops), which it writes as a call of a function of
+   that name (->(a, b)) PostgreSQL has not."
+  [body]
+  (distinct
+   (for [x (tree-seq syntax/branch? seq body)
+         :when (and (vector? x) (keyword? (first x)))
+         :let [h (first x)
+               n (name h)]
+         p [(when (and (syntax/in-ops h) (< 3 (count x)))
+              {:kind :written-otherwise :op h :dropped (- (count x) 3)})
+            (when (and (not (re-matches #"[A-Za-z_][A-Za-z0-9_$.]*" n)) (= 3 (count x))
+                       (some-> (try (first (sql/format-expr [h ::l ::r])) (catch Exception _ nil)) (str/starts-with? (str n "("))))
+              {:kind :written-otherwise :op h :call true})]
+         :when p]
+     p)))
+
 (defn check
   "[problem ...] of a query against the registry; [] when there are none. A problem in a nested
    statement (a subquery, a CTE) carries :in, where the statement sits: (get-in q (:in p)) for
@@ -392,4 +413,4 @@
                         (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
                       chains)]
     (vec (concat found (query/duplicate-columns registry body opts) (return-key-problems registry body (second (first chains)) opts)
-                 (unread-clauses sent-body)))))
+                 (unread-clauses sent-body) (written-otherwise sent-body)))))

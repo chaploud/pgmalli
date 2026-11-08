@@ -440,6 +440,12 @@
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))
+   :written-otherwise (fn [{:keys [op dropped call]}]
+                        (if call
+                          (str (pr-str [op :a :b]) " is written as a call of a function " (name op) "(a, b), which PostgreSQL has not:"
+                               " HoneySQL has not registered the operator; load honey.sql.pg-ops, or register it with sql/register-op!")
+                          (str (pr-str [op :x :a :b]) " is written x " (str/upper-case (str/replace (name op) "-" " ")) " a, the " dropped
+                               " past a dropped; write the list as one vector, " (pr-str [op :x [:a :b]]))))
    :unread-clause (fn [{:keys [clause did-you-mean]}]
                     (if did-you-mean
                       (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))

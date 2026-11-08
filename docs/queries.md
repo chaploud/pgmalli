@@ -464,7 +464,9 @@ An expression has the type PostgreSQL resolves it to, from the types of what it 
   told, a call is typed where every overload of its number of arguments returns one type that is
   not polymorphic (`count`, `jsonb_build_object`). Read parsed, a function of `pg_catalog` that
   builds a `json` or `jsonb` object is a map, one that builds an array (`jsonb_agg`) a sequential.
-  Of a `json` or `jsonb` column an override shapes, `->` of an integer literal and
+  Of a `json` or `jsonb` column an override shapes (the operators HoneySQL writes once
+  `honey.sql.pg-ops` is loaded, without which it writes `[:-> a b]` as a call `->(a, b)`, a
+  `:written-otherwise` problem), `->` of an integer literal and
   `json_array_elements` or `jsonb_array_elements` of a sequential is its element's shape, `->` of a string a map's key's,
   `-` of a string or an ARRAY of strings a map's without those keys (a map-of's as it is), in the
   select list or in FROM (its column `value`); any

@@ -307,6 +307,7 @@ problems it reports:
 | `:unknown-type` | a cast to an unqualified type name of no type of pg_catalog or of the query's schema the registry tells of (an enum, a table's row type, a domain of one of its columns), but of an enum type of another schema; with `:type` and `:did-you-mean`, the qualified names |
 | `:column-definition-list` | a function in FROM whose alias lists column types (`{:with-columns [[:v :jsonb]]}`), which PostgreSQL takes of a function returning record alone; with `:function`, `:alias` and `:columns`, the names it lists. Name the columns with no type (`[:r {:columns [:v]}]`) |
 | `:unread-clause` | a clause pgmalli does not read, with the one meant when HoneySQL knows none of that name; the rest of the query is still checked |
+| `:written-otherwise` | a call HoneySQL writes otherwise than its data reads: `[:in x a b]`, which it writes `x IN a` (`:dropped`, how many it drops), or an operator it has not registered (`[:-> a b]` without `honey.sql.pg-ops`), which it writes as a call `->(a, b)` (`:call`); with `:op` |
 | `:missing-arg` | `h/query-schema` only: a query argument the function's args lack |
 
 `h/humanize` says each problem as what is wrong and what to do:
