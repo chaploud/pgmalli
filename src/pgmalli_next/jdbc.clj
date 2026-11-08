@@ -115,9 +115,11 @@
 
 (defn- json-text
   "A keyword's or a symbol's text as accept/json-key-text writes it, which data.json writes its
-   name alone of; another value as it is."
+   name alone of; a Character as its text; another value as it is."
   [x]
-  (if (or (keyword? x) (symbol? x)) (accept/json-key-text x) x))
+  (cond (or (keyword? x) (symbol? x)) (accept/json-key-text x)
+        (char? x) (str x)
+        :else x))
 
 (defn- jsonb [x]
   (when-let [why (accept/json-problem x)]

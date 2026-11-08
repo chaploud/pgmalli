@@ -116,15 +116,22 @@
    :set map: the key a row is read with (jdbc/row-key, :group_id), so a row read is written
    back, where HoneySQL writes it as column under sql/format's opts (the format; unquoted,
    PostgreSQL folds a name to lower case, and HoneySQL writes - as _); else the column's name as
-   a string, which HoneySQL quotes."
+   a string, which HoneySQL quotes; nil where neither writes it (a.b, which HoneySQL writes as a
+   qualified name, a-b under :quoted-snake)."
   [column {:keys [format]}]
   (let [n (name column)
-        ;; HoneySQL writes it as n, and PostgreSQL reads that as the column: quoted, or no keyword
-        ;; (order, user) nor a qualified name (a.b)
+        ;; HoneySQL writes it as n, and PostgreSQL reads that as the column: quoted, or unquoted a
+        ;; name of an identifier's characters and no keyword (order, user)
         writes? #(let [[text quoted?] (syntax/formatted-name % format false)]
-                   (and (= n text) (not (str/includes? n ".")) (or quoted? (not (types/reserved-word? n)))))
+                   (and (= n text) (not (str/includes? n "."))
+                        (or quoted? (and (re-matches #"[a-z_][a-z0-9_$]*" n) (not (types/reserved-word? n))))))
         k (jdbc/row-key n)]
-    (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
+    (cond (writes? k) k (writes? n) n)))
+
+(defn- unwritten
+  "The type of a required column no key writes (written-key's nil): no value, said so."
+  [column]
+  [:fn {:error/message (str "HoneySQL writes no key of a map as column " column " under this :format")} (constantly false)])
 
 (def ^:private in-a-row
   "What HoneySQL writes a value of a kind as in a row (:values, :set): no value but a column, a
@@ -221,7 +228,7 @@
    the elements e generates (java-array), of registry r, and the maps and vectors of any values
    (jsonb's) as JSON holds them (json-scalar); a value of own's kind within the bounds the
    registry generates own's in (a varchar(n)'s n, 2025's dates), a keyword as short, and no date
-   or time, nor a numeric(p, s)'s number, of another kind, which it bounds not, a string of a type of other values one of its
+   or time, nor a numeric(p, s)'s or a real's number, of another kind, which it bounds not, a string of a type of other values one of its
    literals (types/types', a regclass's that names a relation), nor a value of another kind held to a
    predicate; nil where nothing is left."
   [r own t]
@@ -261,8 +268,10 @@
           (and (= :keyword k) (= :string (shape/kind own)) (:gen/max hints))
           (shape/merge-props t {:gen/schema [:string {:min 1 :max (:gen/max hints)}] :gen/fmap keyword})
           (and (keyword? k) (= "time" (namespace k)) (not= k (shape/kind own))) nil
-          ;; a numeric(p, s)'s values of another kind than its own, which they bound not
-          (and (:pg/precision (shape/column-props own)) (not= k (shape/kind own))) nil
+          ;; a numeric(p, s)'s or a real's values of another kind than its own, which they bound not
+          (and (let [cp (shape/column-props own)] (or (:pg/precision cp) (types/single-precision? (shape/type-name cp))))
+               (not= k (shape/kind own)))
+          nil
           ;; the text of a type of no string values (a regclass's, any type's under :inline, a UUID's
           ;; too), its input reads: one of its literals, none where it has none
           (and (#{:string :uuid} k) (not= k (shape/kind own)) (not= :enum (shape/kind own)) (some? own))
@@ -327,13 +336,19 @@
                                [gen-plain _ gen-lifted] (typed k c (shape/maybe? c))
                                gen (some->> [(some->> gen-plain (generated-values r c))
                                              (some->> gen-lifted (generated-values r c) (vector :tuple [:= :lift]))]
-                                            (remove nil?) seq (#(if (next %) (into [:or] %) (first %))))]]
-                     [(written-key k opts) (not (or (:optional props) triggered?))
-                      (if plain (into [:or lift plain] (when one-written [one-written])) lift)
-                      gen
-                      (not (:optional props))])
-                   (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
-                     [(written-key k opts) false default default false]))
+                                            (remove nil?) seq (#(if (next %) (into [:or] %) (first %))))
+                               wk (written-key k opts)
+                               required? (not (or (:optional props) triggered?))]
+                         :when (or wk required?)]
+                     (if wk
+                       [wk required?
+                        (if plain (into [:or lift plain] (when one-written [one-written])) lift)
+                        gen
+                        (not (:optional props))]
+                       [(clojure.core/name k) true (unwritten (clojure.core/name k)) nil true]))
+                   (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)
+                         :let [wk (written-key k opts)] :when wk]
+                     [wk false default default false]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
           row (into [:map {:closed true :error/fn extra-key-message}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
@@ -495,11 +510,16 @@
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))
-   :written-otherwise (fn [{:keys [op dropped call column clause before]}]
+   :written-otherwise (fn [{:keys [op dropped call column clause before param]}]
                         (cond
+                          param
+                          (str "a vector headed by " (pr-str param) " is written as a call of a function " (subs (str param) 2) ", not as the parameter:"
+                               " write the parameter alone, or a list of them in :in as [:lift coll]")
                           clause
                           (str "a statement of " clause " and " before " is written " before " first, which PostgreSQL reads otherwise or not at all:"
                                " write the query inside the write, {:insert-into [[:t [:a]] {:select [:a] ...}]}")
+                          (string? column)
+                          (str (pr-str column) " is written as another name, " (first (syntax/formatted-name column nil false)) ": HoneySQL writes no key of a map as the column")
                           column
                           (str (pr-str column) " is written " (name column) ", a word PostgreSQL reads as a keyword, not as a column:"
                                " write it as a string, " (pr-str (name column)) ", which HoneySQL quotes, or quote names ({:format {:quoted true}})")

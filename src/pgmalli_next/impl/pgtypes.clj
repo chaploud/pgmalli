@@ -37,6 +37,9 @@
    alone, one of :pg/one-byte (a \"char\"'s, a bound a comparison drops) one byte (char-value?)."
   (m/-simple-schema
    {:type :string :pred string?
+    :type-properties {:error/fn (fn [{:keys [schema value]} _]
+                                  (when (and (string? value) (:pg/one-byte (m/properties schema)))
+                                    "should be one byte: an ASCII character, or \\ooo"))}
     :property-pred (fn [props]
                      (let [bounds ((m/-min-max-pred char-length) props)]
                        (cond (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))

@@ -941,7 +941,7 @@
 (defn- out-of-range?
   "Whether v is a number outside the range of type held-t (types/types' :range; an alias of
    oid's, docs/queries.md#stricter-oid), or of an array's element type, which PostgreSQL refuses
-   where a row reaches it, or a string longer than a \"char\"'s one, which it cuts
+   where a row reaches it, or a string of more than a \"char\"'s one byte (pgtypes/char-value?), which it cuts
    (docs/queries.md#stricter-assignment)."
   [held-t v assign?]
   (let [e (when (string? held-t) (or (types/element held-t) held-t))
@@ -1054,7 +1054,6 @@
                                                           (or (not= :compared-and-cast context) (accept/accepts? t sent :cast)))))
                                   ;; left out by a rule of docs/queries.md "Stricter than PostgreSQL" that PostgreSQL's
                                   ;; verdicts pin (stricter.edn); a cast's accepts? PostgreSQL's verdicts pin (accept-test)
-                                  ;; a class the one sending sends nowhere (docs/queries.md#what-your-application-sends)
                                   ;; a class the one sending sends nowhere (docs/queries.md#what-your-application-sends),
                                   ;; or a Character, which it sends to a character column alone (#stricter-character)
                                   pinned? (or (nil? sent)

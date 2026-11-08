@@ -202,13 +202,15 @@
 (deftest a-large-stack-is-held-by-its-thread-whoever-stops-waiting-for-it
   (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
         big (apply str (repeat 1000000 "a"))
+        permits (.availablePermits ^java.util.concurrent.Semaphore @#'pgmalli-next.impl.pgtypes/large-stacks)
         peak (atom 0)
         watching (future (dotimes [_ 400]
                            (swap! peak max (count (filter #(= "pgmalli-re" (.getName ^Thread %)) (keys (Thread/getAllStackTraces)))))
                            (Thread/sleep 2)))]
     (dotimes [_ 20] (let [f (future (m/validate s big))] (Thread/sleep 5) (future-cancel f)))
     @watching
-    (is (<= @peak 2) "callers interrupted waiting leave no more large stacks running than its permits")))
+    (is (pos? @peak) "watched while they run")
+    (is (<= @peak permits) "callers interrupted waiting leave no more large stacks running than its permits")))
 
 (deftest a-numeric-of-a-precision-generates-within-it-of-its-scale
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}

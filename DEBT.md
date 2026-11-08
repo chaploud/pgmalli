@@ -15,7 +15,7 @@ something PostgreSQL takes, leaves a type untold, or tells a type other than the
   before it may hold NULL, so a write takes nil there too, which PostgreSQL refuses.
 - A map or a vector to a `json` or `jsonb` column is not checked for what the one sending
   refuses to write (accept/json-problem): two keys of one text (`:a` and `"a"`), a nil key inside
-  the document (the map's own is refused), a NaN or an infinity. Sending it is an error of `:pgmalli.error/invalid-options`.
+  the document (the map's own is refused), a NaN or an infinity, a value of a class JSON has no form for (a `PGobject`). Sending it is an error of `:pgmalli.error/invalid-options`.
 - A column of a pg_catalog type `types/types` does not list (`refcursor`, `aclitem`, the ones
   upstream_test's `unsupported` names) takes any value: PostgreSQL refuses a `varchar` there.
 - `as-read` refuses a multi-dimensional array `builder` reads (`[[1 2] [3 4]]`): it types an
@@ -48,3 +48,13 @@ something PostgreSQL takes, leaves a type untold, or tells a type other than the
 - `values-schema` and `set-schema` refuse a vector of two values or more to a column of a string
   type (`{:nick [1 2]}`), which HoneySQL writes as a row, `(?, ?)`, and PostgreSQL takes as the
   row's text (`(1,2)`); `analyze` takes it.
+- A `real[]` column's elements are held neither to a real's range nor, assigned, to a `Float`:
+  a `Double[]` or a `BigDecimal[]` of `1e300` is taken, which PostgreSQL refuses (out of range),
+  and a `Double[]` of `0.1`, which it rounds (a scalar `real` refuses both). A `double precision`
+  column takes a `BigDecimal` past its range (`1e400M`).
+- An INSERT of a query that is a VALUES (`{:insert-into [[:t [:o]] {:values [[:?x]]}]}`, which
+  HoneySQL writes as `{:insert-into :t :columns [:o] :values [[:?x]]}` is) is read as
+  INSERT ... SELECT: its values are not typed by the columns, and a NOT NULL or required column
+  is not checked.
+- A `BigDecimal` or a `BigInt` beside a `real` column in `coalesce` or CASE, which PostgreSQL
+  resolves to `real`, is not held to a real's range.

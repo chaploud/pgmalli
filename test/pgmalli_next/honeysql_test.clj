@@ -3565,3 +3565,46 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\"" :pg/one-byte true}]]]}})
         c (:c (:args (h/analyze reg {:insert-into :t :values [{:c :?c}]})))]
     (is (= [true true false false] (map #(m/validate c % {:registry reg}) ["a" :a "ab" :ab])))))
+
+(deftest a-column-no-key-writes-is-left-out-or-refused
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] ["a.b" [:maybe [:int {:pg/type "integer"}]]]]
+                                          :pg.public/u [:map {:pg/table "public.u"} ["a.b" [:int {:pg/type "integer"}]]]}})]
+    (is (str/includes? (first (sql/format {:insert-into :t :values [{"a.b" 1}]})) "\"a\".\"b\"") "HoneySQL writes it qualified")
+    (is (= [true false] (map #(m/validate (h/values-schema reg :t) % {:registry reg}) [{:id 1} {:id 1 "a.b" 1}])) "optional: left out")
+    (is (= {"a.b" ["HoneySQL writes no key of a map as column a.b under this :format"]}
+           (me/humanize (m/explain (h/values-schema reg :u) {"a.b" 1} {:registry reg}))) "required: no row")
+    (is (= [{:kind :written-otherwise :column "a.b"}] (:problems (h/analyze reg {:insert-into :t :values [{:id 1 "a.b" 1}]}))) "analyze says so")))
+
+(deftest a-real-array-written-generates-reals
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ra [:vector {:pg/type "real[]"} [:double {:pg/type "real"}]]]]}})
+        rows (mg/sample (h/values-schema reg :t) {:registry reg :size 100 :seed 21})
+        elements (mapcat #(let [v (:ra %)] (seq (if (vector? v) (second v) v))) rows)]
+    (is (seq elements))
+    (is (every? #(instance? Float %) elements) "a BigDecimal or a Double past a real's range PostgreSQL refuses")))
+
+(deftest an-in-of-a-lifted-collection-is-a-list-of-its-elements
+  (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "happy" "sad"]
+                                          :pg.public/t [:map {:pg/table "public.t"} [:n [:int {:pg/type "integer"}]] [:m [:ref {:pg/type "public.mood"} :pg.public/mood]]]}})
+        problems #(:problems (h/analyze reg {:select [:n] :from [:t] :where %}))]
+    (is (= "SELECT n FROM t WHERE n IN (?, ?)" (first (sql/format {:select [:n] :from [:t] :where [:in :n [:lift [1 2]]]}))) "HoneySQL's")
+    (is (= [] (problems [:in :n [:lift [1 2]]])))
+    (is (= [] (problems [:not-in :m [:lift [:happy :sad]]])))
+    (is (= [:enum-literal] (map :kind (problems [:in :m [:lift [:happy :glad]]]))) "each element checked")))
+
+(deftest a-vector-headed-by-a-parameter-is-written-as-a-call
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:int {:pg/type "integer"}]]]}})
+        problems #(:problems (h/analyze reg %))]
+    (is (str/includes? (first (sql/format {:select [:n] :from [:t] :where [:in :n [:?x :?y]]} {:params {:x 1 :y 2}})) "??X(") "HoneySQL's")
+    (is (= [{:kind :written-otherwise :param :?x}] (problems {:select [:n] :from [:t] :where [:in :n [:?x :?y]]})))
+    (is (= [{:kind :written-otherwise :param :?x}] (problems {:update :t :set {:n [:?x]}})))
+    (is (= [] (problems {:insert-into :t :values [[:?x]]})) "a row of :values")
+    (is (= [] (problems {:select [[:?x :a]] :from [:t]})) "a select item aliased")))
+
+(deftest a-cast-takes-the-classes-postgresql-casts
+  (let [x (:x (:args (h/analyze {} {:select [[[:cast :?x :boolean] :y]]})))]
+    (is (= [true false false true] (map #(m/validate x % {:registry (pgmalli/registry {:registry {}})}) [(int 1) 1 (short 1) true])) "int4 to bool casts; int8 and int2 do not")))
+
+(deftest a-char-columns-value-of-more-bytes-is-said-to-be-one-byte
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\"" :pg/one-byte true}]] [:v [:string {:pg/type "character varying" :max 2}]]]}})]
+    (is (= {:c ["should be one byte: an ASCII character, or \\ooo"] :v ["should be at most 2 characters"]}
+           (me/humanize (m/explain :pg.public/t {:c "ab" :v "abc"} {:registry reg}))))))

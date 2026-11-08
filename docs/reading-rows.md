@@ -38,8 +38,9 @@ reads no column it builds. Pass it wherever your application reads rows.
 keywords, maps and vectors, sent as [what your application
 sends](queries.md#what-your-application-sends) lists: `Instant/MAX` and `MIN` as `infinity` and
 `-infinity`, a map and a vector written with data.json (an `Instant` and java.time's dates and
-times as their ISO-8601 text, a `UUID` and a keyword as their text; a document JSON cannot hold
-an error: [two keys of one text](queries.md#stricter-json-keys), a nil key, a NaN, an infinity). Every other class goes as
+times as their ISO-8601 text, a `UUID`, a keyword and a `Character` as their text; a document JSON cannot hold
+an error: [two keys of one text](queries.md#stricter-json-keys), a nil key, a NaN, an infinity, a
+value of another class, a `PGobject`). Every other class goes as
 pgjdbc's `setObject` sends it. Call it once, before sending arguments: without it, pgjdbc refuses
 a keyword and a vector (a `PSQLException` of SQLState `07006`, which names the class) and sends a
 map as `hstore` (an error naming hstore where that extension is not installed). It throws where another extension already holds a class pgmalli sends

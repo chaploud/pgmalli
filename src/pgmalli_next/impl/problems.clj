@@ -390,20 +390,28 @@
   "{:kind :written-otherwise ...} of each call HoneySQL writes otherwise than its data reads:
    [:in x a b], whose arguments past a it drops (x IN a), and a name of an operator it has not
    registered ([:-> a b] without honey.sql.pg-ops), which it writes as a call of a function of
-   that name (->(a, b)) PostgreSQL has not."
+   that name (->(a, b)) PostgreSQL has not, and a vector headed by a named parameter
+   ([:?x :?y]) an expression or a written value is, which it writes as a call (??X(?))."
   [body]
   (distinct
-   (for [x (tree-seq syntax/branch? seq body)
+   (for [x (concat (tree-seq syntax/branch? seq body)
+                   ;; a written value, as an operand
+                   (for [st (syntax/statements body) [_ v] (syntax/writes st (constantly nil))] [::written v]))
          :when (and (vector? x) (keyword? (first x)))
          :let [h (first x)
                n (name h)]
-         p [(when (and (syntax/in-ops h) (< 3 (count x)))
+         p (concat
+            ;; an operand of an operator (=, IN) or a written value
+            (when (and (not (map-entry? x)) (or (= ::written h) (syntax/in-ops h) (syntax/operator-name? h)))
+              (for [a (rest x) :when (and (vector? a) (some->> (syntax/param-key (first a)) name (re-find #"^[A-Za-z_]")))]
+                {:kind :written-otherwise :param (first a)}))
+            [(when (and (syntax/in-ops h) (< 3 (count x)))
               {:kind :written-otherwise :op h :dropped (- (count x) 3)})
             ;; HoneySQL escapes a ? of a name as ??
             (when (and (syntax/operator-name? h) (< 2 (count x))
                        (some-> (try (first (sql/format-expr (into [h] (repeat (dec (count x)) ::x)))) (catch Exception _ nil))
                                (str/starts-with? (str (str/replace n "?" "??") "("))))
-              {:kind :written-otherwise :op h :call true})]
+              {:kind :written-otherwise :op h :call true})])
          :when p]
      p)))
 
@@ -432,14 +440,15 @@
 (defn- written-keywords
   "{:kind :written-otherwise :column k} of each column a write names by keyword k (:values,
    :set, :columns, the target's list) that HoneySQL writes unquoted as a word PostgreSQL reads as a keyword (order,
-   user), not as the column."
+   user), not as the column, or by a string it writes as another name."
   [body format]
   (distinct
    (for [st (syntax/statements body)
          k (concat (map first (syntax/writes st (constantly nil))) (vals (:written (syntax/insert-parts st))) (when (sequential? (:columns st)) (:columns st)))
-         :when (keyword? k)
+         :when (or (keyword? k) (string? k))
          :let [[text quoted?] (syntax/formatted-name k format false)]
-         :when (and (not quoted?) (types/reserved-word? text))]
+         ;; a string HoneySQL writes as another name (a.b as "a"."b", a-b as a_b under :quoted-snake)
+         :when (if (string? k) (not= k text) (and (not quoted?) (types/reserved-word? text)))]
      {:kind :written-otherwise :column k})))
 
 (defn check

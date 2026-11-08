@@ -281,11 +281,11 @@
                              ;; a numeric[]'s too, of a Java array of them alone (float8[] to numeric[] by element)
                              (when (and (string? t) (special? (types/element t)))
                                ;; of its own class, as an array of no value is typed (jdbc/array-type)
-                               (distinct (for [[_ s ^Class c] (arrays-sent opts #{"double precision[]"} numeric-special)]
+                               (distinct (for [[_ s ^Class c] (arrays-sent opts #{"double precision[]"} (query/nullable numeric-special))]
                                            (cond-> s (and c (= :pg/array (shape/head s))) (shape/merge-props {:pg/empty-classes #{(.getName c)}}))))))
             all (cond->> (one-per-kind opts (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
                   ;; inlined, a literal is of a type by its value, whatever its class
-                  (and (= :call held-in) (not (::common-type opts)) (not (:inline (:format opts)))) (keep #(class-held % t takes? opts)))
+                  (and (or (= :call held-in) (= :cast context)) (not (::common-type opts)) (not (:inline (:format opts)))) (keep #(class-held % t takes? opts)))
             all (concat all specials)]
         (cond (or (= all own-alts) (empty? all)) own (next all) (into [:or] all) :else (first all))))))
 
@@ -372,11 +372,14 @@
         (syntax/column-keyword? x) (let [e (:element (query/resolve-column registry chain x))] (when (syntax/param-key e) [e true]))))
 
 (defn- compared-literals
-  "The literals of value compared with a side: itself, each of an IN list, each element of
+  "The literals of value compared with a side: itself, each of an IN list, each of an IN's
+   [:lift coll], which HoneySQL writes as a list of its elements, each element of
    [:any [:array [...]]]."
   [op value]
   (filter literal (cond (and (vector? value) (= :any (first value)) (vector? (second value)) (= :array (first (second value))) (sequential? (second (second value))))
                         (second (second value))
+                        (and (syntax/in-ops op) (vector? value) (= :lift (first value)) (= 2 (count value)) (or (sequential? (second value)) (set? (second value))))
+                        (map #(vector :lift %) (second value))
                         (and (syntax/in-ops op) (vector? value) (not (keyword? (first value)))) value
                         :else [value])))
 
@@ -492,8 +495,10 @@
           :when (and s (or (syntax/param-key k) elements? (query/enum-values registry s)))
           :let [e (when-not elements? (unnest-cast-element registry ps x opts))
                 t (accepted-type registry s :cast (cond-> opts e (assoc ::cast-element e)))
+                ;; a call of a type's name (bool(?)) converts its argument implicitly first: its own
+                ;; classes ahead of the cast's (an Integer alone casts to boolean)
                 t (if-let [more (some-> (calls x) call-type)]
-                    (shape/either (shape/distinct-kinds (concat (shape/alternatives (shape/non-null t)) more)) t)
+                    (shape/either (shape/distinct-kinds (concat more (shape/alternatives (shape/non-null t)))) t)
                     t)
                 t (cond-> t
                     ;; compared, PostgreSQL evaluates the cast only where its plan reaches it (a row
