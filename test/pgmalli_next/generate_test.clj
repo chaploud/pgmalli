@@ -79,9 +79,10 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo says (files/config c)) (pr-str c))))
 
 (deftest a-misspelt-db-keeps-its-password-out-of-the-error
-  (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:dbb {:password "s3cret"}})))]
-    (is (not (re-find #"s3cret" (pr-str (ex-data e)))))
-    (is (not (re-find #"s3cret" (str e))))))
+  (doseq [c [{:dbb {:password "s3cret"}} [:db {:password "s3cret"}]]]
+    (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config c)))]
+      (is (not (re-find #"s3cret" (pr-str (ex-data e)))) (pr-str (ex-data e)))
+      (is (not (re-find #"s3cret" (str e)))))))
 
 (deftest generate-writes-over-no-file-it-did-not-write
   (let [path (str (doto (java.io.File/createTempFile "pgmalli-not-generated" ".edn") (spit "{:paths [\"src\"]}")))]

@@ -131,7 +131,13 @@
     (let [ds ((requiring-resolve 'next.jdbc/get-datasource) {:jdbcUrl "jdbc:nope://u:s3cret@localhost:1/x"})
           e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^cannot connect through :db :datasource"
                                   (ir/from-db {:datasource ds})))]
-      (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) "a DataSource's URL is not printed either"))))
+      (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) "a DataSource's URL is not printed either")))
+  (when-not (System/getProperty "babashka.version")
+    (doseq [url ["postgres://u:s3cret@localhost:1/x" "postgresql://u:s3cret@localhost:1/x"]]
+      (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is no URL of PostgreSQL's JDBC driver" (ir/from-db {:jdbcUrl url})))]
+        (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) (str "libpq's URL is not printed: " url))))
+    (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db {:jdbcUrl "JDBC:postgresql://localhost:1/nope?password=s3cret"})))]
+      (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) "nor an upper-case one"))))
 
 (deftest jdbc-reads-what-psql-reads
   ;; babashka has no java.sql

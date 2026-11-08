@@ -8,15 +8,15 @@
 (defn- target
   "host:port/db of a JDBC URL, without its user, password or parameters."
   [url]
-  (let [[_ hosts db] (re-find #"^jdbc:postgresql://(?:[^@/]*@)?([^/?]*)/?([^?]*)" (str url))]
+  (let [[_ hosts db] (re-find #"(?i)^jdbc:postgresql://(?:[^@/]*@)?([^/?]*)/?([^?]*)" (str url))]
     (if hosts (str hosts "/" db) "the :jdbcUrl")))
 
 (defn- without-urls
   "e as a cause that names no URL: DriverManager's \"No suitable driver\" message carries the
-   URL, and a URL may carry a password. Its message with every jdbc: URL replaced, and its
-   SQLState."
+   URL, and a URL may carry a password. Its message with every URL (jdbc:..., scheme://...)
+   replaced, and its SQLState."
   ^java.sql.SQLException [^java.sql.SQLException e]
-  (java.sql.SQLException. (str/replace (str (ex-message e)) #"jdbc:\S+" "the URL") (.getSQLState e)))
+  (java.sql.SQLException. (str/replace (str (ex-message e)) #"(?i)(?:jdbc:|[a-z][a-z0-9+.-]*://)\S+" "the URL") (.getSQLState e)))
 
 (defn- connect [{:keys [jdbcUrl datasource user password]}]
   (if datasource
@@ -26,7 +26,10 @@
              (error/fail! :pgmalli.error/db-unavailable
                           (str "cannot connect through :db :datasource: " (ex-message c) "; check the DataSource's settings and that PostgreSQL is running")
                           {} c))))
-    (do (try (Class/forName "org.postgresql.Driver")
+    (do (when-not (re-find #"(?i)^jdbc:postgresql:" (str jdbcUrl))
+          ;; not echoed: a URL of another scheme (postgres://user:password@host) may carry a password
+          (error/fail! :pgmalli.error/invalid-config ":db's :jdbcUrl is no URL of PostgreSQL's JDBC driver: write jdbc:postgresql://host:port/db (a postgres:// URL is libpq's; its user and password go in :user and :password)"))
+        (try (Class/forName "org.postgresql.Driver")
              (catch ClassNotFoundException _
                (error/fail! :pgmalli.error/invalid-config "PostgreSQL's JDBC driver is not on the classpath: add org.postgresql/postgresql, or give psql settings instead of :jdbcUrl")))
         (try (java.sql.DriverManager/getConnection jdbcUrl (doto (java.util.Properties.)

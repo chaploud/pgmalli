@@ -98,9 +98,10 @@
        (fail! kind (str label ": " (pr-str errors)
                               (cond suggest (did-you-mean suggest)
                                     (and (seq stray) (seq known)) (str "; it takes " (str/join ", " known))))
-                    (cond-> {:given (cond-> opts
-                                      (and (map? opts) known) (select-keys known)
-                                      (map? opts) (dissoc :db))
+                    ;; of what is no map, its class alone: [:db {:password ...}] is no map
+                    (cond-> {:given (if (map? opts)
+                                      (cond-> opts known (select-keys known) true (dissoc :db))
+                                      (some-> opts class .getName))
                              :errors errors}
                       known (assoc :known (vec known))
                       ;; the names of the keys it does not take, not their values
