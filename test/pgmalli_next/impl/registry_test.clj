@@ -207,7 +207,8 @@
         watching (future (dotimes [_ 400]
                            (swap! peak max (count (filter #(= "pgmalli-re" (.getName ^Thread %)) (keys (Thread/getAllStackTraces)))))
                            (Thread/sleep 2)))]
-    (dotimes [_ 20] (let [f (future (m/validate s big))] (Thread/sleep 5) (future-cancel f)))
+    ;; each caller on a small stack, which the value overflows whatever the JVM's default
+    (dotimes [_ 20] (let [t (Thread. nil #(m/validate s big) "small-stack" (* 256 1024))] (.start t) (Thread/sleep 5) (.interrupt t)))
     @watching
     (is (pos? @peak) "watched while they run")
     (is (<= @peak permits) "callers interrupted waiting leave no more large stacks running than its permits")))
