@@ -125,7 +125,7 @@
                                      :when (and taken (not= :cast context) (accept/answers? accepted-t))
                                      c (if (= :unknown sent) untyped-classes [nil])
                                      :when (not (accept/takes? accepted-t (if (= "feel" sent) [:enum "feel"] sent) c context))]
-                                 (cond-> v c (assoc :sent (symbol (.getName ^Class c))))))
+                                 (cond-> v c (assoc :sent (first (oracle/stricter-key sent c context))))))
                      #(vec (sort (map :t %))))))
 
 (defn- triples [m] (set (for [[[sent context] ts] m t ts] [sent context t])))

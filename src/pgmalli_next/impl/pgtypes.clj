@@ -57,7 +57,7 @@
    {:type :double :pred #(or (double? %) (instance? Float %))
     :property-pred (fn [props]
                      (let [bounds ((m/-min-max-pred nil) props)]
-                       (if (= "real" (:name (types/entry (shape/type-name props))))
+                       (if (types/single-precision? (shape/type-name props))
                          (fn [d] (and (float4? d) (or (nil? bounds) (bounds d))))
                          bounds)))}))
 

@@ -243,6 +243,12 @@
       (some-> (canonical-name e) array-of)
       (:name (entry t) t))))
 
+(defn single-precision?
+  "Whether type t (a name types/types knows by) is real, of single precision: a value is held to
+   its range, a Float its own, a Double one PostgreSQL rounds to it on assignment."
+  [t]
+  (= "real" (:name (entry t))))
+
 (defn typname
   "Type n as pg_type names it (integer as int4, double precision[] as float8[]), the name pgjdbc
    takes of a PGobject's type; n where the catalog holds no other."

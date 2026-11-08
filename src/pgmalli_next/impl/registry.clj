@@ -148,7 +148,7 @@
                              {:gen/schema [:double {:min (- (double lim)) :max (double lim)}]
                               :gen/fmap #(let [d (.setScale (bigdec %) (int s) java.math.RoundingMode/DOWN)] (if (pos? (.compareTo (.abs d) lim)) lim d))}))
                 ;; a real: a Float within the range a value of one is held to
-                :double (when (= "real" (:name (types/entry (shape/type-name p))))
+                :double (when (types/single-precision? (shape/type-name p))
                           {:gen/schema [:double {:min -1e6 :max 1e6}] :gen/fmap float})
                 :time/instant {:gen/min (java.time.Instant/parse "2025-01-01T00:00:00Z") :gen/max (java.time.Instant/parse "2025-12-31T23:59:59Z")}
                 :time/local-date-time {:gen/min (java.time.LocalDateTime/parse "2025-01-01T00:00:00") :gen/max (java.time.LocalDateTime/parse "2025-12-31T23:59:59")}

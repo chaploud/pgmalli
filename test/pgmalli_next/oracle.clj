@@ -907,6 +907,12 @@
        (catch PSQLException _ false)
        (finally (.rollback conn))))
 
+(defn stricter-key
+  "The key of stricter.edn a value of class c sent as type sent pins in context: the type, or the
+   class's name as a symbol of one sent untyped, as accept/reads? reads it by class."
+  [sent ^Class c context]
+  [(if (= :unknown sent) (symbol (.getName c)) sent) context])
+
 (def ^:private stricter
   "{[sent context] #{column type}}: where PostgreSQL takes a parameter that accept/takes? leaves
    out, sent by type or untyped by class, as pgmalli-next.accept-test pins it."
@@ -1054,7 +1060,7 @@
                                   pinned? (or (nil? sent)
                                               (and cast? (not takes?))
                                               ;; one sent untyped, pinned by its class, as accept/reads? reads it
-                                              (contains? (get stricter [(if (= :unknown held-sent) (symbol (.getName (class v))) held-sent) held-context]) held-t))
+                                              (contains? (get stricter (stricter-key held-sent (class v) held-context)) held-t))
                                   refused? (not (try (m/validate s arg) (catch Exception _ false)))
                                   row-refused? (written-refuses opts table column context v)
                                   ;; NULL in a NOT NULL column fails once a row is written; the table may have none
