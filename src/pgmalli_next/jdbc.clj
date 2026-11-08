@@ -18,7 +18,15 @@
 
 ;;; reading
 
-(defn- parse-json [s] (json/read-str s :key-fn keyword))
+(defn- parse-json
+  "A json or jsonb column's text as data; nesting past what the thread's stack holds (PostgreSQL
+   stores jsonb thousands deep) an error naming the column, not a StackOverflowError."
+  [s ^ResultSet rs i]
+  (try (json/read-str s :key-fn keyword)
+       (catch StackOverflowError _
+         (error/fail! :pgmalli.error/fault
+                      (str "column " (.getColumnLabel (.getMetaData rs) (int i)) " holds a JSON document nested too deep to read")
+                      {:given (.getColumnLabel (.getMetaData rs) (int i))}))))
 
 (defn- instant
   "A timestamptz as an Instant; pgjdbc reads infinity as OffsetDateTime's MAX and MIN, which no
@@ -53,7 +61,7 @@
                                        (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
                                        (fn [^ResultSet rs i] (.getString rs (int i))))
           (types/json? (:name entry)) (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
-                                                             (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) parse-json)))
+                                                             (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) (parse-json rs i))))
           (by-kind (:schema entry)) (by-kind (:schema entry))
           :else (fn [^ResultSet rs i]
                   (let [v (.getObject rs (int i))]
@@ -107,7 +115,21 @@
   [x]
   (cond (keyword? x) (subs (str x) 1) (symbol? x) (str x) :else x))
 
+(defn- one-text-per-key!
+  "x, where no map in it has two keys of one JSON text (:role, \"role\" and 'role are all
+   \"role\"), of which the document would keep one."
+  [x]
+  (walk/prewalk (fn [v]
+                  (when (map? v)
+                    (when-let [k (some (fn [[k n]] (when (> n 1) k)) (frequencies (map #(let [t (json-text %)] (if (string? t) t (str t))) (keys v))))]
+                      (error/fail! :pgmalli.error/invalid-options
+                                   (str "a map goes as jsonb, whose keys are text: two keys of it are " (pr-str k) "; keep one")
+                                   {:given k})))
+                  v)
+                x))
+
 (defn- jsonb [x]
+  (one-text-per-key! x)
   (doto (PGobject.)
     (.setType "jsonb")
     (.setValue (json/write-str (walk/postwalk json-text x) :default-write-fn write-temporal))))

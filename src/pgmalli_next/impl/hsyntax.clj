@@ -1230,12 +1230,13 @@
     (error/fail! :pgmalli.error/not-query-data
                  (str "pgmalli-next.honeysql reads HoneySQL query data (a map such as {:select ...}), not "
                       (if (nil? body) "nil" "SQL already formatted") "; pass the map you give sql/format")
-                 {:given body}))
+                 ;; the SQL text alone: a formatted query's parameters may be secrets
+                 {:given (if (vector? body) (first body) body)}))
   (when-let [[path sym] (code-at body [])]
     (error/fail! :pgmalli.error/not-query-data
                  (str "pgmalli-next.honeysql reads HoneySQL query data, not code: " (pr-str sym) " at " (pr-str path)
                       " is a symbol; write a name as a keyword ([:cast :score :integer]), or, for code, pass the data it builds, as you give it to sql/format, each variant separately")
-                 {:given body :in path}))
+                 {:given sym :in path}))
   (as-vectors body))
 
 (def ^:private grammar-operators

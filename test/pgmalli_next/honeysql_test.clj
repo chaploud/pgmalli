@@ -788,11 +788,11 @@
     (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number")))
 
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
-  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
-                    [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
-                    [{:qualified? false} #":qualified\? false.* is no longer read: .*\{:builder-fn \(pgmalli-next.jdbc/builder registry\)\}"]
-                    [{:kebab? true} #":kebab\? true.* is no longer read"]
-                    [{:return-keys true} #":return-keys is no longer read: pass it as \{:jdbc \{:return-keys ...\}\}$"]]]
+  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is not read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
+                    [{:stringtype :unspecified} #":stringtype.* is not read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
+                    [{:qualified? false} #":qualified\? false.* is not read: .*\{:builder-fn \(pgmalli-next.jdbc/builder registry\)\}"]
+                    [{:kebab? true} #":kebab\? true.* is not read"]
+                    [{:return-keys true} #":return-keys is not read: pass it as \{:jdbc \{:return-keys ...\}\}$"]]]
     (let [e (try (args {:select [:id] :from [:users]} o) nil (catch clojure.lang.ExceptionInfo e e))]
       (is (re-find says (str (ex-message e))) (pr-str o))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))) (pr-str o)))))
@@ -2856,6 +2856,8 @@
     (doseq [[body said] [[nil #"not nil"] [["SELECT 1"] #"not SQL already formatted"] [{:pg.sample/users []} #"registry first"]]]
       (is (= :pgmalli.error/not-query-data (first (fails #(h/analyze registry body opts)))) (pr-str body))
       (is (re-find said (second (fails #(h/analyze registry body opts)))) (pr-str body)))
+    (is (= "SELECT * FROM u WHERE pw = ?" (:given (ex-data (is (thrown? clojure.lang.ExceptionInfo (h/analyze registry ["SELECT * FROM u WHERE pw = ?" "hunter2"] opts))))))
+        "formatted SQL's text alone: its parameters may be secrets")
     (doseq [[given said] [[{:problems []} #"pass \(:problems result\)"] [[:=> [:cat] :any] #"pass \(:pgmalli/problems"]
                           [{:kind :x} #"got one map"] ["x" #"got java.lang.String"]]]
       (is (= [:pgmalli.error/invalid-options true] (update (fails #(h/humanize given)) 1 (comp boolean (partial re-find said)))) (pr-str given)))

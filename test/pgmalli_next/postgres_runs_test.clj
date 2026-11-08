@@ -553,6 +553,24 @@
         (alter-var-root protocol update :impls dissoc clojure.lang.IPersistentCollection)
         (-reset-methods @protocol)))))
 
+(deftest a-jsonb-nested-past-the-stack-is-an-error-naming-the-column
+  (when *db*
+    ;; read on a thread of a small stack, which 5000 levels overflow whatever the JVM's default
+    (let [deep (str (apply str (repeat 5000 "[")) (apply str (repeat 5000 "]")))
+          thrown (promise)
+          t (Thread. nil #(deliver thrown (try (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" deep] {:builder-fn (builder {})}) nil
+                                               (catch Throwable e e)))
+                     "small-stack" (* 256 1024))
+          e (do (.start t) (.join t) @thrown)]
+      (is (instance? clojure.lang.ExceptionInfo e) (pr-str (class e)))
+      (is (= [:pgmalli.error/fault "doc"] [(:pgmalli/error (ex-data e)) (:given (ex-data e))])))))
+
+(deftest a-map-of-two-keys-of-one-json-text-is-refused-not-sent-as-one
+  (when *db*
+    (doseq [m [{:role "user" "role" "admin"} {:a/role 1 'a/role 2} {1 :x "1" :y}]]
+      (let [e (is (thrown? clojure.lang.ExceptionInfo (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" {:m m}])) (pr-str m))]
+        (is (re-find #"two keys of it are" (str (ex-message e))))))))
+
 (deftest a-time-of-24-reads-as-the-java-time-types-max
   (when *db*
     (is (= {:t java.time.LocalTime/MAX :tt java.time.OffsetTime/MAX}

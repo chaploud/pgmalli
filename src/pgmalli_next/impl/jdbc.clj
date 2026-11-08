@@ -41,6 +41,10 @@
 
 (def ^:private format-read (mapv first format-entries))
 
+(def ^:private one-pattern
+  "The regex of a text and flags, one per text: a Pattern equals none but itself."
+  (memoize (fn [^String s flags] (java.util.regex.Pattern/compile s (int flags)))))
+
 ;; compiled once per set of keys: malli keeps a schema's validator, and options are checked on every call
 (def ^:private options-schema
   (memoize (fn [ks] (m/schema (into [:map {:closed true :pgmalli/not-a-map "should be a map of options"}] (map option-entries) ks)))))
@@ -107,22 +111,22 @@
 (defn options!
   "opts when the function they go to takes them, the options of ks (option-entries' keys, in
    order) closed: a misspelt key or value is an error rather than a check silently weakened. An
-   error names what it does not take, with the one meant; an option of an earlier version what
-   replaced it."
+   error names what it does not take, with the one meant, and an option pgmalli does not read what
+   does its work."
   [opts ks]
   (when-not (or (nil? opts) (map? opts)) (error/checked! (options-schema ks) opts))
   (let [fail! #(error/fail! :pgmalli.error/invalid-options (str "pgmalli options: " %1) {:given %2})]
     (when-let [old (not-empty (select-keys opts [:write :stringtype]))]
-      (fail! (str (pr-str old) " is no longer read: " one-sending) old))
+      (fail! (str (pr-str old) " is not read: " one-sending) old))
     (when-let [old (not-empty (select-keys opts [:qualified? :kebab? :lower? :nil-columns]))]
-      (fail! (str (pr-str old) " is no longer read: " builder-only) old))
+      (fail! (str (pr-str old) " is not read: " builder-only) old))
     (when-let [old (not-empty (select-keys opts [:time :read]))]
-      (fail! (str (pr-str old) " is no longer read: " one-reading) old))
+      (fail! (str (pr-str old) " is not read: " one-reading) old))
     (when (contains? opts :compare)
-      (fail! ":compare is no longer read: a compared argument takes no nil; compare NULL with [:= :x nil] or IS NULL in the query body"
+      (fail! ":compare is not read: a compared argument takes no nil; compare NULL with [:= :x nil] or IS NULL in the query body"
              (select-keys opts [:compare])))
     (when (contains? opts :return-keys)
-      (fail! ":return-keys is no longer read: pass it as {:jdbc {:return-keys ...}}"
+      (fail! ":return-keys is not read: pass it as {:jdbc {:return-keys ...}}"
              (select-keys opts [:return-keys])))
     (let [jdbc (:jdbc opts)]
       (doseq [k (when (map? jdbc) (keys jdbc))
@@ -143,7 +147,11 @@
         (fail! (str ":jdbc's " (str/join ", " (keys given)) " is not read: " builder-only)
                given)))
     (error/checked! (options-schema ks) opts)
-    opts))
+    ;; :format as the keys pgmalli reads, one regex per text: what is memoized by it stays bounded
+    ;; whatever else an application's sql/format options hold (:params)
+    (cond-> opts
+      (map? (:format opts)) (update :format #(cond-> (select-keys % format-read)
+                                               (:quoted-always %) (update :quoted-always (fn [^java.util.regex.Pattern p] (one-pattern (.pattern p) (.flags p)))))))))
 
 (def ^:private inline-integers
   "The types PostgreSQL gives an integer literal, in order: the first whose range (types/types'

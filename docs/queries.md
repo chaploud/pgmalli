@@ -184,10 +184,10 @@ An argument pgmalli gives no type is `[:any {:pgmalli/untyped why}]`, `why` one 
 a polymorphic one under `:inline`, is one) and `:type` (it is compared with or cast to what pgmalli knows no type
 of: the result of a function the registry lacks, a column of a table it lacks, an extension's
 type). An argument where a value of a type pgmalli does not type goes (compared, assigned, or a
-function's argument as above) takes a `PGobject` where pgjdbc reads one (a geometric, network or timespan type: `inet`,
-`interval`), which it sends as the type it names, and what converts to the type implicitly (a
-`LocalTime` to `interval`); otherwise (cast, `json`, `xml`, `money`) it is `[:any {:pg/type ...}]`,
-without `:pgmalli/untyped`:
+function's argument as above) takes a `PGobject` where pgjdbc reads one (a geometric, network, timespan or money type, or an
+alias of `oid`: `inet`, `interval`, `money`, `regclass`), which it sends as the type it names, and
+what converts to the type implicitly (a `LocalTime` to `interval`, an integer within `oid`'s range
+to `regclass`); otherwise (cast, `xml`) it is `[:any {:pg/type ...}]`, without `:pgmalli/untyped`:
 
 ```clojure
 (:args (h/analyze registry {:select [[:?label :label]] :from [:users]}))
@@ -349,10 +349,9 @@ value sent untyped goes where its text is of the column's type's category: a key
 string column as a string, to an enum as its labels. It goes to a
 `bytea` or `"char"` column, whose input takes any text, and to an extension's type pgmalli does
 not type (compared, one whose `=` pgmalli's catalog holds, `citext`). Cast, a keyword goes to
-any type, as a string does. A jsonb column takes a map and a vector, held to the shape an
-[override](../README.md#overrides) gives it, and a json column assigned them too (sent as jsonb,
-which PostgreSQL assigns to json as it is); a json or interval column, where pgmalli knows only
-the driver's object, takes a `PGobject`.
+any type, as a string does. A json or jsonb column takes a map and a vector, held to the shape an
+[override](../README.md#overrides) gives it (sent as jsonb, which PostgreSQL assigns to json as it
+is), and a `PGobject`.
 
 An array argument takes a Java array, the column's element type in its elements' place: a
 vector goes as `jsonb`, no array. Compared (`[:= :id [:any :?ids]]`), it takes the elements its

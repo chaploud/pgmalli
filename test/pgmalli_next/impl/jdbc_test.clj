@@ -41,13 +41,13 @@
   (doseq [o [{:time :instant} {:read {:json :parsed}}]]
     (let [e (try (pgmalli/as-read registry :pg.sample/users o) (catch clojure.lang.ExceptionInfo e e))]
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))
-      (is (re-find #"no longer read: pgmalli types rows as pgmalli-next.jdbc/builder reads them" (ex-message e))))))
+      (is (re-find #"not read: pgmalli types rows as pgmalli-next.jdbc/builder reads them" (ex-message e))))))
 
 (deftest a-comparison-is-strict-and-no-option
   (doseq [c [:strict :lenient]]
     (let [e (try (pgmalli/as-read registry :pg.sample/users {:compare c}) (catch clojure.lang.ExceptionInfo e e))]
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))
-      (is (re-find #":compare is no longer read: a compared argument takes no nil" (ex-message e))))))
+      (is (re-find #":compare is not read: a compared argument takes no nil" (ex-message e))))))
 
 
 (deftest a-typed-arrays-elements-are-its-types-never-what-goes-untyped
@@ -55,3 +55,8 @@
       "a Long[]'s elements are bigints, never what goes untyped")
   (is (not-any? #{:keyword} (flatten (jdbc/array-type [:or [:int {:pg/type "bigint"}] :keyword] {} :compare)))
       "under = ANY(?) too, though = resolves bigint with more element types (a double[]'s)"))
+
+(deftest format-is-held-as-the-keys-pgmalli-reads-one-regex-per-text
+  (let [format #(:format (jdbc/options! {:format {:params {:id (str (random-uuid))} :quoted true :quoted-always (re-pattern "^null$")}} [:format]))]
+    (is (= {:quoted true} (dissoc (format) :quoted-always)) "sql/format's other options, :params with a request's values, left out")
+    (is (identical? (:quoted-always (format)) (:quoted-always (format))))))

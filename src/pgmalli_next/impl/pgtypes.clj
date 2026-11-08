@@ -95,7 +95,9 @@
                                                     (some->> (elements v) (every? valid?)))))))
                   :type-properties {:error/message (if (seq fits)
                                                      (str "should be a Java array (" (str/join ", " (distinct fits)) ") or a java.sql.Array of its elements; a vector goes as jsonb")
-                                                     "should be a typed Java array or a java.sql.Array of its elements; a vector goes as jsonb")}
+                                                     (str "should be a Java array"
+                                                          (when (seq classes) (str " (" (str/join ", " (sort (map #(.getSimpleName (Class/forName %)) classes))) ")"))
+                                                          " or a java.sql.Array of its elements; a vector goes as jsonb"))}
                   :min 1 :max 1}))}))
 
 (def int-ranges
