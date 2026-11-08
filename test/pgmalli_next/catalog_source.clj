@@ -10,7 +10,7 @@
    castcontext: i implicit, a assignment, e explicit), ranges, functions (no procedure), operators and the columns of its tables and views,
    as format_type names them; no extension's."
   "SELECT json_build_object(
-     'types', (SELECT json_agg(json_build_array(format_type(oid, NULL), typcategory, typispreferred) ORDER BY 1)
+     'types', (SELECT json_agg(json_build_array(format_type(oid, NULL), typcategory, typispreferred, typname) ORDER BY 1)
                FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace AND typtype <> 'c'
                  AND NOT (typelem <> 0 AND typsubscript = 'array_subscript_handler'::regproc)),
      'casts', (SELECT json_agg(json_build_array(format_type(castsource, NULL), format_type(casttarget, NULL), castcontext) ORDER BY 1)
@@ -47,7 +47,8 @@
    {name [column ...]} :keywords #{word}}, an overload {:args [type ...] :result type ...}, a column {:name :type
    :not-null}."
   [{:strs [types casts ranges functions operators relations keywords]}]
-  {:types (into {} (for [[n c pref] types] [n (cond-> {:category c} pref (assoc :preferred true))]))
+  ;; typname, where format_type names it otherwise (integer's int4): the name pgjdbc's PGobject takes
+  {:types (into {} (for [[n c pref tn] types] [n (cond-> {:category c} pref (assoc :preferred true) (and tn (not= tn n)) (assoc :typname tn))]))
    :casts (set casts)
    :ranges (into {} (for [[r sub m] ranges] [r {:subtype sub :multirange m}]))
    :functions (update-vals (group-by #(get % "name") functions) #(set (map (comp pattern/function-overload (fn [f] (update-keys f keyword))) %)))

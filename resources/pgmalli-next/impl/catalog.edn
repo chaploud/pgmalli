@@ -146,8 +146,8 @@
   "pg_views" [{:name "schemaname", :type "name"} {:name "viewname", :type "name"} {:name "viewowner", :type "name"} {:name "definition", :type "text"}]
   "pg_wait_events" [{:name "type", :type "text", :in ["17" "18"]} {:name "name", :type "text", :in ["17" "18"]} {:name "description", :type "text", :in ["17" "18"]}]}
  :types
- {"\"any\"" {:category "P"}
-  "\"char\"" {:category "Z"}
+ {"\"any\"" {:category "P", :typname "any"}
+  "\"char\"" {:category "Z", :typname "char"}
   "aclitem" {:category "U"}
   "anyarray" {:category "P"}
   "anycompatible" {:category "P"}
@@ -160,14 +160,14 @@
   "anymultirange" {:category "P"}
   "anynonarray" {:category "P"}
   "anyrange" {:category "P"}
-  "bigint" {:category "N"}
+  "bigint" {:category "N", :typname "int8"}
   "bit" {:category "V"}
-  "bit varying" {:category "V", :preferred true}
-  "boolean" {:category "B", :preferred true}
+  "bit varying" {:category "V", :preferred true, :typname "varbit"}
+  "boolean" {:category "B", :preferred true, :typname "bool"}
   "box" {:category "G"}
   "bytea" {:category "U"}
-  "character" {:category "S"}
-  "character varying" {:category "S"}
+  "character" {:category "S", :typname "bpchar"}
+  "character varying" {:category "S", :typname "varchar"}
   "cid" {:category "U"}
   "cidr" {:category "I"}
   "circle" {:category "G"}
@@ -175,7 +175,7 @@
   "date" {:category "D"}
   "datemultirange" {:category "R"}
   "daterange" {:category "R"}
-  "double precision" {:category "N", :preferred true}
+  "double precision" {:category "N", :preferred true, :typname "float8"}
   "event_trigger" {:category "P"}
   "fdw_handler" {:category "P"}
   "gtsvector" {:category "U"}
@@ -185,7 +185,7 @@
   "int4range" {:category "R"}
   "int8multirange" {:category "R"}
   "int8range" {:category "R"}
-  "integer" {:category "N"}
+  "integer" {:category "N", :typname "int4"}
   "internal" {:category "P"}
   "interval" {:category "T", :preferred true}
   "json" {:category "U"}
@@ -214,7 +214,7 @@
   "pg_snapshot" {:category "U"}
   "point" {:category "G"}
   "polygon" {:category "G"}
-  "real" {:category "N"}
+  "real" {:category "N", :typname "float4"}
   "record" {:category "P"}
   "refcursor" {:category "U"}
   "regclass" {:category "N"}
@@ -228,14 +228,14 @@
   "regprocedure" {:category "N"}
   "regrole" {:category "N"}
   "regtype" {:category "N"}
-  "smallint" {:category "N"}
+  "smallint" {:category "N", :typname "int2"}
   "table_am_handler" {:category "P"}
   "text" {:category "S", :preferred true}
   "tid" {:category "U"}
-  "time with time zone" {:category "D"}
-  "time without time zone" {:category "D"}
-  "timestamp with time zone" {:category "D", :preferred true}
-  "timestamp without time zone" {:category "D"}
+  "time with time zone" {:category "D", :typname "timetz"}
+  "time without time zone" {:category "D", :typname "time"}
+  "timestamp with time zone" {:category "D", :preferred true, :typname "timestamptz"}
+  "timestamp without time zone" {:category "D", :typname "timestamp"}
   "trigger" {:category "P"}
   "tsm_handler" {:category "P"}
   "tsmultirange" {:category "R"}

@@ -243,6 +243,14 @@
       (some-> (canonical-name e) array-of)
       (:name (entry t) t))))
 
+(defn typname
+  "Type n as pg_type names it (integer as int4, double precision[] as float8[]), the name pgjdbc
+   takes of a PGobject's type; n where the catalog holds no other."
+  [n]
+  (if-let [e (element n)]
+    (str (typname e) "[]")
+    (get-in @catalog [:types n :typname] n)))
+
 (defn short-name
   "The short name of type n a cast and a description write: one of spaces as its first alias
    (bit varying as varbit); n otherwise."

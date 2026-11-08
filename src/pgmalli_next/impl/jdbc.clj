@@ -346,7 +346,7 @@
    going where a value of it does, where no Java array goes as a."
   [a use]
   (shape/merge-props pg-object
-                     {:error/message (str "should be a PGobject of type " a " (no Java array goes as " a ", which "
+                     {:error/message (str "should be a PGobject of type " (types/typname a) " (no Java array goes as " a ", which "
                                           (case use :whole "a comparison of arrays" :compare "= ANY(?)" "it")
                                           " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
                       :pgmalli/describe (str "PGobject of " a)}))
@@ -435,7 +435,7 @@
           ;; a PGobject of the array type too, its text ('{1,NULL}') what the type's input reads
           (seq alts) (shape/either (cond-> alts
                                      (and p (#{:assign :whole :common} use)) (concat [(let [a (types/array-of (types/short-name (or elem p)))]
-                                                                           (shape/merge-props pg-object {:error/message (str "should be a PGobject of type " a)
+                                                                           (shape/merge-props pg-object {:error/message (str "should be a PGobject of type " (types/typname a))
                                                                                                          :pgmalli/describe (str "PGobject of " a)
                                                                                                          :pgmalli/element (shape/non-null t)}))])
                                      (and (not p) (some #{pg-object} (shape/alternatives (shape/non-null t)))) (concat [pg-object]))
@@ -562,7 +562,7 @@
    (fn [t]
      (shape/merge-props (update pg-object 1 dissoc :error/message)
                         {:error/fn (fn [{:keys [value]} _]
-                                     (str "should be a PGobject of type " t
+                                     (str "should be a PGobject of type " (types/typname t)
                                           (when (string? value) (str " (a String goes as varchar, which " t " does not take)"))))
                          :pgmalli/describe (str "PGobject of " (types/short-name t))}))))
 

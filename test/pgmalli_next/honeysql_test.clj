@@ -104,7 +104,7 @@
             :let [x (:x (:args (h/analyze reg q)))]]
       (is (not (m/validate x "1" {:registry reg})) (str (pr-str q) ": bit = character varying does not exist"))
       (is (not (m/validate x true {:registry reg})) "nor does bit take a boolean")
-      (is (re-matches #"should be a PGobject of type bit( varying)? \(a String goes as varchar, which bit( varying)? does not take\)"
+      (is (re-matches #"should be a PGobject of type (bit|varbit) \(a String goes as varchar, which bit( varying)? does not take\)"
                       (first (me/humanize (m/explain (shape/non-null (if (= :or (first x)) (second x) x)) "1" {:registry reg}))))
           "a String is told why"))))
 
