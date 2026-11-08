@@ -67,7 +67,10 @@
     (exec-sql! "DROP ROLE IF EXISTS scs_off; CREATE ROLE scs_off LOGIN PASSWORD 'pw'; ALTER ROLE scs_off SET standard_conforming_strings = off;")
     (let [schema "x\\') SELECT 1; CREATE TABLE public.injected_scs (); COMMIT; --"]
       (is (thrown? clojure.lang.ExceptionInfo (ir/from-db {:jdbcUrl (jdbcUrl) :user "scs_off" :password "pw" :schema schema})))
-      (is (not (contains? (:tables (ir/from-db (assoc *db* :schema "public"))) "injected_scs"))))))
+      (is (not (contains? (:tables (ir/from-db (assoc *db* :schema "public"))) "injected_scs"))))
+    (exec-sql! "DROP SCHEMA IF EXISTS scs CASCADE; CREATE SCHEMA scs; CREATE TABLE scs.t (k int, s text); CREATE UNIQUE INDEX t_k ON scs.t (k) WHERE s = 'a';")
+    (is (contains? (get-in (ir/from-db {:jdbcUrl (jdbcUrl) :user "scs_off" :password "pw" :schema "scs"}) [:tables "t" :constraints]) "t_k (index)")
+        "ir.sql's own literals read as written: the partial index's predicate is parsed")))
 
 (def ^:private shadow-types
   "The types ir.sql's operands are of, and arrays of some: an operator of the read schema on any
@@ -105,7 +108,7 @@
    query tree as text, where every operator (:opno) and aggregate (:aggfnoid) it calls is."
   [s sql]
   (let [ir-sql (slurp (io/resource "pgmalli-next/ir.sql"))
-        [_ query] (re-find #"(?s)SET search_path TO [^;]*;\s*(.*);\s*$" ir-sql)
+        [_ query] (re-find #"(?s)SET TRANSACTION READ ONLY;\s*(.*);\s*$" ir-sql)
         query (-> query (str/replace ":'schema'" (str "'" s "'")) (str/replace ":\"schema\"" (str "\"" s "\"")))
         jdbc (requiring-resolve 'next.jdbc/execute!)]
     (with-open [c ((requiring-resolve 'next.jdbc/get-connection) (datasource))]

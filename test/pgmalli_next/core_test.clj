@@ -12,6 +12,7 @@
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types]
             [pgmalli-next.test-db :refer [generated *db* exec-sql! with-postgres]])
   (:import (java.io File)))
 
@@ -249,6 +250,33 @@
                                       ALTER TABLE rp.t ENABLE REPLICA TRIGGER fill; ALTER TABLE rp.a ENABLE ALWAYS TRIGGER fill;")]
       (is (nil? (:pg/before-triggers (shape/row-props (get-in data [:registry :pg.rp/t])))))
       (is (= {:insert ["fill"]} (:pg/before-triggers (shape/row-props (get-in data [:registry :pg.rp/a]))))))))
+
+(deftest an-unnamed-out-argument-is-the-column-postgresql-names-column-n
+  (when *db*
+    (let [[_ data] (registry-of "uo" "CREATE SCHEMA uo;
+                                      CREATE FUNCTION uo.outs(OUT int, OUT text) LANGUAGE sql AS $$SELECT 1, 'a'$$;
+                                      CREATE FUNCTION uo.outs2(OUT x int, OUT text) LANGUAGE sql AS $$SELECT 1, 'a'$$;")]
+      (is (= [[["column1" "integer"] ["column2" "text"]] [["x" "integer"] ["column2" "text"]]]
+             (map #(get-in data [:functions "uo" % 0 :columns]) ["outs" "outs2"]))))))
+
+(deftest a-not-null-not-valid-column-is-nullable-as-the-rows-before-it-may-be
+  (when *db*
+    (let [[_ data] (registry-of "nv" "CREATE SCHEMA nv; CREATE TABLE nv.t (a int);")]
+      ;; NOT NULL NOT VALID is PostgreSQL 18's
+      (when (<= 18 (parse-long (types/label-version (:database-version data))))
+        (let [[_ data] (registry-of "nv2" "CREATE SCHEMA nv2; CREATE TABLE nv2.t (a int); INSERT INTO nv2.t VALUES (NULL);
+                                           ALTER TABLE nv2.t ADD CONSTRAINT a_nn NOT NULL a NOT VALID;")]
+          (is (shape/maybe? (last (get-in data [:registry :pg.nv2/t 2]))))
+          (is (= [[:not-valid "a_nn"]] (map (juxt :kind :constraint) (:diagnostics data)))))))))
+
+(deftest a-trigger-of-one-name-on-two-partitions-is-named-once
+  (when *db*
+    (let [[_ data] (registry-of "tg" "CREATE SCHEMA tg; CREATE FUNCTION tg.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+                                      CREATE TABLE tg.p (id int) PARTITION BY RANGE (id);
+                                      CREATE TABLE tg.p1 PARTITION OF tg.p FOR VALUES FROM (0) TO (10); CREATE TABLE tg.p2 PARTITION OF tg.p FOR VALUES FROM (10) TO (20);
+                                      CREATE TRIGGER trg BEFORE INSERT ON tg.p1 FOR EACH ROW EXECUTE FUNCTION tg.touch();
+                                      CREATE TRIGGER trg BEFORE INSERT OR UPDATE ON tg.p2 FOR EACH ROW EXECUTE FUNCTION tg.touch();")]
+      (is (= {:insert ["trg"] :update ["trg"]} (:pg/before-triggers (shape/row-props (get-in data [:registry :pg.tg/p]))))))))
 
 (deftest a-key-whose-index-is-invalid-is-no-key
   (when *db*

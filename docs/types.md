@@ -235,7 +235,7 @@ applies:
 
 | `:kind` | severity | when |
 |---|---|---|
-| `:not-valid` | `:info` | a `NOT VALID` foreign key: rows from before it may violate it |
+| `:not-valid` | `:info` | a `NOT VALID` foreign key, or `NOT NULL` (PostgreSQL 18, the column then nullable): rows from before it may violate it |
 | `:not-enforced` | `:info` | a `NOT ENFORCED` foreign key (PostgreSQL 18), which the database never checks |
 | `:row-trigger` | `:info` | a row-level INSERT trigger, which may reject or change rows |
 | `:exclude` | `:info` | an EXCLUDE constraint, which the schemas do not check |

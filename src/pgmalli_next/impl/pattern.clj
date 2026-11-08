@@ -13,6 +13,7 @@
      :enum         column of an enum type (or an array of it) {:type-name :values :array?}
      :unknown-type type outside the mapping table (rendered as :any) {:type :type-schema (when not pg_catalog's or the schema's own)}
      :max-length   varchar(n), char(n), bit(n) or bit varying(n) {:max}
+     :not-null     NOT NULL NOT VALID (PostgreSQL 18), the column nullable {:constraint :valid? false}
      :primary-key  table primary key                      {:columns :deferrable?}
      :exclude      EXCLUDE constraint                     {:method :partial? :elements [{:column :op}]}
      :unique       UNIQUE constraint                      {:columns :nulls-distinct? (false for NULLS NOT DISTINCT)
@@ -49,7 +50,7 @@
 
 (defn- column-facts
   "The :column fact of a column and those of its type."
-  [base {cname :name :keys [data_type domain type_schema type_extension is_nullable default_value max_length identity generated_expr position]} enums]
+  [base {cname :name :keys [data_type domain type_schema type_extension is_nullable not_null_not_valid default_value max_length identity generated_expr position]} enums]
   (let [[_ n array?] (types/type-parts data_type)
         ident (types/unquoted n)
         base (assoc base :column cname)
@@ -70,7 +71,10 @@
       (conj (cond-> (merge base {:fact :unknown-type :type data_type})
               (not (#{nil "pg_catalog" (:schema base)} type_schema)) (assoc :type-schema type_schema)))
       (and max_length (:typmod (types/entry n)))
-      (conj (merge base {:fact :max-length :max max_length})))))
+      (conj (merge base {:fact :max-length :max max_length}))
+      ;; the column is nullable: rows from before the constraint may hold NULL
+      not_null_not_valid
+      (conj (merge base {:fact :not-null :constraint not_null_not_valid :valid? false})))))
 
 (defn- key-facts [base {cname :name :keys [type columns references nulls_not_distinct is_valid is_enforced index partial predicate exclude deferrable]}]
   (case type

@@ -109,7 +109,7 @@
             :pg/inherited (when (some (comp #{:inherited} :fact) tfacts) true)
             ;; a BEFORE row trigger runs before NOT NULL is checked: it may fill what a write leaves out
             :pg/before-triggers (not-empty (into {} (for [event [:insert :update]
-                                                          :let [names (vec (for [f tfacts :when (and (= :trigger (:fact f)) (:before f) (event f))] (:name f)))]
+                                                          :let [names (vec (distinct (for [f tfacts :when (and (= :trigger (:fact f)) (:before f) (event f))] (:name f))))]
                                                           :when (seq names)]
                                                       [event names])))})))
 
@@ -122,9 +122,9 @@
      (for [f tfacts :when (false? (:valid? f))]
        {:kind :not-valid :severity :info :constraint (:constraint f)
         :message (str (:constraint f) " is NOT VALID: rows from before it may violate it, new rows may not")})
-     (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))]
-       {:kind :row-trigger :severity :info :trigger (:name f)
-        :message (str "trigger " (:name f) " runs for every inserted row: its code may reject or change rows the schema accepts")})
+     (for [n (distinct (for [f tfacts :when (and (= :trigger (:fact f)) (:insert f))] (:name f)))]
+       {:kind :row-trigger :severity :info :trigger n
+        :message (str "trigger " n " runs for every inserted row: its code may reject or change rows the schema accepts")})
      (for [f tfacts :when (= :exclude (:fact f))]
        {:kind :exclude :severity :info :constraint (:constraint f)
         :message (str "EXCLUDE " (:constraint f) " is not checked by the schemas: a row it refuses still validates")})

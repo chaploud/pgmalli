@@ -53,11 +53,8 @@
   [db sql]
   (with-open [^java.sql.Connection conn (connect db)]
     (let [auto-commit (.getAutoCommit conn)
-          read-only (.isReadOnly conn)
-          restore #(do (.rollback conn) (.setAutoCommit conn auto-commit) (.setReadOnly conn read-only))]
+          restore #(do (.rollback conn) (.setAutoCommit conn auto-commit))]
       (.setAutoCommit conn false)
-      ;; the read writes nothing, whatever the read schema's objects would do
-      (.setReadOnly conn true)
       (let [doc (try (with-open [st (.createStatement conn)] (document st sql))
                      (catch Throwable e
                        (try (restore) (catch Throwable x (.addSuppressed e x)))

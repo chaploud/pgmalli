@@ -1,4 +1,4 @@
--- One schema as a single JSON document. Run with: psql -At -v schema=NAME -f ir.sql
+-- One schema as a single JSON document. Run with: psql -1 -At -v schema=NAME -f ir.sql
 -- Reads tables (regular, partitioned, partitions and foreign), views and materialized views, columns,
 -- PRIMARY KEY / UNIQUE / FOREIGN KEY / EXCLUDE constraints, enum types, functions,
 -- operators and sequences. A CHECK is not read: the database checks it.
@@ -7,6 +7,10 @@
 -- function is called qualified, and every operator has an exact match in pg_catalog (hence the
 -- casts on literals), since a later schema's exact match beats pg_catalog's coercion.
 SET search_path TO pg_catalog, :"schema", pg_temp;
+-- whatever the session's settings say (a service file's options, a URL's readOnlyMode): one
+-- transaction (psql -1, or JDBC's), read-only, and backslashes in literals as written
+SET standard_conforming_strings TO on;
+SET TRANSACTION READ ONLY;
 WITH RECURSIVE cols AS (
   SELECT c.oid AS relid, a.attnum,
          pg_catalog.json_build_object(
@@ -23,7 +27,9 @@ WITH RECURSIVE cols AS (
            'type_extension', (SELECT x.extname FROM pg_catalog.pg_depend dp JOIN pg_catalog.pg_extension x ON x.oid = dp.refobjid
                               WHERE dp.classid = 'pg_catalog.pg_type'::pg_catalog.regclass::pg_catalog.oid AND dp.objid = b.oid
                                 AND dp.refclassid = 'pg_catalog.pg_extension'::pg_catalog.regclass::pg_catalog.oid AND dp.deptype = 'e'),
-           'is_nullable', NOT (a.attnotnull OR (e.oid = t.oid AND COALESCE(dom.not_null, false))),
+           -- a NOT NULL NOT VALID constraint (PostgreSQL 18) sets attnotnull, but rows from before it may hold NULL
+           'is_nullable', NOT ((a.attnotnull AND nv.conname IS NULL) OR (e.oid = t.oid AND COALESCE(dom.not_null, false))),
+           'not_null_not_valid', nv.conname,
            'default_value', CASE WHEN a.attgenerated = '' THEN COALESCE(pg_catalog.pg_get_expr(d.adbin, d.adrelid), CASE WHEN e.oid = t.oid THEN dom.default_value END) END,
            'generated_expr', CASE WHEN a.attgenerated <> '' THEN pg_catalog.pg_get_expr(d.adbin, d.adrelid) END,
            'identity', CASE a.attidentity WHEN 'a' THEN 'ALWAYS' WHEN 'd' THEN 'BY DEFAULT' END,
@@ -55,6 +61,7 @@ WITH RECURSIVE cols AS (
   CROSS JOIN LATERAL (SELECT CASE WHEN dom.root IS NULL THEN a.atttypmod ELSE dom.typmod END AS typmod) m
   JOIN pg_catalog.pg_namespace tn ON tn.oid = b.typnamespace
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
+  LEFT JOIN pg_catalog.pg_constraint nv ON nv.conrelid = c.oid AND nv.contype = 'n' AND nv.conkey[1] = a.attnum AND NOT nv.convalidated
   WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
 ),
 cons AS (
@@ -232,9 +239,12 @@ functions AS (
            'variadic', p.provariadic <> 0::oid,
            'defaults', p.pronargdefaults,
            -- the columns it returns in FROM: its OUT (and TABLE) arguments, else its composite type's
-           'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(u.n, pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = u.t), NULL)) ORDER BY u.i)
-                                FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
-                                WHERE u.m IN ('o', 'b', 't')),
+           -- an unnamed one named column<N>, N its place among them, as PostgreSQL names it
+           'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(COALESCE(NULLIF(o.n, ''::text), 'column'::text || o.k::text),
+                                                                                       pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.t), NULL)) ORDER BY o.k)
+                                FROM (SELECT u.n, u.t, pg_catalog.row_number() OVER (ORDER BY u.i) AS k
+                                      FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
+                                      WHERE u.m IN ('o', 'b', 't')) o),
                                (SELECT pg_catalog.json_agg(pg_catalog.json_build_array(a.attname, pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = a.atttypid), NULL)) ORDER BY a.attnum)
                                 FROM pg_catalog.pg_type rt JOIN pg_catalog.pg_attribute a ON a.attrelid = rt.typrelid
                                 WHERE rt.oid = p.prorettype AND a.attnum > 0 AND NOT a.attisdropped))
