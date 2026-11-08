@@ -16,6 +16,14 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
 - A map or a vector to a `json` or `jsonb` column is not checked for what the one sending
   refuses to write (accept/json-problem): two keys of one text (`:a` and `"a"`), a nil key, a NaN
   or an infinity. Sending it is an error of `:pgmalli.error/invalid-options`.
+- A column of a pg_catalog type `types/types` does not list (`refcursor`, `aclitem`, the ones
+  upstream_test's `unsupported` names) takes any value: PostgreSQL refuses a `varchar` there.
+- `as-read` refuses a multi-dimensional array `builder` reads (`[[1 2] [3 4]]`): it types an
+  array as one-dimensional, as PostgreSQL's type does not say the dimensions.
+- An `OffsetTime` or `OffsetDateTime` of an offset past ±15:59, and a `LocalDate`,
+  `LocalDateTime` or `Instant` past PostgreSQL's range (other than the MAX and MIN that mean
+  infinity), are taken: PostgreSQL refuses the one past its maximum and stores the one before its
+  minimum as `-infinity`.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: the
   registry keeps no length of either. PostgreSQL refuses the value (`value too long`).
