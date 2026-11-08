@@ -670,14 +670,17 @@
 (defn- matrix-values
   "What each argument is sent: a value of each class the one sending sends and of the others of
    values, nil, each integer type's bounds and the integers either side of them (types/types'
-   :range), a negative Integer and Short, a fraction, NaN and an infinity, an empty string, a number as a string, and each label of the schema's
+   :range), a negative Integer and Short, a fraction, NaN and an infinity, an empty string, a number as a string, a double past a real's range or below its smallest, a
+   character past the BMP, and each label of the schema's
    enums and CHECK lists and a string no enum has, alone, as a keyword and in a String[]."
   [labels]
   (let [bounds (distinct (for [[_ {[lo hi] :range}] types/types :when lo, b [(dec' lo) lo hi (inc' hi)]] b))
         labels (concat labels ["no-label-of-any-enum"])]
     (vec (concat (map (comp value first) accept/class-types)
                  (vals (apply dissoc values (map first accept/class-types)))
-                 [nil 0 1.5 1.5M "" "1"]
+                 ;; a double past a real's range and below its smallest, a character past the
+                 ;; BMP, one code point and two UTF-16 units
+                 [nil 0 1.5 1.5M "" "1" 1.0E39 1.0E-46 "\uD835\uDFD8"]
                  bounds
                  labels
                  (map keyword (filter string? labels))
