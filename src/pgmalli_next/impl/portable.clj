@@ -11,7 +11,7 @@
     (cond
       (pgtypes/int-ranges t) (let [[lo hi] (pgtypes/int-ranges t) p (or p {})]
                        [:int (assoc p :min (max lo (:min p lo)) :max (min hi (:max p hi)))])
-      (and (vector? f) (= :pg/bytes t)) 'bytes?
+      (= :pg/bytes t) 'bytes?
       (and (vector? f) (= :ref t) (contains? schemas (last f)))
       ;; the inlined target is converted here: prewalk walks its children, not the node itself
       (portable-node schemas (shape/merge-props (get schemas (last f)) p))

@@ -29,6 +29,8 @@ Identity BY DEFAULT, defaulted and nullable columns are optional.
 An **update schema** is a closed map of the same columns, every one optional. A NOT NULL
 column cannot be set to NULL.
 
+A sequence has neither schema.
+
 A **view's** columns are all `[:maybe ...]`. Views have no insert schema.
 
 A **domain's** column is of the domain's base type, under all its domains and of whatever

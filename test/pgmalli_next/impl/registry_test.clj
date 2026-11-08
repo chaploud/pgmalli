@@ -154,4 +154,6 @@
         reg (pgmalli/registry data)]
     (is (= [{:kind :sequence-named-as-enum :table "public.s"}] (map #(select-keys % [:kind :table]) (:diagnostics data))))
     (is (= [:enum "a"] (shape/schema-of reg :pg.public/s)))
-    (is (:pg/sequence (shape/row-props (shape/schema-of reg :pg.public/t))))))
+    (is (:pg/sequence (shape/row-props (shape/schema-of reg :pg.public/t))))
+    (is (not-any? #(contains? reg %) [:pg.public.t/insert :pg.public.t/update]) "a sequence is written by its functions alone")
+    (is (not-any? #{:pg.public.t/insert} (:known (ex-data (try (pgmalli/as-read reg :pg.public/zz) (catch clojure.lang.ExceptionInfo e e))))))))
