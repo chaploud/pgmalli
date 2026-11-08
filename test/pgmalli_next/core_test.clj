@@ -255,9 +255,12 @@
   (when *db*
     (let [[_ data] (registry-of "uo" "CREATE SCHEMA uo;
                                       CREATE FUNCTION uo.outs(OUT int, OUT text) LANGUAGE sql AS $$SELECT 1, 'a'$$;
-                                      CREATE FUNCTION uo.outs2(OUT x int, OUT text) LANGUAGE sql AS $$SELECT 1, 'a'$$;")]
-      (is (= [[["column1" "integer"] ["column2" "text"]] [["x" "integer"] ["column2" "text"]]]
-             (map #(get-in data [:functions "uo" % 0 :columns]) ["outs" "outs2"]))))))
+                                      CREATE FUNCTION uo.outs2(OUT x int, OUT text) LANGUAGE sql AS $$SELECT 1, 'a'$$;
+                                      CREATE FUNCTION uo.out1(OUT int) LANGUAGE sql AS $$SELECT 1$$;
+                                      CREATE FUNCTION uo.out1x(OUT x int) LANGUAGE sql AS $$SELECT 1$$;")]
+      (is (= [[["column1" "integer"] ["column2" "text"]] [["x" "integer"] ["column2" "text"]] nil [["x" "integer"]]]
+             (map #(get-in data [:functions "uo" % 0 :columns]) ["outs" "outs2" "out1" "out1x"]))
+          "one unnamed is the function's value, no column"))))
 
 (deftest a-not-null-not-valid-column-is-nullable-as-the-rows-before-it-may-be
   (when *db*

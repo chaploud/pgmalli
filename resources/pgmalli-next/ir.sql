@@ -239,9 +239,11 @@ functions AS (
            'variadic', p.provariadic <> 0::oid,
            'defaults', p.pronargdefaults,
            -- the columns it returns in FROM: its OUT (and TABLE) arguments, else its composite type's
-           -- an unnamed one named column<N>, N its place among them, as PostgreSQL names it
-           'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(COALESCE(NULLIF(o.n, ''::text), 'column'::text || o.k::text),
-                                                                                       pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.t), NULL)) ORDER BY o.k)
+           -- an unnamed one named column<N>, N its place among them, as PostgreSQL names it; one alone
+           -- and unnamed is no column but the function's value, named as the function or its alias
+           'columns', COALESCE((SELECT CASE WHEN pg_catalog.count(*) > 1 OR pg_catalog.bool_and(COALESCE(o.n, ''::text) <> ''::text)
+                                            THEN pg_catalog.json_agg(pg_catalog.json_build_array(COALESCE(NULLIF(o.n, ''::text), 'column'::text || o.k::text),
+                                                                                       pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.t), NULL)) ORDER BY o.k) END
                                 FROM (SELECT u.n, u.t, pg_catalog.row_number() OVER (ORDER BY u.i) AS k
                                       FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
                                       WHERE u.m IN ('o', 'b', 't')) o),
