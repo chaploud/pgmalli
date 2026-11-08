@@ -54,7 +54,8 @@
                  d))))
 
 (defn check
-  "What pgmalli-next.generate/check compares: {:missing :stale :unrendered :diagnostics}."
+  "What pgmalli-next.generate/check compares: {:missing :stale :unrendered :diagnostics
+   :database-version}, the last three the database's."
   [config]
   (let [path (:out (files/config config))
         file (when (.exists (io/file path)) (registry/read-generated-file path))
@@ -64,4 +65,5 @@
      ;; a missing file differs in every entry; saying it is missing says it all
      :stale (when file (not-empty (diff file db)))
      :unrendered (not-empty (:unrendered db))
-     :diagnostics (not-empty (:diagnostics db))}))
+     :diagnostics (not-empty (:diagnostics db))
+     :database-version (:database-version db)}))

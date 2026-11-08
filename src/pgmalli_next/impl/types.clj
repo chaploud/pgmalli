@@ -166,10 +166,13 @@
 
 (defn known?
   "Whether a column type has an entry: a pg_catalog type in pg_catalog (type-schema nil or
-   \"pg_catalog\"), an extension's in whatever schema the extension went to."
-  [type-name type-schema]
+   \"pg_catalog\"), an extension's in whatever schema the extension went to, where the type is
+   that extension's (type-extension, the one pg_depend says made it)."
+  [type-name type-schema type-extension]
   (when-let [e (entry type-name)]
-    (or (:extension e) (nil? type-schema) (= "pg_catalog" type-schema))))
+    (if (:extension e)
+      (= (:extension e) type-extension)
+      (or (nil? type-schema) (= "pg_catalog" type-schema)))))
 
 (defn json?
   "Whether a column of the type holds a JSON document."
@@ -201,6 +204,16 @@
    operator of a btree operator family, or its negator). A type, range, cast ({:in ...} its
    fourth element), overload or column not every version has carries :in, the versions that do."
   (delay (edn/read-string (slurp (io/resource "pgmalli-next/impl/catalog.edn")))))
+
+(defn version-label
+  "How the generated file names PostgreSQL major version major (\"17\"): \"PostgreSQL 17\"."
+  [major]
+  (str "PostgreSQL " major))
+
+(defn label-version
+  "The major version a version-label names, nil for none."
+  [label]
+  (some->> label str (re-matches #"PostgreSQL (\d+)") second))
 
 (defn oldest-version
   "The oldest PostgreSQL major version pgmalli reads, the catalog's first (\"16\")."
@@ -280,6 +293,15 @@
       (contains? (:casts @catalog) [from to "i"])
       (and (= "text" to) (extension-string? from))
       (let [a (element from) b (element to)] (boolean (and a b (implicit? a b))))))
+
+(def ^:private oid-aliases
+  (delay (set (for [[from to c] (:casts @catalog) :when (and (= "oid" from) (= "i" c))] to))))
+
+(defn oid-alias?
+  "Whether type t is an alias of oid (regclass, regproc ...): a type oid converts to
+   implicitly, as pg_cast holds it."
+  [t]
+  (contains? @oid-aliases t))
 
 (def ^:private contexts
   (delay (reduce (fn [m [from to c]] (update m [from to] (fnil conj #{}) c)) {} (:casts @catalog))))

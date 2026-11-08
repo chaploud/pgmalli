@@ -49,7 +49,7 @@
 
 (defn- column-facts
   "The :column fact of a column and those of its type."
-  [base {cname :name :keys [data_type domain type_schema is_nullable default_value max_length identity generated_expr position]} enums]
+  [base {cname :name :keys [data_type domain type_schema type_extension is_nullable default_value max_length identity generated_expr position]} enums]
   (let [[_ n array?] (types/type-parts data_type)
         ident (types/unquoted n)
         base (assoc base :column cname)
@@ -66,7 +66,7 @@
                     (when generated_expr {:generated generated_expr}))]
       enum (conj enum)
       ;; a type of another schema: the schema's facts are read alone, so they cannot refer to it
-      (not (or enum (types/known? n type_schema)))
+      (not (or enum (types/known? n type_schema type_extension)))
       (conj (cond-> (merge base {:fact :unknown-type :type data_type})
               (not (#{nil "pg_catalog" (:schema base)} type_schema)) (assoc :type-schema type_schema)))
       (and max_length (:typmod (types/entry n)))
@@ -76,9 +76,11 @@
   (case type
     "EXCLUDE" [(merge base {:fact :exclude :constraint cname :method (:method exclude) :partial? (boolean (:partial exclude))
                             :elements (mapv #(select-keys % [:column :op]) (:elements exclude))})]
-    "PRIMARY KEY" [(cond-> (merge base {:fact :primary-key :constraint cname :columns columns}) deferrable (assoc :deferrable? true))]
-    ;; an invalid unique index (a CREATE INDEX CONCURRENTLY that failed) holds nothing
-    "UNIQUE" (when-not (and index (false? is_valid))
+    ;; an invalid index (a CREATE INDEX CONCURRENTLY that failed, a key added to a partitioned
+    ;; table ONLY) holds nothing
+    "PRIMARY KEY" (when-not (false? is_valid)
+                    [(cond-> (merge base {:fact :primary-key :constraint cname :columns columns}) deferrable (assoc :deferrable? true))])
+    "UNIQUE" (when-not (false? is_valid)
                [(cond-> (merge base {:fact :unique :constraint cname :columns columns :nulls-distinct? (not nulls_not_distinct) :index? (boolean index) :partial? (boolean partial)})
                   predicate (assoc :predicate (mapv (fn [[op & more]] (into [(keyword op)] more)) predicate))
                   deferrable (assoc :deferrable? true))])

@@ -84,8 +84,11 @@
                 :when (not (shape/written-by-database? cp))]
             [k (assoc p :optional true) s]))))
 
-(defn- with-derived [registry]
-  (into registry (for [[k s] registry :when (shape/row-schema? s)
+(defn- with-derived
+  "The registry with the insert and update schemas of its tables: a sequence is written by its
+   functions alone."
+  [registry]
+  (into registry (for [[k s] registry :when (and (shape/row-schema? s) (not (:pg/sequence (shape/row-props s))))
                        e [[(shape/derived-name k "insert") (insert-schema s registry)] [(shape/derived-name k "update") (update-schema s)]]]
                    e)))
 

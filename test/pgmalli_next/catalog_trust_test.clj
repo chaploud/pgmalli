@@ -30,6 +30,9 @@
    CREATE FUNCTION evil.oid_regtype(oid, regtype) RETURNS boolean LANGUAGE plpgsql AS
      $$BEGIN RETURN evil.pwned('oid = regtype'); END$$;
    CREATE OPERATOR evil.= (LEFTARG = oid, RIGHTARG = regtype, FUNCTION = evil.oid_regtype);
+   CREATE FUNCTION evil.oid_regclass(oid, regclass) RETURNS boolean LANGUAGE plpgsql AS
+     $$BEGIN RETURN evil.pwned('oid = regclass'); END$$;
+   CREATE OPERATOR evil.= (LEFTARG = oid, RIGHTARG = regclass, FUNCTION = evil.oid_regclass);
    CREATE FUNCTION evil.name_name(name, name) RETURNS text LANGUAGE plpgsql AS
      $$BEGIN PERFORM evil.pwned('name || name'); RETURN ''; END$$;
    CREATE OPERATOR evil.|| (LEFTARG = name, RIGHTARG = name, FUNCTION = evil.name_name);

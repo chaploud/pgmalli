@@ -30,6 +30,9 @@
   "Config with defaults applied. A key or value config-schema does not take is an error."
   [c]
   (error/checked! config-schema c :pgmalli.error/invalid-config "invalid config")
+  (when (contains? (:db c) :schema)
+    (error/fail! :pgmalli.error/invalid-config ":db's :schema is not read: the schemas generated are :schemas, such as {:schemas [\"public\"]}"
+                 {:given [:schema] :did-you-mean [:schemas]}))
   (merge default-config c))
 
 (defn- sort-maps [x]
@@ -119,7 +122,7 @@
         oldest (types/oldest-version)]
     (when (< major (parse-long oldest))
       (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL " oldest " or later") {:given version}))
-    (str "PostgreSQL " major)))
+    (types/version-label major)))
 
 (defn- read-schema
   "[database-version facts] of one schema, read from the database."

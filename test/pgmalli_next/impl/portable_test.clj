@@ -23,6 +23,9 @@
       (is (m/validate p (assoc user :group_name "a") opts))
       (is (not (m/validate p (assoc user :group_id 2147483648) opts)))
       (is (= 'bytes? (get-in (portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d [:pg/bytes {:min 32 :max 32 :pg/type "bytea"}]]]}}) :pg.public/t) [2 1])))
+      (is (= [:map {:pg/table "public.t"} [:d 'bytes?] [:e [:maybe 'bytes?]]]
+             (portable (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:d :pg/bytes] [:e [:maybe :pg/bytes]]]}}) :pg.public/t))
+          "bare, as an override names it")
       (is (not-any? #(and (map? %) (or (:gen/min %) (:gen/max %))) (tree-seq coll? seq p)) "no generation hints")))
   (testing "as-read: the map as next.jdbc builds it"
     (let [r (pgmalli/as-read registry :pg.sample/users)]
