@@ -6,6 +6,7 @@
    apply. Kinds:
      :enum-type    an enum type of the schema           {:type-name :values}
      :view         a view or materialized view          {:materialized?}; its columns follow, all nullable
+     :relation     a table of no column, which no fact else names
      :column       a column                              {:type :domain :position :nullable? :default :default-sql :identity :generated}
                    :type is a domain's base type under all its domains, as ir.sql reads it (:domain
                    the type the column declares: the domain, or d[] for an array of domain d), :default the default's literal value, :default-sql its SQL; :identity is
@@ -136,7 +137,9 @@
       (for [[tname t] (sort-by key (:tables schema))
             :let [base {:schema schema-name :table tname}
                   view? (contains? #{"VIEW" "MATERIALIZED VIEW"} (:kind t))]
-            f (concat (when view? [(assoc base :fact :view :materialized? (= "MATERIALIZED VIEW" (:kind t)))])
+            ;; a table of no column is a relation all the same
+            f (concat (when (empty? (:columns t)) [(assoc base :fact :relation)])
+                      (when view? [(assoc base :fact :view :materialized? (= "MATERIALIZED VIEW" (:kind t)))])
                       (for [tr (:triggers t)] (merge base {:fact :trigger} (select-keys tr [:name :before :insert :update :delete])))
                       (when (:inherited t) [(assoc base :fact :inherited)])
                       ;; nothing marks a view's column NOT NULL in the catalog, so every one may be NULL

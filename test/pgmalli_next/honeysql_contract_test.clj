@@ -105,3 +105,10 @@
   (sql/register-clause! ::mine (fn [_ x] [(str "MINE " x)]) :where)
   (is (= [{:kind :unread-clause :clause ::mine}] (:problems (h/analyze {} {::mine 1}))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"table public.t is unknown" (h/analyze {} {:table :t})) "TABLE t, read as SELECT * FROM t"))
+
+(deftest sql-format-writes-a-value-in-a-row-as-in-a-row-and-written-otherwise-say
+  ;; honeysql.clj's in-a-row (a keyword a column, a vector a row of parameters, a map a subquery),
+  ;; and problems' :written-otherwise of [:in x a b], which drops b
+  (let [message (str honeysql " writes a row's values or :in otherwise: update in-a-row in src/pgmalli_next/honeysql.clj and written-otherwise in src/pgmalli_next/impl/problems.clj")]
+    (is (= "INSERT INTO t (a, c, d) VALUES (b, (?, ?), (SELECT ?))" (first (sql/format {:insert-into :t :values [{:a :b :c [1 2] :d {:select [1]}}]}))) message)
+    (is (= ["a IN ?" 1] (sql/format-expr [:in :a 1 2])) message)))

@@ -36,6 +36,8 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
   is refused, which PostgreSQL reads: its type is of one dimension, as `as-read`'s.
 - A `PGobject` is taken wherever one is, whatever type its `getType` names (one of `point` to an
   `inet` column, of `jsonb` beside a `json` one in `coalesce`), which PostgreSQL refuses.
+- An argument of `lower(?)` or `upper(?)`, overloaded on text and on ranges, is untyped, and
+  takes what PostgreSQL refuses (an `Integer`: `lower(integer)` does not exist).
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: no
   schema checks a length, which generation alone keeps to (`:pg/max-length`, the array's for its

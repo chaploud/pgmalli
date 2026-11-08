@@ -99,3 +99,7 @@
          (map :fact (p/facts {:name "public" :types {"none" {:kind "ENUM" :enum_values []}}
                               :tables {"t" {:columns [{:name "e" :position 1 :data_type "none" :type_schema "public" :is_nullable true}]
                                             :constraints {}}}})))))
+
+(deftest a-table-of-no-column-is-a-relation
+  (is (= [{:fact :relation :schema "public" :table "nocols"}]
+         (p/facts {:name "public" :types {} :tables {"nocols" {:columns [] :constraints {}}}}))))
