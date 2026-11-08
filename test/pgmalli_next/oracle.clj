@@ -1039,7 +1039,7 @@
                                   held-sent (if (or (#{:any :unnest} context) elements?) (types/element sent) sent)
                                   held-context (cond assign? :assign (#{:coalesce :case :greatest} context) :common :else :compare)
                                   takes? (and sent (if cast?
-                                                     (and (or (not= :unknown sent) (accept/reads? t (class v) :cast)) (accept/accepts? t sent :cast))
+                                                     (accept/takes? t sent (class v) :cast)
                                                      (and (accept/takes? held-t held-sent (class v) held-context)
                                                           ;; compared and cast to the column's type: the cast too
                                                           (or (not= :compared-and-cast context) (accept/accepts? t sent :cast)))))

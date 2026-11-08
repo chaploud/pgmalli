@@ -225,7 +225,7 @@
               (for [p sent
                     a (cond (= :unknown p)
                             ;; under :inline, a String or a UUID is a quoted literal, which every type's input reads
-                            (map #(text-held % own registry) (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/reads? t % context))))
+                            (map #(text-held % own registry) (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/takes? t :unknown % (if (= :cast context) :cast held-in)))))
                             ;; a literal is of its type by its value (jdbc/inline-classes): those values alone
                             (:inline (:format opts)) (map unlabel (jdbc/sent-as opts p))
                             :else (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))

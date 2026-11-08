@@ -275,6 +275,8 @@
 
 (defn takes?
   "Whether a value of class c, sent as type sent, goes where a value of type t does in context:
-   holds?, and, sent untyped, its text read there (reads?, docs/queries.md#stricter-untyped)."
+   holds? (cast, accepts?), and, sent untyped, its text read there (reads?,
+   docs/queries.md#stricter-untyped)."
   [t sent ^Class c context]
-  (and (holds? t sent context) (or (not= :unknown sent) (reads? t c context))))
+  (and (if (= :cast context) (accepts? t sent :cast) (holds? t sent context))
+       (or (not= :unknown sent) (reads? t c context))))
