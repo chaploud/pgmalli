@@ -15,7 +15,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached row-count row-entries type-call)
+(declare derived-types expression-type loose named-type-schema nullable own-routines own-type-schema reached registry-type row-count row-entries type-call)
 
 (defn- versions
   "The versions of the catalog snapshot the registry's generated schemas are of: their file's
@@ -125,6 +125,22 @@
   [registry table format]
   (boolean (and (syntax/quoted? format) (not= table (syntax/folded table))
                 (some #{(syntax/folded table)} (known-tables registry)))))
+
+(defn type-suggestions
+  "The enum types (\"schema.name\") of the registry of name n in a schema other than schema, which
+   a cast to n there may mean where schema has no type of that name the registry tells of: no
+   enum, no table's row type, no domain one of its columns is of. nil for none."
+  [registry n schema]
+  (let [mine (into #{} (concat (for [t (known-tables registry) :let [[s tn] (str/split t #"\." 2)] :when (= s schema)
+                                     x (cons tn (keep (comp :pg/domain shape/column-props second) (column-entries registry t)))]
+                                 x)))]
+    (when-not (or (mine n) (registry-type registry (keyword n) {:schema schema}))
+      (some->> (for [[k v] (::schemas registry)
+                     :when (and (keyword? k) (vector? v) (= :enum (first v)))
+                     :let [[s tn] (shape/schema-and-name k)]
+                     :when (and (= n tn) (not= s schema))]
+                 (str s "." tn))
+               sort seq vec))))
 
 (defn table-suggestions
   "Up to three tables or views of the registry (\"schema.table\") a table it lacks may mean:
@@ -572,6 +588,18 @@
     (cond (and (= :ref (shape/head base)) (labels registry base)) n
           ;; an expression's value of an enum type (coalesce(tier, ?)): its labels with the type's name, which no base type has
           (and (= :enum (shape/head base)) n (nil? (types/entry n))) n)))
+
+(defn cast-type-name
+  "The name a query under opts' :schema casts to column schema s's type by: its :pg/type,
+   qualified by the schema of the registry's type s refers to ([:ref ... :pg.billing/state])
+   where that is not :schema and the name is neither qualified nor pg_catalog's."
+  [s {:keys [schema]}]
+  (let [n (:pg/type (shape/column-props s))
+        k (some #(when (and (vector? %) (= :ref (first %))) (last %)) (tree-seq coll? seq s))
+        [sch] (when k (shape/schema-and-name k))]
+    (if (and n sch (not= sch schema) (not (str/includes? n ".")) (nil? (types/entry (or (types/element n) n))))
+      (str sch "." n)
+      n)))
 
 (defn slot-type
   "The type of a column schema as pgmalli-next.impl.accept names it: [:enum name] for an enum type

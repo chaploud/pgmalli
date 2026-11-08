@@ -1483,7 +1483,7 @@
 
 (deftest each-problem-reads-as-what-to-do
   (is (= ["unknown column nik; did you mean: nick"
-          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:cast \"sad\" :mood]"]
+          "\"sad\" reaches column mood as a typed string, which its type mood does not take (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write [:lift :sad]"]
          (h/humanize (check {:select [:nik] :from [:users] :where [:= :mood "sad"]} opts))))
   (is (every? string? (h/humanize [{:kind :something-new}])) "a kind with no sentence still prints"))
 
@@ -3242,3 +3242,33 @@
 (deftest a-literal-a-schema-cannot-judge-is-not-refused
   (is (false? (#'args/refuses? registry [:ref :pg.nowhere/x] "a")))
   (is (true? (#'args/refuses? registry :int "a"))))
+
+(def ^:private two-schemas
+  (pgmalli/registry {:schemas ["app" "billing"]
+                     :registry {:pg.app/mood [:enum "happy" "sad"]
+                                :pg.app/dmood [:enum "x"]
+                                :pg.billing/state [:enum "draft" "sent" "in progress"]
+                                :pg.billing/invoices [:map {:pg/table "billing.invoices"}
+                                                      [:id [:int {:pg/type "bigint"}]]
+                                                      [:state [:ref {:pg/type "state"} :pg.billing/state]]
+                                                      [:states [:maybe [:vector {:pg/type "state[]"} [:ref {:pg/type "state"} :pg.billing/state]]]]
+                                                      [:payer_mood [:maybe [:ref {:pg/type "app.mood"} :pg.app/mood]]]]}}))
+
+(deftest a-type-a-problem-names-is-qualified-where-the-query-reads-another-schema
+  (let [say #(h/humanize (:problems (h/analyze two-schemas %1 %2)))]
+    (is (= [{:kind :uncast-string :column :state :value "sent" :type "billing.state"}]
+           (:problems (h/analyze two-schemas {:select [:id] :from [:billing.invoices] :where [:= :state "sent"]}))))
+    (is (= {:type "state"} (select-keys (first (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :state "sent"]} {:schema "billing"}))) [:type])))
+    (testing "an enum's label goes as [:lift :label], as values-schema says; one no keyword spells, cast"
+      (is (str/ends-with? (first (say {:select [:id] :from [:billing.invoices] :where [:= :state "sent"]} {})) "write [:lift :sent]"))
+      (is (str/ends-with? (first (say {:select [:id] :from [:billing.invoices] :where [:= :state "in progress"]} {})) "write [:cast \"in progress\" :billing.state]"))
+      (is (= [] (:problems (h/analyze two-schemas {:select [:id] :from [:billing.invoices] :where [:= :state [:lift :sent]]})))))
+    (is (= "billing.state[]" (:type (first (:problems (h/analyze two-schemas {:update :billing.invoices :set {:states [:lift ["sent"]]}})))))))
+  (testing "a cast to a type of no schema the query reads, which an enum of another has the name of"
+    (is (= [{:kind :unknown-type :type "mood" :did-you-mean ["app.mood"]}]
+           (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :payer_mood [:cast "happy" :mood]]} {:schema "billing"}))))
+    (is (= [{:kind :unknown-type :type "mood[]" :did-you-mean ["app.mood[]"]}]
+           (:problems (h/analyze two-schemas {:select [[[:cast :?m [:raw "mood[]"]] :m]]} {:schema "billing"}))))
+    (is (= [] (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :payer_mood [:cast "happy" :app.mood]]} {:schema "billing"}))))
+    (is (= [] (:problems (h/analyze two-schemas {:select [[[:cast "x" :thing] :t]]} {:schema "billing"}))) "a type the registry tells nothing of")
+    (is (= [] (:problems (h/analyze two-schemas {:select [[[:cast "happy" :mood] :t]]} {:schema "app"}))))))

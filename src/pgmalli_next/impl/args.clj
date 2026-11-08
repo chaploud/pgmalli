@@ -123,7 +123,7 @@
                                                          " (sent as " (str/join " or " (distinct (map second in))) ", which PostgreSQL takes as " t "); "
                                                          (str/join ", " (map #(str (named %) " goes as " (second %)) out))
                                                          ", which it does not convert to " t " implicitly: send " (when hint (str hint " or "))
-                                                         "cast the parameter, [:cast <parameter> :" (str/replace t " " "-") "]")}]
+                                                         "cast the parameter, " (syntax/cast-form "<parameter>" t))}]
                          cs)]))))
 
 (defn- class-names [a] (when (and (= :and (shape/head a)) (= :pg/class (shape/head (last a)))) (shape/entries (last a))))
@@ -563,13 +563,14 @@
   (false? (try (m/validate t v {:registry (merge registry/base (::query/schemas registry))}) (catch Exception _ nil))))
 
 (defn- uncast-type
-  "The type to cast a string to for column s: an enum type (or a domain over one), an array, a
-   type of types' :cast (bit takes varbit, which keeps its length), or any other type types
-   has; nil for a string type (text, varchar, char, name, citext) or a type types lacks."
-  [registry s]
+  "The type to cast a string to for column s: an enum type (or a domain over one, as
+   query/cast-type-name names it under opts), an array, a type of types' :cast (bit takes
+   varbit, which keeps its length), or any other type types has; nil for a string type (text,
+   varchar, char, name, citext) or a type types lacks."
+  [registry s opts]
   (let [p (shape/column-props s)
         e (types/entry (shape/type-name p))]
-    (or (query/enum-type registry s)
+    (or (when (query/enum-type registry s) (query/cast-type-name s opts))
         (when e
           (cond (types/element (:pg/type p)) (types/array-of (:name e))
                 (:cast e) (name (:cast e))
@@ -607,12 +608,12 @@
           (and labels (not (coll? value)) (not (some #{(or text value)} labels)))
           (cond-> {:kind :enum-literal :value value :allowed labels} column (assoc :column column) type (assoc :type type))
           (and (sent-typed? x opts) refused?)
-          (let [u (when (and s (string? value)) (uncast-type registry s))]
+          (let [u (when (and s (string? value)) (uncast-type registry s opts))]
             (if u
               (cond-> {:kind :uncast-string :value value :type u} column (assoc :column column) (not column) (assoc :function function))
               (cond-> {:kind :literal-type :function function :value value :sent (literal-sent-type x opts)}
                 (= :assign context) (assoc :column column)
-                (some-> s shape/column-props :pg/type) (assoc :type (:pg/type (shape/column-props s)))))))))
+                (some-> s shape/column-props :pg/type) (assoc :type (query/cast-type-name s opts))))))))
 
 (defn- call-args
   "An argument of a function or an operator: of the types the candidates PostgreSQL may resolve

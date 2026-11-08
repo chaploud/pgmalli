@@ -5,7 +5,8 @@
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.query :as query]
-            [pgmalli-next.impl.shape :as shape]))
+            [pgmalli-next.impl.shape :as shape]
+            [pgmalli-next.impl.types :as types]))
 
 (defn- output-column?
   "Whether a bare :col of :order-by or :group-by may mean an output column of stmt."
@@ -278,7 +279,22 @@
          :let [s (query/side-schema registry chain side opts)
                t (when s (query/slot-type registry s))]
          :when (and (vector? t) (:domain? (get t 2)))]
-     {:kind :no-operator :column side :op op :domain (query/domain-of s) :type (second t)})))
+     {:kind :no-operator :column side :op op :domain (query/domain-of s) :type (query/cast-type-name s opts)})))
+
+(defn- type-problems
+  "{:kind :unknown-type :type n :did-you-mean [...]} of each cast to an unqualified type name n
+   that names no type pg_catalog or the :schema has, but an enum type of another schema
+   (query/type-suggestions)."
+  [registry ps {:keys [schema] :as opts}]
+  (distinct
+   (for [{:keys [x]} (syntax/expression-nodes ps)
+         :when (and (vector? x) (= :cast (first x)) (= 3 (count x)))
+         :let [n (syntax/cast-target (nth x 2))]
+         :when (and n (not (str/includes? n ".")) (nil? (query/named-type-schema registry opts n)))
+         :let [e (types/element n)
+               meant (some->> (query/type-suggestions registry (or e n) schema) (mapv #(cond-> % e types/array-of)))]
+         :when meant]
+     {:kind :unknown-type :type n :did-you-mean meant})))
 
 (defn- column-definition-problems
   "{:kind :column-definition-list :function f :alias a} for each function in FROM of a statement
@@ -318,6 +334,7 @@
                  (insert-problems registry stmt opts)
                  (write-problems registry scopes stmt opts)
                  (operator-problems registry ps opts)
+                 (type-problems registry ps opts)
                  (column-definition-problems registry stmt opts)))))
 
 (defn- unread-clauses

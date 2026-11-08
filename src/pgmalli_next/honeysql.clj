@@ -246,16 +246,6 @@
   [c]
   (cond (and (keyword? c) (namespace c)) (str (namespace c) "." (name c)) (keyword? c) (name c) :else (str c)))
 
-(defn- cast-form
-  "[:cast x t] as HoneySQL writes a cast to type t: t by its short name, as a keyword where one
-   spells it (:timestamptz), else as [:raw t] (\"bigint[]\", \"timestamp(3)\", a quoted name)."
-  [x t]
-  ;; format_type writes a typmod inside the name: timestamp(3) without time zone
-  (let [typmod (re-find #"\([^)]*\)" t)
-        [_ base brackets] (re-matches #"(.*?)((?:\[\])*)" (str/trim (str/replace t #"\([^)]*\)" "")))
-        n (str (types/short-name base) typmod brackets)]
-    (str "[:cast " x " " (if (re-matches #"[a-z_][a-z0-9_]*" n) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
-
 (defn- field-target-text
   "The sentence of an assigned target qualified by its table or alias, a field of a column to PostgreSQL."
   [column did-you-mean]
@@ -316,14 +306,17 @@
                    (str (pr-str value) " is no value of " (if column (column-name column) (str "type " type)) "; it takes " (str/join ", " (map pr-str allowed))))
    :no-operator (fn [{:keys [column op domain type]}]
                   (str "PostgreSQL has no " (if (#{:in :not-in} op) "=" (name op)) " for " (column-name column) ", of domain " domain " over enum " type
-                       "; compare the enum: " (pr-str [:cast column (keyword (str/replace type " " "-"))])))
+                       "; compare the enum: " (syntax/cast-form (pr-str column) type)))
    :uncast-string (fn [{:keys [column function value type]}]
                     (str (pr-str value) " reaches " (cond (keyword? column) (str "column " (column-name column))
                                                           column (pr-str column)
                                                           :else (str "an argument of " function))
                          " as a typed string, which its type " type " does not take"
-                         " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar);"
-                         " write " (cast-form (pr-str value) type)))
+                         " (HoneySQL sends a string as a parameter, which pgjdbc sends as varchar); write "
+                         ;; an enum's label: sent untyped, as values-schema says
+                         (if (and (nil? (types/entry type)) (re-matches #"[A-Za-z_][\w-]*" value))
+                           (pr-str [:lift (keyword value)])
+                           (syntax/cast-form (pr-str value) type))))
    :literal-type (fn [{:keys [function column value sent type]}]
                    (let [to (if column (str "column " (column-name column)) function)]
                      (if-not sent
@@ -334,7 +327,10 @@
                           (if (coll? value)
                             ;; jsonb, which casts to no array or enum
                             (str "send the value of " (or type "the type meant") " itself (an array as a Java array, (into-array ...); a label as [:lift :label])")
-                            (str "cast it, " (if type (cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]"))))))))
+                            (str "cast it, " (if type (syntax/cast-form (pr-str value) type) (str "[:cast " (pr-str value) " <the type meant>]"))))))))
+   :unknown-type (fn [{:keys [type did-you-mean]}]
+                   (str "type " type " is in neither pg_catalog nor the query's schema" (error/did-you-mean (str/join " or " did-you-mean))
+                        "; qualify it, " (syntax/cast-form "x" (first did-you-mean)) ", or pass that schema as :schema"))
    :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
@@ -353,7 +349,7 @@
                           (str "argument " arg " goes to " function ", which takes its type from the value sent, but every value"
                                " its other uses take is sent untyped (a keyword label) or is nil, which PostgreSQL"
                                " cannot type there (could not determine data type of parameter $n, or could not determine polymorphic type);"
-                               " cast it in the query: " (if type (cast-form x type) (str "[:cast " x " <the type meant>]")))))})
+                               " cast it in the query: " (if type (syntax/cast-form x type) (str "[:cast " x " <the type meant>]")))))})
 
 (defn humanize
   "A sentence for each problem of analyze's :problems (or of query-schema's :pgmalli/problems):

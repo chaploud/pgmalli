@@ -1279,6 +1279,17 @@
         ;; a precision written into the SQL ([:inline 10]); a bare 10 HoneySQL sends as a parameter
         (float-precision (keyword-type (name (first t))) (let [p (second t)] (when (and (vector? p) (= :inline (first p)) (integer? (second p))) (second p))))))
 
+(defn cast-form
+  "[:cast x t] as text of HoneySQL data, x text already, a cast to type t (a name format_type
+   writes, maybe qualified): t by its short name, as a keyword where one spells it
+   (:timestamptz, :app.mood), else as [:raw t] (\"bigint[]\", \"timestamp(3)\", a quoted name)."
+  [x t]
+  ;; format_type writes a typmod inside the name: timestamp(3) without time zone
+  (let [typmod (re-find #"\([^)]*\)" t)
+        [_ base brackets] (re-matches #"(.*?)((?:\[\])*)" (str/trim (str/replace t #"\([^)]*\)" "")))
+        n (str (types/short-name base) typmod brackets)]
+    (str "[:cast " x " " (if (re-matches #"[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?" n) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
+
 (defn constant?
   "Whether x is the same value on every row: an argument, a literal (NULL too), or a cast of one."
   [x]
