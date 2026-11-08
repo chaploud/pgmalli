@@ -567,12 +567,6 @@
   [registry table]
   (shape/row-props (get (::schemas registry) (shape/table-key table))))
 
-(defn filled-by-trigger?
-  "Whether a BEFORE row trigger runs, for event (:insert, :update), on the table of row
-   properties props: it may fill a column before NOT NULL is checked."
-  [props event]
-  (boolean (get-in props [:pg/before-triggers event])))
-
 (defn assigned-column
   "{:schema :table :opaque? :nullable?} of the column an assignment (positions) writes, nil
    :schema where it is not told; nullable? where NULL may go there: the column takes it, a
@@ -581,7 +575,7 @@
   [registry {:keys [assign target event]}]
   (let [{s :schema :keys [table opaque?] :as c} (resolve-column registry target assign)]
     (assoc c :nullable? (boolean (or (and s (shape/maybe? s))
-                                     (and s (not opaque?) (filled-by-trigger? (table-props registry table) event)))))))
+                                     (and s (not opaque?) (shape/filled-by-trigger? (table-props registry table) event)))))))
 
 (defn enum-type
   "The type of an enum type's column, of a domain over one, or of an expression's value of one."

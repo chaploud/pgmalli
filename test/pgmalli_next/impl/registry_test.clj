@@ -62,6 +62,18 @@
   (is (not (m/validate :pg.sample.users/update {:nick_upper "x"} opts)) "nor a generated one")
   (is (not (m/validate :pg.sample.users/update {:nope 1} opts)) "closed"))
 
+(deftest a-before-trigger-makes-every-column-of-its-write-optional-and-nullable-as-values-schema-does
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
+                                                        [:a [:int {:pg/type "integer"}]] [:b [:int {:pg/type "integer"}]]]}})
+        valid? #(m/validate %1 %2 {:registry reg})
+        values (h/values-schema reg :pg.public/t)]
+    (is (every? #(valid? :pg.public.t/insert %) [{} {:a nil}]) "the trigger may fill the row")
+    (is (every? #(m/validate values %) [{} {:a nil}]))
+    (is (not (valid? :pg.public.t/update {:a nil})) "no trigger for an UPDATE")
+    (doseq [s [values :pg.public.t/insert]]
+      (is (every? #(some? (:a %)) (mg/sample s {:registry reg :size 20 :seed 1}))
+          "test data as without the trigger, which fills what it fills alone"))))
+
 (deftest several-schemas
   (let [registry (pgmalli/registry pgmalli-next.sample/both-data)
         opts {:registry registry}]

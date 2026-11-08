@@ -218,7 +218,7 @@
          (when columns
            (for [[i row] (map-indexed vector (filter vector? rows)) :when (not= (count row) (count columns))]
              {:kind :values-arity :table table :row i :columns (count columns) :values (count row)}))
-         (when (and (seq given) (not (query/filled-by-trigger? (query/table-props registry table) :insert)))
+         (when (and (seq given) (not (shape/filled-by-trigger? (query/table-props registry table) :insert)))
            (for [c required :when (not (given-names c))]
              {:kind :missing-required-column :table table :column (keyword c)}))
          ;; ON CONFLICT (col, ...) names columns of the target table; a vector headed by :on-constraint
@@ -261,7 +261,7 @@
                            (and (shape/written-by-database? cp)
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
-                           (and (syntax/null-value? v format) (not (shape/maybe? s)) (not (query/filled-by-trigger? (query/table-props registry table) how)))
+                           (and (syntax/null-value? v format) (not (shape/maybe? s)) (not (shape/filled-by-trigger? (query/table-props registry table) how)))
                            {:kind :not-null-violation :table table :column col :clause clause})]
              :when p]
          p)))))

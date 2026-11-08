@@ -16,6 +16,7 @@
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.problems :as problems]
             [pgmalli-next.impl.query :as query]
+            [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -223,13 +224,16 @@
    it writes DEFAULT alone. update takes a non-empty map: HoneySQL writes an empty :set as SET
    alone, which PostgreSQL refuses. nil where r has no such schema."
   [r name derived opts]
-  (when-let [d (get (::query/schemas r) (shape/derived-name name derived))]
-    (let [s (get (::query/schemas r) name)
-          written (shape/column-entries d)
+  (when (get (::query/schemas r) (shape/derived-name name derived))
+    (let [schemas (::query/schemas r)
+          s (get schemas name)
+          ;; the derived schemas as without a trigger, which fills what it fills alone
+          strict #(shape/column-entries (registry/derived-schema s % schemas true))
+          written (strict derived)
           default (sql-word-schema :default (:format opts))
           ;; the columns the database may fill: optional in what an INSERT may carry
-          fills (set (for [[k props] (shape/column-entries (get (::query/schemas r) (shape/derived-name name "insert"))) :when (:optional props)] k))
-          triggered? (query/filled-by-trigger? (shape/row-props s) (keyword derived))
+          fills (set (for [[k props] (strict "insert") :when (:optional props)] k))
+          triggered? (shape/filled-by-trigger? (shape/row-props s) (keyword derived))
           ;; [plain lift lifted] of column c, nullable? where NULL may go there: plain its values as
           ;; HoneySQL writes them in a map (a keyword is a column), lift [:lift v] of lifted's
           typed (fn [k c nullable?]

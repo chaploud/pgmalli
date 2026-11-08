@@ -66,31 +66,38 @@
     (when-not (shape/written-by-database? props)
       [k (cond-> p optional? (assoc :optional true)) s])))
 
-(defn- insert-schema
-  "What an INSERT may carry: identity ALWAYS and generated columns removed, columns with a
-   default or NULL optional, closed map."
-  [row registry]
-  (let [[_ props & entries] row]
-    (into [:map (assoc props :closed true)] (keep #(insert-entry registry %) entries))))
+(defn- filled
+  "Column entry e of a write a BEFORE row trigger may fill: optional, and nullable."
+  [e]
+  (let [[k p s] (shape/entry-parts e)]
+    [k (assoc p :optional true) (if (shape/maybe? s) s [:maybe s])]))
 
-(defn- update-schema
-  "What an UPDATE may set: the columns an INSERT may carry, every one optional (an update sends
-   the columns it changes), each holding what the column holds (a NOT NULL column cannot be set
-   to NULL), closed map."
-  [row]
-  (let [[_ props & entries] row]
-    (into [:map (assoc (select-keys props [:pg/table]) :closed true)]
-          (for [e entries :let [[k p s] (shape/entry-parts e) cp (shape/column-props s)]
-                :when (not (shape/written-by-database? cp))]
-            [k (assoc p :optional true) s]))))
+(defn derived-schema
+  "The derived schema (\"insert\", \"update\") of table row schema row, of malli registry
+   registry: what an INSERT may carry (identity ALWAYS and generated columns removed, columns
+   with a default or NULL optional) or an UPDATE may set (those columns, every one optional, each
+   holding what the column holds), closed map. Where a BEFORE row trigger runs for the write,
+   every column is optional and nullable, unless strict?: the trigger may fill it; generated as
+   without the trigger, which fills what it fills alone."
+  [row derived registry strict?]
+  (let [[_ props & entries] row
+        entries (keep (case derived
+                        "insert" #(insert-entry registry %)
+                        "update" #(let [[k p s] (shape/entry-parts %)]
+                                    (when-not (shape/written-by-database? (shape/column-props s)) [k (assoc p :optional true) s])))
+                      entries)
+        schema #(into [:map (assoc (if (= "insert" derived) props (select-keys props [:pg/table])) :closed true)] %)]
+    (if (and (not strict?) (shape/filled-by-trigger? props (keyword derived)))
+      (shape/merge-props (schema (map filled entries)) {:gen/schema (schema entries)})
+      (schema entries))))
 
 (defn- with-derived
   "The registry with the insert and update schemas of its tables: a sequence is written by its
    functions alone."
   [registry]
   (into registry (for [[k s] registry :when (and (shape/row-schema? s) (not (:pg/sequence (shape/row-props s))))
-                       e [[(shape/derived-name k "insert") (insert-schema s registry)] [(shape/derived-name k "update") (update-schema s)]]]
-                   e)))
+                       d ["insert" "update"]]
+                   [(shape/derived-name k d) (derived-schema s d registry false)])))
 
 (def ^:private json-value
   "What a json or jsonb column with no override to shape it generates: small JSON values."

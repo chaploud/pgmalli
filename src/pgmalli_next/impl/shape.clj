@@ -101,6 +101,12 @@
   [s]
   (props (when (vector? s) s)))
 
+(defn filled-by-trigger?
+  "Whether a BEFORE row trigger runs, for event (:insert, :update), on the table of row
+   properties props: it may fill a column before NOT NULL is checked."
+  [props event]
+  (boolean (get-in props [:pg/before-triggers event])))
+
 (defn maybe?
   "Whether a column schema takes NULL: [:maybe ...]."
   [s]

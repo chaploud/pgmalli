@@ -29,6 +29,9 @@ Identity BY DEFAULT, defaulted and nullable columns are optional.
 An **update schema** is a closed map of the same columns, every one optional. A NOT NULL
 column cannot be set to NULL.
 
+Where a BEFORE row trigger runs for the write (`:pg/before-triggers`), every column of its
+schema is optional and takes nil: the trigger may fill it.
+
 A sequence has neither schema.
 
 A **view's** columns are all `[:maybe ...]`. Views have no insert schema.
