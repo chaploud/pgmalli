@@ -3513,3 +3513,10 @@
         "a ? of the name, which HoneySQL writes ??")
     (is (= [{:kind :written-otherwise :op (keyword "~~~") :call true}] (problems {:select [[[(keyword "~~~") :j "a" "b"] :x]] :from [:t]}))
         "of more operands than two")))
+
+(deftest a-vector-of-one-value-written-is-that-value-and-of-none-a-problem
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ta [:maybe [:vector {:pg/type "text[]"} :string]]] [:n [:maybe [:int {:pg/type "integer"}]]]]}})
+        problems #(:problems (h/analyze reg %))]
+    (is (= [{:kind :uncast-string :value "a" :type "text[]" :column :ta}] (problems {:insert-into :t :values [{:ta ["a"]}]}))
+        "HoneySQL writes [\"a\"] as (?), a varchar")
+    (is (= :unlifted-value (:kind (first (problems {:update :t :set {:ta []}})))) "and [] as (), no value")))

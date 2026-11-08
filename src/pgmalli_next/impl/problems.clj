@@ -270,6 +270,8 @@
                            ;; a column of a type accept answers for takes not (one of a row type may take the row,
                            ;; one of a string type the row's text)
                            (and (or (and (map? v) (not (syntax/statement? v)) (not (contains? v :values)))
+                                    ;; [], which HoneySQL writes ()
+                                    (= [] v)
                                     (and (vector? v) (next v) (not (keyword? (first v))) (not (accept/string-type? (query/slot-type registry s)))))
                                 (query/slot-type registry s))
                            {:kind :unlifted-value :table table :column col :clause clause :value v :type (query/cast-type-name s opts)})]

@@ -798,8 +798,14 @@
         (map? v) [(for [[c x] v] [(target-column c) x]) (vals v)]
         (vector? v) [(for [c v] [c ::untold]) nil]))
 
+(defn- one-written
+  "A value written v as PostgreSQL reads it: a vector of one value but a call ([x], which HoneySQL
+   writes (x)) that value."
+  [v]
+  (if (and (vector? v) (= 1 (count v)) (not (keyword? (first v)))) (first v) v))
+
 (defn writes
-  "[column value event clause] of what a statement writes: :set, ON CONFLICT DO UPDATE SET (a
+  "[column value event clause] of what a statement writes (a vector of one value its value): :set, ON CONFLICT DO UPDATE SET (a
    map of assignments, or the columns taken from EXCLUDED, valued ::untold: a vector of them,
    or {:fields [...] :where ...}), and the rows of :values, maps or positional rows under the
    columns listed.
@@ -809,7 +815,7 @@
    (let [{:keys [columns]} (insert-parts stmt)
          maps (value-rows stmt columns)
          union (distinct (mapcat keys maps))]
-     (map to-field
+     (map (comp (fn [[c v & more]] (into [c (one-written v)] more)) to-field)
       (concat (when (map? (:set stmt)) (for [[c v] (:set stmt)] [(target-column c) v :update :set]))
               (for [[c v] (first (do-update-parts (:do-update-set stmt)))]
                 [c v :update :do-update-set])
