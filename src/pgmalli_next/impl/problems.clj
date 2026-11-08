@@ -126,7 +126,7 @@
         written (:written (syntax/insert-parts stmt))
         ;; a keyword assigned in SET, which HoneySQL writes as a column: the clause and the target column
         set-values (into {} (for [{:keys [x clause assign]} (syntax/assignments ps)
-                                  :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x format))]
+                                  :when (and (syntax/assignment-clauses clause) (syntax/column-keyword? x format))]
                               [x {:clause clause :target assign}]))
         dotted (into {} (for [[clause ts] [[:columns (:columns (syntax/insert-parts stmt))]
                                            [:values (let [v (:values stmt)] (when (vector? v) (mapcat keys (filter map? v))))]
@@ -137,7 +137,8 @@
                           [c [t clause]]))]
     (for [[col scope] (distinct (concat (for [c (keep #(first (syntax/select-parts % opts)) (syntax/selected-items stmt))] [c sc])
                                         (for [c (ordering-columns registry sc stmt)] [c sc])
-                                        (for [c (syntax/distinct-on-expressions stmt) :when (syntax/column-keyword? c format)] [c sc])
+                                        ;; read as ORDER BY reads them: a bare name an output column first
+                                        (for [c (syntax/distinct-on-expressions stmt) :when (and (syntax/column-keyword? c format) (not (output-column? stmt c format)))] [c sc])
                                         (for [[_ c _ chain] (syntax/comparison-sides ps) :when (syntax/column-keyword? c format)] [c chain])
                                         (for [{:keys [x chain]} (syntax/expression-nodes ps)
                                               :when (and (vector? x) (= 3 (count x)) (#{:is :is-not} (first x))
@@ -165,7 +166,7 @@
                                           [a chain])
                                         ;; a keyword assigned in SET is a column the statement sees
                                         (for [{:keys [x chain clause]} (syntax/assignments ps)
-                                              :when (and (#{:set :do-update-set} clause) (syntax/column-keyword? x format))]
+                                              :when (and (syntax/assignment-clauses clause) (syntax/column-keyword? x format))]
                                           [x chain])
                                         (for [c assigned] [c target])))
           ;; an assignment's target names a column, never a table: SET users.score is field score of a column users
@@ -240,8 +241,9 @@
                        target (assoc :target target)))))))))
 
 (defn- write-problems
-  "Writes PostgreSQL refuses: NULL into a NOT NULL column, and a value other than DEFAULT into
-   a column only the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
+  "Writes PostgreSQL refuses: NULL into a NOT NULL column, a map or a vector of values into a
+   column of a type told (:unlifted-value), and a value other than DEFAULT into a column only
+   the database writes (generated, or identity ALWAYS without OVERRIDING SYSTEM
    or USER VALUE, which the first writes and the second ignores). A column one map of :values
    lacks and another has is NULL, as HoneySQL writes it, DEFAULT under sql/format's
    :values-default-columns (in :format). Under a column list, which map keys reach which column
@@ -262,7 +264,12 @@
                                 (not (and overriding? (= :insert how) (= :always (:pg/identity cp)))))
                            {:kind :read-only-column :table table :column col}
                            (and (syntax/null-value? v format) (not (shape/maybe? s)) (not (shape/filled-by-trigger? (query/table-props registry table) how)))
-                           {:kind :not-null-violation :table table :column col :clause clause})]
+                           {:kind :not-null-violation :table table :column col :clause clause}
+                           ;; HoneySQL writes a map as a subquery and a vector of values as a row, (?, ?), which
+                           ;; a column of a type accept answers for takes not (one of a row type may take the row)
+                           (and (or (and (map? v) (not (syntax/statement? v))) (and (vector? v) (next v) (not (keyword? (first v)))))
+                                (query/slot-type registry s))
+                           {:kind :unlifted-value :table table :column col :clause clause :value v :type (query/cast-type-name s opts)})]
              :when p]
          p)))))
 

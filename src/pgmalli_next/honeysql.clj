@@ -122,16 +122,26 @@
     (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
 (defn- lift-message
-  "The :error/fn of [:tuple [:= :lift] t], a column's [:lift v]: v one of t's labels, or as the
-   column takes it; and the class of a value given bare, which no message of the column's others
-   names."
+  "The :error/fn of [:tuple {:pg/type column-type} [:= :lift] t], a column's [:lift v]: v one of t's labels, or as the
+   column takes it; and, of a value given bare, why HoneySQL writes it as no value there (a
+   keyword as a column, a map as a subquery), or why the column takes it not as its class goes
+   (a String as varchar to an enum, an Instant as a timestamptz to a timestamp), with what to
+   write instead."
   [{:keys [schema value]} _]
-  (let [labels (let [e (shape/and-base (shape/non-null (malli.core/form (last (malli.core/children schema)))))]
-                 (when (= :enum (shape/head e)) (shape/entries e)))
+  (let [lifted (shape/non-null (malli.core/form (last (malli.core/children schema))))
+        labels (let [e (shape/and-base lifted)] (when (= :enum (shape/head e)) (shape/entries e)))
+        type (:pg/type (malli.core/properties schema))
+        sent (when (some? value) (jdbc/sent-type value {}))
         c (class value)]
     (str "should be [:lift v], v " (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it")
-         (when-not (or (nil? value) (vector? value))
-           (str "; " (if (#{\A \E \I \O \U} (first (.getSimpleName c))) "an " "a ") (.getName c) " is none of these")))))
+         (cond (or (nil? value) (vector? value)) nil
+               (keyword? value) (str "; HoneySQL writes a bare keyword as a column"
+                                     (if (and labels (not (some #{value} labels))) (str ", and " (pr-str value) " is no label") (str ": write " (pr-str [:lift value]))))
+               (map? value) (str "; HoneySQL writes a map there as a subquery: write " (pr-str [:lift value]))
+               (and labels (string? value)) (str "; a String goes as varchar, which an enum takes not: write the label as a keyword, " (pr-str [:lift (keyword value)]))
+               (and (string? sent) type) (str "; " (error/named (.getName c)) " goes as " sent ", which " type
+                                              " takes through no implicit conversion (docs/queries.md#stricter-than-postgresql): send the column's own value")
+               :else (str "; " (error/named (.getName c)) " is none of these")))))
 
 (defn- extra-key-message
   "The :error/fn of a written row's map: of a key no column has, the column's key it spells
@@ -161,7 +171,8 @@
                                              (shape/alternatives t))))
                 (shape/either t))
     (:map :map-of :vector :sequential) nil
-    (:any :some) [:and t [:not not-one-value]]
+    (:any :some) [:and t [:not {:error/message "should be one value: HoneySQL writes a keyword in a row as a column, a vector as a row of parameters, (?, ?), a map as a subquery; write [:lift v]"}
+                          not-one-value]]
     t))
 
 (defn- java-array
@@ -179,28 +190,43 @@
    :some :any]): a value JSON holds as itself."
   [:or :string :int :boolean :nil])
 
+(def ^:private gen-keys [:gen/min :gen/max :gen/schema :gen/elements :gen/fmap :gen/gen])
+
 (defn- generated-values
-  "t without the values malli generates nothing the one sending sends of: a class alone (a
-   PGobject), any value (:any, :some: of a type pgmalli does not type, alone or among
-   alternatives); its Java arrays
-   ([:pg/array e]) generated as one of the elements e generates (java-array), of registry r, and
-   the maps and vectors of any values (jsonb's) as JSON holds them (json-scalar); nil where nothing
-   is left."
-  [r t]
-  (let [h (shape/head t)]
-    (cond (and (= :fn h) (:pg/class (shape/column-props t))) nil
+  "t, where a value of column schema own goes, without the values malli generates nothing the one
+   sending sends of: a predicate of no :gen/ property (a class alone, a PGobject; what
+   sql/format's :inline writes no literal of), any value (:any, :some: of a type pgmalli does
+   not type, alone or among alternatives); its Java arrays ([:pg/array e]) generated as one of
+   the elements e generates (java-array), of registry r, and the maps and vectors of any values
+   (jsonb's) as JSON holds them (json-scalar); a value of own's kind within the bounds the
+   registry generates own's in (a varchar(n)'s n, 2025's dates), a keyword as short, and no date
+   or time of another kind, which it bounds not, nor a value of another kind held to a
+   predicate; nil where nothing is left."
+  [r own t]
+  (let [h (shape/head t)
+        own (shape/non-null own)
+        hints (select-keys (shape/props own) gen-keys)
+        k (shape/kind t)]
+    (cond (and (= :fn h) (not-any? #(= "gen" (namespace %)) (keys (shape/props t)))) nil
           (#{:any :some} h) nil
-          (= :maybe h) (if-let [x (generated-values r (last t))] [:maybe x] :nil)
+          (= :maybe h) (if-let [x (generated-values r own (last t))] [:maybe x] :nil)
           ;; of alternatives one of which is any value, the type is untold: none generated
           (= :or h) (when-not (some #(#{:any :some} (shape/head %)) (shape/alternatives t))
-                      (some-> (seq (keep #(generated-values r %) (shape/alternatives t))) (shape/either t)))
-          (= :and h) (when-let [b (generated-values r (shape/and-base t))] (shape/update-and-base t (constantly b)))
+                      (some-> (seq (keep #(generated-values r own %) (shape/alternatives t))) (shape/either t)))
+          ;; of another kind than own's, a check malli generates for by retrying may never hold (a
+          ;; BigDecimal of scale 0): its own kind's values are generated
+          (and (= :and h) (not= k (shape/kind own)) (some #(= :fn (shape/head %)) (rest (shape/entries t)))) nil
+          (= :and h) (when-let [b (generated-values r own (shape/and-base t))] (shape/update-and-base t (constantly b)))
           (= :pg/array h)
-          (when-let [e (generated-values r (last t))]
+          (when-let [e (generated-values r (when (= :vector (shape/head own)) (last own)) (last t))]
             (let [valid? (malli.core/validator t (args/malli-options r))]
               (shape/merge-props t {:gen/schema [:vector {:min 1 :max 3} e] :gen/fmap #(java-array valid? %)})))
           (and (#{:map-of :vector :sequential} h) (#{:any :some} (shape/head (last t))))
           (shape/merge-props t {:gen/schema (if (= :map-of h) [:map-of {:max 3} :string json-scalar] [:vector {:max 3} json-scalar])})
+          (and (seq hints) (= k (shape/kind own)) (empty? (select-keys (shape/props t) gen-keys))) (shape/merge-props t hints)
+          (and (= :keyword k) (= :string (shape/kind own)) (:gen/max hints))
+          (shape/merge-props t {:gen/schema [:string {:min 1 :max (:gen/max hints)}] :gen/fmap keyword})
+          (and (keyword? k) (= "time" (namespace k)) (not= k (shape/kind own))) nil
           :else t)))
 
 (def ^:private sql-word-schema
@@ -246,7 +272,7 @@
                         lifted (assigned opts)]
                     [(when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
                      ;; [:lift v] sends v as one parameter, a keyword label and a map too
-                     [:tuple {:error/fn lift-message} [:= :lift] lifted]
+                     [:tuple {:error/fn lift-message :pg/type (:pg/type (shape/column-props c))} [:= {:error/message "should be :lift, [:lift v]: HoneySQL writes a vector of values as a row of parameters, (?, ?), which no column takes"} :lift] lifted]
                      lifted]))
           ;; [key required? type generated generated-required?] of each column, generated the values
           ;; it takes that malli generates (nil for none): of a column a trigger may fill, as
@@ -255,8 +281,8 @@
                    (for [[k props c] written
                          :let [[plain lift] (typed k c (or (shape/maybe? c) triggered?))
                                [gen-plain _ gen-lifted] (typed k c (shape/maybe? c))
-                               gen (some->> [(some->> gen-plain (generated-values r))
-                                             (some->> gen-lifted (generated-values r) (vector :tuple [:= :lift]))]
+                               gen (some->> [(some->> gen-plain (generated-values r c))
+                                             (some->> gen-lifted (generated-values r c) (vector :tuple [:= :lift]))]
                                             (remove nil?) seq (#(if (next %) (into [:or] %) (first %))))]]
                      [(written-key k opts) (not (or (:optional props) triggered?))
                       (if plain [:or lift plain] lift)
@@ -358,7 +384,7 @@
                              star? (and (keyword? x) (str/ends-with? (name x) "*"))
                              alias (when-not star?
                                      (let [a (if (syntax/column-keyword? x) (str/replace (name x) "." "_") label)]
-                                       (keyword (cond (not= a label) a (re-matches #"[a-z_][a-z0-9_]*" a) (str a "_2") :else "column_2"))))]
+                                       (keyword (cond (not= a label) a (syntax/keyword-name? a) (str a "_2") :else "column_2"))))]
                          (str (str/join " and " (map pr-str items)) (if (next items) " make" " makes") " several columns labelled " label
                               "; pgmalli-next.jdbc/builder reads them into one key " column ", keeping the last one's value; "
                               (if star?
@@ -372,7 +398,7 @@
    :enum-literal (fn [{:keys [column type value allowed]}]
                    (str (pr-str value) " is no value of " (if column (column-name column) (str "type " type)) "; it takes " (str/join ", " (map pr-str allowed))))
    :no-operator (fn [{:keys [column op domain type]}]
-                  (str "PostgreSQL has no " (if (#{:in :not-in} op) "=" (name op)) " for " (column-name column) ", of domain " domain " over enum " type
+                  (str "PostgreSQL has no " (if (syntax/in-ops op) "=" (name op)) " for " (column-name column) ", of domain " domain " over enum " type
                        "; compare the enum: " (syntax/cast-form (pr-str column) type)))
    :uncast-string (fn [{:keys [column function value type]}]
                     (str (pr-str value) " reaches " (cond (keyword? column) (str "column " (column-name column))
@@ -404,6 +430,12 @@
    :not-null-violation (fn [{:keys [table column clause]}]
                          (str "NULL written into " table "." (column-name column) ", which is NOT NULL; write a value"
                               (when (= :values clause) ", or [:default] where the column has a default")))
+   :unlifted-value (fn [{:keys [table column clause value type]}]
+                     (str (pr-str value) " in " clause " for " table "." (column-name column) ": HoneySQL writes a "
+                          (if (map? value) "map there as a subquery" "vector there as a row of parameters, (?, ?)")
+                          "; write " (cond (types/json? type) (str (pr-str [:lift value]) ", sent as one parameter (jsonb)")
+                                           (types/element type) (str "a Java array of " type ", (into-array ...)")
+                                           :else (str "a value of " type))))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))

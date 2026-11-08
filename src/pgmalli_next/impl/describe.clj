@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
+            [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -11,9 +12,7 @@
   "The PostgreSQL type of props, short: \"varchar(40)\", \"timestamptz\"; nil without one."
   [props]
   (when-let [t (:pg/type props)]
-    (let [[_ base typmod brackets] (re-matches #"(.*?)(\(.*\))?((?:\[\])*)" t)
-          n (:pg/max-length props)]
-      (str (types/short-name base) (or typmod (when n (str "(" n ")"))) brackets))))
+    (syntax/short-type t (some->> (:pg/max-length props) (format "(%d)")))))
 
 (declare describe)
 
@@ -67,11 +66,16 @@
       (if (*described* s) s (binding [*described* (conj *described* s)] (describe schemas (get schemas s))))
       (= :maybe head) (let [d (describe schemas (first children))]
                         (cond (not (string? d)) [:maybe d]
-                              (str/includes? d " | ") (str "(" d ")?")
+                              ;; (a | b)[] is one type already
+                              (and (str/includes? d " | ") (not (re-matches #"\(.*\)\[\]" d))) (str "(" d ")?")
                               :else (str d "?")))
       (= :map head) (ordered (for [[k ep v] (map shape/entry-parts children)]
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))
-      (#{:sequential :vector :set :pg/array} head) (or (type-label p) (classes-label p) [(describe schemas (first children))])
+      (#{:sequential :vector :set :pg/array} head)
+      (or (type-label p) (classes-label p)
+          (let [d (describe schemas (first children))]
+            ;; a Java array of elements of a type, as PostgreSQL names an array of it
+            (if (and (= :pg/array head) (string? d)) (str (if (re-find #"[ ?]" d) (str "(" d ")") d) "[]") [d])))
       ;; 1.5 and 1.5M, 1.0 and a Float 1.0, a label as each class sends it, print alike
       (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " (distinct (map str children))))
       (= :=> head) (cond-> {:args (mapv #(describe schemas %) (shape/entries (first children))) :returns (describe schemas (second children))}
@@ -82,7 +86,8 @@
       (= :cat head) (mapv #(describe schemas %) children)
       ;; an argument of several collections (IN's)
       (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children)
-           (not-every? (comp :pg/classes props-of) children))
+           (not-every? (comp :pg/classes props-of) children)
+           (apply = (map #(describe schemas (last %)) children)))
       (let [elem (describe schemas (last (first children)))]
         (str elem "[] (" (str/join ", " (map #(name (first %)) children)) ")"))
       (= :or head) (str/join " | " (distinct (map #(let [d (describe schemas %)]

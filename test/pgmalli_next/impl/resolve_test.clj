@@ -73,3 +73,15 @@
     (is (nil? (:result (r/call :functions "f" ["integer"] os))) "version 18 has neither")
     (is (= "text" (:result (r/call :functions "f" ["integer"] (with-meta os {:pgmalli/versions ["16" "17"]}))))
         "a registry of 16 and 17 files")))
+
+(deftest the-polymorphic-types-are-the-catalogs
+  (let [catalog @@(requiring-resolve 'pgmalli-next.impl.types/catalog)
+        used (set (for [kind [:operators :functions] [_ os] (kind catalog) {as :args :keys [result]} os
+                        t (cons result as) :when (and (string? t) (re-matches #"any[a-z]+" t))]
+                    t))]
+    (is (= used @#'r/polymorphic) "each pseudo-type any... a function or operator of pg_catalog takes or returns")))
+
+(deftest the-grammars-calls-are-no-function-of-the-catalog
+  (let [catalog @@(requiring-resolve 'pgmalli-next.impl.types/catalog)]
+    (is (= #{} (set (filter (set (keys (:functions catalog))) @(requiring-resolve 'pgmalli-next.impl.query/grammar-calls))))
+        "pg_proc has none of them: a name of one is the grammar's")))

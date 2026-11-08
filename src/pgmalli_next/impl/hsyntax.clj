@@ -739,6 +739,10 @@
 
 (def in-ops #{:in :not-in})
 
+(def assignment-clauses
+  "The clauses of a map of assignments, column to value: UPDATE's SET, ON CONFLICT's DO UPDATE SET."
+  #{:set :do-update-set})
+
 (def like-ops #{:like :ilike :not-like :not-ilike})
 
 (def distinct-ops
@@ -974,16 +978,27 @@
 
 (def system-calls
   "The SQL syntax HoneySQL writes as a call that PostgreSQL's grammar (gram.y, SystemFuncName)
-   reads as a call of another function, by [name first-word] of the call as HoneySQL names it
-   ([:trim :!leading ...] is [\"trim\" \"leading\"]): [function word], the function it calls and
+   reads as a call of another function, by [name first-word] of the call as HoneySQL writes it
+   (written-name: [:trim :!leading ...] is [\"trim\" \"leading\"], [:collation-for x] COLLATION
+   FOR(x), \"collation for\"): [function word], the function it calls and
    names its column after, and the word whose arguments after it come first (TRIM(LEADING x
    FROM s) is ltrim(s, x), POSITION(a IN b) position(b, a))."
   {["trim" nil] ["btrim" "from"]
    ["trim" "both"] ["btrim" "from"]
    ["trim" "leading"] ["ltrim" "from"]
    ["trim" "trailing"] ["rtrim" "from"]
-   ["collation_for" nil] ["pg_collation_for"]
+   ["collation for" nil] ["pg_collation_for"]
    ["position" nil] ["position" "in"]})
+
+(def ^:private written-name
+  "The name sql/format writes a call of function f (a keyword or a name) under, lower case, its
+   last dotted part: :collation-for's COLLATION FOR, :collation_for's COLLATION_FOR."
+  (memoize
+   (fn [f]
+     (let [s (try (first (sql/format-expr [(keyword (name f))])) (catch Exception _ nil))]
+       (if (string? s)
+         (last (str/split (str/lower-case (str/replace s #"\(.*" "")) #"\."))
+         (last-part f))))))
 
 (defn- word
   "The first SQL word keyword-word? x is written as, lower case (:!leading-from is LEADING
@@ -992,16 +1007,15 @@
   (when (keyword-word? x) (first (str/split (folded (subs (name x) 1)) #"_"))))
 
 (defn- system-call
-  "system-calls' [function word] of a call x, by its name n."
-  [n x]
-  (or (system-calls [n (word (second x))]) (system-calls [n nil])))
+  "system-calls' [function word] of a call x, by the name sql/format writes it under."
+  [x]
+  (let [n (written-name (first x))] (or (system-calls [n (word (second x))]) (system-calls [n nil]))))
 
 (defn- function-name
   "A function's column name: as HoneySQL writes it (- is _), unqualified, as PostgreSQL folds it;
    of a call of no word, the function system-calls says it is."
   [s]
-  (let [n (last-part s)]
-    (or (first (system-calls [n nil])) n)))
+  (or (first (system-calls [(written-name s) nil])) (last-part s)))
 
 (defn called
   "The function name of a call [:f ...] (system-calls': [:trim :!leading ...] is ltrim); nil for
@@ -1009,13 +1023,13 @@
   [x]
   (when (and (vector? x) (not (map-entry? x)) (keyword? (first x)))
     (let [n (last-part (name (first x)))]
-      (or (first (system-call n x)) n))))
+      (or (first (system-call x)) n))))
 
 (defn- call-arguments
   "The arguments PostgreSQL calls the function of call x with: x's but its words (:!from), those
    after the word system-calls names first."
   [x]
-  (let [[_ w] (when (keyword? (first x)) (system-call (last-part (name (first x))) x))
+  (let [[_ w] (when (keyword? (first x)) (system-call x))
         xs (rest x)
         [before after] (split-with #(not (and w (= w (word %)))) xs)]
     (remove keyword-word? (if (seq after) (concat (rest after) before) xs))))
@@ -1162,7 +1176,7 @@
   [x]
   (let [row #(if (map? %) (update-vals % as-vectors) (as-vectors %))]
     (cond (seq? x) (mapv as-vectors x)
-          (map? x) (let [m (into (empty x) (map (fn [[k v]] [k (cond (#{:set :do-update-set} k) (row v)
+          (map? x) (let [m (into (empty x) (map (fn [[k v]] [k (cond (assignment-clauses k) (row v)
                                                                       (and (= :values k) (sequential? v)) (mapv row v)
                                                                       :else (as-vectors v))]))
                                  x)]
@@ -1287,16 +1301,30 @@
         ;; a precision written into the SQL ([:inline 10]); a bare 10 HoneySQL sends as a parameter
         (float-precision (keyword-type (name (first t))) (let [p (second t)] (when (and (vector? p) (= :inline (first p)) (integer? (second p))) (second p))))))
 
+(defn keyword-name?
+  "Whether name s is one a keyword writes as it is, which PostgreSQL reads unquoted as s: lower
+   case letters, digits and _, no digit first."
+  [s]
+  (boolean (re-matches #"[a-z_][a-z0-9_]*" s)))
+
+(defn short-type
+  "Type t as format_type names it (maybe qualified, a typmod inside it: timestamp(3) without time
+   zone; brackets after), short, as a cast and a description write it: its short name
+   (types/short-name, varbit for bit varying), its typmod, or typmod where it names none
+   (varchar's (40), which the registry keeps apart), then its brackets."
+  ([t] (short-type t nil))
+  ([t typmod]
+   (let [own (re-find #"\([^)]*\)" t)
+         [_ base brackets] (re-matches #"(.*?)((?:\[\])*)" (str/trim (str/replace t #"\([^)]*\)" "")))]
+     (str (types/short-name base) (or own typmod) brackets))))
+
 (defn cast-form
   "[:cast x t] as text of HoneySQL data, x text already, a cast to type t (a name format_type
-   writes, maybe qualified): t by its short name, as a keyword where one spells it
+   writes, maybe qualified): t by its short-type, as a keyword where one spells it
    (:timestamptz, :app.mood), else as [:raw t] (\"bigint[]\", \"timestamp(3)\", a quoted name)."
   [x t]
-  ;; format_type writes a typmod inside the name: timestamp(3) without time zone
-  (let [typmod (re-find #"\([^)]*\)" t)
-        [_ base brackets] (re-matches #"(.*?)((?:\[\])*)" (str/trim (str/replace t #"\([^)]*\)" "")))
-        n (str (types/short-name base) typmod brackets)]
-    (str "[:cast " x " " (if (re-matches #"[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?" n) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
+  (let [n (short-type t)]
+    (str "[:cast " x " " (if (let [ps (str/split n #"\.")] (and (<= (count ps) 2) (every? keyword-name? ps))) (keyword n) (str "[:raw " (pr-str n) "]")) "]")))
 
 (defn constant?
   "Whether x is the same value on every row: an argument, a literal (NULL too), or a cast of one."

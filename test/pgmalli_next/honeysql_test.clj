@@ -673,9 +673,10 @@
     (is (= [:map [:i int4] [:f ['float? {:pg/type "real"}]] [:d [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
            (row [[(int 1) :i] [(float 1.5) :f] [1.5M :d]]))
         "pgjdbc types a parameter by its class")
-    (is (= [:map [:i [:maybe :any]] [:s text]]
-           (:row (h/analyze registry {:select [[1 :i] ["s" :s]] :from [:users]} (assoc opts :format {:inline true}))))
-        "an inlined number is typed by its text, which is not read here; an inlined string is text")
+    (is (= [:map [:i int4] [:b [:int {:pg/type "bigint"}]] [:n [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]] [:u text] [:s text] [:nan [:maybe :any]]]
+           (:row (h/analyze registry {:select [[1 :i] [3000000000 :b] [1.5 :n] [#uuid "00000000-0000-0000-0000-000000000001" :u] ["s" :s] [##NaN :nan]] :from [:users]}
+                            (assoc opts :format {:inline true}))))
+        "an inlined number is of the type PostgreSQL gives its literal, an integer by its range; a UUID and a string are quoted, text; NaN is no literal (a name)")
     (is (= [:map [:s [:string {:pg/type "character varying"}]]] (:row (h/analyze registry {:select [["s" :s]] :from [:users]} opts))))
     (is (= [:map [:b [:maybe [:int {:pg/type "bigint"}]]]] (row [[[(keyword "~") :id] :b]])) "~ alone is bitwise NOT, of a bigint a bigint")
     (is (= [:map [:k [:maybe text]] [:v [:maybe :any]]] (row [[[:->> [:cast :nick :jsonb] "k"] :k] [[:->> :nick "k"] :v]]))
@@ -1357,7 +1358,7 @@
       (is (= [{:kind :not-null-violation :table "public.t" :column :id :clause :set}]
              (:problems (h/analyze reg q {:format format}))) (pr-str format)))
     (when-not nrql-registered?
-      (is (thrown? clojure.lang.ExceptionInfo (h/analyze reg q {:format {:dialect :nrql}}))))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be a dialect HoneySQL registers" (h/analyze reg q {:format {:dialect :nrql}}))))))
 
 (deftest null-tests-read-their-column-in-every-condition
   (doseq [op [:is :is-not]
@@ -2102,7 +2103,7 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a java.lang.String is none of these" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"]}
+    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a String goes as varchar, which an enum takes not: write the label as a keyword, [:lift :glad]" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (let [rows (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30}))]
       (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %) (not= :lift (first %))) (vals r))) rows)
@@ -2482,7 +2483,8 @@
 
 (deftest some-of-an-argument-is-typed-as-any-of-it
   (let [any (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]})]
-    (is (some? (second (first any))))
+    (is (m/validate (:ids any) (into-array Long [1]) {:registry registry}) "a Java array of the column's type")
+    (is (not (m/validate (:ids any) [1] {:registry registry})) "a vector goes as jsonb")
     (is (= any (args {:select [:id] :from [:users] :where [:= :id [:some :?ids]]})))))
 
 (deftest a-set-operation-resolves-its-members-two-at-a-time-from-the-left
@@ -2835,8 +2837,9 @@
 (deftest an-argument-tested-for-null-alone-stays-untyped-and-takes-nil-inlined-where-compared-too
   (let [inline (assoc opts :format {:inline true})]
     (is (= {:id [:any {:pgmalli/untyped :position}]} (args {:select [:id] :from [:users] :where [:is :?id nil]} inline)))
-    (is (= {:id [:maybe (conj bigint-cmp :string :uuid)]} (args {:select [:id] :from [:users] :where [:or [:<> :?id nil] [:= :id :?id]]} inline))
-        "inlined, a String is a quoted literal, which a bigint's input reads")
+    (is (= {:id [:maybe [:or [:int {:pg/type "bigint"}] 'decimal? 'integer? (jdbc/inline-finite :double) (jdbc/inline-finite 'float?) :string :uuid]]}
+           (args {:select [:id] :from [:users] :where [:or [:<> :?id nil] [:= :id :?id]]} inline))
+        "inlined, a String is a quoted literal, which a bigint's input reads; a Double finite, as NaN is written as a name")
     (is (= {:id bigint-cmp} (args {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]})))))
 
 (deftest a-wrong-input-fails-saying-what-to-do
@@ -2849,13 +2852,21 @@
              (map #(first (fails (fn [] (% (m/default-schemas))))) [#(h/analyze % q) #(h/values-schema % :users) #(h/set-schema % :users)]))
           "a table no registry pgmalli generates can hold")
       (is (= [:map [:relname [:string {:pg/type "name"}]]] (:row (h/analyze (m/default-schemas) {:select [:relname] :from [:pg_class]})))
-          "pg_catalog's")))
+          "pg_catalog's"))
+    (doseq [[body said] [[nil #"not nil"] [["SELECT 1"] #"not SQL already formatted"] [{:pg.sample/users []} #"registry first"]]]
+      (is (= :pgmalli.error/not-query-data (first (fails #(h/analyze registry body opts)))) (pr-str body))
+      (is (re-find said (second (fails #(h/analyze registry body opts)))) (pr-str body)))
+    (doseq [[given said] [[{:problems []} #"pass \(:problems result\)"] [[:=> [:cat] :any] #"pass \(:pgmalli/problems"]
+                          [{:kind :x} #"got one map"] ["x" #"got java.lang.String"]]]
+      (is (= [:pgmalli.error/invalid-options true] (update (fails #(h/humanize given)) 1 (comp boolean (partial re-find said)))) (pr-str given)))
+    (is (= :pgmalli.error/invalid-options (first (fails #(pgmalli/as-read registry :pg.sample/users {:jdbc {:return-keys true}}))))
+        "as-read reads no :return-keys"))
   (is (= ["clojure.core/map: the query takes argument :y, which the function's args lack; a typo in args?"]
          (h/humanize [{:kind :missing-arg :arg :y :var #'map}]))
       "schema-problems' :var first")
   (is (= {:pgmalli/problems []} (second (h/query-schema registry [] {:select [:id] :from [:users]} opts)))
       "a query schema's parts are where they are, problems or not")
-  (is (= {:args [["bigint | numeric | float8 | real"]] :returns [{:id "bigint"}]}
+  (is (= {:args ["(bigint | numeric | float8 | real)[]"] :returns [{:id "bigint"}]}
          (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))
 
 (deftest special-syntax-writing-an-operator-names-its-column-?column?
@@ -2996,7 +3007,7 @@
     (is (:quoted (first (q {:select [:Nick] :from [:users]}))))
     (is (not (contains? (first (q {:select [:Nope] :from [:users]})) :quoted))))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :quoted" (check {:select [1]} {:format {:quote true}})))
-  (is (thrown? clojure.lang.ExceptionInfo (check {:select [1]} {:format {:quoted "yes"}}))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"pgmalli options.*:quoted" (check {:select [1]} {:format {:quoted "yes"}}))))
 
 (deftest using-names-no-system-column
   (is (= [:unknown-column] (distinct (map :kind (check {:select [:nick] :from [:users] :join [:groups [:using :ctid]]}))))))
@@ -3130,7 +3141,7 @@
     (is (ok? (long-array [1 2])))
     (is (not (ok? (into-array String ["1"]))) "the cast reads a String, = ANY sends it as varchar[]")
     (is (ok? nil) "the query tests it for NULL")
-    (is (= [:maybe ["bigint | numeric | float8 | real"]] (pgmalli/describe registry ids)) "described as the common type"))
+    (is (= "(bigint | numeric | float8 | real)[]?" (pgmalli/describe registry ids)) "described as the common type"))
   (is (= "varchar(40) | keyword" (pgmalli/describe registry (:x (args {:update :users :set {:nick :?x} :where [:= :nick :?x]}))))
       "an assignment's varchar(40) within a comparison's varchar")
   (is (= "(varchar | keyword) & (date | timestamp | timestamptz)" (pgmalli/describe registry (:x (args {:select [:id] :from [:users] :where [:and [:= :nick :?x] [:= :born :?x]]}))))
@@ -3305,3 +3316,91 @@
     (is (= {:problems [] :row [:map [:last_value [:maybe :any]]]}
            (select-keys (h/analyze reg {:select [:last_value] :from [:seqenum]}) [:problems :row]))
         "PostgreSQL holds a sequence and an enum of one name; the registry the enum's")))
+
+(deftest an-inlined-argument-takes-the-literals-of-the-type-postgresql-gives-them
+  (let [inline (assoc opts :format {:inline true})
+        ok? (fn [q v] (m/validate (:x (args q inline)) v {:registry registry}))
+        set-score {:update :users :set {:score :?x}}]
+    (is (ok? set-score 2147483647))
+    (is (not (ok? set-score 2147483648)) "past int4's range a literal is a bigint, which an integer column takes on assignment alone")
+    (is (ok? set-score 1M) "1M is written 1, an integer")
+    (is (not (ok? set-score 1.5M)) "1.5 is a numeric")
+    (is (ok? {:update :users :set {:referrer_id :?x}} 3000000000) "a bigint column takes a bigint")
+    (doseq [v [##NaN ##Inf]]
+      (is (not (ok? {:select [:id] :from [:users] :where [:= :score :?x]} v)) "sql/format writes NaN and Infinity as names"))
+    (is (ok? {:select [:id] :from [:users] :where [:= :id [:any :?x]]} "{1,2}") "= ANY of the quoted text of an array")
+    (is (not (ok? {:select [:id] :from [:users] :where [:= :id [:any :?x]]} (long-array [1]))) "sql/format writes a Java array as no literal")
+    (is (not-any? #(ok? {:select [:id] :from [:users] :where [:in :id :?x]} %) [[1] #{1} 1]) "sql/format writes IN [1, 2]")
+    (is (str/includes? (first (me/humanize (m/explain (:x (args {:select [:id] :from [:users] :where [:in :id :?x]} inline)) [1] {:registry registry})))
+                       "write the list in the query"))))
+
+(deftest an-inlined-row-generates-as-it-validates
+  (let [s (h/values-schema registry :users (assoc opts :format {:inline true}))]
+    (is (every? #(m/validate s % {:registry registry}) (mg/sample s {:registry registry :size 30 :seed 1})))))
+
+(deftest a-map-or-a-vector-of-values-written-to-a-column-is-a-problem
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:tags [:maybe [:vector {:pg/type "text[]"} :string]]]
+                                                         [:doc [:maybe [:any {:pg/type "jsonb"}]]] [:p [:maybe [:any {:pg/type "pair"}]]] [:n [:maybe [:int {:pg/type "integer"}]]]]}})
+        problems #(:problems (h/analyze reg %))]
+    (is (= [{:kind :unlifted-value :table "public.t" :column :tags :clause :set :value ["a" "b"] :type "text[]"}]
+           (problems {:update :t :set {:tags ["a" "b"]}})))
+    (is (= ["{:a 1} in :values for public.t.doc: HoneySQL writes a map there as a subquery; write [:lift {:a 1}], sent as one parameter (jsonb)"]
+           (h/humanize (problems {:insert-into :t :values [{:doc {:a 1}}]}))))
+    (is (= [] (problems {:update :t :set {:n [1] :p [1 2] :doc [:lift {:a 1}]}}))
+        "(?) is one value; a row type's column may take a row")))
+
+(deftest distinct-on-reads-an-output-column-as-order-by-does
+  (is (= [] (check {:select-distinct-on [[:s] [:score :s]] :from [:users] :order-by [:s]}))))
+
+(deftest a-call-of-sql-syntax-is-told-by-the-name-sql-format-writes
+  (is (= [:map [:pg_collation_for [:maybe text]]] (row {:select [[[:collation-for :nick]]] :from [:users]}))
+      "COLLATION FOR(x) is pg_collation_for(x)")
+  (is (= [:map [:collation_for [:maybe :any]]] (row {:select [[[:collation_for :nick]]] :from [:users]}))
+      "COLLATION_FOR(x) is a function of that name, which pg_catalog lacks"))
+
+(deftest a-value-of-a-written-row-says-what-to-write
+  (let [explain #(me/humanize (m/explain (h/set-schema registry :users opts) % {:registry registry}))]
+    (is (str/includes? (first (:mood (explain {:mood :sad}))) "HoneySQL writes a bare keyword as a column: write [:lift :sad]"))
+    (is (str/includes? (first (:mood (explain {:mood "sad"}))) "write the label as a keyword, [:lift :sad]"))
+    (is (str/includes? (first (:updated_at (explain {:updated_at java.time.Instant/EPOCH}))) "a java.time.Instant goes as timestamp with time zone"))))
+
+(deftest a-json-column-an-override-shapes-takes-that-shape-as-jsonb-does
+  (doseq [t ["json" "jsonb"]
+          :let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:map {:pg/type t} [:a :int]]]]}})
+                s (:x (:args (h/analyze reg {:update :t :set {:j :?x}})))]]
+    (is (m/validate s {:a 1} {:registry reg}) t)
+    (is (not (m/validate s {:a "x"} {:registry reg})) t)))
+
+(deftest a-not-null-column-of-a-type-pgmalli-does-not-type-takes-what-a-nullable-one-does
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:some {:pg/type "inet"}]] [:n [:maybe [:any {:pg/type "inet"}]]]]}})
+        {:keys [i n]} (:args (h/analyze reg {:update :t :set {:i :?i :n :?n}}))]
+    (is (= [:maybe i] n))
+    (is (not (m/validate i "10.0.0.1" {:registry reg})) "a String goes as varchar, which inet takes not")))
+
+(deftest an-array-column-of-a-type-no-java-array-goes-as-takes-a-pgobject-of-it
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ts [:maybe [:vector {:pg/type "time[]"} :time/local-time]]]
+                                                         [:ns [:maybe [:vector {:pg/type "numeric[]"} 'decimal?]]]]}})
+        {:keys [ts ns]} (:args (h/analyze reg {:update :t :set {:ts :?ts :ns :?ns}}))]
+    (is (= "PGobject of time[]?" (pgmalli/describe ts)) "pgjdbc sends no Java array as time[]")
+    (is (m/validate ns (into-array Double [##NaN]) {:registry reg}) "float8[] to numeric[], element by element: NaN as it is")
+    (is (not (m/validate ns (into-array Double [1.5]) {:registry reg})) "1.5 would change")))
+
+(deftest a-generated-row-is-within-the-bounds-the-registry-generates-a-column-in
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:v [:maybe [:string {:pg/max-length 3 :pg/type "character varying"}]]]
+                                                         [:at [:maybe [:time/instant {:pg/type "timestamp with time zone"}]]]
+                                                         [:n [:maybe [decimal? {:pg/type "numeric"}]]]]}})
+        rows (mg/sample (h/values-schema reg :t) {:registry reg :size 60 :seed 7})
+        value #(let [v (get % %2)] (if (vector? v) (second v) v))]
+    (is (every? #(<= (count (name %)) 3) (keep #(let [v (value % :v)] (when (and (or (string? v) (keyword? v)) (not= :null v)) v)) rows)) "varchar(3): 3 characters at most, a keyword too")
+    (is (every? #(= 2025 (.getYear (.atZone ^java.time.Instant % java.time.ZoneOffset/UTC))) (filter inst? (keep #(value % :at) rows))) "an Instant in 2025, as the registry's")
+    (is (not-any? #(and (double? %) (Double/isInfinite %)) (keep #(value % :n) rows)) "no infinity, which a numeric(p, s) holds not")))
+
+(deftest a-java-array-and-a-schema-made-under-a-registry-are-described
+  (is (= "bigint[] | integer[]" (pgmalli/describe [:or [:pg/array [:int {:pg/type "bigint"}]] [:pg/array [:int {:pg/type "integer"}]]])))
+  (is (= "bigint" (:id (pgmalli/describe (m/schema [:ref :pg.sample/users] {:registry registry})))) "its columns"))
+
+(deftest a-table-named-outside-the-default-schema-is-named-where-it-is
+  (let [reg (pgmalli/registry {:schemas ["a" "b"] :registry {:pg.a/t [:map {:pg/table "a.t"} [:id :int]] :pg.b/u [:map {:pg/table "b.u"} [:id :int]]}})
+        e (try (h/values-schema reg :t) nil (catch clojure.lang.ExceptionInfo e e))]
+    (is (= [:a.t] (:did-you-mean (ex-data e))))
+    (is (str/includes? (ex-message e) "write :a.t"))))

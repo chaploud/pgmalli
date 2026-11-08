@@ -77,14 +77,16 @@
    (\"varchar(40)\", \"timestamptz\"), ? when it takes NULL, (optional) when its key may be
    absent, an enum with its type and labels (\"user_status: active | closed\"); a map as
    {key description} in column order, a sequence as [description], a function schema as
-   {:args [...] :returns ...} (and :pgmalli/problems, a query schema's). A name, or a reference inside the schema, is read through the registry.
+   {:args [...] :returns ...} (and :pgmalli/problems, a query schema's). A name, or a reference inside the schema, is read through the registry,
+   or that a malli schema was made under.
 
    (describe (h/query-schema registry [:id] q))
    (describe registry :pg.public/users)"
   ([schema]
    (when (shape/generated-name? schema)
      (error/fail! :pgmalli.error/invalid-options (str "describe reads " (pr-str schema) " through a registry: (describe registry " (pr-str schema) ")") {:given schema}))
-   (d/describe {} (schema! reg/base schema)))
+   ;; a malli schema made under a registry reads its references through it
+   (d/describe {} (if (m/schema? schema) (try (m/deref-recursive schema) (catch Exception _ schema)) (schema! reg/base schema))))
   ([registry schema]
    (when (shape/generated-name? schema) (shape/schema-of registry schema))
    (d/describe (shape/schemas-of registry) (schema! registry schema))))

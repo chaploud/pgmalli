@@ -292,6 +292,7 @@ problems it reports:
 | `:duplicate-column` | columns of one label in the row a query returns, which `pgmalli-next.jdbc/builder` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |
+| `:unlifted-value` | a map or a vector of values written into a column (`:set`, `:values`, `:do-update-set`), which HoneySQL writes as a subquery or a row of parameters; with `:value` and the column's `:type` |
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal (a string, `[:lift "s"]`, `[:inline "s"]`, `[:lift :kw]`, a number) outside an enum type's labels where PostgreSQL types it as the enum: compared, in an IN list or ANY's array, assigned, beside the enum in `coalesce`, `greatest`, `least`, `nullif` or CASE's values, or cast to it; with `:allowed`, and `:column` (the column, or the expression compared or resolved beside) or, cast, `:type` |
