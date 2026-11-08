@@ -23,8 +23,9 @@
    type it is sent as, short (a Long's bigint, a byte[]'s bytea), or, one sent untyped, the type
    whose values it is (a LocalDate's date); not a predicate's name, whose ? reads as NULL."
   (reduce (fn [m [_ t s]]
-            ;; a schema of a form ([:vector :any], a vector sent as jsonb) by the form, another by its kind
-            (let [k (when s (if (vector? s) s (shape/kind s)))
+            ;; a schema of a form ([:vector :any], a vector sent as jsonb) by the form, another (one
+            ;; held to a class, [:and float? [:pg/class ...]], too) by its kind
+            (let [k (when s (if (and (vector? s) (not= :and (first s))) s (shape/kind s)))
                   n (if (string? t)
                       (types/short-name t)
                       (some (fn [[n e]] (when (= k (shape/kind (:schema e))) (types/short-name n))) types/types))]
