@@ -43,9 +43,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # the build provenance's signature
-      attestations: write
-    # what deploy publishes is checked against these, not the artifact's own checksum file
+    # what is attested and published is checked against these, not the artifact's own checksum file
+
     outputs:
       jar: ${{ steps.sums.outputs.jar }}
       pom: ${{ steps.sums.outputs.pom }}
@@ -69,11 +68,6 @@ jobs:
         run: |
           echo "jar=$(sha256sum target/pgmalli-next.jar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "pom=$(sha256sum target/classes/META-INF/maven/io.github.chaploud/pgmalli-next/pom.xml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: |
-            target/pgmalli-next.jar
-            target/classes/META-INF/maven/io.github.chaploud/pgmalli-next/pom.xml
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: jar
@@ -81,9 +75,26 @@ jobs:
             target/pgmalli-next.jar
             target/pgmalli-next.jar.sha256
             target/classes/META-INF/maven/io.github.chaploud/pgmalli-next/pom.xml
+  # the signing token in a job that runs no build: the provenance is of the jar job's SHA-256s
+  attest:
+    name: attest the jar and its pom
+    needs: jar
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # the build provenance's signature
+      attestations: write
+    steps:
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: pgmalli-next.jar
+          subject-digest: sha256:${{ needs.jar.outputs.jar }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: pom.xml
+          subject-digest: sha256:${{ needs.jar.outputs.pom }}
   deploy:
     name: publish to Clojars
-    needs: [test, jar]
+    needs: [test, jar, attest]
     runs-on: ubuntu-latest
     environment: clojars
     steps:
@@ -117,7 +128,7 @@ jobs:
   # a job of its own, so that it can be re-run when it fails: Clojars rejects publishing a version twice
   github-release:
     name: GitHub release
-    needs: deploy
+    needs: [jar, deploy]
     runs-on: ubuntu-latest
     permissions:
       contents: write # creates the release
@@ -125,6 +136,10 @@ jobs:
       - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: jar
+      # the jar the jar job built, as deploy checks it
+      - run: echo "$JAR  pgmalli-next.jar" | sha256sum -c
+        env:
+          JAR: ${{ needs.jar.outputs.jar }}
       - run: gh release create "$GITHUB_REF_NAME" pgmalli-next.jar pgmalli-next.jar.sha256 --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}
