@@ -219,7 +219,7 @@
     (is (every? #(<= (abs (double %)) 99.99) (mapcat :ns rows)) "numeric(4, 2)[]")))
 
 (deftest a-char-columns-string-is-one-byte
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\""}]]]}})]
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\"" :pg/one-byte true}]]]}})]
     (is (= [true true true false false false]
            (map #(m/validate :pg.public/t {:c %} {:registry reg}) ["" "a" "\\343" "ab" "é" "\\9"]))
         "an ASCII character, or the \\ooo PostgreSQL writes another byte as")))

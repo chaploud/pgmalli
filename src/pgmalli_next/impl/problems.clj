@@ -400,7 +400,7 @@
          p [(when (and (syntax/in-ops h) (< 3 (count x)))
               {:kind :written-otherwise :op h :dropped (- (count x) 3)})
             ;; HoneySQL escapes a ? of a name as ??
-            (when (and (not (re-matches #"[A-Za-z_][A-Za-z0-9_$.]*" n)) (< 2 (count x))
+            (when (and (syntax/operator-name? h) (< 2 (count x))
                        (some-> (try (first (sql/format-expr (into [h] (repeat (dec (count x)) ::x)))) (catch Exception _ nil))
                                (str/starts-with? (str (str/replace n "?" "??") "("))))
               {:kind :written-otherwise :op h :call true})]

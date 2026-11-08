@@ -937,11 +937,13 @@
    oid's, docs/queries.md#stricter-oid), or of an array's element type, which PostgreSQL refuses
    where a row reaches it, or a string longer than a \"char\"'s one, which it cuts
    (docs/queries.md#stricter-assignment)."
-  [held-t v]
+  [held-t v assign?]
   (let [e (when (string? held-t) (or (types/element held-t) held-t))
+        ;; held to a range assigned, or anywhere an oid's (args' within); a "char"'s length assigned
+        held? (or assign? (types/oid-like? e))
         [lo hi] (:range (types/types (if (types/oid-like? e) "oid" e)))]
-    (boolean (some #(or (and lo (number? %) (not (<= lo % hi)))
-                        (and (= "\"char\"" e) (string? %) (not (pgtypes/char-value? %))))
+    (boolean (some #(or (and held? lo (number? %) (not (<= lo % hi)))
+                        (and assign? (= "\"char\"" e) (string? %) (not (pgtypes/char-value? %))))
                    ;; a Java array's elements
                    (if (some-> v class .isArray) (seq v) [v])))))
 
@@ -989,7 +991,7 @@
                             :when (not (or (and (nil? v) (compared-contexts context))
                                            (and (nil? v) notnull (#{:update :insert :insert-select} context))
                                            ;; docs/queries.md#stricter-oid
-                                           (out-of-range? held-t v)
+                                           (out-of-range? held-t v assign?)
                                            (and (not taken?) (string? lit) (contains? (get stricter [lit (if assign? :assign :compare)]) held-t))))
                             :let [sqlvec (try (sql/format query (assoc fmt :params {:x arg})) (catch Exception _ nil))
                                   pg (when sqlvec (refusal conn sqlvec column (and (nil? v) notnull)))]
@@ -1066,7 +1068,7 @@
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))
-                                                 (out-of-range? held-t v)
+                                                 (out-of-range? held-t v assign?)
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
                                   rule? (and takes? (not cast?) (not untyped-there?) (not= "polymorphic" (namespace context)))]

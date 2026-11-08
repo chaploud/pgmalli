@@ -39,7 +39,7 @@
    "character" {:aliases ["char" "bpchar" "national character" "national char" "nchar"] :schema :string :typmod :max-length}
    "name" {:schema :string}
    ;; one byte (pgtypes/char-value?): PostgreSQL keeps a longer string's first alone, without a word
-   "\"char\"" {:schema :string}
+   "\"char\"" {:schema [:string {:pg/one-byte true}]}
    "bit" {:schema :string :typmod :bits :cast :varbit :read :bit}
    "bit varying" {:aliases ["varbit"] :schema :string :typmod :max-bits :cast (keyword "bit varying") :read :any}
    "boolean" {:aliases ["bool"] :schema :boolean}

@@ -165,7 +165,7 @@
         [s c] (if (and (types/element sent) (types/element t)) [(types/element sent) (types/element t)] [sent t])]
     (cond (symbol? sent) (when-not (accept/reads? (base c) (resolve sent) context) "stricter-untyped")
           (and (= :assign context)
-               (or (some #{"a" "i"} (types/cast-contexts s (base c))) (accept/string-type? c)))
+               (or (contains? (set (types/cast-contexts s (base c))) "a") (accept/string-type? c)))
           "stricter-assignment")))
 
 (deftest every-pair-stricter-than-postgresql-is-a-rule-of-the-docs

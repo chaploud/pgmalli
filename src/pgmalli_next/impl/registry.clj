@@ -64,7 +64,7 @@
         optional? (if (contains? props :default)
                     ;; a varchar(n)'s length is no schema's check: a longer default is refused too
                     (and (m/validate s d {:registry registry})
-                         (not (and (string? d) (:pg/max-length props) (< (:pg/max-length props) (.codePointCount ^String d 0 (count d))))))
+                         (not (and (string? d) (:pg/max-length props) (< (:pg/max-length props) (pgtypes/char-length d)))))
                     (or (:pg/identity props) (contains? props :pg/default) (shape/maybe? s)))]
     (when-not (shape/written-by-database? props)
       [k (cond-> p optional? (assoc :optional true)) s])))

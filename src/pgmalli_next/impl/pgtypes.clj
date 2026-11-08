@@ -12,7 +12,7 @@
             [pgmalli-next.impl.types :as types]))
 
 ;; PostgreSQL counts and slices strings by character (code point), Java by UTF-16 unit
-(defn- char-length
+(defn char-length
   "The length of v as PostgreSQL counts it: a string's in code points."
   [v]
   (if (string? v) (.codePointCount ^String v 0 (count v)) (count v)))
@@ -34,14 +34,14 @@
 (def string-schema
   ":string with :min and :max counting characters (code points), as PostgreSQL's length does,
    where malli's counts UTF-16 units. A bit string (:pg/type bit or bit varying) holds 0s and 1s
-   alone, a \"char\" one byte (char-value?)."
+   alone, one of :pg/one-byte (a \"char\"'s, a bound a comparison drops) one byte (char-value?)."
   (m/-simple-schema
    {:type :string :pred string?
     :property-pred (fn [props]
                      (let [bounds ((m/-min-max-pred char-length) props)]
                        (cond (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
                              (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s)))))
-                             (= "\"char\"" (:name (types/entry (shape/type-name props)))) char-value?
+                             (:pg/one-byte props) char-value?
                              :else bounds)))}))
 
 (defn real-number?

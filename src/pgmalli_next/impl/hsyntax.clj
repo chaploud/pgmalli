@@ -977,11 +977,16 @@
   "HoneySQL's special syntax that writes an SQL operator, whose column PostgreSQL names ?column?."
   (into in-ops #{:not :between :not-between :inline :lift :param}))
 
+(defn operator-name?
+  "Whether keyword h names an operator, not an identifier (:->, :@>, :?|)."
+  [h]
+  (not (re-find #"^[A-Za-z_]" (name h))))
+
 (defn operator?
-  "Whether HoneySQL writes [h ...] as an operator: a name not an identifier (:->, :@>), one
+  "Whether HoneySQL writes [h ...] as an operator: a name not an identifier (operator-name?), one
    HoneySQL has registered (register-op! too), or operator-syntax."
   [h]
-  (boolean (or (operator-syntax h) (not (re-find #"^[A-Za-z_]" (name h))) (sql/registered-op? h))))
+  (boolean (or (operator-syntax h) (operator-name? h) (sql/registered-op? h))))
 
 (def system-calls
   "The SQL syntax HoneySQL writes as a call that PostgreSQL's grammar (gram.y, SystemFuncName)

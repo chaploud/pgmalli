@@ -164,7 +164,7 @@
         col (fn [k] (last (some #(when (= k (first %)) %) (drop 2 (:pg.public/t registry)))))]
     (is (= [:int {:min 0 :max 4294967295 :pg/type "oid"}] (col :o)))
     (is (nil? (some #(= :xid (last (last %))) (drop 2 (:pg.public/t registry)))) "xid is not an integer to the database")
-    (is (= [:string {:pg/type "\"char\""}] (col :c)))
+    (is (= [:string {:pg/one-byte true :pg/type "\"char\""}] (col :c)))
     (is (= [:string {:pg/type "bit" :pg/max-length 4}] (col :b)) "0s and 1s; bit(n)'s n is the database's")
     (is (= [:string {:pg/type "bit varying" :pg/max-length 6}] (col :vb)))
     (is (= [:some {:pg/type "inet"}] (col :ip)) "a type the driver hands over as its own object")

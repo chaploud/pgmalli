@@ -82,6 +82,8 @@
 (def ^:private infix-operators
   ["=" "<>" "<" ">" "<=" ">=" "~" "~~" "!~" "~*" "&&" "@>" "<@" "||" "->>" "->" "&" "-" "+" "|" "*" "/" "%"])
 
+(def ^:private prefix-operators ["-" "~" "+"])
+
 (def ^:private aggregates ["min" "max" "count" "bool_or" "bool_and"])
 
 (defn- shadowing-everything
@@ -95,7 +97,7 @@
                 (str "CREATE OPERATOR " s "." op " (LEFTARG = " l ", RIGHTARG = " r ", FUNCTION = " s ".f_" (id l) "__" (id r) ")"))])
         ps (for [t shadow-types]
              [(str "CREATE FUNCTION " s ".p_" (id t) "(" t ") RETURNS boolean LANGUAGE sql AS 'SELECT true'")
-              (for [op ["-" "~" "+"]] (str "CREATE OPERATOR " s "." op " (RIGHTARG = " t ", FUNCTION = " s ".p_" (id t) ")"))
+              (for [op prefix-operators] (str "CREATE OPERATOR " s "." op " (RIGHTARG = " t ", FUNCTION = " s ".p_" (id t) ")"))
               (str "CREATE FUNCTION " s ".s_" (id t) "(" t ", " t ") RETURNS " t " LANGUAGE sql AS 'SELECT $2'")
               (for [agg aggregates]
                 (str "CREATE AGGREGATE " s "." agg "(" t ") (SFUNC = " s ".s_" (id t) ", STYPE = " t ")"))])]
@@ -136,7 +138,7 @@
       (doseq [{:keys [op l r]} ops
               ;; OPERATOR(pg_catalog.op) resolves in pg_catalog alone
               :when (not (str/includes? (slurp (io/resource "pgmalli-next/ir.sql")) (str "OPERATOR(pg_catalog." op ")")))]
-        (is (some #{op} (concat infix-operators ["-" "~" "+"])) op)
+        (is (some #{op} (concat infix-operators prefix-operators)) op)
         (is (every? #(or (= "-" %) (shadowed %)) [l r]) (str op "(" l ", " r ")")))
       (doseq [{:keys [f]} aggs]
         (is (not (re-find (re-pattern (str "(?<![.\\w])" f "\\(")) (slurp (io/resource "pgmalli-next/ir.sql"))))
