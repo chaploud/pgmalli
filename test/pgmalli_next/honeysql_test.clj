@@ -3529,7 +3529,8 @@
     (is (= :unlifted-value (:kind (first (problems {:update :t :set {:ta []}})))) "and [] as (), no value")
     (is (= [] (problems {:insert-into :t :values [{:n [1]}]})))
     (is (= [true true false] (map #(m/validate (h/values-schema reg :t {}) {:n %} {:registry reg}) [1 [1] [1 2]])) "values-schema reads it so")
-    (is (m/validate (h/set-schema reg :t {}) {:n [1]} {:registry reg}) "set-schema too")))
+    (is (m/validate (h/set-schema reg :t {}) {:n [1]} {:registry reg}) "set-schema too")
+    (is (every? #(m/validate (h/values-schema reg :t {}) {:n %} {:registry reg}) [[[:lift 1]] '(1)]) "of [:lift v], or a list")))
 
 (deftest a-populate-documents-array-holds-what-a-column-of-its-element-type-takes
   (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "happy" "sad"]
@@ -3611,3 +3612,10 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\"" :pg/one-byte true}]] [:v [:string {:pg/type "character varying" :max 2}]]]}})]
     (is (= {:c ["should be one byte: an ASCII character, or \\ooo"] :v ["should be at most 2 characters"]}
            (me/humanize (m/explain :pg.public/t {:c "ab" :v "abc"} {:registry reg}))))))
+
+(deftest a-numeric-of-a-precision-inlined-generates-within-it
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n ['decimal? {:pg/type "numeric" :pg/precision 5 :pg/scale 2}]]
+                                                        [:s ['decimal? {:pg/type "numeric" :pg/precision 2 :pg/scale 5}]]]}})
+        rows (mg/sample (h/values-schema reg :t {:format {:inline true}}) {:registry reg :size 100 :seed 1})
+        v #(if (vector? %) (second %) %)]
+    (is (every? #(and (< (abs (double (v (:n %)))) 1000) (< (abs (double (v (:s %)))) 0.001)) rows))))

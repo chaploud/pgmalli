@@ -271,10 +271,12 @@ writes there as a subquery or a row of parameters (write `[:lift m]`; a scalar d
 string or a number, and the document `null`, read as nil, a `PGobject` of `jsonb`), a `bit(1)` column, read as a `Boolean` (write a
 `PGobject` of `bit`), and an array column, read as a vector (write a Java array, its NULLs nil, a
 `java.sql.Array`, whose elements are not checked, or a `PGobject` of the array type, the one way
-for a type no Java array goes as: an enum's, json's, time's ...), and a column HoneySQL would
-not write as the column under `:format` (one of a word PostgreSQL reads as a keyword, `order`,
-`user`, or of a dot in its name), keyed by its name as a string (`"order"`,
-[what a name refers to](#what-a-name-refers-to)); another spelling (`:group-id`) is refused. A column the database may fill is optional and takes
+for a type no Java array goes as: an enum's, json's, time's ...), and a column whose keyword
+HoneySQL would not write as the column under `:format` (one of a word PostgreSQL reads as a
+keyword, `order`, `user`, or of capitals, `Mixed`, unquoted), keyed by its name as a string
+(`"order"`, [what a name refers to](#what-a-name-refers-to)); another spelling (`:group-id`) is
+refused. A column no key writes (`"a.b"`, which HoneySQL writes `"a"."b"`) is left out, and one
+the row requires makes the schema take no row. A column the database may fill is optional and takes
 DEFAULT too: `[:default]`, or `:default` where the format writes it as the word (not where the format quotes it); one it writes (generated, identity ALWAYS) takes DEFAULT alone. Where a
 BEFORE row trigger runs for the write, every column is optional and takes nil
 ([types](types.md#names-in-the-registry)). In
@@ -287,7 +289,7 @@ in the query body, not in a row. `[:lift v]` is a value too, which HoneySQL send
 parameter, `v` of the column's type: an enum label goes as `[:lift :active]`, as HoneySQL
 writes a bare keyword as a column, and a json document as `[:lift {:a 1}]`, as it writes a map
 as a subquery. A vector or list not headed by `:lift` is a row of parameters, which no column
-takes, but `[x]`, which HoneySQL writes `(?)`, `x`. `mg/generate` gives values and `[:lift v]`, a NOT NULL column a trigger may fill a value
+takes, but `[x]` or `(x)`, which HoneySQL writes `(?)`, `x`. `mg/generate` gives values and `[:lift v]`, a NOT NULL column a trigger may fill a value
 too, and leaves out a column of whose values malli generates none (a `PGobject`, a type pgmalli
 does not type).
 Validate a row under the registry (`{:registry registry}`):

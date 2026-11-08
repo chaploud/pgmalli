@@ -250,6 +250,11 @@
                   :else (when-let [vs (seq (pgtypes/class-values cs))] (shape/merge-props t {:gen/elements (vec vs)}))))
           (#{:any :some} h) nil
           (= :maybe h) (if-let [x (generated-values r own (last t))] [:maybe x] :nil)
+          ;; a numeric(p, s)'s or a real's alternative of a generator of its own (an inlined literal's),
+          ;; which it bounds not: its own values, of own's hints, are generated
+          (and (let [cp (shape/column-props own)] (or (:pg/precision cp) (types/single-precision? (shape/type-name cp))))
+               (= :and h) (seq (select-keys (shape/props t) gen-keys)))
+          nil
           ;; of alternatives one of which is any value, the type is untold: none generated
           (= :or h) (when-not (some #(#{:any :some} (shape/head %)) (shape/alternatives t))
                       (some-> (seq (keep #(generated-values r own %) (shape/alternatives t))) (shape/either t)))
@@ -325,14 +330,16 @@
                      ;; [:lift v] sends v as one parameter, a keyword label and a map too
                      [:tuple {:error/fn lift-message :pg/type (:pg/type (shape/column-props c))} [:= {:error/message (str "should be :lift, [:lift v]: HoneySQL writes a vector of values as " (in-a-row :vector) ", which no column takes")} :lift] lifted]
                      lifted
-                     ;; [x], which HoneySQL writes (?), x's own value
-                     (when one [:tuple {:error/message "should be [v], which HoneySQL writes (?), v one value"} one])]))
+                     ;; [x] or (x), which HoneySQL writes (?), x's own value
+                     [:sequential {:min 1 :max 1 :error/message "should be [v], which HoneySQL writes (?), v one value"}
+                      (shape/either (remove nil? [one [:tuple [:= :lift] lifted]]) nil)]]))
           ;; [key required? type generated generated-required?] of each column, generated the values
           ;; it takes that malli generates (nil for none): of a column a trigger may fill, as
           ;; without the trigger, which fills what it fills alone
           columns (concat
                    (for [[k props c] written
                          :let [[plain lift _ one-written] (typed k c (or (shape/maybe? c) triggered?))
+                               one-written (when plain one-written)
                                [gen-plain _ gen-lifted] (typed k c (shape/maybe? c))
                                gen (some->> [(some->> gen-plain (generated-values r c))
                                              (some->> gen-lifted (generated-values r c) (vector :tuple [:= :lift]))]
