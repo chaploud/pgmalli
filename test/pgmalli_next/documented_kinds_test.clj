@@ -5,7 +5,8 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [pgmalli-next.honeysql :as h]
-            [pgmalli-next.impl.error :as error]))
+            [pgmalli-next.impl.error :as error]
+            pgmalli-next.impl.jdbc))
 
 (defn- made
   "The kinds a map literal {:kind :k ...} of files makes, re the pattern after {:kind :k."
