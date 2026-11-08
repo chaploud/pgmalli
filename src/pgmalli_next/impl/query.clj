@@ -1339,7 +1339,7 @@
               (some (fn [x]
                       (and (vector? x) (= 3 (count x))
                            (case op
-                             :is-null (and (#{:= :is} (first x)) (some (fn [[a b]] (and (of? a col) (nil? b))) [[(nth x 1) (nth x 2)] [(nth x 2) (nth x 1)]]))
+                             :is-null (let [[a negated?] (syntax/null-test x format)] (and (false? negated?) (of? a col)))
                              := (and (= := (first x)) (some (fn [[a b]] (and (of? a col) (same? v (literal-value b)))) [[(nth x 1) (nth x 2)] [(nth x 2) (nth x 1)]]))
                              false)))
                     conjuncts))
@@ -1442,7 +1442,7 @@
         own (for [[k t c] joined :when (= :left-join k) :let [alias (second (syntax/table-ref t opts))] pair (equalities c)] [alias pair])
         held-by (fn [held [a b]]
                   (when-let [[alias col :as ac] (column a)]
-                    (when (if (syntax/null-value? b nil)
+                    (when (if (syntax/null-test [:= a b] format)
                             (not (shape/maybe? (get-in by-alias [alias :columns col] [:maybe :any])))
                             (or (syntax/constant? b) (and (map? b) (uncorrelated? registry b items opts)) (contains? held (column b))))
                       ac)))

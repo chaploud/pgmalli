@@ -656,10 +656,8 @@
    refuses (42P18): tested so under sql/format's :inline alone, or cast ([:= [:cast :?x t] nil])."
   [ps {:keys [format]}]
   (for [{:keys [x]} (syntax/expression-nodes ps)
-        :when (and (vector? x) (= 3 (count x)) (#{:= :<> :not= :!= :is :is-not} (first x)))
-        :let [[_ a b] x]
-        [v other] [[a b] [b a]]
-        :when (syntax/null-value? other format)
+        :let [[v] (syntax/null-test x format)]
+        :when v
         :let [cast? (and (vector? v) (= :cast (first v)) (= 3 (count v)))
               k (syntax/param-key (if cast? (second v) v))]
         :when (and k (or cast? (:inline format)))]

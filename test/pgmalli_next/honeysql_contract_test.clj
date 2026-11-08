@@ -76,6 +76,13 @@
   (is (= ["NULL"] (sql/format :NULL)) "a keyword is written as spelt")
   (is (= ["INSERT INTO t AS u (a) VALUES (?)" 1] (sql/format {:insert-into [[:t :u] [:a]] :values [[1]]}))))
 
+(deftest null-test-is-the-is-null-honeysql-writes
+  (is (= [[:a false] [:a false] [:a true] [:a true] [:a false] [:a true] [:a false]]
+         (map #(syntax/null-test % nil) [[:= :a nil] [:= nil :a] [:<> :a nil] [:not= nil :a] [:is :a nil] [:is-not :a nil] [:is :a [:inline nil]]])))
+  (is (= [nil nil nil nil nil] (map #(syntax/null-test % nil) [[:= :a :null] [:= :a [:inline nil]] [:< :a nil] [:is nil :a] [:= :a :b]]))
+      "a = NULL compares, NULL IS a is no SQL")
+  (is (nil? (syntax/null-test [:is :a :null] {:quoted true})) "under :quoted :null is a column"))
+
 (deftest sql-format-writes-values-maps-as-write-problems-reads-them
   (let [message (str honeysql " writes :values maps differently: update write-problems in src/pgmalli_next/impl/problems.clj, "
                      "which takes a key one map lacks and another has as NULL, DEFAULT under :values-default-columns")]

@@ -1082,6 +1082,27 @@
   [v format]
   (or (nil? v) (#{[:inline nil] [:lift nil]} v) (sql-word? v "null" format)))
 
+(def ^:private null-test-sql
+  "Of [op v x] (left?) or [op x v], v a null-value?, whether the loaded HoneySQL writes it as x IS
+   NOT NULL (true) or x IS NULL (false); nil for neither (x = NULL, NULL IS x)."
+  (memoize (fn [op v left?]
+             (when-let [[_ negated] (try (re-matches #"(?i)pgmalli_x IS (NOT )?NULL"
+                                                     (first (sql/format-expr (if left? [op v :pgmalli_x] [op :pgmalli_x v]))))
+                                         (catch Exception _ nil))]
+               (some? negated)))))
+
+(defn null-test
+  "[operand negated?] of x where HoneySQL writes it as operand IS NULL (negated? false) or IS NOT
+   NULL: [:= a nil], [:<> nil a] and [:is a nil] (but [:= a :null], a = NULL), as sql/format-expr
+   writes them; nil for another x."
+  [x format]
+  (when (and (vector? x) (= 3 (count x)) (keyword? (first x)))
+    (let [[op a b] x]
+      (some (fn [[v operand left?]]
+              (when (null-value? v format)
+                (when-some [negated? (null-test-sql op v left?)] [operand negated?])))
+            [[b a false] [a b true]]))))
+
 (defn truth-value?
   "Whether HoneySQL writes v as TRUE, FALSE or UNKNOWN, which IS [NOT] tests a boolean for:
    true, false, [:inline b], or :true, :false or :unknown."
