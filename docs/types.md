@@ -14,7 +14,7 @@ For a schema `public`:
 | `:pg.public.<table>/insert` | what an INSERT may carry |
 | `:pg.public.<table>/update` | what an UPDATE may set |
 | `:pg.public/<view>` | a row of a view or materialized view |
-| `:pg.public/<enum>` | `[:enum ...]` |
+| `:pg.public/<enum>` | `[:enum ...]`, its labels as strings (`"active"`), as PostgreSQL names them; a row read holds them as keywords ([reading rows](reading-rows.md#the-one-reading-and-sending), `as-read`) |
 
 A row schema checks one row. PRIMARY KEY, UNIQUE and FOREIGN KEY hold across rows, and no
 schema checks them.

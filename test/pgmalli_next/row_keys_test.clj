@@ -6,11 +6,10 @@
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
-            [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.ir :as ir]
-            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! jdbc-url with-postgres]]))
+            [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! jdbc-url with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -71,7 +70,7 @@
     (let [ds (datasource)
           registry (pgmalli/registry (generated {:db *db*} "public"))]
       (doseq [q (concat queries using-chains)
-              row (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps})
+              row (jdbc/execute! ds (sql/format q) {:builder-fn (builder registry)})
               :let [schema (:row (h/analyze registry q))]]
         (is (= (set (keys row)) (set (map first (m/children (m/schema schema {:registry registry}))))) (pr-str q row))
         (is (m/validate schema row {:registry registry}) (pr-str q row))))))
@@ -90,7 +89,7 @@
                  {:truncate :tags}]
               return-keys [nil true ["name"]]
               :let [opts (cond-> {} return-keys (assoc :jdbc {:return-keys return-keys}))
-                    jdbc-opts (assoc (:jdbc opts) :builder-fn rs/as-unqualified-maps)
+                    jdbc-opts (assoc (:jdbc opts) :builder-fn (builder registry))
                     [_ row] (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))
                     [_ one] (m/children (m/schema (h/query-schema registry [] q (assoc opts :result :one)) {:registry registry}))]]
         (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
@@ -117,7 +116,7 @@
         (is (m/validate (into [:map] types) params {:registry registry}) (pr-str q))
         (is (some? (jdbc/execute! ds (sql/format q {:params params}))) (pr-str q)))
       (let [q {:select [[[:cast "ok" :feel] :f] [[:cast 2 :positive] :p] [[:cast :n :int] :i] [[:cast true :bool] :b]] :from [:notes]}
-            row (first (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps}))]
+            row (first (jdbc/execute! ds (sql/format q) {:builder-fn (builder registry)}))]
         (is (some? row))
         (is (= [:p] (keep #(when (= [:maybe :any] (last %)) (first %)) (rest (:row (h/analyze registry q opts)))))
             "each cast is typed but to a domain, which the generated file holds no entry of")
@@ -163,7 +162,7 @@
       (is (not (m/validate (:paths args) ["a"] {:registry registry})) "a vector the driver refuses")
       (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
       (let [q {:select [:paths :meta] :from [:docs]}
-            row (first (jdbc/execute! ds (sql/format q) {:builder-fn rs/as-unqualified-maps}))]
+            row (first (jdbc/execute! ds (sql/format q) {:builder-fn (builder registry)}))]
         (is (m/validate (:row (h/analyze registry q)) row) (pr-str (update-vals row class)))))))
 
 (deftest as-read-is-the-row-the-driver-returns
@@ -171,14 +170,14 @@
     (exec-sql! "CREATE TABLE odd_keys (id int PRIMARY KEY, line_no2 int, \"userId\" int, tags text[], doc jsonb, span interval, born date);
                 INSERT INTO odd_keys VALUES (1, 2, 3, '{a}', '{\"a\": 1}', '1 day', '2026-01-01');")
     (let [registry (pgmalli/registry (generated {:db *db*} "public"))
-          row (first (jdbc/execute! (datasource) ["SELECT * FROM odd_keys"] {:builder-fn rs/as-unqualified-maps}))
+          row (first (jdbc/execute! (datasource) ["SELECT * FROM odd_keys"] {:builder-fn (builder registry)}))
           schema (pgmalli/as-read registry :pg.public/odd_keys)]
       (is (= #{:id :line_no2 :userId :tags :doc :span :born} (set (keys row)) (set (map first (drop 2 schema)))))
       (is (m/validate schema row {:registry registry}) (pr-str (update-vals row class))))))
 
 (deftest a-null-column-keeps-its-key
   (when *db*
-    (let [row (jdbc/execute-one! (datasource) ["SELECT NULL::int AS group_id"] {:builder-fn rs/as-unqualified-maps})]
+    (let [row (jdbc/execute-one! (datasource) ["SELECT NULL::int AS group_id"] {:builder-fn (builder (pgmalli/registry {:registry {}}))})]
       (is (= {:group_id nil} row)))))
 
 (deftest jdbc-leaves-a-pooled-connection-as-it-was
@@ -196,3 +195,17 @@
       (is (= before (path)))
       (is (.getAutoCommit c))
       (.close c))))
+
+(deftest an-enum-reads-as-its-labels-as-keywords-whatever-its-schema-and-name
+  (when *db*
+    (exec-sql! "CREATE SCHEMA \"Odd s\";
+                CREATE TYPE \"Odd s\".\"a\"\"q\" AS ENUM ('it''s', 'b c');
+                CREATE TYPE feeling AS ENUM ('ok');
+                CREATE DOMAIN feeling_d AS feeling;
+                CREATE TABLE \"Odd s\".e (id int PRIMARY KEY, q \"Odd s\".\"a\"\"q\", qs \"Odd s\".\"a\"\"q\"[], f feeling, fd feeling_d, fs feeling[]);
+                INSERT INTO \"Odd s\".e VALUES (1, 'it''s', '{\"b c\", NULL}', 'ok', 'ok', '{ok}');")
+    (let [registry (pgmalli/registry (generated {:db *db*} "public" "Odd s"))
+          row (jdbc/execute-one! (datasource) ["SELECT * FROM \"Odd s\".e"] {:builder-fn (builder registry)})]
+      (is (= {:id 1 :q (keyword "it's") :qs [(keyword "b c") nil] :f :ok :fd :ok :fs [:ok]} row)
+          "a type of a schema off the search_path is named \"schema\".\"name\", a domain's column as its base type")
+      (is (m/validate (pgmalli/as-read registry "pg.Odd s/e") row {:registry registry})))))

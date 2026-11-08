@@ -42,9 +42,8 @@
 (def bigint-cmp (compared bigint))
 (def integer-cmp (compared integer))
 (def text [:string {:pg/type "text"}])
-(def mood [:enum {:pg/type "mood" :default "happy" :pg/default "happy"} "happy" "sad"])
-;; an argument's: a keyword label goes untyped, a String as varchar, which an enum refuses
-(def mood-arg [:enum {:pg/type "mood" :default :happy :pg/default "happy"} :happy :sad])
+;; a label as read, and as an argument takes it: a keyword goes untyped, a String as varchar, which an enum refuses
+(def mood [:enum {:pg/type "mood" :default :happy :pg/default "happy"} :happy :sad])
 (def pg-object jdbc/pg-object)
 (defn in-list [s] [:or [:sequential {:min 1} s] [:set {:min 1} s]])
 
@@ -218,7 +217,7 @@
     (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m :mood] [[:unnest :?s]]]}]}))
         "selected, as INSERT ... SELECT passes values")
     (is (= {:id bigint-cmp
-            :moods (in-list mood-arg)
+            :moods (in-list mood)
             :n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (args body)))
     (is (= {:g/id nick-assigned}
@@ -454,7 +453,7 @@
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id :?id] [:in :mood :?moods] [:> :score :?min]] :limit :?n}]
     (is (= {:id bigint-cmp
-            :moods (in-list mood-arg)
+            :moods (in-list mood)
             :min integer-cmp
             :n [:maybe [:int {:pg/type "bigint" :min 0}]]}
            (args body)))
@@ -588,7 +587,7 @@
     (testing note
       (is (= expected (check query)))))
   (testing "the types the same shapes give"
-    (is (= {:m mood-arg}
+    (is (= {:m mood}
            (args {:insert-into :users :columns [:group_id :mood :score] :values [[1 :?m 2]]})))
     (is (= {:gid integer-cmp}
            (args {:select [:id] :from [:users] :where [:= :?gid :group_id]}))
@@ -720,7 +719,7 @@
         "a star stands for columns the data does not count")))
 
 (deftest a-cast-to-an-alias-or-an-enum-has-its-type
-  (is (= [:map [:m [:enum {:pg/type "mood"} "happy" "sad"]] [:i int4]
+  (is (= [:map [:m [:enum {:pg/type "mood"} :happy :sad]] [:i int4]
           [:b [:boolean {:pg/type "boolean"}]] [:f [:double {:pg/type "double precision"}]]]
          (row {:select [[[:cast "sad" :mood] :m] [[:cast :id :int] :i] [[:cast true :bool] :b] [[:cast :score :float] :f]] :from [:users]}))))
 
@@ -728,7 +727,7 @@
   (is (= [:map [:a [:vector {:pg/type "bigint[]"} [:maybe :int]]]
           [:v [:vector {:pg/type "character varying[]"} [:maybe :string]]]
           [:t [:time/instant {:pg/type "timestamp with time zone"}]] [:d [:double {:pg/type "double precision"}]]
-          [:m [:vector {:pg/type "mood[]"} [:maybe [:enum {:pg/type "mood"} "happy" "sad"]]]]
+          [:m [:vector {:pg/type "mood[]"} [:maybe [:enum {:pg/type "mood"} :happy :sad]]]]
           [:l [:maybe :any]]]
          (row {:select [[[:cast :id [:raw " BIGINT [ ] "]] :a] [[:cast :id [:raw "varchar(10)[]"]] :v]
                         [[:cast :id [:raw "timestamp(3) with time zone"]] :t] [[:cast :id [:raw "double precision"]] :d]
@@ -784,9 +783,9 @@
     (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number")))
 
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
-  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: pgmalli types arguments as the SettableParameter extension of .* sends them"]
-                    [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as the SettableParameter extension of .* sends them"]
-                    [{:qualified? false} #":qualified\? false.* is no longer read: .*\{:builder-fn next.jdbc.result-set/as-unqualified-maps\}"]
+  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is no longer read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
+                    [{:stringtype :unspecified} #":stringtype.* is no longer read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
+                    [{:qualified? false} #":qualified\? false.* is no longer read: .*\{:builder-fn \(pgmalli-next.jdbc/builder registry\)\}"]
                     [{:kebab? true} #":kebab\? true.* is no longer read"]
                     [{:return-keys true} #":return-keys is no longer read: pass it as \{:jdbc \{:return-keys ...\}\}$"]]]
     (let [e (try (args {:select [:id] :from [:users]} o) nil (catch clojure.lang.ExceptionInfo e e))]
@@ -832,14 +831,15 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be a map of options" (h/analyze registry {:select [:id] :from [:users]} o)) (pr-str o)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be the map of options you pass to next.jdbc" (h/analyze registry {:select [:id] :from [:users]} {:jdbc []}))))
 
-(deftest a-builder-other-than-as-unqualified-maps-is-an-error-naming-it
-  (doseq [jdbc [{:builder-fn 'next.jdbc.result-set/as-unqualified-kebab-maps} {:builder-fn (fn [_ _])} {:label-fn str/lower-case} {:qualifier-fn str/lower-case}]]
+(deftest a-builder-other-than-pgmallis-is-an-error-naming-it
+  (doseq [jdbc [{:builder-fn 'next.jdbc.result-set/as-unqualified-maps} {:builder-fn (fn [_ _])} {:label-fn str/lower-case} {:qualifier-fn str/lower-case}]]
     (let [e (try (row {:select [:id] :from [:users]} (assoc opts :jdbc jdbc)) nil (catch clojure.lang.ExceptionInfo e e))]
-      (is (re-find #"is not read: pgmalli types rows as next.jdbc.result-set/as-unqualified-maps builds them" (str (ex-message e))) (pr-str jdbc))
+      (is (re-find #"is not read: pgmalli types rows as pgmalli-next.jdbc/builder builds them" (str (ex-message e))) (pr-str jdbc))
       (is (= :pgmalli.error/invalid-options (:pgmalli/error (ex-data e))))))
-  (is (= (row {:select [:id] :from [:users]})
-         (row {:select [:id] :from [:users]} (assoc opts :jdbc {:builder-fn 'next.jdbc.result-set/as-unqualified-maps})))
-      "the one builder, as the map an application passes next.jdbc holds it"))
+  (doseq [b ['pgmalli-next.jdbc/builder (with-meta (fn [_ _]) {:pgmalli-next.jdbc/builder true})]]
+    (is (= (row {:select [:id] :from [:users]})
+           (row {:select [:id] :from [:users]} (assoc opts :jdbc {:builder-fn b})))
+        "pgmalli's builder, as the map an application passes next.jdbc holds it, or its symbol where pgmalli-next.jdbc does not load")))
 
 (deftest a-derived-tables-and-a-set-operations-columns-are-typed
   (is (= [:map [:pending [:boolean {:pg/type "boolean"}]] [:all [:maybe [:boolean {:pg/type "boolean"}]]]]
@@ -918,7 +918,7 @@
         row #(:row (h/analyze reg {:select [[[:max %] :x]] :from [:t]} {}))]
     (is (= [:map [:x [:maybe text]]] (row :c)) "max(varchar) is max(text)")
     (is (= [:map [:x [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row :p)))
-    (is (= [:map [:x [:maybe [:enum {:pg/type "mood"} "ok" "sad"]]]] (row :m)) "a domain over an enum is the enum")))
+    (is (= [:map [:x [:maybe [:enum {:pg/type "mood"} :ok :sad]]]] (row :m)) "a domain over an enum is the enum")))
 
 (deftest a-domain-over-bit-or-numeric-is-read-as-the-driver-reads-its-base
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
@@ -2424,12 +2424,12 @@
     (is (= [:map [:l [:maybe [:string {:pg/type "text"}]]]] (row {:l [:lower :nick]}))
         "pg_catalog comes first on the search path: the schema's lower(text) gives way to its")
     (is (= [:map [:u [:maybe [:string {:pg/type "text"}]]]] (row {:u [:upper :mood]})) "an overload taking the schema's enum type")
-    (is (= [:map [:m [:maybe [:enum {:pg/type "mood"} "happy" "sad"]]]] (row {:m [:pick_mood]})) "a result of the schema's enum type")
-    (is (= [:map [:o [:maybe [:enum {:default "happy" :pg/default "happy" :pg/type "mood"} "happy" "sad"]]]] (row {:o [:+ :mood [:inline 1]]}))
+    (is (= [:map [:m [:maybe [:enum {:pg/type "mood"} :happy :sad]]]] (row {:m [:pick_mood]})) "a result of the schema's enum type")
+    (is (= [:map [:o [:maybe [:enum {:default :happy :pg/default "happy" :pg/type "mood"} :happy :sad]]]] (row {:o [:+ :mood [:inline 1]]}))
         "an operator of the schema's, of its enum type as its operand's")
     (is (= [:map
             [:uid [:maybe [:int {:pg/type "bigint"}]]]
-            [:feel [:maybe [:enum {:pg/type "mood"} "happy" "sad"]]]] (:row (h/analyze registry {:select [:*] :from [[[:user_rows] :r]]} opts)))
+            [:feel [:maybe [:enum {:pg/type "mood"} :happy :sad]]]] (:row (h/analyze registry {:select [:*] :from [[[:user_rows] :r]]} opts)))
         "RETURNS TABLE: its columns, the last argument left to its default")
     (is (= [:map [:n [:maybe [:int {:pg/type "bigint"}]]]] (:row (h/analyze both {:select [[[:other.note_count] :n]]} opts)))
         "a function qualified with its schema")
@@ -2475,7 +2475,7 @@
              (row {:select [[[f :score] :x]] :from [:users]} qualified))
           (str f "(score) is score cast to its own type, which keeps its table"))
       (is (= [:map [:x int4]] (row {:select [[[f :score] :x]] :from [:users]}))))
-    (is (= [:map [:x [:enum {:pg/type "mood"} "happy" "sad"]]] (row {:select [[[:mood [:inline "sad"]] :x]]}))
+    (is (= [:map [:x [:enum {:pg/type "mood"} :happy :sad]]] (row {:select [[[:mood [:inline "sad"]] :x]]}))
         "a type of the registry's")
     (is (= [:map [:x [:maybe [:int {:pg/type "integer" :min -2147483648 :max 2147483647}]]]] (row {:select [[[:int4 :?n] :x]]})))
     (is (= [:map [:x [:maybe [:time/local-date {:pg/type "date"}]]]] (row {:select [[[:date :closed_at] :x]] :from [:users]}))
@@ -2750,7 +2750,7 @@
   (is (= {:n [:maybe [:or 'decimal? 'integer? :int]]} (args {:select [:*] :from [[[:generate_series 1 :?n] :g]]}))
       "an int, an int8 or a numeric each picks its overload")
   (is (= {:at [:maybe
-               [:or :time/local-date-time :time/local-date :time/offset-time 'inst? :time/local-time :time/instant :time/offset-date-time]]}
+               [:or :time/local-date-time :time/local-date :time/offset-time :time/local-time :time/instant :time/offset-date-time]]}
          (args {:select [[[:timezone :nick :?at] :t]] :from [:users]}))))
 
 (deftest an-array-cast-casts-each-element
@@ -2803,7 +2803,7 @@
                                           :pg.a/t [:map {:pg/table "a.t"} [:id :int]]
                                           :pg.b/t [:map {:pg/table "b.t"} [:m [:any {:pg/type "a.mood"}]] [:ms [:vector {:pg/type "a.mood[]"} :any]]
                                                    [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]}})]
-    (is (= [:map [:m [:enum {:pg/type "a.mood"} "x" "y"]] [:ms [:vector {:pg/type "a.mood[]"} [:maybe [:enum "x" "y"]]]] [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]
+    (is (= [:map [:m [:enum {:pg/type "a.mood"} :x :y]] [:ms [:vector {:pg/type "a.mood[]"} [:maybe [:enum :x :y]]]] [:v [:any {:pg/type "a.v"}]] [:t [:any {:pg/type "a.t"}]]]
            (:row (h/analyze reg {:select [:m :ms :v :t] :from [:t]} {:schema "b"}))))))
 
 (deftest an-argument-tested-for-null-alone-stays-untyped-and-takes-nil-inlined-where-compared-too

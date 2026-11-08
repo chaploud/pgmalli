@@ -1238,7 +1238,7 @@
   (row-entries registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts))
 
 (defn row-schema
-  "The [:map ...] of one row a query returns, as next.jdbc's as-unqualified-maps builds it (for a write with no
+  "The [:map ...] of one row a query returns, as pgmalli-next.jdbc/builder builds it (for a write with no
    RETURNING, its update count); nil when that cannot be told, as
    docs/queries.md#the-row-a-query-returns lists. Columns an outer join may leave NULL are
    nullable; an expression has the type PostgreSQL resolves it to, nullable :any where pgmalli

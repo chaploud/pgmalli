@@ -1,6 +1,6 @@
 (ns pgmalli-next.impl.jdbc
   "The JDBC side: what a column comes back as and what PostgreSQL takes for it under the one
-   reading and sending (docs/reading-rows.md), and the row keys as-unqualified-maps gives.
+   reading and sending (pgmalli-next.jdbc), and the row keys its builder gives.
    as-read and the query namespaces both read columns and key rows here."
   (:require [clojure.string :as str]
             [honey.sql :as sql]
@@ -74,23 +74,21 @@
     :timeout :top})
 
 (def ^:private builder-only
-  (str "pgmalli types rows as next.jdbc.result-set/as-unqualified-maps builds them, keyed by the columns' names;"
-       " pass it to next.jdbc as {:builder-fn next.jdbc.result-set/as-unqualified-maps}"))
+  (str "pgmalli types rows as pgmalli-next.jdbc/builder builds them, keyed by the columns' names;"
+       " pass it to next.jdbc as {:builder-fn (pgmalli-next.jdbc/builder registry)}"))
 
 (def ^:private the-extension
   "https://github.com/chaploud/pgmalli-next/blob/main/docs/reading-rows.md#the-one-reading-and-sending")
 
-(def ^:private one-reading (str "pgmalli types rows as the ReadableColumn extension of " the-extension " reads them"))
+(def ^:private one-reading (str "pgmalli types rows as pgmalli-next.jdbc/builder reads them (" the-extension ")"))
 
-(def ^:private one-sending (str "pgmalli types arguments as the SettableParameter extension of " the-extension " sends them"))
+(def ^:private one-sending (str "pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them (" the-extension ")"))
 
 (defn- the-builder?
-  "Whether f is next.jdbc.result-set/as-unqualified-maps: the function, its var or its symbol,
-   which names it where next.jdbc does not load (babashka)."
+  "Whether f is a builder pgmalli-next.jdbc/builder made, or that function's symbol, which names
+   it where pgmalli-next.jdbc does not load (babashka, which has no pgjdbc)."
   [f]
-  (let [sym 'next.jdbc.result-set/as-unqualified-maps
-        v (try (requiring-resolve sym) (catch Exception _ nil))]
-    (or (= sym f) (and v (or (= v f) (= @v f))))))
+  (or (= 'pgmalli-next.jdbc/builder f) (and (fn? f) (true? (:pgmalli-next.jdbc/builder (meta f))))))
 
 (defn options!
   "opts when the function they go to takes them, the options of ks (option-entries' keys, in
@@ -217,11 +215,11 @@
           :else (shape/read-time (if pgjdbc? :inst :instant) schema))))
 
 (defn read-type
-  "A column's schema (without NULL) as the one reading (docs/reading-rows.md) makes it: dates a
-   LocalDate, times a LocalTime, a timestamp a LocalDateTime, a timestamptz an Instant, an array a vector of its
-   elements so read, json and jsonb parsed as the registry shapes them; or, pgjdbc?, as pgjdbc
-   returns them with no extension (dates and timestamps inst?, an array a java.sql.Array, json a
-   PGobject, time a java.sql.Time). Either way: timetz a java.sql.Time, an interval a PGInterval, citext,
+  "A column's schema (without NULL) as the one reading (pgmalli-next.jdbc/builder) makes it: dates a
+   LocalDate, times a LocalTime, a timetz an OffsetTime, a timestamp a LocalDateTime, a timestamptz an Instant, an array a vector of its
+   elements so read, json and jsonb parsed as the registry shapes them; or, pgjdbc?, as pgjdbc's
+   getObject returns them (dates, timestamps and times inst?, an array a java.sql.Array, json a
+   PGobject). Either way: an interval a PGInterval, citext,
    bit(n > 1) and bit varying a PGobject (these :any), real a Float, bit(1) a Boolean, numeric
    a Double for NaN."
   [schema pgjdbc?]
@@ -236,7 +234,6 @@
           driver-read [driver-read {:pg/type t}]
           ;; the driver's own object, whatever an override says the value is
           (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
-          (= :time/offset-time head) ['inst? {:pg/type t}]
           :else (driver-type schema pgjdbc?))))
 
 (declare write-type)
@@ -345,10 +342,10 @@
     (let [k (shape/kind schema)
           t (driver-type schema true)
           ;; a date or time column takes the java.time value its type is, which the one reading
-          ;; reads it as; a timetz one also the java.sql.Time the one reading leaves it as (inst?)
-          t (cond (= :time/offset-time k) (shape/update-and-base t #(shape/either (distinct [(shape/and-base schema) %]) %))
-                  (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k)) (shape/update-and-base t (constantly (shape/and-base schema)))
-                  :else t)
+          ;; reads it as
+          t (if (and (keyword? k) (= "time" (namespace k)) (not= :time/duration k))
+              (shape/update-and-base t (constantly (shape/and-base schema)))
+              t)
           n (some-> (shape/type-name (shape/column-props schema)) types/entry :name)
           ;; an enum's labels are the column's values; an argument's type keeps those a class sent
           ;; goes as (pgmalli-next.impl.args/labelled-type)
@@ -363,7 +360,7 @@
 ;;; rows as next.jdbc builds them
 
 (defn row-key
-  "The key next.jdbc's as-unqualified-maps gives a column labelled column: its name."
+  "The key pgmalli-next.jdbc/builder gives a column labelled column: its name."
   [column]
   (keyword column))
 
@@ -389,11 +386,24 @@
     (cond-> (read-type (cond-> s d (assoc (dec (count s)) [:any {:pg/type d}])) pgjdbc?)
       d (shape/merge-props {:pg/domain (str d "[]")}))))
 
+(defn- keyword-labels
+  "s with each reference to an enum type of schemas as the type's labels as keywords, as the one
+   reading reads them."
+  [schemas s]
+  (clojure.walk/postwalk (fn [f]
+                           (let [target (shape/ref-target schemas f)]
+                             (if (= :enum (shape/head target))
+                               ;; a default (malli's default-value transformer fills it) a label read
+                               (let [p (when (map? (second f)) (cond-> (second f) (string? (:default (second f))) (update :default keyword)))]
+                                 (into (cond-> [:enum] p (conj p)) (map keyword (shape/entries target))))
+                               f)))
+                         s))
+
 (defn column-read-type
-  "read-type of a column schema (without NULL) under the one reading. The registry's schemas and
-   opts (a write type's) are not read: the arguments are column-write-type's."
-  [_schemas s _opts]
-  (column-read-type* s false))
+  "read-type of a column schema (without NULL) under the one reading. opts (a write type's) are
+   not read: the arguments are column-write-type's."
+  [schemas s _opts]
+  (keyword-labels schemas (column-read-type* s false)))
 
 (defn- column-write-type*
   "write-type of a column schema (without NULL) of a registry's schemas."
@@ -444,7 +454,7 @@
           :else w)))
 
 (defn as-read
-  "The [:map ...] of a row as next.jdbc's as-unqualified-maps builds it; the options are documented on
+  "The [:map ...] of a row as pgmalli-next.jdbc/builder builds it; the options are documented on
    pgmalli-next.core/as-read."
   [registry name opts]
   (let [m (shape/without-gen (data-columns registry name))

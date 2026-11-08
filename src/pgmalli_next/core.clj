@@ -34,9 +34,8 @@
   ([generated] (reg/registry generated)))
 
 (defn as-read
-  "The [:map ...] of a table's or view's row as next.jdbc's as-unqualified-maps builds it under
-   the one reading docs/reading-rows.md gives (the ReadableColumn extension your application
-   installs): keyed by the columns' names (:group_id). Validate with {:registry registry}. name
+  "The [:map ...] of a table's or view's row as pgmalli-next.jdbc/builder builds it
+   (docs/reading-rows.md): keyed by the columns' names (:group_id). Validate with {:registry registry}. name
    is the row schema's (:pg.public/users) or the table as HoneySQL names it (:users in :schema,
    :public.users), as pgmalli-next.honeysql/values-schema takes it.
 

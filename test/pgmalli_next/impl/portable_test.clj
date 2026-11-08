@@ -29,7 +29,7 @@
       (is (= [:group_name [:maybe [:string {:pg/type "text"}]]] (nth r 5)))
       (is (= [:updated_at [:maybe [:time/local-date-time {:pg/type "timestamp"}]]] (last r)) "a timestamp as a LocalDateTime")
       (is (= [:born [:maybe [:time/local-date {:pg/type "date"}]]] (nth r 2)) "dates stay java.sql.Date under read-as-instant")
-      (is (m/validate r {:id 1 :group_id 1 :mood "sad" :seq 1 :score 1 :total 2 :born nil :closed_at nil :group_name nil :nick nil :referrer_id nil :updated_at nil :nick_upper nil} opts)))
+      (is (m/validate r {:id 1 :group_id 1 :mood :sad :seq 1 :score 1 :total 2 :born nil :closed_at nil :group_name nil :nick nil :referrer_id nil :updated_at nil :nick_upper nil} opts)))
     (is (some #{[:nick_upper [:maybe [:string {:pg/generated {:sql "upper((nick)::text)"} :pg/type "text"}]]]} (pgmalli/as-read registry :pg.sample/users {})))
     (is (= :line_no (first (nth (pgmalli/as-read (pgmalli/registry {:registry {:pg.public/order_items [:map {:pg/table "public.order_items"} [:line_no [:int {:pg/type "integer"}]]]}}) :pg.public/order_items {}) 2)))
         "_ read as -")))

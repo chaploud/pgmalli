@@ -18,7 +18,7 @@
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
 
 (def classes
-  "[class type schema categories]: the one sending (docs/reading-rows.md#the-one-reading-and-sending), the
+  "[class type schema categories]: the one sending (pgmalli-next.jdbc/install-sending!), the
    type a value of class goes to PostgreSQL as, :unknown for one sent untyped, which PostgreSQL
    types from where it goes; schema is the malli schema of a value of class, nil for a Java
    array. A value goes as its class's row, else as the first row of a superclass or interface of it.

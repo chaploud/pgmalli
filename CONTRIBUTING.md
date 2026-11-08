@@ -86,8 +86,8 @@ them. The oracle prints:
   reported by design.
 - where PostgreSQL runs the query, a return `h/query-schema` refuses: by default it must take what
   `execute!` returned, under `{:result :one}` what `execute-one!` returned.
-- the same queries' keys: those of `:row`'s map must equal the keys next.jdbc's
-  `as-unqualified-maps` gives the result set's columns.
+- the same queries' keys: those of `:row`'s map must equal the keys `pgmalli-next.jdbc/builder`
+  gives the result set's columns.
 - a `:pg/type` other than the type PostgreSQL describes (a
   domain as its base type); an untyped column passes.
 
@@ -100,7 +100,7 @@ and the schema's labels. It fails where PostgreSQL takes a value the argument's 
 (or, set by UPDATE and INSERT, `set-schema`'s and `values-schema`'s row) and the rules of
 docs/queries.md#stricter-than-postgresql do not leave out, and where `accept/holds?` says a
 value goes and PostgreSQL refuses its type. It sends each value as the one sending
-(docs/reading-rows.md) does, and fails where `sent-type`
+(`pgmalli-next.jdbc/install-sending!`) does, and fails where `sent-type`
 names a type other than PostgreSQL's `pg_typeof` of the value sent. Besides the oracle schema's
 columns, it creates the schema `matrix`, whose table `types` holds, for every type of
 `pgmalli-next.impl.types` (an extension's where the server has it) and the typmods numeric(10,2),

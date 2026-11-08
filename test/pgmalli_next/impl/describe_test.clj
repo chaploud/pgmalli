@@ -16,7 +16,7 @@
   (is (= ["numeric" "numeric"] [(pgmalli/describe [:or ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]) (pgmalli/describe 'decimal?)]))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"did you mean: :pg.sample/users" (pgmalli/describe registry :pg.sample/usres)))
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"through a registry" (pgmalli/describe :pg.sample/users)))
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #":pg.sample/mood is read through a registry" (pgmalli/describe (pgmalli/as-read registry :pg.sample/users))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo #":pg.sample/mood is read through a registry" (pgmalli/describe [:map [:mood [:ref :pg.sample/mood]]])))
   (is (= ["text[]" "posint[]"] (map #(pgmalli/describe %) [[:vector {:pg/type "text[]"} :string] [:vector {:pg/type "posint[]"} :int]]))
       "an array by its PostgreSQL type")
   (is (= {:k [:pg.x/t]} (pgmalli/describe (merge registry {:pg.x/t [:map [:k [:vector [:ref :pg.x/t]]]]}) :pg.x/t))

@@ -197,23 +197,20 @@ error to the people using your application, word it yourself.
 
 ## Rows read through next.jdbc
 
-pgjdbc does not return the registry's types. pgmalli types rows and arguments as the extension
-of [docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending) reads and sends them;
-install it in your application. `as-read` gives the row as next.jdbc then builds it, to
-validate results as they come back:
+pgjdbc does not return the registry's types. pgmalli types rows as `pgmalli-next.jdbc/builder`
+builds them and arguments as `pgmalli-next.jdbc/install-sending!` sends them
+([docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending)). `as-read` gives the
+row as the builder builds it, to validate results as they come back:
 
 ```clojure
 (def user-row (pgmalli/as-read registry :pg.public/users))
 
 (m/validate user-row
-            {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status "active"
+            {:id 1 :group_id 1 :email "ann@example.com" :nick nil :status :active
              :closed_at nil :created_at (java.time.Instant/EPOCH)}
             {:registry registry})
 ;; => true
 ```
-
-pgmalli types rows as next.jdbc's `as-unqualified-maps` builds them
-([docs/reading-rows.md](docs/reading-rows.md#the-builder)).
 
 There are two ways to check a row read from the database:
 
@@ -222,7 +219,7 @@ There are two ways to check a row read from the database:
 | `as-read` | the rows of one table, as next.jdbc returns them (recommended) |
 | `(:row (h/analyze ...))` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
 
-[docs/reading-rows.md](docs/reading-rows.md) has the extension and what each type comes back as.
+[docs/reading-rows.md](docs/reading-rows.md) has what each type comes back as.
 
 ## Generating test data
 
@@ -474,8 +471,9 @@ A `[:ref ...]` to your own schema needs a registry holding it:
 CI tests the oldest versions listed here.
 
 pgmalli depends on malli, test.check and data.json. HoneySQL, next.jdbc
-and pgjdbc are yours to add: `pgmalli-next.core` and `pgmalli-next.honeysql` load HoneySQL;
-generating needs none of them, but pgjdbc for a `:db` with `:jdbc-url`.
+and pgjdbc are yours to add: `pgmalli-next.core` and `pgmalli-next.honeysql` load HoneySQL,
+`pgmalli-next.jdbc` next.jdbc and pgjdbc; generating needs none of them, but pgjdbc for a `:db`
+with `:jdbc-url`.
 
 ## Limits
 

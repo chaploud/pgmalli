@@ -1,19 +1,17 @@
 (ns pgmalli-next.driver-types-test
   "as-read and query-schema against the rows next.jdbc builds from PostgreSQL's JDBC driver: the
    rows of matrix.types (pgmalli-next.oracle/matrix-schema!: every type pgmalli renders, as itself, an
-   array, a domain, an array of the domain), read through next.jdbc's as-unqualified-maps under
-   the one reading (docs/reading-rows.md, which pgmalli-next.test-db installs). JVM only (babashka has
+   array, a domain, an array of the domain), read through pgmalli-next.jdbc/builder. JVM only (babashka has
    no java.sql), so bb test does not list it."
   (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
             [next.jdbc :as jdbc]
             [next.jdbc.prepare :as prepare]
-            [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.oracle :as oracle]
-            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
+            [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres
   (fn [f]
@@ -38,20 +36,15 @@
         :when (= row (nth rows (first (:in e))))]
     [col (some-> v class .getName) v]))
 
-(def ^:private unreadable
-  "The columns whose arrays pgjdbc's getArray cannot read (docs/reading-rows.md#the-one-reading-and-sending)."
-  #{:a_money :a_bit_4})
-
 (deftest as-read-is-what-next-jdbc-builds
   (when *db*
     (with-open [con (jdbc/get-connection (datasource))]
       (doseq [:let [registry (pgmalli/registry (generated {:db *db*} "matrix"))]
               table [:types :v]
-              :let [read (into [] (remove #(and (vector? %) (unreadable (first %))))
-                               (pgmalli/as-read registry (keyword "pg.matrix" (name table))))
+              :let [read (pgmalli/as-read registry (keyword "pg.matrix" (name table)))
                     q {:select (map first (filter vector? (rest read)))
                        :from [(keyword (str "matrix." (name table)))] :order-by [:id]}
-                    rows (jdbc/execute! con (sql/format q) {:builder-fn rs/as-unqualified-maps})
+                    rows (jdbc/execute! con (sql/format q) {:builder-fn (builder registry)})
                     opts {:schema "matrix"}]]
         (testing table
           (is (= [] (vec (distinct (disagreements registry [:sequential read] rows)))))
@@ -67,8 +60,8 @@
       (with-open [con (jdbc/get-connection ds)]
         (.setAutoCommit con false)
         (let [;; as the one reading reads it, sent as the one sending sends it
-              cols (remove unreadable (map first (filter vector? (rest (pgmalli/as-read registry :pg.matrix/types)))))
-              row (jdbc/execute-one! con (sql/format {:select cols :from [:matrix.types] :where [:= :id 1]}) {:builder-fn rs/as-unqualified-maps})
+              cols (map first (filter vector? (rest (pgmalli/as-read registry :pg.matrix/types))))
+              row (jdbc/execute-one! con (sql/format {:select cols :from [:matrix.types] :where [:= :id 1]}) {:builder-fn (builder registry)})
               taken? (fn [k v] (with-open [ps (.prepareStatement con (str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2"))]
                                  (try (prepare/set-parameter v ps 1) (.executeUpdate ps) true
                                       (catch java.sql.SQLException e (oracle/refused e) false)
@@ -76,12 +69,14 @@
                                       (catch Exception _ false)
                                       (finally (.rollback con)))))
               {taken true not-taken false} (group-by #(taken? (key %) (val %)) (dissoc row :id))]
+          ;; an enum's label reads as a keyword, which HoneySQL writes in :values and :set as a column: [:lift v]
           (is (= [] (vec (for [[k v] taken
+                               :let [v (if (keyword? v) [:lift v] v)]
                                :when (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v))))]
                            [k (some-> v class .getName)]))))
           (let [array? #(re-find #"^d?a_" (name %))]
-            ;; bit(1) reads as a Boolean, money as a Double, an enum as a String: none goes back as its type
-            (is (= [:c_bit :c_money :d_bit :d_money :e] (sort (remove array? (keys not-taken)))) "the values PostgreSQL does not take back")
+            ;; bit(1) reads as a Boolean, money as a Double: neither goes back as its type
+            (is (= [:c_bit :c_money :d_bit :d_money] (sort (remove array? (keys not-taken)))) "the values PostgreSQL does not take back")
             ;; an array reads as a vector, which goes as jsonb
             (is (= (sort (filter array? (keys row))) (sort (filter array? (keys not-taken)))) "no array goes back")))))))
 

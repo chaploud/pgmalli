@@ -45,7 +45,7 @@
 
 (defn- sent-as
   "The type PostgreSQL gets v as, sent as the one sending sends it (the extension of
-   docs/reading-rows.md, which pgmalli-next.test-db installs): :unknown for a value sent untyped, nil
+   pgmalli-next.jdbc/install-sending!, which pgmalli-next.test-db calls): :unknown for a value sent untyped, nil
    for one it cannot send."
   [con v]
   (with-open [ps (.prepareStatement con "SELECT pg_typeof(?)::text")]

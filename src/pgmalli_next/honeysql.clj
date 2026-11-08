@@ -5,7 +5,7 @@
    and set-schema type a row written into a table.
 
    Names resolve as PostgreSQL resolves them (docs/queries.md#what-a-name-refers-to). Types are
-   what the one reading reads and the one sending sends (docs/reading-rows.md). The functions
+   what the one reading reads and the one sending sends (pgmalli-next.jdbc, docs/reading-rows.md). The functions
    take the options of docs/queries.md#options; a key or value not among them is an error."
   (:require [clojure.string :as str]
             malli.core
@@ -48,7 +48,7 @@
    :args      {arg schema} for every named parameter (:?id, [:param :id]), keyed as sql/format's
               :params takes them; one pgmalli cannot type is [:any {:pgmalli/untyped why}]
               (docs/queries.md#the-types-of-the-arguments)
-   :row       the [:map ...] of one row it returns, as next.jdbc's as-unqualified-maps builds it
+   :row       the [:map ...] of one row it returns, as pgmalli-next.jdbc/builder builds it
               (a write with no RETURNING, its update count); nil when that cannot be told
               (docs/queries.md#the-row-a-query-returns)
    :rows      {:min n :max m} of the rows it returns where the data tells, nil otherwise

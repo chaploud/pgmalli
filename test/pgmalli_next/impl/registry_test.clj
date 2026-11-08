@@ -101,7 +101,7 @@
 
 (deftest a-domain-over-a-type-the-driver-returns-otherwise-is-read-as-the-driver-returns-it
   (let [read (pgmalli/as-read (:registry generated) :pg.public/t {})
-        row {:n 1M :sm 2M :s "A" :tz (java.util.Date. 0) :j [] :d (java.time.LocalDate/of 2025 1 1) :ds [(java.time.LocalDate/of 2025 1 1)] :b :pgobject :p 1.5M :v "a" :vb :pgobject}]
+        row {:n 1M :sm 2M :s "A" :tz (java.time.OffsetTime/of 1 0 0 0 java.time.ZoneOffset/UTC) :j [] :d (java.time.LocalDate/of 2025 1 1) :ds [(java.time.LocalDate/of 2025 1 1)] :b :pgobject :p 1.5M :v "a" :vb :pgobject}]
     (is (m/validate read row {:registry (:registry generated)}) (pr-str (me/humanize (m/explain read row {:registry (:registry generated)}))))))
 
 (deftest a-bit-string-generates-digits-within-its-length

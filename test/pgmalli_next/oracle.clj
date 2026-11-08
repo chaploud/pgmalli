@@ -19,7 +19,7 @@
    Where PostgreSQL runs a case, the return of query-schema (default and {:result :one}) must
    take what next.jdbc's execute! and execute-one! returned, and the keys of row-schema's map
    must be those the builder gives the result set's columns, read with
-   next.jdbc's as-unqualified-maps: a case it refuses carries
+   pgmalli-next.jdbc/builder: a case it refuses carries
    :return-rejections; where row-schema names or types a column
    otherwise than the ResultSet's metadata, :column-mismatches (and how many it types,
    :columns-typed). arg-matrix sends fixed values as each argument beside each column of the
@@ -138,7 +138,9 @@
 
 ;;; the catalog
 
-(def ^:private unqualified {:builder-fn rs/as-unqualified-maps})
+(def ^:private unqualified
+  ;; the catalog's arrays read as vectors
+  {:builder-fn (test-db/builder (pgmalli/registry {:registry {}}))})
 
 (defn- schemas
   "The oracle schema's schemas: all but PostgreSQL's own and the argument matrix's."
@@ -268,13 +270,13 @@
         (some #(let [v (gen %)] (when (not= ::none v) v)) alts)))))
 
 (defn- verdict
-  "PostgreSQL's verdict on [sql & params]: :ok with the :rows it matched (selected or
+  "PostgreSQL's verdict on [sql & params], its rows read by read (next.jdbc's options): :ok with the :rows it matched (selected or
    written) and the :result execute! returned, or the kind of problem check would report for it,
    or :other; :planned? where it plans. :timeout where it ran out of time, which says neither."
-  [^java.sql.Connection conn [sql & params :as sqlvec]]
+  [^java.sql.Connection conn read [sql & params :as sqlvec]]
   (try
     (jdbc/execute! conn (into [(str "EXPLAIN " sql)] params))
-    (assoc (try (let [r (jdbc/execute! conn sqlvec unqualified)]
+    (assoc (try (let [r (jdbc/execute! conn sqlvec read)]
                   {:pg :ok :rows (or (:next.jdbc/update-count (first r)) (count r)) :result r})
                 (catch PSQLException e
                   (case (.getSQLState e)
@@ -383,7 +385,7 @@
    map are not those of the result set's columns (key-mismatch, as :result :keys)."
   [registry ^java.sql.Connection conn {:keys [query]} opts arg-keys sqlvec rows]
   (vec (for [[result run] [[:many (constantly rows)]
-                           [:one #(jdbc/execute-one! conn sqlvec unqualified)]
+                           [:one #(jdbc/execute-one! conn sqlvec {:builder-fn (test-db/builder registry)})]
                            [:keys nil]]
              :let [opts (cond-> opts (= :one result) (assoc :result :one))
                    r (try (if run
@@ -597,6 +599,7 @@
    the latter), on db."
   [db cs seed]
   (let [registry (registry db)
+        read {:builder-fn (test-db/builder registry)}
         [doms listed] (with-open [conn (jdbc/get-connection (test-db/datasource db))]
                         [(domains conn) (listed (relations conn))])]
     (into []
@@ -617,7 +620,7 @@
                         (instance? Exception sqlvec) (assoc c :format mode :outcome :unformatted :format-error (ex-message sqlvec))
                         (= sqlvec (:sqlvec @before)) (assoc (:result @before) :format mode)
                         :else
-                        (let [{:keys [result] :as v} (cond-> (verdict conn sqlvec) (= :params mode) (uncast-string (:verdict @before)))
+                        (let [{:keys [result] :as v} (cond-> (verdict conn read sqlvec) (= :params mode) (uncast-string (:verdict @before)))
                               problems (vec (remove #(= :unread-clause (:kind %)) (:problems (h/analyze registry query opts))))
                               returned (when result (return-rejections registry conn c opts (vec (keys args)) sqlvec result))
                               {described :mismatches typed :typed} (when result (column-mismatches registry conn doms query opts sqlvec))

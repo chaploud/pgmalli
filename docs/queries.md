@@ -263,9 +263,9 @@ Where your code passes a whole row, a map built at run time for `:values` or `:s
 (`:users` in `:schema`, `:app.users`) or as the registry does (`:pg.public/users`). Each column
 is typed as an argument assigned to it (what your application sends, held to the column's range) and keyed
 by the column's name (`:group_id`), the one key a row is read with
-([the builder](reading-rows.md#the-builder)), so a row read is written back as it is, but for an enum
-column, read as a String, which pgjdbc sends as `varchar` (write its label as `[:lift :happy]`
-or a `PGobject`), a `bit(1)` column, read as a `Boolean` (write a `PGobject` of `bit`), and an
+([the one reading](reading-rows.md#the-one-reading-and-sending)), so a row read is written back as it is, but for an enum
+column, read as a keyword, which HoneySQL writes in `:values` and `:set` as a column (write its
+label as `[:lift :happy]`), a `bit(1)` column, read as a `Boolean` (write a `PGobject` of `bit`), and an
 array column, read as a vector (write a Java array); another
 spelling (`:group-id`) is refused. Where HoneySQL would not write that
 keyword to the column under `:format`, the key is the name as a string
@@ -302,7 +302,7 @@ Validate a row under the registry (`{:registry registry}`):
 
 An argument takes its column's own values as pgmalli reads them: the `:time` type of a date or
 timestamp, an enum's labels, a `varchar`'s strings. What else reaches the column is decided
-by the one sending, which your application installs
+by the one sending, `pgmalli-next.jdbc/install-sending!`
 ([reading-rows.md](reading-rows.md#the-one-reading-and-sending)). Each class goes as one type,
 `:unknown` for a value sent untyped, which PostgreSQL types from where it goes:
 
@@ -382,8 +382,8 @@ type inside the `[:maybe ...]`.
 
 ## The row a query returns
 
-`:row` is the `[:map ...]` of one row, as next.jdbc's `as-unqualified-maps` builds
-it ([the builder](reading-rows.md#the-builder)): keyed by the labels of its columns, a label
+`:row` is the `[:map ...]` of one row, as `pgmalli-next.jdbc/builder` builds
+it ([the one reading](reading-rows.md#the-one-reading-and-sending)): keyed by the labels of its columns, a label
 of several columns one key, the last column's (a `:duplicate-column`, [stricter than
 PostgreSQL](#stricter-than-postgresql)). A column an outer
 join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
@@ -481,7 +481,7 @@ or its negator) of values that are not NULL. An argument of the application's ow
                                     [[:exists {:select [1] :from [:posts]}] :any_posts] [[:cast "active" :user_status] :s]
                                     [[:upper :nick] :shout]]
                            :from [:users]}))
-;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [:time/instant #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} "active" "closed"]] [:shout [:maybe [:string #:pg{:type "text"}]]]]
+;; => [:map [:name [:string #:pg{:type "character varying"}]] [:last [:maybe [:time/instant #:pg{:type "timestamp with time zone"}]]] [:any_posts [:boolean #:pg{:type "boolean"}]] [:s [:enum #:pg{:type "user_status"} :active :closed]] [:shout [:maybe [:string #:pg{:type "text"}]]]]
 ```
 
 Its columns are read as `pgmalli-next.core/as-read` reads them ([the one reading](reading-rows.md#the-one-reading-and-sending)):
@@ -723,7 +723,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   `t` lacks (`u.name` for `u.nick`). For the row's text, write `[:cast :t :text]`.
 - Columns of one label in the row a query returns (`{:select [:q.id :s.id] ...}`, or `*` over
   two tables that each have `id`): a `:duplicate-column`. PostgreSQL returns them all, but
-  next.jdbc's `as-unqualified-maps` reads them into one key, keeping the last column's value
+  next.jdbc's `as-unqualified-maps`, which `pgmalli-next.jdbc/builder` is, reads them into one key, keeping the last column's value
   without a word. Give each an alias of its own (`[:s.id :s_id]`). The row is a statement's,
   a set operation's first member's (whose labels name its columns), or RETURNING's; a
   subquery's or a CTE's columns count where `*` returns them.

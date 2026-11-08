@@ -100,7 +100,7 @@
                 (str "PostgreSQL refuses a generated " t " " (pr-str c) ": fix its entry in src/pgmalli_next/impl/types.clj/types"))))
         (doseq [[table t] tables]
           (testing t
-            (let [rows (jdbc/execute! ds [(str "SELECT * FROM " table)] {:builder-fn rs/as-unqualified-maps})
+            (let [rows (jdbc/execute! ds [(str "SELECT * FROM " table)] {:builder-fn (test-db/builder registry)})
                   schema (pgmalli/as-read registry (keyword "pg.public" table))]
               (is (= 3 (count rows)))
               (is (m/validate [:sequential schema] rows {:registry registry})

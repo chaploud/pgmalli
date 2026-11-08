@@ -8,7 +8,7 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
-            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]])
+            [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! with-postgres]])
   (:import (org.postgresql.util PGobject)))
 
 (use-fixtures :once
@@ -47,12 +47,16 @@
 
 (defn- pg-object [type value] (doto (PGobject.) (.setType type) (.setValue value)))
 
+(def ^:private builder-of
+  ;; the schema's enum types are the fixture's: one registry per database
+  (memoize (fn [_db] (builder (registry)))))
+
 (defn- runs!
   "Runs q with params and opts' :format, rolled back; throws what PostgreSQL refuses."
   [q params opts]
   (with-open [con (jdbc/get-connection (datasource))]
     (.setAutoCommit con false)
-    (try (jdbc/execute! con (sql/format q (assoc (:format opts) :params params)) {:builder-fn rs/as-unqualified-maps})
+    (try (jdbc/execute! con (sql/format q (assoc (:format opts) :params params)) {:builder-fn (builder-of *db*)})
          (finally (.rollback con)))))
 
 (defn- accepted?
@@ -460,33 +464,44 @@
 
 (deftest a-date-and-time-sent-and-read-is-the-same-whatever-the-jvms-time-zone
   (when *db*
-    (let [instant (java.time.Instant/parse "2026-03-08T07:30:00Z")
-          local (java.time.LocalDateTime/of 2026 1 1 0 30)
+    (let [instant (java.time.Instant/parse "2026-03-08T07:30:00.123456Z")
+          local (java.time.LocalDateTime/of 2026 1 1 0 30 0 123456000)
           day (java.time.LocalDate/of 2026 1 1)
-          time (java.time.LocalTime/of 1 30)
+          time (java.time.LocalTime/of 1 30 0 123456000)
+          offset-time (java.time.OffsetTime/of 1 30 0 500000000 (java.time.ZoneOffset/ofHours 9))
           saved (java.util.TimeZone/getDefault)]
       (try
         (doseq [zone ["UTC" "Asia/Tokyo" "America/New_York"]]
           ;; pgjdbc sets the session's time zone to the JVM's when it connects
           (java.util.TimeZone/setDefault (java.util.TimeZone/getTimeZone zone))
           (with-open [c (jdbc/get-connection (datasource *db*))]
-            (jdbc/execute! c ["CREATE TEMP TABLE when_ (tz timestamptz, ts timestamp, d date, t time)"])
-            (jdbc/execute! c ["INSERT INTO when_ VALUES (?, ?, ?, ?)" instant local day time])
-            (is (= {:tz instant :ts local :d day :t time}
-                   (jdbc/execute-one! c ["SELECT * FROM when_"] {:builder-fn rs/as-unqualified-maps}))
+            (jdbc/execute! c ["CREATE TEMP TABLE when_ (tz timestamptz, ts timestamp, d date, t time, tt timetz, ta time[])"])
+            (jdbc/execute! c ["INSERT INTO when_ VALUES (?, ?, ?, ?, ?, ARRAY[?::time])" instant local day time offset-time time])
+            (is (= {:tz instant :ts local :d day :t time :tt offset-time :ta [time]}
+                   (jdbc/execute-one! c ["SELECT * FROM when_"] {:builder-fn (builder-of *db*)}))
                 zone)
-            (is (= {:tz "2026-03-08 07:30:00" :ts "2026-01-01 00:30:00" :d "2026-01-01"}
-                   (jdbc/execute-one! c ["SELECT (tz AT TIME ZONE 'UTC')::text AS tz, ts::text AS ts, d::text AS d FROM when_"]
-                                      {:builder-fn rs/as-unqualified-maps}))
+            (is (= {:tz "2026-03-08 07:30:00.123456" :ts "2026-01-01 00:30:00.123456" :d "2026-01-01" :tt "01:30:00.5+09"}
+                   (jdbc/execute-one! c ["SELECT (tz AT TIME ZONE 'UTC')::text AS tz, ts::text AS ts, d::text AS d, tt::text AS tt FROM when_"]
+                                      {:builder-fn (builder-of *db*)}))
                 (str zone ": the values PostgreSQL holds"))))
         (finally (java.util.TimeZone/setDefault saved))))))
 
-(deftest infinity-reads-as-the-java-time-types-max-and-min
+(deftest infinity-reads-as-the-java-time-types-max-and-min-and-is-written-back-as-infinity
   (when *db*
     (with-open [c (jdbc/get-connection (datasource *db*))]
-      (is (= {:ts java.time.LocalDateTime/MAX :tz java.time.Instant/MAX :d java.time.LocalDate/MAX
-              :nts java.time.LocalDateTime/MIN :ntz java.time.Instant/MIN :nd java.time.LocalDate/MIN}
-             (jdbc/execute-one! c ["SELECT 'infinity'::timestamp AS ts, 'infinity'::timestamptz AS tz, 'infinity'::date AS d,
-                                           '-infinity'::timestamp AS nts, '-infinity'::timestamptz AS ntz, '-infinity'::date AS nd"]
-                                {:builder-fn rs/as-unqualified-maps}))
-          "pgjdbc's time for infinity would read as a time in the year 292278994 of the JVM's zone"))))
+      (let [row (jdbc/execute-one! c ["SELECT 'infinity'::timestamp AS ts, 'infinity'::timestamptz AS tz, 'infinity'::date AS d,
+                                              '-infinity'::timestamp AS nts, '-infinity'::timestamptz AS ntz, '-infinity'::date AS nd,
+                                              ARRAY['infinity'::timestamptz] AS tza"]
+                                   {:builder-fn (builder-of *db*)})]
+        (is (= {:ts java.time.LocalDateTime/MAX :tz java.time.Instant/MAX :d java.time.LocalDate/MAX
+                :nts java.time.LocalDateTime/MIN :ntz java.time.Instant/MIN :nd java.time.LocalDate/MIN
+                :tza [java.time.Instant/MAX]}
+               row)
+            "pgjdbc reads infinity as OffsetDateTime's MAX and MIN, which no Instant is")
+        (is (= {:ts "infinity" :tz "infinity" :d "infinity" :nts "-infinity" :ntz "-infinity" :nd "-infinity"}
+               (jdbc/execute-one! c ["SELECT ?::timestamp::text AS ts, ?::timestamptz::text AS tz, ?::date::text AS d,
+                                             ?::timestamp::text AS nts, ?::timestamptz::text AS ntz, ?::date::text AS nd"
+                                     (:ts row) (:tz row) (:d row) (:nts row) (:ntz row) (:nd row)]
+                                    {:builder-fn (builder-of *db*)}))
+            "an Instant's MAX and MIN go as infinity, which no OffsetDateTime in UTC holds")))))
+
