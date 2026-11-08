@@ -58,6 +58,7 @@ Column schemas carry where they came from:
 | `:pg/type` | the column's type, as PostgreSQL prints it, without its length (`"character varying"`) |
 | `:pg/domain` | the domain the column is declared of (`"email"`), or `"email[]"` for an array of it; a domain of another schema schema-qualified |
 | `:pg/max-length` | `n` of a `varchar(n)`, `char(n)`, `bit(n)` or `bit varying(n)`, which values generate within |
+| `:pg/precision`, `:pg/scale` | `p` and `s` of a `numeric(p, s)`, which values generate within |
 | `:pg/default` | a literal, or `{:sql "now()"}`, the default expression's SQL as the database prints it |
 | `:default` | malli's default, for a literal default |
 | `:pg/identity` | `:always`, `:default` or `:serial` |

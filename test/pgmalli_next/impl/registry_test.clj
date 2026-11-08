@@ -209,3 +209,11 @@
     (dotimes [_ 20] (let [f (future (m/validate s big))] (Thread/sleep 5) (future-cancel f)))
     @watching
     (is (<= @peak 2) "callers interrupted waiting leave no more large stacks running than its permits")))
+
+(deftest a-numeric-of-a-precision-generates-within-it-of-its-scale
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:n ['decimal? {:pg/type "numeric" :pg/precision 5 :pg/scale 2}]]
+                                                        [:ns [:vector {:pg/type "numeric[]" :pg/precision 4 :pg/scale 2} 'decimal?]]]}})
+        rows (mg/sample :pg.public/t {:registry reg :size 50 :seed 1})]
+    (is (every? #(and (<= (abs (double %)) 999.99) (<= (.scale ^BigDecimal %) 2)) (map :n rows)) "numeric(5, 2)")
+    (is (every? #(<= (abs (double %)) 99.99) (mapcat :ns rows)) "numeric(4, 2)[]")))

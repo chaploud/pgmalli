@@ -35,7 +35,9 @@ WITH RECURSIVE cols AS (
            'identity', CASE a.attidentity WHEN 'a' THEN 'ALWAYS' WHEN 'd' THEN 'BY DEFAULT' END,
            -- a varchar(n)'s, char(n)'s, bit(n)'s or bit varying(n)'s n, the typmod of an array column its element type's
            'max_length', CASE WHEN COALESCE(NULLIF(b.typelem, 0::oid), b.oid) IN ('varchar'::regtype::oid, 'bpchar'::regtype::oid) AND m.typmod > 4 THEN m.typmod - 4
-                              WHEN COALESCE(NULLIF(b.typelem, 0::oid), b.oid) IN ('bit'::regtype::oid, 'varbit'::regtype::oid) AND m.typmod > 0 THEN m.typmod END
+                              WHEN COALESCE(NULLIF(b.typelem, 0::oid), b.oid) IN ('bit'::regtype::oid, 'varbit'::regtype::oid) AND m.typmod > 0 THEN m.typmod END,
+           -- a numeric(p, s)'s typmod less its header, p in the high 16 bits, s (signed) in the low
+           'numeric_typmod', CASE WHEN COALESCE(NULLIF(b.typelem, 0::oid), b.oid) = 'numeric'::regtype::oid AND m.typmod >= 4 THEN m.typmod - 4 END
          ) AS col
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace

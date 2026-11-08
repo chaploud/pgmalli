@@ -134,6 +134,12 @@
                                 (= :max-bits typmod) {:gen/schema [:vector {:min 1 :max (min 8 (or n 8))} [:enum "0" "1"]] :gen/fmap #(apply str %)}
                                 ;; within a varchar(n)'s n, which the schema does not check: the database refuses a longer value
                                 (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) (min 24 (or n 24)))}))
+                ;; a numeric(p, s)'s within it, of its scale: the database refuses a longer one
+                decimal? (when-let [pr (:pg/precision p)]
+                           (let [s (:pg/scale p 0)
+                                 lim (- (.pow 10M (int (- pr s))) (.movePointLeft 1M (int s)))]
+                             {:gen/schema [:double {:min (- (double lim)) :max (double lim)}]
+                              :gen/fmap #(let [d (.setScale (bigdec %) (int s) java.math.RoundingMode/DOWN)] (if (pos? (.compareTo (.abs d) lim)) lim d))}))
                 ;; a real: a Float within the range a value of one is held to
                 :double (when (= "real" (:name (types/entry (shape/type-name p))))
                           {:gen/schema [:double {:min -1e6 :max 1e6}] :gen/fmap float})
@@ -159,7 +165,7 @@
       ;; (varchar(n)[]'s n, bit(n)[]'s), which the array's properties hold
       (and (= :vector t) (vector? s))
       (let [e (last s)
-            told (shape/merge-props e (cond-> (select-keys p [:pg/max-length])
+            told (shape/merge-props e (cond-> (select-keys p [:pg/max-length :pg/precision :pg/scale])
                                         (and (not (:pg/type (shape/props e))) (types/element (:pg/type p))) (assoc :pg/type (types/element (:pg/type p)))))
             hinted (select-keys (shape/props (gen-hints told false where)) [:gen/min :gen/max :gen/gen :gen/schema :gen/elements :gen/fmap])]
         (assoc s (dec (count s)) (cond-> (gen-hints e false where) (seq hinted) (shape/merge-props hinted))))

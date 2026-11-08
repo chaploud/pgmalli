@@ -65,6 +65,7 @@
         enum (some #(when (= :enum (:fact %)) %) facts)
         unknown (some #(when (= :unknown-type (:fact %)) %) facts)
         n (some #(when (= :max-length (:fact %)) (:max %)) facts)
+        ps (some #(when (= :precision (:fact %)) %) facts)
         base (cond
                ;; a name of the user's registry or of the file's (:my.app/code, :pg.public/mood) a
                ;; reference, which carries properties: [k {...}] of a name is no schema; malli's and
@@ -80,6 +81,9 @@
                             :pg/domain domain
                             ;; a varchar(n)'s, char(n)'s or bit's n, which no schema checks: the database does
                             :pg/max-length (when-not override n)
+                            ;; a numeric(p, s)'s, which values generate within
+                            :pg/precision (when-not override (:precision ps))
+                            :pg/scale (when-not override (:scale ps))
                             :pg/default (cond (some? default) default default-sql {:sql default-sql})
                             ;; a column override's schema is the user's: the SQL literal is no value known of it
                             :default (when (and (some? default) (not override)) (default-value base default))

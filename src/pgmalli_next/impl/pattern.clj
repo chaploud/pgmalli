@@ -13,6 +13,7 @@
      :enum         column of an enum type (or an array of it) {:type-name :values :array?}
      :unknown-type type outside the mapping table (rendered as :any) {:type :type-schema (when not pg_catalog's or the schema's own)}
      :max-length   varchar(n), char(n), bit(n) or bit varying(n) {:max}
+     :precision    numeric(p, s) {:precision p :scale s}
      :not-null     NOT NULL NOT VALID (PostgreSQL 18), the column nullable {:constraint :valid? false}
      :primary-key  table primary key                      {:columns :deferrable?}
      :exclude      EXCLUDE constraint                     {:method :partial? :elements [{:column :op}]}
@@ -50,7 +51,7 @@
 
 (defn- column-facts
   "The :column fact of a column and those of its type."
-  [base {cname :name :keys [data_type domain type_schema type_extension is_nullable not_null_not_valid default_value max_length identity generated_expr position]} enums]
+  [base {cname :name :keys [data_type domain type_schema type_extension is_nullable not_null_not_valid default_value max_length numeric_typmod identity generated_expr position]} enums]
   (let [[_ n array?] (types/type-parts data_type)
         ident (types/unquoted n)
         base (assoc base :column cname)
@@ -72,6 +73,9 @@
               (not (#{nil "pg_catalog" (:schema base)} type_schema)) (assoc :type-schema type_schema)))
       (and max_length (:typmod (types/entry n)))
       (conj (merge base {:fact :max-length :max max_length}))
+      numeric_typmod
+      (conj (merge base {:fact :precision :precision (bit-and (bit-shift-right numeric_typmod 16) 0xffff)
+                         :scale (let [s (bit-and numeric_typmod 0xffff)] (if (> s 1023) (- s 2048) s))}))
       ;; the column is nullable: rows from before the constraint may hold NULL
       not_null_not_valid
       (conj (merge base {:fact :not-null :constraint not_null_not_valid :valid? false})))))
