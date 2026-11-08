@@ -3431,3 +3431,9 @@
     (doseq [q [{:select [:*] :from [:t] :where [:= :o :?x]} {:select [:*] :from [:t] :where [:= :rc :?x]}
                {:select [[[:coalesce :o :?x] :c]] :from [:t]} {:select [[[:coalesce :rc :?x] :c]] :from [:t]}]]
       (is (= [false false true] (map #(m/validate (t q) % {:registry reg}) [-1 4294967296 1])) (pr-str q)))))
+
+(deftest a-subquery-nested-deep-is-counted-once
+  (let [nested (reduce (fn [q _] {:select [:id] :from [[q :q]]}) {:select [:id] :from [:users]} (range 30))
+        f (future (h/analyze registry nested opts))]
+    (is (not= ::slow (deref f 20000 ::slow)) "each statement's rows counted once, not once per way an enclosing one reads them")
+    (future-cancel f)))

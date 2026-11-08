@@ -1582,6 +1582,14 @@
               (or unbounded-limit? (contains? stmt :offset) (and write? (:returning stmt))) (assoc :min 0))]
       (when (and plain? (:max m)) (cond-> m (< (:max m) (:min m 0)) (assoc :min (:max m)))))))
 
+(defn- row-count*
+  [registry stmt opts]
+  (or (counted-rows registry stmt opts)
+      ;; raw SQL may write rows past the limit (UNION ALL after it)
+      (when (and (map? stmt) (not (contains? stmt :raw)))
+        (when-let [n (some->> (seq (keep #(row-limit stmt %) [:limit :fetch])) (apply min))]
+          {:min 0 :max n}))))
+
 (defn row-count
   "{:min n :max m} of the rows a statement returns where its data tells, nil otherwise; where
    any part may be a function that returns a set or raw SQL (plain-value?), or GROUP BY has
@@ -1591,10 +1599,7 @@
    as a VALUES list has rows, up to as many of an INSERT returning (a trigger, a rule or ON
    CONFLICT may skip one); of a set operation, as set-operation-count counts its members'; at most
    :limit or :fetch, from none where a parameter gives the limit or OFFSET skips some, whatever
-   else the statement holds."
+   else the statement holds. Once per call (once): a statement's count is read by each of its
+   enclosing statements', in several ways, which would make it exponential in the nesting."
   [registry stmt opts]
-  (or (counted-rows registry stmt opts)
-      ;; raw SQL may write rows past the limit (UNION ALL after it)
-      (when (and (map? stmt) (not (contains? stmt :raw)))
-        (when-let [n (some->> (seq (keep #(row-limit stmt %) [:limit :fetch])) (apply min))]
-          {:min 0 :max n}))))
+  (once registry row-count* stmt opts))
