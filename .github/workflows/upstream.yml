@@ -15,6 +15,7 @@ concurrency:
   group: upstream
   cancel-in-progress: true
 jobs:
+  # the newest upstreams run with no token that writes: what they load cannot reach one
   upstream:
     name: suite on the newest upstreams
     # forks inherit the schedule; the report belongs to this repository's issues
@@ -22,7 +23,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      issues: write # opens, comments on and closes the upstream issue
+    outputs:
+      outcome: ${{ steps.run.outcome }}
     env:
       PGMALLI_PG_IMAGE: ${{ inputs.pg-image || 'postgres:alpine' }}
     steps:
@@ -37,8 +39,7 @@ jobs:
         with:
           cli: 1.12.5.1664
           bb: 1.13.219
-      - name: install psql
-        run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      # psql is on the runner image
       - name: pull postgres image
         run: docker pull "$PGMALLI_PG_IMAGE"
       - name: bb upstream
@@ -47,11 +48,26 @@ jobs:
         run: |
           set -o pipefail
           bb upstream | tee upstream-report.md
-      # one open issue labelled upstream: a failure comments on it (or opens it), a pass closes it
-      - name: report on the upstream issue
-        env:
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: upstream-report
+          path: upstream-report.md
+  # one open issue labelled upstream: a failure comments on it (or opens it), a pass closes it
+  report:
+    name: report on the upstream issue
+    needs: upstream
+    if: always() && needs.upstream.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write # opens, comments on and closes the upstream issue
+    steps:
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: upstream-report
+      - env:
           GH_TOKEN: ${{ github.token }}
-          OUTCOME: ${{ steps.run.outcome }}
+          GH_REPO: ${{ github.repository }}
+          OUTCOME: ${{ needs.upstream.outputs.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           gh label create upstream --color D93F0B --description "bb upstream: the suite against the newest upstreams" 2>/dev/null || true

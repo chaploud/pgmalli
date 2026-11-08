@@ -9,10 +9,11 @@
          lint {:doc "clj-kondo over src, test and dev"
                :task (shell "clj-kondo --lint src test dev")}
          test:matrix {:doc "bb test against the PostgreSQL versions CI covers (needs docker)"
-                      :requires ([clj-yaml.core :as yaml])
-                      :task (doseq [v (get-in (yaml/parse-string (slurp ".github/workflows/ci.yml")) [:jobs :test :strategy :matrix :pg])]
+                      :extra-paths ["dev"]
+                      :requires ([ci-images])
+                      :task (doseq [[v image] (ci-images/images)]
                               (println "==" v)
-                              (shell {:extra-env {"PGMALLI_PG_IMAGE" (str "postgres:" v "-alpine")}} "bb test"))}
+                              (shell {:extra-env {"PGMALLI_PG_IMAGE" image}} "bb test"))}
          upstream {:doc "The JVM suite against the newest HoneySQL, next.jdbc, pgjdbc, malli and postgres:alpine, with what to update (needs docker)"
                    :task (load-file "dev/upstream.clj")}
          sweep {:doc "bb sweep <sql-dir> <out-dir> [glob]: run SQL files through the whole pipeline, findings as EDN (needs docker)"

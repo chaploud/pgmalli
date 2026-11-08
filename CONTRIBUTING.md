@@ -191,9 +191,11 @@ is a step nobody minds, a minor once it is work people plan for.
    breaking one has them do, and whether the file needs regenerating. Nothing is written
    between releases.
 2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
-3. The release workflow checks that the tag is on main, runs `bb test:jvm` and builds the
-   jar; a second job deploys it to Clojars, and a third creates the GitHub release with the
-   jar and generated notes. If only the last job fails, re-run it alone: Clojars rejects
+3. The release workflow checks that the tag is on main and runs `bb test:jvm` on the image CI
+   pins, and, in a job of its own with tools.build alone, builds the jar, its SHA-256 and a
+   build provenance attestation (`gh attestation verify pgmalli-next.jar --repo
+   chaploud/pgmalli-next`); a third job deploys it to Clojars once both pass, and a fourth
+   creates the GitHub release with the jar, its SHA-256 and generated notes. If only the last job fails, re-run it alone: Clojars rejects
    publishing a version twice.
 
 The Clojars deploy token is the secret `CLOJARS_PASSWORD` of the environment `clojars`,

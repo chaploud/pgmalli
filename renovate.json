@@ -5,6 +5,7 @@
     ":semanticCommitsDisabled",
     "helpers:pinGitHubActionDigests"
   ],
+  "osvVulnerabilityAlerts": true,
   "schedule": [
     "before 9am on monday"
   ],

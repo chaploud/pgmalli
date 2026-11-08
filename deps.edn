@@ -34,7 +34,9 @@
   ;; pulls an old AWS SDK, jackson and logback with known advisories: newer versions here, and no
   ;; logback (slf4j 2 does not bind it; slf4j-nop takes the logs).
   :deploy {:extra-deps {slipset/deps-deploy {:mvn/version "0.2.5"
-                                             :exclusions [ch.qos.logback/logback-classic]}}
+                                             :exclusions [ch.qos.logback/logback-classic
+                                                          ;; ssh deploys, which an https one never loads: jsch, unmaintained (CVE-2023-48795)
+                                                          org.apache.maven.wagon/wagon-ssh]}}
            :override-deps {com.amazonaws/aws-java-sdk-s3 {:mvn/version "1.12.797"}
                            com.amazonaws/aws-java-sdk-sts {:mvn/version "1.12.797"}
                            com.amazonaws/aws-java-sdk-kms {:mvn/version "1.12.797"}

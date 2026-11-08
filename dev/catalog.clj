@@ -5,7 +5,7 @@
    pgmalli-next.upstream-test checks the file against the server it runs on."
   (:require [babashka.process :as p]
             [cheshire.core :as json]
-            [clj-yaml.core :as yaml]
+            [ci-images]
             [clojure.string :as str]
             [pgmalli-next.catalog-source :as source]
             [pgmalli-next.test-db :as db]))
@@ -51,10 +51,11 @@
      :operators (overloads :operators)}))
 
 (defn -main [& _]
-  (let [versions (get-in (yaml/parse-string (slurp ".github/workflows/ci.yml")) [:jobs :test :strategy :matrix :pg])
+  (let [images (ci-images/images)
+        versions (vec (keys images))
         cs (for [v versions]
              (do (println "dumping PostgreSQL" v)
-                 (source/shape (read-string (:out (p/shell {:out :string :extra-env {"PGMALLI_PG_IMAGE" (str "postgres:" v "-alpine")}}
+                 (source/shape (read-string (:out (p/shell {:out :string :extra-env {"PGMALLI_PG_IMAGE" (images v)}}
                                                     "bb" "catalog:dump"))))))
         c (merged versions cs)]
     (spit "resources/pgmalli-next/impl/catalog.edn"
