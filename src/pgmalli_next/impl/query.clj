@@ -24,7 +24,7 @@
   [schemas]
   (let [all (:versions @types/catalog)
         vs (for [[k s] schemas :when (and (keyword? k) (= (namespace (shape/routines-key "")) (namespace k)))]
-             (some->> (:pg/database-version (second s)) str (re-find #"^PostgreSQL (\d+)") second))]
+             (types/label-version (:pg/database-version (second s))))]
     (if (and (seq vs) (every? (set all) vs)) (vec (distinct vs)) all)))
 
 (defn- in-versions
