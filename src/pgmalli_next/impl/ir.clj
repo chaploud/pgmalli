@@ -44,7 +44,8 @@
   (str/replace (query-sql) #":\"schema\"|:'schema'"
                #(if (= % ":\"schema\"")
                   (str "\"" (str/replace schema "\"" "\"\"") "\"")
-                  (str "'" (str/replace schema "'" "''") "'"))))
+                  ;; E'': a backslash is an escape whatever standard_conforming_strings says
+                  (str "E'" (-> schema (str/replace "\\" "\\\\") (str/replace "'" "''")) "'"))))
 
 (defn- target
   "host:port/db psql reaches, from the db map or psql's environment."
@@ -70,6 +71,8 @@
 (defn- psql-out [{:keys [schema psql] :or {psql "psql"} :as db}]
   (let [;; shell/sh replaces the whole environment, so layer the overrides on the current one
         env (into (into {} (System/getenv)) (keep (fn [[k e]] (when-some [v (get db k)] [e (str v)])) env-keys))
+        ;; the read writes nothing: a transaction read only, whatever the read schema's objects would do
+        env (update env "PGOPTIONS" #(str/trim (str % " -c default_transaction_read_only=on")))
         args (cond-> [psql "-X" "-q" "-A" "-t" "-v" "ON_ERROR_STOP=1" "-v" (str "schema=" schema) "-f" "-"
                       :in (query-sql) :env env])
         {:keys [exit out err]} (try (apply shell/sh args)

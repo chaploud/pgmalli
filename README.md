@@ -130,7 +130,8 @@ JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sq
 One file holds every schema in `:schemas`. `generate!` writes over no file but a generated one,
 and returns the diagnostics and the columns left out ([docs/types.md](docs/types.md#the-generated-file)).
 `generate!` and `check` print the columns left out, nothing where all is well. Generating needs a
-[supported PostgreSQL](#supported-versions).
+[supported PostgreSQL](#supported-versions). The read runs in a read-only transaction and needs no
+privilege but to log in: give `:db` a role of its own, one that owns nothing and writes nothing.
 
 `(pgmalli/registry)` reads `pgmalli-next.edn` from the classpath. Where `:out` is elsewhere,
 pass its data:

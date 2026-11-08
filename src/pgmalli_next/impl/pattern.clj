@@ -43,7 +43,7 @@
   [s]
   (cond (#{"true" "false"} s) (= "true" s)
         (number-literal s) (number-literal s)
-        :else (when-let [[_ quoted t] (re-matches #"(?s)'((?:[^']|'')*)'(?:::(.+))?" s)]
+        :else (when-let [[_ quoted t] (re-matches #"(?s)'((?:[^']++|'')*+)'(?:::(.+))?" s)]
                 (let [v (str/replace quoted "''" "'")]
                   (or (when (some-> t types/entry types/number-entry?) (number-literal v)) v)))))
 

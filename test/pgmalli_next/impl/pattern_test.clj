@@ -84,3 +84,11 @@
                                    :constraints {}}}})]
     (is (= [-1 -1 10000000000 -1.5M 1.5M 1E+300M 100000000000000000000N "NaN" "12" "happy"]
            (map :default (filter (comp #{:column} :fact) fs))))))
+
+(deftest a-long-quoted-default-is-read-without-running-out-of-stack
+  (let [s (apply str (repeat 100000 "a"))
+        facts (p/facts {:name "public" :types {}
+                        :tables {"t" {:columns [{:name "c" :position 1 :data_type "text" :type_schema "pg_catalog" :is_nullable true
+                                                 :default_value (str "'" s "'::text")}]
+                                      :constraints {}}}})]
+    (is (= s (:default (first (filter #(= :column (:fact %)) facts)))))))

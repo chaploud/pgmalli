@@ -106,3 +106,12 @@
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:db {:schema "app"}})))]
     (is (= [":db's :schema is not read: the schemas generated are :schemas, such as {:schemas [\"public\"]}" [:schemas]]
            [(ex-message e) (:did-you-mean (ex-data e))]))))
+
+(deftest generate-writes-through-no-symbolic-link
+  (let [dir (doto (java.io.File/createTempFile "pgmalli-out" "") .delete .mkdirs)
+        target (java.io.File. dir "elsewhere")
+        link (java.io.File. dir "pgmalli-next.edn")]
+    (java.nio.file.Files/createSymbolicLink (.toPath link) (.toPath target) (make-array java.nio.file.attribute.FileAttribute 0))
+    (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is a symbolic link"
+                          (generate/generate! {:out (str link) :db {:psql "/nonexistent/psql"}})))
+    (is (not (.exists target)) "a dangling link's target is not created")))

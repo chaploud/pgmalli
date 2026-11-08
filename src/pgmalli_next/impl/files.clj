@@ -155,9 +155,16 @@
   "Writes the config's file, where no file or a generated one is. Returns its path."
   [c]
   (let [f (io/file (:out (config c)))]
+    (when (java.nio.file.Files/isSymbolicLink (.toPath f))
+      (error/fail! :pgmalli.error/invalid-config (str ":out " f " is a symbolic link; give :out the path of a file") {:given (str f)}))
     (when (and (.exists f) (or (.isDirectory f) (not (str/starts-with? (slurp f) header))))
       (error/fail! :pgmalli.error/invalid-config (str ":out " f " is a file generate! did not write; give :out a path of its own") {:given (str f)}))
-    (let [{:keys [path data]} (generated c)]
-      (io/make-parents f)
-      (spit f (edn-string data))
+    (let [{:keys [path data]} (generated c)
+          _ (io/make-parents f)
+          ;; written whole beside it, then moved over it: no half-written file, no link followed
+          tmp (java.io.File/createTempFile ".pgmalli-next" ".edn" (.getAbsoluteFile (.getParentFile (.getAbsoluteFile f))))]
+      (spit tmp (edn-string data))
+      (java.nio.file.Files/move (.toPath tmp) (.toPath f)
+                                (into-array java.nio.file.CopyOption [java.nio.file.StandardCopyOption/REPLACE_EXISTING
+                                                                     java.nio.file.StandardCopyOption/ATOMIC_MOVE]))
       path)))

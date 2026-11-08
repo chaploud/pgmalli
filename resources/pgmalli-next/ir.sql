@@ -6,7 +6,7 @@
 -- pg_catalog first so that the schema's own functions and operators never stand in for its: every
 -- function is called qualified, and every operator has an exact match in pg_catalog (hence the
 -- casts on literals), since a later schema's exact match beats pg_catalog's coercion.
-SET search_path TO pg_catalog, :"schema";
+SET search_path TO pg_catalog, :"schema", pg_temp;
 WITH RECURSIVE cols AS (
   SELECT c.oid AS relid, a.attnum,
          pg_catalog.json_build_object(
@@ -47,7 +47,7 @@ WITH RECURSIVE cols AS (
     )
     SELECT (SELECT base FROM chain ORDER BY depth DESC LIMIT 1) AS root,
            (SELECT typmod FROM chain ORDER BY depth DESC LIMIT 1) AS typmod,
-           (SELECT bool_or(not_null) FROM chain) AS not_null,
+           (SELECT pg_catalog.bool_or(not_null) FROM chain) AS not_null,
            (SELECT default_value FROM chain WHERE default_value IS NOT NULL ORDER BY depth LIMIT 1) AS default_value
   ) dom ON true
   -- the type the column's values are of, and its typmod
@@ -132,7 +132,7 @@ cons AS (
       LEFT JOIN pg_catalog.pg_attribute a ON a.attrelid = i.indrelid AND a.attnum > 0 AND NOT a.attisdropped
         AND pg_catalog.quote_ident(a.attname) = COALESCE(c.m[1], l.lhs)
         AND (c.m IS NULL OR EXISTS (SELECT 1 FROM pg_catalog.pg_cast k
-                                    WHERE k.castsource = a.atttypid AND k.casttarget = pg_catalog.to_regtype(c.m[2]) AND k.castmethod = 'b'))
+                                    WHERE k.castsource = a.atttypid AND k.casttarget = pg_catalog.to_regtype(c.m[2])::pg_catalog.oid AND k.castmethod = 'b'))
       LEFT JOIN LATERAL (SELECT pg_catalog.regexp_match(parts.p, '^\(.+? = ''((?:[^'']|'''')*)''::([A-Za-z_][A-Za-z0-9_."]*)\)$') AS m) s ON true
       LEFT JOIN LATERAL (SELECT pg_catalog.regexp_match(parts.p, '^\(.+? = (-?[0-9]+)\)$') AS m) d ON true),
     read AS (
@@ -150,9 +150,9 @@ cons AS (
       FROM parsed)
     -- the whole predicate written back from the conditions read: a part read as none (NULL) makes
     -- it no match, which bool_and, skipping NULLs, would not
-    SELECT CASE WHEN bool_and(r.cond IS NOT NULL AND r.written IS NOT NULL AND r.written = r.p)
-                     AND count(*) = count(r.written)
-                     AND (SELECT CASE WHEN count(*) = 1 THEN min(r2.written) ELSE '(' || pg_catalog.string_agg(r2.written, ' AND ' ORDER BY r2.n) || ')' END FROM read r2) = (SELECT e FROM e)
+    SELECT CASE WHEN pg_catalog.bool_and(r.cond IS NOT NULL AND r.written IS NOT NULL AND r.written = r.p)
+                     AND pg_catalog.count(*) = pg_catalog.count(r.written)
+                     AND (SELECT CASE WHEN pg_catalog.count(*) = 1 THEN pg_catalog.min(r2.written) ELSE '(' || pg_catalog.string_agg(r2.written, ' AND ' ORDER BY r2.n) || ')' END FROM read r2) = (SELECT e FROM e)
                 THEN pg_catalog.json_agg(r.cond ORDER BY r.n) END AS conds
     FROM read r
   ) pred ON i.indpred IS NOT NULL
@@ -243,8 +243,8 @@ functions AS (
   FROM pg_catalog.pg_proc p
   JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
   WHERE n.nspname = :'schema' AND p.prokind <> 'p'
-    AND NOT (ARRAY[p.prorettype] || p.proargtypes::pg_catalog.oid[])
-            && ARRAY['trigger', 'event_trigger', 'internal', 'cstring', 'language_handler', 'fdw_handler',
+    AND NOT (ARRAY[p.prorettype] OPERATOR(pg_catalog.||) p.proargtypes::pg_catalog.oid[])
+            OPERATOR(pg_catalog.&&) ARRAY['trigger', 'event_trigger', 'internal', 'cstring', 'language_handler', 'fdw_handler',
                'index_am_handler', 'table_am_handler', 'tsm_handler']::pg_catalog.regtype[]::pg_catalog.oid[]
 ),
 operators AS (
@@ -255,7 +255,7 @@ operators AS (
                                                          pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprright), NULL)) END,
            'result', pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.oprresult), NULL),
            -- its function returns a set, as a function's 'set'
-           'set', (SELECT p.proretset FROM pg_catalog.pg_proc p WHERE p.oid = o.oprcode),
+           'set', (SELECT p.proretset FROM pg_catalog.pg_proc p WHERE p.oid = o.oprcode::pg_catalog.oid),
            -- a comparison: an operator of a btree operator family, or its negator
            'btree', EXISTS (SELECT 1 FROM pg_catalog.pg_amop a JOIN pg_catalog.pg_am am ON am.oid = a.amopmethod
                             WHERE a.amopopr IN (o.oid, o.oprnegate) AND am.amname = 'btree')
