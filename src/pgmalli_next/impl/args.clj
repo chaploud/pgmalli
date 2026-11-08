@@ -101,12 +101,14 @@
   (let [t (query/slot-type registry s)
         inline? (:inline (:format opts))
         rows (jdbc/write-rows opts false)
-        untyped (when inline? (for [[x p] rows :when (= :unknown p) a (shape/alternatives x)] a))]
+        untyped (when inline? (for [[x p] rows :when (= :unknown p) a (shape/alternatives x)] a))
+        ;; a number goes to an oid alias (regclass, regproc) as an oid, within oid's range
+        oid (when (= "N" (types/category t)) (types/type-schema "oid"))]
     (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
                       (for [[x p] rows
                             :when (and (string? p) (not= p t) (accept/holds? t p context))
                             a (shape/alternatives x)]
-                        (unlabel a))))))
+                        (cond-> (unlabel a) (and oid (accept/number-type? p)) (within p "oid" oid)))))))
 
 (defn- class-held
   "A function's argument's alternative a held to the classes of its schema the one sending sends

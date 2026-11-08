@@ -587,7 +587,7 @@
               row rows
               ;; matrix's domains are CHECK (VALUE IS NOT NULL), which no schema tells; and the
               ;; columns of DEBT.md's types taking values PostgreSQL refuses
-              :let [row (into {} (remove #(re-find #"^da?_|^[ca]_(oid|reg|character$)|^a_(varchar|char)_" (name (key %)))) row)]
+              :let [row (into {} (remove #(re-find #"^da?_|^[ca]_character$|^a_(varchar|char)_" (name (key %)))) row)]
               :when (seq row)]
         (is (m/validate s row {:registry reg}))
         (is (nil? (written (q row))) (str table " " (pr-str row)))))))
