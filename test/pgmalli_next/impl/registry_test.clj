@@ -217,3 +217,9 @@
         rows (mg/sample :pg.public/t {:registry reg :size 50 :seed 1})]
     (is (every? #(and (<= (abs (double %)) 999.99) (<= (.scale ^BigDecimal %) 2)) (map :n rows)) "numeric(5, 2)")
     (is (every? #(<= (abs (double %)) 99.99) (mapcat :ns rows)) "numeric(4, 2)[]")))
+
+(deftest a-char-columns-string-is-one-byte
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\""}]]]}})]
+    (is (= [true true true false false false]
+           (map #(m/validate :pg.public/t {:c %} {:registry reg}) ["" "a" "\\343" "ab" "é" "\\9"]))
+        "an ASCII character, or the \\ooo PostgreSQL writes another byte as")))

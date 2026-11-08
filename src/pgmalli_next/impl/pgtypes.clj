@@ -24,17 +24,25 @@
   (let [f (unchecked-float d)]
     (not (or (and (Float/isInfinite f) (not (Double/isInfinite d))) (and (zero? f) (not (zero? d)))))))
 
+(defn char-value?
+  "Whether string s is a value of PostgreSQL's \"char\", one byte: none, one ASCII character, or
+   the \\ooo its output writes another byte as (which its input reads back); a longer one, or a
+   character of more bytes (é), it cuts to its first byte without a word."
+  [s]
+  (boolean (or (re-matches #"[\x00-\x7F]?" s) (re-matches #"\\[0-3][0-7]{2}" s))))
+
 (def string-schema
   ":string with :min and :max counting characters (code points), as PostgreSQL's length does,
    where malli's counts UTF-16 units. A bit string (:pg/type bit or bit varying) holds 0s and 1s
-   alone."
+   alone, a \"char\" one byte (char-value?)."
   (m/-simple-schema
    {:type :string :pred string?
     :property-pred (fn [props]
                      (let [bounds ((m/-min-max-pred char-length) props)]
-                       (if (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
-                         (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s)))))
-                         bounds)))}))
+                       (cond (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
+                             (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s)))))
+                             (= "\"char\"" (:name (types/entry (shape/type-name props)))) char-value?
+                             :else bounds)))}))
 
 (defn real-number?
   "Whether number n (a Long, a BigDecimal ...) converts to a real: finite as a double, and

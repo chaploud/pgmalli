@@ -699,7 +699,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-assignment"></a>An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
   `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
-  time off, a `String` of more than one character into a `"char"` column keeps its first), and a number assigned to a `text` column PostgreSQL converts through its text. Two
+  time off, a `String` of more than one byte into a `"char"` column keeps its first), and a number assigned to a `text` column PostgreSQL converts through its text. Two
   assignment casts change nothing and are taken: a `Double` NaN or infinity to a `numeric` column
   (an array of them to `numeric[]`), and `jsonb` to a `json` column.
   Cast it in the query (`[:cast :?n :bigint]`) where the conversion is meant. A value of a

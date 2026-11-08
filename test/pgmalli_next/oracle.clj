@@ -47,6 +47,7 @@
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.hsyntax :as syntax]
+            [pgmalli-next.impl.pgtypes :as pgtypes]
             [pgmalli-next.impl.jdbc :as pjdbc]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.test-db :as test-db])
@@ -940,7 +941,7 @@
   (let [e (when (string? held-t) (or (types/element held-t) held-t))
         [lo hi] (:range (types/types (if (types/oid-like? e) "oid" e)))]
     (boolean (some #(or (and lo (number? %) (not (<= lo % hi)))
-                        (and (= "\"char\"" e) (string? %) (< 1 (count %))))
+                        (and (= "\"char\"" e) (string? %) (not (pgtypes/char-value? %))))
                    ;; a Java array's elements
                    (if (some-> v class .isArray) (seq v) [v])))))
 

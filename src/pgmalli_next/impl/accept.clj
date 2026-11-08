@@ -239,7 +239,7 @@
   "[from to] of the casts PostgreSQL makes on assignment alone (pg_cast's castcontext 'a') that
    change no value they do not refuse: jsonb to json, the same document; a wider integer to a
    narrower one, which refuses a value past its range (a number assigned is held to the
-   column's range); varchar to \"char\", of one character (the column's own string is held to one)."
+   column's range); varchar to \"char\", of one byte (the column's own string is held to one, pgtypes/char-value?)."
   #{["jsonb" "json"] ["bigint" "integer"] ["bigint" "smallint"] ["integer" "smallint"] ["character varying" "\"char\""]})
 
 (defn holds?
