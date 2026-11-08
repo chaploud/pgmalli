@@ -119,7 +119,10 @@
    a string, which HoneySQL quotes."
   [column {:keys [format]}]
   (let [n (name column)
-        writes? #(= n (first (syntax/formatted-name % format false)))
+        ;; HoneySQL writes it as n, and PostgreSQL reads that as the column: quoted, or no keyword
+        ;; (order, user) nor a qualified name (a.b)
+        writes? #(let [[text quoted?] (syntax/formatted-name % format false)]
+                   (and (= n text) (not (str/includes? n ".")) (or quoted? (not (types/keyword-word? n)))))
         k (jdbc/row-key n)]
     (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
@@ -478,10 +481,18 @@
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))
-   :written-otherwise (fn [{:keys [op dropped call]}]
-                        (if call
+   :written-otherwise (fn [{:keys [op dropped call column clause before]}]
+                        (cond
+                          clause
+                          (str "a statement of " clause " and " before " is written " before " first, which PostgreSQL reads otherwise or not at all:"
+                               " write the query inside the write, {:insert-into [[:t [:a]] {:select [:a] ...}]}")
+                          column
+                          (str (pr-str column) " is written " (name column) ", a word PostgreSQL reads as a keyword, not as a column:"
+                               " write it as a string, " (pr-str (name column)) ", which HoneySQL quotes, or quote names ({:format {:quoted true}})")
+                          call
                           (str (pr-str [op :a :b]) " is written as a call of a function " (name op) "(a, b), which PostgreSQL has not:"
                                " HoneySQL has not registered the operator; load honey.sql.pg-ops, or register it with sql/register-op!")
+                          :else
                           (str (pr-str [op :x :a :b]) " is written x " (str/upper-case (str/replace (name op) "-" " ")) " a, the " dropped
                                " past a dropped; write the list as one vector, " (pr-str [op :x [:a :b]]))))
    :unread-clause (fn [{:keys [clause did-you-mean]}]

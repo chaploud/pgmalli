@@ -48,7 +48,9 @@
                                  (cond-> c (not= vs versions) (conj {:in vs}))))
      :ranges (named :ranges)
      :functions (overloads :functions)
-     :operators (overloads :operators)}))
+     :operators (overloads :operators)
+     ;; of any version: a name quoted where one need not be is the same column
+     :keywords (vec (sort (distinct (mapcat :keywords cs))))}))
 
 (defn -main [& _]
   (let [images (ci-images/images)

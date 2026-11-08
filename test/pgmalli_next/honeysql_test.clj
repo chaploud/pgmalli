@@ -341,7 +341,7 @@
     (is (= [{:kind :duplicate-column :column :id :items [:id [:nick :id]]}] (check {:select [:id [:nick :id]] :from [:users]})))
     (is (= [{:kind :duplicate-column :column :id :items [:id [:group_id :id]]}] (check {:update :users :set {:nick "a"} :where [:= :id 1] :returning [:id [:group_id :id]]}))
         "RETURNING")
-    (let [q {:insert-into :users :columns [:group_id :score] :select [[:?g] [:?s]] :returning [:id]}]
+    (let [q {:insert-into [[:users [:group_id :score]] {:select [[:?g] [:?s]]}] :returning [:id]}]
       (is (= [] (check q)) "an INSERT's SELECT is not returned")
       (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row q)) "its RETURNING is"))
     (is (= [{:kind :duplicate-column :column :id :items [:q.id :s.id] :in [:union 0]}]
@@ -1202,7 +1202,7 @@
 (deftest a-clause-read-nowhere-is-a-problem
   (is (= [{:kind :unread-clause :clause :fetch-next}] (check {:select [:id] :from [:users] :fetch-next 1})))
   (is (= [] (check {:select [:id] :from [:users] :for :update :window [:w {:partition-by [:id]}]})) "clauses that change nothing read here")
-  (is (= [{:kind :unknown-column :column :table}
+  (is (= [{:kind :unknown-column :column :table} {:kind :written-otherwise :column :table}
           {:kind :uncast-string :column :mood :value "sad" :type "mood"}] (check {:insert-into :users :values [{:table 1 :group_id 1 :mood "sad" :score 1}]}))
       "a row's column named like a clause is a column"))
 
@@ -3500,3 +3500,16 @@
         rows (mg/sample (h/values-schema reg :t) {:registry reg :size 20 :seed 1})]
     (is (every? #(let [e (:e %)] (str/ends-with? (if (vector? e) (second e) e) "@example.com")) rows)
         "a value of it, a NOT NULL column a trigger may fill too")))
+
+(deftest a-write-honeysql-writes-otherwise-than-it-reads-is-a-problem
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:order [:int {:pg/type "integer"}]] [:j [:any {:pg/type "jsonb"}]]]}})
+        problems #(:problems (h/analyze reg %))]
+    (is (= [{:kind :written-otherwise :clause :insert-into :before :select}] (problems {:insert-into :t :select [:id] :from [:t]}))
+        "sql/format writes SELECT id INSERT INTO t FROM t")
+    (is (= [{:kind :written-otherwise :column :order}] (problems {:insert-into :t :values [{:id 1 :order 2 :j [:lift {}]}]})) "INSERT INTO t (id, order)")
+    (is (= [] (problems {:insert-into :t :values [{:id 1 "order" 2 :j [:lift {}]}]})) "a string key, which HoneySQL quotes")
+    (is (some #{"order"} (keys (mg/generate (h/values-schema reg :t) {:registry reg :seed 1}))) "values-schema keys it so")
+    (is (= [{:kind :written-otherwise :op (keyword "?~") :call true}] (problems {:select [:id] :from [:t] :where [(keyword "?~") :j "a"]}))
+        "a ? of the name, which HoneySQL writes ??")
+    (is (= [{:kind :written-otherwise :op (keyword "~~~") :call true}] (problems {:select [[[(keyword "~~~") :j "a" "b"] :x]] :from [:t]}))
+        "of more operands than two")))

@@ -38,18 +38,21 @@
                                                      'result', format_type(o.oprresult, NULL),
                                                      'set', (SELECT p.proretset FROM pg_proc p WHERE p.oid = o.oprcode),
                                                      'btree', EXISTS (SELECT 1 FROM pg_amop a WHERE a.amopopr IN (o.oid, o.oprnegate) AND a.amopmethod = (SELECT oid FROM pg_am WHERE amname = 'btree'))) ORDER BY o.oprname)
-                   FROM pg_operator o WHERE o.oprnamespace = 'pg_catalog'::regnamespace))")
+                   FROM pg_operator o WHERE o.oprnamespace = 'pg_catalog'::regnamespace),
+     'keywords', (SELECT json_agg(word ORDER BY word) FROM pg_get_keywords() WHERE catcode IN ('R', 'T')))")
 
 (defn shape
   "A version's catalog as catalog.edn holds it: {:types {name [category preferred?]} :casts
    #{[source target context]} :functions {name #{overload}} :operators {name #{overload}} :relations
-   {name [column ...]}}, an overload {:args [type ...] :result type ...}, a column {:name :type
+   {name [column ...]} :keywords #{word}}, an overload {:args [type ...] :result type ...}, a column {:name :type
    :not-null}."
-  [{:strs [types casts ranges functions operators relations]}]
+  [{:strs [types casts ranges functions operators relations keywords]}]
   {:types (into {} (for [[n c pref] types] [n (cond-> {:category c} pref (assoc :preferred true))]))
    :casts (set casts)
    :ranges (into {} (for [[r sub m] ranges] [r {:subtype sub :multirange m}]))
    :functions (update-vals (group-by #(get % "name") functions) #(set (map (comp pattern/function-overload (fn [f] (update-keys f keyword))) %)))
    :relations (into {} (for [[n cs] relations]
                          [n (vec (for [[c t not-null?] cs] (cond-> {:name c :type t} not-null? (assoc :not-null true))))]))
-   :operators (update-vals (group-by #(get % "name") operators) #(set (map (comp pattern/operator-overload (fn [o] (update-keys o keyword))) %)))})
+   :operators (update-vals (group-by #(get % "name") operators) #(set (map (comp pattern/operator-overload (fn [o] (update-keys o keyword))) %)))
+   ;; the words no column is named unquoted (reserved, and of types and functions)
+   :keywords (set keywords)})

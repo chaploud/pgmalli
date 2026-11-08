@@ -397,11 +397,48 @@
                n (name h)]
          p [(when (and (syntax/in-ops h) (< 3 (count x)))
               {:kind :written-otherwise :op h :dropped (- (count x) 3)})
-            (when (and (not (re-matches #"[A-Za-z_][A-Za-z0-9_$.]*" n)) (= 3 (count x))
-                       (some-> (try (first (sql/format-expr [h ::l ::r])) (catch Exception _ nil)) (str/starts-with? (str n "("))))
+            ;; HoneySQL escapes a ? of a name as ??
+            (when (and (not (re-matches #"[A-Za-z_][A-Za-z0-9_$.]*" n)) (< 2 (count x))
+                       (some-> (try (first (sql/format-expr (into [h] (repeat (dec (count x)) ::x)))) (catch Exception _ nil))
+                               (str/starts-with? (str (str/replace n "?" "??") "("))))
               {:kind :written-otherwise :op h :call true})]
          :when p]
      p)))
+
+(def ^:private select-keys-of-a-query
+  [:select :select-distinct :select-distinct-on :union :union-all :intersect :except :table])
+
+(def ^:private select-first?
+  "Whether the loaded HoneySQL writes a statement of write clause k (:insert-into, :update,
+   :delete-from) and a SELECT of it beside as the SELECT first (SELECT x INSERT INTO t ...)."
+  (memoize (fn [k s] (boolean (some-> (try (first (sql/format {k :t s (if (= :table s) :u [:x])})) (catch Exception _ nil))
+                                      str/upper-case (str/starts-with? "SELECT"))))))
+
+(defn- written-first
+  "{:kind :written-otherwise :clause write :before select} of each statement of a write clause and
+   a query's clause beside, which HoneySQL writes the query first of, a statement PostgreSQL reads
+   otherwise (SELECT ... INTO) or not at all."
+  [body]
+  (distinct
+   (for [st (syntax/statements body)
+         w [:insert-into :update :delete-from]
+         :when (contains? st w)
+         s select-keys-of-a-query
+         :when (and (contains? st s) (select-first? w s))]
+     {:kind :written-otherwise :clause w :before s})))
+
+(defn- written-keywords
+  "{:kind :written-otherwise :column k} of each column a write names by keyword k (:values,
+   :set, :columns) that HoneySQL writes unquoted as a word PostgreSQL reads as a keyword (order,
+   user), not as the column."
+  [body format]
+  (distinct
+   (for [st (syntax/statements body)
+         k (concat (map first (syntax/writes st (constantly nil))) (when (sequential? (:columns st)) (:columns st)))
+         :when (keyword? k)
+         :let [[text quoted?] (syntax/formatted-name k format false)]
+         :when (and (not quoted?) (types/keyword-word? text))]
+     {:kind :written-otherwise :column k})))
 
 (defn check
   "[problem ...] of a query against the registry; [] when there are none. A problem in a nested
@@ -414,4 +451,4 @@
                         (cond->> (problems registry stmt scopes ps opts) (seq path) (map #(assoc % :in (vec path)))))
                       chains)]
     (vec (concat found (query/duplicate-columns registry body opts) (return-key-problems registry body (second (first chains)) opts)
-                 (unread-clauses sent-body) (written-otherwise sent-body)))))
+                 (unread-clauses sent-body) (written-otherwise sent-body) (written-first sent-body) (written-keywords sent-body (:format opts))))))
