@@ -297,10 +297,10 @@
      {:kind :unknown-type :type n :did-you-mean meant})))
 
 (defn- column-definition-problems
-  "{:kind :column-definition-list :function f :alias a} for each function in FROM of a statement
+  "{:kind :column-definition-list :function f :alias a :columns [c ...]} for each function in FROM of a statement
    whose alias writes a column definition list ({:with-columns ...}) where no candidate of it
    returns record, as PostgreSQL takes one for alone: of no type, a list of names
-   ([:r {:columns [:v]}]) renames its columns."
+   ([:r {:columns [:v]}]) renames its columns. columns, the names the list gives."
   [registry stmt opts]
   (for [item (syntax/table-items stmt)
         :when (syntax/column-definitions item)
@@ -308,7 +308,8 @@
               [kind n :as parts] (syntax/call-parts f)
               os (when (= :functions kind) (query/reached registry opts parts))]
         :when (and (seq os) (not-any? #(= "record" (:result %)) os))]
-    {:kind :column-definition-list :function n :alias (syntax/alias-label al opts)}))
+    {:kind :column-definition-list :function n :alias (syntax/alias-label al opts)
+     :columns (mapv #(keyword (syntax/ident-name (first %) (:format opts))) (syntax/column-definitions item))}))
 
 (defn- problems
   "The problems of one statement (README.md's table of :kind), scope the statement's (from

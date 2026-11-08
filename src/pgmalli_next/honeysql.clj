@@ -299,7 +299,8 @@
                                 (str "list the columns of " x " instead, giving one an alias of its own")
                                 (str "give one an alias of its own: " (pr-str [(if (keyword? x) x (first x)) alias]))))))
    :missing-required-column (fn [{:keys [table column]}]
-                              (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"))
+                              (str "INSERT into " table " lacks " (column-name column) ", which is NOT NULL with no default"
+                                   "; give every row a value of " (column-name column)))
    :values-arity (fn [{:keys [row columns values]}]
                    (str ":values row " row " has " values (if (= 1 values) " value" " values") " for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column type value allowed]}]
@@ -334,7 +335,9 @@
    :unknown-type (fn [{:keys [type did-you-mean]}]
                    (str "type " type " is in neither pg_catalog nor the query's schema" (error/did-you-mean (str/join " or " did-you-mean))
                         "; qualify it, " (syntax/cast-form "x" (first did-you-mean)) ", or pass that schema as :schema"))
-   :not-null-violation (fn [{:keys [table column]}] (str "NULL written into " table "." (column-name column) ", which is NOT NULL"))
+   :not-null-violation (fn [{:keys [table column clause]}]
+                         (str "NULL written into " table "." (column-name column) ", which is NOT NULL; write a value"
+                              (when (= :values clause) ", or [:default] where the column has a default")))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))
@@ -342,10 +345,10 @@
                     (if did-you-mean
                       (str "clause " clause " is no clause HoneySQL or pgmalli knows" (error/did-you-mean (first did-you-mean)))
                       (str "clause " clause " is not read by pgmalli, so what it does is not checked; check the clause name, or check that part by hand")))
-   :column-definition-list (fn [{:keys [function alias]}]
+   :column-definition-list (fn [{:keys [function alias columns]}]
                              (str "the alias " alias " of " function " lists column types, which PostgreSQL takes of a function returning record"
                                   " alone (a column definition list is only allowed for functions returning record); name the columns with no type: "
-                                  (pr-str [(keyword alias) {:columns [:v]}])))
+                                  (pr-str [(keyword alias) {:columns columns}])))
    :missing-arg (fn [{:keys [arg]}] (str "the query takes argument " arg ", which the function's args lack; a typo in args?"))
    :undetermined-type (fn [{:keys [arg function type]}]
                         (let [x (keyword (str "?" (name arg)))]

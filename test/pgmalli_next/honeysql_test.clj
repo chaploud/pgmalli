@@ -1502,7 +1502,7 @@
     (is (= [:map [:v element] [:n [:int {:pg/type "bigint"}]]]
            (:row (h/analyze reg {:select [:r.v :r.n] :from [:d [[:with-ordinality [:jsonb_array_elements :items] [:r :v :n]]]]} {})))
         "under WITH ORDINALITY, the alias as a call, as HoneySQL writes it there")
-    (is (= [{:kind :column-definition-list :function "jsonb_array_elements" :alias "r"}]
+    (is (= [{:kind :column-definition-list :function "jsonb_array_elements" :alias "r" :columns [:value]}]
            (:problems (h/analyze reg {:select [:r.value] :from [:d [[:jsonb_array_elements :items] [:r {:with-columns [[:value :jsonb]]}]]]} {})))
         "column types of a function returning no record, which PostgreSQL refuses")
     (is (= [] (:problems (h/analyze reg {:select [:w.k] :from [[[:jsonb_to_record :?doc] [:w {:with-columns [[:k :text]]}]]]} {})))
@@ -3282,3 +3282,13 @@
     (is (= [] (check {:select [:id] :from [:users] :where [:> :updated_at t]})) "compared, timestamp converts to timestamptz implicitly")
     (is (= ["a java.time.Instant (2026-01-01T00:00:00Z) goes to column updated_at as a parameter, which pgjdbc sends as timestamp with time zone, a type column updated_at takes there through no implicit conversion; cast it, [:cast <the Instant> :timestamp]"]
            (h/humanize (check {:update :users :set {:updated_at t} :where [:= :id 1]}))))))
+
+(deftest a-write-problem-says-what-to-write
+  (is (= ["INSERT into sample.users lacks score, which is NOT NULL with no default; give every row a value of score"]
+         (h/humanize (check {:insert-into :users :values [{:group_id 1}]}))))
+  (is (= ["NULL written into sample.users.score, which is NOT NULL; write a value, or [:default] where the column has a default"]
+         (h/humanize (check {:insert-into :users :values [{:group_id 1 :score nil}]}))))
+  (is (= ["NULL written into sample.users.score, which is NOT NULL; write a value"]
+         (h/humanize (check {:update :users :set {:score nil}}))))
+  (is (str/ends-with? (first (h/humanize [{:kind :column-definition-list :function "f" :alias "r" :columns [:k :v]}]))
+                      "name the columns with no type: [:r {:columns [:k :v]}]")))
