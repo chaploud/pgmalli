@@ -104,6 +104,10 @@ An enum of another schema (`wh.stock.k` of type `catalog.kind`) is `[:any]` in t
 (`:type-schema "catalog"`). Generated with both schemas in `:schemas`, the registry reads the
 column as of that type, an array of it too, and `:unrendered` leaves it out.
 
+An interval is `:time/duration` in the registry, a `Duration`, which pgjdbc sends nowhere: a row
+read holds a `PGInterval` ([reading rows](reading-rows.md#the-one-reading-and-sending)), and an
+argument takes one.
+
 A row schema differs from PostgreSQL where an array's elements are NULL: PostgreSQL takes NULL
 elements, a row schema refuses them. What a row is read as (`as-read`, `analyze`'s `:row`) takes
 them.

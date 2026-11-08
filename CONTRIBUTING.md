@@ -24,7 +24,7 @@ need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` sel
 | `bb test:update [ns ...]` | each failing `(is (= literal form))` written back with what it got (`bb test:update:jvm` for the namespaces that need next.jdbc); prints what it left and why |
 | `bb test:docs:update [file.md ...]` | each `;; =>` of the docs written back with what its form gives |
 | `bb test:stricter` | `test/resources/pgmalli-next/stricter.edn` rewritten: where PostgreSQL takes a parameter that `accept/holds?` leaves out |
-| `bb mutate --file src/... [--kind table\|logic] [--ns ns ...] [--fn def ...] [--limit N] [--jvm] [--db] [--timeout secs]` | each mutant of the file (an element left out of a def's literal collection; and/or, when/when-not, =/not=, true/false swapped) against the tests (`--ns`, or the bb suite, or the JVM suite under `--jvm`; database tests only under `--db`), each run killed after `--timeout` seconds, in a temporary copy of the working tree (uncommitted changes too), which it never writes; prints the survivors with file:line and writes `--out` (target/mutate.edn) |
+| `bb mutate --file src/...` | which mutants of a source file the tests miss, in a temporary copy of the working tree; `bb tasks` lists its flags |
 
 Before a pull request: `bb test:all`, then read the log of each task that did not exit 0. Each
 task starts its own PostgreSQL container. On a machine without docker, `bb lint`,

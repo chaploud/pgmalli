@@ -567,7 +567,7 @@ is not seen; pass them in `:format`.
 
 | option | for |
 |---|---|
-| `:schema "app"` | the schema of unqualified tables |
+| `:schema "app"` | the schema of unqualified tables, the one your connection's `search_path` names |
 | `:jdbc` | the options you pass to next.jdbc ([reading-rows.md](reading-rows.md#the-options-of-nextjdbc)); its `:return-keys true` or `["col" ...]` adds RETURNING to a write ([the row a query returns](#the-row-a-query-returns)) |
 | `:format {...}` | the options you pass to `sql/format`; `:values-default-columns`, `:inline`, `:quoted`, `:dialect`, `:quoted-snake` and `:quoted-always` are read, a name (an alias, a key of `:values`) as the loaded HoneySQL writes it under them |
 | `:result :one` | `h/query-schema`'s alone: the return is what `execute-one!` returns |
@@ -750,6 +750,8 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 
 ## Not checked
 
+- A write to a view PostgreSQL cannot update (one with an aggregate, a join, DISTINCT ...): it
+  is typed as a table's.
 - What [types.md](types.md#names-in-the-registry) leaves to the database: a CHECK and the like.
 - A search path other than `pg_catalog` and then `:schema` (one naming `pg_catalog` later, or
   several schemas): a call resolves as under that one. A cast the application defines

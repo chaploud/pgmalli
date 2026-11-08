@@ -215,12 +215,8 @@ row as the builder builds it, to validate results as they come back:
 ;; => true
 ```
 
-There are two ways to check a row read from the database:
-
-| way | for |
-|---|---|
-| `as-read` | the rows of one table, as `builder` builds them (recommended) |
-| `(:row (h/analyze ...))` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
+A query's row, a join's or some columns', is `(:row (h/analyze ...))`
+([queries](docs/queries.md#the-row-a-query-returns)).
 
 [docs/reading-rows.md](docs/reading-rows.md) has what each type comes back as.
 
@@ -480,14 +476,15 @@ CI tests the oldest versions listed here.
 
 - The registry is the schema at generate time; nothing reads the database at run time
   ([Keeping the file current](#keeping-the-file-current)).
-- PRIMARY KEY, UNIQUE and foreign keys are not checked: a row schema holds for one row.
-- Triggers, EXCLUDE constraints and policies are not enforced
-  ([docs/types.md](docs/types.md#what-is-read)).
+- A table with a BEFORE row trigger for a write takes nil in every NOT NULL column and leaves
+  every column optional there, as the trigger may fill any
+  ([queries](docs/queries.md#the-types-of-the-arguments)).
 - `h/analyze` reads a query as the data `sql/format` takes: code in it is an error, and each
   variant your code builds is analyzed on its own
   ([docs/queries.md](docs/queries.md#stricter-than-postgresql)).
-- What the database checks of a row beyond its columns' types and NOT NULL, no schema checks
-  ([docs/types.md](docs/types.md#names-in-the-registry)).
+- What the database checks beyond a row's column types and NOT NULL (PRIMARY KEY, UNIQUE,
+  foreign keys, CHECKs, triggers, EXCLUDE, policies), no schema checks: a row schema holds for
+  one row ([docs/types.md](docs/types.md#names-in-the-registry), [what is read](docs/types.md#what-is-read)).
 
 ## Stability
 
