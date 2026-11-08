@@ -145,6 +145,59 @@
     (error/checked! (options-schema ks) opts)
     opts))
 
+(def ^:private inline-integers
+  "The types PostgreSQL gives an integer literal, in order: the first whose range (types/types'
+   :range) holds it, else numeric (make_const)."
+  ["integer" "bigint"])
+
+(defn inline-type
+  "The type PostgreSQL gives the literal sql/format's :inline writes value v as: a quoted text
+   (a String's, a UUID's) :unknown, TRUE or FALSE a boolean, an integer the first of
+   inline-integers whose range holds it, else numeric, another number numeric; nil where it
+   writes no literal (a keyword as a name, a date or a map as its text unquoted, NaN and
+   Infinity as names)."
+  [v]
+  (let [s (try (first (sql/format-expr [:inline v])) (catch Exception _ nil))]
+    (cond (not (string? s)) nil
+          (str/starts-with? s "'") :unknown
+          (#{"TRUE" "FALSE"} s) "boolean"
+          (re-matches #"-?\d+" s) (let [n (bigint s)]
+                                    (or (some #(let [[lo hi] (:range (types/types %))] (when (<= lo n hi) %)) inline-integers) "numeric"))
+          (re-matches #"-?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?" s) "numeric")))
+
+(defn inline-finite
+  "Alternative a of a Double or a Float, held to the values sql/format's :inline writes as a
+   literal (inline-type): finite, within a double's bounds, which NaN and the infinities, written
+   as names, are not."
+  [a]
+  (let [[lo hi] [(- Double/MAX_VALUE) Double/MAX_VALUE]]
+    (cond (and (= :double (shape/head a)) (not-any? (or (shape/props a) {}) [:min :max])) (shape/merge-props a {:min lo :max hi})
+          (= :double (shape/head a)) a
+          :else [:and a [:>= lo] [:<= hi]])))
+
+(def inline-classes
+  "[class type schema] of the values sql/format's :inline writes into the SQL as a literal, as
+   inline-type types them, in accept/class-types' order: a String and a UUID untyped; an integer as
+   each type of inline-integers within its range (a schema tells no class: an Integer's too), and as numeric where none holds it; a
+   BigDecimal of scale 0 (1M, written 1) as an integer alike, another numeric; a Double and a
+   Float numeric, finite (inline-finite); a boolean a boolean."
+  (let [whole [:fn {:error/message "should be of scale 0 (1M), which sql/format's :inline writes as an integer"} #(zero? (.scale ^java.math.BigDecimal %))]
+        ranged (fn [c base f]
+                 (for [t inline-integers :let [[lo hi] (:range (types/types t))]]
+                   [c t (if (= :int base)
+                          [:int {:min lo :max hi}]
+                          (into [:and {:gen/schema [:int {:min lo :max hi}] :gen/fmap f} base] (concat (when (= 'decimal? base) [whole]) [[:>= lo] [:<= hi]])))]))
+        rows {String [[String :unknown :string]]
+              java.util.UUID [[java.util.UUID :unknown :uuid]]
+              Long (ranged Long :int nil) Integer (ranged Integer :int nil) Short (ranged Short :int nil) Byte (ranged Byte :int nil)
+              clojure.lang.BigInt (concat (ranged clojure.lang.BigInt 'integer? bigint) [[clojure.lang.BigInt "numeric" 'integer?]])
+              java.math.BigInteger (concat (ranged java.math.BigInteger 'integer? biginteger) [[java.math.BigInteger "numeric" 'integer?]])
+              java.math.BigDecimal (concat (ranged java.math.BigDecimal 'decimal? bigdec) [[java.math.BigDecimal "numeric" 'decimal?]])
+              Double [[Double "numeric" (inline-finite :double)]]
+              Float [[Float "numeric" (inline-finite 'float?)]]
+              Boolean [[Boolean "boolean" :boolean]]}]
+    (vec (for [[c] accept/class-types r (rows c)] r))))
+
 (def ^:private sends
   "{class type} the one sending sends (accept/class-types) but a Character, which a char? on
    every string argument would say nothing of: it is taken by a character column
@@ -152,11 +205,11 @@
   (dissoc (into {} accept/class-types) Character))
 
 (defn- rows-of
-  "{array? [[schema type class] ...]} of [class type] rows, in their order: an array argument's (a
-   Java array but byte[]) and another's."
+  "{array? [[schema type class] ...]} of [class type schema?] rows, in their order, schema the
+   row's or its class's: an array argument's (a Java array but byte[]) and another's."
   [rows]
   (group-by (fn [[s]] (= [:pg/array :pgmalli/element] s))
-            (for [[c t] rows] [(class-schema c) t c])))
+            (for [[c t s] rows] [(or s (class-schema c)) t c])))
 
 (def ^:private sent-rows (rows-of (filter (comp sends first) accept/class-types)))
 
@@ -164,13 +217,13 @@
 
 (def ^:private json-rows (rows-of accept/json-classes))
 
-(def ^:private inline-rows (rows-of accept/inline-classes))
+(def ^:private inline-rows (rows-of inline-classes))
 
 (defn write-rows
   "[schema type class] for each class the one sending sends, in accept/class-types' order, by array?
    an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
    under ::json, a value of a JSON document as accept/json-classes writes it, no array; under
-   sql/format's :inline, a value it writes as a literal (accept/inline-classes), no array; a Character
+   sql/format's :inline, a value it writes as a literal (inline-classes), no array; a Character
    under ::characters alone (sends)."
   [opts array?]
   (cond (::json opts) (if array? [] (get json-rows false []))
@@ -262,7 +315,7 @@
   (class-fn "org.postgresql.util.PGobject"
             (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
 
-(defn- value-kind
+(defn value-kind
   "The kind of alternative a as a value: pgmalli's integer types (:pg/integer) an :int, as malli's is."
   [a]
   (let [k (shape/kind a)] (if (pgtypes/int-ranges k) :int k)))
@@ -277,6 +330,14 @@
                                           " takes alone), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
                       :pgmalli/describe (str "PGobject of " a)}))
 
+(defn- none [_] false)
+
+(defn inline-none
+  "[:fn] that takes no value, as sql/format's :inline writes none where it goes as a literal
+   PostgreSQL takes: why says so."
+  [why]
+  [:fn {:error/message (str "should be no value: " why)} none])
+
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :whole, compared with an
    array column; :assign, to an array column; :common, beside an array column in coalesce or
@@ -285,8 +346,11 @@
    element type is one of t's own (accept/holds?, assigned; under :common, as coalesce resolves it; under = ANY(?), as = resolves an element with it), its elements
    then also that type's values (a bigint[]'s Longs to a numeric[] column); of an enum type,
    an array of that type alone; where t takes a PGobject (of a type known at run time alone), a
-   PGobject too. ::element-type in opts names t's type where t's schema names none (numeric[]'s
-   decimal?). :any without one."
+   PGobject too; where no Java array goes, a PGobject of the array type alone (array-pg-object).
+   ::element-type in opts names t's type where t's schema names none (numeric[]'s decimal?);
+   :any where none does. Under sql/format's :inline, which writes a Java array as no
+   literal, the quoted text the array type's input reads ('{1,2}'), but under unnest, which
+   takes no untyped value."
   [t opts use]
   ;; t may take NULL (a nullable column's elements); its type is the one without
   ;; an array column names its elements' type (a domain's array its base's), which goes first
@@ -339,12 +403,16 @@
                  (for [[_ as] (group-by like alts)]
                    (if (next as) (shape/merge-props (first as) {:pg/classes (into #{} (mapcat (comp :pg/classes shape/props)) as)}) (first as))))
                alts)]
-    (cond (seq alts) (shape/either (cond-> alts (some #{pg-object} (shape/alternatives (shape/non-null t))) (concat [pg-object])) :any)
-          ;; no Java array of the type (text[]'s, String[] going as varchar[]; an enum's): a PGobject
-          ;; of it, which PostgreSQL takes as the array a comparison infers, its elements t's
-          ;; an enum's array has no Java array wherever it goes: assigned too
-          (and p (or (#{:whole :compare} use) (= :enum (shape/kind (shape/non-null t)))))
-          (shape/merge-props (array-pg-object (types/short-name (types/array-of (or elem p))) use)
+    (cond (:inline (:format opts))
+          (if (= :unnest use)
+            (inline-none "unnest of the quoted text sql/format's :inline writes is ambiguous to PostgreSQL (unnest(unknown)): write the array in the query, or cast it")
+            (shape/either (sent-as opts :unknown) :any))
+          (seq alts) (shape/either (cond-> alts (some #{pg-object} (shape/alternatives (shape/non-null t))) (concat [pg-object])) :any)
+          ;; no Java array of the type (text[]'s compared, String[] going as varchar[]; an enum's; a
+          ;; time[]'s, json[]'s or box[]'s wherever it goes): a PGobject of it, which PostgreSQL takes
+          ;; as the array type it names, its elements t's
+          p
+          (shape/merge-props (array-pg-object (types/array-of (types/short-name (or elem p))) use)
                              {:pgmalli/element (shape/non-null t)})
           :else :any)))
 
@@ -368,9 +436,9 @@
           ;; an enum's labels are the column's values; an argument's type keeps those a class sent
           ;; goes as (pgmalli-next.impl.args/labelled-type)
           sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))]
-      (cond (empty? sent) t
-            ;; a json column an override shapes: what is sent as its type is held to that shape
+      (cond ;; a json or jsonb column an override shapes: what is sent as its type is held to that shape
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema
+            (empty? sent) t
             (= :any (shape/head t)) (shape/either sent t)
             ;; a kind the column's own values have already takes their bounds (an integer's range)
             :else (shape/either (concat (shape/alternatives t) (remove #(= (value-kind %) (value-kind (shape/and-base t))) sent)) t)))))

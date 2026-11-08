@@ -178,20 +178,27 @@
   "opts with :schema defaulted; one given that the registry (as reading reads it) holds nothing
    of is an error, unless it holds no schema at all. The default one it lacks is not: a query
    naming every table with its schema needs none, and an unqualified one is an :unknown-table
-   saying which schema holds it; with needed?, where the default names a table, an error."
+   saying which schema holds it; with needed?, where the default names a table, an error, which
+   names the tables of that name in the schemas held where needed? is the table's name."
   ([registry given] (with-defaults registry given false))
   ([registry given needed?]
   (let [opts (merge {:schema syntax/default-schema} given)
         s (:schema opts)
         held (::held registry)]
     (when (and (or needed? (contains? given :schema)) (seq held) (not (some #{s} held)) (not= "pg_catalog" s))
-      (let [meant (error/suggest s held)]
+      (let [meant (error/suggest s held)
+            ;; of one schema held, its name says where; of several, the tables of that name
+            elsewhere (when (and (string? needed?) (next held))
+                        (seq (for [t (table-suggestions registry (str s "." needed?)) :when (= needed? (syntax/table-name t))] (keyword t))))]
         (error/fail! :pgmalli.error/invalid-options
                      (str "the registry holds no schema " (pr-str s) "; "
-                          (if (next held)
-                            (str "it holds " (str/join ", " (map pr-str held)) (error/did-you-mean (some-> meant pr-str)))
-                            (str "pass {:schema " (pr-str (first held)) "}")))
-                     (cond-> {:given s :known (vec held)} meant (assoc :did-you-mean [meant])))))
+                          (cond elsewhere (str "for the table of that name, write " (str/join " or " (map pr-str elsewhere))
+                                               ", or pass its schema as :schema")
+                                (next held) (str "it holds " (str/join ", " (map pr-str held)) (error/did-you-mean (some-> meant pr-str)))
+                                :else (str "pass {:schema " (pr-str (first held)) "}")))
+                     (cond-> {:given s :known (vec held)}
+                       elsewhere (assoc :did-you-mean (vec elsewhere))
+                       (and meant (not elsewhere)) (assoc :did-you-mean [meant])))))
     opts)))
 
 (defn- row-name* [registry name what opts]
@@ -204,7 +211,7 @@
             name
             (let [t (syntax/qualified name (if (or (namespace name) (str/includes? (clojure.core/name name) "."))
                                              (select-keys opts [:format])
-                                             (with-defaults registry opts true)))]
+                                             (with-defaults registry opts (clojure.core/name name))))]
               (when (< 2 (count (str/split t #"\.")))
                 (error/fail! :pgmalli.error/invalid-options
                              (str what " takes a table as :table or :schema.table; " (pr-str name) " names more")
@@ -649,11 +656,18 @@
       t)))
 
 (defn untyped?
-  "A type that says nothing: :any, with or without properties."
+  "A type that says nothing of a value but NULL: :any, or :some (a NOT NULL column's), with or
+   without properties."
   [t]
-  (or (nil? t) (= :any t) (and (vector? t) (= :any (first t)))))
+  (or (nil? t) (contains? #{:any :some} t) (and (vector? t) (contains? #{:any :some} (first t)))))
 
-(defn nullable [t] (if (or (untyped? t) (shape/maybe? t)) t [:maybe t]))
+(defn nullable
+  "t or NULL."
+  [t]
+  (cond (shape/maybe? t) t
+        (= :some (shape/head t)) (if (vector? t) (assoc t 0 :any) :any)
+        (untyped? t) t
+        :else [:maybe t]))
 
 (defn- registry-type
   "The registry's key and schema of the enum type a cast names (:mood, :app.mood);
@@ -963,19 +977,15 @@
   (when t {:schema (types/type-schema t) :type t}))
 
 (defn- literal-type
-  "The expression type of a literal x HoneySQL sends as a parameter (a string, a number, a
-   boolean), or v of [:inline v], which it writes into the SQL: a string an unknown literal, a
-   number by its value."
+  "The expression type of a literal x, a value of no HoneySQL syntax: a boolean, which HoneySQL
+   writes TRUE or FALSE; one HoneySQL sends as a parameter, as the one sending sends its class;
+   v of [:inline v] (inline?) or any under sql/format's :inline, written into the SQL, as
+   PostgreSQL types the literal (jdbc/inline-type), a quoted text an unknown literal."
   [x inline? opts]
-  (cond (string? x) (let [t (if inline? :unknown (jdbc/sent-type x opts))] (if (= :unknown t) {:type :unknown :schema (types/type-schema "text")} (of-type t)))
-        (boolean? x) (of-type "boolean")
-        (not inline?) (let [t (jdbc/sent-type x opts)] (when-not (= :unknown t) (of-type t)))
-        ;; HoneySQL writes 1M and 1N as 1, an integer literal to PostgreSQL, and a ratio as a
-        ;; division of integers
-        (ratio? x) (of-type "integer")
-        (and (number? x) (re-matches #"-?\d+" (str x)))
-        (of-type (let [n (bigint x)] (cond (<= Integer/MIN_VALUE n Integer/MAX_VALUE) "integer" (<= Long/MIN_VALUE n Long/MAX_VALUE) "bigint" :else "numeric")))
-        (number? x) (of-type "numeric")))
+  (let [t (cond (boolean? x) "boolean"
+                (or inline? (:inline (:format opts))) (jdbc/inline-type x)
+                :else (jdbc/sent-type x opts))]
+    (if (= :unknown t) {:type :unknown :schema (types/type-schema "text")} (of-type t))))
 
 (defn named-type-schema
   "The column schema of a value of type n (as cast-target names it, \"x[]\" an array, or as
@@ -1033,7 +1043,7 @@
     (cond
       (syntax/param-key x) {:type :free :nullable? true}
       (or (nil? x) (= :null (syntax/sql-value x))) {:type :unknown :nullable? true}
-      (or (string? x) (boolean? x) (number? x)) (literal-type x false opts)
+      (not (or (keyword? x) (symbol? x) (coll? x))) (literal-type x false opts)
       (syntax/sql-value x) (cond-> (of-type (syntax/sql-value-types (syntax/sql-value x))) (syntax/nullable-sql-values (syntax/sql-value x)) (assoc :nullable? true))
       (syntax/column-keyword? x) (when-let [{s :schema :keys [nullable?]} (resolve-column registry chain x)]
                             ;; a subquery's or a CTE's column has the type its SELECT gives, an opaque table's none
@@ -1044,7 +1054,7 @@
       (and (vector? h) (= 1 (count x))) (sub h)
       (not= x (syntax/operand-alone x)) (sub (syntax/operand-alone x))
       (and (not (keyword? x)) (not (keyword? h))) nil
-      (= :inline h) (let [v (second x)] (when (or (string? v) (boolean? v) (number? v)) (literal-type v true opts)))
+      (= :inline h) (let [v (second x)] (when-not (or (nil? v) (keyword? v) (symbol? v) (coll? v)) (literal-type v true opts)))
       ;; [:lift v] sends v as a parameter as it is, a keyword or a vector too: a collection as the one
       ;; sending sends its class (a map as jsonb)
       (= :lift h) (let [v (second x)]

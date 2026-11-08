@@ -68,6 +68,11 @@
   [given known]
   (first (suggestions given known 1)))
 
+(defn named
+  "A name with its article, as a sentence names a thing of it: \"a java.time.Instant\", \"an Integer\"."
+  [n]
+  (str (if (#{\a \e \i \o \u \A \E \I \O \U} (first n)) "an " "a ") n))
+
 (defn did-you-mean
   "\"; did you mean: x\" for the name x printed as it should appear, \"\" for none. No ? follows:
    a name may end in one (:nullable?)."

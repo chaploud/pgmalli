@@ -670,7 +670,7 @@
 (defn- matrix-values
   "What each argument is sent: a value of each class the one sending sends and of the others of
    values, nil, each integer type's bounds and the integers either side of them (types/types'
-   :range), a fraction, an empty string, a number as a string, and each label of the schema's
+   :range), a negative Integer and Short, a fraction, NaN and an infinity, an empty string, a number as a string, and each label of the schema's
    enums and CHECK lists and a string no enum has, alone, as a keyword and in a String[]."
   [labels]
   (let [bounds (distinct (for [[_ {[lo hi] :range}] types/types :when lo, b [(dec' lo) lo hi (inc' hi)]] b))
@@ -681,7 +681,11 @@
                  bounds
                  labels
                  (map keyword (filter string? labels))
-                 (map #(into-array String [%]) labels)))))
+                 (map #(into-array String [%]) labels)
+                 ;; last: a statement run more often than pgjdbc's prepareThreshold is planned
+                 ;; generically, evaluating a parameter only where a row reaches it, which the
+                 ;; values before them are not run under
+                 [##NaN ##Inf (int -1) (short -1)]))))
 
 (def ^:private samples
   "A value as text of each type of pgmalli-next.impl.types without :literals, for the row of matrix.types."
@@ -924,38 +928,64 @@
 
 (defn- matrix-format [quoted?] (if quoted? {:quoted true} {}))
 
+(defn- negative-oid?
+  "Whether v is a negative integer to an oid alias, or an array of one, held-t
+   (docs/queries.md#stricter-oid)."
+  [held-t v]
+  (and (string? held-t) (accept/oid-alias? (or (types/element held-t) held-t)) (integer? v) (neg? v)))
+
+(def ^:private inline-refusals
+  "The SQLSTATEs of PostgreSQL refusing an inlined literal: its type (type-refusals), or the SQL
+   sql/format wrote of a value it writes as no literal (a syntax error, a name of no column:
+   NaN). A value's range or a CHECK it fails is the value's."
+  (conj type-refusals "42601" "42703"))
+
 (defn inline-matrix
   "The argument matrix under sql/format's :inline, which writes each value into the SQL: each
-   value of matrix-values of a class it writes as a literal (accept/inline-classes) and nil, at
-   each place of a scalar (no IN list, ANY's or unnest's array): :inline where PostgreSQL runs
-   the SQL and the argument's schema under {:format {:inline true}} refuses the value, but nil
-   compared, nil into a NOT NULL column, a negative integer into an oid (docs/queries.md
-   \"Stricter\"), and a literal stricter.edn pins (its type is the literal's, accept/inline-classes')."
+   value of matrix-values it writes as a literal (pjdbc/inline-type) and nil, at each place
+   but unnest's array (an IN list of one value): :inline where PostgreSQL runs the SQL and the
+   argument's schema under {:format {:inline true}} refuses the value, but nil compared, nil into
+   a NOT NULL column, a negative integer into an oid (docs/queries.md \"Stricter\"), and a
+   literal stricter.edn pins (its type is the literal's, pjdbc/inline-type's); :inline-taken
+   where the schema (one of a type, not cast: a cast takes what pg_cast casts in any version
+   the catalog holds) takes a number or a boolean and PostgreSQL refuses its
+   type or the SQL (inline-refusals; a quoted text, which any type's input reads and the schema
+   takes as it does not read it, aside); :untyped
+   where arg-types throws or gives the argument no schema."
   [db]
   (let [{:keys [registry all-values places]} (matrix db)
-        inline-type (fn [v] (some (fn [[c t]] (when (instance? c v) t)) accept/inline-classes))
-        values (filter #(or (nil? %) (inline-type %)) all-values)]
+        values (filter #(or (nil? %) (pjdbc/inline-type %)) all-values)]
     (into []
           cat
           (in-parallel
-           db (remove (comp #{:in :any :unnest :compared-and-any} :context) places)
+           db (remove (comp #{:unnest :compared-and-any} :context) places)
            (fn [conn {:keys [context query column notnull compared-type quoted?] t :type :as place}]
              (let [fmt (assoc (matrix-format quoted?) :inline true)
-                   s (some-> (:x (:args (h/analyze registry query {:format fmt}))) (m/schema {:registry registry}))
+                   s (try (or (some-> (:x (:args (h/analyze registry query {:format fmt}))) (m/schema {:registry registry}))
+                              "arg-types gives :x no schema")
+                          (catch Exception e (str "arg-types throws: " (ex-message e))))
                    assign? (#{:update :insert :insert-select :insert-select-tested :limit} context)
-                   held-t (if (and compared-type (not assign?)) compared-type t)]
-               (vec (for [v values
-                          :let [lit (inline-type v)]
-                          :when (and s (not (m/validate s v)))
-                          :when (not (or (and (nil? v) (compared-contexts context))
-                                         (and (nil? v) notnull (#{:update :insert :insert-select} context))
-                                         ;; docs/queries.md#stricter-oid
-                                         (and (string? held-t) (or (= "oid" held-t) (str/starts-with? held-t "reg")) (integer? v) (neg? v))
-                                         (and (string? lit) (contains? (get stricter [lit (if assign? :assign :compare)]) held-t))))
-                          :let [sqlvec (try (sql/format query (assoc fmt :params {:x v})) (catch Exception _ nil))]
-                          :when (and sqlvec (nil? (refusal conn sqlvec column (and (nil? v) notnull))))]
-                      (merge (select-keys place [:table :column :context :type])
-                             {:kind :inline :sql (first sqlvec) :value v :class (some-> v class .getName) :schema (m/form s)})))))))))
+                   held-t (if (and compared-type (not assign?)) compared-type t)
+                   failure #(merge (select-keys place [:table :column :context :type]) %)]
+               (if (string? s)
+                 [(failure {:kind :untyped :sql (pr-str query) :schema s})]
+                 (vec (for [v values
+                            :let [lit (pjdbc/inline-type v)
+                                  arg (if (= :in context) [v] v)
+                                  taken? (m/validate s arg)]
+                            ;; a schema of any value tells nothing taken, nor a cast's, of what any version casts
+                            :when (or (not taken?) (and (some? v) (not= :unknown lit) (not= :any (m/type s)) (not (#{:cast :compared-and-cast} context))))
+                            :when (not (or (and (nil? v) (compared-contexts context))
+                                           (and (nil? v) notnull (#{:update :insert :insert-select} context))
+                                           ;; docs/queries.md#stricter-oid
+                                           (negative-oid? held-t v)
+                                           (and (not taken?) (string? lit) (contains? (get stricter [lit (if assign? :assign :compare)]) held-t))))
+                            :let [sqlvec (try (sql/format query (assoc fmt :params {:x arg})) (catch Exception _ nil))
+                                  pg (when sqlvec (refusal conn sqlvec column (and (nil? v) notnull)))]
+                            :when (and sqlvec (not (:timeout? pg))
+                                       (if taken? (contains? inline-refusals (:state pg)) (nil? pg)))]
+                        (failure {:kind (if taken? :inline-taken :inline) :sql (first sqlvec) :value v :class (some-> v class .getName)
+                                  :schema (m/form s) :pg pg}))))))))))
 
 (defn arg-matrix
   "Each argument of the queries of matrix-queries, over every column of the oracle schema and
@@ -1021,6 +1051,7 @@
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))
+                                                 (negative-oid? held-t v)
                                                  null-refused?)
                                   ;; accept-test holds accepts? (a cast) to PostgreSQL, of the version it runs
                                   rule? (and takes? (not cast?) (not untyped-there?) (not= "polymorphic" (namespace context)))]

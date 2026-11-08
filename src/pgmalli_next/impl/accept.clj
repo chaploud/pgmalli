@@ -88,6 +88,11 @@
         (when (.isArray e)
           (when-let [r (row-of e rows)] (when (array-type-row? r) (assoc r 0 c)))))))
 
+(defn array-class?
+  "Whether the one sending sends a Java array of class c as an array type (row-of)."
+  [^Class c]
+  (boolean (and c (.isArray c) (some-> (row-of c classes) array-type-row?))))
+
 (defn multi-dimensional?
   "Whether a Java array of class c goes as the array type its component goes as (row-of)."
   [^Class c]
@@ -109,17 +114,6 @@
 (def class-types
   "[class type] of classes, in its order."
   (mapv (fn [[c t]] [c t]) classes))
-
-(def inline-classes
-  "[class type] of the values sql/format's :inline writes into the SQL as a literal, as PostgreSQL
-   types it: a String's and a UUID's quoted text untyped, an integer an integer (a value past
-   int4's range is a bigint or a numeric to PostgreSQL), a Double a numeric, a BigDecimal an
-   integer or a numeric as its scale writes it (1M as 1, 1.5M as 1.5), a boolean a boolean; in
-   class-types' order. Another value (a keyword, a date, a map) it writes as no literal."
-  (let [t {String [:unknown] java.util.UUID [:unknown] Long ["integer"] Integer ["integer"] Short ["integer"] Byte ["integer"]
-           clojure.lang.BigInt ["integer"] java.math.BigInteger ["integer"] Double ["numeric"] Float ["numeric"]
-           java.math.BigDecimal ["integer" "numeric"] Boolean ["boolean"]}]
-    (vec (for [[c] class-types x (t c)] [c x]))))
 
 (def json-classes
   "classes as the one sending's jsonb writes a value of class into a JSON document (data.json, an
@@ -152,6 +146,12 @@
 (def ^:private numbers (set (for [[t e] types/types :when (types/number-entry? e)] t)))
 
 (defn number-type? [t] (contains? numbers t))
+
+(defn oid-alias?
+  "Whether t is oid or an alias of it (regclass, regproc ...): a type PostgreSQL converts an oid to
+   implicitly, which reads a number as an oid."
+  [t]
+  (or (= "oid" t) (contains? (:casts @types/catalog) ["oid" t "i"])))
 
 (defn integer-type? [t] (and (string? t) (= :integer (:value (types/types t)))))
 
@@ -221,10 +221,16 @@
                  (contains? any-text t)
                  (not (answers? t))))))
 
+(def unchanged-assignments
+  "[from to] of the casts PostgreSQL makes on assignment alone (pg_cast's castcontext 'a') that
+   change no value: jsonb to json, the same document."
+  #{["jsonb" "json"]})
+
 (defn holds?
   "Whether a value sent as type sent is one of type t's own: its type; one PostgreSQL converts to
    t implicitly (pg_cast's castcontext 'i', an array element by element), assigned or as a
-   function's argument (:call); compared, one = resolves with (compares?), through casts to a
+   function's argument (:call), and assigned, by a cast of unchanged-assignments (of arrays,
+   element by element); compared, one = resolves with (compares?), through casts to a
    third type too (regclass = regoper as oid = oid, xid = integer as xid = int4; an array of t's
    type alone: anyarray's = takes no other); resolved with t to one type (:common:
    coalesce's, CASE's), one of t's category select_common_type takes; a string of another string
@@ -241,7 +247,7 @@
         :json (and (number-type? t) (number-type? sent) (or (not (integer-type? t)) (integer-type? sent)))
         :compare (and (string? t) (string? sent) (compares? t sent))
         :common (and (string? t) (string? sent) (some? (resolve/common-type [t sent])))
-        (and (string? t) (string? sent) (types/implicit? sent t)))
+        (and (string? t) (string? sent) (or (types/implicit? sent t) (and (= :assign context) (contains? unchanged-assignments (if (types/element t) [(types/element sent) (types/element t)] [sent t]))))))
       (and (string-type? t) (string-type? sent))
       (and (= :unknown sent)
            (or (not (#{:compare :call :common} context))

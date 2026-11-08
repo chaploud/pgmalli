@@ -6,6 +6,7 @@
             [clojure.walk :as walk]
             [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
+            [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
@@ -102,13 +103,14 @@
         inline? (:inline (:format opts))
         rows (jdbc/write-rows opts false)
         untyped (when inline? (for [[x p] rows :when (= :unknown p) a (shape/alternatives x)] a))
-        ;; a number goes to an oid alias (regclass, regproc) as an oid, within oid's range
-        oid (when (= "N" (types/category t)) (types/type-schema "oid"))]
+        ;; a number goes to an oid alias (regclass, regproc) as an oid, within oid's range; resolved
+        ;; with it (coalesce, CASE), which converts it only where a row reaches it, any
+        oid (when (accept/oid-alias? t) (types/type-schema "oid"))]
     (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
                       (for [[x p] rows
                             :when (and (string? p) (not= p t) (accept/holds? t p context))
                             a (shape/alternatives x)]
-                        (cond-> (unlabel a) (and oid (accept/number-type? p)) (within p "oid" oid)))))))
+                        (cond-> (unlabel a) (and oid (accept/number-type? p) (not= :common context)) (within p "oid" oid)))))))
 
 (defn- class-held
   "A function's argument's alternative a held to the classes of its schema the one sending sends
@@ -119,7 +121,7 @@
   (let [k (shape/kind a)
         rows (filter (fn [[s p]] (and (not= :unknown p) (some #(= k (shape/kind %)) (shape/alternatives s)))) (jdbc/write-rows opts false))
         [in out] ((juxt filter remove) (fn [[_ p]] (or (= t p) (takes? p))) rows)
-        named (fn [[_ _ ^Class c]] (let [n (.getSimpleName c)] (str (if (#{\A \E \I \O \U} (first n)) "an " "a ") n)))
+        named (fn [[_ _ ^Class c]] (error/named (.getSimpleName c)))
         hint (some (fn [[_ _ c]] ({Integer "(int n)" Short "(short n)"} c)) in)]
     (cond (or (empty? out) (not (string? t))) a
           (empty? in) nil
@@ -148,6 +150,24 @@
                                   cs (distinct (mapcat class-names same))]
                               [:and {:gen/schema (into [:pg/class] cs)} b (into [:pg/class (shape/props c)] cs)]))))))
 
+
+(def ^:private numeric-special
+  "A Double NaN or infinity, which numeric holds as it is (no other Double), generated NaN alone: a
+   numeric(p, s), whose typmod the registry keeps not, holds no infinity."
+  [:and {:gen/elements [##NaN]} [:double {:pg/type "numeric"}]
+   [:fn {:error/message "should be a Double NaN or infinity alone, which numeric holds as it is"} #(or (Double/isNaN %) (Double/isInfinite %))]])
+
+(defn- one-per-kind
+  "Alternatives as, of a kind the first (shape/distinct-kinds); under sql/format's :inline, as an
+   inlined number of a kind is of several types by its value, each of its own range
+   (jdbc/inline-classes), each of a kind, but that a kind's first alternative of no check
+   (decimal?) takes them all."
+  [opts as]
+  (if (:inline (:format opts))
+    (let [plain? #(let [u (unlabel %)] (or (keyword? u) (symbol? u)))
+          free (into {} (for [a (reverse as) :when (plain? a)] [(jdbc/value-kind a) a]))]
+      (distinct (for [a as :let [k (jdbc/value-kind a)]] (get free k a))))
+    (shape/distinct-kinds as)))
 
 (defn- accepted-type*
   "The type of an argument where a value of column schema s goes, in context (:compare, :call,
@@ -183,12 +203,16 @@
                    [nil a]))
         alts (concat
               (for [p sent
-                    a (if (= :unknown p)
-                        ;; under :inline, a String or a UUID is a quoted literal, which every type's input reads
-                        (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/reads? t % context)))
-                        (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
+                    a (cond (= :unknown p)
+                            ;; under :inline, a String or a UUID is a quoted literal, which every type's input reads
+                            (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/reads? t % context)))
+                            ;; a literal is of its type by its value (jdbc/inline-classes): those values alone
+                            (:inline (:format opts)) (map unlabel (jdbc/sent-as opts p))
+                            :else (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
                     :when (and (not (query/untyped? a))
-                               (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a)))))]
+                               (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a))))
+                               ;; a document of a json column an override shapes is of that shape, as whichever type
+                               (not (and (types/json? t) (types/json? p) (not (query/untyped? own)))))]
                 [p a])
               arrays)]
     (cond
@@ -200,12 +224,12 @@
       ;; compared, assigned, a function's argument or a :common operand, of a type whose values
       ;; pgmalli does not type and pgjdbc reads as a PGobject or a String (a geometric, network,
       ;; timespan or numeric one: inet, interval, regclass, money; or json), a PGobject of it and
-      ;; what converts to it (a map or a vector, sent as jsonb, to json), not any value
-      (and (string? t) (query/untyped? own) (not es) (or (and (#{:compare :assign} context) (#{"G" "I" "T" "N"} (types/category t))) (and (= :assign context) (= "json" t))))
-      (shape/either (concat (untyped-type-values registry s held-in opts)
-                            ;; jsonb, which PostgreSQL assigns to json as it is (castcontext 'a', no value changed)
-                            (when (= "json" t) (jdbc/sent-as opts "jsonb")))
-                    :any)
+      ;; what it holds (a map or a vector, sent as jsonb, to json: accept/unchanged-assignments), not any value
+      ;; under sql/format's :inline, of any type but cast: the quoted text its input reads
+      (and (string? t) (query/untyped? own) (not es)
+           (or (and (#{:compare :assign} context) (#{"G" "I" "T" "N"} (types/category t))) (and (= :assign context) (= "json" t))
+               (and (:inline (:format opts)) (not (#{:cast :json} context)))))
+      (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
       (= :enum (shape/kind own))
       (labelled-type own alts (boolean (some #(or (= t %) (takes? %)) (jdbc/string-sends opts))) (not (::keywords-columns opts)))
@@ -222,47 +246,67 @@
             ;; a cast's array of any elements is broader than an array of the type's own
             cast-kinds (set (map (comp shape/kind second) arrays))
             ;; numeric's NaN and infinities, which the one reading reads as a Double: PostgreSQL
-            ;; assigns them exactly, as no other Double
-            specials (when (and (= :assign context) (= :or-double (:read (types/entry t))))
-                       [[:and {:gen/elements [##NaN ##Inf ##-Inf]} [:double {:pg/type "numeric"}]
-                         [:fn {:error/message "should be a Double NaN or infinity alone, which numeric holds as it is"} #(or (Double/isNaN %) (Double/isInfinite %))]]])
-            all (cond->> (shape/distinct-kinds (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
-                  (and (= :call held-in) (not (::common-type opts))) (keep #(class-held % t takes? opts)))
+            ;; assigns them exactly, as no other Double; sql/format's :inline writes them as names
+            special? #(and (= :assign context) (= :or-double (:read (types/entry %))) (not (:inline (:format opts))))
+            specials (concat (when (special? t) [numeric-special])
+                             ;; a numeric[]'s too, of a Java array of them alone (float8[] to numeric[] by element)
+                             (when (and (string? t) (special? (types/element t)))
+                               (distinct (map second (arrays-sent opts #{"double precision[]"} numeric-special)))))
+            all (cond->> (one-per-kind opts (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
+                  ;; inlined, a literal is of a type by its value, whatever its class
+                  (and (= :call held-in) (not (::common-type opts)) (not (:inline (:format opts)))) (keep #(class-held % t takes? opts)))
             all (concat all specials)]
         (cond (or (= all own-alts) (empty? all)) own (next all) (into [:or] all) :else (first all))))))
 
+(def ^:private inline-rows (jdbc/write-rows {:format {:inline true}} false))
+
 (def ^:private inline-kinds
-  "The kinds of value sql/format's :inline writes into the SQL as a literal (jdbc/inline-types)."
-  #{:string :uuid :int :double :boolean :enum 'decimal? 'integer? 'double? 'float? :pg/integer :pg/smallint})
+  "The kinds of value sql/format's :inline writes into the SQL as a literal (jdbc/inline-classes'),
+   an enum's labels too, which it takes as strings there."
+  (conj (set (map (comp jdbc/value-kind first) inline-rows)) :enum))
+
+(def ^:private inline-row-schemas (set (map first inline-rows)))
+
+(def ^:private finite-kinds
+  "The kinds of inline-kinds of a Double and a Float, whose values but NaN and the infinities it
+   writes as a literal (jdbc/inline-finite)."
+  (set (for [[s _ c] inline-rows :when (#{Double Float} c)] (jdbc/value-kind s))))
 
 (defn- inline-only
-  "t without the values sql/format's :inline writes as no literal (a keyword as a name, a date, a
-   PGobject or a map as their text unquoted)."
-  [t]
-  (if (or (query/untyped? t) (= :nil (shape/head t)))
-    t
+  "t, held-in as accepted-type's, without the values sql/format's :inline writes as no literal (a
+   keyword as a name, a date, a PGobject or a map as their text unquoted, a Double NaN as a name);
+   any value, of a type whose values pgmalli does not type (int4range, an extension's), the
+   quoted text the type's input reads, but cast (a number goes to money) or in a JSON document."
+  [t held-in opts]
+  (cond
+    (= :nil (shape/head t)) t
+    (query/untyped? t) (if (#{:cast :json} held-in) t (shape/either (jdbc/sent-as opts :unknown) t))
+    :else
     (let [inner (shape/non-null t)
-          as (filter #(inline-kinds (shape/kind %)) (shape/alternatives inner))
+          as (for [a (shape/alternatives inner) :let [k (jdbc/value-kind a)] :when (inline-kinds k)]
+               (cond-> a (and (finite-kinds k) (not (inline-row-schemas a))) jdbc/inline-finite))
           kept (cond (= as (shape/alternatives inner)) inner
                      (seq as) (shape/either as inner)
-                     :else [:fn {:error/message "should be a value sql/format's :inline writes as a literal (a string, a number, a boolean)"}
-                            (constantly false)])]
+                     :else (jdbc/inline-none "sql/format's :inline writes a value of this type as no literal: send a string, a number or a boolean"))]
       (if (shape/maybe? t) [:maybe kept] kept))))
 
 (defn accepted-type
   "accepted-type*; under sql/format's :inline, the values it writes as a literal alone."
   [registry s held-in opts]
   (cond-> (accepted-type* registry s held-in opts)
-    (:inline (:format opts)) inline-only))
+    (:inline (:format opts)) (inline-only held-in opts)))
 
 (defn- compared-type
   "The type of an argument compared with a column by op, t as accepted-type gives it compared
    (its ranges left out: PostgreSQL compares a value beyond them, matching
    no row), without NULL; :in's a non-empty vector, list or set of it, as
-   sql/format expands it (IN () is not SQL); an array's the Java arrays the one sending sends (jdbc/array-type).
-   NULL is compared with IS NULL in the query body."
+   sql/format expands it (IN () is not SQL), none under its :inline, which writes no list of it;
+   an array's the Java arrays the one sending sends (jdbc/array-type). NULL is compared with IS
+   NULL in the query body."
   [op t array? opts]
   (cond-> (cond array? (jdbc/array-type t opts :compare)
+                (and (syntax/in-ops op) (:inline (:format opts)))
+                (jdbc/inline-none "sql/format's :inline writes a collection in IN as no list PostgreSQL reads (IN [1, 2]): write the list in the query, [:in :id [1 2]]")
                 (and (syntax/in-ops op) (not (query/untyped? t))) [:or [:sequential {:min 1} t] [:set {:min 1} t]]
                 :else t)
     (syntax/distinct-ops op) query/nullable))
@@ -582,12 +626,13 @@
     (cond (empty? ss) nil
           (next ss) (query/nullable
                      ;; beside others, a type pgmalli does not type (pg_lsn for +) takes a PGobject, not any value
-                     (shape/either (shape/distinct-kinds
-                                    (classes-joined (for [s ss, x (shape/alternatives (accepted-type registry s held-in opts))]
-                                                      ;; an array of such a type takes the Java arrays sent as it
-                                                      (if (and (= :any (shape/head x)) (not (types/element (:pg/type (shape/column-props s)))))
-                                                        jdbc/pg-object
-                                                        (unlabel x)))))
+                     (shape/either (one-per-kind opts
+                                    ((if (:inline (:format opts)) identity classes-joined)
+                                     (for [s ss, x (shape/alternatives (accepted-type registry s held-in opts))]
+                                       ;; an array of such a type takes the Java arrays sent as it
+                                       (if (and (= :any (shape/head x)) (not (types/element (:pg/type (shape/column-props s)))))
+                                         jdbc/pg-object
+                                         (unlabel x)))))
                                    :any))
           :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 

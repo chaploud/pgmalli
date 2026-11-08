@@ -156,7 +156,6 @@
         ;; as values will be sent once this extension is made: a map and a vector by their classes
         after (merge impls (update-vals sending #(hash-map :set-parameter %)))
         sent (concat (filter class? (map first accept/classes))
-                     [Instant clojure.lang.Keyword]
                      (map class [{} (zipmap (range 9) (range 9)) (sorted-map) [] (subvec [1] 0) (first {1 1})]))
         others (sort-by str (distinct (concat (for [c (keys sending)
                                                     :let [f (get-in impls [c :set-parameter])]

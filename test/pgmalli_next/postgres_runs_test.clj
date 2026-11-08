@@ -10,6 +10,7 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
+            [pgmalli-next.oracle :as oracle]
             [pgmalli-next.test-db :refer [builder generated *db* datasource exec-sql! with-postgres]])
   (:import (org.postgresql.util PGobject)))
 
@@ -60,6 +61,12 @@
     (.setAutoCommit con false)
     (try (jdbc/execute! con (sql/format q (assoc (:format opts) :params params)) {:builder-fn (builder-of *db*)})
          (finally (.rollback con)))))
+
+(defn- refused?
+  "Whether PostgreSQL refuses q, run as runs! runs it: for the statement (oracle/refused), not the
+   server or the connection, which it throws."
+  [q params opts]
+  (try (runs! q params opts) false (catch java.sql.SQLException e (boolean (oracle/refused e)))))
 
 (defn- accepted?
   "Whether analyze finds no problem in q and every argument's type takes its value."
@@ -161,7 +168,7 @@
   (when *db*
     (let [reg (registry)
           q {:select [:id] :from [:accounts] :where [:= :status [:lift "live"]]}]
-      (is (thrown? Exception (runs! q {} {})) "PostgreSQL has no status = varchar")
+      (is (refused? q {} {}) "PostgreSQL has no status = varchar")
       (is (= [:uncast-string] (map :kind (:problems (h/analyze reg q)))))
       (is (some? (runs! q {} {:format {:inline true}})))
       (is (= [] (:problems (h/analyze reg q {:format {:inline true}})))))))
@@ -170,7 +177,7 @@
   (when *db*
     (let [reg (registry)
           q {:select [:id] :from [:app.items] :where [:= :status "live"]}]
-      (is (thrown? Exception (runs! q {} {})))
+      (is (refused? q {} {}))
       (is (= [{:kind :uncast-string :column :status :value "live" :type "public.status"}] (:problems (h/analyze reg q))))
       (is (accepted? reg {:select [:id] :from [:app.items] :where [:= :status :?s]} {:s :live} {})))))
 
@@ -188,7 +195,7 @@
           q {:select [:id] :from [:accounts] :where [:and [:= :mail :?m] [:= :mail [:cast :?m :mail]]]}]
       (is (some? (runs! q {:m "a"} {})) "mail = 'a' (as text) keeps no row, so the cast is never evaluated")
       (is (accepted? reg q {:m "a"} {}))
-      (is (thrown? Exception (runs! {:select [[[:cast :?m :mail] :v]]} {:m "a"} {}))))))
+      (is (refused? {:select [[[:cast :?m :mail] :v]]} {:m "a"} {})))))
 
 (deftest a-date-time-or-timestamp-goes-to-a-date-time-or-timestamp
   (when *db*
@@ -310,7 +317,7 @@
       (doseq [[t x] [["bigint[]" (into-array Boolean [true])] ["jsonb[]" (long-array [1])]
                      ["status[]" (into-array String ["gone"])]]]
         (testing (str t " " (pr-str (vec x)))
-          (is (thrown? Exception (runs! (cast-to t) {:x x} {})))
+          (is (refused? (cast-to t) {:x x} {}))
           (is (not (accepted? reg (cast-to t) {:x x} {}))))))))
 
 (deftest an-unnest-of-an-array-cast-to-the-columns-type-holds-each-element-to-the-column
@@ -326,7 +333,7 @@
           (is (some? (runs! (q c t) {:xs ok} {})))
           (is (accepted? reg (q c t) {:xs ok} {}))
           (when bad
-            (is (thrown? Exception (runs! (q c t) {:xs bad} {})))
+            (is (refused? (q c t) {:xs bad} {}))
             (is (not (accepted? reg (q c t) {:xs bad} {}))))))
       (is (= (get-in (h/analyze reg {:select [[[:cast :?xs [:raw "bigint[]"]] :x]]}) [:args :xs])
              (get-in (h/analyze reg (star :x "bigint[]")) [:args :xs]))
@@ -370,13 +377,13 @@
       (doseq [row [{:group_id 1 :name "a" :sort_order 3000000000} {:group_id 1 :name "a" :sort_order 1.5}
                    {:group_id 1}]]
         (testing (pr-str row)
-          (is (thrown? Exception (runs! q {:rows [row]} {})))
+          (is (refused? q {:rows [row]} {}))
           (is (not (accepted? reg q {:rows [row]} {})))))
       (testing "a jsonb column's CHECK is the database's"
         (let [q (insert :ul [:j])]
           (is (some? (runs! q {:rows [{:j {:a 1}}]} {})))
           (is (accepted? reg q {:rows [{:j {:a 1}}]} {}))
-          (is (thrown? Exception (runs! q {:rows [{:j [1]}]} {})))
+          (is (refused? q {:rows [{:j [1]}]} {}))
           (is (accepted? reg q {:rows [{:j [1]}]} {}))))
       (testing "java.time values and a UUID, written as their text, read by the column type's input"
         (let [q (insert :typed [:u :d :ts :tz :t])
@@ -408,7 +415,7 @@
       (is (returned? reg q {:words ok} {}))
       (doseq [row [{:n 1.5} {:n 3000000000} {:role_keys "x"}]]
         (testing (pr-str row)
-          (is (thrown? Exception (runs! q {:words [row]} {})))
+          (is (refused? q {:words [row]} {}))
           (is (not (accepted? reg q {:words [row]} {})))))
       (testing "a record, its document cast to json"
         (let [q {:select [:r.d] :from [[[:json_to_record [:cast :?doc :json]] [:r {:with-columns [[:d :date]]}]]]}]

@@ -62,11 +62,6 @@
   ;; by name: babashka has no java.sql
   (boolean (some #(= "java.sql.Array" (.getName ^Class %)) (supers (class v)))))
 
-(defn- array-class?
-  "Whether the one sending sends a Java array of class c as an array type (accept/row-of)."
-  [^Class c]
-  (boolean (and c (.isArray c) (some-> (accept/row-of c accept/classes) second string?)
-                (some? (types/element (second (accept/row-of c accept/classes)))))))
 
 (defn- elements
   "The elements of Java array v, of an array of arrays (accept/multi-dimensional?) its innermost
@@ -90,12 +85,12 @@
                      ;; the arrays whose elements t takes, as their component class's value tells
                      fits (for [[^Class c] accept/classes
                                 :let [e (some-> c .getComponentType) v (get accept/values (get accept/boxed e e))]
-                                :when (and (array-class? c) (some? v) (or (nil? classes) (contains? classes (.getName c)))
+                                :when (and (accept/array-class? c) (some? v) (or (nil? classes) (contains? classes (.getName c)))
                                            (try (valid? v) (catch Exception _ false)))]
                             (.getSimpleName c))]
                  {:pred (fn [v] (or (sql-array? v)
                                     (let [c (class v)]
-                                      (boolean (and (array-class? c)
+                                      (boolean (and (accept/array-class? c)
                                                     (or (nil? classes) (contains? classes (.getName ^Class c)))
                                                     (some->> (elements v) (every? valid?)))))))
                   :type-properties {:error/message (if (seq fits)

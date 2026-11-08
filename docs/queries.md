@@ -237,7 +237,7 @@ refuses a NULL parameter in `? IS NULL`, whose type nothing tells.
 
 ```clojure
 (:args (h/analyze registry {:select [:id] :from [:users] :where [:or [:= :?id nil] [:= :id :?id]]} {:format {:inline true}}))
-;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float? :string :uuid]]}
+;; => {:id [:maybe [:or [:int #:pg{:type "bigint"}] decimal? integer? [:double {:min -1.7976931348623157E308, :max 1.7976931348623157E308}] [:and float? [:>= -1.7976931348623157E308] [:<= 1.7976931348623157E308]] :string :uuid]]}
 ```
 
 ```clojure
@@ -324,10 +324,14 @@ by the one sending, `pgmalli-next.jdbc/install-sending!`
 | a `PGobject` | the type it names |
 
 Under `{:format {:inline true}}`, `sql/format` writes each argument into the SQL, so an
-argument takes what it writes as a literal (`pgmalli-next.impl.accept/inline-classes`): a
-`String`, quoted, which any type's input reads, a `UUID` likewise, a number, a boolean; no
-keyword, which it writes as a name, nor a date, a map or a `PGobject`, which it writes as their
-text unquoted.
+argument takes what it writes as a literal, of the type PostgreSQL gives the literal
+(`pgmalli-next.impl.jdbc/inline-classes`): a `String`, quoted, which any type's input reads (an
+array's text, `"{1,2}"`, to an array column or `= ANY`; a value of a type pgmalli does not
+type), a `UUID` likewise; an integer as an `integer` within its range, else a `bigint` or a
+`numeric` (a `BigDecimal` of scale 0 too: `1M` is written `1`); another number a `numeric`;
+a boolean. No keyword, which it writes as a name, nor a `Double` NaN or infinity, a date, a map,
+a Java array or a `PGobject`, which it writes as their text unquoted; nothing in `:in`, whose
+collection it writes as no list (write the list in the query, `[:in :id [1 2]]`).
 
 Another class (a set, a list, a symbol; a `java.util.Date`, which pgjdbc refuses, and java.sql's
 `Date`, `Time` and `Timestamp`, whose text pgjdbc writes in the JVM's time zone) is sent nowhere. `pgmalli-next.impl.accept/classes` holds
@@ -359,8 +363,9 @@ an `int[]`, no `long[]`): where none goes so (a `text[]` column, a `String[]` go
 `varchar[]`), a `PGobject` of the type, or cast it (`[:cast :?tags [:raw "text[]"]]`). So does
 one compared with `ANY` where no Java array goes as the element type's array (an enum's:
 `[:= :mood [:any :?ms]]` takes a `PGobject` of `mood[]`, its elements' schema under
-`:pgmalli/element`; cast, `[:cast :?ms [:raw "mood[]"]]`, an array of the labels). Elsewhere,
-without such a class, an array argument is `:any`.
+`:pgmalli/element`; cast, `[:cast :?ms [:raw "mood[]"]]`, an array of the labels), and one
+assigned where no Java array goes as the array type (`time[]`, `json[]`, `interval[]`, `box[]`).
+Elsewhere, without such a class, an array argument is `:any`.
 
 An enum argument takes its labels as keywords, which go untyped, or as strings cast
 (`[:cast :?m :user_status]`): PostgreSQL neither compares a `varchar` with an enum nor assigns
@@ -690,7 +695,8 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-assignment"></a>An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
   `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
-  time off; a `numeric` column takes a `Double` NaN or infinity alone, which it holds as it is),
+  time off; a `numeric` column takes a `Double` NaN or infinity alone, which it holds as it is,
+  a `numeric[]` one an array of them; a `jsonb` goes to a `json` column, the same document),
   and a number assigned to a `text` column PostgreSQL converts through its text.
   Cast it in the query (`[:cast :?n :bigint]`) where the conversion is meant. A value of a
   `jsonb_populate_record` document likewise takes its column's own values, which
