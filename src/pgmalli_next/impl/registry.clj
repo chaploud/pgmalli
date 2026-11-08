@@ -5,6 +5,7 @@
    \"registry\" is two things here: the file's :registry key is a plain {name schema} map of
    schema data, and a malli registry is what registry builds from it."
   (:require [clojure.edn :as edn]
+            [clojure.string :as str]
             [clojure.java.io :as io]
             [clojure.test.check.generators :as gen]
             [clojure.walk :as walk]
@@ -62,9 +63,15 @@
         props (shape/column-props s)
         d (:default props)
         optional? (if (contains? props :default)
-                    ;; a varchar(n)'s length is no schema's check: a longer default is refused too
+                    ;; a length is no schema's check: a default the column's length refuses is refused
+                    ;; too, a varchar(n)'s past n but its trailing spaces (which PostgreSQL drops), a
+                    ;; bit(n)'s of another length
                     (and (m/validate s d {:registry registry})
-                         (not (and (string? d) (:pg/max-length props) (< (:pg/max-length props) (pgtypes/char-length d)))))
+                         (let [n (:pg/max-length props)]
+                           (or (not (string? d)) (nil? n)
+                               (if (= :bits (:typmod (types/entry (shape/type-name props))))
+                                 (= n (count d))
+                                 (<= (pgtypes/char-length (str/replace d #" +$" "")) n)))))
                     (or (:pg/identity props) (contains? props :pg/default) (shape/maybe? s)))]
     (when-not (shape/written-by-database? props)
       [k (cond-> p optional? (assoc :optional true)) s])))

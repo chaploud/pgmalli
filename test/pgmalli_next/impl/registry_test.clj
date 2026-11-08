@@ -223,3 +223,9 @@
     (is (= [true true true false false false]
            (map #(m/validate :pg.public/t {:c %} {:registry reg}) ["" "a" "\\343" "ab" "é" "\\9"]))
         "an ASCII character, or the \\ooo PostgreSQL writes another byte as")))
+
+(deftest a-default-the-columns-length-takes-leaves-the-column-optional
+  (let [reg (registry-of {} [{:name "v" :position 1 :data_type "character varying" :is_nullable false :default_value "'ab    '::character varying" :max_length 3}
+                             {:name "b" :position 2 :data_type "bit" :is_nullable false :default_value "'10'::\"bit\"" :max_length 3}])]
+    (is (= [true false] (map #(boolean (get (into {} (map (juxt first (comp :optional second)) (shape/column-entries (m/form (m/deref (m/schema :pg.public.t/insert {:registry reg})))))) %)) [:v :b]))
+        "varchar(3)'s 'ab    ' PostgreSQL takes, its trailing spaces dropped; bit(3)'s '10' it refuses")))
