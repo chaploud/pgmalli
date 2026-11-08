@@ -56,12 +56,15 @@
 
 (defn- insert-entry
   "A column of an INSERT: optional when the database fills it, unless with a literal default
-   the column itself refuses."
+   the column itself refuses (past its varchar(n)'s length too)."
   [registry e]
   (let [[k p s] (shape/entry-parts e)
         props (shape/column-props s)
+        d (:default props)
         optional? (if (contains? props :default)
-                    (m/validate s (:default props) {:registry registry})
+                    ;; a varchar(n)'s length is no schema's check: a longer default is refused too
+                    (and (m/validate s d {:registry registry})
+                         (not (and (string? d) (:pg/max-length props) (< (:pg/max-length props) (.codePointCount ^String d 0 (count d))))))
                     (or (:pg/identity props) (contains? props :pg/default) (shape/maybe? s)))]
     (when-not (shape/written-by-database? props)
       [k (cond-> p optional? (assoc :optional true)) s])))

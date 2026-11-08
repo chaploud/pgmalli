@@ -174,3 +174,7 @@
     (is (:pg/sequence (shape/row-props (shape/schema-of reg :pg.public/t))))
     (is (not-any? #(contains? reg %) [:pg.public.t/insert :pg.public.t/update]) "a sequence is written by its functions alone")
     (is (not-any? #{:pg.public.t/insert} (:known (ex-data (try (pgmalli/as-read reg :pg.public/zz) (catch clojure.lang.ExceptionInfo e e))))))))
+
+(deftest a-default-longer-than-its-columns-length-makes-the-column-required
+  (let [reg (registry-of {} [{:name "c" :position 1 :data_type "character varying" :is_nullable false :default_value "'abcdef'::character varying" :max_length 3}])]
+    (is (not (m/validate :pg.public.t/insert {} {:registry reg})) "PostgreSQL refuses the default where the row leaves the column out")))

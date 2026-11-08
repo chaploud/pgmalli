@@ -25,6 +25,9 @@
     (is (= [{:name :pg.sample/groups :column :name :property :pg/type :file "text" :db "varchar"}]
            (generate/diff before (with (assoc-in groups [3 1 1 :pg/type] "varchar"))))
         "a property of a column")
+    (is (= [{:name :pg.sample/groups :column :motto :property :pg/type :file "text" :db "varchar"}]
+           (generate/diff (with (conj groups [:motto [:maybe [:string {:pg/type "text"}]]])) (with (conj groups [:motto [:maybe [:string {:pg/type "varchar"}]]]))))
+        "a nullable column's property, inside its [:maybe]")
     (is (= [{:name :pg.sample/groups :column :name :file [:string {:pg/type "text"}] :db [:maybe [:string {:pg/type "text"}]]}]
            (generate/diff before (with (assoc-in groups [3 1] [:maybe [:string {:pg/type "text"}]]))))
         "a column's schema")

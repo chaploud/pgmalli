@@ -18,8 +18,11 @@
    row schema by column and property, anything else as a whole."
   [name file db]
   (let [f (row-parts file) d (row-parts db)
-        props (fn [s] (when (and (vector? s) (map? (second s))) (second s)))
-        props-only? (fn [a b] (and (props a) (props b) (= (assoc a 1 {}) (assoc b 1 {}))))
+        ;; a nullable column's properties are its type's, inside [:maybe ...]
+        inner (fn [s] (if (shape/maybe? s) (last s) s))
+        props (fn [s] (let [s (inner s)] (when (and (vector? s) (map? (second s))) (second s))))
+        props-only? (fn [a b] (and (props a) (props b) (= (shape/maybe? a) (shape/maybe? b))
+                                   (= (assoc (inner a) 1 {}) (assoc (inner b) 1 {}))))
         by (fn [part label] (for [k (distinct (concat (keys (part f)) (keys (part d))))
                                   :let [a (get (part f) k) b (get (part d) k)]
                                   :when (not= a b)
