@@ -49,7 +49,7 @@
    ;; as an OffsetDateTime in UTC, which pgjdbc sends as a timestamptz: an Instant pgjdbc refuses alone
    [java.time.Instant "timestamp with time zone" :time/instant]
    [clojure.lang.Keyword :unknown :keyword #{"S" "E"}]
-   ;; the one sending's jsonb writes a key by its name or text: no nil key
+   ;; the one sending's jsonb writes a key as its text (a keyword's namespace kept): no nil key
    [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
 (def values

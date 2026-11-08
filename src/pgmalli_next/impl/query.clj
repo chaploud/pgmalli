@@ -1246,7 +1246,7 @@
   [registry body opts]
   (when (map? body)
     (if-let [body (sent body opts)]
-      ;; a label twice is one key, as-unqualified-maps keeping the last column's value
+      ;; a label twice is one key, pgmalli-next.jdbc/builder keeping the last column's value
       (when-let [entries (once registry returned-entries body opts)]
         (let [last-of (into {} (map (juxt first identity)) entries)]
           (into [:map] (map last-of) (distinct (map first entries)))))

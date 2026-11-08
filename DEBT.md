@@ -6,3 +6,8 @@ work goes back.
 
 None of these refuses what PostgreSQL takes. Each lets through something PostgreSQL refuses
 (it fails when the query runs), or leaves a type untold. Fix one, then delete its entry.
+
+- An enum named `text`, `name` or `varchar` in a schema on the session's search_path reads as a
+  `String` (`pgmalli-next.jdbc/builder`), while its row type says keyword labels: pgjdbc names it
+  as it names that pg_catalog type, both a `VARCHAR`, and tells no type OID through
+  `ResultSetMetaData`. Off the search_path it is named `"schema"."text"` and reads as keywords.

@@ -9,7 +9,6 @@
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.pgtypes :as pgtypes]
-            [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -92,11 +91,11 @@
   (set? (:pgmalli-next.jdbc/builder (meta f))))
 
 (defn builder!
-  "opts when their :jdbc's :builder-fn, if any, reads the enums of registry as keywords: one made
-   of another registry reads an enum it lacks as a String, which the types say is a keyword."
+  "opts when their :jdbc's :builder-fn, if any, reads the enums of registry as keywords: one of a
+   registry of other enums reads an enum it lacks as a String, which the types say is a keyword."
   [registry opts]
   (when-let [enums (:pgmalli-next.jdbc/builder (meta (:builder-fn (:jdbc opts))))]
-    (let [ours (shape/enum-type-names registry resolve/type-name?)]
+    (let [ours (shape/enum-type-names registry)]
       (when (not= enums ours)
         (error/fail! :pgmalli.error/invalid-options
                      (str "pgmalli options: :jdbc's :builder-fn was made of a registry of other enums ("

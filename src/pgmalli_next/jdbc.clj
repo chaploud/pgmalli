@@ -10,7 +10,6 @@
             [next.jdbc.result-set :as rs]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
-            [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types])
   (:import (java.sql Array PreparedStatement ResultSet ResultSetMetaData Types)
@@ -48,10 +47,11 @@
   [t sql-type enums]
   ;; a type pgjdbc names "schema"."name" is no pg_catalog type
   (let [entry (when-not (str/starts-with? t "\"") (types/entry t))]
-    (cond (types/json? (:name entry)) (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
+    ;; an enum of the name of a pg_catalog type (date) on the search_path is named as that type
+    (cond (and (= Types/VARCHAR sql-type) (contains? enums t)) (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
+          (types/json? (:name entry)) (fn [^ResultSet rs i] (let [v (.getObject rs (int i))]
                                                              (some-> (if (instance? PGobject v) (.getValue ^PGobject v) v) parse-json)))
           (by-kind (:schema entry)) (by-kind (:schema entry))
-          (and (= Types/VARCHAR sql-type) (contains? enums t)) (fn [^ResultSet rs i] (some-> (.getString rs (int i)) keyword))
           :else (fn [^ResultSet rs i]
                   (let [v (.getObject rs (int i))]
                     (if (instance? Array v) (read-array v enums) v))))))
@@ -78,7 +78,7 @@
 
    (jdbc/execute! ds (sql/format q) {:builder-fn (pgmalli-next.jdbc/builder registry)})"
   [registry]
-  (let [enums (shape/enum-type-names registry resolve/type-name?)]
+  (let [enums (shape/enum-type-names registry)]
     (with-meta (fn [^ResultSet rs opts]
                  (let [rd (readers (.getMetaData rs) enums)]
                    ((rs/builder-adapter rs/as-unqualified-maps (fn [_ r i] ((nth rd (dec i)) r i))) rs opts)))
@@ -130,8 +130,9 @@
 (defn install-sending!
   "Extends next.jdbc's SettableParameter, for the whole JVM, for the classes
    docs/reading-rows.md#the-one-reading-and-sending lists. Call it once, before sending arguments.
-   Throws where another extension of it holds a class pgmalli sends (accept/classes'), which
-   would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own."
+   Throws where another extension of it already holds a class pgmalli sends (accept/classes'),
+   which would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own;
+   one made after it is not seen."
   []
   (let [sent (into (set (keys sending)) (filter class?) (map first accept/classes))
         others (sort-by str (for [[c {f :set-parameter}] (:impls prepare/SettableParameter)

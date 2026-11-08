@@ -225,4 +225,13 @@
       (is (= {:q (keyword "n/a") :j {(keyword "n/a") ["n/a"]}}
              (jdbc/execute-one! (datasource) ["SELECT ?::\"Odd s\".\"a\"\"q\" AS q, ?::jsonb AS j" (:q row) {(:q row) [(:q row)]}]
                                 {:builder-fn (builder registry)}))
-          "a label of a / goes as its text, alone and in a jsonb document"))))
+          "a label of a / goes as its text, alone and in a jsonb document")
+      (exec-sql! "CREATE TYPE \"Odd s\".\"date\" AS ENUM ('d1'); CREATE TYPE \"Odd s\".\"integer\" AS ENUM ('i1');
+                  CREATE TABLE \"Odd s\".named (d \"Odd s\".\"date\", i \"Odd s\".\"integer\", real_d date);
+                  INSERT INTO \"Odd s\".named VALUES ('d1', 'i1', '2026-01-01');")
+      (with-open [c (jdbc/get-connection (datasource))]
+        ;; on the search_path, pgjdbc names them as the pg_catalog types date and integer
+        (jdbc/execute! c ["SET search_path = \"Odd s\", public"])
+        (is (= {:d :d1 :i :i1 :real_d (java.time.LocalDate/of 2026 1 1)}
+               (jdbc/execute-one! c ["SELECT * FROM named"] {:builder-fn (builder (pgmalli/registry (generated {:db *db*} "public" "Odd s")))}))
+            "an enum named as a pg_catalog type pgjdbc returns otherwise than a VARCHAR")))))

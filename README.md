@@ -180,8 +180,7 @@ These schemas hold the database's types. For a row your code builds and HoneySQL
 application sends ([docs/queries.md](docs/queries.md#a-row-written-into-a-table)).
 
 A `numeric` column takes a BigDecimal (`10M`); a long such as `10` fails. An enum's schema
-takes its labels as strings, as PostgreSQL names them; a row read holds them as keywords, which
-`as-read` types ([docs/types.md](docs/types.md)):
+takes its labels as strings ([docs/types.md](docs/types.md)):
 
 ```clojure
 (m/validate :pg.public/user_status "closed" {:registry registry})
@@ -218,7 +217,7 @@ There are two ways to check a row read from the database:
 
 | way | for |
 |---|---|
-| `as-read` | the rows of one table, as next.jdbc returns them (recommended) |
+| `as-read` | the rows of one table, as `builder` builds them (recommended) |
 | `(:row (h/analyze ...))` ([queries](docs/queries.md#the-row-a-query-returns)) | the rows of a query: a join, some columns |
 
 [docs/reading-rows.md](docs/reading-rows.md) has what each type comes back as.
@@ -505,7 +504,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli/error` | when |
 |---|---|
 | `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` or `:overrides` too), a schema the database lacks, or an `:out` file generate! did not write |
-| `:pgmalli.error/other-sending` | `install-sending!`: next.jdbc's `SettableParameter` already extended for a class pgmalli sends, by another (`next.jdbc.date-time`'s `LocalDate`), with `:given` the classes |
+| `:pgmalli.error/other-sending` | `install-sending!`: next.jdbc's `SettableParameter` already extended for a class pgmalli sends, by another (`next.jdbc.date-time`'s `LocalDate`), with `:given` the classes' names |
 | `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
 | `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |

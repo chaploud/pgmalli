@@ -14,7 +14,6 @@
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
-            [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.sample :refer [registry]]))
 
@@ -833,7 +832,7 @@
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be the map of options you pass to next.jdbc" (h/analyze registry {:select [:id] :from [:users]} {:jdbc []}))))
 
 (deftest a-builder-other-than-pgmallis-is-an-error-naming-it
-  (let [pgmallis (with-meta (fn [_ _]) {:pgmalli-next.jdbc/builder (shape/enum-type-names registry resolve/type-name?)})]
+  (let [pgmallis (with-meta (fn [_ _]) {:pgmalli-next.jdbc/builder (shape/enum-type-names registry)})]
     (doseq [[jdbc refused] [[{:builder-fn 'next.jdbc.result-set/as-unqualified-maps} ":builder-fn"]
                             [{:builder-fn 'pgmalli-next.jdbc/builder} ":builder-fn"]
                             [{:builder-fn (fn [_ _])} ":builder-fn"]
