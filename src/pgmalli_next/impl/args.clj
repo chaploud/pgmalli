@@ -17,7 +17,7 @@
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
-(declare accepted-type cast-arrays typed-only)
+(declare accepted-type cast-arrays malli-options typed-only)
 
 (defn- array-arg
   "The argument x of [h x] with h one of heads, sent as one array: of array-comparisons by
@@ -67,6 +67,17 @@
           (empty? bounds) a
           (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
           :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))))
+
+(defn- text-held
+  "Alternative a of a value sent untyped, as its text (a keyword's, :n/a as n/a), held to what own,
+   a column's type, takes of a string where an override or a domain checks it ([:and :string
+   ...]): the text is the value the column gets."
+  [a own registry]
+  (let [checked (filter #(and (= :and (shape/head %)) (= :string (shape/kind %))) (shape/alternatives (shape/non-null own)))]
+    (if (and (seq checked) (= :keyword (shape/kind a)))
+      (let [valid? (m/validator (shape/either checked nil) (malli-options registry))]
+        [:and a [:fn {:error/message "should be a keyword whose text the column's string takes"} #(valid? (subs (str %) 1))]])
+      a)))
 
 (defn- arrays-sent
   "[type schema] of the arrays the one sending sends (jdbc/write-rows) as a type pred takes, element in
@@ -214,7 +225,7 @@
               (for [p sent
                     a (cond (= :unknown p)
                             ;; under :inline, a String or a UUID is a quoted literal, which every type's input reads
-                            (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/reads? t % context)))
+                            (map #(text-held % own registry) (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/reads? t % context))))
                             ;; a literal is of its type by its value (jdbc/inline-classes): those values alone
                             (:inline (:format opts)) (map unlabel (jdbc/sent-as opts p))
                             :else (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))

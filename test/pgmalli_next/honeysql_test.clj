@@ -3467,3 +3467,15 @@
         key-type #(shape/non-null (last (some (fn [e] (when (and (vector? e) (= % (first e))) e)) (rest doc))))]
     (is (= ["fill"] (:pgmalli/before-triggers (shape/props (key-type :group_id)))))
     (is (nil? (:pgmalli/before-triggers (shape/props (key-type :nick)))) "a nullable column's is nullable of itself")))
+
+(deftest a-keyword-to-a-checked-string-column-is-held-to-the-check-its-text-meets
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:e [:and {:pg/type "character varying" :pg/domain "email"} :string [:re "@"]]]]}})
+        t (:x (:args (h/analyze reg {:update :t :set {:e :?x}})))
+        greg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                         [:e [:and {:pg/type "character varying" :pg/domain "email" :gen/schema [:string {:min 1 :max 5}] :gen/fmap #(str % "@x")}
+                                                              :string [:fn #(str/includes? % "@")]]]]}})
+        v (h/values-schema greg :t)]
+    (is (= [true false true false] (map #(m/validate t % {:registry reg}) ["a@b" "nope" (keyword "a@b") :nope]))
+        "a keyword goes as its text, which the column gets")
+    (is (every? #(re-find #"@" (let [e (:e %)] (if (vector? e) (name (second e)) e))) (mg/sample v {:registry greg :size 20 :seed 3}))
+        "generated within the check")))
