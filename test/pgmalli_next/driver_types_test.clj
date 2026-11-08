@@ -79,8 +79,8 @@
                                :when (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v))))]
                            [k (some-> v class .getName)]))))
           (let [array? #(re-find #"^d?a_" (name %))]
-            ;; bit(1) reads as a Boolean, money as a Double: neither goes back as its type
-            (is (= [:c_bit :c_money :d_bit :d_money] (sort (remove array? (keys not-taken)))) "the values PostgreSQL does not take back")
+            ;; bit(1) reads as a Boolean, which goes back as no bit
+            (is (= [:c_bit :d_bit] (sort (remove array? (keys not-taken)))) "the values PostgreSQL does not take back")
             ;; an array reads as a vector, which goes as jsonb
             (is (= (sort (filter array? (keys row))) (sort (filter array? (keys not-taken)))) "no array goes back")))))))
 

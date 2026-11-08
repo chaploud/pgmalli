@@ -12,6 +12,7 @@
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.args :as args]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.problems :as problems]
@@ -238,7 +239,7 @@
   "[:fn] of what HoneySQL writes as NULL or DEFAULT (word) under format, one per format so that
    the schemas of one call equal the next's: DEFAULT generated as [:default], which every format
    writes so; nil for NULL where HoneySQL writes no keyword as NULL under format (:quoted)."
-  (memoize
+  (memo/bounded
    (fn [word format]
      (let [[pred candidates] (case word
                                :null [#(and (keyword? %) (syntax/null-value? % format)) [:null :NULL]]

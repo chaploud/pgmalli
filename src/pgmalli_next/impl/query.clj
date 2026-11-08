@@ -8,6 +8,7 @@
             [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.portable :as portable]
@@ -98,9 +99,9 @@
                   r (assoc r
                            ::held (held-schemas schemas)
                            ::generated? (boolean (some shape/generated-name? (keys schemas)))
-                           ::table-columns (memoize #(some->> (column-entries r %) (map (fn [[c s]] [c s]))
+                           ::table-columns (memo/bounded #(some->> (column-entries r %) (map (fn [[c s]] [c s]))
                                                               (into (if (view? r %) {} system-columns))))
-                           ::routines (memoize #(own-routines r %1 %2 %3)))]
+                           ::routines (memo/bounded #(own-routines r %1 %2 %3)))]
               (reset! last-read [schemas r])
               r))]
     (assoc r ::derived (atom {}) ::calls (atom {}))))

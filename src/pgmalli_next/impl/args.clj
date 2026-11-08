@@ -7,6 +7,7 @@
             [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.query :as query]
@@ -763,7 +764,7 @@
   "The classes of accept/values whose value alternative x's kind takes, by name; of a PGobject
    predicate, its class; of an enum, its labels' classes; of an array, ::array; ::untold where
    they cannot be told."
-  (memoize
+  (memo/bounded
    (fn [x]
      (let [x (unlabel x)
            props (shape/props x)]

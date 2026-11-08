@@ -4,6 +4,7 @@
   (:require [clojure.string :as str]
             [honey.sql :as sql]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -670,7 +671,7 @@
   (if (vector? x) (first x) x))
 
 (def ^:private alone?
-  (memoize (fn [h] (= (sql/format-expr :operand) (try (sql/format-expr [h :operand]) (catch Exception _ nil))))))
+  (memo/bounded (fn [h] (= (sql/format-expr :operand) (try (sql/format-expr [h :operand]) (catch Exception _ nil))))))
 
 (defn operand-alone
   "The operand of [op x] where the loaded HoneySQL writes it as x alone ([:and x], [:* x]),
@@ -869,7 +870,7 @@
 (def ^:private call-written?
   "Whether the loaded HoneySQL writes [:f x] as clause k's whole value as the call f(x) (WHERE),
    not as a list of f and x (GROUP BY f, x)."
-  (memoize (fn [k] (boolean (try (str/includes? (first (sql/format {k [:upper :pgmalli_x]})) "UPPER(pgmalli_x)")
+  (memo/bounded (fn [k] (boolean (try (str/includes? (first (sql/format {k [:upper :pgmalli_x]})) "UPPER(pgmalli_x)")
                                  (catch Exception _ false))))))
 
 (defn positions
@@ -993,7 +994,7 @@
 (def ^:private written-name
   "The name sql/format writes a call of function f (a keyword or a name) under, lower case, its
    last dotted part: :collation-for's COLLATION FOR, :collation_for's COLLATION_FOR."
-  (memoize
+  (memo/bounded
    (fn [f]
      (let [s (try (first (sql/format-expr [(keyword (name f))])) (catch Exception _ nil))]
        (if (string? s)
@@ -1098,7 +1099,7 @@
   "[name quoted?] of k (a keyword, or a string) as the loaded HoneySQL writes it under sql/format's
    options format, as a column of :values or, alias? true, as an alias of a select item; name as
    PostgreSQL reads it: a quoted one as it is, else folded to lower case."
-  (memoize (fn [k format alias?]
+  (memo/bounded (fn [k format alias?]
              ;; a name the loaded HoneySQL refuses (:a;b) formats nothing
              (when-let [n (try (let [s (first (sql/format (if alias? {:select [[:a k]]} {:insert-into :t :values [{k 1}]}) (dissoc (or format {}) :params)))]
                                  (second (re-find (if alias? #" AS (.*)$" #"\((.*?)\)") s)))
@@ -1125,7 +1126,7 @@
 (def ^:private null-test-sql
   "Of [op v x] (left?) or [op x v], v a null-value?, whether the loaded HoneySQL writes it as x IS
    NOT NULL (true) or x IS NULL (false); nil for neither (x = NULL, NULL IS x)."
-  (memoize (fn [op v left?]
+  (memo/bounded (fn [op v left?]
              (when-let [[_ negated] (try (re-matches #"(?i)pgmalli_x IS (NOT )?NULL"
                                                      (first (sql/format-expr (if left? [op v :pgmalli_x] [op :pgmalli_x v]))))
                                          (catch Exception _ nil))]

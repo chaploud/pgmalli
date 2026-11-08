@@ -8,6 +8,7 @@
             [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.pgtypes :as pgtypes]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
@@ -43,7 +44,7 @@
 
 (def ^:private one-pattern
   "The regex of a text and flags, one per text: a Pattern equals none but itself."
-  (memoize (fn [^String s flags] (java.util.regex.Pattern/compile s (int flags)))))
+  (memo/bounded (fn [^String s flags] (java.util.regex.Pattern/compile s (int flags)))))
 
 ;; compiled once per set of keys: malli keeps a schema's validator, and options are checked on every call
 (def ^:private options-schema
@@ -310,6 +311,8 @@
           (= :or-double driver-read) (let [d (:pg/domain (shape/props schema))]
                                        (cond-> [:or (driver-type (cond-> schema d (update 1 dissoc :pg/domain)) pgjdbc?) ['double? {:pg/type t}]]
                                          d (shape/merge-props {:pg/domain d})))
+          ;; money: a PGobject of its text (types/types' :read), the driver's object
+          (= :text driver-read) [(if (= :some head) :some :any) {:pg/type t}]
           driver-read [driver-read {:pg/type t}]
           ;; the driver's own object, whatever an override says the value is
           (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
@@ -545,7 +548,7 @@
 (def typed-pg-object
   "pg-object of type t: what it says where a value of t is refused, why a String is where one is
    given. Memoized: a type's schema of one call equals the next's."
-  (memoize
+  (memo/bounded
    (fn [t]
      (shape/merge-props (update pg-object 1 dissoc :error/message)
                         {:error/fn (fn [{:keys [value]} _]
