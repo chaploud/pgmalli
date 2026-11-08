@@ -127,7 +127,7 @@
     (.setType "jsonb")
     (.setValue (try (json/write-str (walk/postwalk json-text x) :default-write-fn write-temporal)
                     (catch StackOverflowError _
-                      (error/fail! :pgmalli.error/invalid-options "a map or a vector goes as jsonb, which pgmalli writes no document of nested deeper than the stack walks"
+                      (error/fail! :pgmalli.error/invalid-options (str "a map or a vector goes as jsonb, which holds no document of " accept/too-deep)
                                    {:given (.getName (class x))}))))))
 
 (defn- offset-date-time
@@ -143,7 +143,7 @@
   "The extension install-sending! makes: {class set-parameter}, each flagged as pgmalli's (a
    namespace loaded again makes other functions)."
   (update-vals {Instant (fn [v ^PreparedStatement s ^long i] (.setObject s i (offset-date-time v)))
-                clojure.lang.Keyword (fn [k ^PreparedStatement s ^long i] (.setObject s i (subs (str k) 1) Types/OTHER))
+                clojure.lang.Keyword (fn [k ^PreparedStatement s ^long i] (.setObject s i (accept/sent-text k) Types/OTHER))
                 clojure.lang.IPersistentMap (fn [m ^PreparedStatement s ^long i] (.setObject s i (jsonb m)))
                 clojure.lang.IPersistentVector (fn [v ^PreparedStatement s ^long i] (.setObject s i (jsonb v)))}
                #(with-meta % {::sending true})))

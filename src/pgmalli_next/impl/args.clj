@@ -76,7 +76,7 @@
   (let [checked (filter #(and (= :and (shape/head %)) (= :string (shape/kind %))) (shape/alternatives (shape/non-null own)))]
     (if (and (seq checked) (= :keyword (shape/kind a)))
       (let [valid? (m/validator (shape/either checked nil) (malli-options registry))]
-        [:and a [:fn {:error/message "should be a keyword whose text the column's string takes"} #(valid? (subs (str %) 1))]])
+        [:and a [:fn {:error/message "should be a keyword whose text the column's string takes"} #(valid? (accept/sent-text %))]])
       a)))
 
 (defn- arrays-sent
@@ -355,7 +355,7 @@
     (cond (value? x) {:value x}
           (= :lift (when (vector? x) (first x)))
           (cond (or (value? v) (coll? v)) {:value v}
-                (keyword? v) {:value v :text (subs (str v) 1)})
+                (keyword? v) {:value v :text (accept/sent-text v)})
           (and (= :inline (when (vector? x) (first x))) (string? v)) {:value v :inline true})))
 
 (defn- literal-key

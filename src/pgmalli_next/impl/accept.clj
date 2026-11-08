@@ -11,11 +11,20 @@
 
 ;;; what an application sends
 
-(defn json-key-text
-  "The text of key k of a map the one sending writes as jsonb: a keyword's or a symbol's with its
-   namespace (:n/a as n/a), as it sends a keyword alone; another's its str."
+(defn sent-text
+  "The text the one sending sends keyword k as, untyped: its name with its namespace (:n/a as n/a)."
   [k]
-  (cond (keyword? k) (subs (str k) 1) (symbol? k) (str k) :else (str k)))
+  (subs (str k) 1))
+
+(defn json-key-text
+  "The text of key k of a map the one sending writes as jsonb: a keyword's as it sends one alone
+   (sent-text), another's its str."
+  [k]
+  (if (keyword? k) (sent-text k) (str k)))
+
+(def too-deep
+  "Why a document nested past the stack is no document the one sending writes."
+  "nesting deeper than the stack walks")
 
 (defn json-problem
   "Why the one sending cannot write document x (a map or a vector) as jsonb, nil where it can: a
@@ -28,8 +37,8 @@
                                      (frequencies (map json-key-text (keys v))))
                                (some walk (vals v)))
                   (coll? v) (some walk v)
-                  (and (or (double? v) (float? v)) (or (Double/isNaN (double v)) (Double/isInfinite (double v)))) "a NaN or an infinity, which JSON has not"))]
-    (try (walk x) (catch StackOverflowError _ "nesting deeper than the stack walks"))))
+                  (and (float? v) (or (Double/isNaN (double v)) (Double/isInfinite (double v)))) "a NaN or an infinity, which JSON has not"))]
+    (try (walk x) (catch StackOverflowError _ too-deep))))
 
 (defn- array "The class of an array of c." [c] (class (make-array c 0)))
 (defn- named "The class named n; nil where the runtime has none." [n] (try (Class/forName n) (catch Throwable _ nil)))
