@@ -65,7 +65,13 @@
         enum (some #(when (= :enum (:fact %)) %) facts)
         unknown (some #(when (= :unknown-type (:fact %)) %) facts)
         n (some #(when (= :max-length (:fact %)) (:max %)) facts)
-        base (cond override override
+        base (cond
+               ;; a name of the user's registry or of the file's (:my.app/code, :pg.public/mood) a
+               ;; reference, which carries properties: [k {...}] of a name is no schema; malli's and
+               ;; pgmalli's own types (:time/instant, :pg/integer) as they are
+               (or (string? override) (and (qualified-keyword? override) (not (#{"time" "pg"} (namespace override)))))
+               [:ref override]
+               override override
                    enum (cond->> [:ref (shape/schema-key schema-name (:type-name enum))] (:array? enum) (vector :vector))
                    ;; a type of another schema named as a pg_catalog type (s.date) is no pg_catalog type
                    unknown (if (types/element type) [:vector :any] :any)

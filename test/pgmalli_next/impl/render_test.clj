@@ -304,3 +304,13 @@
     (is (= (set (keep :extension (vals types/types)))
            (set (code (str/replace (second (re-find #"(?s)extension is in:\s(.*?)\.\s" (section "Extensions"))) #"\(`[^`]*`\)" ""))))
         "the extensions docs/types.md lists")))
+
+(deftest an-override-of-a-registrys-name-is-a-reference-to-it
+  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
+                                                 :tables {"t" {:columns [{:name "b" :position 1 :data_type "text" :is_nullable false}
+                                                                         {:name "c" :position 2 :data_type "text" :is_nullable false}]
+                                                               :constraints {}}}})
+                                       {:public.t/b :my.app/code :public.t/c :time/instant})
+        column (fn [k] (some #(when (= k (first %)) (last %)) (drop 2 (:pg.public/t registry))))]
+    (is (= [:ref {:pg/type "text"} :my.app/code] (column :b)) "[k {...}] of a name is no schema malli builds")
+    (is (= [:time/instant {:pg/type "text"}] (column :c)) "a type of malli's or pgmalli's own takes properties as it is")))
