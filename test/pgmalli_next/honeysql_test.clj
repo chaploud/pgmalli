@@ -3485,3 +3485,9 @@
 (deftest a-literal-of-the-columns-type-out-of-its-shape-says-so
   (let [said (first (h/humanize (:problems (h/analyze docs {:update :docs :set {:meta [:lift {:a "x"}]} :where [:= :id 1]}))))]
     (is (str/includes? said "its own type, but is none of the values its schema takes") said)))
+
+(deftest a-coalesce-nested-deep-is-typed-reading-each-argument-once
+  (let [nested (reduce (fn [a _] [:+ [:coalesce a 1] 1]) :id (range 25))
+        f (future (h/analyze registry {:select [:id] :from [:users] :where [:= :id nested]} opts))]
+    (is (not= ::slow (deref f 20000 ::slow)))
+    (future-cancel f)))

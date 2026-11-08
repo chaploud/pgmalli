@@ -1083,9 +1083,11 @@
                       (assoc r :schema (some->> (:schema r) computed-of-one-type)
                              :nullable? (or (not else?) (boolean (some :nullable? vts))))))
       (common-type-functions (syntax/called x))
-      (some-> (common (map sub (rest x)))
-              ;; greatest and least skip NULLs as coalesce does
-              (assoc :nullable? (not-any? #(and % (not (:nullable? %))) (map sub (rest x)))))
+      ;; the arguments' types read once: twice, a nesting of n would be read 2^n times
+      (let [ts (mapv sub (rest x))]
+        (some-> (common ts)
+                ;; greatest and least skip NULLs as coalesce does
+                (assoc :nullable? (not-any? #(and % (not (:nullable? %))) ts))))
       (= "nullif" (syntax/called x)) (nullif-type (map sub (rest x)))
       ;; x op ANY(array) is boolean (docs 9.24.3), NULL where an element is
       (and (vector? x) (= 3 (count x)) (keyword? h) (syntax/operator? h) (syntax/array-of-elements? (nth x 2))) (assoc (of-type "boolean") :nullable? true)
