@@ -57,9 +57,11 @@
 
 (def write-keys [:insert-into :update :delete-from :truncate])
 
-(def statement-keys
-  (into #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top}
-        (concat write-keys set-operation-keys)))
+(def select-clauses
+  "The clauses a SELECT's list is written in."
+  [:select :select-distinct :select-distinct-on :select-top :select-distinct-top])
+
+(def statement-keys (into (set select-clauses) (concat write-keys set-operation-keys)))
 
 (def default-schema "public")
 
@@ -676,7 +678,7 @@
 
 (def select-list-clauses
   "The clauses of a select list, whose items are [expr alias] (selected-items')."
-  #{:select :select-distinct :select-distinct-on :select-top :select-distinct-top :returning})
+  (conj (set select-clauses) :returning))
 
 (defn- distinct-on-parts
   "[expressions items] of a :select-distinct-on value: DISTINCT ON's, then the select list's."
@@ -693,11 +695,12 @@
    :select-top or :select-distinct-top (after their first value) or :returning, an expression HoneySQL writes as its operand alone (operand-alone) that
    operand."
   [stmt]
-  (let [s (or (:select stmt) (:select-distinct stmt) (:returning stmt))
-        after-first (or (:select-top stmt) (:select-distinct-top stmt))]
-    (for [item (cond (or (vector? s) (keyword? s)) (vectorish s)
-                     (:select-distinct-on stmt) (second (distinct-on-parts (:select-distinct-on stmt)))
-                     (vector? after-first) (rest after-first))]
+  (let [k (some #(when (contains? stmt %) %) (conj select-clauses :returning))
+        v (get stmt k)]
+    (for [item (case k
+                 :select-distinct-on (second (distinct-on-parts v))
+                 (:select-top :select-distinct-top) (when (vector? v) (rest v))
+                 (vectorish v))]
       (if (and (vector? item) (<= 1 (count item) 2))
         (let [e (operand-alone (first item))] (if (and (= 1 (count item)) (keyword? e)) e (assoc item 0 e)))
         item))))

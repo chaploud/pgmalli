@@ -1198,7 +1198,7 @@
    INSERT writes ({:insert-into :t :columns [...] :select [...] :returning [...]})."
   [stmt]
   (cond-> stmt
-    (some #(contains? stmt %) syntax/write-keys) (dissoc :select :select-distinct :select-distinct-on :select-top :select-distinct-top)))
+    (some #(contains? stmt %) syntax/write-keys) (#(apply dissoc % syntax/select-clauses))))
 
 (defn- row-entries
   "The entries of the row of the statement at path in a query, in order, a label twice where its
