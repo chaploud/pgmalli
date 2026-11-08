@@ -3527,3 +3527,9 @@
                                                         [:ia [:maybe [:vector {:pg/type "integer[]"} [:int {:pg/type "integer"}]]]]]}})
         doc (:rows (:args (h/analyze reg {:insert-into [[:t [:ma :ia]] {:select [:ma :ia] :from [[[:jsonb_populate_record [:cast nil :t] :?rows] :r]]}]})))]
     (is (m/validate doc {:ma [:happy] :ia ["1"]} {:registry reg}) "a keyword label and a number's text, as the one reading reads them back")))
+
+(deftest a-character-goes-to-a-character-column-alone-as-stricter-character-says
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "character" :pg/max-length 1}]] [:t [:string {:pg/type "text"}]]]}})
+        ok? (fn [col] (m/validate (:x (:args (h/analyze reg {:update :t :set {col :?x}}))) \a {:registry reg}))]
+    (is (ok? :c))
+    (is (not (ok? :t)) "PostgreSQL takes it as varchar: docs/queries.md#stricter-character")))

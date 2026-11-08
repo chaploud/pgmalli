@@ -740,9 +740,9 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-json-keys"></a>A map `install-sending!` sends as `jsonb` with two keys of one text
   (`:a` and `"a"`, `:n/a` and `'n/a`): PostgreSQL keeps the last of them, which is the map's hash
   order's, not the application's. Sending it is an error; keep one key.
-- A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
-  one: taking it would put `char?` on every string argument (a `"char"` column takes a `varchar`
-  on assignment alone, cut to its first byte). Send `(str c)`.
+- <a id="stricter-character"></a>A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
+  one: taking it would put `char?` on every string argument (a `"char"` column, as
+  [above](#stricter-assignment)). Send `(str c)`.
 - A key of a `jsonb_populate_record` document (or of `json_populate_record` and their
   `recordset`) that names no column of the row type, which PostgreSQL ignores: almost always a
   misspelled or unconverted key (`:sort-order` for `sort_order`), whose value is then not

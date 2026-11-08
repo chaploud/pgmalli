@@ -1047,6 +1047,8 @@
                                   ;; left out by a rule of docs/queries.md "Stricter than PostgreSQL" that PostgreSQL's
                                   ;; verdicts pin (stricter.edn); a cast's accepts? PostgreSQL's verdicts pin (accept-test)
                                   ;; a class the one sending sends nowhere (docs/queries.md#what-your-application-sends)
+                                  ;; a class the one sending sends nowhere (docs/queries.md#what-your-application-sends),
+                                  ;; or a Character, which it sends to a character column alone (#stricter-character)
                                   pinned? (or (nil? sent)
                                               (and cast? (not takes?))
                                               ;; one sent untyped, pinned by its class, as accept/reads? reads it
