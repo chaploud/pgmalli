@@ -2247,6 +2247,15 @@
                                            :limit [:jsonb_array_length :?rows]} :r]]}]}]
       (is (ok? derived :rows [{:group_id 1 :score 0}]))
       (is (not (ok? derived :rows [{:group_id 1}])) "through a derived table, score NOT NULL too"))
+    (let [ordered {:insert-into [[:users [:group_id :score]]
+                                 {:select [:r/group_id :r/score]
+                                  :from [[{:select [:j/group_id :j/score :j/ordinality]
+                                           :from [[[:with-ordinality [:jsonb_populate_recordset [:cast nil :users] :?rows] :j]]]
+                                           :limit [:jsonb_array_length :?rows]} :r]]
+                                  :order-by [:r/ordinality]}]}]
+      (is (ok? ordered :rows [{:group_id 1 :score 0}]))
+      (is (not (ok? ordered :rows [{:group_id 1}])) "WITH ORDINALITY too")
+      (is (not (ok? ordered :rows [{:group_id 1 :score 0 :ordinality 1}])) "ordinality no key of the document"))
     (let [star {:insert-into [[:groups [:id :name]] {:select [:*] :from [[[:jsonb_populate_recordset [:cast nil :groups] :?rows] :r]]}]}]
       (is (ok? star :rows [{:id 1 :name "a"}]))
       (is (not (ok? star :rows [{:id 1}])) "SELECT * writes every column of the row type"))

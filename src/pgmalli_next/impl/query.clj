@@ -343,11 +343,13 @@
         [al listed] (syntax/alias-columns al ordinality?)
         [kind n args :as parts] (when (vector? f) (syntax/call-parts f))
         renamed (fn [cs] (vec (map-indexed (fn [i [c s]] [(if (< i (count listed)) (syntax/ident-name (nth listed i) (:format opts)) c) s]) cs)))
-        populated (when (and (not ordinality?) (or (nil? listed) (sequential? listed)))
+        populated (when (or (nil? listed) (sequential? listed))
                     (when-let [p (populate-call registry chain f opts)] (populated-columns registry p item opts)))]
     (if populated
-      ;; the columns of the row type, NULL where the document lacks a key
-      (renamed (for [[c s] populated] [c (some-> s nullable)]))
+      ;; the columns of the row type, NULL where the document lacks a key; WITH ORDINALITY, then
+      ;; ordinality
+      (renamed (cond-> (vec (for [[c s] populated] [c (some-> s nullable)]))
+                 ordinality? (conj ["ordinality" (named-type-schema registry opts "bigint")])))
       ;; a column definition list where the function returns no record PostgreSQL refuses
       ;; (:column-definition-list): no column of it told
       (when (and (= :functions kind) (not (syntax/column-definitions item)) (or (nil? listed) (and (sequential? listed) (every? ident? listed))))

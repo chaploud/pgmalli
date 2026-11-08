@@ -581,7 +581,14 @@
         {:keys [x chain]} (syntax/expression-nodes ps)
         :let [{:keys [table set? type json arg] :as call} (query/populate-call registry chain x opts)]
         :when arg
-        :let [item (some (fn [{i :x top? :top?}] (when (and top? (vector? i) (identical? x (first i))) i)) ps)
+        :let [;; [call alias], or [[:with-ordinality call alias]]
+              item (some (fn [{i :x top? :top?}]
+                           (when (and top? (vector? i)
+                                      (or (identical? x (first i))
+                                          (and (vector? (first i)) (= :with-ordinality (ffirst i)) (identical? x (second (first i))))))
+                             i))
+                         ps)
+              ordinality? (and (vector? (first item)) (= :with-ordinality (ffirst item)))
               columns (query/populated-columns registry call item opts)]
         :when columns
         :let [s (if (syntax/param-key json) (types/type-schema type) (:schema (query/expression-type registry chain json opts)))
@@ -601,6 +608,8 @@
                                 :let [{:keys [column opaque?] from :table} (query/resolve-column registry chain y)]
                                 :when (and opaque? (= alias from))]
                             (keyword column))))
+              ;; WITH ORDINALITY's column, no column of the document
+              used (cond-> used ordinality? (disj :ordinality))
               ;; {output column, call's column} of the statement's select items that are columns of
               ;; the call: a statement over it as a derived table (FROM (SELECT j.a ... LIMIT n) r) writes r.a
               through (when alias
