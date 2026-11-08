@@ -273,13 +273,26 @@
     (is (contains? (:casts @types/catalog) [from to "a"]) (str from " to " to))))
 
 
+(def ^:private inlined
+  "Values sql/format's :inline writes as a literal, at the edges of the types PostgreSQL gives them."
+  [1 -2147483648 2147483647 2147483648 -9223372036854775808 9223372036854775807 9223372036854775808N
+   (int 1) (short -1) 1N (biginteger 5) 1M 1.5M 1E+3M 1.5 1.0E20 (float 1.5) true "a" #uuid "00000000-0000-0000-0000-000000000001"])
+
+(def ^:private not-inlined [##NaN ##Inf (java.time.LocalDate/of 2026 1 1) :a])
+
 (deftest an-inlined-literal-is-of-the-type-postgresql-gives-it
   (when *db*
     (with-open [con (jdbc/get-connection (datasource))]
-      (doseq [v [1 -2147483648 2147483647 2147483648 -9223372036854775808 9223372036854775807 9223372036854775808N
-                 (int 1) (short -1) 1N (biginteger 5) 1M 1.5M 1E+3M 1.5 1.0E20 (float 1.5) true "a" #uuid "00000000-0000-0000-0000-000000000001"]
+      (doseq [v inlined
               :let [[q] (sql/format {:select [[[:pg_typeof [:inline v]] :t]]})
                     t (:t (jdbc/execute-one! con [(str "SELECT t::text AS t FROM (" q ") AS s")]))]]
         (is (= (pgjdbc/inline-type v) (if (= "unknown" t) :unknown (types/canonical-name t))) (pr-str v)))
-      (doseq [v [##NaN ##Inf (java.time.LocalDate/of 2026 1 1) :a]]
+      (doseq [v not-inlined]
         (is (nil? (pgjdbc/inline-type v)) (str (pr-str v) ": " (first (sql/format-expr [:inline v]))))))))
+
+(deftest inline-classes-type-each-value-as-inline-type-does
+  (let [types-of (fn [v] (set (for [[c t s] pgjdbc/inline-classes :when (and (instance? c v) (m/validate s v))] t)))]
+    (doseq [v inlined]
+      (is (contains? (types-of v) (pgjdbc/inline-type v)) (pr-str v)))
+    (doseq [v not-inlined]
+      (is (empty? (types-of v)) (pr-str v)))))
