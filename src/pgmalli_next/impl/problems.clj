@@ -438,13 +438,15 @@
      {:kind :written-otherwise :clause w :before s})))
 
 (defn- written-inline
-  "{:kind :written-otherwise :op :in :lifted true} of each IN of a [:lift coll], which sql/format's
-   :inline writes as the collection's text (IN [1, 2]), no list."
+  "{:kind :written-otherwise :lifted v} of each [:lift v] of a collection or a map, which
+   sql/format's :inline writes as its printed text ([1, 2], {a: 1}), no SQL; but a list of one,
+   written (1)."
   [body format]
   (when (:inline format)
     (distinct (for [x (tree-seq syntax/branch? seq body)
-                    :when (and (vector? x) (syntax/in-ops (first x)) (syntax/lifted-coll? (nth x 2 nil)))]
-                {:kind :written-otherwise :op (first x) :lifted true}))))
+                    :let [v (when (and (vector? x) (= :lift (first x)) (= 2 (count x))) (second x))]
+                    :when (and (coll? v) (not (and (seq? v) (= 1 (count v)))))]
+                {:kind :written-otherwise :lifted v}))))
 
 (defn- written-keywords
   "{:kind :written-otherwise :column k} of each column a write names by keyword k (:values,

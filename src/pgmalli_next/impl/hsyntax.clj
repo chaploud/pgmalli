@@ -1191,10 +1191,12 @@
    as [:position a :!in b]; a function's argument
    {:distinct x :order-by [...]} as [:order-by [:distinct x] ...]; an :at-time-zone zone named by
    a keyword as the string it is: the SQL HoneySQL writes of each.
-   The rows of :values, :set and :do-update-set are maps of columns, not statements."
+   The rows of :values, :set and :do-update-set are maps of columns, not statements; [:lift v]'s v
+   is a value, as it is."
   [x]
   (let [row #(if (map? %) (update-vals % as-vectors) (as-vectors %))]
-    (cond (seq? x) (mapv as-vectors x)
+    (cond (and (vector? x) (= :lift (first x))) x
+          (seq? x) (mapv as-vectors x)
           (map? x) (let [m (into (empty x) (map (fn [[k v]] [k (cond (assignment-clauses k) (row v)
                                                                       (and (= :values k) (sequential? v)) (mapv row v)
                                                                       :else (as-vectors v))]))

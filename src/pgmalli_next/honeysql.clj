@@ -264,7 +264,10 @@
           (= :and h) (when-let [b (generated-values r own (shape/and-base t))] (shape/update-and-base t (constantly b)))
           (= :pg/array h)
           ;; of elements but NULL, an array of NULLs alone telling nothing of its type
-          (when-let [e (generated-values r (when (= :vector (shape/head own)) (last own)) (shape/non-null (last t)))]
+          ;; its elements of the array's precision (a numeric(p, s)[]'s)
+          (when-let [e (generated-values r (when (= :vector (shape/head own))
+                                             (shape/merge-props (last own) (select-keys (shape/props own) [:pg/precision :pg/scale])))
+                                         (shape/non-null (last t)))]
             (let [valid? (malli.core/validator t (args/malli-options r))]
               (shape/merge-props t {:gen/schema [:vector {:min 1 :max 3} e] :gen/fmap #(java-array valid? %)})))
           (and (#{:map-of :vector :sequential} h) (#{:any :some} (shape/head (last t))))
@@ -359,7 +362,7 @@
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
           row (into [:map {:closed true :error/fn extra-key-message}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
-          generated (into [:map] (for [[k _ t g required?] columns :when (or g required?)] (entry k required? (or g t))))
+          generated (into [:map] (for [[k _ _ g required?] columns :when (or g required?)] (entry k required? (or g [:fn any?]))))
           ;; HoneySQL writes an empty :set as SET alone, an empty row as VALUES (), which PostgreSQL refuses
           non-empty #(vector :and % [:not [:= nil {}]])]
       (shape/merge-props (non-empty row) {:gen/schema (non-empty generated)}))))
@@ -519,9 +522,9 @@
                             " leave it out, or write [:default]"))
    :written-otherwise (fn [{:keys [op dropped call column clause before param columns] :as p}]
                         (cond
-                          (:lifted p)
-                          (str (pr-str [op :x [:lift [1 2]]]) " is written under :inline as the collection's text, x " (str/upper-case (str/replace (name op) "-" " ")) " [1, 2], no list:"
-                               " write the list in the query, " (pr-str [op :x [1 2]]))
+                          (contains? p :lifted)
+                          (str "[:lift v] of a collection or a map is written under :inline as its printed text ([1, 2], {a: 1}), no SQL:"
+                               " write a list in the query ([:in :x [1 2]]), or send the value as an argument, without :inline")
                           columns
                           (str (pr-str column) " in :columns is written as parameters, one per character, not as a column:"
                                " list the columns in the target, {:insert-into [:t [" (pr-str column) " ...]]}")

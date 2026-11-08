@@ -3634,10 +3634,21 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:int {:pg/type "integer"}]]]}})
         q {:select [:n] :from [:t] :where [:in :n [:lift [1 2]]]}]
     (is (= "SELECT n FROM t WHERE n IN [1, 2]" (first (sql/format q {:inline true}))) "HoneySQL's")
-    (is (= [{:kind :written-otherwise :op :in :lifted true}] (:problems (h/analyze reg q {:format {:inline true}}))))))
+    (is (= [{:kind :written-otherwise :lifted [1 2]}] (:problems (h/analyze reg q {:format {:inline true}}))))
+    (is (= [] (:problems (h/analyze reg {:select [:n] :from [:t] :where [:in :n [:lift '(1)]]} {:format {:inline true}}))) "IN (1) of a list of one")
+    (is (= [{:kind :written-otherwise :lifted {:a 1}}] (:problems (h/analyze reg {:update :t :set {:n [:lift {:a 1}]}} {:format {:inline true}}))) "anywhere")))
 
 (deftest a-double-to-a-real-inlined-is-held-to-a-reals-range
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:r [:double {:pg/type "real"}]]]}})
         x (:x (:args (h/analyze reg {:insert-into :t :values [{:r :?x}]} {:format {:inline true}})))]
     (is (= [true false] (map #(m/validate x % {:registry reg}) [1.5 1e40])))))
 
+
+(deftest a-numeric-arrays-elements-written-generate-within-its-precision
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:a [:vector {:pg/type "numeric[]" :pg/precision 4 :pg/scale 1} 'decimal?]]]}})
+        rows (mg/sample (h/values-schema reg :t) {:registry reg :size 100 :seed 1})]
+    (is (every? #(< (abs (double %)) 1000) (mapcat #(let [v (:a %)] (seq (if (vector? v) (second v) v))) rows)))))
+
+(deftest a-required-column-of-no-value-generated-fails-to-generate-inlined-too
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:any {:pg/type "interval"}]]]}})]
+    (is (thrown? clojure.lang.ExceptionInfo (mg/generate (h/values-schema reg :t {:format {:inline true}}) {:registry reg :seed 1})))))
