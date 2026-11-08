@@ -120,6 +120,29 @@
         k (jdbc/row-key n)]
     (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
+(defn- lift-message
+  "The :error/fn of [:tuple [:= :lift] t], a column's [:lift v]: v one of t's labels, or as the
+   column takes it; and the class of a value given bare, which no message of the column's others
+   names."
+  [{:keys [schema value]} _]
+  (let [labels (let [e (shape/and-base (shape/non-null (malli.core/form (last (malli.core/children schema)))))]
+                 (when (= :enum (shape/head e)) (shape/entries e)))
+        c (class value)]
+    (str "should be [:lift v], v " (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it")
+         (when-not (or (nil? value) (vector? value))
+           (str "; " (if (#{\A \E \I \O \U} (first (.getSimpleName c))) "an " "a ") (.getName c) " is none of these")))))
+
+(defn- extra-key-message
+  "The :error/fn of a written row's map: of a key no column has, the column's key it spells
+   otherwise (:group-id for :group_id), which HoneySQL writes as that column but a row is not
+   read with; nil for another error."
+  [{:keys [schema type in]} _]
+  (let [k (last in)
+        kebab #(when (keyword? %) (keyword (str/replace (name %) "_" "-")))]
+    (when-let [c (and (= :malli.core/extra-key type) (keyword? k)
+                      (some #(when (and (not= % k) (= k (kebab %))) %) (map first (malli.core/children schema))))]
+      (str "disallowed key: the column is " (pr-str c) ", the key a row is read with"))))
+
 (def ^:private not-one-value
   "What HoneySQL writes in :values or :set as something else than one value: a keyword as a
    column, a Clojure vector or sequence as a row of parameters, (?, ?), which no column takes, a
@@ -216,13 +239,10 @@
                         alts (remove nil? [(one-value a)
                                            (when nullable? (sql-word-schema :null (:format opts)))
                                            (when (fills k) default)])
-                        lifted (assigned opts)
-                        labels (let [e (shape/and-base (shape/non-null lifted))] (when (= :enum (shape/head e)) (shape/entries e)))]
+                        lifted (assigned opts)]
                     [(when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
                      ;; [:lift v] sends v as one parameter, a keyword label and a map too
-                     [:tuple {:error/message (str "should be [:lift v], v "
-                                                  (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it"))}
-                      [:= :lift] lifted]
+                     [:tuple {:error/fn lift-message} [:= :lift] lifted]
                      lifted]))
           ;; [key required? type generated generated-required?] of each column, generated the values
           ;; it takes that malli generates (nil for none): of a column a trigger may fill, as
@@ -235,13 +255,13 @@
                                              (some->> gen-lifted (generated-values r) (vector :tuple [:= :lift]))]
                                             (remove nil?) seq (#(if (next %) (into [:or] %) (first %))))]]
                      [(written-key k opts) (not (or (:optional props) triggered?))
-                      (if plain [:or plain lift] lift)
+                      (if plain [:or lift plain] lift)
                       gen
                       (not (:optional props))])
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]
                      [(written-key k opts) false default default false]))
           entry (fn [k required? t] (if required? [k t] [k {:optional true} t]))
-          row (into [:map {:closed true}] (for [[k required? t] columns] (entry k required? t)))
+          row (into [:map {:closed true :error/fn extra-key-message}] (for [[k required? t] columns] (entry k required? t)))
           ;; a column that generates nothing is left out where it may be; a required one fails to generate
           generated (into [:map] (for [[k _ t g required?] columns :when (or g required?)] (entry k required? (or g t))))
           nonempty [:not [:= nil {}]]

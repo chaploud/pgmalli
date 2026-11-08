@@ -1088,7 +1088,7 @@
     (is (every? #(ok? v %) [{:group_id 1 :score 0} {:group_id 1 :score 0 :updated_at nil :nick_upper :default}]))
     (is (not-any? #(ok? v %) [{:score 0} {:group_id nil :score 0} {:group-id 1 :score 0}])
         "the kebab spelling is not the key a row is read with")
-    (is (= {:group-id ["disallowed key"]} (me/humanize (m/explain v {:group-id 1 :group_id 1 :score 0} {:registry registry}))))
+    (is (= {:group-id ["disallowed key: the column is :group_id, the key a row is read with"]} (me/humanize (m/explain v {:group-id 1 :group_id 1 :score 0} {:registry registry}))))
     (is (every? #(ok? s %) [{:group_id 2} {:nick_upper :default}]))
     (is (not-any? #(ok? s %) [{} {:group-id 2} {:nope 1}]))
     (is (every? #(ok? v %) (mg/sample v {:registry registry :seed 1})))
@@ -2100,7 +2100,7 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])" "should be [:lift v], v one of :happy :sad"]}
+    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a java.lang.String is none of these" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (let [rows (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30}))]
       (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %) (not= :lift (first %))) (vals r))) rows)
