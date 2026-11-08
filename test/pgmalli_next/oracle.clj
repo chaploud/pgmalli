@@ -1052,6 +1052,8 @@
                                   ;; sent untyped, or nil, where PostgreSQL takes the type from the value
                                   untyped-there? (and (#{:compared-and-any :compared-and-polymorphic} context) (or (nil? v) (= :unknown sent)))
                                   explained? (or (and (some? v) (not takes?) pinned?)
+                                                 ;; a value sent untyped whose text accept/reads? leaves out (docs/queries.md#stricter-untyped)
+                                                 (and (some? v) (= :unknown sent) (not takes?))
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))

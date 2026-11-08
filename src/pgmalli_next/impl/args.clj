@@ -228,11 +228,12 @@
       (jdbc/array-pg-object (query/domain-of s) :whole)
       ;; compared, assigned, a function's argument or a :common operand, of a type whose values
       ;; pgmalli does not type and pgjdbc reads as a PGobject or a String (a geometric, network,
-      ;; timespan or numeric one: inet, interval, regclass, money; or json), a PGobject of it and
+      ;; timespan, numeric, range or other pg_catalog one: inet, interval, regclass, money,
+      ;; int4range, xml, tsvector, macaddr; or json), a PGobject of it and
       ;; what it holds (a map or a vector, sent as jsonb, to json: accept/unchanged-assignments), not any value
       ;; under sql/format's :inline, of any type but cast: the quoted text its input reads
       (and (string? t) (query/untyped? own) (not es)
-           (or (and (#{:compare :assign} context) (#{"G" "I" "T" "N"} (types/category t))) (and (= :assign context) (= "json" t))
+           (or (and (#{:compare :assign} context) (#{"G" "I" "T" "N" "R" "U"} (types/category t)) (not= "json" t)) (and (= :assign context) (= "json" t))
                (and (:inline (:format opts)) (not (#{:cast :json} context)))))
       (shape/either (untyped-type-values registry s held-in opts) :any)
       (or (nil? t) (and (query/untyped? own) (not es))) own
