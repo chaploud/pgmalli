@@ -147,12 +147,6 @@
 
 (defn number-type? [t] (contains? numbers t))
 
-(defn oid-alias?
-  "Whether t is oid or an alias of it (regclass, regproc ...): a type PostgreSQL converts an oid to
-   implicitly, which reads a number as an oid."
-  [t]
-  (or (= "oid" t) (contains? (:casts @types/catalog) ["oid" t "i"])))
-
 (defn integer-type? [t] (and (string? t) (= :integer (:value (types/types t)))))
 
 (defn- converts?

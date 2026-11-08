@@ -932,7 +932,7 @@
   "Whether v is a negative integer to an oid alias, or an array of one, held-t
    (docs/queries.md#stricter-oid)."
   [held-t v]
-  (and (string? held-t) (accept/oid-alias? (or (types/element held-t) held-t)) (integer? v) (neg? v)))
+  (and (string? held-t) (let [e (or (types/element held-t) held-t)] (or (= "oid" e) (types/oid-alias? e))) (integer? v) (neg? v)))
 
 (def ^:private inline-refusals
   "The SQLSTATEs of PostgreSQL refusing an inlined literal: its type (type-refusals), or the SQL

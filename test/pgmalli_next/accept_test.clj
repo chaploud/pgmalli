@@ -272,8 +272,6 @@
   (doseq [[from to] accept/unchanged-assignments]
     (is (contains? (:casts @types/catalog) [from to "a"]) (str from " to " to))))
 
-(deftest an-oid-alias-is-a-type-an-oid-converts-to-implicitly
-  (is (= [true true true false false] (map accept/oid-alias? ["oid" "regclass" "regproc" "money" "bigint"]))))
 
 (deftest an-inlined-literal-is-of-the-type-postgresql-gives-it
   (when *db*

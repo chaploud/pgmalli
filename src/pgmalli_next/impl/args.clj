@@ -105,7 +105,7 @@
         untyped (when inline? (for [[x p] rows :when (= :unknown p) a (shape/alternatives x)] a))
         ;; a number goes to an oid alias (regclass, regproc) as an oid, within oid's range; resolved
         ;; with it (coalesce, CASE), which converts it only where a row reaches it, any
-        oid (when (accept/oid-alias? t) (types/type-schema "oid"))]
+        oid (when (types/oid-alias? t) (types/type-schema "oid"))]
     (distinct (concat (if inline? untyped [(jdbc/typed-pg-object t)])
                       (for [[x p] rows
                             :when (and (string? p) (not= p t) (accept/holds? t p context))
