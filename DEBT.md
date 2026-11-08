@@ -16,6 +16,10 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
 - A map or a vector to a `json` or `jsonb` column is not checked for what the one sending
   refuses to write (accept/json-problem): two keys of one text (`:a` and `"a"`), a nil key, a NaN
   or an infinity. Sending it is an error of `:pgmalli.error/invalid-options`.
+- A `Double` to a `real` column is taken, within single precision's range, as its own value:
+  PostgreSQL rounds it to single precision on assignment (`double precision` to `real` is an
+  assignment cast), which the rule of [assignment](docs/queries.md#stricter-assignment) would
+  refuse. A `Float` goes as it is.
 - A `character` column of no length (`char`, which is `char(1)`) takes a `String` of any length,
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: the
   registry keeps no length of either. PostgreSQL refuses the value (`value too long`).

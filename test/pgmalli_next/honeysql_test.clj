@@ -3443,3 +3443,10 @@
         said (first (h/humanize (check {:select [:id] :from [:users] :where [:= :mood long-label]})))]
     (is (< (count said) 400) said)
     (is (str/includes? said "<a String>"))))
+
+(deftest a-number-to-a-real-is-held-to-single-precisions-range-whatever-its-class
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:r [:double {:pg/type "real"}]]]}})
+        t (:x (:args (h/analyze reg {:update :t :set {:r :?x}})))]
+    (is (= [false true true true false false false]
+           (map #(m/validate t % {:registry reg}) [3.5e38 1.5 (float 1.5) 1 1E39M 1E400M (bigint 1e39)]))
+        "a Double past it, and a BigDecimal or a BigInt past it, which PostgreSQL converts to a real and refuses")))

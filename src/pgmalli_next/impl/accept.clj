@@ -53,7 +53,7 @@
    JVM's time zone."
   (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
    [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
-   [Double "double precision" :double] [Float "real" 'float?]
+   [Double "double precision" :double] [Float "real" [:and 'float? [:pg/class "java.lang.Float"]]]
    [Boolean "boolean" :boolean] [String "character varying" :string] [Character "character varying" 'char?]
    [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate "date" :time/local-date]
    [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]

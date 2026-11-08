@@ -7,9 +7,10 @@
             [malli.core :as m]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
-            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
+            [pgmalli-next.impl.memo :as memo]
+            [pgmalli-next.impl.pgtypes :as pgtypes]
             [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.resolve :as resolve]
@@ -51,14 +52,17 @@
 
 (defn- within
   "Alternative a, a number sent as type p, held to the range a column of type t's own assigned
-   values have (their :min and :max). PostgreSQL rounds a fraction going to an integer type
+   values have (their :min and :max; a real's, single precision's, which its :double holds). PostgreSQL rounds a fraction going to an integer type
    first, so a fraction is held to the bounds half a unit wider."
   [a p t own]
   (let [base (shape/and-base own)
         {:keys [min max]} (when (and (vector? base) (map? (second base))) (second base))
         [min max] (if (and (accept/integer-type? t) (not (accept/integer-type? p))) [(some-> min (- 0.5)) (some-> max (+ 0.5))] [min max])
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))]
-    (cond (empty? bounds) a
+    (cond (= "real" t) (if (= :double (shape/head a))
+                         a
+                         [:and a [:fn {:error/message "should be within a real's range"} pgtypes/real-number?]])
+          (empty? bounds) a
           (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
           :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))))
 

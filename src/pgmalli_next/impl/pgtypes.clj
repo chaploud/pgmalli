@@ -17,7 +17,7 @@
   [v]
   (if (string? v) (.codePointCount ^String v 0 (count v)) (count v)))
 
-(defn- float4?
+(defn float4?
   "Whether a double fits a real: single precision neither overflows to infinity nor
    underflows to zero, where PostgreSQL rejects the value."
   [d]
@@ -35,6 +35,12 @@
                        (if (#{:bits :max-bits} (:typmod (types/entry (shape/type-name props))))
                          (fn [s] (boolean (and (re-matches #"[01]*" s) (or (nil? bounds) (bounds s)))))
                          bounds)))}))
+
+(defn real-number?
+  "Whether number n (a Long, a BigDecimal ...) converts to a real: finite as a double, and
+   within single precision's range."
+  [n]
+  (let [d (double n)] (and (not (Double/isInfinite d)) (float4? d))))
 
 (def double-schema
   ":double, a real (:pg/type) within single precision's range: PostgreSQL rejects a value that
