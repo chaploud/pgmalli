@@ -14,7 +14,8 @@
             [clojure.java.shell :as shell]
             [clojure.string :as str]
             [pgmalli-next.impl.error :as error]
-            [pgmalli-next.impl.json :as json]))
+            [pgmalli-next.impl.json :as json]
+            [pgmalli-next.impl.types :as types]))
 
 (def ^:private named-maps #{:tables :constraints :types})
 
@@ -50,6 +51,22 @@
   [env]
   (str (get env "PGHOST" "local socket") ":" (get env "PGPORT" "5432") "/" (get env "PGDATABASE" (get env "PGUSER" (System/getProperty "user.name")))))
 
+(defn needs
+  "What reading a schema needs of the server, for an error that it failed."
+  []
+  (str "pgmalli needs PostgreSQL " (types/oldest-version) " or later and a user that can read pg_catalog"))
+
+(defn- psql-error
+  "Why psql failed, of its stderr: a line the server wrote (FATAL:), else the last address psql
+   tried (it tries each address a host name has in turn, the last the one that answered), else
+   its first line."
+  [err]
+  (let [lines (remove str/blank? (str/split-lines (str err)))]
+    (str/replace (or (some #(when (str/includes? % "FATAL:") %) lines)
+                     (last (filter #(str/includes? % "failed:") lines))
+                     (first lines) "")
+                 #"^psql: (error: )?" "")))
+
 (defn- psql-out [{:keys [schema psql] :or {psql "psql"} :as db}]
   (let [;; shell/sh replaces the whole environment, so layer the overrides on the current one
         env (into (into {} (System/getenv)) (keep (fn [[k e]] (when-some [v (get db k)] [e (str v)])) env-keys))
@@ -61,17 +78,15 @@
                                                    (str "cannot run psql (" psql "): " (ex-message e)
                                                         "; install the PostgreSQL client, set :db :psql to its path, or give :db :jdbcUrl")
                                                    {:given psql} e)))
-        ;; psql tells each address it tried in turn: the first says it
-        first-err (str/replace (or (first (remove str/blank? (str/split-lines (str err)))) "") #"^psql: (error: )?" "")]
+        why (psql-error err)]
     (cond (zero? exit) out
           ;; psql exits 2 when it cannot connect, 3 when the script fails
           (= 2 exit) (error/fail! :pgmalli.error/db-unavailable
-                                  (str "cannot connect to " (target env) " with psql: " first-err
+                                  (str "cannot connect to " (target env) " with psql: " why
                                        "; check :db (or PGHOST, PGPORT, PGDATABASE, PGUSER, PGPASSWORD) and that PostgreSQL is running")
                                   {:given (target env) :exit exit :err err})
           :else (error/fail! :pgmalli.error/fault
-                             (str "psql failed reading schema " schema " on " (target env) " (exit " exit "): " first-err
-                                  "; pgmalli needs PostgreSQL 16 or later and a user that can read pg_catalog")
+                             (str "psql failed reading schema " schema " on " (target env) " (exit " exit "): " why "; " (needs))
                              {:given schema :exit exit :err err}))))
 
 (def ^:private db-keys

@@ -107,8 +107,6 @@
                                             (:partial? f) (assoc :where true)))))
             ;; other tables inherit it: a query reads their rows too, which its keys do not span
             :pg/inherited (when (some (comp #{:inherited} :fact) tfacts) true)
-            ;; a query reads or writes a partition by name, a row of this table
-            :pg/partitions (some #(when (= :partitions (:fact %)) (:names %)) tfacts)
             ;; a BEFORE row trigger runs before NOT NULL is checked: it may fill what a write leaves out
             :pg/before-triggers (not-empty (into {} (for [event [:insert :update]
                                                           :let [names (vec (for [f tfacts :when (and (= :trigger (:fact f)) (:before f) (event f))] (:name f)))]

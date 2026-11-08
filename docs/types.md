@@ -66,7 +66,6 @@ The table's map carries:
 | `:pg/primary-key-deferrable` | `true`: the primary key is DEFERRABLE, so it may be checked only at commit |
 | `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, for a partial one `:where` its predicate where it is equalities of a column (a `varchar` too, which PostgreSQL casts to `text` there) to a string or integer and `IS NULL`s, ANDed (`[[:= "status" "active"] [:is-null "deleted_at"]]`), `true` otherwise, `:deferrable true` for a DEFERRABLE one; an invalid unique index is left out |
 | `:pg/inherited` | `true`: other tables inherit it (not as partitions), so a query reads their rows too |
-| `:pg/partitions` | a partitioned table's partitions of its schema, at any depth; the registry holds a row schema of each by its name, the table's but for `:pg/table`, which a query reads or writes by name |
 | `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked |
 | `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; `:where true` for a partial one |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
@@ -186,7 +185,7 @@ Generate a version's rows from its own schema, so the generator need not guess t
 
 ## What is read
 
-Tables (regular, partitioned and foreign), views, materialized views, sequences, columns,
+Tables (regular, partitioned, each partition and foreign), views, materialized views, sequences, columns,
 PRIMARY KEY, UNIQUE, FOREIGN KEY and EXCLUDE constraints, unique indexes over plain columns,
 row-level triggers and enum types. A domain is read as its base type, with its NOT NULL and
 DEFAULT.

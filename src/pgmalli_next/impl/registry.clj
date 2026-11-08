@@ -184,19 +184,6 @@
                         :else f)))]
     (update-vals schemas #(if (shape/row-schema? %) (walk/postwalk (fn [f] (if (and (vector? f) (map? (second f))) (typed f) f)) %) %))))
 
-(defn- with-partitions
-  "Row schemas with each :pg/partitions' partition a row schema of its table's (its :pg/table
-   its own): a query reads or writes a partition by name."
-  [schemas]
-  (into schemas (for [[k s] schemas
-                      :when (and (keyword? k) (shape/row-schema? s))
-                      n (:pg/partitions (shape/row-props s))]
-                  [(keyword (namespace k) n)
-                   (walk/postwalk #(if (and (map? %) (:pg/partitions %))
-                                     (-> % (dissoc :pg/partitions) (assoc :pg/table (str (subs (namespace k) 3) "." n)))
-                                     %)
-                                  s)])))
-
 (defn- sequence-rows
   "The row schema of each of generated data d's :sequences, the columns every sequence has
    (PostgreSQL 16 to 18 alike), which a query reads by its name."
@@ -213,7 +200,7 @@
   ([data]
    (let [d (generated-data data "registry")
          generated (into {} (map (fn [[k s]] [k (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k)))]))
-                         (with-partitions (with-other-schemas-types (merge (:registry d) (sequence-rows d)))))]
+                         (with-other-schemas-types (merge (:registry d) (sequence-rows d))))]
      (merge base
             (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
             (into {} (for [s (:schemas d)]

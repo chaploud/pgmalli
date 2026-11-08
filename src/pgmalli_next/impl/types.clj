@@ -190,6 +190,11 @@
    fourth element), overload or column not every version has carries :in, the versions that do."
   (delay (edn/read-string (slurp (io/resource "pgmalli-next/impl/catalog.edn")))))
 
+(defn oldest-version
+  "The oldest PostgreSQL major version pgmalli reads, the catalog's first (\"16\")."
+  []
+  (first (:versions @catalog)))
+
 (defn element
   "The element type of an array type t (\"bigint[]\" is bigint); nil for another."
   [t]

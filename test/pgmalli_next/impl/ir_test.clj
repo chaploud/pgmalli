@@ -73,14 +73,16 @@
       (is (= {:match "SIMPLE" :schema "public" :table "groups" :columns ["id"]} (get-in members ["members_group_id_fkey" :references])))
       (is (= {:match "FULL" :schema "public" :table "groups" :columns ["id" "code"]} (get-in members ["members_group_code_fkey" :references]))))))
 
-(deftest skips-partition-children-and-qualifies-foreign-types
+(deftest a-partition-is-a-table-and-a-foreign-type-is-qualified
   (when *db*
     (exec-sql! "CREATE SCHEMA other; CREATE TYPE other.color AS ENUM ('r');
-                CREATE TABLE p (id int, c other.color) PARTITION BY RANGE (id);
-                CREATE TABLE p_1 PARTITION OF p FOR VALUES FROM (0) TO (10);")
+                CREATE TABLE p (id int PRIMARY KEY, c other.color) PARTITION BY RANGE (id);
+                CREATE TABLE p_1 PARTITION OF p (c DEFAULT 'r') FOR VALUES FROM (0) TO (10);
+                CREATE TABLE fk (id int REFERENCES p (id));")
     (let [s (ir/from-db *db*)]
-      (is (contains? (:tables s) "p"))
-      (is (not (contains? (:tables s) "p_1")))
+      (is (= ["p_1_pkey"] (keys (get-in s [:tables "p_1" :constraints]))) "the key it takes from its table")
+      (is (= "'r'::other.color" (:default_value (second (get-in s [:tables "p_1" :columns])))))
+      (is (= ["fk_id_fkey"] (keys (get-in s [:tables "fk" :constraints]))) "a foreign key to a partitioned table, not its clone to each partition")
       (is (= "other.color" (:data_type (first (filter (comp #{"c"} :name) (get-in s [:tables "p" :columns])))))))))
 
 (deftest unknown-schema
@@ -100,6 +102,22 @@
                                 (ir/from-db {:host "localhost" :port 1 :dbname "nope" :user "u" :password "s3cret"})))]
     (is (= :pgmalli.error/db-unavailable (:pgmalli/error (ex-data e))))
     (is (not (str/includes? (str (ex-message e) (pr-str (ex-data e))) "s3cret")))))
+
+(deftest psql-that-is-refused-says-what-the-server-said
+  (when *db*
+    ;; localhost is ::1 first, where the container does not listen, then 127.0.0.1
+    (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db (assoc *db* :password "wrong"))))]
+      (is (re-find #"with psql: connection to server at \"localhost\" \(127.0.0.1\), port \d+ failed: FATAL:  password authentication failed" (ex-message e))))))
+
+(deftest psql-whose-script-fails-says-why-and-what-reading-needs
+  (when *db*
+    (let [psql (doto (java.io.File/createTempFile "pgmalli-psql" ".sh") .deleteOnExit)]
+      (spit psql "#!/bin/sh\nPGOPTIONS='-c statement_timeout=1' exec psql \"$@\"\n")
+      (.setExecutable psql true)
+      (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db (assoc *db* :psql (str psql)))))]
+        (is (re-find #"^psql failed reading schema public on localhost:\d+/\w+ \(exit 3\): .*canceling statement due to statement timeout; pgmalli needs PostgreSQL 16 or later"
+                     (ex-message e)))
+        (is (= [:pgmalli.error/fault 3] ((juxt :pgmalli/error :exit) (ex-data e))))))))
 
 (deftest jdbc-that-cannot-connect-names-the-target-and-keeps-the-cause-without-the-url
   (when-not (System/getProperty "babashka.version")

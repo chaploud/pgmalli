@@ -159,13 +159,17 @@
                                       CREATE FUNCTION fx.text_in(cstring) RETURNS text LANGUAGE internal IMMUTABLE STRICT AS 'textin';
                                       CREATE FUNCTION fx.am(internal) RETURNS index_am_handler LANGUAGE internal AS 'bthandler';
                                       CREATE DOMAIN fx.pos AS bigint; CREATE DOMAIN fx.pos2 AS fx.pos;
-                                      CREATE FUNCTION fx.twice(n fx.pos2) RETURNS fx.pos LANGUAGE sql AS 'SELECT n * 2';")]
+                                      CREATE FUNCTION fx.twice(n fx.pos2) RETURNS fx.pos LANGUAGE sql AS 'SELECT n * 2';
+                                      CREATE DOMAIN fx.poss AS bigint[];
+                                      CREATE FUNCTION fx.firsts(a fx.pos2[], b fx.poss[], OUT c fx.pos[]) LANGUAGE sql AS 'SELECT a';")]
       (is (= {"add_one" [{:args ["bigint" "bigint"] :result "bigint"}]
+              "firsts" [{:args ["bigint[]" "bigint[]"] :result "bigint[]" :columns [["c" "bigint[]"]]}]
               "maybe_total" [{:args ["bigint"] :result "bigint" :kind :a}]
-              "total" [{:args ["bigint"] :result "bigint" :kind :a :non-null true}]
+              "total" [{:args ["bigint"] :result "bigint" :kind :a}]
               "twice" [{:args ["bigint"] :result "bigint"}]}
              (get-in data [:functions "fx"]))
-          "an aggregate starting from a value is never NULL, as count; internal and cstring are no values of SQL; a domain is its base type")
+          (str "internal and cstring are no values of SQL; a domain is its base type, an array of one the array of its base; "
+               "a schema's aggregate is no count: its transition function may return NULL whatever it starts from"))
       (is (= [:map [:x [:maybe [:int {:pg/type "bigint"}]]]] (:row (h/analyze (pgmalli/registry data) {:select [[[:fx.twice 2] :x]]} {:schema "fx"})))))))
 
 (deftest a-partitioned-table-whose-only-partition-is-default-takes-every-row
@@ -183,7 +187,40 @@
                                     CREATE TABLE pid.p1 PARTITION OF pid.p FOR VALUES FROM (MINVALUE) TO (100);
                                     CREATE TABLE pid.p2 PARTITION OF pid.p FOR VALUES FROM (100) TO (MAXVALUE);")]
       (is (m/validate :pg.pid.p/insert {:x 1} {:registry reg}))
-      (is (some? (mg/generate :pg.pid.p/insert {:registry reg :seed 1}))))))
+      (let [row (mg/generate :pg.pid.p/insert {:registry reg :seed 1})]
+        (is (not (contains? row :id)))
+        (exec-sql! (str "INSERT INTO pid.p (x) VALUES (" (or (:x row) "NULL") ")"))))))
+
+(deftest a-partition-is-a-table-of-its-own-schema
+  (when *db*
+    (exec-sql! "CREATE SCHEMA pt; CREATE SCHEMA pt_old;
+                CREATE FUNCTION pt.touch() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.x := 1; RETURN NEW; END $$;
+                CREATE TABLE pt.\"Parent X\" (id int, x int NOT NULL, PRIMARY KEY (id)) PARTITION BY RANGE (id);
+                CREATE TABLE pt.\"Pq One\" PARTITION OF pt.\"Parent X\" (x DEFAULT 7) FOR VALUES FROM (0) TO (10);
+                CREATE TABLE pt.p2 PARTITION OF pt.\"Parent X\" FOR VALUES FROM (10) TO (20);
+                CREATE TRIGGER fill BEFORE INSERT ON pt.p2 FOR EACH ROW EXECUTE FUNCTION pt.touch();
+                CREATE TABLE pt_old.p0 PARTITION OF pt.\"Parent X\" FOR VALUES FROM (-10) TO (0);")
+    (let [data (generated {:db *db*} "pt" "pt_old")
+          reg (pgmalli/registry data)
+          row #(get-in data [:registry %])]
+      (is (= [:map {:pg/table "pt.Parent X" :pg/primary-key ["id"]} [:id [:pg/integer {:pg/type "integer"}]] [:x [:pg/integer {:pg/type "integer"}]]]
+             (row "pg.pt/Parent X"))
+          "the partitioned table names none of its partitions")
+      (is (= {:default 7 :pg/default 7 :pg/type "integer"} (shape/column-props (last (last (row "pg.pt/Pq One"))))) "a partition's own DEFAULT")
+      (is (m/validate "pg.pt.Pq One/insert" {:id 1} {:registry reg}))
+      (is (= {:insert ["fill"]} (:pg/before-triggers (shape/row-props (row :pg.pt/p2)))) "a partition's own BEFORE trigger")
+      (is (= [] (:problems (h/analyze reg {:insert-into :pt.p2 :values [{:id 11}]}))) "which may fill a NOT NULL column")
+      (is (seq (:problems (h/analyze reg {:insert-into :pt_old.p0 :values [{:id -1}]}))) "a partition without one may not")
+      (is (= [] (:problems (h/analyze reg {:select [:id :x] :from [:pt_old.p0]}))) "a partition in another schema, in its schema")
+      (is (= ["id"] (:pg/primary-key (shape/row-props (row :pg.pt_old/p0))))))))
+
+(deftest a-unique-index-a-foreign-key-references-is-a-key
+  (when *db*
+    (let [[reg] (registry-of "fu" "CREATE SCHEMA fu; CREATE TABLE fu.r (id int PRIMARY KEY, code text NOT NULL);
+                                   CREATE UNIQUE INDEX r_code ON fu.r (code);
+                                   CREATE TABLE fu.s (id int PRIMARY KEY, code text REFERENCES fu.r (code));")]
+      (is (= [{:columns ["code"] :index true}] (:pg/unique (shape/row-props (shape/schema-of reg :pg.fu/r)))))
+      (is (= {:min 0 :max 1} (:rows (h/analyze reg {:select [:id] :from [:r] :where [:= :code "a"]} {:schema "fu"})))))))
 
 (deftest types-of-the-schema-are-found-by-any-name-in-arrays-and-under-domains
   (when *db*

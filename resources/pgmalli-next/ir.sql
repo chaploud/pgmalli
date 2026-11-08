@@ -1,5 +1,5 @@
 -- One schema as a single JSON document. Run with: psql -At -v schema=NAME -f ir.sql
--- Reads tables (regular, partition parents and foreign), views and materialized views, columns,
+-- Reads tables (regular, partitioned, partitions and foreign), views and materialized views, columns,
 -- PRIMARY KEY / UNIQUE / FOREIGN KEY / EXCLUDE constraints, enum types, functions,
 -- operators and sequences. A CHECK is not read: the database checks it.
 -- search_path is pinned so type qualification does not depend on the connecting user, with
@@ -51,7 +51,7 @@ WITH RECURSIVE cols AS (
   CROSS JOIN LATERAL (SELECT CASE WHEN dom.root IS NULL THEN a.atttypmod ELSE dom.typmod END AS typmod) m
   JOIN pg_catalog.pg_namespace tn ON tn.oid = b.typnamespace
   LEFT JOIN pg_catalog.pg_attrdef d ON d.adrelid = c.oid AND d.adnum = a.attnum
-  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition
+  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
 ),
 cons AS (
   SELECT k.conrelid AS relid,
@@ -85,7 +85,9 @@ cons AS (
          ) AS con
   FROM pg_catalog.pg_constraint k
   JOIN pg_catalog.pg_namespace n ON n.oid = k.connamespace
-  WHERE n.nspname = :'schema' AND k.contype IN ('p', 'u', 'f', 'x') AND k.conparentid = 0::oid
+  -- a foreign key to a partitioned table is cloned, on the same table, for each of its partitions
+  WHERE n.nspname = :'schema' AND k.contype IN ('p', 'u', 'f', 'x')
+    AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint pk WHERE pk.oid = k.conparentid AND pk.conrelid = k.conrelid)
   UNION ALL
   -- a unique index over plain columns constrains rows as a UNIQUE constraint does, a partial one
   -- (with a predicate) the rows it covers; its key columns only (INCLUDE columns are not part of the key)
@@ -154,7 +156,9 @@ cons AS (
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
   WHERE n.nspname = :'schema' AND i.indisunique AND NOT i.indisprimary
     AND i.indexprs IS NULL
-    AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k WHERE k.conindid = i.indexrelid)
+    -- the index of a key constraint, which a foreign key's conindid names too: the index it references
+    AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k
+                    WHERE k.conindid = i.indexrelid AND k.conrelid = i.indrelid AND k.contype IN ('p', 'u', 'x'))
 ),
 tables AS (
   SELECT c.relname,
@@ -172,19 +176,11 @@ tables AS (
                         WHERE t.tgrelid = c.oid AND NOT t.tgisinternal AND t.tgenabled <> 'D' AND (t.tgtype::int4 & 1) = 1),
            -- a table other tables inherit (not as partitions): a query reads their rows too, which its keys do not span
            'inherited', EXISTS (SELECT 1 FROM pg_catalog.pg_inherits i JOIN pg_catalog.pg_class ch ON ch.oid = i.inhrelid
-                                WHERE i.inhparent = c.oid AND NOT ch.relispartition),
-           -- a partitioned table's partitions of this schema, at any depth: a query reads or writes one by name
-           'partitions', (WITH RECURSIVE tree AS (
-                            SELECT inhrelid FROM pg_catalog.pg_inherits WHERE inhparent = c.oid
-                            UNION ALL
-                            SELECT i.inhrelid FROM pg_catalog.pg_inherits i JOIN tree ON i.inhparent = tree.inhrelid)
-                          SELECT pg_catalog.json_agg(l.relname ORDER BY l.relname)
-                          FROM tree JOIN pg_catalog.pg_class l ON l.oid = tree.inhrelid
-                          WHERE c.relkind = 'p' AND l.relnamespace = c.relnamespace)
+                                WHERE i.inhparent = c.oid AND NOT ch.relispartition)
          ) AS tbl
   FROM pg_catalog.pg_class c
   JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
-  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f') AND NOT c.relispartition
+  WHERE n.nspname = :'schema' AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
 ),
 types AS (
   SELECT t.typname,
@@ -201,9 +197,15 @@ domain_bases(oid, base) AS (
   UNION ALL
   SELECT d.oid, t.typbasetype FROM domain_bases d JOIN pg_catalog.pg_type t ON t.oid = d.base AND t.typtype = 'd'
 ),
--- every type with the type its values are of: a domain's base, else itself
+-- every type with the type its values are of: a domain's base, an array of a domain's the array of
+-- its base (a domain over an array: that array, of any dimensions), else itself
 type_bases(oid, base) AS (
-  SELECT t.oid, COALESCE(d.base, t.oid)
+  SELECT t.oid, COALESCE(d.base,
+                         CASE WHEN t.typtype = 'b' AND t.typcategory = 'A' THEN
+                           (SELECT CASE WHEN eb.typtype = 'b' AND eb.typcategory = 'A' THEN eb.oid ELSE NULLIF(eb.typarray, 0::oid) END
+                            FROM domain_bases ed JOIN pg_catalog.pg_type eb ON eb.oid = ed.base AND eb.typtype <> 'd'
+                            WHERE ed.oid = t.typelem) END,
+                         t.oid)
   FROM pg_catalog.pg_type t
   LEFT JOIN (domain_bases d JOIN pg_catalog.pg_type b ON b.oid = d.base AND b.typtype <> 'd') ON d.oid = t.oid
 ),
@@ -219,9 +221,6 @@ functions AS (
            'kind', p.prokind,
            'variadic', p.provariadic <> 0::oid,
            'defaults', p.pronargdefaults,
-           -- an aggregate whose state starts from a value and is its result (count), a window
-           -- function of no argument (row_number)
-           'non_null', (a.agginitval IS NOT NULL AND a.aggfinalfn = 0::oid) OR (p.prokind = 'w' AND p.pronargs = 0),
            -- the columns it returns in FROM: its OUT (and TABLE) arguments, else its composite type's
            'columns', COALESCE((SELECT pg_catalog.json_agg(pg_catalog.json_build_array(u.n, pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = u.t), NULL)) ORDER BY u.i)
                                 FROM ROWS FROM (pg_catalog.unnest(p.proargnames), pg_catalog.unnest(p.proallargtypes), pg_catalog.unnest(p.proargmodes)) WITH ORDINALITY u(n, t, m, i)
@@ -233,7 +232,6 @@ functions AS (
          p.proname, p.oid
   FROM pg_catalog.pg_proc p
   JOIN pg_catalog.pg_namespace n ON n.oid = p.pronamespace
-  LEFT JOIN pg_catalog.pg_aggregate a ON a.aggfnoid = p.oid
   WHERE n.nspname = :'schema' AND p.prokind <> 'p'
     AND NOT (ARRAY[p.prorettype] || p.proargtypes::pg_catalog.oid[])
             && ARRAY['trigger', 'event_trigger', 'internal', 'cstring', 'language_handler', 'fdw_handler',

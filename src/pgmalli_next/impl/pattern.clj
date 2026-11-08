@@ -24,7 +24,6 @@
      :not-enforced a NOT ENFORCED FOREIGN KEY             {:constraint :input} (nothing to render)
      :trigger      a row-level trigger left enabled       {:name :before :insert :update :delete} (nothing to render)
      :inherited    a table other tables inherit (not as partitions) {} (nothing to render)
-     :partitions   a partitioned table's partitions        {:names}
      :sequence     a sequence of the schema                {:name}
      :function     a function a query may call            {:name :overload}
      :operator     an operator                            {:name :overload}
@@ -98,7 +97,8 @@
 
 (defn function-overload
   "An overload as pgmalli-next.impl.types/catalog holds one, of a function as ir.sql and the catalog's
-   query read it: {:args :result :set :kind :variadic :defaults :non_null :columns}."
+   query read it: {:args :result :set :kind :variadic :defaults :non_null :columns}, :non_null the
+   catalog's alone: a schema's own aggregate may return NULL from its transition function."
   [{:keys [args result set kind variadic defaults non_null columns]}]
   (cond-> {:args (vec args) :result result}
     set (assoc :set true)
@@ -131,7 +131,6 @@
             f (concat (when view? [(assoc base :fact :view :materialized? (= "MATERIALIZED VIEW" (:kind t)))])
                       (for [tr (:triggers t)] (merge base {:fact :trigger} (select-keys tr [:name :before :insert :update :delete])))
                       (when (:inherited t) [(assoc base :fact :inherited)])
-                      (when (seq (:partitions t)) [(assoc base :fact :partitions :names (vec (:partitions t)))])
                       ;; nothing marks a view's column NOT NULL in the catalog, so every one may be NULL
                       (mapcat #(column-facts base (cond-> % view? (assoc :is_nullable true)) enums) (sort-by :name (:columns t)))
                       (mapcat #(key-facts base %) (sort-by :name (vals (:constraints t)))))]

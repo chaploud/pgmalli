@@ -110,11 +110,12 @@
 
 (defn major-version
   "\"PostgreSQL 17\" of the server's \"PostgreSQL 17.6 (Debian ...)\": a minor upgrade changes no
-   schema. A server older than 16 is an error."
+   schema. A server older than the catalog's versions is an error."
   [version]
-  (let [major (parse-long (or (re-find #"\d+" version) "0"))]
-    (when (< major 16)
-      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL 16 or later") {:given version}))
+  (let [major (parse-long (or (re-find #"\d+" version) "0"))
+        oldest (types/oldest-version)]
+    (when (< major (parse-long oldest))
+      (error/fail! :pgmalli.error/fault (str version " is older than pgmalli reads: generate from PostgreSQL " oldest " or later") {:given version}))
     (str "PostgreSQL " major)))
 
 (defn- read-schema

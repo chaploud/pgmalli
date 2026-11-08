@@ -47,5 +47,16 @@
          (re-seq #"\d+" (second (re-find #"(?m)^\s+pg: \[(.*)\]" (slurp ".github/workflows/ci.yml")))))
       "a version added to or dropped from CI's matrix: run bb catalog"))
 
+(deftest the-supported-versions-readme-lists-are-the-ones-ci-tests
+  (let [readme (into {} (for [[_ k v] (re-seq #"(?m)^\| (\S[^|]*?) \| ([^|]*?) \|$" (slurp "README.md"))] [k v]))
+        floor (into {} (for [[_ artifact v] (re-seq #"([\w./-]+) \{:mvn/version \\\"([^\\]+)\\\"\}" (slurp "bb.edn"))] [artifact v]))
+        oldest #(re-find #"^\S+" (readme %))]
+    (is (= {"org.clojure/clojure" (oldest "Clojure") "metosin/malli" (oldest "malli") "com.github.seancorfield/honeysql" (oldest "HoneySQL")
+            "com.github.seancorfield/next.jdbc" (oldest "next.jdbc") "org.postgresql/postgresql" (oldest "pgjdbc")}
+           floor)
+        "bb test:floor runs the oldest versions README supports")
+    (is (= (:versions @types/catalog) (re-seq #"\d+" (re-find #"^[^;]*" (readme "PostgreSQL"))))
+        "README's PostgreSQL versions are the catalog's, the oldest the one generation refuses below")))
+
 (deftest a-test-run-removes-the-containers-of-its-hosts-dead-runs-alone
   (is (= ["b"] (test-db/orphans ["a other:7" "b me:7" "c me:8" "d 7"] "me" #{8}))))
