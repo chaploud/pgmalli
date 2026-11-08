@@ -2106,7 +2106,7 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a String goes as varchar, which an enum takes not: write the label as a keyword, [:lift :glad]" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"]}
+    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a String goes as varchar, which an enum takes not: write the label as a keyword, [:lift :label]" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (let [rows (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30}))]
       (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %) (not= :lift (first %))) (vals r))) rows)
@@ -3437,3 +3437,9 @@
         f (future (h/analyze registry nested opts))]
     (is (not= ::slow (deref f 20000 ::slow)) "each statement's rows counted once, not once per way an enclosing one reads them")
     (future-cancel f)))
+
+(deftest a-problems-sentence-says-a-long-literal-by-its-class
+  (let [long-label (apply str (repeat 1000 "x"))
+        said (first (h/humanize (check {:select [:id] :from [:users] :where [:= :mood long-label]})))]
+    (is (< (count said) 400) said)
+    (is (str/includes? said "<a String>"))))

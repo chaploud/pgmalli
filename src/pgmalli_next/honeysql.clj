@@ -133,13 +133,18 @@
         labels (let [e (shape/and-base lifted)] (when (= :enum (shape/head e)) (shape/entries e)))
         type (:pg/type (malli.core/properties schema))
         sent (when (some? value) (jdbc/sent-type value {}))
-        c (class value)]
+        c (class value)
+        ;; the value given is said by a label of the schema alone: it may be a request's, of any size
+        label (when (or (keyword? value) (string? value)) (some #(when (= (name value) (name %)) (keyword (name %))) labels))]
     (str "should be [:lift v], v " (if labels (str "one of " (str/join " " (map pr-str labels))) "as the column takes it")
          (cond (or (nil? value) (vector? value)) nil
                (keyword? value) (str "; HoneySQL writes a bare keyword as a column"
-                                     (if (and labels (not (some #{value} labels))) (str ", and " (pr-str value) " is no label") (str ": write " (pr-str [:lift value]))))
-               (map? value) (str "; HoneySQL writes a map there as a subquery: write " (pr-str [:lift value]))
-               (and labels (string? value)) (str "; a String goes as varchar, which an enum takes not: write the label as a keyword, " (pr-str [:lift (keyword value)]))
+                                     (cond label (str ": write " (pr-str [:lift label]))
+                                           labels ", and the keyword is no label"
+                                           :else ": write [:lift v]"))
+               (map? value) "; HoneySQL writes a map there as a subquery: write [:lift <the map>]"
+               (and labels (string? value)) (str "; a String goes as varchar, which an enum takes not: write the label as a keyword, "
+                                                 (if label (pr-str [:lift label]) "[:lift :label]"))
                (and (string? sent) type) (str "; " (error/named (.getName c)) " goes as " sent ", which " type
                                               " takes through no implicit conversion (docs/queries.md#stricter-than-postgresql): send the column's own value")
                :else (str "; " (error/named (.getName c)) " is none of these")))))
@@ -351,6 +356,12 @@
        (first (str/split (column-name column) #"\.")) "; assign "
        (if did-you-mean (str "it unqualified: " (column-name (first did-you-mean))) "the column unqualified")))
 
+(defn- shown
+  "A literal of a query as a problem's sentence says it: its text up to 60 characters, a longer
+   one by its class (a request's value may be any size)."
+  [v]
+  (let [s (pr-str v)] (if (< 60 (count s)) (str "<a " (.getSimpleName (class v)) ">") s)))
+
 (def ^:private explanations
   "The sentence for each kind of problem: what is wrong, then what to do."
   {:unknown-table (fn [{:keys [table did-you-mean quoted]}] (query/unknown-table-text table did-you-mean quoted))
@@ -402,12 +413,12 @@
    :values-arity (fn [{:keys [row columns values]}]
                    (str ":values row " row " has " values (if (= 1 values) " value" " values") " for " columns " :columns; give each row as many values as :columns"))
    :enum-literal (fn [{:keys [column type value allowed]}]
-                   (str (pr-str value) " is no value of " (if column (column-name column) (str "type " type)) "; it takes " (str/join ", " (map pr-str allowed))))
+                   (str (shown value) " is no value of " (if column (column-name column) (str "type " type)) "; it takes " (str/join ", " (map pr-str allowed))))
    :no-operator (fn [{:keys [column op domain type]}]
                   (str "PostgreSQL has no " (if (syntax/in-ops op) "=" (name op)) " for " (column-name column) ", of domain " domain " over enum " type
                        "; compare the enum: " (syntax/cast-form (pr-str column) type)))
    :uncast-string (fn [{:keys [column function value type]}]
-                    (str (pr-str value) " reaches " (cond (keyword? column) (str "column " (column-name column))
+                    (str (shown value) " reaches " (cond (keyword? column) (str "column " (column-name column))
                                                           column (pr-str column)
                                                           :else (str "an argument of " function))
                          " as a typed string, which its type " type " does not take"
@@ -415,16 +426,16 @@
                          ;; an enum's label: sent untyped, as values-schema says
                          (if (and (nil? (types/entry type)) (re-matches #"[A-Za-z_][\w-]*" value))
                            (pr-str [:lift (keyword value)])
-                           (syntax/cast-form (pr-str value) type))))
+                           (syntax/cast-form (shown value) type))))
    :literal-type (fn [{:keys [function column value sent type]}]
                    (let [to (if column (str "column " (column-name column)) function)
                          ;; a value of no literal syntax (an Instant) by its class
                          printed? (or (string? value) (number? value) (boolean? value) (coll? value) (uuid? value))
-                         x (if printed? (pr-str value) (str "<the " (.getSimpleName (class value)) ">"))]
+                         x (if printed? (shown value) (str "<the " (.getSimpleName (class value)) ">"))]
                      (if-not sent
-                       (str (pr-str value) " goes to " to " as a parameter, which pgjdbc sends no " (.getSimpleName (class value))
+                       (str (shown value) " goes to " to " as a parameter, which pgjdbc sends no " (.getSimpleName (class value))
                             " as; send a vector (jsonb) or a Java array (an array type)")
-                     (str (if printed? (pr-str value) (str "a " (.getName (class value)) " (" value ")")) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
+                     (str (if printed? (shown value) (str "a " (.getName (class value)) " (" value ")")) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
                           " takes there through no implicit conversion; "
                           (if (coll? value)
                             ;; jsonb, which casts to no array or enum
@@ -437,9 +448,9 @@
                          (str "NULL written into " table "." (column-name column) ", which is NOT NULL; write a value"
                               (when (= :values clause) ", or [:default] where the column has a default")))
    :unlifted-value (fn [{:keys [table column clause value type]}]
-                     (str (pr-str value) " in " clause " for " table "." (column-name column) ": HoneySQL writes a "
+                     (str (shown value) " in " clause " for " table "." (column-name column) ": HoneySQL writes a "
                           (if (map? value) "map there as a subquery" "vector there as a row of parameters, (?, ?)")
-                          "; write " (cond (types/json? type) (str (pr-str [:lift value]) ", sent as one parameter (jsonb)")
+                          "; write " (cond (types/json? type) (str (shown [:lift value]) ", sent as one parameter (jsonb)")
                                            (types/element type) (str "a Java array of " type ", (into-array ...)")
                                            :else (str "a value of " type))))
    :read-only-column (fn [{:keys [table column]}]
