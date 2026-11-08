@@ -431,15 +431,15 @@
 
 (defn- written-keywords
   "{:kind :written-otherwise :column k} of each column a write names by keyword k (:values,
-   :set, :columns) that HoneySQL writes unquoted as a word PostgreSQL reads as a keyword (order,
+   :set, :columns, the target's list) that HoneySQL writes unquoted as a word PostgreSQL reads as a keyword (order,
    user), not as the column."
   [body format]
   (distinct
    (for [st (syntax/statements body)
-         k (concat (map first (syntax/writes st (constantly nil))) (when (sequential? (:columns st)) (:columns st)))
+         k (concat (map first (syntax/writes st (constantly nil))) (vals (:written (syntax/insert-parts st))) (when (sequential? (:columns st)) (:columns st)))
          :when (keyword? k)
          :let [[text quoted?] (syntax/formatted-name k format false)]
-         :when (and (not quoted?) (types/keyword-word? text))]
+         :when (and (not quoted?) (types/reserved-word? text))]
      {:kind :written-otherwise :column k})))
 
 (defn check

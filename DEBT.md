@@ -4,8 +4,8 @@ What pgmalli-next knows it gets wrong and has not fixed yet. This repository is 
 branch of pgmalli: these would be issues there. Move them to issues, or delete this file, when the
 work goes back.
 
-None of these refuses what PostgreSQL takes. Each lets through something PostgreSQL refuses
-(it fails when the query runs), leaves a type untold, or tells a type other than the value read. Fix one, then delete its entry.
+Each lets through something PostgreSQL refuses (it fails when the query runs), refuses
+something PostgreSQL takes, leaves a type untold, or tells a type other than the value read. Fix one, then delete its entry.
 
 - An enum named `text`, `name` or `varchar` in a schema on the session's search_path reads as a
   `String` (`pgmalli-next.jdbc/builder`), while its row type says keyword labels: pgjdbc names it
@@ -45,3 +45,6 @@ None of these refuses what PostgreSQL takes. Each lets through something Postgre
 - An array of a type pgmalli does not type (`ltree[]`, `isbn13[]`) takes any Java array, a
   `Long[]` too, which PostgreSQL refuses (`column is of type ltree[] but expression is of type
   bigint[]`); values-schema generates no value of it.
+- `values-schema` and `set-schema` refuse a vector of two values or more to a column of a string
+  type (`{:nick [1 2]}`), which HoneySQL writes as a row, `(?, ?)`, and PostgreSQL takes as the
+  row's text (`(1,2)`); `analyze` takes it.

@@ -42,11 +42,12 @@
 (defn- default-literal
   "The value of a default PostgreSQL prints as a literal (42, 1.5, true, 'happy'::mood, a
    number it quotes, cast to a number type: '-1'::integer, '10000000000'::bigint); nil for an
-   expression (now(), nextval(...))."
+   expression (now(), nextval(...)) and for a cast of a length or precision ('abcdef'::varchar(3)),
+   which stores another value than the literal (abc)."
   [s]
   (cond (#{"true" "false"} s) (= "true" s)
         (number-literal s) (number-literal s)
-        :else (when-let [[_ quoted t] (re-matches #"(?s)'((?:[^']++|'')*+)'(?:::(.+))?" s)]
+        :else (when-let [[_ quoted t] (re-matches #"(?s)'((?:[^']++|'')*+)'(?:::([^(]+))?" s)]
                 (let [v (str/replace quoted "''" "'")]
                   (or (when (some-> t types/entry types/number-entry?) (number-literal v)) v)))))
 

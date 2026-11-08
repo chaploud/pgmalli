@@ -9,8 +9,9 @@
   "host:port/db of a JDBC URL, without its user, password or parameters."
   [url]
   (let [[_ authority db] (re-find #"(?i)^jdbc:postgresql://([^/?]*)/?([^?]*)" (str url))]
-    ;; a user and password before the host (libpq's way, user:p@ss@host) are no host to name
-    (if (and authority (not (str/includes? (str authority "/" db) "@"))) (str authority "/" db) "the :jdbcUrl")))
+    ;; a user and password before the host (libpq's way, user:p@ss@host, a ? in the password
+    ;; ending the authority) are no host to name
+    (if (and authority (not (str/includes? (str url) "@"))) (str authority "/" db) "the :jdbcUrl")))
 
 (defn- without-urls
   "e as a cause that names no URL: DriverManager's \"No suitable driver\" message carries the

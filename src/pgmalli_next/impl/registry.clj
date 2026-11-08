@@ -137,14 +137,15 @@
                          (when (<= lo hi) {:gen/min lo :gen/max hi})))
                 :string (let [n (:pg/max-length p)
                               typmod (:typmod (types/entry (shape/type-name p)))]
-                          (cond (= :bits typmod) {:gen/schema [:vector {:min (or n 1) :max (or n 8)} [:enum "0" "1"]] :gen/fmap #(apply str %)}
+                          (cond (:pg/one-byte p) {:gen/max 1}
+                                (= :bits typmod) {:gen/schema [:vector {:min (or n 1) :max (or n 8)} [:enum "0" "1"]] :gen/fmap #(apply str %)}
                                 (= :max-bits typmod) {:gen/schema [:vector {:min 1 :max (min 8 (or n 8))} [:enum "0" "1"]] :gen/fmap #(apply str %)}
                                 ;; within a varchar(n)'s n, which the schema does not check: the database refuses a longer value
                                 (or (nil? (:max p)) (> (:max p) 24)) {:gen/max (max (:min p 0) (min 24 (or n 24)))}))
                 ;; a numeric(p, s)'s within it, of its scale: the database refuses a longer one
                 decimal? (when-let [pr (:pg/precision p)]
                            (let [s (:pg/scale p 0)
-                                 lim (- (.pow 10M (int (- pr s))) (.movePointLeft 1M (int s)))]
+                                 lim (- (.scaleByPowerOfTen 1M (int (- pr s))) (.scaleByPowerOfTen 1M (int (- s))))]
                              {:gen/schema [:double {:min (- (double lim)) :max (double lim)}]
                               :gen/fmap #(let [d (.setScale (bigdec %) (int s) java.math.RoundingMode/DOWN)] (if (pos? (.compareTo (.abs d) lim)) lim d))}))
                 ;; a real: a Float within the range a value of one is held to

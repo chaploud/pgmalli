@@ -313,7 +313,7 @@
 
 (def ^:private keywords (delay (set (:keywords @catalog))))
 
-(defn keyword-word?
+(defn reserved-word?
   "Whether word s (lower case) is one PostgreSQL reads as a keyword where a column's name goes
    (pg_get_keywords' reserved and type or function names): a column of the name is quoted."
   [s]

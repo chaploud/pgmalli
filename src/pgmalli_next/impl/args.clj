@@ -71,9 +71,9 @@
 (defn- text-held
   "Alternative a of a value sent untyped, as its text (a keyword's, :n/a as n/a), held to what own,
    a column's type, takes of a string where an override or a domain checks it ([:and :string
-   ...]): the text is the value the column gets."
+   ...]), or a \"char\" its one byte: the text is the value the column gets."
   [a own registry]
-  (let [checked (filter #(and (= :and (shape/head %)) (= :string (shape/kind %))) (shape/alternatives (shape/non-null own)))]
+  (let [checked (filter #(and (or (= :and (shape/head %)) (:pg/one-byte (shape/props %))) (= :string (shape/kind %))) (shape/alternatives (shape/non-null own)))]
     (if (and (seq checked) (= :keyword (shape/kind a)))
       (let [valid? (m/validator (shape/either checked nil) (malli-options registry))]
         [:and a [:fn {:error/message "should be a keyword whose text the column's string takes"} #(valid? (accept/sent-text %))]])
@@ -211,7 +211,7 @@
         ;; element type; a scalar through the array type's input alike for every element type
         es (when (= :cast context) (some->> (types/element (:pg/type (shape/column-props s))) (query/named-type-schema registry opts)))
         t (or t (when es "text[]"))
-        takes? (if (= :cast context) #(accept/accepts? t % context) #(accept/holds? t % held-in))
+        takes? #(accept/sent-held? t % (if (= :cast context) :cast held-in))
         sent (distinct (for [[_ p] (jdbc/write-rows opts false) :when (and (not= p t) (takes? p))] p))
         arrays (when (= :cast context)
                  (for [a (shape/alternatives

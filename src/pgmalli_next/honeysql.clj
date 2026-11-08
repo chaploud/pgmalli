@@ -122,7 +122,7 @@
         ;; HoneySQL writes it as n, and PostgreSQL reads that as the column: quoted, or no keyword
         ;; (order, user) nor a qualified name (a.b)
         writes? #(let [[text quoted?] (syntax/formatted-name % format false)]
-                   (and (= n text) (not (str/includes? n ".")) (or quoted? (not (types/keyword-word? n)))))
+                   (and (= n text) (not (str/includes? n ".")) (or quoted? (not (types/reserved-word? n)))))
         k (jdbc/row-key n)]
     (cond (writes? k) k (or (string? column) (writes? n)) n :else k)))
 
@@ -154,6 +154,8 @@
                (map? value) (str "; HoneySQL writes a map there as " (in-a-row :map) ": write [:lift <the map>]")
                (and labels (string? value)) (str "; a String goes as varchar, which an enum takes not: write the label as a keyword, "
                                                  (if label (pr-str [:lift label]) "[:lift :label]"))
+               (and (string? sent) type (accept/takes? type sent c :assign))
+               "; the value is none the column's schema takes (an override's shape, a range): write one it takes"
                (and (string? sent) type) (str "; " (error/named (.getName c)) " goes as " sent ", which " type
                                               " takes through no implicit conversion (docs/queries.md#stricter-than-postgresql): send the column's own value")
                :else (str "; " (error/named (.getName c)) " is none of these")))))
@@ -161,13 +163,17 @@
 (defn- extra-key-message
   "The :error/fn of a written row's map: of a key no column has, the column's key it spells
    otherwise (:group-id for :group_id), which HoneySQL writes as that column but a row is not
-   read with; nil for another error."
+   read with, or the string of its name (\"order\" for :order), which HoneySQL would write as no
+   column; nil for another error."
   [{:keys [schema type in]} _]
   (let [k (last in)
-        kebab #(when (keyword? %) (keyword (str/replace (name %) "_" "-")))]
-    (when-let [c (and (= :malli.core/extra-key type) (keyword? k)
-                      (some #(when (and (not= % k) (= k (kebab %))) %) (map first (malli.core/children schema))))]
-      (str "disallowed key: the column is " (pr-str c) ", the key a row is read with"))))
+        kebab #(when (keyword? %) (keyword (str/replace (name %) "_" "-")))
+        ks (map first (malli.core/children schema))]
+    (when (and (= :malli.core/extra-key type) (keyword? k))
+      (if-let [c (some #(when (and (not= % k) (= k (kebab %))) %) ks)]
+        (str "disallowed key: the column is " (pr-str c) ", the key a row is read with")
+        (when-let [n (some #{(subs (str k) 1)} ks)]
+          (str "disallowed key: the column is " (pr-str n) ", a string, as HoneySQL writes " (pr-str k) " as no column"))))))
 
 (def ^:private not-one-value
   "What HoneySQL writes in :values or :set as something else than one value: a keyword as a
@@ -215,7 +221,7 @@
    the elements e generates (java-array), of registry r, and the maps and vectors of any values
    (jsonb's) as JSON holds them (json-scalar); a value of own's kind within the bounds the
    registry generates own's in (a varchar(n)'s n, 2025's dates), a keyword as short, and no date
-   or time of another kind, which it bounds not, a string of a type of other values one of its
+   or time, nor a numeric(p, s)'s number, of another kind, which it bounds not, a string of a type of other values one of its
    literals (types/types', a regclass's that names a relation), nor a value of another kind held to a
    predicate; nil where nothing is left."
   [r own t]
@@ -255,6 +261,8 @@
           (and (= :keyword k) (= :string (shape/kind own)) (:gen/max hints))
           (shape/merge-props t {:gen/schema [:string {:min 1 :max (:gen/max hints)}] :gen/fmap keyword})
           (and (keyword? k) (= "time" (namespace k)) (not= k (shape/kind own))) nil
+          ;; a numeric(p, s)'s values of another kind than its own, which they bound not
+          (and (:pg/precision (shape/column-props own)) (not= k (shape/kind own))) nil
           ;; the text of a type of no string values (a regclass's, any type's under :inline, a UUID's
           ;; too), its input reads: one of its literals, none where it has none
           (and (#{:string :uuid} k) (not= k (shape/kind own)) (not= :enum (shape/kind own)) (some? own))
@@ -299,26 +307,29 @@
                   (let [assigned #(cond-> (args/accepted-type r c :assign %) nullable? query/nullable)
                         a (assigned (assoc opts ::args/keywords-columns true))
                         ;; a nullable column takes a keyword HoneySQL writes as NULL (:null, :NULL) too
-                        alts (remove nil? [(one-value a)
+                        one (one-value a)
+                        alts (remove nil? [one
                                            (when nullable? (sql-word-schema :null (:format opts)))
                                            (when (fills k) default)])
                         lifted (assigned opts)]
                     [(when (seq alts) (if (next alts) (into [:or] alts) (first alts)))
                      ;; [:lift v] sends v as one parameter, a keyword label and a map too
                      [:tuple {:error/fn lift-message :pg/type (:pg/type (shape/column-props c))} [:= {:error/message (str "should be :lift, [:lift v]: HoneySQL writes a vector of values as " (in-a-row :vector) ", which no column takes")} :lift] lifted]
-                     lifted]))
+                     lifted
+                     ;; [x], which HoneySQL writes (?), x's own value
+                     (when one [:tuple {:error/message "should be [v], which HoneySQL writes (?), v one value"} one])]))
           ;; [key required? type generated generated-required?] of each column, generated the values
           ;; it takes that malli generates (nil for none): of a column a trigger may fill, as
           ;; without the trigger, which fills what it fills alone
           columns (concat
                    (for [[k props c] written
-                         :let [[plain lift] (typed k c (or (shape/maybe? c) triggered?))
+                         :let [[plain lift _ one-written] (typed k c (or (shape/maybe? c) triggered?))
                                [gen-plain _ gen-lifted] (typed k c (shape/maybe? c))
                                gen (some->> [(some->> gen-plain (generated-values r c))
                                              (some->> gen-lifted (generated-values r c) (vector :tuple [:= :lift]))]
                                             (remove nil?) seq (#(if (next %) (into [:or] %) (first %))))]]
                      [(written-key k opts) (not (or (:optional props) triggered?))
-                      (if plain [:or lift plain] lift)
+                      (if plain (into [:or lift plain] (when one-written [one-written])) lift)
                       gen
                       (not (:optional props))])
                    (for [[k] (shape/column-entries s) :when (not-any? #(= k (first %)) written)]

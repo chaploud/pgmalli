@@ -241,9 +241,8 @@ Insert it as `{:insert-into :events :values [row]}`.
 A column whose CHECK (its own or its domain's) the generated values miss takes an
 [override](#overrides) that generates within it. The file is EDN, which holds no function, so
 the override refers to a schema of your registry, `{:overrides {:public.users/email
-[:ref :app/email]}}`, with `:app/email` in your registry as `[:and {:gen/schema [:string {:min 1
-:max 8}] :gen/fmap #(str % "@example.com")} :string [:fn #(str/includes? % "@")]]`, its
-generator on the whole schema (malli generates an `[:and ...]` from its first child). A keyword
+[:ref :app/email]}}`, with `:app/email` in your registry ([overrides](#overrides) builds it), its
+generator on the whole `[:and ...]` (malli generates an `[:and ...]` from its first child). A keyword
 to the column, which goes as its text, is held to it too. A `:re`
 override generates only with `com.gfredericks/test.chuck` on the classpath, as malli's `:re` does.
 
@@ -301,7 +300,7 @@ problems it reports:
 | `:duplicate-column` | columns of one label in the row a query returns, which `pgmalli-next.jdbc/builder` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |
-| `:unlifted-value` | a map, or a vector of two values or none, written into a column (`:set`, `:values`, `:do-update-set`), which HoneySQL writes as a subquery or a row of parameters; with `:value` and the column's `:type` |
+| `:unlifted-value` | a map, or a vector of none or of two values or more (none alone into a column of a string type, which takes the row's text), written into a column (`:set`, `:values`, `:do-update-set`), which HoneySQL writes as a subquery or a row of parameters; with `:value` and the column's `:type` |
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |
 | `:enum-literal` | a literal (a string, `[:lift "s"]`, `[:inline "s"]`, `[:lift :kw]`, a number) outside an enum type's labels where PostgreSQL types it as the enum: compared, in an IN list or ANY's array, assigned, beside the enum in `coalesce`, `greatest`, `least`, `nullif` or CASE's values, or cast to it; with `:allowed`, and `:column` (the column, or the expression compared or resolved beside) or, cast, `:type` |
@@ -455,17 +454,19 @@ the schemas generated: a key must name a column, and a value must be a malli sch
 qualified name passes, as your registry's). An error names the key meant; a type key (`:inet`)
 names the columns of the type to override instead.
 
-A `[:ref ...]` to your own schema needs a registry holding it:
+A `[:ref ...]` to your own schema needs a registry holding it (without one, malli throws
+`:malli.core/invalid-ref`); pass it wherever this README passes `registry`:
 
 ```clojure
-(require '[malli.registry :as mr])
+(require '[malli.registry :as mr] '[clojure.string :as str])
 
 (def app-registry
   (mr/composite-registry
-   {:app/scores-consistent [:fn (fn [{:keys [min_score max_score]}] (<= min_score max_score))]}
+   {:app/email [:and {:gen/schema [:string {:min 1 :max 8}] :gen/fmap #(str % "@example.com")}
+                :string [:fn #(str/includes? % "@")]]}
    registry))
 
-(m/validate :app/scores-consistent {:min_score 1 :max_score 3} {:registry app-registry})
+(m/validate :app/email "ann@example.com" {:registry app-registry})
 ;; => true
 ```
 

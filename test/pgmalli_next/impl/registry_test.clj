@@ -213,8 +213,10 @@
 (deftest a-numeric-of-a-precision-generates-within-it-of-its-scale
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                         [:n ['decimal? {:pg/type "numeric" :pg/precision 5 :pg/scale 2}]]
-                                                        [:ns [:vector {:pg/type "numeric[]" :pg/precision 4 :pg/scale 2} 'decimal?]]]}})
+                                                        [:ns [:vector {:pg/type "numeric[]" :pg/precision 4 :pg/scale 2} 'decimal?]]
+                                                        [:small ['decimal? {:pg/type "numeric" :pg/precision 2 :pg/scale 5}]]]}})
         rows (mg/sample :pg.public/t {:registry reg :size 50 :seed 1})]
+    (is (every? #(<= (abs (double %)) 0.00099) (map :small rows)) "numeric(2, 5), a scale past its precision")
     (is (every? #(and (<= (abs (double %)) 999.99) (<= (.scale ^BigDecimal %) 2)) (map :n rows)) "numeric(5, 2)")
     (is (every? #(<= (abs (double %)) 99.99) (mapcat :ns rows)) "numeric(4, 2)[]")))
 
@@ -222,10 +224,13 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\"" :pg/one-byte true}]]]}})]
     (is (= [true true true false false false]
            (map #(m/validate :pg.public/t {:c %} {:registry reg}) ["" "a" "\\343" "ab" "é" "\\9"]))
-        "an ASCII character, or the \\ooo PostgreSQL writes another byte as")))
+        "an ASCII character, or the \\ooo PostgreSQL writes another byte as")
+    (is (every? #(m/validate :pg.public/t % {:registry reg}) (mg/sample :pg.public/t {:registry reg :size 30 :seed 1})) "generated")))
 
 (deftest a-default-the-columns-length-takes-leaves-the-column-optional
   (let [reg (registry-of {} [{:name "v" :position 1 :data_type "character varying" :is_nullable false :default_value "'ab    '::character varying" :max_length 3}
-                             {:name "b" :position 2 :data_type "bit" :is_nullable false :default_value "'10'::\"bit\"" :max_length 3}])]
-    (is (= [true false] (map #(boolean (get (into {} (map (juxt first (comp :optional second)) (shape/column-entries (m/form (m/deref (m/schema :pg.public.t/insert {:registry reg})))))) %)) [:v :b]))
-        "varchar(3)'s 'ab    ' PostgreSQL takes, its trailing spaces dropped; bit(3)'s '10' it refuses")))
+                             {:name "b" :position 2 :data_type "bit" :is_nullable false :default_value "'10'::\"bit\"" :max_length 3}
+                             {:name "w" :position 3 :data_type "character varying" :is_nullable false :default_value "'abcdef'::character varying(3)" :max_length 3}
+                             {:name "f" :position 4 :data_type "bit" :is_nullable false :default_value "'1'::bit(3)" :max_length 3}])]
+    (is (= [true false true true] (map #(boolean (get (into {} (map (juxt first (comp :optional second)) (shape/column-entries (m/form (m/deref (m/schema :pg.public.t/insert {:registry reg})))))) %)) [:v :b :w :f]))
+        "varchar(3)'s 'ab    ' PostgreSQL takes, its trailing spaces dropped; bit(3)'s '10' it refuses; a cast of a length it cuts or pads to (abc, 100)")))

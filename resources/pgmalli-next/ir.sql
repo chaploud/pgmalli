@@ -242,8 +242,11 @@ functions AS (
            'defaults', p.pronargdefaults,
            -- the columns it returns in FROM: its OUT (and TABLE) arguments, else its composite type's
            -- an unnamed one named column<N>, N its place among them, as PostgreSQL names it; one alone
-           -- and unnamed is no column but the function's value, named as the function or its alias
-           'columns', COALESCE((SELECT CASE WHEN pg_catalog.count(*) > 1 OR pg_catalog.bool_and(COALESCE(o.n, ''::text) <> ''::text)
+           -- and unnamed is no column but the function's value, named as the function or its alias; one
+           -- alone of a composite type returns that type's columns, named or not
+           'columns', COALESCE((SELECT CASE WHEN pg_catalog.count(*) > 1
+                                              OR (pg_catalog.bool_and(COALESCE(o.n, ''::text) <> ''::text)
+                                                  AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_type ct WHERE ct.oid = p.prorettype AND ct.typtype = 'c'))
                                             THEN pg_catalog.json_agg(pg_catalog.json_build_array(COALESCE(NULLIF(o.n, ''::text), 'column'::text || o.k::text),
                                                                                        pg_catalog.format_type((SELECT b.base FROM type_bases b WHERE b.oid = o.t), NULL)) ORDER BY o.k) END
                                 FROM (SELECT u.n, u.t, pg_catalog.row_number() OVER (ORDER BY u.i) AS k

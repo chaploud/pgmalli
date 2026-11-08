@@ -136,7 +136,7 @@
     (doseq [url ["postgres://u:s3cret@localhost:1/x" "postgresql://u:s3cret@localhost:1/x"]]
       (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"is no URL of PostgreSQL's JDBC driver" (ir/from-db {:jdbcUrl url})))]
         (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) (str "libpq's URL is not printed: " url))))
-    (doseq [url ["JDBC:postgresql://localhost:1/nope?password=s3cret" "jdbc:postgresql://u:pa/s3cret@localhost:1/x" "jdbc:postgresql://u:p@s3cret@localhost:1/x"]]
+    (doseq [url ["JDBC:postgresql://localhost:1/nope?password=s3cret" "jdbc:postgresql://u:pa/s3cret@localhost:1/x" "jdbc:postgresql://u:p@s3cret@localhost:1/x" "jdbc:postgresql://u:s3cret?x@localhost:1/x"]]
       (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db {:jdbcUrl url})))]
         (is (not (str/includes? (pr-str (Throwable->map e)) "s3cret")) (str "nor of an upper-case scheme, or a user and password before the host: " url))))))
 

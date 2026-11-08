@@ -2106,7 +2106,8 @@
     (is (not-any? #(ok? s %) [{:score [:+ :score 1]} {:score :seq} {:score {:select [1]}}]))
     (is (not-any? #(ok? v (merge row %)) [{:score [:lift "1"]} {:mood [:lift "glad"]} {:score [1 2]} {:score '(1 2)} {:score [:default]}])
         "[:lift v] holds v to the column's type; a vector not headed by :lift a row of parameters; DEFAULT where the database fills nothing")
-    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a String goes as varchar, which an enum takes not: write the label as a keyword, [:lift :label]" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"]}
+    (is (= {:mood ["should be [:lift v], v one of :happy :sad; a String goes as varchar, which an enum takes not: write the label as a keyword, [:lift :label]" "should be a PGobject of type mood (a String goes as varchar, which mood does not take)" "should be DEFAULT as HoneySQL writes it ([:default])"
+                   "should be [v], which HoneySQL writes (?), v one value"]}
            (me/humanize (m/explain v (assoc row :mood "glad") {:registry registry}))))
     (let [rows (concat (mg/sample v {:registry registry :seed 1 :size 30}) (mg/sample s {:registry registry :seed 1 :size 30}))]
       (is (not-any? (fn [r] (some #(and (sequential? %) (not= [:default] %) (not= :lift (first %))) (vals r))) rows)
@@ -3508,7 +3509,10 @@
         "sql/format writes SELECT id INSERT INTO t FROM t")
     (is (= [{:kind :written-otherwise :column :order}] (problems {:insert-into :t :values [{:id 1 :order 2 :j [:lift {}]}]})) "INSERT INTO t (id, order)")
     (is (= [] (problems {:insert-into :t :values [{:id 1 "order" 2 :j [:lift {}]}]})) "a string key, which HoneySQL quotes")
+    (is (some #{{:kind :written-otherwise :column :order}} (problems {:insert-into [[:t [:order]] {:select [:id] :from [:t]}]})) "the target's list")
     (is (some #{"order"} (keys (mg/generate (h/values-schema reg :t) {:registry reg :seed 1}))) "values-schema keys it so")
+    (is (= ["disallowed key: the column is \"order\", a string, as HoneySQL writes :order as no column"]
+           (:order (me/humanize (m/explain (h/values-schema reg :t) {:id 1 :order 2 :j [:lift {}]} {:registry reg})))) "a row read written back")
     (is (= [{:kind :written-otherwise :op (keyword "?~") :call true}] (problems {:select [:id] :from [:t] :where [(keyword "?~") :j "a"]}))
         "a ? of the name, which HoneySQL writes ??")
     (is (= [{:kind :written-otherwise :op (keyword "~~~") :call true}] (problems {:select [[[(keyword "~~~") :j "a" "b"] :x]] :from [:t]}))
@@ -3519,7 +3523,10 @@
         problems #(:problems (h/analyze reg %))]
     (is (= [{:kind :uncast-string :value "a" :type "text[]" :column :ta}] (problems {:insert-into :t :values [{:ta ["a"]}]}))
         "HoneySQL writes [\"a\"] as (?), a varchar")
-    (is (= :unlifted-value (:kind (first (problems {:update :t :set {:ta []}})))) "and [] as (), no value")))
+    (is (= :unlifted-value (:kind (first (problems {:update :t :set {:ta []}})))) "and [] as (), no value")
+    (is (= [] (problems {:insert-into :t :values [{:n [1]}]})))
+    (is (= [true true false] (map #(m/validate (h/values-schema reg :t {}) {:n %} {:registry reg}) [1 [1] [1 2]])) "values-schema reads it so")
+    (is (m/validate (h/set-schema reg :t {}) {:n [1]} {:registry reg}) "set-schema too")))
 
 (deftest a-populate-documents-array-holds-what-a-column-of-its-element-type-takes
   (let [reg (pgmalli/registry {:registry {:pg.public/mood [:enum "happy" "sad"]
@@ -3540,3 +3547,21 @@
     (is (m/validate t (into-array Double []) {:registry reg}))
     (is (not (m/validate t (into-array String []) {:registry reg})) "an empty String[] goes as varchar[]")
     (is (< 1 (count (distinct (map :r (mg/sample (h/values-schema reg :t) {:registry reg :size 20 :seed 1}))))) "a real generates Floats of many values")))
+
+(deftest a-numeric-of-a-precision-written-generates-within-it
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n ['decimal? {:pg/type "numeric" :pg/precision 6 :pg/scale 2}]]]}})
+        rows (mg/sample (h/values-schema reg :t) {:registry reg :size 200 :seed 3})]
+    (is (every? #(let [n (:n %)] (< (abs (double (if (vector? n) (second n) n))) 1e4)) rows) "numeric(6, 2): an Integer or Long would go past it")))
+
+(deftest a-value-of-the-columns-type-its-schema-refuses-is-said-so
+  (let [base (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:code [:ref {:pg/type "text"} :app/code]]]}})
+        reg (mr/composite-registry base {:app/code [:re "^[A-Z]+$"]})
+        v (h/values-schema reg :t)]
+    (is (= [true false] (map #(m/validate v {:code %} {:registry reg}) ["ABC" "abc"])) "a :re override holds a written String")
+    (is (= "should be [:lift v], v as the column takes it; the value is none the column's schema takes (an override's shape, a range): write one it takes"
+           (first (:code (me/humanize (m/explain v {:code "abc"} {:registry reg}))))))))
+
+(deftest a-keyword-to-a-char-column-is-held-to-one-byte-as-a-string-is
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "\"char\"" :pg/one-byte true}]]]}})
+        c (:c (:args (h/analyze reg {:insert-into :t :values [{:c :?c}]})))]
+    (is (= [true true false false] (map #(m/validate c % {:registry reg}) ["a" :a "ab" :ab])))))

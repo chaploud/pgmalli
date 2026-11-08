@@ -271,10 +271,10 @@ writes there as a subquery or a row of parameters (write `[:lift m]`; a scalar d
 string or a number, and the document `null`, read as nil, a `PGobject` of `jsonb`), a `bit(1)` column, read as a `Boolean` (write a
 `PGobject` of `bit`), and an array column, read as a vector (write a Java array, its NULLs nil, a
 `java.sql.Array`, whose elements are not checked, or a `PGobject` of the array type, the one way
-for a type no Java array goes as: an enum's, json's, time's ...); another
-spelling (`:group-id`) is refused. Where HoneySQL would not write that
-keyword to the column under `:format`, the key is the name as a string
-([what a name refers to](#what-a-name-refers-to)). A column the database may fill is optional and takes
+for a type no Java array goes as: an enum's, json's, time's ...), and a column HoneySQL would
+not write as the column under `:format` (one of a word PostgreSQL reads as a keyword, `order`,
+`user`, or of a dot in its name), keyed by its name as a string (`"order"`,
+[what a name refers to](#what-a-name-refers-to)); another spelling (`:group-id`) is refused. A column the database may fill is optional and takes
 DEFAULT too: `[:default]`, or `:default` where the format writes it as the word (not where the format quotes it); one it writes (generated, identity ALWAYS) takes DEFAULT alone. Where a
 BEFORE row trigger runs for the write, every column is optional and takes nil
 ([types](types.md#names-in-the-registry)). In
@@ -287,7 +287,7 @@ in the query body, not in a row. `[:lift v]` is a value too, which HoneySQL send
 parameter, `v` of the column's type: an enum label goes as `[:lift :active]`, as HoneySQL
 writes a bare keyword as a column, and a json document as `[:lift {:a 1}]`, as it writes a map
 as a subquery. A vector or list not headed by `:lift` is a row of parameters, which no column
-takes. `mg/generate` gives values and `[:lift v]`, a NOT NULL column a trigger may fill a value
+takes, but `[x]`, which HoneySQL writes `(?)`, `x`. `mg/generate` gives values and `[:lift v]`, a NOT NULL column a trigger may fill a value
 too, and leaves out a column of whose values malli generates none (a `PGobject`, a type pgmalli
 does not type).
 Validate a row under the registry (`{:registry registry}`):
@@ -700,7 +700,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-assignment"></a>An argument takes what PostgreSQL converts implicitly, not all it converts: a cast
   PostgreSQL makes on assignment alone changes the value without a word (a `Double` or a
   `BigDecimal` into a `bigint` column rounds, an `OffsetDateTime` into a `date` column cuts the
-  time off, a `String` of more than one byte into a `"char"` column keeps its first), and a number assigned to a `text` column PostgreSQL converts through its text. Two
+  time off, a `String` of more than one byte into a `"char"` column keeps its first), and a value of another type assigned to a string column (`text`, `varchar`, `char(n)`, `name`, `citext`: a number, a `Boolean`, a `UUID`, a date), which PostgreSQL converts through its text. Two
   assignment casts change nothing and are taken: a `Double` NaN or infinity to a `numeric` column
   (an array of them to `numeric[]`), and `jsonb` to a `json` column.
   Cast it in the query (`[:cast :?n :bigint]`) where the conversion is meant. A value of a
@@ -742,9 +742,9 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
 - <a id="stricter-json-keys"></a>A map `install-sending!` sends as `jsonb` with two keys of one text
   (`:a` and `"a"`, `:n/a` and `'n/a`): PostgreSQL keeps the last of them, which is the map's hash
   order's, not the application's. Sending it is an error; keep one key.
-- <a id="stricter-character"></a>A `Character` argument, which pgjdbc sends as `varchar`, to a column other than a `character`
-  one: taking it would put `char?` on every string argument (a `"char"` column, as
-  [above](#stricter-assignment)). Send `(str c)`.
+- <a id="stricter-character"></a>A `Character` argument, which pgjdbc sends as `varchar`, to any column but a `character`
+  (`char(n)`) one, `varchar` and `text` included: taking it would put `char?` on every string
+  argument. A `"char"` column refuses it by the [assignment rule](#stricter-assignment). Send `(str c)`.
 - A key of a `jsonb_populate_record` document (or of `json_populate_record` and their
   `recordset`) that names no column of the row type, which PostgreSQL ignores: almost always a
   misspelled or unconverted key (`:sort-order` for `sort_order`), whose value is then not
@@ -786,6 +786,10 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   :position}]`: an item of `INSERT ... SELECT`'s select list, an element of `[:array ...]`, and
   coalesce or CASE of values alone (`[:coalesce "a" 1]`).
 - A value beside a column of `"char"`, which coalesce and CASE match with no `character varying`.
+- A column of a word PostgreSQL reads as a keyword (`:order`) outside a write (the select list,
+  `:where`, `:order-by`), which HoneySQL writes unquoted and PostgreSQL refuses: write it as a
+  string (`"order"`) or quote names.
+- A string key of a row (`:values`, `:set`) that names no column, which PostgreSQL refuses.
 - A call returning a domain over an enum type compared (`[:= [:f :m] "ok"]`): its value is of
   the enum type, which a column of the domain is not (`:no-operator`).
 - A raw FROM item of SQL beyond a name (`[[:raw "jsonb_array_elements(doc) AS e(v)"]]`) is not

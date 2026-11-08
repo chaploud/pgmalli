@@ -282,10 +282,16 @@
                (string-type? t)
                (if (vector? t) (or (= :common context) (not (:domain? (get t 2)))) (compares? t t))))))
 
+(defn sent-held?
+  "Whether a value sent as type sent goes where a value of type t does in context, whatever its
+   class: holds? (cast, accepts?)."
+  [t sent context]
+  (if (= :cast context) (accepts? t sent :cast) (holds? t sent context)))
+
 (defn takes?
   "Whether a value of class c, sent as type sent, goes where a value of type t does in context:
-   holds? (cast, accepts?), and, sent untyped, its text read there (reads?,
+   sent-held?, and, sent untyped, its text read there (reads?,
    docs/queries.md#stricter-untyped)."
   [t sent ^Class c context]
-  (and (if (= :cast context) (accepts? t sent :cast) (holds? t sent context))
+  (and (sent-held? t sent context)
        (or (not= :unknown sent) (reads? t c context))))
