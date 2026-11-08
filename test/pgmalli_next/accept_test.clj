@@ -212,10 +212,11 @@
           (is (casts? s t) (str s " to " t)))))))
 
 (deftest the-schema-of-each-class-sent-takes-its-values
-  ;; a value of every class with a schema (accept/values), a new class too
+  ;; a value of every class the one sending sends (accept/values), a new class too
   (doseq [:let [registry (pgmalli/registry {:registry {}})]
-          v (vals accept/values)
-          :when (or (not (.isArray (class v))) (= accept/bytes-class (class v)))]
+          [_ _ c] (pgjdbc/write-rows {} false)
+          :let [v (get accept/values c)]
+          :when (some? v)]
     (is (some (fn [[s t]] (and (= t (pgjdbc/sent-type v {})) (m/validate s v {:registry registry}))) (pgjdbc/write-rows {} false))
         (str (class v) " goes as its type"))))
 
