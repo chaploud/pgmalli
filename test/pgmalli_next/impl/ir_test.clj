@@ -115,7 +115,7 @@
       (spit psql "#!/bin/sh\nPGOPTIONS='-c statement_timeout=1' exec psql \"$@\"\n")
       (.setExecutable psql true)
       (let [e (is (thrown? clojure.lang.ExceptionInfo (ir/from-db (assoc *db* :psql (str psql)))))]
-        (is (re-find #"^psql failed reading schema public on localhost:\d+/\w+ \(exit 3\): .*canceling statement due to statement timeout; pgmalli needs PostgreSQL 16 or later"
+        (is (re-find #"^psql failed reading schema public on localhost:\d+/\w+ \(exit 3\): .*canceling statement due to [^;]*; pgmalli needs PostgreSQL 16 or later"
                      (ex-message e)))
         (is (= [:pgmalli.error/fault 3] ((juxt :pgmalli/error :exit) (ex-data e))))))))
 

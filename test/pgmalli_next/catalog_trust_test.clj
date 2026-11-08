@@ -101,7 +101,7 @@
           [_ query] (re-find #"(?s)SET search_path TO [^;]*;\s*(.*);\s*$" ir-sql)
           query (-> query (str/replace ":'schema'" "'shadow'") (str/replace ":\"schema\"" "\"shadow\""))
           jdbc (requiring-resolve 'next.jdbc/execute!)
-          outside (with-open [c (.getConnection ^javax.sql.DataSource (datasource))]
+          outside (with-open [c ((requiring-resolve (quote next.jdbc/get-connection)) (datasource))]
                     (jdbc c ["SET search_path TO pg_catalog, shadow, pg_temp"])
                     (jdbc c [(str "CREATE TEMP VIEW irv AS " query)])
                     (jdbc c ["SET search_path TO pg_catalog"])
