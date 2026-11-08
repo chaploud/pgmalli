@@ -192,10 +192,12 @@ is a step nobody minds, a minor once it is work people plan for.
    between releases.
 2. Push the commit, then tag it and push the tag: `git tag vX.Y.Z && git push origin vX.Y.Z`.
 3. The release workflow checks that the tag is on main and runs `bb test:jvm` on the image CI
-   pins, and, in a job of its own with tools.build alone, builds the jar, its SHA-256 and a
-   build provenance attestation (`gh attestation verify pgmalli-next.jar --repo
-   chaploud/pgmalli-next`); a third job deploys it to Clojars once both pass, and a fourth
-   creates the GitHub release with the jar, its SHA-256 and generated notes. If only the last job fails, re-run it alone: Clojars rejects
+   pins; then, in a job of its own with tools.build alone, it builds the jar, its SHA-256 and a
+   build provenance attestation of the jar and its pom (`gh attestation verify pgmalli-next.jar
+   --repo chaploud/pgmalli-next --signer-workflow chaploud/pgmalli-next/.github/workflows/release.yml
+   --source-ref refs/tags/vX.Y.Z`); a third job checks the jar and pom it downloads against the
+   SHA-256s that job gave and deploys them to Clojars, and a fourth creates the GitHub release
+   with the jar, its SHA-256 and generated notes. If only the last job fails, re-run it alone: Clojars rejects
    publishing a version twice.
 
 The Clojars deploy token is the secret `CLOJARS_PASSWORD` of the environment `clojars`,
