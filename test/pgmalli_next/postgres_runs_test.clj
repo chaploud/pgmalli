@@ -542,6 +542,7 @@
       (is (= {:t "{{1,2},{3,4}}"} (one ["SELECT (?::int[])::text AS t" [[1 2] [3 4]]])) "a vector of vectors, multi-dimensional")
       (is (= {:t "{\"a\\\"b\",c}"} (one ["SELECT (?::text[])::text AS t" ["a\"b" "c"]])) "quoted, a quote escaped")
       (is (= {:b true} (one ["SELECT 2 = ANY(?) AS b" #{1 2}])) "a set, untyped: = ANY reads it as the other side's array")
+      (is (= {:b true} (one ["SELECT 2 = ANY(?) AS b" (map inc [0 1])])) "a seq, as a vector")
       (is (= {:t "{ns/a,b}"} (one ["SELECT (?::text[])::text AS t" [:ns/a :b]])) "a keyword element's text, its namespace kept")
       (is (= {:t "array"} (one ["SELECT jsonb_typeof(?) AS t" (jsonb [1 2])])) "a vector jsonb marks, a document")
       (is (= {:t "object"} (one ["SELECT jsonb_typeof(?) AS t" {:a 1}])))

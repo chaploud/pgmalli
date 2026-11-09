@@ -326,7 +326,7 @@ by the one sending, `pgmalli-next.jdbc/sent`
 | `OffsetTime`, `OffsetDateTime`, `Instant` | `timetz`, `timestamptz`, `timestamptz` (an `Instant` as an `OffsetDateTime` in UTC) |
 | `Duration`, `Period` | `interval` (its ISO-8601 text, which interval's input reads to the microsecond) |
 | a keyword | untyped, its text (`:ns/a` as `ns/a`) |
-| a vector, a set | untyped, an array literal's text (`{"1",NULL}`), which PostgreSQL reads as the array type where it goes; a vector of vectors a multi-dimensional one |
+| a vector, a seq (a list, `(map :id rows)`), a set | untyped, an array literal's text (`{"1",NULL}`), which PostgreSQL reads as the array type where it goes; a vector of vectors a multi-dimensional one |
 | a map, a vector `pgmalli-next.jdbc/jsonb` marks | `jsonb` |
 | a `PGobject` | the type it names |
 
@@ -340,7 +340,7 @@ a boolean. No keyword, which it writes as a name, nor a `Double` NaN or infinity
 a vector or a `PGobject`, which it writes as their text unquoted; nothing in `:in`, whose
 collection it writes as no list (write the list in the query, `[:in :id [1 2]]`).
 
-Another class (a list, a symbol, a Java array; a `java.util.Date`, which pgjdbc refuses, and java.sql's
+Another class (a symbol, a Java array; a `java.util.Date`, which pgjdbc refuses, and java.sql's
 `Date`, `Time` and `Timestamp`, whose text pgjdbc writes in the JVM's time zone) is sent nowhere. `pgmalli-next.impl.accept/classes` holds
 this table. A value reaches an argument through its class's row or one of its superclasses' or
 interfaces'.
@@ -363,7 +363,7 @@ any type, as a string does. A json or jsonb column takes a map and a vector
 held to the shape a [shape](../README.md#column-shapes) gives it (sent as jsonb, which PostgreSQL
 assigns to json as it is), and a `PGobject`.
 
-An array argument takes a vector, sent untyped: PostgreSQL reads its literal's text as the array
+An array argument takes a vector or a seq (a list, `(map :id rows)`), sent untyped: PostgreSQL reads its literal's text as the array
 type where it goes, each element through its type's input. An element is one of the column's
 own values (an enum's labels as keywords), within its type's range and of any length (the array
 type has no type modifier there), nil where the column's elements are. Compared with `ANY` or
@@ -733,7 +733,7 @@ PostgreSQL cannot tell from one; a literal written into the SQL (`:inline`, `[:i
   `(pgmalli-next.jdbc/jsonb v)`. A set goes to `= ANY` and `= ALL` alone, which see no order of
   its elements: elsewhere PostgreSQL keeps an order the set has not; send a vector. stricter.edn
   pins each type this leaves out, by the class sent (`clojure.lang.Keyword`,
-  `clojure.lang.IPersistentVector`).
+  `clojure.lang.IPersistentVector`, `clojure.lang.ISeq`).
 - An `Instant` (a `timestamptz`) assigned to a `timestamp` or a `date` column, and a
   `LocalDateTime` (a `timestamp`) to a `date` one: PostgreSQL converts it on assignment alone,
   in the session's time zone, which pgjdbc sets to the JVM's, so the value written changes with

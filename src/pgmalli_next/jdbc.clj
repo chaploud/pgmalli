@@ -187,7 +187,7 @@
   "Element x of an array literal: NULL, an array, or its text quoted."
   [x]
   (cond (nil? x) "NULL"
-        (or (vector? x) (set? x)) (array-text x)
+        (or (sequential? x) (set? x)) (array-text x)
         :else
         (let [t (cond (keyword? x) (accept/sent-text x)
                       ;; a domain's element as pgjdbc reads it
@@ -205,7 +205,7 @@
           (str \" (str/replace t #"[\"\\]" "\\\\$0") \"))))
 
 (defn- array-text
-  "The array literal of vector or set xs ('{\"1\",NULL}'), a set's elements in its order."
+  "The array literal of sequential or set xs ('{\"1\",NULL}'), a set's elements in its order."
   [xs]
   (str "{" (str/join "," (map element-text xs)) "}"))
 
@@ -214,7 +214,7 @@
         (keyword? v) (untyped (accept/sent-text v))
         (or (instance? java.time.Duration v) (instance? java.time.Period v)) (interval-object v)
         (or (map? v) (accept/jsonb? v)) (jsonb-object v)
-        (or (vector? v) (set? v)) (untyped (try (array-text v)
+        (or (sequential? v) (set? v)) (untyped (try (array-text v)
                                                 (catch StackOverflowError _
                                                   (error/fail! :pgmalli.error/invalid-options (str "an array nested " accept/too-deep)
                                                                {:given (.getName (class v))}))))
@@ -222,7 +222,7 @@
 
 (defn sent
   "sqlvec, [sql & params] (sql/format's), with each parameter as the one sending sends it, as
-   docs/reading-rows.md#the-one-reading-and-sending lists: a vector (a set) an array, untyped,
+   docs/reading-rows.md#the-one-reading-and-sending lists: a vector, a seq (a set) an array, untyped,
    which PostgreSQL types where it goes; a map, and a vector jsonb marks, jsonb; a keyword its text (an enum's label);
    an Instant a timestamptz; a Duration and a Period an interval; another value as pgjdbc's
    setObject sends it.

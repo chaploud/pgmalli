@@ -462,8 +462,8 @@
     (is (= {:ids (compared-array bigint "bigint[]" "int8[]") :gs (compared-array int4 "integer[]" "int4[]")} (args body))
         "a vector or a set of the column's values, sent untyped, read as an array of the column's type")
     (let [t (:ids (args body))]
-      (doseq [v [[1 2] [] #{1 2}]] (is (m/validate t v {:registry registry}) (pr-str v)))
-      (doseq [v [(long-array [1]) ["a"] [1 nil] '(1) nil]] (is (not (m/validate t v {:registry registry})) (pr-str v))))))
+      (doseq [v [[1 2] [] #{1 2} '(1) (map inc [1])]] (is (m/validate t v {:registry registry}) (pr-str v)))
+      (doseq [v [(long-array [1]) ["a"] [1 nil] nil]] (is (not (m/validate t v {:registry registry})) (pr-str v))))))
 
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id :?id] [:in :mood :?moods] [:> :score :?min]] :limit :?n}]
@@ -3703,8 +3703,9 @@
     (is (= :i (-> e ex-data :data :schema m/form second :pgmalli/no-values)))))
 
 (deftest a-lifted-list-to-an-operator-is-typed-as-a-vector-is
-  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})]
-    (is (= [:literal-type] (map :kind (:problems (h/analyze reg {:select [[[:-> :j [:lift '(1)]] :x]] :from [:t]})))))))
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
+        problems #(:problems (h/analyze reg {:select [[[:-> :j [:lift %]] :x]] :from [:t]}))]
+    (is (= (problems [1]) (problems '(1))))))
 
 (deftest a-lifted-seq-is-sent-as-given
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]] [:n [:int {:pg/type "integer"}]] [:lift [:maybe [:int {:pg/type "integer"}]]]]}})
@@ -3716,15 +3717,17 @@
 
 (deftest a-lifted-value-pgjdbc-sends-not-is-a-problem-wherever-it-is
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:int {:pg/type "integer"}]] [:j [:any {:pg/type "jsonb"}]]]}})
-        problems #(:problems (h/analyze reg %))]
-    (doseq [q [{:select [:n] :from [:t] :where [:= :n [:any [:lift '(1 2)]]]}
-               {:select [[[:lift '(1 2)] :x]]}]]
-      (is (= [{:kind :literal-type :value '(1 2) :sent nil}] (problems q)) (pr-str q)))
-    (is (= 1 (count (problems {:update :t :set {:j [:lift '(1 2)]}}))) "once where a slot reports it")
+        problems #(:problems (h/analyze reg %))
+        ;; a collection the one sending sends not
+        queue (conj clojure.lang.PersistentQueue/EMPTY 1 2)]
+    (doseq [q [{:select [:n] :from [:t] :where [:= :n [:any [:lift queue]]]}
+               {:select [[[:lift queue] :x]]}]]
+      (is (= [{:kind :literal-type :value queue :sent nil}] (problems q)) (pr-str q)))
+    (is (= 1 (count (problems {:update :t :set {:j [:lift queue]}}))) "once where a slot reports it")
     (is (= [] (problems {:select [:n] :from [:t] :where [:in :n [:lift '(1 2)]]})) "IN, written a list of its elements")
-    (is (= [] (problems {:select [[[:lift [1 2]] :x] [[:lift #{1}] :y]]})) "a vector and a set, sent untyped")
-    (is (= ["(1 2) is sent as a parameter, which pgjdbc sends no PersistentList as; send a vector (an array) or a map (jsonb)"]
-           (h/humanize (problems {:select [[[:lift '(1 2)] :x]]}))))))
+    (is (= [] (problems {:select [[[:lift [1 2]] :x] [[:lift '(1 2)] :y] [[:lift #{1}] :z]]})) "a vector, a seq and a set, sent untyped")
+    (is (= ["<a PersistentQueue> is sent as a parameter, which pgjdbc sends no PersistentQueue as; send a vector (an array) or a map (jsonb)"]
+           (h/humanize (problems {:select [[[:lift queue] :x]]}))))))
 
 (deftest an-order-by-item-of-more-than-a-direction-is-written-otherwise
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:a [:int {:pg/type "integer"}]]]}})

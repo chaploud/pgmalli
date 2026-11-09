@@ -151,7 +151,7 @@
         (doseq [v [[1 2] [] [[1 2] [3 4]]]]
           (is (and (taken? c v) (m/validate s v)) (pr-str v)))
         (is (and (taken? c #{1}) (m/validate sets #{1}) (not (m/validate s #{1}))) "a set where its order is not seen alone")
-        (is (not (or (taken? c '(1)) (m/validate s '(1)))) "a list, which the one sending sends not")
+        (is (and (taken? c '(1)) (taken? c (map inc [0])) (m/validate s '(1)) (m/validate s (map inc [0]))) "a seq, as a vector")
         (is (and (taken? c (long-array [1])) (not (m/validate s (long-array [1]))))
             "a Java array pgjdbc sends, which pgmalli takes not: a vector is the one way")))))
 

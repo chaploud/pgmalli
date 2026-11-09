@@ -87,8 +87,10 @@
    [java.time.Instant "timestamp with time zone" :time/instant]
    [clojure.lang.Keyword :unknown :keyword #{"S" "E"}]
    ;; an array literal's text ('{1,NULL}'), which PostgreSQL reads as the array type where it
-   ;; goes; a set's elements in no order, taken where none is seen (= ANY, = ALL)
+   ;; goes: a vector's, a seq's (a list, (map f xs)); a set's elements in no order, taken where
+   ;; none is seen (= ANY, = ALL)
    [clojure.lang.IPersistentVector :unknown [:pg/array :pgmalli/element] #{"A"}]
+   [clojure.lang.ISeq :unknown [:pg/array :pgmalli/element] #{"A"}]
    [clojure.lang.IPersistentSet :unknown [:pg/array {:pg/set true} :pgmalli/element] #{"A"}]
    ;; the one sending's jsonb writes a key as its text (a keyword's namespace kept): no nil key
    [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]]
@@ -108,7 +110,7 @@
          java.time.Instant java.time.Instant/EPOCH
          java.time.Duration (java.time.Duration/ofMinutes 90) java.time.Period (java.time.Period/of 1 2 3)
          bytes-class (.getBytes "a") clojure.lang.Keyword :a
-         clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1] clojure.lang.IPersistentSet #{1}}))
+         clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1] clojure.lang.ISeq '(1) clojure.lang.IPersistentSet #{1}}))
 
 (defn row-of
   "The row of rows (classes', json-classes') a value of class c is sent by: its class's, else the
@@ -130,7 +132,7 @@
    A Character and a byte[], which it does not write as a value of theirs, are
    left out."
   (vec (keep (fn [[c :as row]]
-               (cond (#{Character bytes-class clojure.lang.IPersistentSet} c) nil
+               (cond (#{Character bytes-class clojure.lang.IPersistentSet clojure.lang.ISeq} c) nil
                      (and (= clojure.lang.IPersistentVector c) (= "jsonb" (second row))) nil
                      (= clojure.lang.IPersistentVector c) [c "jsonb" [:vector :any]]
                      (= String c) [c :unknown :string #{"*"}]

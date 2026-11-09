@@ -1008,7 +1008,7 @@
    array, a number to a text[])."
   [t context v]
   (boolean
-   (and (or (vector? v) (set? v)) (or (string? t) (vector? t))
+   (and (or (sequential? v) (set? v)) (or (string? t) (vector? t))
         (or (and (set? v) (not= :any context))
             ;; a polymorphic function's element (array_append(text[], ?)): read as the element's
             ;; type, of no array, which an array literal goes to not
@@ -1079,10 +1079,10 @@
                                   row-refused? (written-refuses opts table column context v)
                                   ;; NULL in a NOT NULL column fails once a row is written; the table may have none
                                   null-refused? (and (nil? v) notnull (#{:update :insert :insert-select} context))
-                                  ;; a keyword in a written row is a column to HoneySQL, a vector a row of parameters or
-                                  ;; ([x]) x, which is refused there too, a map a subquery
+                                  ;; a keyword in a written row is a column to HoneySQL, a vector or a seq a row of
+                                  ;; parameters or ([x]) x, which is refused there too, a map a subquery
                                   honeysql? (or (keyword? v) (map? v)
-                                                (and (vector? v) (not (keyword? (first v)))
+                                                (and (sequential? v) (not (keyword? (first v)))
                                                      (or (not= 1 (count v)) (written-refuses opts table column context (first v)))))
                                   ;; sent untyped, or nil, where PostgreSQL takes the type from the value
                                   untyped-there? (and (#{:compared-and-any :compared-and-polymorphic} context) (or (nil? v) (= :unknown sent)))

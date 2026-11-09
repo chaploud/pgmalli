@@ -30,7 +30,7 @@ pgmalli types rows as one reading builds them and arguments as one sending sends
 
 `sent` takes the `[sql & params]` `sql/format` returns and gives it back with each parameter as
 pgmalli types it ([what your application sends](queries.md#what-your-application-sends)): a
-vector or a set as an array, untyped (its literal's text, which PostgreSQL reads as the array
+vector, a seq (a list, `(map :id rows)`) or a set as an array, untyped (its literal's text, which PostgreSQL reads as the array
 type where it goes; a set's elements in no order), a map as `jsonb`, a keyword as its text,
 untyped (an enum's label), an `Instant` as a `timestamptz` (`Instant/MAX` and `MIN` as
 `infinity` and `-infinity`), a `Duration` and a `Period` as an `interval` of their ISO-8601

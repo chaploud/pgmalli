@@ -324,7 +324,7 @@
   (and (not (isa? c clojure.lang.IPersistentSet))
        ;; accept/values' vector of a number, whose text another array type's input may read: an
        ;; element of other than the type's own, refused (docs/queries.md#stricter-untyped)
-       (not (and (isa? c clojure.lang.IPersistentVector) (string? t) (some-> (types/element t) (-> accept/number-type? not))))
+       (not (and (or (isa? c clojure.lang.IPersistentVector) (isa? c clojure.lang.ISeq)) (string? t) (some-> (types/element t) (-> accept/number-type? not))))
        (accept/holds? t sent :compare) (or (not= :unknown sent) (accept/reads? t c :compare))))
 
 (defn- argument-failures

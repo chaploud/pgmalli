@@ -76,24 +76,24 @@
                 :min 0 :max 0})}))
 
 (defn- elements
-  "The elements of array v, a vector's or a set's; of a vector of vectors (a multi-dimensional
-   array) its innermost ones, nil where they are not all as long, which PostgreSQL's array input
-   refuses."
+  "The elements of array v, a sequential's or a set's; of a sequential of sequentials (a
+   multi-dimensional array) its innermost ones, nil where they are not all as long, which
+   PostgreSQL's array input refuses."
   [v]
-  (if (and (vector? v) (seq v) (every? vector? v))
+  (if (and (sequential? v) (seq v) (every? sequential? v))
     (when (apply = (map count v))
       (reduce (fn [acc s] (if-let [es (elements s)] (into acc es) (reduced nil))) [] v))
     (vec v)))
 
 (def ^:private array-schema
-  "[:pg/array t]: an array argument: a vector of t's (a vector of vectors, all as long, a
+  "[:pg/array t]: an array argument: a vector or a seq of t's (of vectors, all as long, a
    multi-dimensional one: PostgreSQL's array types tell no dimensions), which the one sending
    sends as an array literal's text; under {:pg/set true}, where no order is seen, a set too."
   (m/-simple-schema
    {:type :pg/array
     :compile (fn [{sets? :pg/set} [child] options]
                (let [valid? (m/validator child options)]
-                 {:pred (fn [v] (boolean (and (or (vector? v) (and sets? (set? v)))
+                 {:pred (fn [v] (boolean (and (or (vector? v) (seq? v) (and sets? (set? v)))
                                               (some->> (elements v) (every? valid?)))))
                   :type-properties {:error/message (if sets? "should be a vector or a set of its elements" "should be a vector of its elements")}
                   :min 1 :max 1}))}))
