@@ -369,7 +369,7 @@
                                   (for [item (syntax/table-items st) :when (syntax/column-definitions item)] (nth (syntax/function-alias item) 2)))
                         :when (map? r)]
                     r))
-        maps (tree-seq syntax/branch? seq body)]
+        maps (syntax/nodes body)]
     (distinct
      (for [m maps
            ;; the query itself is clauses, however unknown ({:selct [:id]})
@@ -402,10 +402,10 @@
   [body]
   (distinct
    (concat
-    (for [x (tree-seq syntax/branch? seq body) :when (and (map? x) (contains? x :order-by))
+    (for [x (syntax/nodes body) :when (and (map? x) (contains? x :order-by))
           o (syntax/vectorish (:order-by x)) :when (and (sort-item? o) (< 2 (count o)))]
       {:kind :written-otherwise :order-by o})
-    (for [x (concat (tree-seq syntax/branch? seq body)
+    (for [x (concat (syntax/nodes body)
                     ;; a written value, as an operand
                     (for [st (syntax/statements body) [_ v] (syntax/writes st (constantly nil))] [::written v]))
           :when (and (vector? x) (keyword? (first x)))
@@ -454,7 +454,7 @@
    integer, finite float or Boolean, written (1), its text SQL's."
   [body format]
   (when (:inline format)
-    (distinct (for [x (tree-seq syntax/branch? seq body)
+    (distinct (for [x (syntax/nodes body)
                     :let [v (when (and (vector? x) (not (map-entry? x)) (= :lift (first x)) (= 2 (count x))) (second x))
                           given (syntax/given v)]
                     :when (and (coll? v)
@@ -491,7 +491,7 @@
   (when-not (:inline (:format opts))
     (let [reported (set (for [p found :when (and (= :literal-type (:kind p)) (nil? (:sent p)))] (:value p)))]
       (distinct
-       (for [x (tree-seq syntax/branch? seq body)
+       (for [x (syntax/nodes body)
              :when (and (vector? x) (not (map-entry? x)))
              v (if (and (syntax/in-ops (first x)) (syntax/lifted-coll? (nth x 2 nil)))
                  []

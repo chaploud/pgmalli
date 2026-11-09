@@ -204,7 +204,8 @@
 
 (def ^:dynamic *scans*
   "An atom of the walks of a body done in one call of a pgmalli-next.honeysql public function
-   (query/once binds it), which a query of many CTEs walks again for each; nil for none kept."
+   (analyze and query/once bind it), which a query of many CTEs walks again for each; nil for none
+   kept."
   nil)
 
 (defn- scanned
@@ -214,6 +215,12 @@
     (let [key (into [k] args)]
       (if-let [[_ v] (find @m key)] v (let [v (apply f args)] (swap! m assoc key v) v)))
     (apply f args)))
+
+(defn nodes
+  "The nodes of body in tree-seq's order (branch?'s walk), as a vector."
+  [body]
+  (letfn [(walk [acc x] (let [acc (conj! acc x)] (if (branch? x) (reduce walk acc (seq x)) acc)))]
+    (persistent! (walk (transient []) body))))
 
 (defn- walked
   "(f x) of each map x in body, in a walk's order (tree-seq's), concatenated: kept per map within
@@ -268,10 +275,17 @@
          ;; each listed column read, to the keyword written
          :written (when listed (zipmap dotted listed))}))))
 
+(defn- per-map
+  "The set of (f m) of each map m in x, kept per map within *scans* as walked keeps its walk."
+  [k f x]
+  (cond (map? x) (scanned k #(into (set (f %)) (mapcat (fn [c] (per-map k f c))) (seq %)) x)
+        (branch? x) (into #{} (mapcat #(per-map k f %)) (seq x))
+        :else #{}))
+
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
   [body format]
-  (scanned ::cte-names #(set (keep (fn [e] (cte-name e %2)) (mapcat cte-entries (statements %1)))) body format))
+  (per-map [::cte-names format] (fn [m] (when (statement? m) (keep #(cte-name % format) (cte-entries m)))) body))
 
 (defn qualified
   "\"schema.table\" of a table keyword: :schema/table, :schema.table, or :table in opts' :schema;
@@ -491,9 +505,11 @@
   [body name opts]
   (scanned ::cte-statement cte-statement* body name opts))
 
+(declare cte-index)
+
 (defn- cte-statement*
   [body name {:keys [format] :as opts}]
-  (let [found (for [[w k i e] (with-entries body) :when (= name (cte-name e format))]
+  (let [found (for [[w k i e] (get (cte-index body format) name)]
                 [(second e) (subvec w 0 i) (when (vector? (first e)) (listed-columns (second (first e)))) k (search-columns e format)])]
     (when-let [[[stmt before listed k added]] (when (= 1 (count found)) found)]
       (let [set-op (when (and (= :with-recursive k) (map? stmt)) (some #(when (vector? (get stmt %)) %) set-operation-keys))
@@ -562,17 +578,25 @@
   [body inner ctes opts]
   (scanned ::standalone standalone* body inner ctes opts))
 
+(defn- read-names
+  "The names as written of the tables the statements of x read (table-ref's third), at any depth."
+  [x format]
+  (per-map [::read-names format] (fn [m] (when (statement? m) (keep #(nth (table-ref % {:format format}) 2) (table-items m)))) x))
+
+(defn- cte-index
+  "{name [with-entry ...]} of with-entries of body, by the CTE's name, in their order."
+  [body format]
+  (scanned ::cte-index (fn [b f] (group-by (fn [[_ _ _ e]] (cte-name e f)) (with-entries b))) body format))
+
 (defn- standalone*
-  [body inner ctes {:keys [format] :as opts}]
+  [body inner ctes {:keys [format]}]
   (let [defined (cte-names inner format)
-        read (set (for [i (mapcat table-items (statements inner))
-                        :let [[_ _ written] (table-ref i opts)]
-                        :when (and written (not (defined written)) (contains? ctes written))]
-                    written))]
+        read (set (filter #(and (not (defined %)) (contains? ctes %)) (read-names inner format)))]
     (if (empty? read)
       inner
-      (let [found (for [[w k i e] (with-entries body) :when (read (cte-name e format))]
-                    [w k i])]
+      ;; found's order does not matter: it is counted, made a set, its greatest index taken
+      (let [index (cte-index body format)
+            found (for [n read, [w k i] (get index n)] [w k i])]
         (when (and (= (count read) (count found)) (= read (set (map (fn [[w _ i]] (cte-name (nth w i) format)) found)))
                    (apply = (map first found)) (apply = (map second found))
                    (not-any? #(contains? inner %) with-keys))
@@ -643,18 +667,19 @@
                  tables (cons base (map second (mapcat flat-entry (group-joins js))))]
              (cons (select-keys (first chain) (map #(second (table-ref % opts)) tables)) outer))))
 
-(defn split-column
+(def split-column
   "[alias column] of a column keyword: :a/b and :a.b name a table (:schema.a.b too), :b does
    not; each as PostgreSQL reads it (pg-name under sql/format's options format), * as it is."
-  [col format]
-  (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))
-        ;; HoneySQL writes :'x as x, as it is, unquoted
-        raw? (str/starts-with? s "'")
-        parts (str/split (cond-> s raw? (subs 1)) #"\.")
-        named #(cond (= "*" %) % raw? (folded %) :else (pg-name % format))]
-    (if (next parts)
-      [(named (nth parts (- (count parts) 2))) (named (last parts))]
-      [nil (named (first parts))])))
+  (memo/bounded
+   (fn [col format]
+     (let [s (if (namespace col) (str (namespace col) "." (name col)) (name col))
+           ;; HoneySQL writes :'x as x, as it is, unquoted
+           raw? (str/starts-with? s "'")
+           parts (str/split (cond-> s raw? (subs 1)) #"\.")
+           named #(cond (= "*" %) % raw? (folded %) :else (pg-name % format))]
+       (if (next parts)
+         [(named (nth parts (- (count parts) 2))) (named (last parts))]
+         [nil (named (first parts))])))))
 
 (defn chain [scope] (if (map? scope) [scope] scope))
 
@@ -694,7 +719,7 @@
   [x]
   (and (vector? x) (= :lift (first x)) (= 2 (count x)) (or (sequential? (second x)) (set? (second x)))))
 
-(defn query-args [body] (set (keep param-key (tree-seq branch? seq body))))
+(defn query-args [body] (set (keep param-key (nodes body))))
 
 (defn shorthand-fn
   "The function a HoneySQL :%f.args keyword calls (:%max.id is MAX(id)); nil for any other."

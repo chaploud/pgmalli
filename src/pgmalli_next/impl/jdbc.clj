@@ -359,6 +359,8 @@
   [why]
   [:fn {:error/message (str "should be no value: " why)} none])
 
+(declare array-type*)
+
 (defn array-type
   "An array argument of elements t, used as use (:compare, = ANY(?); :whole, compared with an
    array column; :assign, to an array column; :common, beside an array column in coalesce or
@@ -373,6 +375,11 @@
    literal, the quoted text the array type's input reads ('{1,2}'), but under unnest, which
    takes no untyped value."
   [t opts use]
+  (array-type* t opts use))
+
+(def ^:private array-type*
+  (memo/bounded
+   (fn [t opts use]
   ;; t may take NULL (a nullable column's elements); its type is the one without
   ;; an array column names its elements' type (a domain's array its base's), which goes first
   (let [p (or (::element-type opts) (some pg-type (shape/alternatives (shape/non-null t))))
@@ -446,7 +453,7 @@
           p
           (shape/merge-props (array-pg-object (types/array-of (types/short-name (or elem p))) use)
                              {:pgmalli/element (shape/non-null t)})
-          :else :any)))
+          :else :any)))))
 
 (defn write-type
   "A column's schema (without NULL) as an argument the driver takes: an array column's

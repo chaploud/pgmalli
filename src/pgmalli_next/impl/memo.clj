@@ -14,13 +14,19 @@
 
 (defn bounded
   "memoize of f holding at most limit results, none of an argument long-name?; past the limit, it
-   forgets them all."
+   forgets them all. Keyed by a vector of the arguments, of each arity f is called with."
   [f]
-  (let [cache (atom {})]
-    (fn [& args]
-      (if-let [[_ v] (find @cache args)]
-        v
-        (let [v (apply f args)]
-          (when-not (some long-name? args)
-            (swap! cache #(assoc (if (<= limit (count %)) {} %) args v)))
-          v)))))
+  (let [cache (atom {})
+        look (fn [k thunk]
+               (if-let [[_ v] (find @cache k)]
+                 v
+                 (let [v (thunk)]
+                   (when-not (some long-name? k)
+                     (swap! cache #(assoc (if (<= limit (count %)) {} %) k v)))
+                   v)))]
+    (fn
+      ([a] (look [a] #(f a)))
+      ([a b] (look [a b] #(f a b)))
+      ([a b c] (look [a b c] #(f a b c)))
+      ([a b c d] (look [a b c d] #(f a b c d)))
+      ([a b c d & more] (let [k (into [a b c d] more)] (look k #(apply f k)))))))

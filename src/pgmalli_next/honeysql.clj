@@ -72,13 +72,14 @@
   ([registry body] (analyze registry body {}))
   ([registry written opts]
    (let [[registry body opts] (prepared registry written opts option-keys)]
+     (binding [syntax/*scans* (or syntax/*scans* (::query/scans registry))]
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
       :problems (as-written written (let [ps (concat (problems/check registry body opts) (args/arg-problems registry body opts) (args/literal-problems registry body opts))]
                                       (concat ps (problems/unsent-lifted body ps opts))))
       :tables (query/tables registry body opts)
-      :document-columns (args/document-columns registry body opts)})))
+      :document-columns (args/document-columns registry body opts)}))))
 
 (defn query-schema
   "[:=> {:pgmalli/problems [...]} [:cat arg ...] [:sequential row]], the malli function schema of a function taking args

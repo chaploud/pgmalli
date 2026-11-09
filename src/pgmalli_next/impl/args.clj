@@ -321,11 +321,15 @@
                      :else (jdbc/inline-none "sql/format's :inline writes a value of this type as no literal: send a string, a number or a boolean"))]
       (if (shape/maybe? t) [:maybe kept] kept))))
 
-(defn accepted-type
-  "accepted-type*; under sql/format's :inline, the values it writes as a literal alone."
-  [registry s held-in opts]
+(defn- accepted-type-of [registry s held-in opts]
   (cond-> (accepted-type* registry s held-in opts)
     (:inline (:format opts)) (inline-only held-in opts)))
+
+(defn accepted-type
+  "accepted-type*; under sql/format's :inline, the values it writes as a literal alone. Once per
+   call (query/once): a column's type is asked again for each argument compared with it."
+  [registry s held-in opts]
+  (query/once registry accepted-type-of s held-in opts))
 
 (defn- compared-type
   "The type of an argument compared with a column by op, t as accepted-type gives it compared
@@ -715,10 +719,17 @@
                                    :any))
           :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 
+(def ^:private last-options (atom [nil nil]))
+
 (defn malli-options
-  "The malli options a schema of registry r (an argument's, a row's) is validated under."
+  "The malli options a schema of registry r (an argument's, a row's) is validated under, of the
+   last schemas built again only for others."
   [r]
-  {:registry (merge registry/base (::query/schemas r))})
+  (let [schemas (::query/schemas r)
+        [s o] @last-options]
+    (if (and o (identical? s schemas))
+      o
+      (let [o {:registry (merge registry/base schemas)}] (reset! last-options [schemas o]) o))))
 
 (defn- refuses?
   "Whether argument schema t refuses literal v; not where malli cannot tell (validate throws)."

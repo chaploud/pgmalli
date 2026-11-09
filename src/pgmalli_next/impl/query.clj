@@ -110,12 +110,13 @@
   "(f registry & args), once per call of a pgmalli-next.honeysql public function (reading's ::calls): the functions a
    call makes of one another read the same statements."
   [registry f & args]
-  (binding [syntax/*scans* (or syntax/*scans* (::scans registry))]
-    (let [memo (::calls registry)
-          k (into [f] args)]
-      (if (contains? @memo k)
-        (@memo k)
-        (let [v (apply f registry args)] (swap! memo assoc k v) v)))))
+  (if-let [memo (::calls registry)]
+    (binding [syntax/*scans* (or syntax/*scans* (::scans registry))]
+      (let [k (into [f] args)]
+        (if-let [[_ v] (find @memo k)]
+          v
+          (let [v (apply f registry args)] (swap! memo assoc k v) v))))
+    (apply f registry args)))
 
 (defn table-columns [registry table] ((::table-columns registry) table))
 
@@ -303,6 +304,7 @@
    of type (\"json\" or \"jsonb\"); arg the argument there, bare or cast to json or jsonb, nil
    for another value. nil for another x."
   [registry scopes x {:keys [schema format]}]
+  (when (str/includes? (str/lower-case (str (if (vector? x) (first x) x))) "record")
   (let [[kind n args q] (syntax/call-parts x)
         to? (some-> n (str/includes? "_to_"))
         [a json :as args] (if to? (cons nil args) args)]
@@ -319,7 +321,7 @@
            :arg (cond (syntax/param-key json) json
                       (and (vector? json) (= :cast (first json)) (= 3 (count json)) (syntax/param-key (second json))
                            (some->> (syntax/cast-target (nth json 2)) str/lower-case types/json?))
-                      (second json))})))))
+                      (second json))}))))))
 
 (defn populated-columns
   "[[column schema] ...] of the row populate-call p makes as FROM item: its table's columns, or
@@ -430,7 +432,12 @@
                            ;; a row's types read its CTEs' through the scope (derived-types), not their bodies
                            (for [k syntax/with-keys :let [w (get x k)] :when (and (some? w) (not (and (::row-only opts) (empty? path))))
                                  found (if (vector? w)
-                                         (apply concat (map-indexed (fn [i e] (walk e (conj path k i) outer (into base (keep #(syntax/cte-name % (:format opts))) (if (= :with-recursive k) w (take i w))) false true)) w))
+                                         (let [names (mapv #(syntax/cte-name % (:format opts)) w)
+                                               ;; the names entry i sees: the entries before it, every one under :with-recursive
+                                               seen (if (= :with-recursive k)
+                                                      (constantly (into base (keep identity) names))
+                                                      (vec (reductions (fn [s n] (cond-> s n (conj n))) base names)))]
+                                           (apply concat (map-indexed (fn [i e] (walk e (conj path k i) outer (seen i) false true)) w)))
                                          (walk w (conj path k) outer ctes false true))]
                              found)
                            (for [[ks v sees] (letfn [(parts [ks v sees]
@@ -489,6 +496,8 @@
           (= :open (first outer)) (if (and alias (contains? sc alias)) hits [[alias nil true]])
           :else (column-hits registry outer col))))
 
+(declare resolve-column*)
+
 (defn resolve-column
   "{:table :column :schema :nullable? :opaque?} for a column keyword in a scope (or the chain of
    scopes of a nested statement), :table the alias for an opaque table, :schema the type a
@@ -497,6 +506,13 @@
    an unnest's column is, cast or not; nil when the column resolves to no
    table or to several known ones. A column an opaque table may hold besides one known table is
    the opaque one's, untyped: which of them PostgreSQL takes is not in the data."
+  [registry scope col]
+  (if-let [m (::calls registry)]
+    (let [k [::resolve scope col]]
+      (if-let [[_ v] (find @m k)] v (let [v (resolve-column* registry scope col)] (swap! m assoc k v) v)))
+    (resolve-column* registry scope col)))
+
+(defn- resolve-column*
   [registry scope col]
   (let [hits (column-hits registry scope col)
         column (second (syntax/split-column col (::format registry)))
@@ -650,9 +666,15 @@
         (contains? stmt :truncate) stmt
         :else (assoc stmt :returning (if (true? return-keys) [:*] (mapv #(keyword (name %)) return-keys)))))
 
+(declare driver-schema*)
+
 (defn driver-schema
   "A column schema as jdbc's column-read-type or column-write-type (f) gives it, without NULL, as
    malli's default registry reads it."
+  [registry f s opts]
+  (once registry driver-schema* f s opts))
+
+(defn- driver-schema*
   [registry f s opts]
   (let [t (portable/portable-data (::schemas registry) (f (::schemas registry) (shape/non-null s) opts))]
     ;; one of each kind, after pgmalli's own types read as malli's (:pg/bytes as bytes?)
@@ -1271,8 +1293,10 @@
    when its row cannot be told, or is asked for again while it is read (a CTE read inside itself)."
   ([registry stmt opts] (derived-types registry stmt opts ()))
   ([registry stmt opts outer]
+   ;; one key whatever the options derived-types* adds as it reads (::columns, ::row-only)
    (let [memo (::derived registry)
-         k [stmt (dissoc opts :jdbc) outer]]
+         opts (-> opts (dissoc :jdbc ::row-only) (assoc ::columns true))
+         k [stmt opts outer]]
      (if (contains? @memo k)
        (@memo k)
        (do (swap! memo assoc k nil)
