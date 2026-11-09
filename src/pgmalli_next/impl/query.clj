@@ -104,17 +104,18 @@
                            ::routines (memo/bounded #(own-routines r %1 %2 %3)))]
               (reset! last-read [schemas r])
               r))]
-    (assoc r ::derived (atom {}) ::calls (atom {}))))
+    (assoc r ::derived (atom {}) ::calls (atom {}) ::scans (atom {}))))
 
 (defn once
   "(f registry & args), once per call of a pgmalli-next.honeysql public function (reading's ::calls): the functions a
    call makes of one another read the same statements."
   [registry f & args]
-  (let [memo (::calls registry)
-        k (into [f] args)]
-    (if (contains? @memo k)
-      (@memo k)
-      (let [v (apply f registry args)] (swap! memo assoc k v) v))))
+  (binding [syntax/*scans* (or syntax/*scans* (::scans registry))]
+    (let [memo (::calls registry)
+          k (into [f] args)]
+      (if (contains? @memo k)
+        (@memo k)
+        (let [v (apply f registry args)] (swap! memo assoc k v) v)))))
 
 (defn table-columns [registry table] ((::table-columns registry) table))
 

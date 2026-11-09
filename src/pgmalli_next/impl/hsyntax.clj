@@ -202,10 +202,23 @@
   [x]
   (and (map? x) (some statement-keys (keys x))))
 
+(def ^:dynamic *scans*
+  "An atom of the walks of a body done in one call of a pgmalli-next.honeysql public function
+   (query/once binds it), which a query of many CTEs walks again for each; nil for none kept."
+  nil)
+
+(defn- scanned
+  "(f body), once per *scans*."
+  [k f body]
+  (if-let [m *scans*]
+    (let [key [k body]]
+      (if-let [[_ v] (find @m key)] v (let [v (f body)] (swap! m assoc key v) v)))
+    (f body)))
+
 (defn statements
   "The statements in a query (a map, or Clojure data holding maps); a subquery is one too."
   [body]
-  (into [] (filter statement?) (tree-seq branch? seq body)))
+  (scanned ::statements #(into [] (filter statement?) (tree-seq branch? seq %)) body))
 
 (defn cte-name [entry format]
   (when (vector? entry)
@@ -437,10 +450,12 @@
 (defn- with-entries
   "[entries key index entry] of each entry of every :with and :with-recursive in query body."
   [body]
-  (for [x (tree-seq branch? seq body) :when (map? x)
-        k with-keys :let [w (get x k)] :when (vector? w)
-        [i e] (map-indexed vector w)]
-    [w k i e]))
+  (scanned ::with-entries
+           #(vec (for [x (tree-seq branch? seq %) :when (map? x)
+                       k with-keys :let [w (get x k)] :when (vector? w)
+                       [i e] (map-indexed vector w)]
+                   [w k i e]))
+           body))
 
 (defn- search-columns
   "[[name type] ...] of the columns a CTE's SEARCH and CYCLE add ([:c q :search-depth-first-by :x
