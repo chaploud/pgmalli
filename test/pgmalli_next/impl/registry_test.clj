@@ -101,8 +101,7 @@
                                                                (col "tz" "time with time zone") (col "j" "jsonb") (col "d" "date" :domain "day")
                                                                (col "ds" "date[]") (col "b" "bit" :max_length 3) (col "p" "numeric")
                                                                (col "v" "character varying" :max_length 5) (col "vb" "bit varying" :max_length 2)]
-                                                     :constraints {}}}})]]
-                             {}))]
+                                                     :constraints {}}}})]]))]
     {:registry reg :rows (try (vec (mg/sample :pg.public.t/insert {:registry reg :size 30 :seed 1})) (catch Exception e (ex-message e)))}))
 
 (defn- generated-values [k] (let [rows (:rows generated)] (if (string? rows) [rows] (map k rows))))
@@ -131,7 +130,7 @@
     (is (= (pgmalli/registry pgmalli-next.sample/sample-data) (pgmalli/registry)))))
 
 (defn- registry-of [types columns]
-  (pgmalli/registry (files/assemble "x" [["public" (p/facts {:name "public" :types types :tables {"t" {:columns columns :constraints {}}}})]] {})))
+  (pgmalli/registry (files/assemble "x" [["public" (p/facts {:name "public" :types types :tables {"t" {:columns columns :constraints {}}}})]])))
 
 (deftest an-re-in-the-registry-round-trips-through-malli-ast
   (let [reg (pgmalli/registry {:registry {}})
@@ -156,7 +155,7 @@
 (deftest a-not-null-column-of-a-type-pgmalli-has-no-value-of-fails-to-generate-naming-it
   (let [e (is (thrown? clojure.lang.ExceptionInfo
                        (mg/generate :pg.public/t {:registry (registry-of {} [{:name "p" :position 1 :data_type "pair" :type_schema "public" :is_nullable false}]) :seed 1})))]
-    (is (= ["public.t.p: pgmalli cannot make a value of type pair; give one with :overrides" :pgmalli.error/cannot-generate]
+    (is (= ["public.t.p: pgmalli cannot make a value of type pair; give one with :shapes" :pgmalli.error/cannot-generate]
            [(ex-message e) (:pgmalli/error (ex-data e))])))
   (is (= {:q nil} (mg/generate :pg.public/t {:registry (registry-of {} [{:name "q" :position 1 :data_type "pair" :type_schema "public" :is_nullable true}]) :seed 1}))
       "a nullable one is NULL"))
@@ -166,7 +165,7 @@
          (me/humanize (m/explain :pg.sample/users (assoc user :closed_at 1 :born "2025-01-01") opts)))))
 
 (deftest a-sequence-of-an-enums-name-leaves-the-registrys-name-to-the-enum
-  (let [data (files/assemble "x" [["public" (p/facts {:name "public" :types {"s" {:kind "ENUM" :enum_values ["a"]}} :sequences ["s" "t"] :tables {}})]] {})
+  (let [data (files/assemble "x" [["public" (p/facts {:name "public" :types {"s" {:kind "ENUM" :enum_values ["a"]}} :sequences ["s" "t"] :tables {}})]])
         reg (pgmalli/registry data)]
     (is (= [{:kind :sequence-named-as-enum :table "public.s"}] (map #(select-keys % [:kind :table]) (:diagnostics data))))
     (is (= [:enum "a"] (shape/schema-of reg :pg.public/s)))

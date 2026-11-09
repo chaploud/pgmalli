@@ -232,33 +232,35 @@
     (is (= {:sql "(price * (2)::numeric)"} (:pg/generated (second (last (last (get-in registry [:pg.public/t 5])))))) "a generated column carries its expression")
     (is (= [{:columns ["email"]} {:columns ["nick"] :index true}] (:pg/unique (second (:pg.public/t registry)))) "a unique index is marked")))
 
-(deftest an-override-keyed-by-column
-  (let [{:keys [registry unrendered]} (r/rendered (p/facts {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["a" "b"]}}
+(defn- shaped [rendered shapes] (#'pgmalli-next.impl.registry/shaped (:registry rendered) shapes))
+
+(deftest a-shape-keyed-by-column
+  (let [registry (shaped (r/rendered (p/facts {:name "public" :types {"mood" {:kind "ENUM" :enum_values ["a" "b"]}}
                                                             :tables {"jobs" {:columns [{:name "input" :position 1 :data_type "jsonb" :is_nullable false}
                                                                                        {:name "meta" :position 2 :data_type "jsonb" :is_nullable true}
                                                                                        {:name "n" :position 3 :data_type "integer" :is_nullable false}
                                                                                        {:name "m" :position 4 :data_type "mood" :type_schema "public" :is_nullable true}
                                                                                        {:name "ip" :position 5 :data_type "inet" :is_nullable true}
                                                                                        {:name "g" :position 6 :data_type "geometry" :type_schema "public" :is_nullable true}]
-                                                                             :constraints {}}}})
+                                                                             :constraints {}}}}))
                                                   {:public.jobs/input [:map [:prompt :string]]
                                                    :public.jobs/n [:int {:min 1}]
                                                    :public.jobs/m [:enum "a"]
                                                    :public.jobs/ip :string
                                                    :public.jobs/g :string})
         column (fn [k] (some #(when (= k (first %)) (last %)) (drop 2 (:pg.public/jobs registry))))]
-    (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (column :input)) "the override is the column's value, its type kept")
+    (is (= [:map {:pg/type "jsonb"} [:prompt :string]] (column :input)) "the shape is the column's value, its type kept")
     (is (= [:maybe [:any {:pg/type "jsonb"}]] (column :meta)) "another column of the type is as generated")
-    (is (= [:int {:min 1 :pg/type "integer"}] (column :n)) "the override's own bounds are kept")
+    (is (= [:int {:min 1 :pg/type "integer"}] (column :n)) "the shape's own bounds are kept")
     (is (= [:maybe [:enum {:pg/type "mood"} "a"]] (column :m)) "it replaces the type's schema, an enum's reference too")
     (is (= [:maybe [:string {:pg/type "inet"}]] (column :ip)) "a type the driver reads as an object of its own too")
-    (is (empty? unrendered) "a column of a type pgmalli does not know is no longer left out")))
+    (is (= [:maybe [:string {:pg/type "geometry"}]] (column :g)) "and one of a type pgmalli does not know")))
 
-(deftest an-overridden-column-with-a-default-may-be-left-out-of-an-insert
-  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
-                                                 :tables {"images" {:columns [{:name "variants" :position 1 :data_type "jsonb" :is_nullable false
-                                                                               :default_value "'{}'::jsonb"}]}}})
-                                       {:public.images/variants [:ref :app/variants]})
+(deftest a-shaped-column-with-a-default-may-be-left-out-of-an-insert
+  (let [registry (shaped (r/rendered (p/facts {:name "public" :types {}
+                                               :tables {"images" {:columns [{:name "variants" :position 1 :data_type "jsonb" :is_nullable false
+                                                                             :default_value "'{}'::jsonb"}]}}}))
+                         {:public.images/variants [:ref :app/variants]})
         [_ _ s] (shape/entry-parts (first (drop 2 (:pg.public/images registry))))]
     (is (contains? (shape/column-props s) :pg/default))
     (is (not (contains? (shape/column-props s) :default))
@@ -305,12 +307,12 @@
            (set (code (str/replace (second (re-find #"(?s)extension is in:\s(.*?)\.\s" (section "Extensions"))) #"\(`[^`]*`\)" ""))))
         "the extensions docs/types.md lists")))
 
-(deftest an-override-of-a-registrys-name-is-a-reference-to-it
-  (let [{:keys [registry]} (r/rendered (p/facts {:name "public" :types {}
-                                                 :tables {"t" {:columns [{:name "b" :position 1 :data_type "text" :is_nullable false}
-                                                                         {:name "c" :position 2 :data_type "text" :is_nullable false}]
-                                                               :constraints {}}}})
-                                       {:public.t/b :my.app/code :public.t/c :time/instant})
+(deftest a-shape-of-a-registrys-name-is-a-reference-to-it
+  (let [registry (shaped (r/rendered (p/facts {:name "public" :types {}
+                                               :tables {"t" {:columns [{:name "b" :position 1 :data_type "text" :is_nullable false}
+                                                                       {:name "c" :position 2 :data_type "text" :is_nullable false}]
+                                                             :constraints {}}}}))
+                         {:public.t/b :my.app/code :public.t/c :time/instant})
         column (fn [k] (some #(when (= k (first %)) (last %)) (drop 2 (:pg.public/t registry))))]
     (is (= [:ref {:pg/type "text"} :my.app/code] (column :b)) "[k {...}] of a name is no schema malli builds")
     (is (= [:time/instant {:pg/type "text"}] (column :c)) "a type of malli's or pgmalli's own takes properties as it is")))

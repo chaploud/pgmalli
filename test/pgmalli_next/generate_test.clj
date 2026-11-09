@@ -94,9 +94,10 @@
         "refused before the database is read")
     (is (= "{:paths [\"src\"]}" (slurp path)))))
 
-(deftest an-override-key-is-a-columns-keyword-checked-before-the-database-is-read
-  (is (thrown-with-msg? clojure.lang.ExceptionInfo #"should be a column's keyword, :schema.table/column"
-                        (files/config {:overrides {"users.email" :string}}))))
+(deftest overrides-are-no-generations-the-registrys-shapes-say-a-columns-schema
+  (let [e (is (thrown-with-msg? clojure.lang.ExceptionInfo #"^:overrides is not read: the file holds what the database tells; give a column a schema of your own with \(pgmalli-next.core/registry generated \{:shapes"
+                                (files/config {:overrides {:public.users/email :string}})))]
+    (is (= [:shapes] (:did-you-mean (ex-data e))))))
 
 (deftest schemas-name-each-schema-once
   (doseq [s [[] ["public" "public"]]]

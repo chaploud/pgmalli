@@ -123,7 +123,7 @@ them.
 The types without a malli counterpart generate from a fixed list of literals PostgreSQL
 accepts (an interval in ISO 8601). A NOT NULL
 column of a type pgmalli cannot make a value of fails to generate, naming it:
-`public.t.p: pgmalli cannot make a value of type pair; give one with :overrides`.
+`public.t.p: pgmalli cannot make a value of type pair; give one with :shapes`.
 
 Dates and times generate within 2025 (in arrays too), `timetz` offsets within what PostgreSQL
 takes, a string within its `:pg/max-length`.
@@ -144,9 +144,9 @@ yet are listed under `unsupported` in
 
 ## jsonb columns
 
-A jsonb column is `:any`: its keys and their types are the application's. An override of the column
-(`{:overrides {:public.evidence/payload [:map [:course :string]]}}`) gives it one shape
-([Overrides](../README.md#overrides)). For shapes that depend on another column,
+A jsonb column is `:any`: its keys and their types are the application's. A shape of the column
+(`(pgmalli/registry generated {:shapes {:public.evidence/payload [:map [:course :string]]}})`)
+gives it one ([Column shapes](../README.md#column-shapes)). For shapes that depend on another column,
 write them as malli and join them to the generated schema, with no copy of either:
 
 ```clojure

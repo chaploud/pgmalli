@@ -164,7 +164,7 @@
                (and labels (string? value)) (str "; a String goes as varchar, which an enum takes not: write the label as a keyword, "
                                                  (if label (pr-str [:lift label]) "[:lift :label]"))
                (and (string? sent) type (accept/takes? type sent c :assign))
-               "; the value is none the column's schema takes (an override's shape, a range): write one it takes"
+               "; the value is none the column's schema takes (a column's shape, a range): write one it takes"
                (and (string? sent) type) (str "; " (error/named (.getName c)) " goes as " sent ", which " type
                                               " takes through no implicit conversion (docs/queries.md#stricter-than-postgresql): send the column's own value")
                :else (str "; " (error/named (.getName c)) " is none of these")))))
@@ -507,10 +507,10 @@
                        (not sent)
                        (str (shown value) (if to (str " goes to " to " as a parameter") " is sent as a parameter") ", which pgjdbc sends no " (.getSimpleName (class value))
                             " as; send a vector (jsonb) or a Java array (an array type)")
-                       ;; of the type taken, out of the values the schema holds it to (an override's shape)
+                       ;; of the type taken, out of the values the schema holds it to (a column's shape)
                        (= sent type)
                        (str (shown value) " goes to " to " as " sent ", its own type, but is none of the values its schema takes"
-                            " (an override's shape, a range): write one it takes")
+                            " (a column's shape, a range): write one it takes")
                        :else
                      (str (if printed? (shown value) (str "a " (.getName (class value)) " (" value ")")) " goes to " to " as a parameter, which pgjdbc sends as " sent ", a type " to
                           " takes there through no implicit conversion; "

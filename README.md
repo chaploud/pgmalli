@@ -13,7 +13,7 @@ generate test data and check HoneySQL queries, without a database at hand.
 - [Checking HoneySQL queries](#checking-honeysql-queries)
 - [Function schemas for queries](#function-schemas-for-queries): instrument query functions
 - [Keeping the file current](#keeping-the-file-current): a stale file fails CI
-- [Overrides](#overrides)
+- [Column shapes](#column-shapes)
 - [Supported versions](#supported-versions), [Limits](#limits) and [Stability](#stability)
 - Reference: [types and constraints](docs/types.md), [reading rows](docs/reading-rows.md),
   [queries](docs/queries.md)
@@ -107,7 +107,6 @@ alias's `:exec-args` and a REPL calls them alike:
 ```clojure
 {:schemas ["public"]                  ; the default
  :out "resources/pgmalli-next.edn"    ; the default; keep it on the classpath
- :overrides {}                        ; see Overrides
  :db {:host "localhost" :port 5432 :dbname "app_dev" :user "app"}}
 ```
 
@@ -238,13 +237,12 @@ aside):
 
 Insert it as `{:insert-into :events :values [row]}`.
 
-A column whose CHECK (its own or its domain's) the generated values miss takes an
-[override](#overrides) that generates within it. The file is EDN, which holds no function, so
-the override refers to a schema of your registry, `{:overrides {:public.users/email
-[:ref :app/email]}}`, with `:app/email` in your registry ([overrides](#overrides) builds it), its
-generator on the whole `[:and ...]` (malli generates an `[:and ...]` from its first child). A keyword
-to the column, which goes as its text, is held to it too. A `:re`
-override generates only with `com.gfredericks/test.chuck` on the classpath, as malli's `:re` does.
+A column whose CHECK (its own or its domain's) the generated values miss takes a
+[shape](#column-shapes) that generates within it, `{:shapes {:public.users/email [:ref
+:app/email]}}`, with `:app/email` in your registry ([column shapes](#column-shapes) builds it),
+its generator on the whole `[:and ...]` (malli generates an `[:and ...]` from its first child). A
+keyword to the column, which goes as its text, is held to it too. A `:re` shape generates only
+with `com.gfredericks/test.chuck` on the classpath, as malli's `:re` does.
 
 The registry's `/insert` schema generates the database's types (a label a string, a document a
 map), what another system holds rather than what HoneySQL sends.
@@ -429,16 +427,18 @@ deserves a look (`:diagnostics`, such as a row-level INSERT trigger or an EXCLUD
 ;; => {:unrendered [], :diagnostics []}
 ```
 
-## Overrides
+## Column shapes
 
-`:overrides` in the map `generate!` takes replaces what pgmalli generates of a column. A key
-`:schema.table/column` replaces the schema of that column's value, such as an `inet` column,
-which is otherwise `:any`, or a jsonb column's shape:
+The generated file holds what the database tells, and no more. What it does not tell, a jsonb
+column's keys or a CHECK, is your application's: give the registry it, `:shapes`, a key
+`:schema.table/column` the schema of that column's value, such as an `inet` column's, which is
+otherwise `:any`, or a jsonb column's shape:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-{:overrides {:public.hosts/ip [:re "^(\\d{1,3}\\.){3}\\d{1,3}(/\\d{1,2})?$"]
-             :public.ai_jobs/input [:map [:prompt :string] [:max_tokens {:optional true} :int]]}}
+(pgmalli/registry (pgmalli/generated)
+                  {:shapes {:public.hosts/ip [:re "^[0-9./]+$"]
+                            :public.ai_jobs/input [:map [:prompt :string] [:max_tokens {:optional true} :int]]}})
 ```
 
 pgmalli still adds what the database says of the column: `[:maybe ...]` unless it is NOT
@@ -446,13 +446,14 @@ NULL, its default and `:pg/type`. The schema holds where values are read (`as-re
 `h/analyze`'s `:row`) and written (`h/analyze`'s `:args`, `h/values-schema`, `h/set-schema`),
 but for a type the driver reads as an object of its own: an `inet`, read as a PGobject (an
 `hstore` as a `java.util.Map`), stays that object where it is read; the `:public.hosts/ip`
-override above holds for what is written. A json or jsonb column is read parsed
+shape above holds for what is written. A json or jsonb column is read parsed
 ([the one reading](docs/reading-rows.md#the-one-reading-and-sending)), so its shape holds for
 what is read, and for a map or a vector an argument sends ([what your application
-sends](docs/queries.md#what-your-application-sends)). `generate!` checks every key against
-the schemas generated: a key must name a column, and a value must be a malli schema (a
-qualified name passes, as your registry's). An error names the key meant; a type key (`:inet`)
-names the columns of the type to override instead.
+sends](docs/queries.md#what-your-application-sends)). `registry` checks every key against the
+schemas generated: a key must name a column, and a value must be a malli schema (a qualified
+name passes, as your registry's). An error names the key meant; a type key (`:inet`) names the
+columns of the type to shape instead. `pgmalli-next.jdbc/builder` takes the generated data
+alone: reading rows needs no shape.
 
 A `[:ref ...]` to your own schema needs a registry holding it (without one, malli throws
 `:malli.core/invalid-ref`); pass it wherever this README passes `registry`:
@@ -512,7 +513,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 
 | `:pgmalli/error` | when |
 |---|---|
-| `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` or `:overrides` too), a schema the database lacks, or an `:out` that is a symbolic link or a file generate! did not write |
+| `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` too), a schema the database lacks, or an `:out` that is a symbolic link or a file generate! did not write |
 | `:pgmalli.error/other-sending` | `install-sending!`: next.jdbc's `SettableParameter` already extended for a class pgmalli sends, by another (`next.jdbc.date-time`'s `LocalDate`), with `:given` the classes' names |
 | `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
 | `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a map or a vector `install-sending!` cannot write as jsonb (two keys of one text, a nil key, a NaN or an infinity) |

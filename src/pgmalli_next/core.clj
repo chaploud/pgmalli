@@ -27,9 +27,14 @@
    malli.experimental.time (each with an :error/message, which me/humanize says).
 
    (registry)
-   (registry (clojure.edn/read-string (slurp \"api/pgmalli-next.edn\")))"
+   (registry (clojure.edn/read-string (slurp \"api/pgmalli-next.edn\")))
+   (registry generated {:shapes {:public.jobs/input [:ref :app/job-input]}})
+
+   :shapes gives a column (:schema.table/column) the schema of your own the database does not
+   tell (a jsonb document's shape, a CHECK's): the file holds what the database tells alone."
   ([] (reg/registry))
-  ([generated] (reg/registry generated)))
+  ([generated] (reg/registry generated))
+  ([generated opts] (reg/registry generated opts)))
 
 (defn as-read
   "The [:map ...] of a table's or view's row as pgmalli-next.jdbc/builder builds it

@@ -49,5 +49,5 @@
    :functions [{:name "note_count" :args [] :result "bigint" :kind "f" :defaults 0}]})
 (doseq [[n schemas] [["sample" [sample]] ["other" [other]] ["both" [sample other]]]]
   (let [path (str "test/resources/pgmalli-next/" n ".edn")]
-    (spit path (files/edn-string (files/assemble "none" (for [s schemas] [(:name s) (p/facts s)]) {})))
+    (spit path (files/edn-string (files/assemble "none" (for [s schemas] [(:name s) (p/facts s)]))))
     (println "wrote" path)))

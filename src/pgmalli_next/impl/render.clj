@@ -1,7 +1,7 @@
 (ns pgmalli-next.impl.render
   "Facts -> malli schemas: rendered. A row schema is [:map ...] of its columns' types; a CHECK is
    no part of it (docs/types.md). Identifiers that are not plain names become string keys.
-   Properties are docs/types.md#properties. overrides is {:schema.table/column schema}."
+   Properties are docs/types.md#properties."
   (:require [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -50,47 +50,33 @@
   [data-type]
   (types/canonical-name (types/bare-name data-type)))
 
-(defn column-override-key
-  "The :overrides key of one column: :schema.table/column."
-  [schema table column]
-  (keyword (str schema "." table) column))
-
 (defn- order [f] [(or (:table f) (:type-name f) "") (or (:constraint f) "") (or (:column f) "")])
 
 (defn- column-schema
-  "{:schema :unrendered} of one column: its type (an enum type's a reference to it), or an
-   override of the column in its place, with provenance properties; nullable in [:maybe ...]."
-  [schema-name {:keys [schema table column type domain nullable? default default-sql identity generated]} facts overrides]
-  (let [override (get overrides (column-override-key schema table column))
-        enum (some #(when (= :enum (:fact %)) %) facts)
+  "{:schema :unrendered} of one column: its type (an enum type's a reference to it), with
+   provenance properties; nullable in [:maybe ...]."
+  [schema-name {:keys [type domain nullable? default default-sql identity generated]} facts]
+  (let [enum (some #(when (= :enum (:fact %)) %) facts)
         unknown (some #(when (= :unknown-type (:fact %)) %) facts)
         n (some #(when (= :max-length (:fact %)) (:max %)) facts)
         ps (some #(when (= :precision (:fact %)) %) facts)
-        base (cond
-               ;; a name of the user's registry or of the file's (:my.app/code, :pg.public/mood) a
-               ;; reference, which carries properties: [k {...}] of a name is no schema; malli's and
-               ;; pgmalli's own types (:time/instant, :pg/integer) as they are
-               (or (string? override) (and (qualified-keyword? override) (not (#{"time" "pg"} (namespace override)))))
-               [:ref override]
-               override override
-                   enum (cond->> [:ref (shape/schema-key schema-name (:type-name enum))] (:array? enum) (vector :vector))
+        base (cond enum (cond->> [:ref (shape/schema-key schema-name (:type-name enum))] (:array? enum) (vector :vector))
                    ;; a type of another schema named as a pg_catalog type (s.date) is no pg_catalog type
                    unknown (if (types/element type) [:vector :any] :any)
                    :else (base-type type))
         s (with-props base {:pg/type type
                             :pg/domain domain
                             ;; a varchar(n)'s, char(n)'s or bit's n, which no schema checks: the database does
-                            :pg/max-length (when-not override n)
+                            :pg/max-length n
                             ;; a numeric(p, s)'s, which values generate within
-                            :pg/precision (when-not override (:precision ps))
-                            :pg/scale (when-not override (:scale ps))
+                            :pg/precision (:precision ps)
+                            :pg/scale (:scale ps)
                             :pg/default (cond (some? default) default default-sql {:sql default-sql})
-                            ;; a column override's schema is the user's: the SQL literal is no value known of it
-                            :default (when (and (some? default) (not override)) (default-value base default))
+                            :default (when (some? default) (default-value base default))
                             :pg/identity identity
                             :pg/generated (some->> generated (hash-map :sql))})]
     {:schema (if nullable? [:maybe s] (rejecting-nil s))
-     :unrendered (when (and unknown (not override)) [unknown])}))
+     :unrendered (when unknown [unknown])}))
 
 (defn- map-props [schema-name table tfacts]
   (if-let [v (some #(when (= :view (:fact %)) %) tfacts)]
@@ -158,10 +144,10 @@
        :message (str "sequence " schema-name "." (:name f) " has the name of an enum type: " (pr-str (shape/schema-key schema-name (:name f)))
                      " is the enum's, so the sequence's columns are untyped in a query")})))
 
-(defn- render-table [schema-name table tfacts overrides]
+(defn- render-table [schema-name table tfacts]
   (let [by-column (group-by :column (filter :column tfacts))
         columns (sort-by first (for [f tfacts :when (= :column (:fact f))]
-                               [(:column f) (column-schema schema-name f (by-column (:column f)) overrides)]))]
+                               [(:column f) (column-schema schema-name f (by-column (:column f)))]))]
     {:entry [(shape/schema-key schema-name table)
              (into [:map (map-props schema-name table tfacts)] (for [[col r] columns] [(shape/ident-key col) (:schema r)]))]
      :unrendered (mapcat (comp :unrendered second) columns)
@@ -176,11 +162,10 @@
   "facts -> {:registry :functions :operators :sequences :unrendered :diagnostics}, :registry being
    the file's :registry map (names to schemas) rather than a malli registry; a diagnostic is what
    deserves a look in the database: {:table :kind :severity :message ...}."
-  ([facts] (rendered facts {}))
-  ([facts overrides]
-   (let [schema-name (:schema (first facts))
+  [facts]
+  (let [schema-name (:schema (first facts))
          tables (for [[table tfacts] (sort-by key (group-by :table (filter :table facts)))]
-                  (render-table schema-name table tfacts overrides))]
+                  (render-table schema-name table tfacts))]
      {:registry (into (sorted-map-by #(compare (str %1) (str %2)))
                       (concat (for [f facts :when (= :enum-type (:fact f))] [(shape/schema-key schema-name (:type-name f)) (into [:enum] (:values f))])
                               (map :entry tables)))
@@ -188,4 +173,4 @@
       :operators (overloads facts :operator)
       :sequences (vec (sort (for [f facts :when (= :sequence (:fact f))] (:name f))))
       :unrendered (vec (sort-by order (mapcat :unrendered tables)))
-      :diagnostics (vec (sort-by (juxt :table :constraint :kind) (concat (mapcat :diagnostics tables) (sequence-diagnostics schema-name facts))))})))
+      :diagnostics (vec (sort-by (juxt :table :constraint :kind) (concat (mapcat :diagnostics tables) (sequence-diagnostics schema-name facts))))}))

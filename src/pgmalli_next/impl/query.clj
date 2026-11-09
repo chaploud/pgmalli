@@ -389,7 +389,7 @@
                                                     [(second (first item))]
                                                     (and (nil? table) (map? item)) [item])
                     ;; a CTE's body comes under the entries before it already: the CTEs it reads beyond them are outer ones
-                    own (when inner (let [o (syntax/standalone body inner ctes opts)] (when (or (not cte?) (identical? o inner)) o)))
+                    own (when inner (let [o (syntax/standalone body inner ctes opts)] (when (or (not cte?) (= o inner)) o)))
                     ts (cond inner
                              (when own
                                (if lateral
@@ -508,7 +508,8 @@
    the opaque one's, untyped: which of them PostgreSQL takes is not in the data."
   [registry scope col]
   (if-let [m (::calls registry)]
-    (let [k [::resolve scope col]]
+    ;; the scopes' ::using too, which column-hits reads and = does not see
+    (let [k [::resolve scope (map (comp ::using meta) (syntax/chain scope)) col]]
       (if-let [[_ v] (find @m k)] v (let [v (resolve-column* registry scope col)] (swap! m assoc k v) v)))
     (resolve-column* registry scope col)))
 

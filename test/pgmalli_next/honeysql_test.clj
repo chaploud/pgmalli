@@ -3581,7 +3581,7 @@
     (is (every? (fn [[w v]] (m/validate (:x (:args (h/analyze reg {:select [:code] :from [:t] :where w}))) v {:registry reg}))
                 [[[:like :code :?x] "A%"] [[:= :code :?x] "abc"]])
         "compared, the pattern dropped as a length is")
-    (is (= "should be [:lift v], v as the column takes it; the value is none the column's schema takes (an override's shape, a range): write one it takes"
+    (is (= "should be [:lift v], v as the column takes it; the value is none the column's schema takes (a column's shape, a range): write one it takes"
            (first (:code (me/humanize (m/explain v {:code "abc"} {:registry reg}))))))))
 
 (deftest a-keyword-to-a-char-column-is-held-to-one-byte-as-a-string-is

@@ -2,7 +2,7 @@
   "The generation side, which needs psql or a JDBC driver: the generated file, and whether it still
    matches the database. The application side (pgmalli-next.core) reads the file alone.
 
-   generate! and check take one map, {:schemas :out :overrides :db} (README.md#generating), so a
+   generate! and check take one map, {:schemas :out :db} (README.md#generating), so a
    REPL and clojure -X call them alike:
 
      clojure -X:pgmalli-next pgmalli-next.generate/generate!
@@ -38,7 +38,7 @@
     (println (str "unrendered (" (count unrendered) "), left out of the schemas:"))
     (doseq [{:keys [table column type]} unrendered]
       (println (str "  " table " " column ": type " type))
-      (println (str "    to keep it, add to :overrides {" (keyword table column) " <malli schema>}")))))
+      (println (str "    to type it, give it a schema: (pgmalli-next.core/registry generated {:shapes {" (keyword table column) " <malli schema>}})")))))
 
 (defn generate!
   "Writes the generated file of config's schemas to its :out (where no file or a generated one

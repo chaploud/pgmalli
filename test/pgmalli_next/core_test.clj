@@ -94,7 +94,7 @@
   (when *db*
     (exec-sql! "CREATE SCHEMA pr; CREATE TYPE pr.pair AS (a int, b int); CREATE TABLE pr.t (id int PRIMARY KEY, p pr.pair);")
     (let [config {:db *db* :schemas ["pr"] :out (temp-out "pgmalli-pr")}
-          left-out "unrendered (1), left out of the schemas:\n  pr.t p: type pair\n    to keep it, add to :overrides {:pr.t/p <malli schema>}\n"]
+          left-out "unrendered (1), left out of the schemas:\n  pr.t p: type pair\n    to type it, give it a schema: (pgmalli-next.core/registry generated {:shapes {:pr.t/p <malli schema>}})\n"]
       (is (= left-out (with-out-str (generate/generate! config))))
       (exec-sql! "ALTER TABLE pr.t ADD COLUMN n text")
       (is (= (str ":pg.pr/t :n\n  file: nil\n  db:   [:maybe [:string {:pg/type \"text\"}]]\n" left-out)
@@ -358,8 +358,7 @@
            (:unrendered (generated {:db *db*} "wh")))
         "another schema's domain is its base type, as one of the schema's own is")
     (is (= [] (:unrendered (generated {:db *db*} "catalog" "wh"))) "an enum of another schema of the file is no column left out")
-    (let [config {:db *db* :overrides {:wh.stock/k [:ref :pg.catalog/kind]}}
-          reg (pgmalli/registry (:data (files/generated (assoc config :schemas ["catalog" "wh"]))))]
+    (let [reg (pgmalli/registry (:data (files/generated {:db *db* :schemas ["catalog" "wh"]})) {:shapes {:wh.stock/k [:ref :pg.catalog/kind]}})]
       (is (not (m/validate :pg.wh/stock {:id 1 :sku nil :k nil} {:registry reg})))
       (is (not (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "c"} {:registry reg})))
       (is (m/validate :pg.wh/stock {:id 1 :sku "ABC" :k "a"} {:registry reg}))
@@ -381,11 +380,11 @@
              (dissoc (into {} (drop 2 read)) :id))
           "a date of another schema is no pg_catalog date; a NOT NULL column and a quoted name of one alike"))))
 
-(deftest a-column-override-shapes-reads-and-writes-of-that-column
+(deftest a-column-shape-shapes-reads-and-writes-of-that-column
   (when *db*
     (exec-sql! "CREATE SCHEMA ov; CREATE TABLE ov.jobs (id int PRIMARY KEY, input jsonb NOT NULL, meta jsonb, n int NOT NULL CHECK (n < 100));")
-    (let [config {:db *db* :schemas ["ov"] :overrides {:ov.jobs/input [:map [:prompt :string]] :ov.jobs/n [:int {:min 1}]}}
-          reg (pgmalli/registry (:data (files/generated config)))
+    (let [data (:data (files/generated {:db *db* :schemas ["ov"]}))
+          reg (pgmalli/registry data {:shapes {:ov.jobs/input [:map [:prompt :string]] :ov.jobs/n [:int {:min 1}]}})
           o {:schema "ov"}
           sends o
           row {:id 1 :input {:prompt "x"} :meta nil :n 5}
@@ -401,9 +400,9 @@
         ;; HoneySQL writes a map in :values or :set as a subquery: the document is [:lift m]
         (is (m/validate (h/values-schema reg :jobs sends) (update row :input #(vector :lift %)) {:registry reg}))
         (is (not (m/validate (h/values-schema reg :jobs sends) row {:registry reg})))
-        (is (not (m/validate (h/set-schema reg :jobs sends) {:input [:lift {:prompt 1}]} {:registry reg})))))
-    (is (thrown-with-msg? clojure.lang.ExceptionInfo #":overrides: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"
-                          (files/generated {:db *db* :schemas ["ov"] :overrides {:ov.jobs/inptu :map}})))))
+        (is (not (m/validate (h/set-schema reg :jobs sends) {:input [:lift {:prompt 1}]} {:registry reg}))))
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo #":shapes: :ov.jobs/inptu names no column of ov.jobs; did you mean: :ov.jobs/input"
+                            (pgmalli/registry data {:shapes {:ov.jobs/inptu :map}}))))))
 
 (deftest an-unqualified-name-means-the-generated-schema-of-that-name
   (let [registry (pgmalli/registry pgmalli-next.sample/sample-data)

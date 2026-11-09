@@ -85,7 +85,7 @@ row)` builds none and reads the column as pgjdbc returns it (a `java.sql.Timesta
 the row there (`(next.jdbc.result-set/datafiable-row row ds {})`), or convert the column where
 your application knows its type.
 
-Under an [override](../README.md#overrides), an enum a json column's shape refers to holds its
+Under a [shape](../README.md#column-shapes), an enum a json column's shape refers to holds its
 labels as strings, as JSON does, and a JSON number is what `builder` parses (above): an integer
 `integer?`, a fraction `double?`.
 

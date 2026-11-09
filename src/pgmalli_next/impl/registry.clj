@@ -10,6 +10,7 @@
             [clojure.test.check.generators :as gen]
             [clojure.walk :as walk]
             [malli.core :as m]
+            [malli.registry :as mr]
             malli.experimental.time.generator
             [malli.util :as mu]
             [pgmalli-next.impl.error :as error]
@@ -118,7 +119,7 @@
    NULL), which throws, naming where, when a value is wanted."
   [where type-name]
   (with-meta (gen/sized (fn [_] (error/fail! :pgmalli.error/cannot-generate
-                                             (str where ": pgmalli cannot make a value of type " type-name "; give one with :overrides")
+                                             (str where ": pgmalli cannot make a value of type " type-name "; give one with :shapes")
                                              {:given where :type type-name})))
     {:malli.generator/never-gen true}))
 
@@ -231,14 +232,105 @@
               [:map {:pg/table (str schema "." n) :pg/sequence true}
                [:last_value [:int {:pg/type "bigint"}]] [:log_cnt [:int {:pg/type "bigint"}]] [:is_called [:boolean {:pg/type "boolean"}]]]])))
 
+(def ^:private shape-registry
+  "The base schemas, and any qualified name: a reference to the user's registry, which the
+   registry of the file does not hold."
+  (mr/composite-registry base (reify mr/Registry (-schema [_ k] (when (qualified-keyword? k) :any)) (-schemas [_] {}))))
+
+(defn- column-meant
+  "The column key meant by k: k with its schema (:users/email for :public.users/email) or
+   without pg. (:pg.public.users/email), else the closest."
+  [k columns schemas]
+  (or (some (set columns) (cons (keyword (str/replace (namespace k) #"^pg\." "") (name k))
+                                (for [s schemas] (keyword (str s "." (namespace k)) (name k)))))
+      (error/suggest k columns)))
+
+(def ^:private by-keyword (types/by-keyword any?))
+
+(defn- relation-columns
+  "{:schema.table/column column-schema} of the tables' and views' rows of the file's registry."
+  [rows]
+  (into {} (for [[_ s] rows :when (shape/read-row? s)
+                 :let [p (shape/row-props s) rel (or (:pg/table p) (:pg/view p))]
+                 [c _ cs] (shape/column-entries s)]
+             [(keyword rel (name c)) cs])))
+
+(defn- checked-shapes!
+  "shapes when each key names a column of rows (:schema.table/column) with a malli schema. An
+   error names what to write instead."
+  [shapes rows schemas]
+  (let [by-column (relation-columns rows)
+        columns (keys by-column)
+        of-type (fn [t] (sort (for [[k cs] by-column :when (= t (shape/type-name (shape/column-props cs)))] k)))
+        by-table (group-by namespace columns)
+        generated (str "the schemas generated: " (str/join ", " schemas))
+        listed #(str/join ", " %)
+        fail! (fn [message data] (error/fail! :pgmalli.error/invalid-options (str ":shapes: " message) data))]
+    (doseq [[k v] shapes]
+      (cond (simple-keyword? k)
+            (let [cols (of-type (:name (by-keyword k) (name k)))]
+              (fail! (str (pr-str k) " names a type: give each column a schema, :schema.table/column"
+                          (if (seq cols) (str " (" (listed cols) ")") (str "; no column of " generated " has it")))
+                     {:given k}))
+            (not (contains? by-column k))
+            (let [table (namespace k)
+                  meant (column-meant k columns schemas)]
+              (fail! (str k (if (by-table table) (str " names no column of " table) (str " names no table or view of " generated))
+                          (cond meant (error/did-you-mean meant)
+                                (by-table table) (str "; it has " (listed (sort (by-table table))))
+                                :else ""))
+                     (cond-> {:given k} meant (assoc :did-you-mean [meant]))))
+            :else
+            (try (m/schema v {:registry shape-registry})
+                 (catch Exception e
+                   (fail! (str (pr-str k) "'s schema " (pr-str v) " is no malli schema: " (if-let [t (:type (ex-data e))] (str (name t) " " (pr-str (:data (ex-data e)))) (ex-message e)))
+                          {:given k})))))
+    shapes))
+
+(defn- shaped-column
+  "Column schema c with schema v in place of its type, its provenance properties kept but the
+   bounds of the type (a length, a precision, a default value of it); a qualified name of the
+   user's registry a reference, [:ref name]; NULL where c takes it."
+  [c v]
+  (let [nullable? (shape/maybe? c)
+        props (dissoc (shape/column-props c) :pg/max-length :pg/precision :pg/scale :default)
+        base (if (or (string? v) (and (qualified-keyword? v) (not (#{"time" "pg"} (namespace v))))) [:ref v] v)
+        s (shape/merge-props base props)]
+    (cond nullable? [:maybe s]
+          (= :any s) :some
+          (and (vector? s) (= :any (first s))) (assoc s 0 :some)
+          :else s)))
+
+(defn- shaped
+  "rows with each column shapes names of the schema given there."
+  [rows shapes]
+  (if (empty? shapes)
+    rows
+    (into {} (for [[k s] rows]
+               [k (if (shape/read-row? s)
+                    (let [p (shape/row-props s) rel (or (:pg/table p) (:pg/view p))]
+                      (into [(first s) (second s)]
+                            (for [e (drop 2 s)]
+                              (if-let [v (and (vector? e) (get shapes (keyword rel (name (first e)))))]
+                                (assoc e (dec (count e)) (shaped-column (peek e) v))
+                                e))))
+                    s)]))))
+
+(def ^:private registry-options
+  [:map {:closed true}
+   [:shapes {:optional true} [:map-of [:keyword {:error/message "should be a column's keyword, :schema.table/column"}] :any]]])
+
 (defn registry
   "The registry pgmalli-next.core/registry documents: of generated data, or of the classpath's
-   (read-generated) with none."
+   (read-generated) with none; of each column :shapes names, the schema given."
   ([] (registry (read-generated)))
-  ([data]
+  ([data] (registry data {}))
+  ([data opts]
+   (error/checked! registry-options opts)
    (let [d (generated-data data "registry")
+         rows (shaped (:registry d) (checked-shapes! (:shapes opts) (:registry d) (:schemas d)))
          generated (into {} (map (fn [[k s]] [k (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k)))]))
-                         (with-other-schemas-types (merge (sequence-rows d) (:registry d))))]
+                         (with-other-schemas-types (merge (sequence-rows d) rows)))]
      (merge base
             (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
             (into {} (for [s (:schemas d)]
