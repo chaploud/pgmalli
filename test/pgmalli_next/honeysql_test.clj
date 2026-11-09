@@ -2218,7 +2218,7 @@
                        [{:group_id 1.5} "a fraction, which an integer's input does not read"]
                        [{:mood "angry"} "no label of the enum"]
                        [{:nick 1} "a number to a string column, as assigned"]
-                       [{:nick \a} "a Character, which data.json does not write"]
+                       [{:nick \a} "a Character, which the document holds as no value of its own"]
                        [[{:nick "ann"}] "an array, which a record is not"]]]
       (is (not (ok? q :doc doc)) why))
     (is (ok? q :doc {"nick" "ann" :group_id 1}) "a string key equal to a column's name, as JSON's keys are")

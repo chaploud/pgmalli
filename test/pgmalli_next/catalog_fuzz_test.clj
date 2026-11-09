@@ -203,7 +203,7 @@
 
 (defn- literal [column-type v]
   (cond (nil? v) "NULL"
-        (#{"json" "jsonb"} column-type) (sql-literal ((requiring-resolve 'clojure.data.json/write-str) v))
+        (#{"json" "jsonb"} column-type) (sql-literal ((requiring-resolve 'pgmalli-next.impl.json/write) v))
         (vector? v) (if (empty? v) "'{}'" (str "ARRAY[" (str/join ", " (map #(literal nil %) v)) "]::" column-type))
         (bytes? v) (sql-literal (str "\\x" (apply str (map #(format "%02x" (bit-and % 0xff)) v))))
         (or (number? v) (boolean? v)) (str v)

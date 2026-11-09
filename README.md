@@ -93,7 +93,7 @@ Depend on a commit of this repository in `deps.edn`'s `:deps`:
 io.github.chaploud/pgmalli-next {:git/url "https://github.com/chaploud/pgmalli-next" :git/sha "<commit>"}
 ```
 
-pgmalli depends on malli, test.check and data.json. Add HoneySQL for `pgmalli-next.core` and
+pgmalli depends on malli, test.check and jsonista (on babashka, cheshire, which it ships). Add HoneySQL for `pgmalli-next.core` and
 `pgmalli-next.honeysql`, and next.jdbc and pgjdbc for `pgmalli-next.jdbc` ([Supported
 versions](#supported-versions) has the oldest each takes); generating needs none of them, but
 pgjdbc for a `:db` with `:jdbcUrl`. On babashka, put the same coordinate in `bb.edn`'s `:deps`.

@@ -6,7 +6,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [malli.core :as m]
             [malli.generator :as mg]
-            [clojure.data.json :as json]
+            [pgmalli-next.impl.json :as json]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.catalog-source :as source]
@@ -81,7 +81,7 @@
 (defn- text-of
   "A generated value of type t as text PostgreSQL reads as t."
   [t v]
-  (cond (#{"json" "jsonb"} t) (json/write-str v)
+  (cond (#{"json" "jsonb"} t) (json/write v)
         (map? v) (str/join ", " (for [[k x] v :let [q #(str "\"" (str/replace (str %) #"[\\\"]" "\\\\$0") "\"")]]
                                         (str (q k) "=>" (if (nil? x) "NULL" (q x)))))
         (bytes? v) (apply str "\\x" (map #(format "%02x" (bit-and % 0xff)) v))
@@ -112,7 +112,7 @@
   (when *db*
     (let [ds (datasource)
           version (first (str/split (first (column ds "SHOW server_version")) #"\."))
-          server (source/shape (json/read-str (first (column ds (str "SELECT (" source/query ")::text")))))
+          server (source/shape (json/parse (first (column ds (str "SELECT (" source/query ")::text")))))
           snapshot @types/catalog
           here? (fn [{:keys [in]}] (or (nil? in) (some #{version} in)))
           ;; what the snapshot says this version has

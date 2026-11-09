@@ -146,10 +146,10 @@
   (mapv (fn [[c t]] [c t]) classes))
 
 (def json-classes
-  "classes as the one sending's jsonb writes a value of class into a JSON document (data.json, an
+  "classes as the one sending's jsonb writes a value of class into a JSON document (jsonista, an
    ISO-8601 string of a java.time value), which json_populate_record reads into a column through
    its type's input: a String as a JSON string, whose text every type's input reads (\"*\");
-   a BigInt and a BigInteger as the integer data.json writes; a number, a boolean and a JSON
+   a BigInt and a BigInteger as the integer it writes; a number, a boolean and a JSON
    string of another class as the one sending sends the class.
    A Character and a byte[], which it does not write as a value of theirs, are
    left out."

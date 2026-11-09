@@ -3,13 +3,13 @@
    builder, the :builder-fn your application passes next.jdbc, and install-sending!, which
    extends next.jdbc's SettableParameter for the classes pgmalli sends otherwise than pgjdbc.
    Your application adds next.jdbc and pgjdbc."
-  (:require [clojure.data.json :as json]
-            [clojure.string :as str]
+  (:require [clojure.string :as str]
             [clojure.walk :as walk]
             [next.jdbc.prepare :as prepare]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.json :as json]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types])
   (:import (java.sql Array PreparedStatement ResultSet ResultSetMetaData Types)
@@ -22,7 +22,7 @@
   "A json or jsonb column's text as data; nesting past what the thread's stack holds (PostgreSQL
    stores jsonb thousands deep) an error naming the column, not a StackOverflowError."
   [s label]
-  (try (json/read-str s :key-fn keyword)
+  (try (json/parse s true)
        (catch StackOverflowError _
          (error/fail! :pgmalli.error/fault (str "column " label " holds a JSON document nested too deep to read") {:given label}))))
 
@@ -108,22 +108,19 @@
 ;;; timestamp, a LocalDate as a date, an OffsetDateTime as a timestamptz), an Instant as an
 ;;; OffsetDateTime in UTC
 
-;; data.json writes an Instant and a UUID as JSON strings; a LocalDate, a LocalDateTime, a
-;; LocalTime, an OffsetDateTime and an OffsetTime go as their ISO-8601 text here
-(defn- write-temporal [x ^java.io.Writer out _options]
-  (if (instance? java.time.temporal.Temporal x)
-    (json/write (str x) out)
-    (error/fail! :pgmalli.error/invalid-options
-                 (str "a map or vector goes as jsonb, which holds no " (.getName (class x)) ": send its text, or the value as its own argument")
-                 {:given (.getName (class x))})))
-
 (defn- json-text
-  "A keyword's or a symbol's text as accept/json-key-text writes it, which data.json writes its
-   name alone of; a Character as its text; another value as it is."
+  "x as JSON holds it: a keyword's or a symbol's text as accept/json-key-text writes it (:n/a as
+   n/a), a Character's, java.time's and a UUID's text (an Instant's to the nanosecond, as its
+   ISO-8601), a Ratio a double; a value JSON has no form for an error."
   [x]
   (cond (or (keyword? x) (symbol? x)) (accept/json-key-text x)
-        (char? x) (str x)
-        :else x))
+        (or (char? x) (instance? java.time.temporal.Temporal x) (uuid? x)) (str x)
+        (ratio? x) (double x)
+        (instance? clojure.lang.BigInt x) (biginteger x)
+        (or (nil? x) (boolean? x) (number? x) (string? x) (map? x) (map-entry? x) (coll? x)) x
+        :else (error/fail! :pgmalli.error/invalid-options
+                           (str "a map or vector goes as jsonb, which holds no " (.getName (class x)) ": send its text, or the value as its own argument")
+                           {:given (.getName (class x))})))
 
 (defn- jsonb [x]
   (when-let [why (accept/json-problem x)]
@@ -131,7 +128,7 @@
                  {:given (.getName (class x))}))
   (doto (PGobject.)
     (.setType "jsonb")
-    (.setValue (try (json/write-str (walk/postwalk json-text x) :default-write-fn write-temporal)
+    (.setValue (try (json/write (walk/postwalk json-text x))
                     (catch StackOverflowError _
                       (error/fail! :pgmalli.error/invalid-options (str "a map or a vector goes as jsonb, which holds no document of " accept/too-deep)
                                    {:given (.getName (class x))}))))))
