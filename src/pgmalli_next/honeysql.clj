@@ -32,8 +32,10 @@
   ([registry opts ks]
    (if (::query/schemas registry)
      [registry opts]
-     (let [opts (jdbc/builder! registry (jdbc/options! opts ks))]
-       [(assoc (query/reading registry) ::query/format (:format opts)) opts])))
+     (let [opts (jdbc/builder! registry (jdbc/options! opts ks))
+           r (query/reading registry)
+           refused (some-> (get (::query/schemas r) :pgmalli/refused) shape/props :pgmalli/refused)]
+       [(assoc r ::query/format (:format opts)) (cond-> opts refused (assoc ::jdbc/refused refused))])))
   ([registry body opts ks]
    (if (::query/schemas registry)
      [registry body opts]

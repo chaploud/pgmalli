@@ -89,17 +89,6 @@
    ;; the one sending's jsonb writes a key as its text (a keyword's namespace kept): no nil key
    [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
-(def refused
-  "The classes the one sending refuses to send (pgmalli-next.jdbc/install-sending!'s :refused),
-   which no argument takes: the application's, of the whole JVM, as the sending is."
-  #{})
-
-(defn refuse!
-  "Makes classes the ones the one sending refuses."
-  [classes]
-  (alter-var-root #'refused (constantly (set classes)))
-  nil)
-
 (def values
   "A value of each class of classes with a schema (a byte[] too), by class."
   (into {} (filter (comp some? key))

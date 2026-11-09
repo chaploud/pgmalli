@@ -319,7 +319,8 @@
 
 (def ^:private registry-options
   [:map {:closed true}
-   [:shapes {:optional true} [:map-of [:keyword {:error/message "should be a column's keyword, :schema.table/column"}] :any]]])
+   [:shapes {:optional true} [:map-of [:keyword {:error/message "should be a column's keyword, :schema.table/column"}] :any]]
+   [:refused {:optional true} [:sequential [:fn {:error/message "should be a class"} class?]]]])
 
 (defn registry
   "The registry pgmalli-next.core/registry documents: of generated data, or of the classpath's
@@ -333,6 +334,8 @@
          generated (into {} (map (fn [[k s]] [k (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k)))]))
                          (with-other-schemas-types (merge (sequence-rows d) rows)))]
      (merge base
+            ;; the classes the application sends not (install-sending!'s :refused), which no argument takes
+            (when-let [cs (seq (:refused opts))] {:pgmalli/refused [:any {:pgmalli/refused (set cs)}]})
             (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
             (into {} (for [s (:schemas d)]
                       [(shape/routines-key s)

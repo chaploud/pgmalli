@@ -35,7 +35,12 @@ an application that reads rows alone, without checking queries, loads no more th
 `pgmalli-next.jdbc` (no `pgmalli-next.core`, nor the analysis). `builder` is next.jdbc's
 `as-unqualified-maps`, each column read by its type as below. It
 extends no protocol: what your application extends `next.jdbc.result-set/ReadableColumn` with
-reads no column it builds. Pass it wherever your application reads rows.
+reads no column it builds. Pass it wherever your application reads rows; to make it the
+default of every read, the reads your tests and tools make too, give it to next.jdbc's
+`with-options` once, `(jdbc/with-options ds {:builder-fn (pgmalli-jdbc/builder registry)})`.
+next.jdbc drops those options where it hands out a connection (`with-transaction`,
+`get-connection`): wrap that connection again. A `ReadableColumn` extension reads none of the
+rows `builder` builds, so no second reading is kept beside it.
 
 `install-sending!` extends next.jdbc's `SettableParameter` for the whole JVM, for `Instant`,
 keywords, maps and vectors, sent as [what your application
@@ -44,7 +49,7 @@ sends](queries.md#what-your-application-sends) lists: `Instant/MAX` and `MIN` as
 times as their ISO-8601 text, a `UUID`, a keyword and a `Character` as their text; a document JSON cannot hold
 an error: [two keys of one text](queries.md#stricter-json-keys), a nil key, a NaN, an infinity, a
 value of another class, a `PGobject`). Every other class goes as
-pgjdbc's `setObject` sends it. `(install-sending! {:refused [java.time.LocalDateTime]})` makes classes your application does not send (a date and time of no time zone) an error to send, and no argument takes one. Call it once, before sending arguments and before analyzing queries: without it, pgjdbc refuses
+pgjdbc's `setObject` sends it. `(install-sending! {:refused [java.time.LocalDateTime]})` makes classes your application does not send (a date and time of no time zone) an error to send; give the registry the same, `(pgmalli/registry data {:refused [java.time.LocalDateTime]})`, and no argument takes one (one value of yours given both). Call it once, before sending arguments: without it, pgjdbc refuses
 a keyword and a vector (a `PSQLException` of SQLState `07006`, which names the class) and sends a
 map as `hstore` (an error naming hstore where that extension is not installed). It throws where another extension already holds a class pgmalli sends
 (`next.jdbc.date-time`'s `LocalDate`), which would go otherwise than pgmalli types it; one made

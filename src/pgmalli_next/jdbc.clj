@@ -192,7 +192,8 @@
    Throws where another extension of it already holds a class pgmalli sends (accept/classes'),
    which would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own;
    one made after it is not seen. :refused, classes the application does not send (a
-   LocalDateTime, of no time zone): sending one is an error, and no argument takes one.
+   LocalDateTime, of no time zone): sending one is an error. Give the registry the same
+   (pgmalli-next.core/registry's :refused), and no argument takes one.
 
    (install-sending! {:refused [java.time.LocalDateTime]})"
   ([] (install-sending! {}))
@@ -231,4 +232,4 @@
       (-reset-methods prepare/SettableParameter)))
   (doseq [[c f] sending]
     (extend c prepare/SettableParameter {:set-parameter f}))
-  (accept/refuse! refused))))
+  nil)))

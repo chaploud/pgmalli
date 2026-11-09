@@ -231,7 +231,7 @@
 (def ^:private inline-rows (rows-of inline-classes))
 
 (defn write-rows
-  "[schema type class] for each class the one sending sends, but the refused, in accept/class-types' order, by array?
+  "[schema type class] for each class the one sending sends, but those ::refused names (the registry's :refused), in accept/class-types' order, by array?
    an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
    under ::json, a value of a JSON document as accept/json-classes writes it, no array; under
    sql/format's :inline, a value it writes as a literal (inline-classes), no array; a Character
@@ -241,7 +241,7 @@
                  (:inline (:format opts)) (get inline-rows array? [])
                  (::characters opts) (get character-rows array? [])
                  :else (get sent-rows array? []))
-    (seq accept/refused) (into [] (remove #(contains? accept/refused (nth % 2 nil))))))
+    (seq (::refused opts)) (into [] (remove #(contains? (::refused opts) (nth % 2 nil))))))
 
 (defn sent-as
   "The alternatives of the schemas of the classes, no array, the one sending sends as type t; with
