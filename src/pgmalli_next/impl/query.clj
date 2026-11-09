@@ -729,7 +729,7 @@
             (#{:vector :sequential :set} h) (let [kept (select-keys p [:pg/type :pg/domain])]
                                               (if (seq kept) [h kept (loose (last t))] [h (loose (last t))]))
             (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
-            ;; an override's pattern, a bound as a length is
+            ;; a shape's pattern, a bound as a length is
             (= :re h) (if-let [pg (:pg/type p)] [:string {:pg/type pg}] :string)
             (seq children) t
             :else (if-let [pg (:pg/type p)] [h {:pg/type pg}] h)))))
@@ -777,7 +777,7 @@
 (defn- result-schema
   "The schema of a value of resolver type t computed from inputs (expression types): an input's
    where it is of t (a domain's base type, an enum's labels; without bounds), else t's. A json or
-   jsonb input's shape (an override's) is no shape of a value computed from it."
+   jsonb input's shape is no shape of a value computed from it."
   [t inputs]
   (or (some #(let [s (domain-base-type (:schema %))]
                ;; a typmod reads otherwise (bit(1) a Boolean), which a value computed from others may not keep
@@ -915,7 +915,7 @@
         (and (vector? a) (= :inline (first a)) (string? (second a))) (second a)))
 
 (def ^:private json-parts
-  "What part of a json or jsonb value of a shape (an override's, without NULL) a call takes, as
+  "What part of a json or jsonb value of a shape (without NULL) a call takes, as
    PostgreSQL defines it, by [kind name]: f of the shape and the call's second argument, nil where
    its shape is not told. -> an inline integer (HoneySQL sends a number as a bigint, which ->
    takes none of) an array's element, -> a key a map's value of it; - a key, or an ARRAY of keys,

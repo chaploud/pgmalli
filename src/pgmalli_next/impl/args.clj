@@ -84,7 +84,7 @@
 
 (defn- text-held
   "Alternative a of a value sent untyped, as its text (a keyword's, :n/a as n/a), held to what own,
-   a column's type, takes of a string where an override or a domain checks it ([:and :string
+   a column's type, takes of a string where a shape or a domain checks it ([:and :string
    ...]), or a \"char\" its one byte: the text is the value the column gets."
   [a own registry]
   (let [checked (filter #(and (or (#{:and :re} (shape/head %)) (:pg/one-byte (shape/props %))) (= :string (shape/value-kind %))) (shape/alternatives (shape/non-null own)))]
@@ -238,7 +238,7 @@
                             :else (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
                     :when (and (not (query/untyped? a))
                                (not (and (= :cast context) (accept/scalar-cast? t p) (shape/collection-kinds (shape/kind a))))
-                               ;; a document of a json column an override shapes is of that shape, as whichever type
+                               ;; a document of a json column a shape gives is of that shape, as whichever type
                                (not (and (types/json? t) (types/json? p) (not (query/untyped? own)))))]
                 [p a])
               arrays)]

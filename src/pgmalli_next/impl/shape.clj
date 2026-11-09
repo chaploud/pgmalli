@@ -120,8 +120,8 @@
   (or (props (if (maybe? s) (last s) s)) {}))
 
 (defn and-base
-  "s's first schema where it is [:and x ...] (an argument held to a range or to classes, an
-   override), else s."
+  "s's first schema where it is [:and x ...] (an argument held to a range or to classes, a
+   shape), else s."
   [s]
   (if (and (vector? s) (= :and (first s))) (first (entries s)) s))
 
@@ -284,7 +284,7 @@
 (def collection-kinds #{:map :map-of :vector :sequential :set :tuple})
 
 (defn value-kind
-  "kind, the strings' of :re and string?, as an override writes a string column's schema."
+  "kind, the strings' of :re and string?, as a shape writes a string column's schema."
   [t]
   (let [k (kind t)] (get {:re :string 'string? :string} k k)))
 

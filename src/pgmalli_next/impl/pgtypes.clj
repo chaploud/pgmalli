@@ -104,7 +104,7 @@
 
 (defn- bounded-int
   "A schema type for an integer type of PostgreSQL: its range, narrowed by :min and :max
-   properties (an override's), generated within :gen/min and :gen/max when given."
+   properties (a shape's), generated within :gen/min and :gen/max when given."
   [type]
   (let [[lo hi] (int-ranges type)]
     (m/-simple-schema

@@ -290,7 +290,7 @@
   [schema pgjdbc?]
   (let [driver-object [:any {:pg/type (pg-type schema)}]]
     (cond (array-column? schema) (if pgjdbc? driver-object [:vector {:pg/type (pg-type schema)} [:maybe (read-type (element schema) false)]])
-          ;; a NOT NULL one's document null reads as nil, as no override shapes it
+          ;; a NOT NULL one's document null reads as nil, as no shape gives it one
           (types/json? (pg-type schema)) (cond pgjdbc? driver-object
                                                (= :some (shape/head schema)) (assoc schema 0 :any)
                                                :else schema)
@@ -317,7 +317,7 @@
           ;; money: a PGobject of its text (types/types' :read), the driver's object
           (= :text driver-read) [(if (= :some head) :some :any) {:pg/type t}]
           driver-read [driver-read {:pg/type t}]
-          ;; the driver's own object, whatever an override says the value is
+          ;; the driver's own object, whatever a shape says the value is
           (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
           :else (driver-type schema pgjdbc?))))
 
@@ -437,7 +437,7 @@
           ;; an enum's labels are the column's values; an argument's type keeps those a class sent
           ;; goes as (pgmalli-next.impl.args/labelled-type)
           sent (when (and n (not= :enum (shape/kind t))) (sent-as opts n))]
-      (cond ;; a json or jsonb column an override shapes: what is sent as its type is held to that shape
+      (cond ;; a json or jsonb column a shape gives: what is sent as its type is held to that shape
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema
             (empty? sent) t
             ;; the driver's object of the type too (a PGInterval), a PGobject of it, where none is sent
@@ -484,7 +484,7 @@
 (defn- keyword-labels
   "s with each reference to an enum type of the registry's schemas as the type's labels as
    keywords, as the one reading reads a column of the type; a json column's, whose values are
-   JSON's (an override's reference too), as it is."
+   JSON's (a shape's reference too), as it is."
   [schemas s]
   (clojure.walk/postwalk (fn [f]
                            (let [target (when-not (types/json? (pg-type s)) (shape/ref-target schemas f))]

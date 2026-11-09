@@ -230,7 +230,7 @@
         own (shape/non-null own)
         hints (select-keys (shape/props own) gen-keys)
         k (shape/kind t)]
-    (cond ;; an override's reference to a schema of the user's registry, inlined in t: generated
+    (cond ;; a shape's reference to a schema of the user's registry, inlined in t: generated
           ;; as that schema generates (portable-data drops its hints)
           (and (= :ref (shape/head own)) (not (shape/generated-name? (last own)))
                (some->> (get (::query/schemas r) (last own)) shape/kind (= (shape/kind t))))

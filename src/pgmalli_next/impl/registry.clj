@@ -111,7 +111,7 @@
                    [(shape/derived-name k d) (derived-schema s d registry false)])))
 
 (def ^:private json-value
-  "What a json or jsonb column with no override to shape it generates: small JSON values."
+  "What a json or jsonb column with no shape generates: small JSON values."
   [:or :string :int :boolean [:map-of {:max 3} :string [:or :string :int]] [:vector {:max 3} [:or :string :int]]])
 
 (defn- cannot-make
@@ -194,7 +194,7 @@
     m))
 
 (def base
-  "The schemas a generated schema or an override names besides the generated ones."
+  "The schemas a generated schema or a shape names besides the generated ones."
   (merge (m/default-schemas) (mu/schemas) pgtypes/schemas))
 
 (defn other-schemas-enum
