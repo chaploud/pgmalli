@@ -547,7 +547,13 @@
       (is (= {:t "array"} (one ["SELECT jsonb_typeof(?) AS t" (jsonb [1 2])])) "a vector jsonb marks, a document")
       (is (= {:t "object"} (one ["SELECT jsonb_typeof(?) AS t" {:a 1}])))
       (is (thrown? java.sql.SQLException (one ["SELECT jsonb_typeof(?) AS t" [1 2]])) "a vector alone, an array literal jsonb's input refuses")
-      (is (= {:t "\\x6162"} (one ["SELECT (?::bytea[])[1]::text AS t" [(.getBytes "ab")]])) "a byte[] element as bytea's hex"))))
+      (is (= {:t "\\x6162"} (one ["SELECT (?::bytea[])[1]::text AS t" [(.getBytes "ab")]])) "a byte[] element as bytea's hex")
+      (is (= {:t "array"} (one ["SELECT jsonb_typeof((?::jsonb[])[1]) AS t" [(jsonb [1 2])]])) "a marked document, one jsonb element")
+      (is (= {:b true} (one ["SELECT (?::date[]) = ARRAY['0001-01-01 BC'::date, '0006-03-04 BC', '10000-01-01'] AS b"
+                             [(java.time.LocalDate/of 0 1 1) (java.time.LocalDate/of -5 3 4) (java.time.LocalDate/of 10000 1 1)]]))
+          "a date of no year, or past 9999, as date's input reads it")
+      (is (= {:b true} (one ["SELECT (?::timestamptz[])[1] = '0002-01-01 00:00:00+00 BC'::timestamptz AS b"
+                             [(java.time.OffsetDateTime/of -1 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]))))))
 
 (deftest a-jsonb-nested-past-the-stack-is-an-error-naming-the-column
   (when *db*

@@ -183,17 +183,36 @@
 
 (declare array-text)
 
+(defn- quoted
+  "Text t as a quoted element of an array literal, a quote and a backslash escaped."
+  [t]
+  (str \" (str/replace t #"[\"\\]" "\\\\$0") \"))
+
+(defn- date-text
+  "The text date and time input reads of a java.time value of a year java.time writes otherwise:
+   none (0000, -0005), which PostgreSQL writes 0001 BC, 0006 BC; past 9999 (+10000), which it
+   writes 10000. nil for another value."
+  [x]
+  (when-let [y (cond (instance? Instant x) (.getYear (OffsetDateTime/ofInstant ^Instant x ZoneOffset/UTC))
+                     (instance? java.time.temporal.TemporalAccessor x)
+                     (when (.isSupported ^java.time.temporal.TemporalAccessor x java.time.temporal.ChronoField/YEAR)
+                       (.get ^java.time.temporal.TemporalAccessor x java.time.temporal.ChronoField/YEAR)))]
+    (when-not (<= 1 y 9999)
+      (let [s (str (if (instance? Instant x) (OffsetDateTime/ofInstant ^Instant x ZoneOffset/UTC) x))]
+        (str (str/replace-first s #"^[+-]?\d+" (format "%04d" (if (pos? y) y (- 1 y)))) (when-not (pos? y) " BC"))))))
+
 (defn- element-text
   "Element x of an array literal: NULL, an array, or its text quoted."
   [x]
-  (cond (nil? x) "NULL"
+  (cond (or (nil? x) (and (instance? PGobject x) (nil? (.getValue ^PGobject x)))) "NULL"
+        (or (map? x) (accept/jsonb? x)) (quoted (.getValue ^PGobject (jsonb-object x)))
         (or (sequential? x) (set? x)) (array-text x)
         :else
         (let [t (cond (keyword? x) (accept/sent-text x)
                       ;; a domain's element as pgjdbc reads it
                       (instance? PGobject x) (.getValue ^PGobject x)
                       (infinite-text x) (infinite-text x)
-                      (map? x) (.getValue ^PGobject (jsonb-object x))
+                      (date-text x) (date-text x)
                       (bytes? x) (str "\\x" (apply str (map #(format "%02x" (bit-and 0xff %)) x)))
                       (decimal? x) (.toPlainString ^java.math.BigDecimal x)
                       (ratio? x) (str (double x))
@@ -202,7 +221,7 @@
                       :else (error/fail! :pgmalli.error/invalid-options
                                          (str "a vector or a set goes as an array, which holds no " (.getName (class x)) ": send its text")
                                          {:given (.getName (class x))}))]
-          (str \" (str/replace t #"[\"\\]" "\\\\$0") \"))))
+          (quoted t))))
 
 (defn- array-text
   "The array literal of sequential or set xs ('{\"1\",NULL}'), a set's elements in its order."

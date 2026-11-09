@@ -428,14 +428,22 @@
 
 (defn- cast-arrays
   "The arrays cast to the type of column schema s, an array type, of elements of element type:
-   sent untyped, their text read by the array type's input; :any for none."
+   sent untyped, their text read by the element type's input, which reads the text of a value
+   of its own kind, a string's and a keyword's, a number's too where it is a number type but an
+   integer type's no fraction (no Boolean to an integer[], which a cast would convert), any
+   value's where it is a string type; :any for none."
   [registry s element opts]
-  (let [;; an integer type's input reads no fraction, which a cast to it would round
-        element (if (accept/integer-type? (query/slot-type registry s))
-                  (let [whole (remove #(#{:double 'decimal? 'float? :float} (jdbc/value-kind (shape/non-null %))) (shape/alternatives (shape/non-null element)))]
-                    (cond-> (shape/either whole :any) (shape/maybe? element) query/nullable))
-                  element)]
-    (shape/either (distinct (map second (arrays-sent opts #(and (query/slot-type registry s) (= :unknown %)) element)))
+  (let [t (query/slot-type registry s)
+        own (set (map jdbc/value-kind (shape/alternatives (shape/non-null (query/driver-schema registry jdbc/column-write-type s opts)))))
+        kinds (cond-> (into own [:string :keyword])
+                (and (string? t) (accept/number-type? t) (not (accept/integer-type? t))) (into [:int 'decimal? :double])
+                (accept/integer-type? t) (conj :int))
+        ;; a string type's input, bytea's and "char"'s read any value's text
+        element (if (or (accept/string-type? t) (#{"bytea" "\"char\""} t))
+                  element
+                  (let [as (filter #(kinds (jdbc/value-kind (shape/non-null %))) (shape/alternatives (shape/non-null element)))]
+                    (cond-> (shape/either as :any) (shape/maybe? element) query/nullable)))]
+    (shape/either (distinct (map second (arrays-sent opts #(and t (= :unknown %)) element)))
                   :any)))
 
 (defn- unnest-cast-element

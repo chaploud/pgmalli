@@ -76,15 +76,28 @@
                                   :gen/gen (gen/fmap byte-array (gen/vector gen/byte (or min 0) (or max (+ (or min 0) 16))))}
                 :min 0 :max 0})}))
 
+(defn- nested?
+  "Whether x is an array's dimension: a sequential but a document jsonb marks."
+  [x]
+  (and (sequential? x) (not (accept/jsonb? x))))
+
+(defn- dimensions
+  "The lengths of the dimensions of x, [] of an element; ::ragged where the arrays of one
+   dimension are not all of one shape, which PostgreSQL's array input refuses."
+  [x]
+  (if-not (nested? x)
+    []
+    (let [ds (distinct (map dimensions x))]
+      (cond (empty? ds) [0]
+            (or (next ds) (= ::ragged (first ds))) ::ragged
+            :else (into [(count x)] (first ds))))))
+
 (defn- elements
   "The elements of array v, a sequential's or a set's; of a sequential of sequentials (a
-   multi-dimensional array) its innermost ones, nil where they are not all as long, which
-   PostgreSQL's array input refuses."
+   multi-dimensional array) its innermost ones; nil where its dimensions are ragged."
   [v]
-  (if (and (sequential? v) (seq v) (every? sequential? v))
-    (when (apply = (map count v))
-      (reduce (fn [acc s] (if-let [es (elements s)] (into acc es) (reduced nil))) [] v))
-    (vec v)))
+  (when-not (= ::ragged (dimensions (if (set? v) (vec v) v)))
+    (into [] (remove nested?) (rest (tree-seq #(or (set? %) (nested? %)) seq v)))))
 
 (def ^:private array-schema
   "[:pg/array t]: an array argument: a vector or a seq of t's (of vectors, all as long, a

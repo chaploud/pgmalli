@@ -3763,3 +3763,20 @@
         fresh #(pgmalli/registry pgmalli-next.sample/sample-data)]
     (doseq [q qs]
       (is (= (:args (h/analyze (fresh) q opts)) (:args (h/analyze (fresh) (assoc q :limit 1) opts))) (pr-str q)))))
+
+(deftest an-array-of-ragged-dimensions-or-of-a-marked-document-as-a-dimension-is-refused
+  (let [ok? (fn [q v] (m/validate (:x (args q)) v {:registry registry}))
+        any {:select [:id] :from [:users] :where [:= :id [:any :?x]]}]
+    (is (not (ok? any [[[1]] [[2 3]]])) "dimensions of one shape alone, at every depth")
+    (is (ok? any [[[1]] [[2]]]))
+    (is (not (ok? any [[1 2] 3])) "an element beside a dimension"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
+                                                        [:ja [:maybe [:vector {:pg/type "jsonb[]"} [:any {:pg/type "jsonb"}]]]]]}})
+        ok? (fn [v] (m/validate (:x (:args (h/analyze reg {:update :t :set {:ja :?x} :where [:= :id 1]}))) v {:registry reg}))]
+    (is (ok? [(accept/jsonb [1 2]) {:a 1}]) "a marked document an element, no dimension")
+    (is (not (ok? [[1 2] 3])))))
+
+(deftest an-array-cast-takes-elements-its-element-types-input-reads
+  (let [ok? #(m/validate (:x (args {:select [[[:cast :?x [:raw "integer[]"]] :z]]})) % {:registry registry})]
+    (is (every? ok? [[1] ["1"] [:a]]) "an integer, or a text the input reads")
+    (is (not-any? ok? [[true] [(.getBytes "a")] [1.5]]) "a Boolean, which a cast converts, the input reads not")))
