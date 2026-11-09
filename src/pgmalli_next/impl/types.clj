@@ -23,7 +23,8 @@
    resources/pgmalli-next/impl/catalog.edn from each PostgreSQL version CI runs."
   (:require [clojure.edn :as edn]
             [clojure.java.io :as io]
-            [clojure.string :as str]))
+            [clojure.string :as str]
+            [pgmalli-next.impl.memo :as memo]))
 
 (def types
   {"smallint" {:aliases ["int2"] :schema :pg/smallint :value :integer :range [-32768 32767]}
@@ -137,15 +138,16 @@
 (def ^:private by-name
   (into {} (for [[t e] types, n (cons t (:aliases e))] [n (assoc e :name t)])))
 
-(defn type-parts
+(def type-parts
   "[schema name array?] of a type as format_type prints it (or a cast spells it): the schema it
    is qualified with (a type outside the search path: ext.citext), nil for none; its name
    without its typmod, wherever format_type prints it (timestamp(3) with time zone is
    timestamp with time zone), a quoted one as printed, quotes and all; whether it is an array
    (bit(8)[]). nil for no string."
-  [t]
-  (when-let [[_ schema n brackets] (and (string? t) (re-matches #"(?s)(?:(\"(?:[^\"]|\"\")*\"|[^.\"]+?)\.)?(\"(?:[^\"]|\"\")*\"|[^\"]+?)((?:\[\])*)" t))]
-    [schema (cond-> n (not (str/starts-with? n "\"")) (str/replace #"\([^)]*\)" "")) (boolean (seq brackets))]))
+  (memo/bounded
+   (fn [t]
+     (when-let [[_ schema n brackets] (and (string? t) (re-matches #"(?s)(?:(\"(?:[^\"]|\"\")*\"|[^.\"]+?)\.)?(\"(?:[^\"]|\"\")*\"|[^\"]+?)((?:\[\])*)" t))]
+       [schema (cond-> n (not (str/starts-with? n "\"")) (str/replace #"\([^)]*\)" "")) (boolean (seq brackets))]))))
 
 (defn unquoted
   "An identifier as type-parts gives it, without its quotes: the name its catalog holds."

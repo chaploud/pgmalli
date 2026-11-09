@@ -8,7 +8,9 @@
   "A name longer than any PostgreSQL holds (63 bytes, a schema's and a table's together): held,
    10000 of a request's size would fill the heap."
   [x]
-  (and (or (string? x) (ident? x)) (< 256 (count (str x)))))
+  (cond (string? x) (< 256 (count ^String x))
+        (ident? x) (< 256 (+ (count (name x)) (count (namespace x))))
+        :else false))
 
 (defn bounded
   "memoize of f holding at most limit results, none of an argument long-name?; past the limit, it
@@ -16,12 +18,9 @@
   [f]
   (let [cache (atom {})]
     (fn [& args]
-      (let [c @cache]
-        (cond
-          (some long-name? args) (apply f args)
-          (contains? c args)
-          (get c args)
-          :else
-          (let [v (apply f args)]
-            (swap! cache #(assoc (if (<= limit (count %)) {} %) args v))
-            v))))))
+      (if-let [[_ v] (find @cache args)]
+        v
+        (let [v (apply f args)]
+          (when-not (some long-name? args)
+            (swap! cache #(assoc (if (<= limit (count %)) {} %) args v)))
+          v)))))

@@ -427,7 +427,8 @@
                                      outer)]
                     (cons [x chain path outer]
                           (concat
-                           (for [k syntax/with-keys :let [w (get x k)] :when (some? w)
+                           ;; a row's types read its CTEs' through the scope (derived-types), not their bodies
+                           (for [k syntax/with-keys :let [w (get x k)] :when (and (some? w) (not (and (::row-only opts) (empty? path))))
                                  found (if (vector? w)
                                          (apply concat (map-indexed (fn [i e] (walk e (conj path k i) outer (into base (keep #(syntax/cte-name % (:format opts))) (if (= :with-recursive k) w (take i w))) false true)) w))
                                          (walk w (conj path k) outer ctes false true))]
@@ -1258,7 +1259,7 @@
 (defn- derived-types*
   [registry stmt opts outer]
   (let [opts (-> opts (dissoc :jdbc) (assoc ::columns true))
-        chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt opts outer))]
+        chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt (assoc opts ::row-only true) outer))]
     (when-let [entries (row-entries registry stmt [] chains opts)]
       (vec (for [[k _ s] (map shape/entry-parts entries)]
              [(name k) (when-not (= :any s) s)])))))

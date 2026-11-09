@@ -208,17 +208,28 @@
   nil)
 
 (defn- scanned
-  "(f body), once per *scans*."
-  [k f body]
+  "(apply f args), once per *scans*."
+  [k f & args]
   (if-let [m *scans*]
-    (let [key [k body]]
-      (if-let [[_ v] (find @m key)] v (let [v (f body)] (swap! m assoc key v) v)))
-    (f body)))
+    (let [key (into [k] args)]
+      (if-let [[_ v] (find @m key)] v (let [v (apply f args)] (swap! m assoc key v) v)))
+    (apply f args)))
+
+(defn- walked
+  "(f x) of each map x in body, in a walk's order (tree-seq's), concatenated: kept per map within
+   *scans*, so that a body holding another one walked (a CTE's statement on its own, holding the
+   entries before it) walks only what is new."
+  [k f body]
+  (letfn [(walk [x]
+            (cond (map? x) (scanned k #(into (vec (f %)) (mapcat walk) (seq %)) x)
+                  (branch? x) (into [] (mapcat walk) (seq x))
+                  :else []))]
+    (walk body)))
 
 (defn statements
   "The statements in a query (a map, or Clojure data holding maps); a subquery is one too."
   [body]
-  (scanned ::statements #(into [] (filter statement?) (tree-seq branch? seq %)) body))
+  (walked ::statements #(when (statement? %) [%]) body))
 
 (defn cte-name [entry format]
   (when (vector? entry)
@@ -260,7 +271,7 @@
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
   [body format]
-  (set (keep #(cte-name % format) (mapcat cte-entries (statements body)))))
+  (scanned ::cte-names #(set (keep (fn [e] (cte-name e %2)) (mapcat cte-entries (statements %1)))) body format))
 
 (defn qualified
   "\"schema.table\" of a table keyword: :schema/table, :schema.table, or :table in opts' :schema;
@@ -450,12 +461,11 @@
 (defn- with-entries
   "[entries key index entry] of each entry of every :with and :with-recursive in query body."
   [body]
-  (scanned ::with-entries
-           #(vec (for [x (tree-seq branch? seq %) :when (map? x)
-                       k with-keys :let [w (get x k)] :when (vector? w)
-                       [i e] (map-indexed vector w)]
-                   [w k i e]))
-           body))
+  (walked ::with-entries
+          (fn [x] (for [k with-keys :let [w (get x k)] :when (vector? w)
+                        [i e] (map-indexed vector w)]
+                    [w k i e]))
+          body))
 
 (defn- search-columns
   "[[name type] ...] of the columns a CTE's SEARCH and CYCLE add ([:c q :search-depth-first-by :x
@@ -470,12 +480,18 @@
                        (contains? by :search-breadth-first-by) [(typed :set "record")]
                        (contains? by :cycle) [(typed :set (when-not (contains? by :to) "boolean")) (typed :using "record[]")]))))
 
+(declare cte-statement*)
+
 (defn cte-statement
   "[statement columns recursive? added] of CTE name: its body as read on its own, under the entries of
    its :with before it, and the columns its name lists ([[:c {:columns [:x]}] ...]); of a
    recursive one (a set operation under :with-recursive one of whose members reads the CTE
    itself), its first member, whose types PostgreSQL gives the columns; added, the columns its SEARCH or CYCLE adds (search-columns). nil where the query defines name more than once, or the body is
    no statement."
+  [body name opts]
+  (scanned ::cte-statement cte-statement* body name opts))
+
+(defn- cte-statement*
   [body name {:keys [format] :as opts}]
   (let [found (for [[w k i e] (with-entries body) :when (= name (cte-name e format))]
                 [(second e) (subvec w 0 i) (when (vector? (first e)) (listed-columns (second (first e)))) k (search-columns e format)])]
@@ -536,10 +552,17 @@
   (let [[_ _ m] (function-alias item)]
     (when (and (map? m) (contains? m :with-columns)) (:with-columns m))))
 
+(declare standalone*)
+
 (defn standalone
   "Statement inner as a query of its own: itself where it reads no CTE of ctes (those its place
    in query body sees), else under the entries of the one :with of body that define them, up to
-   the last; nil where they are not there, or inner has a :with of its own."
+   the last; nil where they are not there, or inner has a :with of its own. One object of the
+   same arguments within *scans*: derived types are kept by it."
+  [body inner ctes opts]
+  (scanned ::standalone standalone* body inner ctes opts))
+
+(defn- standalone*
   [body inner ctes {:keys [format] :as opts}]
   (let [defined (cte-names inner format)
         read (set (for [i (mapcat table-items (statements inner))
