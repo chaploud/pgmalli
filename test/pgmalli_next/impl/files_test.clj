@@ -40,7 +40,9 @@
              (fails {:int4 :int})))
       (is (= [":shapes: :inet names a type: give each column a schema, :schema.table/column; no column of the schemas generated: public has it" :pgmalli.error/invalid-options nil]
              (fails {:inet :string}))))
-    (testing "a value is a malli schema"
+    (testing "a value is a malli schema, of the form the column's is made of"
+      (is (every? #(re-find #"is no malli schema" (or (first (fails {:public.jobs/input %})) "")) [#"^z" ((requiring-resolve (quote malli.core/schema)) [:map [:a :int]])])
+          "a regex, a Schema: no form the column's properties go with")
       (is (= ":shapes: :public.jobs/input's schema [:strin] is no malli schema: invalid-schema {:schema :strin, :form [:strin]}"
              (first (fails {:public.jobs/input [:strin]})))))
     (testing "a column key without its schema, or with pg., names the column meant"

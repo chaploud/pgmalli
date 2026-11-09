@@ -255,6 +255,20 @@
                  [c _ cs] (shape/column-entries s)]
              [(keyword rel (name c)) cs])))
 
+(defn- shaped-column
+  "Column schema c with schema v in place of its type, its provenance properties kept but the
+   bounds of the type (a length, a precision, a default value of it); a qualified name of the
+   user's registry a reference, [:ref name]; NULL where c takes it."
+  [c v]
+  (let [nullable? (shape/maybe? c)
+        props (dissoc (shape/column-props c) :pg/max-length :pg/precision :pg/scale :default)
+        base (if (and (qualified-keyword? v) (not (#{"time" "pg"} (namespace v)))) [:ref v] v)
+        s (shape/merge-props base props)]
+    (cond nullable? [:maybe s]
+          (= :any s) :some
+          (and (vector? s) (= :any (first s))) (assoc s 0 :some)
+          :else s)))
+
 (defn- checked-shapes!
   "shapes when each key names a column of rows (:schema.table/column) with a malli schema. An
    error names what to write instead."
@@ -281,25 +295,12 @@
                                 :else ""))
                      (cond-> {:given k} meant (assoc :did-you-mean [meant]))))
             :else
-            (try (m/schema v {:registry shape-registry})
+            ;; the column's schema it makes, which a value of no schema form (a regex, a Schema) is none of
+            (try (m/schema v {:registry shape-registry}) (m/schema (shaped-column (by-column k) v) {:registry shape-registry})
                  (catch Exception e
                    (fail! (str (pr-str k) "'s schema " (pr-str v) " is no malli schema: " (if-let [t (:type (ex-data e))] (str (name t) " " (pr-str (:data (ex-data e)))) (ex-message e)))
                           {:given k})))))
     shapes))
-
-(defn- shaped-column
-  "Column schema c with schema v in place of its type, its provenance properties kept but the
-   bounds of the type (a length, a precision, a default value of it); a qualified name of the
-   user's registry a reference, [:ref name]; NULL where c takes it."
-  [c v]
-  (let [nullable? (shape/maybe? c)
-        props (dissoc (shape/column-props c) :pg/max-length :pg/precision :pg/scale :default)
-        base (if (or (string? v) (and (qualified-keyword? v) (not (#{"time" "pg"} (namespace v))))) [:ref v] v)
-        s (shape/merge-props base props)]
-    (cond nullable? [:maybe s]
-          (= :any s) :some
-          (and (vector? s) (= :any (first s))) (assoc s 0 :some)
-          :else s)))
 
 (defn- shaped
   "rows with each column shapes names of the schema given there."
