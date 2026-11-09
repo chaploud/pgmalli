@@ -80,15 +80,19 @@
       (and (= :tuple head) (= [:= :lift] (first children))) (let [d (describe schemas (second children))] (str "[:lift " (if (string? d) d (pr-str d)) "]"))
       (= :cat head) (mapv #(describe schemas %) children)
       ;; an argument of several collections (IN's)
-      (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children)
-           (apply = (map #(describe schemas (last %)) children)))
-      (let [elem (describe schemas (last (first children)))]
-        (str elem "[] (" (str/join ", " (map #(cond (not= :pg/array (first %)) (name (first %)) (:pg/set (props-of %)) "set" :else "vector") children)) ")"))
-      (= :or head) (str/join " | " (distinct (map #(let [d (describe schemas %)]
-                                                     (cond (string? d) d
-                                                           (and (vector? d) (string? (first d))) (str (first d) "[]")
-                                                           :else (pr-str d)))
-                                                  children)))
+      ;; an argument of several collections of one element type (IN's; = ANY's vector and set)
+      ;; once, its other alternatives beside it
+      (= :or head) (let [coll? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %)))
+                         colls (filter coll? children)
+                         one (fn [x] (let [d (describe schemas x)]
+                                       (cond (string? d) d
+                                             (and (vector? d) (string? (first d))) (str (first d) "[]")
+                                             :else (pr-str d))))
+                         grouped (when (and (next colls) (apply = (map #(describe schemas (last %)) colls)))
+                                   (str (describe schemas (last (first colls))) "[] ("
+                                        (str/join ", " (map #(cond (not= :pg/array (first %)) (name (first %)) (:pg/set (props-of %)) "set" :else "vector") colls))
+                                        ")"))]
+                     (str/join " | " (distinct (if grouped (cons grouped (map one (remove coll? children))) (map one children)))))
       (= :ref head) (let [target (get schemas (last s))]
                       (if (and (vector? target) (= :enum (first target)))
                         (str (or (type-label p) "enum") ": " (str/join " | " (shape/entries target)))

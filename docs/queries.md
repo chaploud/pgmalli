@@ -348,7 +348,7 @@ interfaces'.
 ```clojure
 (update-vals (:args (h/analyze registry {:update :users :set {:status :?status :nick :?nick} :where [:= :id [:any :?ids]]}))
              #(pgmalli/describe registry %))
-;; => {:nick "(varchar(40) | keyword)?", :ids "bigint[] | PGobject of bigint[]", :status "user_status: :active | :closed"}
+;; => {:nick "(varchar(40) | keyword)?", :ids "bigint[] (vector, set) | PGobject of bigint[]", :status "user_status: :active | :closed"}
 ```
 
 A class adds to what a column takes where its type is the column's or one it takes

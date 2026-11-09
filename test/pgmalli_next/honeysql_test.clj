@@ -2907,7 +2907,7 @@
       "schema-problems' :var first")
   (is (= {:pgmalli/problems []} (second (h/query-schema registry [] {:select [:id] :from [:users]} opts)))
       "a query schema's parts are where they are, problems or not")
-  (is (= {:args ["bigint[] | PGobject of bigint[]"] :returns [{:id "bigint"}]}
+  (is (= {:args ["bigint[] (vector, set) | PGobject of bigint[]"] :returns [{:id "bigint"}]}
          (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))
 
 (deftest special-syntax-writing-an-operator-names-its-column-?column?
@@ -3184,7 +3184,7 @@
     (is (ok? [1 2]))
     (is (not (ok? ["1"])) "a String is no bigint's own")
     (is (ok? nil) "the query tests it for NULL")
-    (is (= "(bigint[] | PGobject of bigint[])?" (pgmalli/describe registry ids)) "described as the common type"))
+    (is (= "(bigint[] (vector, set) | PGobject of bigint[])?" (pgmalli/describe registry ids)) "described as the common type"))
   (is (= "varchar(40) | keyword" (pgmalli/describe registry (:x (args {:update :users :set {:nick :?x} :where [:= :nick :?x]}))))
       "an assignment's varchar(40) within a comparison's varchar")
   (is (= "(varchar | keyword) & (date | timestamp | timestamptz)" (pgmalli/describe registry (:x (args {:select [:id] :from [:users] :where [:and [:= :nick :?x] [:= :born :?x]]}))))
