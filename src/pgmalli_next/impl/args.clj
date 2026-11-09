@@ -286,7 +286,11 @@
             all (cond->> (one-per-kind opts (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
                   ;; inlined, a literal is of a type by its value, whatever its class
                   (and (or (= :call held-in) (= :cast context)) (not (::common-type opts)) (not (:inline (:format opts)))) (keep #(class-held % t takes? opts)))
-            all (concat all specials)]
+            all (concat all specials)
+            ;; cast to json, a text is read as JSON's
+            all (if (and (= :cast context) (types/json? t))
+                  (map #(if (#{:string :keyword} (shape/value-kind %)) [:and % [:pg/is {:pg/pred :json-text :error/message "should be JSON text, which json's input reads"}]] %) all)
+                  all)]
         (cond (or (= all own-alts) (empty? all)) own (next all) (into [:or] all) :else (first all))))))
 
 (def ^:private inline-rows (jdbc/write-rows {:format {:inline true}} false))
@@ -428,21 +432,17 @@
 
 (defn- cast-arrays
   "The arrays cast to the type of column schema s, an array type, of elements of element type:
-   sent untyped, their text read by the element type's input, which reads the text of a value
-   of its own kind, a string's and a keyword's, a number's too where it is a number type but an
-   integer type's no fraction (no Boolean to an integer[], which a cast would convert), any
-   value's where it is a string type; :any for none."
+   sent untyped, their text read by the element type's input, which reads what a cast to it
+   takes but a Boolean's text (true) where it is no boolean type, a byte[]'s (\\x01) where it
+   is no bytea or string type, and a fraction's where it is an integer type; :any for none."
   [registry s element opts]
   (let [t (query/slot-type registry s)
-        own (set (map jdbc/value-kind (shape/alternatives (shape/non-null (query/driver-schema registry jdbc/column-write-type s opts)))))
-        kinds (cond-> (into own [:string :keyword])
-                (and (string? t) (accept/number-type? t) (not (accept/integer-type? t))) (into [:int 'decimal? :double])
-                (accept/integer-type? t) (conj :int))
-        ;; a string type's input, bytea's and "char"'s read any value's text
-        element (if (or (accept/string-type? t) (#{"bytea" "\"char\""} t))
-                  element
-                  (let [as (filter #(kinds (jdbc/value-kind (shape/non-null %))) (shape/alternatives (shape/non-null element)))]
-                    (cond-> (shape/either as :any) (shape/maybe? element) query/nullable)))]
+        unread (cond-> #{}
+                 (and (string? t) (not= "boolean" t) (not (accept/string-type? t))) (conj :boolean)
+                 (and (string? t) (not= "bytea" t) (not (accept/string-type? t))) (conj 'bytes?)
+                 (accept/integer-type? t) (into [:double 'decimal? 'float? :float]))
+        element (let [as (remove #(unread (jdbc/value-kind (shape/non-null %))) (shape/alternatives (shape/non-null element)))]
+                  (cond-> (shape/either as :any) (shape/maybe? element) query/nullable))]
     (shape/either (distinct (map second (arrays-sent opts #(and t (= :unknown %)) element)))
                   :any)))
 
@@ -761,6 +761,14 @@
 
 (defn- sent-typed? [x opts] (some? (literal-sent-type x opts)))
 
+(defn- untyped-array?
+  "Whether literal x is an array the one sending sends untyped ([:lift [1 2]]), but under
+   sql/format's :inline, which sends none."
+  [x opts]
+  (let [{:keys [value inline]} (literal x)]
+    (boolean (and (some? value) (not inline) (not (:inline (:format opts))) (= :unknown (jdbc/sent-type value opts))
+                  (or (vector? value) (seq? value) (set? value)) (not (accept/jsonb? value))))))
+
 (defn- literal-problem
   "The problem of literal x where a value of type t goes (an argument there takes t), of a column
    or expression of schema s: outside an enum's labels however it is sent, an :enum-literal;
@@ -801,14 +809,14 @@
   [registry ps opts]
   (for [{:keys [x chain clause]} (syntax/expression-nodes ps)
         :let [[kind n args :as parts] (when-not (or (syntax/comparison? x) (query/type-call registry chain x opts)) (syntax/call-parts x))]
-        :when (and kind (some #(or (syntax/param-key %) (sent-typed? % opts)) args))
+        :when (and kind (some #(or (syntax/param-key %) (sent-typed? % opts) (untyped-array? % opts)) args))
         :let [type-of #(:type (query/expression-type registry chain % opts))
               ;; a literal judged as an argument: the call's literals taken as its arguments are
               literal-ins (mapv #(if (sent-typed? % opts) :free (type-of %)) args)
               param-ins (mapv type-of args)
               os (query/reached registry opts parts)]
         [j a] (map-indexed vector args)
-        :when (or (syntax/param-key a) (sent-typed? a opts))
+        :when (or (syntax/param-key a) (sent-typed? a opts) (untyped-array? a opts))
         :let [all-ins (if (syntax/param-key a) param-ins literal-ins)
               [ins i] (if (and (syntax/rows-from? n args) (some #{clause} (concat syntax/from-keys syntax/join-keys [:join-by]))) [[(nth all-ins j)] 0] [all-ins j])
               ss (map #(query/named-type-schema registry opts %) (resolve/argument-types ins i os))
@@ -818,10 +826,11 @@
                                                    (if (seq ts) (for [x inss t ts] (assoc x j t)) inss))
                                                  inss))
                                   [ins] (range (count ins)))
-              refused? (and (syntax/param-key a) (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
+              refused? (and (or (syntax/param-key a) (untyped-array? a opts)) (not (:inline (:format opts))) (every? #(resolve/untyped-refused? kind % i os) sibling-ins))
               t (call-arg-type registry ss os i opts)]
-        :when (or refused? (and t (every? some? ss)))]
-    (cond refused? [a (or (some-> t typed-only) (jdbc/typed-where #(resolve/takes-at? ins i os %))) {:typed-only n}]
+        :when (if (untyped-array? a opts) refused? (or refused? (and t (every? some? ss))))]
+    (cond (untyped-array? a opts) [(literal-key a {:function n}) (jdbc/typed-where #(resolve/takes-at? ins i os %))]
+          refused? [a (or (some-> t typed-only) (jdbc/typed-where #(resolve/takes-at? ins i os %))) {:typed-only n}]
           (syntax/param-key a) [a t]
           :else [(literal-key a {:function n :schema (when (= 1 (count ss)) (first ss))}) t])))
 
@@ -1010,6 +1019,32 @@
    against the type an argument there takes (docs/queries.md#stricter-than-postgresql)."
   [registry body opts]
   (vec (keep (fn [[k t]] (literal-problem registry k t opts)) (:literals (query/once registry analysis body opts)))))
+
+(defn- row-literal?
+  "Whether x is a vector of values HoneySQL writes as a row, (?, ?): two values or more, no
+   keyword among them (a function's name, a column, an alias), the first no map (a clause) nor
+   vector (an expression an alias names)."
+  [x]
+  (and (vector? x) (next x) (not-any? keyword? x) (not (map? (first x))) (not (vector? (first x)))))
+
+(defn row-problems
+  "A :row-value problem of each operand or function argument written as a vector of values, which
+   HoneySQL writes as a row, (?, ?), which PostgreSQL takes compared with a row alone: a
+   composite ([:composite ...]), another row, a column of a row type."
+  [registry body opts]
+  (vec (distinct
+        (for [[_ _ _ ps] (query/once registry query/statement-positions body opts)
+              {:keys [x chain]} (syntax/expression-nodes ps)
+              :let [[kind n args] (syntax/call-parts x)]
+              :when kind
+              [i a] (map-indexed vector args)
+              :when (row-literal? a)
+              :let [others (keep-indexed #(when (not= i %1) %2) args)
+                    row? #(or (row-literal? %) (and (vector? %) (= :composite (first %)))
+                              (and (syntax/column-keyword? %)
+                                   (= :map (some-> (query/side-schema registry chain % opts) shape/non-null shape/kind))))]
+              :when (not (and (= :operators kind) (some row? others)))]
+          {:kind :row-value :function n :value a}))))
 
 (defn arg-problems
   "An :undetermined-type problem of each argument at a position PostgreSQL takes its type from

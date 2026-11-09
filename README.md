@@ -298,6 +298,7 @@ problems it reports:
 | `:duplicate-column` | columns of one label in the row a query returns, which `pgmalli-next.jdbc/builder` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |
+| `:row-value` | a vector of two values or more as an operand or a function's argument (`[:= :id [:any [1 2]]]`, `[:array_length [1 2] 1]`), which HoneySQL writes as a row, `(?, ?)`, compared with no row (a composite, another row, a column of a row type); with `:function` and `:value`. Write `[:lift v]` |
 | `:unlifted-value` | a map, or a vector of none or of two values or more (none alone into a column of a string type, which takes the row's text), written into a column (`:set`, `:values`, `:do-update-set`), which HoneySQL writes as a subquery or a row of parameters; with `:value` and the column's `:type` |
 | `:read-only-column` | a value written into a generated or identity ALWAYS column |
 | `:values-arity` | a `:values` row not as long as `:columns` |

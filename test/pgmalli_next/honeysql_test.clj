@@ -3780,3 +3780,47 @@
   (let [ok? #(m/validate (:x (args {:select [[[:cast :?x [:raw "integer[]"]] :z]]})) % {:registry registry})]
     (is (every? ok? [[1] ["1"] [:a]]) "an integer, or a text the input reads")
     (is (not-any? ok? [[true] [(.getBytes "a")] [1.5]]) "a Boolean, which a cast converts, the input reads not")))
+
+(deftest a-marked-document-or-a-set-within-is-no-array
+  (let [ok? (fn [q v] (m/validate (:x (args q)) v {:registry registry}))
+        any {:select [:id] :from [:users] :where [:= :id [:any :?x]]}]
+    (is (not (ok? any (accept/jsonb [1]))) "a document goes as jsonb, no array")
+    (is (not (ok? {:select [[[:cast :?x [:raw "text[]"]] :a]]} [#{"a"} #{"b"}])) "a set's order, no dimension")
+    (is (ok? any []))))
+
+(deftest an-array-cast-takes-what-its-element-types-input-reads-of-what-a-cast-takes
+  (let [ok? (fn [t v] (m/validate (:x (args {:select [[[:cast :?x [:raw t]] :a]]})) v {:registry registry}))]
+    (is (ok? "integer[]" [1N]) "a BigInt's text is an integer's")
+    (is (ok? "date[]" [(java.time.LocalDateTime/of 2020 1 1 0 0)]) "date's input reads a timestamp's text")
+    (is (not (ok? "date[]" [true])))))
+
+(deftest a-vector-of-values-in-an-expression-is-a-row-of-parameters
+  (let [kinds #(map :kind (check %))]
+    (doseq [q [{:select [:id] :from [:users] :where [:= :id [:any [1 2]]]}
+               {:select [[[:array_length [1 2] 1] :n]]}
+               {:select [:id] :from [:users] :where [:= :id [1 2]]}]]
+      (is (some #{:row-value} (kinds q)) (pr-str q)))
+    (doseq [q [{:select [:id] :from [:users] :where [:in :id [1 2]]}
+               {:select [:id] :from [:users] :where [:= [:composite :id :group_id] [1 2]]}
+               {:select [:id] :from [:users] :where [:= :id [:any [:lift [1 2]]]]}
+               {:select [[[1 2] :r]]}]]
+      (is (not-any? #{:row-value} (kinds q)) (str "a row PostgreSQL takes: " (pr-str q))))
+    (is (re-find #"write \[:lift \[1 2\]\]" (first (h/humanize (check {:select [:id] :from [:users] :where [:= :id [:any [1 2]]]})))))))
+
+(deftest an-untyped-array-to-a-polymorphic-argument-is-a-problem
+  (let [q {:select [[[:array_length [:lift [1 2]] 1] :n]]}]
+    (is (= [{:kind :literal-type :function "array_length" :value [1 2] :sent nil}] (check q)))
+    (is (re-find #"cannot tell: cast it" (first (h/humanize (check q)))))
+    (is (not-any? #(= [1 2] (:value %)) (check {:select [[[:array_length [:cast [:lift [1 2]] [:raw "bigint[]"]] [:cast 1 :integer]] :n]]}))
+        "cast, it is typed")))
+
+(deftest a-text-cast-to-json-is-json-text
+  (let [ok? (fn [t v] (m/validate (:x (args {:select [[[:cast :?x t] :j]]})) v {:registry registry}))]
+    (is (every? #(ok? :jsonb %) ["{}" "1" {:a 1} :true]) "what json's input reads")
+    (is (not (ok? :jsonb "x")) "a text of no JSON, which json's input refuses")
+    (is (ok? [:raw "jsonb[]"] ["{}"]))
+    (is (not (ok? [:raw "jsonb[]"] ["x"])) "an element too")))
+
+(deftest an-expression-and-its-alias-is-no-row-of-parameters
+  (is (not-any? #(= :row-value (:kind %))
+                (check {:with [[:c {:select [:u.id [:nick :n] [[:+ :id 1] :next]] :from [[:users :u]]}]] :select [:c.id :c.n :c.next] :from [:c]}))))

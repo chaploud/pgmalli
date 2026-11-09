@@ -78,7 +78,7 @@
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
-      :problems (as-written written (let [ps (concat (problems/check registry body opts) (args/arg-problems registry body opts) (args/literal-problems registry body opts))]
+      :problems (as-written written (let [ps (concat (problems/check registry body opts) (args/arg-problems registry body opts) (args/literal-problems registry body opts) (args/row-problems registry body opts))]
                                       (concat ps (problems/unsent-lifted body ps opts))))
       :tables (query/tables registry body opts)
       :document-columns (args/document-columns registry body opts)}))))
@@ -484,9 +484,12 @@
                          printed? (or (string? value) (number? value) (boolean? value) (coll? value) (uuid? value))
                          x (if printed? (shown value) (str "<the " (.getSimpleName (class value)) ">"))]
                      (cond
+                       (and (not sent) (= :unknown (jdbc/sent-type value {})) (not type))
+                       (str (shown value) (if to (str " goes to " to) " is sent") " as an array literal, untyped, whose type "
+                            (or to "PostgreSQL") " cannot tell: cast it, [:cast " (shown [:lift value]) " [:raw \"bigint[]\"]], of its type")
                        (and (not sent) (= :unknown (jdbc/sent-type value {})))
                        (str (shown value) (if to (str " goes to " to) " is sent") " as an array literal, untyped, which "
-                            (if type (str "the input of " type) "none but an array type's input") " does not read; "
+                            (str "the input of " type) " does not read; "
                             (if (and type (types/json? type))
                               (str "send it as a document, (pgmalli-next.jdbc/jsonb " (shown value) ")")
                               (str "send a value of " (or type "the type meant"))))
@@ -510,6 +513,9 @@
    :not-null-violation (fn [{:keys [table column clause]}]
                          (str "NULL written into " table "." (column-name column) ", which is NOT NULL; write a value"
                               (when (= :values clause) ", or [:default] where the column has a default")))
+   :row-value (fn [{:keys [function value]}]
+                (str (shown value) " goes to " function ": HoneySQL writes a vector of values there as " (in-a-row :vector)
+                     ", a row, which " function " takes not; write " (shown [:lift value]) ", sent as one parameter (an array)"))
    :unlifted-value (fn [{:keys [table column clause value type]}]
                      (str (shown value) " in " clause " for " table "." (column-name column) ": HoneySQL writes a "
                           (if (map? value) (str "map there as " (in-a-row :map)) (str "vector there as " (in-a-row :vector)))

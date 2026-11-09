@@ -36,7 +36,10 @@ untyped (an enum's label), an `Instant` as a `timestamptz` (`Instant/MAX` and `M
 `infinity` and `-infinity`), a `Duration` and a `Period` as an `interval` of their ISO-8601
 text. Every other value goes as pgjdbc's `setObject` sends it. A document whose top is an array
 goes as `jsonb` marked so, `(pgmalli-jdbc/jsonb [{:id 1}])`, which an argument of `jsonb` takes:
-a vector alone goes as an array. `sent` writes a document with jsonista (an `Instant` and
+a vector alone goes as an array. An application that writes in the query where a document goes
+(`[:cast :?doc :jsonb]`) marks the value of that argument where it binds it, and its callers pass
+a map or a vector as it is: `sent` reads no query, so what a position takes is the analysis's
+to tell. `sent` writes a document with jsonista (an `Instant` and
 java.time's dates and times as their ISO-8601 text, a `UUID`, a keyword and a `Character` as
 their text); one JSON cannot hold is an error: [two keys of one text](queries.md#stricter-json-keys),
 a nil key, a NaN, an infinity, a value of another class, a `PGobject`. It reads no registry and

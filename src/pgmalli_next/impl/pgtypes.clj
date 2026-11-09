@@ -9,6 +9,7 @@
             [malli.experimental.time :as time]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.json :as json]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -83,10 +84,13 @@
 
 (defn- dimensions
   "The lengths of the dimensions of x, [] of an element; ::ragged where the arrays of one
-   dimension are not all of one shape, which PostgreSQL's array input refuses."
+   dimension are not all of one shape, which PostgreSQL's array input refuses, or an element is
+   a set, whose order no dimension has."
   [x]
-  (if-not (nested? x)
-    []
+  (cond
+    (set? x) ::ragged
+    (not (nested? x)) []
+    :else
     (let [ds (distinct (map dimensions x))]
       (cond (empty? ds) [0]
             (or (next ds) (= ::ragged (first ds))) ::ragged
@@ -97,7 +101,7 @@
    multi-dimensional array) its innermost ones; nil where its dimensions are ragged."
   [v]
   (when-not (= ::ragged (dimensions (if (set? v) (vec v) v)))
-    (into [] (remove nested?) (rest (tree-seq #(or (set? %) (nested? %)) seq v)))))
+    (into [] (remove nested?) (rest (tree-seq nested? seq (vec v))))))
 
 (def ^:private array-schema
   "[:pg/array t]: an array argument: a vector or a seq of t's (of vectors, all as long, a
@@ -107,9 +111,9 @@
    {:type :pg/array
     :compile (fn [{sets? :pg/set} [child] options]
                (let [valid? (m/validator child options)]
-                 {:pred (fn [v] (boolean (and (or (vector? v) (seq? v) (and sets? (set? v)))
+                 {:pred (fn [v] (boolean (and (or (vector? v) (seq? v) (and sets? (set? v))) (not (accept/jsonb? v))
                                               (some->> (elements v) (every? valid?)))))
-                  :type-properties {:error/message (if sets? "should be a vector or a set of its elements" "should be a vector of its elements")}
+                  :type-properties {:error/message (if sets? "should be a vector, a seq or a set of its elements" "should be a vector or a seq of its elements")}
                   :min 1 :max 1}))}))
 
 (def int-ranges
@@ -202,6 +206,9 @@
    :nan-or-infinite #(and (double? %) (or (Double/isNaN %) (Double/isInfinite %)))
    :one-key-per-column #(and (map? %) (one-key-per-column? %))
    :scale-0 #(and (decimal? %) (zero? (.scale ^java.math.BigDecimal %)))
+   ;; a String's, a keyword's text json's input reads
+   :json-text #(when-let [s (cond (string? %) % (keyword? %) (accept/sent-text %))]
+                 (try (json/parse s) true (catch Exception _ false)))
    :none (constantly false)})
 
 (def ^:private is-schema

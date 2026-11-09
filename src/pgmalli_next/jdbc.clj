@@ -206,7 +206,7 @@
   [x]
   (cond (or (nil? x) (and (instance? PGobject x) (nil? (.getValue ^PGobject x)))) "NULL"
         (or (map? x) (accept/jsonb? x)) (quoted (.getValue ^PGobject (jsonb-object x)))
-        (or (sequential? x) (set? x)) (array-text x)
+        (or (vector? x) (seq? x) (set? x)) (array-text x)
         :else
         (let [t (cond (keyword? x) (accept/sent-text x)
                       ;; a domain's element as pgjdbc reads it
@@ -233,7 +233,7 @@
         (keyword? v) (untyped (accept/sent-text v))
         (or (instance? java.time.Duration v) (instance? java.time.Period v)) (interval-object v)
         (or (map? v) (accept/jsonb? v)) (jsonb-object v)
-        (or (sequential? v) (set? v)) (untyped (try (array-text v)
+        (or (vector? v) (seq? v) (set? v)) (untyped (try (array-text v)
                                                 (catch StackOverflowError _
                                                   (error/fail! :pgmalli.error/invalid-options (str "an array nested " accept/too-deep)
                                                                {:given (.getName (class v))}))))
