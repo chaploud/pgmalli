@@ -532,8 +532,12 @@
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"
                             " leave it out, or write [:default]"))
-   :written-otherwise (fn [{:keys [op dropped call column clause before param columns] :as p}]
+   :written-otherwise (fn [{:keys [op dropped call column clause before param columns order-by] :as p}]
                         (cond
+                          order-by
+                          (let [[x d & more] order-by]
+                            (str (pr-str order-by) " is written " (pr-str x) " " (str/upper-case (name d)) ", " (str/join " " (map pr-str more)) " dropped:"
+                                 " write the direction as one keyword, " (pr-str [x (keyword (str (name d) "-" (str/join "-" (map name more))))])))
                           (contains? p :lifted)
                           (str "[:lift v] of a collection or a map is written under :inline as its printed text ([1, 2], {a: 1}), no SQL:"
                                " write a list in the query ([:in :x [1 2]]), or send the value as an argument, without :inline")

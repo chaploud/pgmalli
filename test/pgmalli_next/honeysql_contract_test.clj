@@ -112,4 +112,5 @@
   ;; and problems' :written-otherwise of [:in x a b], which drops b
   (let [message (str honeysql " writes a row's values or :in otherwise: update in-a-row in src/pgmalli_next/honeysql.clj and written-otherwise in src/pgmalli_next/impl/problems.clj")]
     (is (= "INSERT INTO t (a, c, d, e) VALUES (b, (?, ?), (SELECT ?), (?))" (first (sql/format {:insert-into :t :values [{:a :b :c [1 2] :d {:select [1]} :e [1]}]}))) message)
-    (is (= ["a IN ?" 1] (sql/format-expr [:in :a 1 2])) message)))
+    (is (= ["a IN ?" 1] (sql/format-expr [:in :a 1 2])) message)
+    (is (= "SELECT a FROM t ORDER BY a DESC" (first (sql/format {:select [:a] :from [:t] :order-by [[:a :desc :nulls-last]]}))) message)))

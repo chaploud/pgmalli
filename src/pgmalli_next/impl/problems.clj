@@ -105,6 +105,11 @@
   "The directions HoneySQL writes after an ORDER BY item ([:score :desc])."
   #{:asc :desc :nulls-first :nulls-last :asc-nulls-first :asc-nulls-last :desc-nulls-first :desc-nulls-last})
 
+(defn- sort-item?
+  "Whether x is [expr direction ...], an ORDER BY item; HoneySQL writes no more than its first two."
+  [x]
+  (and (vector? x) (<= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x)))))))
+
 (defn- listed-expressions
   "The expressions x lists where HoneySQL writes a list of ORDER BY's items, each expr or [expr
    direction], no call: a window's :partition-by and :order-by ({:partition-by [:a]}, in OVER or
@@ -118,7 +123,7 @@
         (= :distinct (first x)) [(second x)]
         (and (= :array (first x)) (sequential? (second x))) (second x)
         (and (= :frame clause) (= 2 (count x)) (#{:preceding :following} (second x))) [(first x)]
-        (and (= 2 (count x)) (keyword? (second x)) (sort-directions (keyword (str/lower-case (name (second x)))))) [(first x)]))
+        (sort-item? x) [(first x)]))
 
 (defn- column-problems [registry sc stmt ps {:keys [format] :as opts}]
   (let [target (syntax/target-scope sc stmt opts)
@@ -389,32 +394,37 @@
 
 (defn- written-otherwise
   "{:kind :written-otherwise ...} of each call HoneySQL writes otherwise than its data reads:
-   [:in x a b], whose arguments past a it drops (x IN a), and a name of an operator it has not
+   [:in x a b], whose arguments past a it drops (x IN a), a name of an operator it has not
    registered ([:-> a b] without honey.sql.pg-ops), which it writes as a call of a function of
-   that name (->(a, b)) PostgreSQL has not, and a vector headed by a named parameter
-   ([:?x :?y]) an expression or a written value is, which it writes as a call (??X(?))."
+   that name (->(a, b)) PostgreSQL has not, a vector headed by a named parameter ([:?x :?y]) an
+   expression or a written value is, which it writes as a call (??X(?)), and an ORDER BY item of
+   more than a direction ([:a :desc :nulls-last]), which it writes a DESC."
   [body]
   (distinct
-   (for [x (concat (tree-seq syntax/branch? seq body)
-                   ;; a written value, as an operand
-                   (for [st (syntax/statements body) [_ v] (syntax/writes st (constantly nil))] [::written v]))
-         :when (and (vector? x) (keyword? (first x)))
-         :let [h (first x)
-               n (name h)]
-         p (concat
-            ;; an operand of an operator (=, IN) or a written value
-            (when (and (not (map-entry? x)) (or (= ::written h) (syntax/in-ops h) (syntax/operator-name? h)))
-              (for [a (rest x) :when (and (vector? a) (some->> (syntax/param-key (first a)) name (re-find #"^[A-Za-z_]")))]
-                {:kind :written-otherwise :param (first a)}))
-            [(when (and (syntax/in-ops h) (< 3 (count x)))
-              {:kind :written-otherwise :op h :dropped (- (count x) 3)})
-            ;; HoneySQL escapes a ? of a name as ??
-            (when (and (syntax/operator-name? h) (< 2 (count x))
-                       (some-> (try (first (sql/format-expr (into [h] (repeat (dec (count x)) ::x)))) (catch Exception _ nil))
-                               (str/starts-with? (str (str/replace n "?" "??") "("))))
-              {:kind :written-otherwise :op h :call true})])
-         :when p]
-     p)))
+   (concat
+    (for [x (tree-seq syntax/branch? seq body) :when (and (map? x) (contains? x :order-by))
+          o (syntax/vectorish (:order-by x)) :when (and (sort-item? o) (< 2 (count o)))]
+      {:kind :written-otherwise :order-by o})
+    (for [x (concat (tree-seq syntax/branch? seq body)
+                    ;; a written value, as an operand
+                    (for [st (syntax/statements body) [_ v] (syntax/writes st (constantly nil))] [::written v]))
+          :when (and (vector? x) (keyword? (first x)))
+          :let [h (first x)
+                n (name h)]
+          p (concat
+             ;; an operand of an operator (=, IN) or a written value
+             (when (and (not (map-entry? x)) (or (= ::written h) (syntax/in-ops h) (syntax/operator-name? h)))
+               (for [a (rest x) :when (and (vector? a) (some->> (syntax/param-key (first a)) name (re-find #"^[A-Za-z_]")))]
+                 {:kind :written-otherwise :param (first a)}))
+             [(when (and (syntax/in-ops h) (< 3 (count x)))
+                {:kind :written-otherwise :op h :dropped (- (count x) 3)})
+              ;; HoneySQL escapes a ? of a name as ??
+              (when (and (syntax/operator-name? h) (< 2 (count x))
+                         (some-> (try (first (sql/format-expr (into [h] (repeat (dec (count x)) ::x)))) (catch Exception _ nil))
+                                 (str/starts-with? (str (str/replace n "?" "??") "("))))
+                {:kind :written-otherwise :op h :call true})])
+          :when p]
+      p))))
 
 (def ^:private select-keys-of-a-query
   [:select :select-distinct :select-distinct-on :union :union-all :intersect :except :table])
@@ -466,12 +476,12 @@
     (for [st (syntax/statements body) :when (sequential? (:columns st)) k (:columns st) :when (string? k)]
       {:kind :written-otherwise :column k :columns true})
     (for [st (syntax/statements body)
-         k (concat (map first (syntax/writes st (constantly nil))) (vals (:written (syntax/insert-parts st))) (when (sequential? (:columns st)) (remove string? (:columns st))))
-         :when (or (keyword? k) (string? k))
-         :let [[text quoted?] (syntax/formatted-name k format false)]
-         ;; a string HoneySQL writes as another name (a.b as "a"."b", a-b as a_b under :quoted-snake)
-         :when (if (string? k) (not= k text) (and (not quoted?) (types/reserved-word? text)))]
-     {:kind :written-otherwise :column k}))))
+          k (concat (map first (syntax/writes st (constantly nil))) (vals (:written (syntax/insert-parts st))) (when (sequential? (:columns st)) (remove string? (:columns st))))
+          :when (or (keyword? k) (string? k))
+          :let [[text quoted?] (syntax/formatted-name k format false)]
+          ;; a string HoneySQL writes as another name (a.b as "a"."b", a-b as a_b under :quoted-snake)
+          :when (if (string? k) (not= k text) (and (not quoted?) (types/reserved-word? text)))]
+      {:kind :written-otherwise :column k}))))
 
 (defn unsent-lifted
   "{:kind :literal-type :value v :sent nil} of each [:lift v] of a class the one sending sends

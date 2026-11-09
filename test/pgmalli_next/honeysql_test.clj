@@ -3711,3 +3711,13 @@
     (is (= [] (problems {:select [[[:lift [1 2]] :x]]})) "a vector, sent as jsonb")
     (is (= ["(1 2) is sent as a parameter, which pgjdbc sends no PersistentList as; send a vector (jsonb) or a Java array (an array type)"]
            (h/humanize (problems {:select [[[:lift '(1 2)] :x]]}))))))
+
+(deftest an-order-by-item-of-more-than-a-direction-is-written-otherwise
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:a [:int {:pg/type "integer"}]]]}})
+        problems #(:problems (h/analyze reg %))]
+    (is (= [{:kind :written-otherwise :order-by [:a :desc :nulls-last]}] (problems {:select [:a] :from [:t] :order-by [[:a :desc :nulls-last]]})))
+    (is (= [{:kind :written-otherwise :order-by [:a :desc :nulls-last]}] (problems {:select [[[:over [[:rank] {:order-by [[:a :desc :nulls-last]]}]] :r]] :from [:t]})) "in a window, no column of it")
+    (is (= [] (problems {:select [:a] :from [:t] :order-by [[:a :desc-nulls-last]]})))
+    (is (= ["[:a :desc :nulls-last] is written :a DESC, :nulls-last dropped: write the direction as one keyword, [:a :desc-nulls-last]"]
+           (h/humanize (problems {:select [:a] :from [:t] :order-by [[:a :desc :nulls-last]]}))))))
+
