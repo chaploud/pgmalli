@@ -30,7 +30,10 @@ pgmalli types rows as one reading builds them and arguments as one sending sends
 (jdbc/execute! ds (sql/format q) jdbc-opts)
 ```
 
-`builder` is next.jdbc's `as-unqualified-maps`, each column read by its type as below. It
+`builder` takes the generated data too (`(builder (edn/read-string (slurp "api/pgmalli-next.edn")))`):
+an application that reads rows alone, without checking queries, loads no more than
+`pgmalli-next.jdbc` (no `pgmalli-next.core`, nor the analysis). `builder` is next.jdbc's
+`as-unqualified-maps`, each column read by its type as below. It
 extends no protocol: what your application extends `next.jdbc.result-set/ReadableColumn` with
 reads no column it builds. Pass it wherever your application reads rows.
 

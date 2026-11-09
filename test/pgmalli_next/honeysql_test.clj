@@ -3720,4 +3720,3 @@
     (is (= [] (problems {:select [:a] :from [:t] :order-by [[:a :desc-nulls-last]]})))
     (is (= ["[:a :desc :nulls-last] is written :a DESC, :nulls-last dropped: write the direction as one keyword, [:a :desc-nulls-last]"]
            (h/humanize (problems {:select [:a] :from [:t] :order-by [[:a :desc :nulls-last]]}))))))
-

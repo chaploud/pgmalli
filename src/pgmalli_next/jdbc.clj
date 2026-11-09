@@ -89,10 +89,14 @@
 (defn builder
   "The :builder-fn pgmalli types rows as: next.jdbc's as-unqualified-maps, each column read as
    docs/reading-rows.md says, an enum of registry (pgmalli-next.core/registry's) as a keyword.
+   registry may be the generated data itself, its enums read alike, which an application that
+   reads rows alone gives without loading pgmalli-next.core and the analysis.
 
-   (jdbc/execute! ds (sql/format q) {:builder-fn (pgmalli-next.jdbc/builder registry)})"
+   (jdbc/execute! ds (sql/format q) {:builder-fn (pgmalli-next.jdbc/builder registry)})
+   (pgmalli-next.jdbc/builder (clojure.edn/read-string (slurp \"api/pgmalli-next.edn\")))"
   [registry]
-  (let [enums (shape/enum-type-names registry)]
+  (let [generated? (and (map? registry) (contains? registry :registry) (contains? registry :schemas))
+        enums (shape/enum-type-names (if generated? (:registry registry) registry))]
     (with-meta (fn [^ResultSet rs opts]
                  (let [md (.getMetaData rs)
                        rd (readers md enums #(.getColumnLabel md (int %)))]

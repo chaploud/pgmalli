@@ -20,3 +20,7 @@
 
 (deftest generating-loads-no-honeysql
   (is (not-any? #(= "honey" (first (.split (name %) "\\."))) (reached 'pgmalli-next.generate))))
+
+(deftest reading-rows-loads-no-analysis
+  (let [r (reached 'pgmalli-next.jdbc)]
+    (is (not-any? r '[pgmalli-next.core pgmalli-next.impl.query pgmalli-next.impl.describe pgmalli-next.impl.registry clojure.test.check.generators]) (pr-str (sort r)))))

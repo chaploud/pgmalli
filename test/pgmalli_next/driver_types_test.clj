@@ -121,3 +121,9 @@
                          ((requiring-resolve 'pgmalli-next.impl.ir-jdbc/out) {:datasource (datasource)} "SELECT no_such_column FROM pg_class")))]
       (is (= :pgmalli.error/fault (:pgmalli/error (ex-data e))))
       (is (str/includes? (ex-message e) ((requiring-resolve 'pgmalli-next.impl.ir/needs)))))))
+
+(deftest a-builder-of-the-generated-data-reads-enums-as-of-its-registry
+  (let [b (requiring-resolve 'pgmalli-next.jdbc/builder)
+        data @(requiring-resolve 'pgmalli-next.sample/sample-data)]
+    (is (seq (:pgmalli-next.jdbc/builder (meta (b data)))))
+    (is (= (:pgmalli-next.jdbc/builder (meta (b (pgmalli/registry data)))) (:pgmalli-next.jdbc/builder (meta (b data)))))))
