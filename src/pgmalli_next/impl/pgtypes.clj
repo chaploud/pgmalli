@@ -147,46 +147,18 @@
 
 (def integer-schema (bounded-int :pg/integer))
 
-(def ^:private large-stacks
-  "The matches running on a large stack at once: each stack's memory is reserved as it grows, so an
-   unbounded number of long values validated together would exhaust it."
-  (java.util.concurrent.Semaphore. 2 true))
-
-(defn- found-on-a-large-stack
-  "(re-find p x) on a thread whose stack holds it: java.util.regex recurses once per character
-   for a regex such as ^([a-z0-9]|-)+$, past a thread's default stack on a long value that
-   PostgreSQL's regex engine matches. false where even that stack runs out: a value too long for
-   java.util.regex to tell is refused, never let through; so is one whose caller is interrupted
-   waiting (the interrupt kept for it to see). The thread holds its permit of large-stacks till it
-   ends, whoever stops waiting for it."
-  [p x]
-  (let [^java.util.concurrent.Semaphore sem large-stacks
-        result (promise)]
-    (try
-      (.acquire sem)
-      (let [t (Thread. nil #(try (deliver result (try (some? (re-find p x))
-                                                      (catch StackOverflowError _ false)
-                                                      (catch Throwable e e)))
-                                 (finally (.release sem)))
-                       "pgmalli-re" (* 256 1024 1024))]
-        (try (.start t) (catch Throwable e (.release sem) (throw e)))
-        (.join t)
-        (let [r @result] (if (instance? Throwable r) (throw r) r)))
-      (catch InterruptedException _
-        (.interrupt (Thread/currentThread))
-        false))))
-
 (def re-schema
-  "[:re re] as malli's, except a value java.util.regex runs out of stack on is matched on a
-   larger stack (found-on-a-large-stack) instead of throwing StackOverflowError, which malli,
-   catching Exception alone, lets through."
+  "[:re re] as malli's, except a value java.util.regex runs out of the caller's stack on (it
+   recurses once per character for a pattern such as ^([a-z0-9]|-)+$) is refused, never let
+   through, where malli's throws StackOverflowError. No larger stack: a JVM unwinding an overflow
+   of compiled frames takes native memory in proportion to the stack, which it keeps."
   (m/-simple-schema
    {:type :re
     :to-ast m/-to-value-ast
     :compile (fn [_ [re] _]
                (let [p (re-pattern re)]
                  {:pred (fn [x] (and (instance? CharSequence x)
-                                     (try (some? (re-find p x)) (catch StackOverflowError _ (found-on-a-large-stack p x)))))
+                                     (try (some? (re-find p x)) (catch StackOverflowError _ false))))
                   :min 1 :max 1}))}))
 
 (defn class-values

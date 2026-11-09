@@ -44,9 +44,10 @@ empty scalar subquery; its documentation calls this a defect not to rely on.
 
 pgmalli's own schema types are in the registry too: `:pg/bytes`, `:pg/smallint`,
 `:pg/integer`, `:pg/array` and `:pg/class`. Some of malli's are replaced: `:string` counts
-characters (code points, as `length` does; malli's counts UTF-16 units), `:double` with `:pg/type "real"` keeps to a real's range, `:re` runs a match that
-would overflow the thread's stack (a long value) on a thread of a larger stack, at most two at a
-time, where malli's throws StackOverflowError, and refuses a value too long even for that stack; and malli.experimental.time's types (`:time/instant` ...) carry an error
+characters (code points, as `length` does; malli's counts UTF-16 units), `:double` with `:pg/type "real"` keeps to a real's range, `:re` refuses a value whose match
+overflows the thread's stack, where malli's throws StackOverflowError (java.util.regex recurses
+once per character on a repeated alternation, `^([a-z0-9]|-)+$`: write it as a character class,
+`^[a-z0-9-]+$`, for a long value); and malli.experimental.time's types (`:time/instant` ...) carry an error
 message (`"should be a java.time.Instant"`), which malli.error has none of.
 
 ## Properties

@@ -138,15 +138,14 @@
         s (m/schema [:map [:a [:re {:error/message "m"} "x+"]]] {:registry reg})]
     (is (= (m/form s) (m/form (m/from-ast (m/ast s) {:registry reg}))))))
 
-(deftest a-regex-running-out-of-the-threads-stack-matches-on-a-larger-one
+(deftest a-regex-running-out-of-the-callers-stack-refuses-the-value
   (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
         long-value (apply str (repeat 200000 "a"))]
     (is (instance? StackOverflowError (on-small-stack #(re-find #"^([a-z0-9]|-)+$" long-value))) "the thread's own stack runs out")
-    (is (true? (on-small-stack #(m/validate s long-value))))
-    (is (false? (on-small-stack #(m/validate s (str long-value "!")))))
-    (let [too-long (apply str (repeat 3000000 "a"))]
-      (is (every? false? (pmap (fn [v] (on-small-stack #(m/validate s v))) (repeat 6 too-long)))
-          "a value that matches, too long for the larger stack too, is refused, several at once"))))
+    (is (false? (on-small-stack #(m/validate s long-value))) "refused, never let through")
+    (is (true? (on-small-stack #(m/validate s "ab-c"))))
+    (is (true? (on-small-stack #(m/validate (m/schema [:re "^[a-z0-9-]+$"] {:registry (pgmalli/registry {:registry {}})}) long-value)))
+        "a character class, which does not recurse, of any length")))
 
 (deftest a-default-pgmalli-cannot-parse-is-its-sql-and-the-column-optional-in-insert
   (let [reg (registry-of {} [{:name "c" :position 1 :data_type "text" :is_nullable false :default_value "CASE WHEN"}])
@@ -192,26 +191,6 @@
         s (m/schema [:string {:max 1}] {:registry reg})]
     (is (m/validate s "𝟘") "one code point, two UTF-16 units")
     (is (not (m/validate s "ab")))))
-
-(deftest a-long-value-whose-caller-is-interrupted-is-refused-the-interrupt-kept
-  (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
-        r (on-small-stack #(do (.interrupt (Thread/currentThread))
-                               [(m/validate s (apply str (repeat 200000 "a"))) (Thread/interrupted)]))]
-    (is (= [false true] r))))
-
-(deftest a-large-stack-is-held-by-its-thread-whoever-stops-waiting-for-it
-  (let [s (m/schema [:re "^([a-z0-9]|-)+$"] {:registry (pgmalli/registry {:registry {}})})
-        big (apply str (repeat 1000000 "a"))
-        permits (.availablePermits ^java.util.concurrent.Semaphore @(requiring-resolve 'pgmalli-next.impl.pgtypes/large-stacks))
-        peak (atom 0)
-        watching (future (dotimes [_ 400]
-                           (swap! peak max (count (filter #(= "pgmalli-re" (.getName ^Thread %)) (keys (Thread/getAllStackTraces)))))
-                           (Thread/sleep 2)))]
-    ;; each caller on a small stack, which the value overflows whatever the JVM's default
-    (dotimes [_ 20] (let [t (Thread. nil #(m/validate s big) "small-stack" (* 256 1024))] (.start t) (Thread/sleep 5) (.interrupt t)))
-    @watching
-    (is (pos? @peak) "watched while they run")
-    (is (<= @peak permits) "callers interrupted waiting leave no more large stacks running than its permits")))
 
 (deftest a-numeric-of-a-precision-generates-within-it-of-its-scale
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
