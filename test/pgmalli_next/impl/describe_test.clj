@@ -32,7 +32,7 @@
 (deftest a-number-classs-predicate-reads-as-its-type-and-null-of-a-union-marks-the-union
   (is (= "bigint | numeric | float8 | real" (pgmalli/describe registry [:or [:int {:pg/type "bigint"}] 'decimal? 'integer? :double 'float?])))
   (is (= "(date | inst)?" (pgmalli/describe registry [:maybe [:or [:time/local-date {:pg/type "date"}] 'inst?]])))
-  (is (= "any[] | org.postgresql.util.PGobject" (pgmalli/describe registry [:or [:pg/array :any] [:fn {:pg/class "org.postgresql.util.PGobject"} any?]])))
+  (is (= "any[] | org.postgresql.util.PGobject" (pgmalli/describe registry [:or [:pg/array :any] [:pg/instance {:pg/class "org.postgresql.util.PGobject"}]])))
   (is (= "real: 1.5 | 2.5" (pgmalli/describe registry [:enum {:pg/type "real"} 1.5 2.5 1.5M 2.5M]))))
 
 (deftest a-type-of-spaces-is-described-as-a-cast-writes-it

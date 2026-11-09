@@ -240,11 +240,13 @@
 
 (defn kind
   "The kind of value t takes: its head, through [:and t ...]; a
-   function schema ([:fn f]) is a kind of its own."
+   predicate's schema ([:fn f], [:pg/instance ...], [:pg/is ...]) is a kind of its own."
   [t]
   (case (head t)
     :and (kind (and-base t))
-    :fn t
+    (:fn :pg/instance :pg/is) t
+    ;; a whole number of a class: a BigDecimal's decimal?, a BigInt's and a BigInteger's integer?
+    :pg/whole (if (= "java.math.BigDecimal" (:pg/class (props t))) 'decimal? 'integer?)
     (head t)))
 
 (defn value-classes

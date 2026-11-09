@@ -152,7 +152,10 @@ types it.
 
 `:args` is `{arg schema}` for every named parameter of a query (`:?id`, `[:param :id]`),
 keyed as in `sql/format`'s `:params`, as the one sending sends them
-([what your application sends](#what-your-application-sends)):
+([what your application sends](#what-your-application-sends)). A schema, and `:row`'s, is data
+alone: printed, it reads back equal (`clojure.edn/read-string`), a predicate one of the
+registry's types (`[:pg/instance {:pg/class "org.postgresql.util.PGobject"}]`), so an
+application may cache an analysis by it. Validate with the registry, which holds those types:
 
 ```clojure
 (:args (h/analyze registry {:select [:id]

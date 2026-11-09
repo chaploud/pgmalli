@@ -235,7 +235,7 @@
           (and (= :ref (shape/head own)) (not (shape/generated-name? (last own)))
                (some->> (get (::query/schemas r) (last own)) shape/kind (= (shape/kind t))))
           (shape/merge-props t {:gen/schema [:ref (last own)]})
-          (and (= :fn h) (not-any? #(= "gen" (namespace %)) (keys (shape/props t)))) nil
+          (and (#{:fn :pg/instance :pg/is} h) (not-any? #(= "gen" (namespace %)) (keys (shape/props t)))) nil
           (and (= :pg/class h) (empty? (pgtypes/class-values (shape/entries t)))) nil
           ;; held to classes ([:and float? [:pg/class "java.lang.Float"]]): those classes' values
           (and (= :and h) (some #(= :pg/class (shape/head %)) (shape/entries t)))
@@ -247,14 +247,14 @@
           ;; a numeric(p, s)'s or a real's alternative of a generator of its own (an inlined literal's),
           ;; which it bounds not: its own values, of own's hints, are generated
           (and (let [cp (shape/column-props own)] (or (:pg/precision cp) (types/single-precision? (shape/type-name cp))))
-               (= :and h) (seq (select-keys (shape/props t) gen-keys)))
+               (or (= :pg/whole h) (and (= :and h) (seq (select-keys (shape/props t) gen-keys)))))
           nil
           ;; of alternatives one of which is any value, the type is untold: none generated
           (= :or h) (when-not (some #(#{:any :some} (shape/head %)) (shape/alternatives t))
                       (some-> (seq (keep #(generated-values r own %) (shape/alternatives t))) (shape/either t)))
           ;; of another kind than own's, a check malli generates for by retrying may never hold (a
           ;; BigDecimal of scale 0): its own kind's values are generated
-          (and (= :and h) (not= k (shape/kind own)) (some #(= :fn (shape/head %)) (rest (shape/entries t)))) nil
+          (and (= :and h) (not= k (shape/kind own)) (some #(#{:fn :pg/is :pg/keyword-text} (shape/head %)) (rest (shape/entries t)))) nil
           (= :and h) (when-let [b (generated-values r own (shape/and-base t))] (shape/update-and-base t (constantly b)))
           (= :pg/array h)
           ;; of elements but NULL, an array of NULLs alone telling nothing of its type

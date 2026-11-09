@@ -729,6 +729,8 @@
             (#{:vector :sequential :set} h) (let [kept (select-keys p [:pg/type :pg/domain])]
                                               (if (seq kept) [h kept (loose (last t))] [h (loose (last t))]))
             (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
+            ;; a predicate's schema, its properties what it is
+            (#{:pg/instance :pg/is :pg/whole} h) t
             ;; a shape's pattern, a bound as a length is
             (= :re h) (if-let [pg (:pg/type p)] [:string {:pg/type pg}] :string)
             (seq children) t

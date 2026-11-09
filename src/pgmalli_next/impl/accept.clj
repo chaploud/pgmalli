@@ -42,7 +42,7 @@
 (defn jsonb-vector
   "The schema of a jsonb document of e's whose top is an array: a vector of them jsonb marks."
   [e]
-  [:and [:vector e] [:fn {:error/message "should be (pgmalli-next.jdbc/jsonb v): a vector goes as an array"} jsonb?]])
+  [:and [:vector e] [:pg/is {:pg/pred :jsonb-marked :error/message "should be (pgmalli-next.jdbc/jsonb v): a vector goes as an array"}]])
 
 (def too-deep
   "Why a document nested past the stack is no document the one sending writes."
@@ -76,7 +76,7 @@
   (filterv some? [[Long "bigint" :int] [Integer "integer" :int] [Short "smallint" :int] [Byte "smallint" :int]
    [java.math.BigDecimal "numeric" 'decimal?] [clojure.lang.BigInt "numeric" 'integer?] [java.math.BigInteger "numeric" 'integer?]
    [Double "double precision" :double] [Float "real" [:and 'float? [:pg/class "java.lang.Float"]]]
-   [Boolean "boolean" :boolean] [String "character varying" :string] [Character "character varying" [:and {:gen/schema [:int {:min 32 :max 126}] :gen/fmap char} 'char?]]
+   [Boolean "boolean" :boolean] [String "character varying" :string] [Character "character varying" [:and {:gen/elements [\a \Z \0 \space \~]} 'char?]]
    [java.util.UUID "uuid" :uuid] [bytes-class "bytea" 'bytes?] [java.time.LocalDate "date" :time/local-date]
    [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]
    [java.time.LocalDateTime "timestamp without time zone" :time/local-date-time]

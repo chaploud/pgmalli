@@ -10,7 +10,6 @@
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.memo :as memo]
-            [pgmalli-next.impl.pgtypes :as pgtypes]
             [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.resolve :as resolve]
@@ -77,7 +76,7 @@
         bounds (cond-> {} min (assoc :min min) max (assoc :max max))]
     (cond (types/single-precision? t) (if (and (= :double (shape/head a)) (types/single-precision? (:pg/type (shape/props a))))
                          a
-                         [:and a [:fn {:error/message "should be within a real's range"} pgtypes/real-number?]])
+                         [:and a [:pg/is {:pg/pred :real-number :error/message "should be within a real's range"}]])
           (empty? bounds) a
           (#{:int :double} (shape/head a)) (if (vector? a) (update a 1 merge bounds) [a bounds])
           :else (into [:and a] (remove nil? [(when min [:>= min]) (when max [:<= max])])))))
@@ -86,11 +85,10 @@
   "Alternative a of a value sent untyped, as its text (a keyword's, :n/a as n/a), held to what own,
    a column's type, takes of a string where a shape or a domain checks it ([:and :string
    ...]), or a \"char\" its one byte: the text is the value the column gets."
-  [a own registry]
+  [a own]
   (let [checked (filter #(and (or (#{:and :re} (shape/head %)) (:pg/one-byte (shape/props %))) (= :string (shape/value-kind %))) (shape/alternatives (shape/non-null own)))]
     (if (and (seq checked) (= :keyword (shape/kind a)))
-      (let [valid? (m/validator (shape/either checked nil) (malli-options registry))]
-        [:and a [:fn {:error/message "should be a keyword whose text the column's string takes"} #(valid? (accept/sent-text %))]])
+      [:and a [:pg/keyword-text {:error/message "should be a keyword whose text the column's string takes"} (shape/either checked nil)]]
       a)))
 
 (defn- arrays-sent
@@ -180,8 +178,8 @@
 (def ^:private numeric-special
   "A Double NaN or infinity, which numeric holds as it is (no other Double), generated NaN alone: a
    numeric(p, s), whose typmod the registry keeps not, holds no infinity."
-  [:and {:gen/elements [##NaN]} [:double {:pg/type "numeric"}]
-   [:fn {:error/message "should be a Double NaN or infinity alone, which numeric holds as it is"} #(or (Double/isNaN %) (Double/isInfinite %))]])
+  [:and {:gen/schema [:pg/is {:pg/pred :nan-or-infinite}]} [:double {:pg/type "numeric"}]
+   [:pg/is {:pg/pred :nan-or-infinite :error/message "should be a Double NaN or infinity alone, which numeric holds as it is"}]])
 
 (defn- one-per-kind
   "Alternatives as, of a kind the first (shape/distinct-kinds); under sql/format's :inline, as an
@@ -232,7 +230,7 @@
               (for [p sent
                     a (cond (= :unknown p)
                             ;; under :inline, a String or a UUID is a quoted literal, which every type's input reads
-                            (map #(text-held % own registry) (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/takes? t :unknown % (if (= :cast context) :cast held-in)))))
+                            (map #(text-held % own) (jdbc/sent-as opts :unknown #(or (:inline (:format opts)) (accept/takes? t :unknown % (if (= :cast context) :cast held-in)))))
                             ;; a literal is of its type by its value (jdbc/inline-classes): those values alone
                             (:inline (:format opts)) (map unlabel (jdbc/sent-as opts p))
                             :else (shape/alternatives (unlabel (query/loose (query/driver-schema registry jdbc/column-write-type (types/type-schema p) opts)))))
@@ -562,14 +560,9 @@
           ;; the array input's text is in braces, after its dimensions where it names them ([1:2]={1,2})
           ;; each element as a value of the element type's column, which its schema names not (a mood[]'s [:ref mood])
           (types/element p) [:or [:sequential (query/nullable (json-field-type registry (shape/merge-props (last s) {:pg/type (types/element p)}) opts))]
-                             [:re {:error/message "should be an array's text, {1,2}"} #"(?s)^\s*(\[[^\]]*\]\s*=\s*)?\{.*\}\s*$"]]
+                             [:re {:error/message "should be an array's text, {1,2}"} "(?s)^\\s*(\\[[^\\]]*\\]\\s*=\\s*)?\\{.*\\}\\s*$"]]
           :else (let [t (accepted-type registry s :json opts)]
                   (shape/either (remove #{jdbc/pg-object} (shape/alternatives t)) t)))))
-
-(defn- one-key-per-column?
-  "Whether document m holds no column's key both as a keyword and as a string."
-  [m]
-  (not-any? #(and (keyword? %) (contains? m (name %))) (keys m)))
 
 (defn- populate-documents
   "[{:arg :schema :columns} ...] of the documents of the calls populate-call tells. schema, of
@@ -660,7 +653,7 @@
                        (into [:map {:closed true}]
                              (for [[c t req?] fields, k [(keyword c) c]]
                                (jdbc/row-entry k {:optional true} t (not req?))))
-                       [:fn {:error/message "should hold a column's key once, as a keyword or a string"} one-key-per-column?]]
+                       [:pg/is {:pg/pred :one-key-per-column :error/message "should hold a column's key once, as a keyword or a string"}]]
                       (into (for [[c t req?] fields :when req?]
                               [:or [:map [(keyword c) t]] [:map [c t]]])))
               [kept dropped] (if set? [:vector :map-of] [:map-of :vector])]]
@@ -846,7 +839,7 @@
     (cond (#{:map-of} k) [:map-of :any :any]
           (#{:sequential :vector :set} k) [k :any]
           (= :tuple k) [:fn vector?]
-          (vector? k) (when (= :fn (first k)) k)
+          (vector? k) (when (#{:fn :pg/instance :pg/is} (first k)) k)
           (or (keyword? k) (symbol? k)) k)))
 
 (defn- enum-head
@@ -864,7 +857,7 @@
            props (shape/props x)]
        (cond (= :pg/array (shape/head x)) #{::array}
              (= :enum (shape/kind x)) (set (map #(.getName (class %)) (shape/entries (shape/and-base x))))
-             (and (= :fn (shape/head x)) (:pg/class props)) #{(:pg/class props)}
+             (= :pg/instance (shape/head x)) #{(:pg/class props)}
              :else (if-let [b (bare x)]
                      (try (set (for [[c v] accept/values :when (m/validate b v {:registry registry/base})] (.getName ^Class c)))
                           (catch Exception _ ::untold))

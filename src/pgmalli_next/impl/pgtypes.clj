@@ -8,6 +8,7 @@
             [malli.core :as m]
             [malli.experimental.time :as time]
             [pgmalli-next.impl.accept :as accept]
+            [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
 
@@ -153,6 +154,77 @@
                                      (seq (class-values names)) (assoc :gen/gen (gen/elements (class-values names))))
                   :min 1 :max Long/MAX_VALUE}))}))
 
+;; schema types of the predicates an argument's type holds a value to, data alone, so that a
+;; type printed reads back equal (an application keys a cache by it)
+
+(defn instance-named?
+  "Whether x is an instance of the class named n: its class's, a superclass's or an interface's,
+   by name (pgjdbc's PGobject need not be loaded)."
+  [n x]
+  (boolean (and (some? x) (some #(= n (.getName ^Class %)) (cons (class x) (supers (class x)))))))
+
+(def ^:private instance-schema
+  "[:pg/instance {:pg/class n}]: an instance of the class named n (instance-named?); under
+   {:pg/of t}, a PGobject of type t, which a String is not."
+  (m/-simple-schema
+   {:type :pg/instance
+    :compile (fn [{n :pg/class t :pg/of} _ _]
+               {:pred #(instance-named? n %)
+                :type-properties {:error/fn (fn [{:keys [value]} _]
+                                              (if t
+                                                (str "should be a PGobject of type " (types/typname t)
+                                                     (when (string? value) (str " (a String goes as varchar, which " t " does not take)")))
+                                                (str "should be " (error/named n))))}
+                :min 0 :max 0})}))
+
+(defn one-key-per-column?
+  "Whether document m holds no column's key both as a keyword and as a string."
+  [m]
+  (not-any? #(and (keyword? %) (contains? m (name %))) (keys m)))
+
+(def ^:private predicates
+  "The predicates of [:pg/is {:pg/pred k}], by k."
+  {:jsonb-marked accept/jsonb?
+   :real-number #(and (number? %) (real-number? %))
+   :nan-or-infinite #(and (double? %) (or (Double/isNaN %) (Double/isInfinite %)))
+   :one-key-per-column #(and (map? %) (one-key-per-column? %))
+   :scale-0 #(and (decimal? %) (zero? (.scale ^java.math.BigDecimal %)))
+   :none (constantly false)})
+
+(def ^:private is-schema
+  "[:pg/is {:pg/pred k}]: a value predicates' k takes; its message the :error/message given. A
+   NaN, which equals nothing, is generated here, as no value of a form can be."
+  (m/-simple-schema
+   {:type :pg/is
+    :compile (fn [{k :pg/pred} _ _]
+               {:pred (or (predicates k) (throw (ex-info (str "no predicate " k) {:pred k})))
+                :type-properties (cond-> {} (= :nan-or-infinite k) (assoc :gen/gen (gen/return ##NaN)))
+                :min 0 :max 0})}))
+
+(def ^:private keyword-text-schema
+  "[:pg/keyword-text t]: a keyword whose text, as the one sending sends it (accept/sent-text), t
+   takes."
+  (m/-simple-schema
+   {:type :pg/keyword-text
+    :compile (fn [_ [t] options]
+               (let [valid? (m/validator t options)]
+                 {:pred #(and (keyword? %) (valid? (accept/sent-text %)))
+                  :min 1 :max 1}))}))
+
+(def ^:private whole-schema
+  "[:pg/whole {:pg/class n :min lo :max hi}]: a whole number of the class named n (a BigInt, a
+   BigInteger, a BigDecimal of scale 0) from lo to hi, generated so."
+  (m/-simple-schema
+   {:type :pg/whole
+    :compile (fn [{n :pg/class lo :min hi :max} _ _]
+               (let [of ({"clojure.lang.BigInt" bigint "java.math.BigInteger" biginteger "java.math.BigDecimal" bigdec} n)]
+                 {:pred #(and (instance-named? n %) (or (not (decimal? %)) (zero? (.scale ^java.math.BigDecimal %)))
+                              (<= lo % hi))
+                  :type-properties {:error/message (str "should be " (error/named n) " from " lo " to " hi
+                                                        (when (= "java.math.BigDecimal" n) ", of scale 0 (1M), which sql/format's :inline writes as an integer"))
+                                    :gen/gen (gen/fmap of (gen/large-integer* {:min lo :max hi}))}
+                  :min 0 :max 0}))}))
+
 (defn- with-message
   "Schema type t as it is, with an :error/message: malli.error has none of malli.experimental.time's,
    which me/humanize then calls an unknown error."
@@ -173,4 +245,5 @@
   (merge time-schemas
          {:re re-schema :string string-schema :double double-schema :pg/bytes bytes-schema
           :pg/smallint smallint-schema :pg/integer integer-schema :pg/array array-schema
-          :pg/class class-schema}))
+          :pg/class class-schema :pg/instance instance-schema :pg/is is-schema
+          :pg/keyword-text keyword-text-schema :pg/whole whole-schema}))

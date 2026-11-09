@@ -296,7 +296,8 @@
         (is (nil? (pgjdbc/inline-type v)) (str (pr-str v) ": " (first (sql/format-expr [:inline v]))))))))
 
 (deftest inline-classes-type-each-value-as-inline-type-does
-  (let [types-of (fn [v] (set (for [[c t s] pgjdbc/inline-classes :when (and (instance? c v) (m/validate s v))] t)))]
+  (let [reg (pgmalli/registry {:registry {}})
+        types-of (fn [v] (set (for [[c t s] pgjdbc/inline-classes :when (and (instance? c v) (m/validate s v {:registry reg}))] t)))]
     (doseq [v inlined]
       (is (contains? (types-of v) (pgjdbc/inline-type v)) (pr-str v)))
     (doseq [v not-inlined]

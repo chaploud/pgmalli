@@ -54,16 +54,10 @@
 
 ;;; what an application sends
 
-(defn- class-fn
-  "[:fn] of the values of class name n, pred telling them."
-  [n pred]
-  [:fn {:pg/class n :error/message (str "should be " (error/named n))} pred])
-
-(def ^:private class-schema
-  ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
-  (memo/bounded (fn [^Class c]
-             (or (get (accept/row-of c accept/classes) 2)
-                 (class-fn (.getName c) (fn [x] (instance? c x)))))))
+(defn- class-schema
+  "The schema of the values of class c: its row's, else an instance of it by name."
+  [^Class c]
+  (or (get (accept/row-of c accept/classes) 2) [:pg/instance {:pg/class (.getName c)}]))
 
 (def ^:private jdbc-read
   "The keys of :jdbc pgmalli reads."
@@ -189,18 +183,15 @@
    each type of inline-integers within its range (a schema tells no class: an Integer's too), and as numeric where none holds it; a
    BigDecimal of scale 0 (1M, written 1) as an integer alike, another numeric; a Double and a
    Float numeric, finite (inline-finite); a boolean a boolean."
-  (let [whole [:fn {:error/message "should be of scale 0 (1M), which sql/format's :inline writes as an integer"} #(zero? (.scale ^java.math.BigDecimal %))]
-        ranged (fn [c base f]
+  (let [ranged (fn [^Class c base]
                  (for [t inline-integers :let [[lo hi] (:range (types/types t))]]
-                   [c t (if (= :int base)
-                          [:int {:min lo :max hi}]
-                          (into [:and {:gen/schema [:int {:min lo :max hi}] :gen/fmap f} base] (concat (when (= 'decimal? base) [whole]) [[:>= lo] [:<= hi]])))]))
+                   [c t (if (= :int base) [:int {:min lo :max hi}] [:pg/whole {:pg/class (.getName c) :min lo :max hi}])]))
         rows {String [[String :unknown :string]]
               java.util.UUID [[java.util.UUID :unknown :uuid]]
-              Long (ranged Long :int nil) Integer (ranged Integer :int nil) Short (ranged Short :int nil) Byte (ranged Byte :int nil)
-              clojure.lang.BigInt (concat (ranged clojure.lang.BigInt 'integer? bigint) [[clojure.lang.BigInt "numeric" 'integer?]])
-              java.math.BigInteger (concat (ranged java.math.BigInteger 'integer? biginteger) [[java.math.BigInteger "numeric" 'integer?]])
-              java.math.BigDecimal (concat (ranged java.math.BigDecimal 'decimal? bigdec) [[java.math.BigDecimal "numeric" 'decimal?]])
+              Long (ranged Long :int) Integer (ranged Integer :int) Short (ranged Short :int) Byte (ranged Byte :int)
+              clojure.lang.BigInt (concat (ranged clojure.lang.BigInt 'integer?) [[clojure.lang.BigInt "numeric" 'integer?]])
+              java.math.BigInteger (concat (ranged java.math.BigInteger 'integer?) [[java.math.BigInteger "numeric" 'integer?]])
+              java.math.BigDecimal (concat (ranged java.math.BigDecimal 'decimal?) [[java.math.BigDecimal "numeric" 'decimal?]])
               Double [[Double "numeric" (inline-finite :double)]]
               Float [[Float "numeric" (inline-finite 'float?)]]
               Boolean [[Boolean "boolean" :boolean]]}]
@@ -326,13 +317,12 @@
 (def pg-object
   "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
    the type its getType names, which is known at run time alone."
-  (class-fn "org.postgresql.util.PGobject"
-            (fn [x] (boolean (some #(= "org.postgresql.util.PGobject" (.getName ^Class %)) (take-while some? (iterate #(.getSuperclass ^Class %) (class x))))))))
+  [:pg/instance {:pg/class "org.postgresql.util.PGobject"}])
 
 (def sqlxml
   "A java.sql.SQLXML (pgjdbc's PgSQLXML, which it reads an xml as), by name: pgjdbc sends it as
    xml."
-  (class-fn "java.sql.SQLXML" (fn [x] (boolean (some #(= "java.sql.SQLXML" (.getName ^Class %)) (supers (class x)))))))
+  [:pg/instance {:pg/class "java.sql.SQLXML"}])
 
 (defn value-kind
   "The kind of alternative a as a value: pgmalli's integer types (:pg/integer) an :int, as malli's is."
@@ -349,13 +339,11 @@
                                           " does not resolve to " a "), or the argument cast in the query: [:cast <the argument> [:raw \"" a "\"]]")
                       :pgmalli/describe (str "PGobject of " a)}))
 
-(defn- none [_] false)
-
 (defn inline-none
-  "[:fn] that takes no value, as sql/format's :inline writes none where it goes as a literal
+  "A schema that takes no value, as sql/format's :inline writes none where it goes as a literal
    PostgreSQL takes: why says so."
   [why]
-  [:fn {:error/message (str "should be no value: " why)} none])
+  [:pg/is {:pg/pred :none :error/message (str "should be no value: " why)}])
 
 (declare array-type*)
 
@@ -524,16 +512,11 @@
                                   [pg-object]))
                 :any))
 
-(def typed-pg-object
+(defn typed-pg-object
   "pg-object of type t: what it says where a value of t is refused, why a String is where one is
-   given. Memoized: a type's schema of one call equals the next's."
-  (memo/bounded
-   (fn [t]
-     (shape/merge-props (update pg-object 1 dissoc :error/message)
-                        {:error/fn (fn [{:keys [value]} _]
-                                     (str "should be a PGobject of type " (types/typname t)
-                                          (when (string? value) (str " (a String goes as varchar, which " t " does not take)"))))
-                         :pgmalli/describe (str "PGobject of " (types/short-name t))}))))
+   given."
+  [t]
+  (shape/merge-props pg-object {:pg/of t :pgmalli/describe (str "PGobject of " (types/short-name t))}))
 
 (defn column-write-type
   "column-write-type*: a column pgjdbc returns as a PGobject (json, jsonb, citext, bit(n > 1), bit varying)

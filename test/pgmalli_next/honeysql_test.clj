@@ -788,9 +788,9 @@
 
 (deftest an-alternative-is-held-to-its-columns-range
   (let [t (:x (args {:update :users :set {:score [:cast :?x :integer]} :where [:= :id 1]}))]
-    (is (m/validate t 3M))
-    (is (not (m/validate t 1000000000000M)) "beyond an integer's range, PostgreSQL refuses it")
-    (is (not (m/validate t 1.0E12)))))
+    (is (m/validate t 3M {:registry registry}))
+    (is (not (m/validate t 1000000000000M {:registry registry})) "beyond an integer's range, PostgreSQL refuses it")
+    (is (not (m/validate t 1.0E12 {:registry registry})))))
 
 (deftest only-a-number-is-held-to-a-number-columns-range
   (is (m/validate (:x (args {:select [[[:cast :?x :integer] :n]]} {:schema "sample"})) "5" {:registry registry})
@@ -1621,8 +1621,8 @@
                                                             [:mask [:maybe [:string {:pg/type "bit"}]]]
                                                             [:doc [:any {:pg/type "jsonb"}]]
                                                             [:note [:string {:pg/type "text"}]]
-                                                            [:born [:maybe [inst? {:pg/type "date"}]]]
-                                                            [:seen [:maybe [inst? {:pg/type "timestamp with time zone"}]]]
+                                                            [:born [:maybe ['inst? {:pg/type "date"}]]]
+                                                            [:seen [:maybe ['inst? {:pg/type "timestamp with time zone"}]]]
                                                             [:paths [:maybe [:vector {:pg/type "text[]"} :string]]]]}})
         check #(:problems (h/analyze reg %1 (merge {:schema "public"} %2)))]
     (testing "a type of types but the string ones"
@@ -2007,7 +2007,7 @@
 
 (deftest an-array-column-of-fractions-takes-integers
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
-                                                        [:na [:maybe [:vector {:pg/type "numeric[]"} [decimal? {:pg/type "numeric"}]]]]
+                                                        [:na [:maybe [:vector {:pg/type "numeric[]"} ['decimal? {:pg/type "numeric"}]]]]
                                                         [:da [:maybe [:vector {:pg/type "double precision[]"} [:double {:pg/type "double precision"}]]]]]}})
         o {}]
     (doseq [c [:na :da]]
@@ -2581,7 +2581,7 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c [:string {:pg/type "citext"}]]]}})
         x (:x (:args (h/analyze reg {:update :t :set {:c :?x}})))]
     (is (some #(str/includes? (str %) "should be an org.postgresql.util.PGobject")
-              (flatten [((requiring-resolve 'malli.error/humanize) (m/explain x 42 malli-opts))])))))
+              (flatten [((requiring-resolve 'malli.error/humanize) (m/explain x 42 {:registry reg}))])))))
 
 (deftest an-integer-argument-of-a-function-takes-no-long-postgresql-converts-no-bigint-to-integer-implicitly
   (let [ok? (fn [q v] (m/validate (:x (args q)) v {:registry registry}))]
@@ -3435,7 +3435,7 @@
 (deftest a-generated-row-is-within-the-bounds-the-registry-generates-a-column-in
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:v [:maybe [:string {:pg/max-length 3 :pg/type "character varying"}]]]
                                                          [:at [:maybe [:time/instant {:pg/type "timestamp with time zone"}]]]
-                                                         [:n [:maybe [decimal? {:pg/type "numeric"}]]]]}})
+                                                         [:n [:maybe ['decimal? {:pg/type "numeric"}]]]]}})
         rows (mg/sample (h/values-schema reg :t) {:registry reg :size 60 :seed 7})
         value #(let [v (get % %2)] (if (vector? v) (second v) v))]
     (is (every? #(<= (count (name %)) 3) (keep #(let [v (value % :v)] (when (and (or (string? v) (keyword? v)) (not= :null v)) v)) rows)) "varchar(3): 3 characters at most, a keyword too")
@@ -3751,3 +3751,15 @@
   (let [q {:with-recursive [[:r {:select [:x.id] :from [[:users :u] [[:lateral {:select [:id] :from [:r] :where [:= :r.id :u.id]}] :x]]}]]
            :select [:id] :from [:r] :where [:= :id :?p]}]
     (is (= [:any {:pgmalli/untyped :type}] (:p (:args (h/analyze registry q opts)))))))
+
+(deftest an-argument-is-typed-equal-by-another-registry-of-the-data-and-another-body
+  ;; an application compares argument types, and keys caches by them: a schema's functions are
+  ;; one value each, not made by each analysis
+  (let [qs [{:select [:id] :from [:users] :where [:= :mood [:any :?ms]]}
+            {:update :users :set {:nick :?n :mood :?m} :where [:= :id :?id]}
+            {:select [:id] :from [:users] :where [:and [:= :nick :?n] [:in :id :?ids]]}
+            {:insert-into :users :values [{:group_id :?g :mood :?m :score :?s :nick :?n}]}
+            {:select [[[:cardinality :?xs] :n]]}]
+        fresh #(pgmalli/registry pgmalli-next.sample/sample-data)]
+    (doseq [q qs]
+      (is (= (:args (h/analyze (fresh) q opts)) (:args (h/analyze (fresh) (assoc q :limit 1) opts))) (pr-str q)))))
