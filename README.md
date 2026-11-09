@@ -200,8 +200,8 @@ error to the people using your application, word it yourself.
 ## Rows read through next.jdbc
 
 pgjdbc does not return the registry's types. pgmalli types rows as `pgmalli-next.jdbc/builder`
-builds them and arguments as `pgmalli-next.jdbc/install-sending!` sends them: call
-`(install-sending!)` once, and pass next.jdbc `{:builder-fn (builder registry)}`
+builds them and arguments as `pgmalli-next.jdbc/sent` sends them: pass next.jdbc the sqlvec
+through `(sent (sql/format q {:params args}))`, and `{:builder-fn (builder registry)}`
 ([docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending)). `as-read` gives the
 row as the builder builds it, to validate results as they come back:
 
@@ -304,7 +304,7 @@ problems it reports:
 | `:enum-literal` | a literal (a string, `[:lift "s"]`, `[:inline "s"]`, `[:lift :kw]`, a number) outside an enum type's labels where PostgreSQL types it as the enum: compared, in an IN list or ANY's array, assigned, beside the enum in `coalesce`, `greatest`, `least`, `nullif` or CASE's values, or cast to it; with `:allowed`, and `:column` (the column, or the expression compared or resolved beside) or, cast, `:type` |
 | `:no-operator` | a comparison of a column of a domain over an enum type, which PostgreSQL compares with no value, not even its own; with `:column`, `:op`, `:domain` and `:type`, the enum to cast the column to |
 | `:uncast-string` | a string literal (or `[:lift "s"]`), which pgjdbc sends as `varchar`, where the column's type takes none (an enum, a number, a date ...), or a function's or an operator's argument there (with `:function` in place of `:column`; `:column` the column, or the expression compared); not under `:format {:inline true}`. A named argument is typed as `:args` types it |
-| `:literal-type` | a literal HoneySQL sends as a parameter (`[:round :price 2]`'s `2`, a `Long` sent as `bigint`; `[:lift ["a"]]`, a vector sent as `jsonb`, to a `text[]` column) where an argument would refuse it: a function's or an operator's argument, compared, assigned (`:set {:id_uuid 1}`), beside others in `coalesce` or CASE; with `:function` (the function or operator, or the column, also as `:column`, where it is assigned), `:sent`, and `:type` where one type is meant; a `[:lift v]` of a class pgjdbc sends nowhere (a list, a set) wherever it is but in `:in`, `:sent nil`, with no `:function` where no argument takes it; not under `:format {:inline true}` |
+| `:literal-type` | a literal HoneySQL sends as a parameter (`[:round :price 2]`'s `2`, a `Long` sent as `bigint`; `[:lift [1]]`, a vector sent as an array, to a `jsonb` column) where an argument would refuse it: a function's or an operator's argument, compared, assigned (`:set {:id_uuid 1}`), beside others in `coalesce` or CASE; with `:function` (the function or operator, or the column, also as `:column`, where it is assigned), `:sent`, and `:type` where one type is meant; a `[:lift v]` of a class pgjdbc sends nowhere (a list, a set) wherever it is but in `:in`, `:sent nil`, with no `:function` where no argument takes it; not under `:format {:inline true}` |
 | `:undetermined-type` | an argument where PostgreSQL takes its type from the value alone (`[:cardinality :?ids]`, `concat`'s `"any"`), whose other uses take only values sent untyped (a keyword label) or nil; with `:function`, and `:type` where the other uses name one |
 | `:unknown-type` | a cast to an unqualified type name of no type of pg_catalog or of the query's schema the registry tells of (an enum, a table's row type, a domain of one of its columns), but of an enum type of another schema; with `:type` and `:did-you-mean`, the qualified names |
 | `:column-definition-list` | a function in FROM whose alias lists column types (`{:with-columns [[:v :jsonb]]}`), which PostgreSQL takes of a function returning record alone; with `:function`, `:alias` and `:columns`, the names it lists. Name the columns with no type (`[:r {:columns [:v]}]`) |
@@ -514,9 +514,8 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 | `:pgmalli/error` | when |
 |---|---|
 | `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` too), a schema the database lacks, or an `:out` that is a symbolic link or a file generate! did not write |
-| `:pgmalli.error/other-sending` | `install-sending!`: next.jdbc's `SettableParameter` already extended for a class pgmalli sends, by another (`next.jdbc.date-time`'s `LocalDate`), with `:given` the classes' names |
 | `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
-| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a map or a vector `install-sending!` cannot write as jsonb (two keys of one text, a nil key, a NaN or an infinity) |
+| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a value `pgmalli-next.jdbc/sent` cannot send: a document it cannot write as jsonb (two keys of one text, a nil key, a NaN or an infinity), an array element of a class it has no text for |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
 | `:pgmalli.error/not-query-data` | a query that is no HoneySQL data: SQL already formatted, or code (a symbol in it) |

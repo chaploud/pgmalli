@@ -23,12 +23,27 @@ pgmalli types rows as one reading builds them and arguments as one sending sends
          '[next.jdbc :as jdbc]
          '[pgmalli-next.jdbc :as pgmalli-jdbc])
 
-(pgmalli-jdbc/install-sending!)
-
 (def jdbc-opts {:builder-fn (pgmalli-jdbc/builder registry)})
 
-(jdbc/execute! ds (sql/format q) jdbc-opts)
+(jdbc/execute! ds (pgmalli-jdbc/sent (sql/format q {:params args})) jdbc-opts)
 ```
+
+`sent` takes the `[sql & params]` `sql/format` returns and gives it back with each parameter as
+pgmalli types it ([what your application sends](queries.md#what-your-application-sends)): a
+vector or a set as an array, untyped (its literal's text, which PostgreSQL reads as the array
+type where it goes; a set's elements in no order), a map as `jsonb`, a keyword as its text,
+untyped (an enum's label), an `Instant` as a `timestamptz` (`Instant/MAX` and `MIN` as
+`infinity` and `-infinity`), a `Duration` and a `Period` as an `interval` of their ISO-8601
+text. Every other value goes as pgjdbc's `setObject` sends it. A document whose top is an array
+goes as `jsonb` marked so, `(pgmalli-jdbc/jsonb [{:id 1}])`, which an argument of `jsonb` takes:
+a vector alone goes as an array. `sent` writes a document with jsonista (an `Instant` and
+java.time's dates and times as their ISO-8601 text, a `UUID`, a keyword and a `Character` as
+their text); one JSON cannot hold is an error: [two keys of one text](queries.md#stricter-json-keys),
+a nil key, a NaN, an infinity, a value of another class, a `PGobject`. It reads no registry and
+changes nothing outside the sqlvec, so a query whose parameters are strings and numbers alone
+goes the same without it. Classes your application does not send (a date and time of no time
+zone) are the registry's `:refused`, `(pgmalli/registry data {:refused [java.time.LocalDateTime]})`:
+no argument takes one.
 
 `builder` takes the generated data too (`(builder (edn/read-string (slurp "api/pgmalli-next.edn")))`):
 an application that reads rows alone, without checking queries, loads no more than
@@ -41,21 +56,6 @@ default of every read, the reads your tests and tools make too, give it to next.
 next.jdbc drops those options where it hands out a connection (`with-transaction`,
 `get-connection`): wrap that connection again. A `ReadableColumn` extension reads none of the
 rows `builder` builds, so no second reading is kept beside it.
-
-`install-sending!` extends next.jdbc's `SettableParameter` for the whole JVM, for `Instant`,
-keywords, maps and vectors, sent as [what your application
-sends](queries.md#what-your-application-sends) lists: `Instant/MAX` and `MIN` as `infinity` and
-`-infinity`, a map and a vector written with jsonista (an `Instant` and java.time's dates and
-times as their ISO-8601 text, a `UUID`, a keyword and a `Character` as their text; a document JSON cannot hold
-an error: [two keys of one text](queries.md#stricter-json-keys), a nil key, a NaN, an infinity, a
-value of another class, a `PGobject`). Every other class goes as
-pgjdbc's `setObject` sends it. `(install-sending! {:refused [java.time.LocalDateTime]})` makes classes your application does not send (a date and time of no time zone) an error to send; give the registry the same, `(pgmalli/registry data {:refused [java.time.LocalDateTime]})`, and no argument takes one (one value of yours given both). Call it once, before sending arguments: without it, pgjdbc refuses
-a keyword and a vector (a `PSQLException` of SQLState `07006`, which names the class) and sends a
-map as `hstore` (an error naming hstore where that extension is not installed). It throws where another extension already holds a class pgmalli sends
-(`next.jdbc.date-time`'s `LocalDate`), which would go otherwise than pgmalli types it; one made
-after it is not seen, so call it after loading the namespaces that extend `SettableParameter`. An application that sends its own way uses `builder` alone,
-and types its arguments from the facts pgmalli gives a sender of its own ([what your
-application sends](queries.md#what-your-application-sends)).
 
 A row's keys are its columns' names as PostgreSQL labels them, unqualified (`:group_id`), and a
 NULL column keeps its key. A query's row has the keys of its labels likewise

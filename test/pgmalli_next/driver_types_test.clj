@@ -7,7 +7,7 @@
             [clojure.test :refer [deftest is testing use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
-            [next.jdbc :as jdbc]
+            [pgmalli-next.test-jdbc :as jdbc]
             [next.jdbc.prepare :as prepare]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
@@ -66,23 +66,23 @@
               cols (map first (filter vector? (rest (pgmalli/as-read registry :pg.matrix/types))))
               row (jdbc/execute-one! con (sql/format {:select cols :from [:matrix.types] :where [:= :id 1]}) {:builder-fn (builder registry)})
               taken? (fn [k v] (with-open [ps (.prepareStatement con (str "UPDATE matrix.types SET " (name k) " = ? WHERE id = 2"))]
-                                 (try (prepare/set-parameter v ps 1) (.executeUpdate ps) true
+                                 (try (prepare/set-parameter (second ((requiring-resolve 'pgmalli-next.jdbc/sent) ["" v])) ps 1) (.executeUpdate ps) true
                                       (catch java.sql.SQLException e (oracle/refused e) false)
                                       ;; a vector of PGobjects (a citext[]'s) has no JSON
                                       (catch Exception _ false)
                                       (finally (.rollback con)))))
               {taken true not-taken false} (group-by #(taken? (key %) (val %)) (dissoc row :id))]
-          ;; an enum's label reads as a keyword, a json document as a map, which HoneySQL writes in :values
-          ;; and :set as a column and a subquery: [:lift v]
+          ;; an enum's label reads as a keyword, a json document as a map, an array as a vector, which
+          ;; HoneySQL writes in :values and :set as a column, a subquery and a row: [:lift v]
           (is (= [] (vec (for [[k v] taken
-                               :let [v (if (or (keyword? v) (map? v)) [:lift v] v)]
+                               :let [v (if (or (keyword? v) (map? v) (vector? v)) [:lift v] v)]
                                :when (not (and (m/validate set {k v}) (m/validate values (assoc (select-keys row [:id]) k v))))]
                            [k (some-> v class .getName)]))))
           (let [array? #(re-find #"^d?a_" (name %))]
             ;; bit(1) reads as a Boolean, which goes back as no bit
             (is (= [:c_bit :d_bit] (sort (remove array? (keys not-taken)))) "the values PostgreSQL does not take back")
-            ;; an array reads as a vector, which goes as jsonb
-            (is (= (sort (filter array? (keys row))) (sort (filter array? (keys not-taken)))) "no array goes back")))))))
+            ;; bit(1)'s elements read as Booleans, whose text bit's input reads not; xml's as SQLXMLs, of no text sent
+            (is (= [:a_bit :a_xml] (sort (filter array? (keys not-taken)))) "an array goes back as the vector it reads as")))))))
 
 (defn- taken?
   "Whether PostgreSQL takes v as sql's parameter, run and rolled back."

@@ -43,6 +43,20 @@
     (accepted-type registry s :compare opts)
     :any))
 
+(defn- array-element-type
+  "The type of an element of an array argument compared with side (= ANY(?), a whole array):
+   sent untyped, its text is read by the input of side's type, as an assigned value's is, of no
+   length (the array type PostgreSQL resolves it to has no type modifier) and none of the
+   column's own properties; :any where side's is not told."
+  [registry sc side opts]
+  (if-let [s (query/side-schema registry sc side opts)]
+    (walk/postwalk #(if-let [p (shape/props %)]
+                      (let [p (dissoc p :pg/identity :pg/generated :default :pg/default)]
+                        (if (empty? p) (into [(first %)] (drop 2 %)) (assoc % 1 p)))
+                      %)
+                   (shape/without-lengths (accepted-type registry s :assign opts)))
+    :any))
+
 (defn- unlabel
   "t without the :pg/type it names, which an alternative of another type's values would misname."
   [t]
@@ -80,20 +94,12 @@
       a)))
 
 (defn- arrays-sent
-  "[type schema] of the arrays the one sending sends (jdbc/write-rows) as a type pred takes, element in
-   their elements' place, and the values of the array's own elements of a class sent nowhere alone
-   (accept/element-schema: a java.sql.Date[]'s inst?), which element, of the classes sent, does not
-   hold; those of a class sent alone element holds as its type takes them (an enum's labels)."
+  "[type schema class] of the arrays the one sending sends (jdbc/write-rows) as a type pred takes,
+   element in their elements' place: a vector's, a set's (in no order) left to = ANY and = ALL
+   (jdbc/array-type)."
   [opts pred element]
-  (for [[schema q ^Class c] (jdbc/write-rows opts true) :when (pred q)
-        :let [own (when (and c (.isArray c) (nil? (accept/row-of (.getComponentType c) accept/classes)))
-                    (some-> c accept/element-schema shape/alternatives))
-              kinds (set (map shape/kind (shape/alternatives (shape/non-null element))))
-              more (remove (comp kinds shape/kind) own)
-              e (if (and (seq more) (not (query/untyped? element)))
-                  (cond-> (shape/either (concat (shape/alternatives (shape/non-null element)) more) element) (shape/maybe? element) query/nullable)
-                  element)]]
-    [q (walk/postwalk-replace {:pgmalli/element e} schema) c]))
+  (for [[schema q c] (jdbc/write-rows opts true) :when (and (pred q) (not= clojure.lang.IPersistentSet c))]
+    [q (walk/postwalk-replace {:pgmalli/element element} schema) c]))
 
 (defn- labelled-type
   "The type of an argument where a value of own, an enum type's labels, goes, alts the [type
@@ -218,7 +224,8 @@
                           (if es
                             (cast-arrays registry es (or (::cast-element opts) (query/nullable (accepted-type registry es :cast opts))) opts)
                             ;; to another type (text, say), its elements any
-                            (shape/either (map second (arrays-sent opts #(and (takes? %) (not (accept/scalar-cast? t %))) :any)) :any)))
+                            ;; an untyped array's text ('{1}') read by a string type's input alone
+                            (shape/either (map second (arrays-sent opts #(and (takes? %) (not (accept/scalar-cast? t %)) (or (not= :unknown %) (accept/string-type? t))) :any)) :any)))
                        :when (not (query/untyped? a))]
                    [nil a]))
         alts (concat
@@ -238,9 +245,6 @@
     (cond
       ;; a cast takes a string and every explicit cast, of types pgmalli-next.impl.accept does not answer for
       (and (nil? t) (= :cast context)) :any
-      ;; an array of a domain (d[]) is compared with a d[] alone: no Java array goes as one
-      (and (= :compare held-in) (some-> (query/domain-of s) types/element))
-      (jdbc/array-pg-object (query/domain-of s) :whole)
       ;; compared, assigned, a function's argument or a :common operand, of a type whose values
       ;; pgmalli does not type and pgjdbc reads as a PGobject or a String (a geometric, network,
       ;; timespan, numeric, range or other pg_catalog one: inet, interval, regclass, money,
@@ -278,11 +282,9 @@
             ;; assigns them exactly, as no other Double; sql/format's :inline writes them as names
             special? #(and (= :assign context) (= :or-double (:read (types/entry %))) (not (:inline (:format opts))))
             specials (concat (when (special? t) [numeric-special])
-                             ;; a numeric[]'s too, of a Java array of them alone (float8[] to numeric[] by element)
+                             ;; a numeric[]'s too, its elements' text ('{NaN}') what numeric's input reads
                              (when (and (string? t) (special? (types/element t)))
-                               ;; of its own class, as an array of no value is typed (jdbc/array-type)
-                               (distinct (for [[_ s ^Class c] (arrays-sent opts #{"double precision[]"} (query/nullable numeric-special))]
-                                           (cond-> s (and c (= :pg/array (shape/head s))) (shape/merge-props {:pg/empty-classes #{(.getName c)}}))))))
+                               (map second (arrays-sent opts #{:unknown} (query/nullable numeric-special)))))
             all (cond->> (one-per-kind opts (concat (remove (comp cast-kinds shape/kind) own-alts) alts))
                   ;; inlined, a literal is of a type by its value, whatever its class
                   (and (or (= :call held-in) (= :cast context)) (not (::common-type opts)) (not (:inline (:format opts)))) (keep #(class-held % t takes? opts)))
@@ -336,7 +338,7 @@
    (its ranges left out: PostgreSQL compares a value beyond them, matching
    no row), without NULL; :in's a non-empty vector, list or set of it, as
    sql/format expands it (IN () is not SQL), none under its :inline, which writes no list of it;
-   an array's the Java arrays the one sending sends (jdbc/array-type). NULL is compared with IS
+   an array's the arrays the one sending sends (jdbc/array-type). NULL is compared with IS
    NULL in the query body."
   [op t array? opts]
   (cond-> (cond array? (jdbc/array-type t opts :compare)
@@ -404,7 +406,7 @@
                                          (compared-arg-type registry chain side opts)]))
                 (let [;; ANY(?)'s elements of the column's type (a varchar column's takes a String[])
                       base (when (and x (not elements?)) (some->> (query/side-schema registry chain side opts) (query/slot-type registry)))
-                      t (compared-type op (compared-arg-type registry chain side opts) (when-not elements? x)
+                      t (compared-type op (if (and x (not elements?)) (array-element-type registry chain side opts) (compared-arg-type registry chain side opts)) (when-not elements? x)
                                        (cond-> opts (string? base) (assoc ::jdbc/element-type base)))]
                   (when-not (and elements? (query/untyped? t))
                     [[k (if elements? (jdbc/array-type t opts :unnest) t)]])))]
@@ -427,11 +429,15 @@
     [(second x) (query/nullable (accepted-type registry (types/type-schema "boolean") :assign opts))]))
 
 (defn- cast-arrays
-  "The arrays whose elements PostgreSQL casts to the type of column schema s, elements of
-   element type, typed; :any for none."
+  "The arrays cast to the type of column schema s, an array type, of elements of element type:
+   sent untyped, their text read by the array type's input; :any for none."
   [registry s element opts]
-  (let [t (query/slot-type registry s)]
-    (shape/either (distinct (map second (arrays-sent opts #(and t (string? %) (accept/accepts? t (types/element %) :cast)) element)))
+  (let [;; an integer type's input reads no fraction, which a cast to it would round
+        element (if (accept/integer-type? (query/slot-type registry s))
+                  (let [whole (remove #(#{:double 'decimal? 'float? :float} (jdbc/value-kind (shape/non-null %))) (shape/alternatives (shape/non-null element)))]
+                    (cond-> (shape/either whole :any) (shape/maybe? element) query/nullable))
+                  element)]
+    (shape/either (distinct (map second (arrays-sent opts #(and (query/slot-type registry s) (= :unknown %)) element)))
                   :any)))
 
 (defn- unnest-cast-element
@@ -662,7 +668,7 @@
      :columns used
      :schema (query/nullable (shape/either (for [a (shape/alternatives (shape/non-null base))
                                            :when (not= dropped (shape/kind a))]
-                                       (if (= kept (shape/kind a)) (if set? [:vector doc] doc) a))
+                                       (if (= kept (shape/kind a)) (if set? (accept/jsonb-vector doc) doc) a))
                                      :any))}))
 
 (defn document-columns
@@ -712,7 +718,7 @@
                      (shape/either (one-per-kind opts
                                     ((if (:inline (:format opts)) identity classes-joined)
                                      (for [s ss, x (shape/alternatives (accepted-type registry s held-in opts))]
-                                       ;; an array of such a type takes the Java arrays sent as it
+                                       ;; an array of such a type takes the arrays sent as it
                                        (if (and (= :any (shape/head x)) (not (types/element (:pg/type (shape/column-props s)))))
                                          jdbc/pg-object
                                          (unlabel x)))))
@@ -759,7 +765,8 @@
    or expression of schema s: outside an enum's labels however it is sent, an :enum-literal;
    sent typed where an argument there would refuse it, an :uncast-string for a string, a
    :literal-type otherwise. A literal written into the SQL or sent untyped is held to the labels
-   alone, as PostgreSQL reads it as the type's input."
+   alone, as PostgreSQL reads it as the type's input, but an array literal (a vector, a set),
+   which the input of an array type alone reads."
   [registry {x ::literal :keys [column type function context] s :schema} t opts]
   (let [{:keys [value text]} (literal x)
         labels (some->> s (query/enum-values registry))
@@ -774,7 +781,8 @@
             (= :assign context) (assoc :column column))
           (and labels (not (coll? value)) (not (some #{(or text value)} labels)))
           (cond-> {:kind :enum-literal :value value :allowed labels} column (assoc :column column) type (assoc :type type))
-          (and (sent-typed? x opts) refused?)
+          ;; an array literal sent untyped too, which no type's input but an array's reads
+          (and (or (sent-typed? x opts) (and (coll? value) (not (:inline (:format opts))))) refused?)
           (let [u (when (and s (string? value)) (uncast-type registry s opts))]
             (if u
               (cond-> {:kind :uncast-string :value value :type u} column (assoc :column column) (not column) (assoc :function function))

@@ -23,20 +23,14 @@
    type it is sent as, short (a Long's bigint, a byte[]'s bytea), or, one sent untyped, the type
    whose values it is (a LocalDate's date); not a predicate's name, whose ? reads as NULL."
   (reduce (fn [m [_ t s]]
-            ;; a schema of a form ([:vector :any], a vector sent as jsonb) by the form, another (one
-            ;; held to a class, [:and float? [:pg/class ...]], too) by its kind
-            (let [k (when s (if (and (vector? s) (not= :and (first s))) s (shape/kind s)))
+            ;; a schema of a form ([:map-of :some :any], a map sent as jsonb; a vector jsonb marks) by
+            ;; the form, another (one held to a class, [:and float? [:pg/class ...]], too) by its kind
+            (let [k (when s (if (and (vector? s) (or (not= :and (first s)) (= s (accept/jsonb-vector :any)))) s (shape/kind s)))
                   n (if (string? t)
                       (types/short-name t)
                       (some (fn [[n e]] (when (= k (shape/kind (:schema e))) (types/short-name n))) types/types))]
               (cond-> m (and k n (not (contains? m k))) (assoc k n))))
           {} accept/classes))
-
-(defn- classes-label
-  "The types the one sending sends the Java arrays :pg/classes of props names as, short."
-  [props]
-  (when-let [cs (seq (:pg/classes props))]
-    (str/join " | " (distinct (for [n (sort cs), [c t] accept/classes :when (= n (.getName ^Class c))] (types/short-name t))))))
 
 (defn- leaf [s]
   (cond (keyword? s) (get class-names s (name s))
@@ -73,9 +67,9 @@
       (= :map head) (ordered (for [[k ep v] (map shape/entry-parts children)]
                                [k (cond-> (describe schemas v) (and (:optional ep) (string? (describe schemas v))) (str " (optional)"))]))
       (#{:sequential :vector :set :pg/array} head)
-      (or (type-label p) (classes-label p)
+      (or (type-label p)
           (let [d (describe schemas (first children))]
-            ;; a Java array of elements of a type, as PostgreSQL names an array of it
+            ;; an array argument of elements of a type, as PostgreSQL names an array of it
             (if (and (= :pg/array head) (string? d)) (str (if (re-find #"[ ?]" d) (str "(" d ")") d) "[]") [d])))
       ;; 1.5 and 1.5M, 1.0 and a Float 1.0, a label as each class sends it, print alike
       (= :enum head) (str (or (type-label p) "enum") ": " (str/join " | " (distinct (map str children))))
@@ -87,10 +81,9 @@
       (= :cat head) (mapv #(describe schemas %) children)
       ;; an argument of several collections (IN's)
       (and (= :or head) (every? #(and (vector? %) (#{:pg/array :sequential :set :vector} (first %))) children)
-           (not-every? (comp :pg/classes props-of) children)
            (apply = (map #(describe schemas (last %)) children)))
       (let [elem (describe schemas (last (first children)))]
-        (str elem "[] (" (str/join ", " (map #(name (first %)) children)) ")"))
+        (str elem "[] (" (str/join ", " (map #(cond (not= :pg/array (first %)) (name (first %)) (:pg/set (props-of %)) "set" :else "vector") children)) ")"))
       (= :or head) (str/join " | " (distinct (map #(let [d (describe schemas %)]
                                                      (cond (string? d) d
                                                            (and (vector? d) (string? (first d))) (str (first d) "[]")

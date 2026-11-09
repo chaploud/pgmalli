@@ -6,7 +6,8 @@
    pgmalli-next.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
    a caller passes a domain as its base type, a domain over an enum as [:enum name {:domain? true}]. pgmalli-next.accept-test holds both against the one
    sending and PostgreSQL."
-  (:require [pgmalli-next.impl.memo :as memo]
+  (:require [pgmalli-next.impl.error :as error]
+            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.types :as types]))
 
@@ -22,6 +23,26 @@
    (sent-text), another's its str."
   [k]
   (if (keyword? k) (sent-text k) (str k)))
+
+(defn jsonb?
+  "Whether vector x is marked a jsonb document (pgmalli-next.jdbc/jsonb), which the one sending
+   sends as jsonb, not an array."
+  [x]
+  (boolean (:pgmalli/jsonb (meta x))))
+
+(defn jsonb
+  "pgmalli-next.jdbc/jsonb's: sequential x as a vector jsonb? tells, a map as it is."
+  [x]
+  (cond (map? x) x
+        (sequential? x) (vary-meta (vec x) assoc :pgmalli/jsonb true)
+        :else (error/fail! :pgmalli.error/invalid-options
+                           (str "jsonb takes a map or a sequential collection, not a " (.getName (class x)))
+                           {:given (.getName (class x))})))
+
+(defn jsonb-vector
+  "The schema of a jsonb document of e's whose top is an array: a vector of them jsonb marks."
+  [e]
+  [:and [:vector e] [:fn {:error/message "should be (pgmalli-next.jdbc/jsonb v): a vector goes as an array"} jsonb?]])
 
 (def too-deep
   "Why a document nested past the stack is no document the one sending writes."
@@ -41,22 +62,13 @@
                   (and (float? v) (or (Double/isNaN (double v)) (Double/isInfinite (double v)))) "a NaN or an infinity, which JSON has not"))]
     (try (walk x) (catch StackOverflowError _ too-deep))))
 
-(defn- array "The class of an array of c." [c] (class (make-array c 0)))
-(defn- named "The class named n; nil where the runtime has none." [n] (try (Class/forName n) (catch Throwable _ nil)))
-(defn- array-of "The class of an array of c; nil where the runtime makes none." [c] (try (array c) (catch Throwable _ nil)))
-
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))
 
-(def boxed
-  "The boxed class of each primitive one."
-  {Long/TYPE Long Integer/TYPE Integer Short/TYPE Short Byte/TYPE Byte Double/TYPE Double Float/TYPE Float
-   Boolean/TYPE Boolean Character/TYPE Character})
-
 (def classes
-  "[class type schema categories]: the one sending (pgmalli-next.jdbc/install-sending!), the
+  "[class type schema categories]: the one sending (pgmalli-next.jdbc/sent), the
    type a value of class goes to PostgreSQL as, :unknown for one sent untyped, which PostgreSQL
-   types from where it goes; schema is the malli schema of a value of class, nil for a Java
-   array. A value goes as its class's row, else as the first row of a superclass or interface of it.
+   types from where it goes; schema is the malli schema of a value of class, :pgmalli/element in
+   an array's elements' place. A value goes as its class's row, else as the first row of a superclass or interface of it.
    categories, of a class sent untyped, are the typcategories of the types it goes to as its text
    (reads?): a keyword's a string type's and an enum's (\"S\", \"E\"), a label's name. A date
    and time goes typed, java.time's alone: pgjdbc sends a java.sql value untyped, its text in the
@@ -71,23 +83,17 @@
    [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
    ;; as an interval PGobject of its ISO-8601 text, which interval's input reads (pgjdbc sends neither)
    [java.time.Duration "interval" :time/duration] [java.time.Period "interval" :time/period]
-   ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
-   [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
-   [(array Short/TYPE) "smallint[]"] [(array Short) "smallint[]"] [(array Double/TYPE) "double precision[]"]
-   [(array Double) "double precision[]"] [(array Float/TYPE) "real[]"] [(array Float) "real[]"]
-   [(array Boolean/TYPE) "boolean[]"] [(array Boolean) "boolean[]"] [(array String) "character varying[]"]
-   [(class (make-array Byte/TYPE 0 0)) "bytea[]"] [(array java.math.BigDecimal) "numeric[]"]
-   ;; babashka makes no UUID[]: where it cannot, the row is left out
-   (some-> (array-of java.util.UUID) (vector "uuid[]"))
-   ;; java.sql's arrays (babashka has not all of these classes)
-   (some-> (named "java.sql.Date") array-of (vector "date[]"))
-   ;; (a java.sql.Time[] goes as a timetz[] of the JVM's offset, which changes with the JVM's time zone)
-   (some-> (named "java.sql.Timestamp") array-of (vector "timestamp with time zone[]"))
    ;; as an OffsetDateTime in UTC, which pgjdbc sends as a timestamptz: an Instant pgjdbc refuses alone
    [java.time.Instant "timestamp with time zone" :time/instant]
    [clojure.lang.Keyword :unknown :keyword #{"S" "E"}]
+   ;; an array literal's text ('{1,NULL}'), which PostgreSQL reads as the array type where it
+   ;; goes; a set's elements in no order, taken where none is seen (= ANY, = ALL)
+   [clojure.lang.IPersistentVector :unknown [:pg/array :pgmalli/element] #{"A"}]
+   [clojure.lang.IPersistentSet :unknown [:pg/array {:pg/set true} :pgmalli/element] #{"A"}]
    ;; the one sending's jsonb writes a key as its text (a keyword's namespace kept): no nil key
-   [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
+   [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]]
+   ;; a vector marked a document (jsonb?), which a value of its class goes otherwise than
+   [clojure.lang.IPersistentVector "jsonb" (jsonb-vector :any)]]))
 
 (def values
   "A value of each class of classes with a schema (a byte[] too), by class."
@@ -102,47 +108,14 @@
          java.time.Instant java.time.Instant/EPOCH
          java.time.Duration (java.time.Duration/ofMinutes 90) java.time.Period (java.time.Period/of 1 2 3)
          bytes-class (.getBytes "a") clojure.lang.Keyword :a
-         clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1]}))
-
-(defn- array-type-row?
-  "Whether row r sends its class as an array type."
-  [r]
-  (and (string? (second r)) (some? (types/element (second r)))))
+         clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1] clojure.lang.IPersistentSet #{1}}))
 
 (defn row-of
   "The row of rows (classes', json-classes') a value of class c is sent by: its class's, else the
-   first of a class it is one of, in their order (java.sql.Date's java.util.Date row); of an array
-   of arrays, its component's where that goes as an array type, as pgjdbc sends a long[][] as a
-   bigint[] (PostgreSQL's array types tell no dimensions); nil for none."
+   first of a class it is one of, in their order (java.sql.Date's java.util.Date row); nil for none."
   [^Class c rows]
   (or (some #(when (= c (first %)) %) rows)
-      (some #(when (.isAssignableFrom ^Class (first %) c) %) rows)
-      (when-let [e (when (.isArray c) (.getComponentType c))]
-        (when (.isArray e)
-          (when-let [r (row-of e rows)] (when (array-type-row? r) (assoc r 0 c)))))))
-
-(defn array-class?
-  "Whether the one sending sends a Java array of class c as an array type (row-of)."
-  [^Class c]
-  (boolean (and c (.isArray c) (some-> (row-of c classes) array-type-row?))))
-
-(defn multi-dimensional?
-  "Whether a Java array of class c goes as the array type its component goes as (row-of)."
-  [^Class c]
-  (boolean (when-let [e (when (.isArray c) (.getComponentType c))]
-             (and (.isArray e) (some-> (row-of e classes) array-type-row?)))))
-
-(defn element-schema
-  "The schema of an element of a Java array of class c the one sending sends: its component class's
-   row's (of an array of arrays, its innermost elements'), else, of a java.sql.Date[] or a
-   Timestamp[] (pgjdbc's typed date[] and timestamptz[]), a java.util.Date's (inst?), which goes
-   nowhere alone; nil for another c."
-  [^Class c]
-  (when-let [e (some-> c .getComponentType)]
-    (if (multi-dimensional? c)
-      (element-schema e)
-      (or (get (row-of e classes) 2)
-          (when (.isAssignableFrom java.util.Date e) 'inst?)))))
+      (some #(when (.isAssignableFrom ^Class (first %) c) %) rows)))
 
 (def class-types
   "[class type] of classes, in its order."
@@ -157,7 +130,9 @@
    A Character and a byte[], which it does not write as a value of theirs, are
    left out."
   (vec (keep (fn [[c :as row]]
-               (cond (#{Character bytes-class} c) nil
+               (cond (#{Character bytes-class clojure.lang.IPersistentSet} c) nil
+                     (and (= clojure.lang.IPersistentVector c) (= "jsonb" (second row))) nil
+                     (= clojure.lang.IPersistentVector c) [c "jsonb" [:vector :any]]
                      (= String c) [c :unknown :string #{"*"}]
                      (#{clojure.lang.BigInt java.math.BigInteger} c) (assoc row 1 "bigint")
                      :else row))
@@ -238,15 +213,18 @@
    type's \"*\"), t's
    input takes any text (any-text), or answers? does not answer for t (an extension's type); cast,
    as converts? casts a string, also a string's text (a keyword's) to any type and any text to a
-   string type. The rest PostgreSQL reads through t's input is left out:
+   string type. An array literal (\"A\") goes to an array type alone, cast to a string type too.
+   The rest PostgreSQL reads through t's input is left out:
    docs/queries.md#stricter-than-postgresql."
   [t ^Class c context]
   (let [ks (or (get (row-of c (if (= :json context) json-classes classes)) 3) #{})]
-    (boolean (or (ks "*")
+    (boolean (if (ks "A")
+               (or (= "A" (types/category t)) (and (= :cast context) (string-type? t)) (not (answers? t)))
+               (or (ks "*")
                  (ks (if (string-type? t) "S" (types/category t)))
                  (and (= :cast context) (or (ks "S") (string-type? t)))
                  (contains? any-text t)
-                 (not (answers? t))))))
+                 (not (answers? t)))))))
 
 (def unchanged-assignments
   "[from to] of the casts PostgreSQL makes on assignment alone (pg_cast's castcontext 'a') that

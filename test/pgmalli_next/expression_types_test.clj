@@ -11,7 +11,7 @@
             [clojure.test :refer [deftest is use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
-            [next.jdbc :as jdbc]
+            [pgmalli-next.test-jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
@@ -318,9 +318,14 @@
        (finally (.rollback con))))
 
 (defn- compared-holds?
-  "Whether a value of class c sent as type sent is one of type t's own, compared."
+  "Whether a value of class c sent as type sent is one of type t's own, compared; a set's
+   elements in no order, which = ANY and = ALL alone see not (refused by design)."
   [t sent c]
-  (and (accept/holds? t sent :compare) (or (not= :unknown sent) (accept/reads? t c :compare))))
+  (and (not (isa? c clojure.lang.IPersistentSet))
+       ;; accept/values' vector of a number, whose text another array type's input may read: an
+       ;; element of other than the type's own, refused (docs/queries.md#stricter-untyped)
+       (not (and (isa? c clojure.lang.IPersistentVector) (string? t) (some-> (types/element t) (-> accept/number-type? not))))
+       (accept/holds? t sent :compare) (or (not= :unknown sent) (accept/reads? t c :compare))))
 
 (defn- argument-failures
   "[query class] of each value of pgmalli-next.oracle/values sent as :?x of query q of places [q

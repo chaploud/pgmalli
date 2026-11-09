@@ -40,7 +40,7 @@
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
-            [next.jdbc :as jdbc]
+            [pgmalli-next.test-jdbc :as jdbc]
             [next.jdbc.prepare :as prep]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
@@ -250,14 +250,7 @@
   "A value of schema s; of an alternative that generates where one does not (an array of a
    driver's own, :pg/array); nil where none does."
   [s registry seed]
-  (let [array (fn [elem]
-                ;; the typed Java array pgjdbc sends of the elements' class
-                (let [vs (remove nil? (mg/generate [:vector {:min 1 :max 3} elem] {:registry registry :seed seed :size 3}))]
-                  (cond (every? int? vs) (long-array vs)
-                        (every? string? vs) (into-array String vs)
-                        (every? double? vs) (double-array vs)
-                        (every? boolean? vs) (boolean-array vs)
-                        :else ::none)))
+  (let [array (fn [elem] (vec (remove nil? (mg/generate [:vector {:min 1 :max 3} elem] {:registry registry :seed seed :size 3}))))
         gen #(try (let [f (m/form (m/schema % {:registry registry}))]
                     (if (and (vector? f) (= :pg/array (first f))) (array (last f)) (mg/generate % {:registry registry :seed seed :size 3})))
                   (catch Exception _ ::none))
@@ -662,20 +655,17 @@
           org.postgresql.util.PGobject (doto (org.postgresql.util.PGobject.) (.setType "json") (.setValue "{}"))}))
 
 (defn value
-  "A value of class c: of values, or an array of one element; throws for another class, (accept-test
-   holds accept/values to accept/classes)."
+  "A value of class c, of values; throws for another class (accept-test holds accept/values to
+   accept/classes)."
   [^Class c]
-  (if (.isArray c)
-    (let [e (.getComponentType c)]
-      (doto (java.lang.reflect.Array/newInstance e 1) (java.lang.reflect.Array/set 0 (value (get accept/boxed e e)))))
-    (or (values c) (throw (ex-info "no value of the class" {:class c})))))
+  (or (values c) (throw (ex-info "no value of the class" {:class c}))))
 
 (defn- matrix-values
   "What each argument is sent: a value of each class the one sending sends and of the others of
    values, nil, each integer type's bounds and the integers either side of them (types/types'
    :range), a negative Integer and Short, a fraction, NaN and an infinity, an empty string, a number as a string, a double past a real's range or below its smallest, a
    character past the BMP, and each label of the schema's
-   enums and CHECK lists and a string no enum has, alone, as a keyword and in a String[]."
+   enums and CHECK lists and a string no enum has, alone, as a keyword and in a vector."
   [labels]
   (let [bounds (distinct (for [[_ {[lo hi] :range}] types/types :when lo, b [(dec' lo) lo hi (inc' hi)]] b))
         labels (concat labels ["no-label-of-any-enum"])]
@@ -687,7 +677,7 @@
                  bounds
                  labels
                  (map keyword (filter string? labels))
-                 (map #(into-array String [%]) labels)
+                 (map vector labels)
                  ;; last: a statement run more often than pgjdbc's prepareThreshold is planned
                  ;; generically, evaluating a parameter only where a row reaches it, which the
                  ;; values before them are not run under
@@ -817,19 +807,20 @@
                 [(keyword "polymorphic" (str n "/" p)) {:select [[(into [(keyword n)] (if (zero? p) [c :?x] [:?x c])) :v]] :from [t]}]))))))
 
 (defn- send!
-  "Runs [sql & params] on conn, each parameter set as the one sending (docs/reading-rows.md, which
-   pgmalli-next.test-db installs) sets it."
-  [^java.sql.Connection conn [sql & params]]
+  "Runs [sql & params] on conn, each parameter set as the one sending (pgmalli-next.jdbc/sent,
+   docs/reading-rows.md) sets it."
+  [^java.sql.Connection conn sqlvec]
+  (let [[sql & params] ((requiring-resolve 'pgmalli-next.jdbc/sent) sqlvec)]
   (with-open [ps (.prepareStatement conn sql)]
     (doseq [[i v] (map-indexed vector params)] (prep/set-parameter v ps (inc i)))
-    (.execute ps)))
+    (.execute ps))))
 
 (defn- typeof
   "The type PostgreSQL gets v as, set as send! sets it: :unknown for one sent untyped, nil
    where it cannot be set."
   [^java.sql.Connection conn v]
   (try (with-open [ps (.prepareStatement conn "SELECT pg_typeof(?)::text")]
-         (when (try (prep/set-parameter v ps 1) true (catch java.sql.SQLException _ false))
+         (when (try (prep/set-parameter (second ((requiring-resolve 'pgmalli-next.jdbc/sent) ["" v])) ps 1) true (catch java.sql.SQLException _ false))
            (with-open [rs (.executeQuery ps)] (.next rs) (canonical {} (.getString rs 1)))))
        (catch PSQLException e
          (if (= "42P18" (.getSQLState e)) :unknown (throw e)))
@@ -911,9 +902,10 @@
 
 (defn stricter-key
   "The key of stricter.edn a value of class c sent as type sent pins in context: the type, or the
-   class's name as a symbol of one sent untyped, as accept/reads? reads it by class."
+   name of the class of its row of accept/classes as a symbol (clojure.lang.IPersistentVector of a
+   PersistentVector) of one sent untyped, as accept/reads? reads it by class."
   [sent ^Class c context]
-  [(if (= :unknown sent) (symbol (.getName c)) sent) context])
+  [(if (= :unknown sent) (symbol (.getName ^Class (first (accept/row-of c accept/classes)))) sent) context])
 
 (def ^:private stricter
   "{[sent context] #{column type}}: where PostgreSQL takes a parameter that accept/takes? leaves
@@ -952,8 +944,8 @@
         [lo hi] (:range (types/types (if (types/oid-like? e) "oid" e)))]
     (boolean (some #(or (and held? lo (number? %) (not (<= lo % hi)))
                         (and assign? (= "\"char\"" e) (or (string? %) (keyword? %)) (not (pgtypes/char-value? (if (keyword? %) (accept/sent-text %) %)))))
-                   ;; a Java array's elements
-                   (if (some-> v class .isArray) (seq v) [v])))))
+                   ;; an array's elements
+                   (if (or (vector? v) (set? v)) (seq v) [v])))))
 
 (def ^:private inline-refusals
   "The SQLSTATEs of PostgreSQL refusing an inlined literal: its type (type-refusals), or the SQL
@@ -1007,6 +999,27 @@
                                        (if taken? (contains? inline-refusals (:state pg)) (nil? pg)))]
                         (failure {:kind (if taken? :inline-taken :inline) :sql (first sqlvec) :value v :class (some-> v class .getName)
                                   :schema (m/form s) :pg pg}))))))))))
+
+(defn- array-literal-by-design?
+  "Whether a vector or a set, an array literal PostgreSQL reads as array type t (each element by
+   the element type's input), is one arg-types refuses by docs/queries.md#stricter-untyped: a set
+   where its order is seen (but under = ANY), an array literal where a polymorphic function's
+   element goes, or an element of no value of the element type's own (a String to an enum's
+   array, a number to a text[])."
+  [t context v]
+  (boolean
+   (and (or (vector? v) (set? v)) (or (string? t) (vector? t))
+        (or (and (set? v) (not= :any context))
+            ;; a polymorphic function's element (array_append(text[], ?)): read as the element's
+            ;; type, of no array, which an array literal goes to not
+            (= "polymorphic" (namespace context))
+            (let [e (if (string? t) (or (types/element t) t) t)]
+              (some #(when (some? %)
+                       (let [s (pjdbc/sent-type % {})]
+                         (or (not (string? s)) (not (accept/holds? e s :assign))
+                             ;; a "char"'s own value is of one byte (docs/queries.md#stricter-assignment)
+                             (and (= "\"char\"" e) (string? %) (not (pgtypes/char-value? %))))))
+                    v))))))
 
 (defn arg-matrix
   "Each argument of the queries of matrix-queries, over every column of the oracle schema and
@@ -1074,6 +1087,7 @@
                                   ;; sent untyped, or nil, where PostgreSQL takes the type from the value
                                   untyped-there? (and (#{:compared-and-any :compared-and-polymorphic} context) (or (nil? v) (= :unknown sent)))
                                   explained? (or (and (some? v) (not takes?) pinned?)
+                                                 (array-literal-by-design? t context v)
                                                  untyped-there?
                                                  (and row-refused? (not refused?) honeysql?)
                                                  (and (compared-contexts context) (nil? v))

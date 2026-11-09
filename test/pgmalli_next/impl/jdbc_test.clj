@@ -3,6 +3,7 @@
   (:require [clojure.test :refer [deftest is]]
             [malli.core :as m]
             [pgmalli-next.core :as pgmalli]
+            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.sample :refer [registry]]))
@@ -18,10 +19,10 @@
     (is (takes? day (java.time.LocalDate/now)))
     (is (not (takes? day "2026-01-01")))))
 
-(deftest a-shaped-json-column-takes-its-shape-from-a-map-or-vector-sent-as-jsonb
+(deftest a-shaped-json-column-takes-its-shape-from-a-map-or-a-marked-vector-sent-as-jsonb
   (let [shaped [:map {:pg/type "jsonb"} [:prompt :string]]]
     (is (= shaped (jdbc/write-type shaped {})))
-    (is (= [:or [:map-of :some :any] [:vector :any]] (jdbc/write-type [:any {:pg/type "jsonb"}] {})) "an unshaped one takes what is sent")
+    (is (= [:or [:map-of :some :any] (accept/jsonb-vector :any)] (jdbc/write-type [:any {:pg/type "jsonb"}] {})) "an unshaped one takes what is sent")
     (is (= [:any {:pg/type "json"}] (jdbc/write-type [:any {:pg/type "json"}] {})) "nothing goes as json: the driver's object")
     (is (= shaped (jdbc/read-type shaped false)) "read parsed, in the shape that is written")
     (is (= [:any {:pg/type "jsonb"}] (jdbc/read-type shaped true)) "as pgjdbc returns it: the driver's object")))
@@ -50,11 +51,12 @@
       (is (re-find #":compare is not read: a compared argument takes no nil" (ex-message e))))))
 
 
-(deftest a-typed-arrays-elements-are-its-types-never-what-goes-untyped
-  (is (= [:int {:pg/type "bigint"}] (last (first (shape/alternatives (jdbc/array-type [:or [:int {:pg/type "bigint"}] :keyword] {} :assign)))))
-      "a Long[]'s elements are bigints, never what goes untyped")
-  (is (not-any? #{:keyword} (flatten (jdbc/array-type [:or [:int {:pg/type "bigint"}] :keyword] {} :compare)))
-      "under = ANY(?) too, though = resolves bigint with more element types (a double[]'s)"))
+(deftest an-arrays-elements-are-its-elements-type-and-a-set-goes-where-no-order-is-seen
+  (let [e [:int {:pg/type "bigint"}]]
+    (is (= [:pg/array e] (first (shape/alternatives (jdbc/array-type e {} :assign)))) "a vector of them, sent untyped")
+    (is (not-any? #(= :pg/array (shape/head %)) (shape/alternatives (jdbc/array-type e {} :unnest))) "unnest(unknown) is not unique")
+    (is (some #(= [:pg/array {:pg/set true} e] %) (shape/alternatives (jdbc/array-type [:maybe e] {} :compare)))
+        "= ANY(?): a set too, and no NULL, which matches no row")))
 
 (deftest format-is-held-as-the-keys-pgmalli-reads-one-regex-per-text
   (let [format #(:format (jdbc/options! {:format {:params {:id (str (random-uuid))} :quoted true :quoted-always (re-pattern "^null$")}} [:format]))]

@@ -714,17 +714,20 @@
     (let [h (first t)
           p (shape/props t)
           children (shape/entries t)]
-      (cond (= :and h) (let [base (loose (first children))]
+      (cond ;; a document jsonb marks keeps the mark, which tells it from an array
+            (and (= :and h) (some #{(last (accept/jsonb-vector :any))} children)) (assoc t 1 (loose (second t)))
+            (= :and h) (let [base (loose (first children))]
                          (if-let [pg (and (vector? base) (not (map? (second base))) (:pg/type p))]
                            (into [(first base) {:pg/type pg}] (rest base))
                            (if (and (ident? base) (:pg/type p)) [base {:pg/type (:pg/type p)}] base)))
             (= :maybe h) [h (loose (last t))]
-            ;; an array column's :pg/type is what tells pgjdbc's java.sql.Array (an argument) from a read
-            ;; vector; :pg/classes the Java arrays a whole array compared takes, :pg/empty-classes
-            ;; those of no value it takes
-            ;; :pg/domain the domain of its elements, which pgjdbc reads as PGobjects
-            (#{:vector :sequential :set :pg/array} h) (let [kept (select-keys p [:pg/type :pg/classes :pg/empty-classes :pg/domain])]
-                                                        (if (seq kept) [h kept (loose (last t))] [h (loose (last t))]))
+            ;; an array argument's elements, sent untyped, are read by their type's input, which
+            ;; refuses a value beyond its range
+            (= :pg/array h) (shape/without-lengths t)
+            ;; an array column's :pg/type tells a read vector's type; :pg/domain the domain of its
+            ;; elements, which pgjdbc reads as PGobjects
+            (#{:vector :sequential :set} h) (let [kept (select-keys p [:pg/type :pg/domain])]
+                                              (if (seq kept) [h kept (loose (last t))] [h (loose (last t))]))
             (= :or h) (into (cond-> [:or] p (conj p)) (map loose children))
             ;; an override's pattern, a bound as a length is
             (= :re h) (if-let [pg (:pg/type p)] [:string {:pg/type pg}] :string)

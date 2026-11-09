@@ -260,6 +260,17 @@
                  'int? 'integer? 'decimal? 'double? 'float? 'number? 'boolean? 'uuid? 'bytes? 'inst? 'nil?} k)) #{}
           :else #{:string :keyword})))
 
+(defn without-lengths
+  "t without a string's length (its :min, :max and :pg/max-length), its other bounds kept: an
+   element of an array sent untyped, which PostgreSQL resolves to an array type of no type
+   modifier."
+  [t]
+  (walk/postwalk #(if (and (vector? %) (= :string (first %)) (map? (second %)))
+                            (let [p (dissoc (second %) :min :max :pg/max-length)]
+                              (if (empty? p) (into [:string] (drop 2 %)) (assoc % 1 p)))
+                            %)
+                         t))
+
 (defn either
   "One schema of alternatives ts: an :or of them, the one alone, empty when there are none."
   [ts empty]
@@ -280,7 +291,7 @@
 (defn distinct-kinds
   "Alternatives ts, the first of each kind, in their order (an argument's own values come
    first, with their :pg/type and bounds); collections of different contents (two shapes of a
-   json column, the Java arrays of two element classes) are each kept, a kind as value-kind
+   json column, the arrays of two element types) are each kept, a kind as value-kind
    names it."
   [ts]
   (first (reduce (fn [[out seen] t]

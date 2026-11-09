@@ -14,7 +14,8 @@
             [malli.core :as m]
             [malli.error :as me]
             [malli.generator :as mg]
-            [next.jdbc :as jdbc]
+            [next.jdbc]
+            [pgmalli-next.test-jdbc :as jdbc]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.pipeline :as pipeline]
@@ -260,7 +261,7 @@
           (remove nil? [e1 e2])
           (concat
            (pipeline/catalog-findings data)
-           (jdbc/with-transaction [tx ds {:rollback-only true}]
+           (next.jdbc/with-transaction [tx ds {:rollback-only true}]
              (jdbc/execute! tx ["SET LOCAL session_replication_role = replica"])
              (doall
               (concat

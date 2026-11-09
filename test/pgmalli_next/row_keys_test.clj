@@ -6,7 +6,7 @@
             [honey.sql :as sql]
             [malli.core :as m]
             [malli.error :as me]
-            [next.jdbc :as jdbc]
+            [pgmalli-next.test-jdbc :as jdbc]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
             [pgmalli-next.impl.ir :as ir]
@@ -109,12 +109,11 @@
     (let [ds (datasource)
           registry (pgmalli/registry (generated {:db *db*} "public"))
           opts {}]
-      (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest :?bodies]]]}]}
+      (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest [:cast :?bodies [:raw "text[]"]]]]]}]}
                            {:n 1 :feel "ok" :bodies ["a" "b"]}]
                           [{:select [:id] :from [:notes] :where [:and [:= [:cast :n :text] :?t] [:< [:composite :n :id] [:composite :?n :?id]]]}
                            {:t "1" :n 2 :id 99}]]
-              :let [types (:args (h/analyze registry q opts))
-                    params (update-vals params #(if (vector? %) (into-array String %) %))]]
+              :let [types (:args (h/analyze registry q opts))]]
         (is (m/validate (into [:map] types) params {:registry registry}) (pr-str q))
         (is (some? (jdbc/execute! ds (sql/format q {:params params}))) (pr-str q)))
       (let [q {:select [[[:cast "ok" :feel] :f] [[:cast 2 :positive] :p] [[:cast :n :int] :i] [[:cast true :bool] :b]] :from [:notes]}
@@ -142,15 +141,19 @@
       (is (not (m/validate (:x (:args (h/analyze registry {:select [:id] :from [:prices] :where [:= :id :?x]}))) "1"))
           "a varchar compared with a bigint is no argument PostgreSQL takes"))))
 
-(deftest pg-array-is-what-the-driver-takes
+(deftest pg-array-is-what-the-one-sending-sends-as-an-array
   (when *db*
     (let [ds (datasource)
-          s (m/schema [:pg/array :int] {:registry (pgmalli/registry {:registry {}})})]
+          s (m/schema [:pg/array :int] {:registry (pgmalli/registry {:registry {}})})
+          sets (m/schema [:pg/array {:pg/set true} :int] {:registry (pgmalli/registry {:registry {}})})
+          taken? (fn [c v] (try (jdbc/execute-one! c ["SELECT 1 AS one WHERE 1 = ANY(?)" v]) true (catch Exception _ false)))]
       (with-open [c (jdbc/get-connection ds)]
-        (doseq [v [(long-array [1 2]) (into-array Long [1]) (int-array []) (.createArrayOf c "bigint" (object-array [1]))
-                   (object-array [1]) [1 2] #{1}]
-                :let [taken? (try (jdbc/execute-one! c ["SELECT 1 AS one WHERE 1 = ANY(?)" v]) true (catch Exception _ false))]]
-          (is (= taken? (m/validate s v)) (str (class v))))))))
+        (doseq [v [[1 2] [] [[1 2] [3 4]]]]
+          (is (and (taken? c v) (m/validate s v)) (pr-str v)))
+        (is (and (taken? c #{1}) (m/validate sets #{1}) (not (m/validate s #{1}))) "a set where its order is not seen alone")
+        (is (not (or (taken? c '(1)) (m/validate s '(1)))) "a list, which the one sending sends not")
+        (is (and (taken? c (long-array [1])) (not (m/validate s (long-array [1]))))
+            "a Java array pgjdbc sends, which pgmalli takes not: a vector is the one way")))))
 
 (deftest arrays-and-json-are-what-the-driver-returns-and-takes
   (when *db*
@@ -159,9 +162,9 @@
           registry (pgmalli/registry (generated {:db *db*} "public"))
           ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
           args (:args (h/analyze registry ins))
-          v (into-array String ["a" "b"])]
-      (is (m/validate (:paths args) v {:registry registry}) "a String[] for a text[] column")
-      (is (not (m/validate (:paths args) ["a"] {:registry registry})) "a vector the driver refuses")
+          v ["a" nil]]
+      (is (m/validate (:paths args) v {:registry registry}) "a vector for a text[] column")
+      (is (not (m/validate (:paths args) #{"a"} {:registry registry})) "a set, whose order the column would keep")
       (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
       (let [q {:select [:paths :meta] :from [:docs]}
             row (first (jdbc/execute! ds (sql/format q) {:builder-fn (builder registry)}))]

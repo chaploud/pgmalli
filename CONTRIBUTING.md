@@ -118,7 +118,7 @@ and the schema's labels. It fails where PostgreSQL takes a value the argument's 
 (or, set by UPDATE and INSERT, `set-schema`'s and `values-schema`'s row) and the rules of
 docs/queries.md#stricter-than-postgresql do not leave out, and where `accept/takes?` says a
 value goes and PostgreSQL refuses its type. It sends each value as the one sending
-(`pgmalli-next.jdbc/install-sending!`) does, and fails where `sent-type`
+(`pgmalli-next.jdbc/sent`) does, and fails where `sent-type`
 names a type other than PostgreSQL's `pg_typeof` of the value sent. Besides the oracle schema's
 columns, it creates the schema `matrix`, whose table `types` holds, for every type of
 `pgmalli-next.impl.types` (an extension's where the server has it) and the typmods numeric(10,2),

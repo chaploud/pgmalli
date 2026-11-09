@@ -7,7 +7,7 @@
             [malli.core :as m]
             [malli.generator :as mg]
             [pgmalli-next.impl.json :as json]
-            [next.jdbc :as jdbc]
+            [pgmalli-next.test-jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.catalog-source :as source]
             [pgmalli-next.core :as pgmalli]

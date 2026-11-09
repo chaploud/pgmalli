@@ -194,39 +194,18 @@
 
 (defn- one-value
   "t without not-one-value's values (:default is added after), nil where nothing is left (a jsonb
-   column's map, a vector); a set, or a Java array, is one value."
+   column's map, an array's vector); a set is one value."
   [t]
   (case (shape/head t)
     :maybe (if-let [x (one-value (last t))] [:maybe x] :nil)
     :and (when (one-value (shape/and-base t)) (shape/update-and-base t one-value))
-    :or (some-> (seq (keep one-value (remove #(or (= :keyword (shape/kind %)) (#{:vector :sequential :map :map-of} (shape/head %)))
+    :or (some-> (seq (keep one-value (remove #(or (= :keyword (shape/kind %)) (#{:vector :sequential :map :map-of :pg/array} (shape/head %)))
                                              (shape/alternatives t))))
                 (shape/either t))
-    (:map :map-of :vector :sequential) nil
+    (:map :map-of :vector :sequential :pg/array) nil
     (:any :some) [:and t [:not {:error/message (str "should be one value: HoneySQL writes a keyword in a row as " (in-a-row :keyword) ", a vector as " (in-a-row :vector) ", a map as " (in-a-row :map) "; write [:lift v]")}
                           not-one-value]]
     t))
-
-(defn- java-array
-  "A Java array of the elements of v, of the first class the one sending sends as an array
-   (accept/classes, of no primitive) that valid? takes, a java.time value as the java.sql one of
-   it (a LocalDate a java.sql.Date); nil for none."
-  [valid? v]
-  (some (fn [[^Class c]]
-          (when (and c (.isArray c) (not (.isPrimitive (.getComponentType c))))
-            (when-let [a (try (into-array (.getComponentType c)
-                                          (map #(condp instance? %
-                                                  java.time.LocalDate (java.sql.Date/valueOf ^java.time.LocalDate %)
-                                                  java.time.LocalDateTime (java.sql.Timestamp/valueOf ^java.time.LocalDateTime %)
-                                                  java.time.Instant (java.sql.Timestamp/from ^java.time.Instant %)
-                                                  java.util.Date (if (= java.sql.Date (.getComponentType c))
-                                                                   (java.sql.Date. (.getTime ^java.util.Date %))
-                                                                   (java.sql.Timestamp. (.getTime ^java.util.Date %)))
-                                                  %)
-                                               v))
-                              (catch Exception _ nil))]
-              (when (valid? a) a))))
-        accept/classes))
 
 (def ^:private json-scalar
   "What generation makes of a value a map or a vector holds that may be any (jsonb's [:map-of
@@ -239,8 +218,8 @@
   "t, where a value of column schema own goes, without the values malli generates nothing the one
    sending sends of: a predicate of no :gen/ property (a class alone, a PGobject; what
    sql/format's :inline writes no literal of), any value (:any, :some: of a type pgmalli does
-   not type, alone or among alternatives); its Java arrays ([:pg/array e]) generated as one of
-   the elements e generates (java-array), of registry r, and the maps and vectors of any values
+   not type, alone or among alternatives); its arrays ([:pg/array e]) generated as vectors of
+   the elements e generates, of registry r, and the maps and vectors of any values
    (jsonb's) as JSON holds them (json-scalar); a value of own's kind within the bounds the
    registry generates own's in (a varchar(n)'s n, 2025's dates), a keyword as short, and no date
    or time, nor a numeric(p, s)'s or a real's number, of another kind, which it bounds not, a string of a type of other values one of its
@@ -283,8 +262,7 @@
           (when-let [e (generated-values r (when (= :vector (shape/head own))
                                              (shape/merge-props (last own) (select-keys (shape/props own) [:pg/precision :pg/scale])))
                                          (shape/non-null (last t)))]
-            (let [valid? (malli.core/validator t (args/malli-options r))]
-              (shape/merge-props t {:gen/schema [:vector {:min 1 :max 3} e] :gen/fmap #(java-array valid? %)})))
+            (shape/merge-props t {:gen/schema [:vector {:min 1 :max 3} e]}))
           (and (#{:map-of :vector :sequential} h) (#{:any :some} (shape/head (last t))))
           (shape/merge-props t {:gen/schema (if (= :map-of h) [:map-of {:max 3} :string json-scalar] [:vector {:max 3} json-scalar])})
           (and (seq hints) (= k (shape/kind own)) (empty? (select-keys (shape/props t) gen-keys))) (shape/merge-props t hints)
@@ -506,9 +484,15 @@
                          printed? (or (string? value) (number? value) (boolean? value) (coll? value) (uuid? value))
                          x (if printed? (shown value) (str "<the " (.getSimpleName (class value)) ">"))]
                      (cond
+                       (and (not sent) (= :unknown (jdbc/sent-type value {})))
+                       (str (shown value) (if to (str " goes to " to) " is sent") " as an array literal, untyped, which "
+                            (if type (str "the input of " type) "none but an array type's input") " does not read; "
+                            (if (and type (types/json? type))
+                              (str "send it as a document, (pgmalli-next.jdbc/jsonb " (shown value) ")")
+                              (str "send a value of " (or type "the type meant"))))
                        (not sent)
                        (str (shown value) (if to (str " goes to " to " as a parameter") " is sent as a parameter") ", which pgjdbc sends no " (.getSimpleName (class value))
-                            " as; send a vector (jsonb) or a Java array (an array type)")
+                            " as; send a vector (an array) or a map (jsonb)")
                        ;; of the type taken, out of the values the schema holds it to (a column's shape)
                        (= sent type)
                        (str (shown value) " goes to " to " as " sent ", its own type, but is none of the values its schema takes"
@@ -518,7 +502,7 @@
                           " takes there through no implicit conversion; "
                           (if (coll? value)
                             ;; jsonb, which casts to no array or enum
-                            (str "send the value of " (or type "the type meant") " itself (an array as a Java array, (into-array ...); a label as [:lift :label])")
+                            (str "send the value of " (or type "the type meant") " itself (an array as a vector; a label as [:lift :label])")
                             (str "cast it, " (if type (syntax/cast-form x type) (str "[:cast " x " <the type meant>]"))))))))
    :unknown-type (fn [{:keys [type did-you-mean]}]
                    (str "type " type " is in neither pg_catalog nor the query's schema" (error/did-you-mean (str/join " or " did-you-mean))
@@ -530,7 +514,7 @@
                      (str (shown value) " in " clause " for " table "." (column-name column) ": HoneySQL writes a "
                           (if (map? value) (str "map there as " (in-a-row :map)) (str "vector there as " (in-a-row :vector)))
                           "; write " (cond (types/json? type) (str (shown [:lift value]) ", sent as one parameter (jsonb)")
-                                           (types/element type) (str "a Java array of " type ", (into-array ...)")
+                                           (types/element type) (str (shown [:lift value]) ", sent as one parameter (an array)")
                                            :else (str "a value of " type))))
    :read-only-column (fn [{:keys [table column]}]
                        (str table "." (column-name column) " is written by the database (generated, or identity ALWAYS);"

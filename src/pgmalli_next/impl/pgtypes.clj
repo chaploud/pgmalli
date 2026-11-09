@@ -75,53 +75,27 @@
                                   :gen/gen (gen/fmap byte-array (gen/vector gen/byte (or min 0) (or max (+ (or min 0) 16))))}
                 :min 0 :max 0})}))
 
-(defn- sql-array? [v]
-  ;; by name: babashka has no java.sql
-  (boolean (some #(= "java.sql.Array" (.getName ^Class %)) (supers (class v)))))
-
-
 (defn- elements
-  "The elements of Java array v, of an array of arrays (accept/multi-dimensional?) its innermost
-   ones; nil where its arrays are not all as long, which pgjdbc cannot send."
+  "The elements of array v, a vector's or a set's; of a vector of vectors (a multi-dimensional
+   array) its innermost ones, nil where they are not all as long, which PostgreSQL's array input
+   refuses."
   [v]
-  (if (accept/multi-dimensional? (class v))
-    (let [subs (seq v)]
-      (when (apply = (map count subs))
-        (reduce (fn [acc s] (if-let [es (elements s)] (into acc es) (reduced nil))) [] subs)))
-    (vec (seq v))))
+  (if (and (vector? v) (seq v) (every? vector? v))
+    (when (apply = (map count v))
+      (reduce (fn [acc s] (if-let [es (elements s)] (into acc es) (reduced nil))) [] v))
+    (vec v)))
 
 (def ^:private array-schema
-  "[:pg/array t]: what PostgreSQL's JDBC driver takes as an array parameter: a Java array of a
-   class the one sending sends as an array type (accept/classes: long[], Long[], String[] ...; not
-   a byte[], a bytea, nor Object[]) of t's, of one of the classes :pg/classes names where it names
-   some, and of :pg/empty-classes where it holds no value but NULL (pgjdbc types it by its class
-   alone), or a java.sql.Array, whose elements are not read."
+  "[:pg/array t]: an array argument: a vector of t's (a vector of vectors, all as long, a
+   multi-dimensional one: PostgreSQL's array types tell no dimensions), which the one sending
+   sends as an array literal's text; under {:pg/set true}, where no order is seen, a set too."
   (m/-simple-schema
    {:type :pg/array
-    :compile (fn [{:pg/keys [classes empty-classes]} [child] options]
-               (let [valid? (m/validator child options)
-                     ;; the arrays whose elements t takes, as their component class's value tells
-                     fits (for [[^Class c] accept/classes
-                                :let [e (some-> c .getComponentType) v (get accept/values (get accept/boxed e e))]
-                                :when (and (accept/array-class? c) (some? v) (or (nil? classes) (contains? classes (.getName c)))
-                                           (try (valid? v) (catch Exception _ false)))]
-                            (.getSimpleName c))]
-                 {:pred (fn [v] (or (sql-array? v)
-                                    (let [c (class v)
-                                          es (when (accept/array-class? c) (elements v))
-                                          ;; a long[][]'s type is a long[]'s; a byte[][]'s is its own, a byte[] a bytea
-                                          n (when es (.getName ^Class (loop [^Class c c]
-                                                                        (let [e (.getComponentType c)]
-                                                                          (if (and (.isArray e) (not= e accept/bytes-class)) (recur e) c)))))]
-                                      (boolean (and es
-                                                    (or (nil? classes) (contains? classes n))
-                                                    (or (nil? empty-classes) (some some? es) (contains? empty-classes n))
-                                                    (every? valid? es))))))
-                  :type-properties {:error/message (if (seq fits)
-                                                     (str "should be a Java array (" (str/join ", " (distinct fits)) ") or a java.sql.Array of its elements; a vector goes as jsonb")
-                                                     (str "should be a Java array"
-                                                          (when (seq classes) (str " (" (str/join ", " (sort (map #(.getSimpleName (Class/forName %)) classes))) ")"))
-                                                          " or a java.sql.Array of its elements; a vector goes as jsonb"))}
+    :compile (fn [{sets? :pg/set} [child] options]
+               (let [valid? (m/validator child options)]
+                 {:pred (fn [v] (boolean (and (or (vector? v) (and sets? (set? v)))
+                                              (some->> (elements v) (every? valid?)))))
+                  :type-properties {:error/message (if sets? "should be a vector or a set of its elements" "should be a vector of its elements")}
                   :min 1 :max 1}))}))
 
 (def int-ranges

@@ -13,7 +13,7 @@ something PostgreSQL takes, leaves a type untold, or tells a type other than the
   `ResultSetMetaData`. Off the search_path it is named `"schema"."text"` and reads as keywords.
 - A column of a `NOT NULL NOT VALID` constraint (PostgreSQL 18) is nullable, as rows from
   before it may hold NULL, so a write takes nil there too, which PostgreSQL refuses.
-- A map or a vector to a `json` or `jsonb` column is not checked for what the one sending
+- A map or a vector `pgmalli-next.jdbc/jsonb` marks to a `json` or `jsonb` column is not checked for what the one sending
   refuses to write (accept/json-problem): two keys of one text (`:a` and `"a"`), a nil key inside
   the document (the map's own is refused), a NaN or an infinity, a value of a class JSON has no form for (a `PGobject`). Sending it is an error of `:pgmalli.error/invalid-options`.
 - A column of a pg_catalog type `types/types` does not list (`refcursor`, `aclitem`, the ones
@@ -42,9 +42,9 @@ something PostgreSQL takes, leaves a type untold, or tells a type other than the
   and an array of a type of a length (`varchar(5)[]`, `char(3)[]`) elements of any length: no
   schema checks a length, which generation alone keeps to (`:pg/max-length`, the array's for its
   elements). PostgreSQL refuses the value (`value too long`).
-- An array of a type pgmalli does not type (`ltree[]`, `isbn13[]`) takes any Java array, a
-  `Long[]` too, which PostgreSQL refuses (`column is of type ltree[] but expression is of type
-  bigint[]`); values-schema generates no value of it.
+- An array of a type pgmalli does not type (`ltree[]`, `isbn13[]`) takes a vector of any
+  elements, sent untyped, whose text the type's input may refuse (`{"a b"}` to `ltree[]`);
+  values-schema generates no value of it.
 - `values-schema` and `set-schema` refuse a vector of two values or more to a column of a string
   type (`{:nick [1 2]}`), which HoneySQL writes as a row, `(?, ?)`, and PostgreSQL takes as the
   row's text (`(1,2)`); `analyze` takes it.

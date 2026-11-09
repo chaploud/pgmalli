@@ -32,8 +32,8 @@
 
    :shapes gives a column (:schema.table/column) the schema of your own the database does not
    tell (a jsonb document's shape, a CHECK's): the file holds what the database tells alone.
-   :refused, the classes your application sends not, which no argument takes then: give
-   pgmalli-next.jdbc/install-sending! the same, which refuses to send them."
+   :refused, the classes your application sends not (a LocalDateTime, of no time zone), which
+   no argument takes then."
   ([] (reg/registry))
   ([generated] (reg/registry generated))
   ([generated opts] (reg/registry generated opts)))

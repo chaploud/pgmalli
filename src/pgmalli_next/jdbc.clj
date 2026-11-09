@@ -1,18 +1,18 @@
 (ns pgmalli-next.jdbc
   "The one reading and sending pgmalli types rows and arguments as (docs/reading-rows.md):
-   builder, the :builder-fn your application passes next.jdbc, and install-sending!, which
-   extends next.jdbc's SettableParameter for the classes pgmalli sends otherwise than pgjdbc.
-   Your application adds next.jdbc and pgjdbc."
+   builder, the :builder-fn your application passes next.jdbc, and sent, the parameters of a
+   sqlvec as pgmalli sends them where pgjdbc sends them otherwise. Your application adds
+   next.jdbc and pgjdbc."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
-            [next.jdbc.prepare :as prepare]
+            next.jdbc.types
             [next.jdbc.result-set :as rs]
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.json :as json]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types])
-  (:import (java.sql Array PreparedStatement ResultSet ResultSetMetaData Types)
+  (:import (java.sql Array ResultSet ResultSetMetaData Types)
            (java.time Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneOffset)
            (org.postgresql.util PGInterval PGobject)))
 
@@ -118,8 +118,7 @@
       {::builder enums})))
 
 ;;; sending: pgjdbc's setObject, which sends java.time's types typed (a LocalDateTime as a
-;;; timestamp, a LocalDate as a date, an OffsetDateTime as a timestamptz), an Instant as an
-;;; OffsetDateTime in UTC
+;;; timestamp, a LocalDate as a date, an OffsetDateTime as a timestamptz), but what sent changes
 
 (defn- json-text
   "x as JSON holds it: a keyword's or a symbol's text as accept/json-key-text writes it (:n/a as
@@ -132,18 +131,20 @@
         (instance? clojure.lang.BigInt x) (biginteger x)
         (or (nil? x) (boolean? x) (number? x) (string? x) (map? x) (map-entry? x) (coll? x)) x
         :else (error/fail! :pgmalli.error/invalid-options
-                           (str "a map or vector goes as jsonb, which holds no " (.getName (class x)) ": send its text, or the value as its own argument")
+                           (str "a jsonb document holds no " (.getName (class x)) ": send its text, or the value as its own argument")
                            {:given (.getName (class x))})))
 
-(defn- jsonb [x]
+(defn- jsonb-object
+  "Document x as a jsonb PGobject; one JSON cannot hold an error (docs/queries.md#stricter-json-keys)."
+  [x]
   (when-let [why (accept/json-problem x)]
-    (error/fail! :pgmalli.error/invalid-options (str "a map or a vector goes as jsonb, which holds no document of " why)
+    (error/fail! :pgmalli.error/invalid-options (str "jsonb holds no document of " why)
                  {:given (.getName (class x))}))
   (doto (PGobject.)
     (.setType "jsonb")
     (.setValue (try (json/write (walk/postwalk json-text x))
                     (catch StackOverflowError _
-                      (error/fail! :pgmalli.error/invalid-options (str "a map or a vector goes as jsonb, which holds no document of " accept/too-deep)
+                      (error/fail! :pgmalli.error/invalid-options (str "jsonb holds no document of " accept/too-deep)
                                    {:given (.getName (class x))}))))))
 
 (defn- offset-date-time
@@ -155,81 +156,77 @@
     Instant/MIN OffsetDateTime/MIN
     (OffsetDateTime/ofInstant v ZoneOffset/UTC)))
 
-(def ^:private sending
-  "The extension install-sending! makes: {class set-parameter}, each flagged as pgmalli's (a
-   namespace loaded again makes other functions)."
-  (update-vals {Instant (fn [v ^PreparedStatement s ^long i] (.setObject s i (offset-date-time v)))
-                clojure.lang.Keyword (fn [k ^PreparedStatement s ^long i] (.setObject s i (accept/sent-text k) Types/OTHER))
-                java.time.Duration (fn [d ^PreparedStatement s ^long i] (.setObject s i (doto (PGobject.) (.setType "interval") (.setValue (str d)))))
-                java.time.Period (fn [p ^PreparedStatement s ^long i] (.setObject s i (doto (PGobject.) (.setType "interval") (.setValue (str p)))))
-                clojure.lang.IPersistentMap (fn [m ^PreparedStatement s ^long i] (.setObject s i (jsonb m)))
-                clojure.lang.IPersistentVector (fn [v ^PreparedStatement s ^long i] (.setObject s i (jsonb v)))}
-               #(with-meta % {::sending true})))
+(defn jsonb
+  "Sequential x as a vector marked a jsonb document, which sent sends as jsonb, not as an array
+   as it does a vector, and an argument of jsonb takes; a map, which goes as jsonb, as it is.
 
-(defn- dispatched
-  "The function a value of class c is sent by under SettableParameter's impls, as a protocol
-   dispatches: the class, its superclasses, then the most specific of its interfaces."
-  [impls ^Class c]
-  (let [impl #(:set-parameter (get impls %))]
-    (or (some impl (take-while #(and % (not= Object %)) (iterate #(.getSuperclass ^Class %) c)))
-        (some->> (filter impl (disj (supers c) Object))
-                 seq
-                 (reduce (fn [^Class a ^Class b] (if (.isAssignableFrom a b) b a)))
-                 impl)
-        (impl Object))))
+   (pgmalli-next.jdbc/jsonb [{:id 1} {:id 2}])"
+  [x]
+  (accept/jsonb x))
 
-(defn- refusing
-  "The set-parameter of a class the application does not send: an error naming it."
-  [^Class c]
-  (with-meta (fn [_ _ _] (error/fail! :pgmalli.error/invalid-options
-                                      (str "install-sending! refuses to send a " (.getName c) " ({:refused ...}): send a value of another class")
-                                      {:given (.getName c)}))
-    {::sending true ::refused true}))
+(defn- untyped
+  "x's text sent untyped (java.sql.Types/OTHER), which PostgreSQL types where it goes."
+  [text]
+  (next.jdbc.types/as-other text))
 
-(defn install-sending!
-  "Extends next.jdbc's SettableParameter, for the whole JVM, for the classes
-   docs/reading-rows.md#the-one-reading-and-sending lists. Call it once, before sending arguments.
-   Throws where another extension of it already holds a class pgmalli sends (accept/classes'),
-   which would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own;
-   one made after it is not seen. :refused, classes the application does not send (a
-   LocalDateTime, of no time zone): sending one is an error. Give the registry the same
-   (pgmalli-next.core/registry's :refused), and no argument takes one.
+(defn- interval-object [v]
+  (doto (PGobject.) (.setType "interval") (.setValue (str v))))
 
-   (install-sending! {:refused [java.time.LocalDateTime]})"
-  ([] (install-sending! {}))
-  ([{:keys [refused] :as opts}]
-  (error/checked! [:map {:closed true} [:refused {:optional true} [:sequential [:fn {:error/message "should be a class"} class?]]]] opts)
-  (let [sending (merge sending (into {} (map (juxt identity refusing)) refused))]
-  (let [impls (:impls prepare/SettableParameter)
-        ours? #(::sending (meta %))
-        ;; next.jdbc's own, which an application's extension of Object replaces
-        next-jdbc? #(str/starts-with? (.getName (class %)) "next.jdbc.prepare$")
-        ;; as values will be sent once this extension is made: a map and a vector by their classes
-        after (merge impls (update-vals sending #(hash-map :set-parameter %)))
-        sent (concat (filter class? (map first accept/classes))
-                     (map class [{} (zipmap (range 9) (range 9)) (sorted-map) [] (subvec [1] 0) (first {1 1})]))
-        others (sort-by str (distinct (concat (for [c (keys sending)
-                                                    :let [f (get-in impls [c :set-parameter])]
-                                                    :when (and f (not (ours? f)))]
-                                                c)
-                                              (for [c sent
-                                                    :let [f (dispatched after c)]
-                                                    :when (and f (not (next-jdbc? f)) (not (ours? f)))]
-                                                c))))]
-    (when (seq others)
-      (error/fail! :pgmalli.error/other-sending
-                   (str "install-sending!: next.jdbc's SettableParameter is already extended for "
-                        (str/join ", " (map #(.getName ^Class %) others))
-                        ", which pgmalli types as pgjdbc's setObject or install-sending! sends them; drop that extension"
-                        " (next.jdbc.date-time extends Instant, LocalDate and LocalDateTime when it loads)")
-                   {:given (mapv #(.getName ^Class %) others)})))
-  ;; a class refused before and no longer: the driver's again
-  (let [dropped (for [[c m] (:impls prepare/SettableParameter)
-                      :when (and (::refused (meta (:set-parameter m))) (not (contains? (set refused) c)))]
-                  c)]
-    (when (seq dropped)
-      (alter-var-root #'prepare/SettableParameter #(apply update % :impls dissoc dropped))
-      (-reset-methods prepare/SettableParameter)))
-  (doseq [[c f] sending]
-    (extend c prepare/SettableParameter {:set-parameter f}))
-  nil)))
+(defn- infinite-text
+  "infinity or -infinity for the MAX or MIN of a date and time the one reading reads them as, nil
+   otherwise."
+  [x]
+  (condp contains? x
+    #{Instant/MAX LocalDate/MAX LocalDateTime/MAX OffsetDateTime/MAX} "infinity"
+    #{Instant/MIN LocalDate/MIN LocalDateTime/MIN OffsetDateTime/MIN} "-infinity"
+    nil))
+
+(declare array-text)
+
+(defn- element-text
+  "Element x of an array literal: NULL, an array, or its text quoted."
+  [x]
+  (cond (nil? x) "NULL"
+        (or (vector? x) (set? x)) (array-text x)
+        :else
+        (let [t (cond (keyword? x) (accept/sent-text x)
+                      ;; a domain's element as pgjdbc reads it
+                      (instance? PGobject x) (.getValue ^PGobject x)
+                      (infinite-text x) (infinite-text x)
+                      (map? x) (.getValue ^PGobject (jsonb-object x))
+                      (bytes? x) (str "\\x" (apply str (map #(format "%02x" (bit-and 0xff %)) x)))
+                      (decimal? x) (.toPlainString ^java.math.BigDecimal x)
+                      (ratio? x) (str (double x))
+                      (or (string? x) (number? x) (boolean? x) (uuid? x) (char? x)
+                          (instance? java.time.temporal.Temporal x) (instance? java.time.temporal.TemporalAmount x)) (str x)
+                      :else (error/fail! :pgmalli.error/invalid-options
+                                         (str "a vector or a set goes as an array, which holds no " (.getName (class x)) ": send its text")
+                                         {:given (.getName (class x))}))]
+          (str \" (str/replace t #"[\"\\]" "\\\\$0") \"))))
+
+(defn- array-text
+  "The array literal of vector or set xs ('{\"1\",NULL}'), a set's elements in its order."
+  [xs]
+  (str "{" (str/join "," (map element-text xs)) "}"))
+
+(defn- sent-value [v]
+  (cond (instance? Instant v) (offset-date-time v)
+        (keyword? v) (untyped (accept/sent-text v))
+        (or (instance? java.time.Duration v) (instance? java.time.Period v)) (interval-object v)
+        (or (map? v) (accept/jsonb? v)) (jsonb-object v)
+        (or (vector? v) (set? v)) (untyped (try (array-text v)
+                                                (catch StackOverflowError _
+                                                  (error/fail! :pgmalli.error/invalid-options (str "an array nested " accept/too-deep)
+                                                               {:given (.getName (class v))}))))
+        :else v))
+
+(defn sent
+  "sqlvec, [sql & params] (sql/format's), with each parameter as the one sending sends it, as
+   docs/reading-rows.md#the-one-reading-and-sending lists: a vector (a set) an array, untyped,
+   which PostgreSQL types where it goes; a map, and a vector jsonb marks, jsonb; a keyword its text (an enum's label);
+   an Instant a timestamptz; a Duration and a Period an interval; another value as pgjdbc's
+   setObject sends it.
+
+   (jdbc/execute! ds (pgmalli-next.jdbc/sent (sql/format q {:params args})) opts)"
+  [[sql & params]]
+  (into [sql] (map sent-value) params))

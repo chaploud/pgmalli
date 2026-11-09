@@ -111,10 +111,6 @@
 (def ^:private said-skipped
   (delay (println "PGMALLI_SKIP_DB=1: the tests that need a database are skipped")))
 
-(def ^:private one-sending
-  ;; pgmalli-next.jdbc needs pgjdbc, which babashka has not
-  (delay ((requiring-resolve 'pgmalli-next.jdbc/install-sending!))))
-
 (defn builder
   "pgmalli-next.jdbc/builder of registry: rows read as pgmalli types them (JVM only)."
   [registry]
@@ -122,14 +118,13 @@
 
 (defn with-postgres
   "clojure.test :once fixture. Binds *db* to an empty database for the namespace, and names the
-   upstream versions that ran in every failure under it. On the JVM, arguments are sent as
-   pgmalli-next.jdbc/install-sending! sends them; read rows with builder. Set PGMALLI_SKIP_DB=1 to run without docker;
+   upstream versions that ran in every failure under it. On the JVM, send arguments through
+   pgmalli-next.test-jdbc, as pgmalli-next.jdbc/sent sends them; read rows with builder. Set PGMALLI_SKIP_DB=1 to run without docker;
    *db* is then nil."
   [f]
   (if (= "1" (System/getenv "PGMALLI_SKIP_DB"))
     (do @said-skipped (f))
     (let [{:keys [name port]} @container
-          _ (when-not (System/getProperty "babashka.version") @one-sending)
           dbname (str "t_" (System/nanoTime))]
       (exec-in! name "postgres" (str "CREATE DATABASE " dbname))
       (binding [*db* {:host "localhost" :port port :dbname dbname :user "postgres" :password "pw"}

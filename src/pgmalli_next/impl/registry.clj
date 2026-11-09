@@ -334,7 +334,7 @@
          generated (into {} (map (fn [[k s]] [k (if (shape/row-schema? s) (with-gen-hints s) (gen-hints s false (str k)))]))
                          (with-other-schemas-types (merge (sequence-rows d) rows)))]
      (merge base
-            ;; the classes the application sends not (install-sending!'s :refused), which no argument takes
+            ;; the classes the application sends not (:refused), which no argument takes
             (when-let [cs (seq (:refused opts))] {:pgmalli/refused [:any {:pgmalli/refused (set cs)}]})
             (apply dissoc (merge (with-derived (merge base generated)) generated) (keys base))
             (into {} (for [s (:schemas d)]

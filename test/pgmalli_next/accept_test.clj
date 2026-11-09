@@ -3,11 +3,12 @@
    each class goes as, and each sent type prepared where a value of each type goes.
    JVM only (babashka has no java.sql), so bb test does not list it."
   (:require [clojure.edn :as edn]
+            [clojure.walk :as walk]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing use-fixtures]]
             [honey.sql :as sql]
             [malli.core :as m]
-            [next.jdbc :as jdbc]
+            [pgmalli-next.test-jdbc :as jdbc]
             [next.jdbc.prepare :as prepare]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
@@ -16,27 +17,21 @@
             [pgmalli-next.impl.jdbc :as pgjdbc]
             [pgmalli-next.impl.types :as types]
             [pgmalli-next.oracle :as oracle]
-            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]])
-  (:import (java.lang.reflect Array)
-           (java.time Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime)))
+            [pgmalli-next.test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
 (def ^:private candidates
-  "Classes besides class-types' an application may send."
-  (concat (keys oracle/values)
-          (for [e (concat (keys accept/boxed) (vals accept/boxed) [String java.math.BigDecimal java.math.BigInteger java.util.UUID (Class/forName "[B")
-                                                     LocalDate LocalTime OffsetTime LocalDateTime OffsetDateTime Instant
-                                                     java.sql.Date java.sql.Time java.sql.Timestamp java.util.Date])]
-            (class (Array/newInstance ^Class e 0)))))
+  "Classes besides class-types' an application may send. A Java array, which pgjdbc sends typed,
+   is none: an array goes as a vector (docs/queries.md#what-your-application-sends)."
+  (keys oracle/values))
 
 (def ^:private left-out
   "Classes the one sending sends that class-types leaves out, with why."
   {org.postgresql.util.PGobject "a PGobject names its type itself, value by value"
    java.sql.Timestamp "untyped, its text in the JVM's time zone, which a timestamp column's value changes with"
    java.sql.Date "untyped, its text at midnight of the JVM's time zone"
-   java.sql.Time "untyped, its text with the JVM's offset"
-   (class (Array/newInstance java.sql.Time 0)) "a timetz[] of the JVM's offset"})
+   java.sql.Time "untyped, its text with the JVM's offset"})
 
 (defn- type-name
   "t by the name types keys it by."
@@ -44,12 +39,11 @@
   (if-let [e (types/element t)] (str (type-name e) "[]") (:name (types/entry t) t)))
 
 (defn- sent-as
-  "The type PostgreSQL gets v as, sent as the one sending sends it (the extension of
-   pgmalli-next.jdbc/install-sending!, which pgmalli-next.test-db calls): :unknown for a value sent untyped, nil
-   for one it cannot send."
+  "The type PostgreSQL gets v as, sent as the one sending sends it (pgmalli-next.jdbc/sent):
+   :unknown for a value sent untyped, nil for one it cannot send."
   [con v]
   (with-open [ps (.prepareStatement con "SELECT pg_typeof(?)::text")]
-    (when (try (prepare/set-parameter v ps 1) true (catch Exception _ false))
+    (when (try (prepare/set-parameter (second ((requiring-resolve 'pgmalli-next.jdbc/sent) ["" v])) ps 1) true (catch Exception _ false))
       (try (with-open [rs (.executeQuery ps)] (.next rs) (type-name (.getString rs 1)))
            (catch java.sql.SQLException e
              (if (= "42P18" (.getSQLState e)) :unknown (throw e)))))))
@@ -161,7 +155,7 @@
    value PostgreSQL converts on assignment alone, by a cast (an array's element by element, a
    domain's base) or through its text into a string type."
   [sent context t]
-  (let [base #(if (= "positive" %) "integer" %)
+  (let [base #(case % "positive" "integer" "feel" [:enum "feel"] %)
         [s c] (if (and (types/element sent) (types/element t)) [(types/element sent) (types/element t)] [sent t])]
     (cond (symbol? sent) (when-not (accept/reads? (base c) (resolve sent) context) "stricter-untyped")
           (and (= :assign context)
@@ -214,10 +208,12 @@
 (deftest the-schema-of-each-class-sent-takes-its-values
   ;; a value of every class the one sending sends (accept/values), a new class too
   (doseq [:let [registry (pgmalli/registry {:registry {}})]
-          [_ _ c] (pgjdbc/write-rows {} false)
+          [_ _ c] (mapcat #(pgjdbc/write-rows {} %) [false true])
           :let [v (get accept/values c)]
           :when (some? v)]
-    (is (some (fn [[s t]] (and (= t (pgjdbc/sent-type v {})) (m/validate s v {:registry registry}))) (pgjdbc/write-rows {} false))
+    ;; an array's elements its schema leaves to where it goes: any
+    (is (some (fn [[s t]] (and (= t (pgjdbc/sent-type v {})) (m/validate (walk/postwalk-replace {:pgmalli/element :any} s) v {:registry registry})))
+              (mapcat #(pgjdbc/write-rows {} %) [false true]))
         (str (class v) " goes as its type"))))
 
 (defn- refusal
@@ -230,7 +226,7 @@
   ;; "any" (concat, format, jsonb_build_object): PostgreSQL types the parameter from what is sent
   (when *db*
     (let [registry (pgmalli/registry {:registry {}})
-          values [1 "a" 1.5M true (java.util.UUID/randomUUID) (java.time.OffsetDateTime/now) {:a 1} [1] (long-array [1])
+          values [1 "a" 1.5M true (java.util.UUID/randomUUID) (java.time.OffsetDateTime/now) {:a 1} [1]
                   :a nil (java.time.Instant/now) (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0)]]
       (with-open [con (jdbc/get-connection (datasource))]
         (doseq [q [{:select [[[:concat :?x] :v]]} {:select [[[:format "%s" :?x] :v]]} {:select [[[:jsonb_build_object "k" :?x] :v]]}
@@ -238,7 +234,7 @@
                 :let [s (:x (:args (h/analyze registry q)))]
                 v values
                 :let [state (refusal con (sql/format q {:params {:x v}}))]]
-          (testing (pr-str q (cond-> v (some-> v class .isArray) vec))
+          (testing (pr-str q v)
             (is (= (nil? state) (m/validate s v {:registry registry})) (str "PostgreSQL: " (or state "takes it")))
             (when state (is (= "42P18" state) "could not determine data type of parameter"))))))))
 
@@ -321,8 +317,8 @@
                   ;; a type no class goes as goes as a PGobject alone, whose type args reads not (DEBT.md)
                   (for [[c st] accept/class-types :when (= sent st) :let [v (get accept/values c)] :when (some? v)] v)))
         checked (for [[sent context t] pairs :when (column t)] [sent context t])]
-    (is (empty? (remove #(or (column %) (= "positive" %) (#{"aclitem" "gtsvector" "refcursor"} (or (types/element %) %))) (map last pairs)))
-        "a column type left unchecked is a domain of the test's (positive) or a type types/types lists not")
+    (is (empty? (remove #(or (column %) (#{"positive" "feel"} %) (#{"aclitem" "gtsvector" "refcursor"} (or (types/element %) %))) (map last pairs)))
+        "a column type left unchecked is a domain or an enum of the test's (positive, feel) or a type types/types lists not")
     (doseq [[sent context t] checked
             :let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:c (column t)]]}})]
             v (value sent)]

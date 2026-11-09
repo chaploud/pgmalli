@@ -12,6 +12,7 @@
             [malli.experimental.time :as time]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
+            [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.args :as args]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
@@ -44,6 +45,12 @@
 (def bigint-cmp (compared bigint))
 (def integer-cmp (compared integer))
 (def text [:string {:pg/type "text"}])
+(defn- compared-array
+  "= ANY(?)'s argument of elements e: a vector or a set of them, sent untyped, or a PGobject of
+   array type a (typname n)."
+  [e a n]
+  [:or [:pg/array e] [:pg/array {:pg/set true} e]
+   (shape/merge-props jdbc/pg-object {:error/message (str "should be a PGobject of type " n) :pgmalli/describe (str "PGobject of " a) :pgmalli/element e})])
 ;; a label as read, and as an argument takes it: a keyword goes untyped, a String as varchar, which an enum refuses
 (def mood [:enum {:pg/type "mood" :default :happy :pg/default "happy"} :happy :sad])
 (def pg-object jdbc/pg-object)
@@ -108,13 +115,13 @@
                       (first (me/humanize (m/explain (shape/non-null (if (= :or (first x)) (second x) x)) "1" {:registry reg}))))
           "a String is told why"))))
 
-(deftest an-array-of-a-domain-is-compared-with-a-pgobject-of-the-domains-array-alone
+(deftest an-array-of-a-domain-is-compared-with-a-vector-or-a-pgobject-of-its-type
   (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:vector {:pg/type "integer[]" :pg/domain "dint[]"} :pg/integer]]]}})
         x (:x (:args (h/analyze reg {:select [:n] :from [:t] :where [:= :n :?x]})))]
-    (is (not (m/validate x (int-array [1]) {:registry reg})) "dint[] = integer[] does not exist")
-    (is (m/validate (:x (:args (h/analyze reg {:select [[[:coalesce :n :?x] :c]] :from [:t]}))) (int-array [1]) {:registry reg})
-        "beside it in coalesce, an integer[] resolves to it")
-    (is (re-find #"PGobject of type dint\[\]" (pr-str x)))))
+    (is (m/validate x [1] {:registry reg}) "a vector goes untyped, which dint[] = unknown resolves to dint[]")
+    (is (m/validate (:x (:args (h/analyze reg {:select [[[:coalesce :n :?x] :c]] :from [:t]}))) [1] {:registry reg})
+        "beside it in coalesce, an untyped array resolves to it")
+    (is (re-find #"PGobject of type int4\[\]" (pr-str x)))))
 
 (deftest a-lifted-string-is-inlined-under-inline-which-an-enum-takes
   (is (= [] (check {:select [:id] :from [:users] :where [:= :mood [:lift "sad"]]} (assoc opts :format {:inline true})))))
@@ -178,8 +185,10 @@
     (is (m/validate (x {:select [[[:array_append :ints :?x] :a]] :from [:t]}) 1.5 {:registry reg})
         "array_append(int[], 1.5) resolves to double precision[]")
     (is (= [] (:problems (h/analyze reg {:select [[[:array_append :ints 1.5] :a]] :from [:t]}))))
-    (is (m/validate (x {:select [[[:|| :ints :?x] :a]] :from [:t]}) (double-array [1.5]) {:registry reg})
-        "int[] || double[] resolves to double precision[], as array_cat does: || has several candidates")
+    (is (m/validate (x {:select [[[:|| :ints :?x] :a]] :from [:t]}) [1] {:registry reg})
+        "int[] || an untyped array resolves to integer[]")
+    (is (not (m/validate (x {:select [[[:|| :ints :?x] :a]] :from [:t]}) [1.5] {:registry reg}))
+        "whose input reads no fraction")
     (is (m/validate (x {:select [[[:nullif :iv :?x] :n]] :from [:t]}) (java.time.LocalTime/of 1 0) {:registry reg})
         "nullif(interval, time) is interval = time, which resolves")))
 
@@ -411,26 +420,27 @@
 
 (deftest an-array-columns-argument-is-an-array
   (let [body {:insert-into :docs :values [{:id 1 :paths :?paths :meta :?meta}]}]
-    (is (= {:paths [:maybe [:or [:pg/array {:pg/empty-classes #{"[Ljava.lang.String;"}} [:maybe text]]
-                            (shape/merge-props pg-object {:error/message "should be a PGobject of type text[]" :pgmalli/describe "PGobject of text[]" :pgmalli/element text})]]
+    (is (= {:paths (let [e [:or text pg-object]]
+                     [:maybe [:or [:pg/array [:maybe e]]
+                              (shape/merge-props pg-object {:error/message "should be a PGobject of type text[]" :pgmalli/describe "PGobject of text[]" :pgmalli/element e})]])
             :meta [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]}
            (select-keys (:args (h/analyze docs body)) [:paths :meta]))
-        "an assigned array is a Java array of elements or NULLs, or a PGobject of the array type: a vector goes as jsonb")
-    (is (= "PGobject of text[]" (pgmalli/describe docs (:p (:args (h/analyze docs {:select [:id] :from [:docs] :where [:= :paths :?p]})))))
-        "compared, an array of text[]'s type alone, which no Java array goes as (a String[] goes as varchar[])")))
+        "an assigned array is a vector of elements (a PGobject too, its text) or NULLs, sent untyped, or a PGobject of the array type")
+    (is (m/validate (:p (:args (h/analyze docs {:select [:id] :from [:docs] :where [:= :paths :?p]}))) ["a" nil] {:registry docs})
+        "compared whole, a vector too, read as text[]")))
 
 (deftest an-array-argument-takes-no-byte-array-which-goes-as-a-bytea
   (doseq [q [{:select [:id] :from [:users] :where [:= :id [:any :?x]]}
              {:select [:x] :from [[[:unnest :?x] :x]]}]]
-    (is (not (m/validate (:x (args q)) (.getBytes "a") {:registry registry})) (pr-str q))
-    (is (m/validate (:x (args q)) (long-array [1]) {:registry registry}) (pr-str q))))
+    (is (not (m/validate (:x (args q)) (.getBytes "a") {:registry registry})) (pr-str q)))
+  (is (m/validate (:x (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]})) [1] {:registry registry})))
 
-(deftest a-java-array-of-arrays-goes-as-the-array-type-its-component-does
+(deftest a-vector-of-vectors-is-a-multi-dimensional-array
   (let [t (:x (args {:select [:id] :from [:users] :where [:= :id [:any :?x]]}))
         ok? #(m/validate t % {:registry registry})]
-    (is (ok? (into-array (Class/forName "[J") [(long-array [1 2]) (long-array [3 4])])) "pgjdbc sends a long[][] as a bigint[]")
-    (is (not (ok? (into-array (Class/forName "[J") [(long-array [1 2]) (long-array [3])]))) "arrays not all as long, which pgjdbc cannot send")
-    (is (not (ok? (into-array (Class/forName "[Ljava.lang.String;") [(into-array String ["a"])]))) "a varchar[]")))
+    (is (ok? [[1 2] [3 4]]) "PostgreSQL's array types tell no dimensions")
+    (is (not (ok? [[1 2] [3]])) "vectors not all as long, which an array literal cannot be")
+    (is (not (ok? [["a"]])) "of no bigint")))
 
 (deftest a-whole-array-compared-takes-an-array-of-the-columns-type-alone
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
@@ -438,24 +448,22 @@
                                                        [:bigs [:vector {:pg/type "bigint[]"} :int]]
                                                        [:vcs [:vector {:pg/type "character varying[]"} :string]]]}})
         ok? (fn [q v] (m/validate (:x (:args (h/analyze reg q))) v {:registry reg}))]
-    (is (ok? {:select [:*] :from [:t] :where [:= :ints :?x]} (into-array Integer [(int 1)])))
-    (is (not (ok? {:select [:*] :from [:t] :where [:= :ints :?x]} (long-array [1]))) "integer[] = bigint[] does not resolve")
-    (is (not (ok? {:select [:*] :from [:t] :where [(keyword "&&") :ints :?x]} (long-array [1]))) "&& too, anyarray's")
-    (is (ok? {:select [:*] :from [:t] :where [(keyword "@>") :bigs :?x]} (long-array [1])))
-    (is (ok? {:select [:*] :from [:t] :where [:= :bigs :?x]} (into-array Long [1])) "a Long[] too, which goes as bigint[] as a long[] does")
-    (is (ok? {:select [:*] :from [:t] :where [(keyword "&&") :vcs :?x]} (into-array String ["a"])))
-    (is (ok? {:update :t :set {:ints :?x}} (long-array [1])) "assigned, element by element")
-    (is (ok? {:select [:*] :from [:t] :where [:= :bigs [:any :?x]]} (into-array Integer [(int 1)])) "= ANY compares an element")))
+    (is (ok? {:select [:*] :from [:t] :where [:= :ints :?x]} [1]) "untyped, read as the column's integer[]")
+    (is (not (ok? {:select [:*] :from [:t] :where [:= :ints :?x]} [3000000000])) "beyond integer, which its input refuses")
+    (is (not (ok? {:select [:*] :from [:t] :where [(keyword "&&") :ints :?x]} [1.5])) "&& too: no fraction")
+    (is (ok? {:select [:*] :from [:t] :where [(keyword "@>") :bigs :?x]} [1]))
+    (is (ok? {:select [:*] :from [:t] :where [(keyword "&&") :vcs :?x]} ["a"]))
+    (is (not (ok? {:select [:*] :from [:t] :where [(keyword "&&") :vcs :?x]} #{"a"})) "a set's order is seen compared whole")
+    (is (ok? {:update :t :set {:ints :?x}} [1]) "assigned")
+    (is (ok? {:update :t :set {:bigs :?x}} [[1 2] [3 4]]) "a multi-dimensional one")))
 
 (deftest an-any-or-all-argument-is-an-array
   (let [body {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:<> :group_id [:all :?gs]]]}]
-    (is (= {:ids [:pg/array bigint-cmp] :gs [:pg/array integer-cmp]} (args body))
-        "the Java arrays pgjdbc sends as an array of the column's type: a long[] as bigint[], an int[] as integer[]")
+    (is (= {:ids (compared-array bigint "bigint[]" "int8[]") :gs (compared-array int4 "integer[]" "int4[]")} (args body))
+        "a vector or a set of the column's values, sent untyped, read as an array of the column's type")
     (let [t (:ids (args body))]
-      (doseq [v [(long-array [1 2]) (into-array Long [1]) (long-array [])]] (is (m/validate t v {:registry registry}) (pr-str v)))
-      (doseq [v [(object-array [1]) (into-array String ["a"]) [1] '(1) #{1} nil]] (is (not (m/validate t v {:registry registry})) (pr-str v)))
-      (is (= [:pg/array bigint-cmp] t)
-          ":pg/array is what the driver takes (Object[] it refuses); a vector goes as jsonb, no array"))))
+      (doseq [v [[1 2] [] #{1 2}]] (is (m/validate t v {:registry registry}) (pr-str v)))
+      (doseq [v [(long-array [1]) ["a"] [1 nil] '(1) nil]] (is (not (m/validate t v {:registry registry})) (pr-str v))))))
 
 (deftest types-of-parameters-and-rows
   (let [body {:select [:id :nick :closed_at [:group_id :g]] :from [:users] :where [:and [:= :id :?id] [:in :mood :?moods] [:> :score :?min]] :limit :?n}]
@@ -713,16 +721,16 @@
   (let [q {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [[:unnest :?s]] [:?n :nick_alias]]}]}]
     (is (= {:g int4
             :m [:enum {:pg/type "mood" :pgmalli/cast "mood"} "happy" "sad" :happy :sad]
-            :s [:pg/array {:pgmalli/type-from-value "unnest"} int4]
+            :s (shape/merge-props (jdbc/array-pg-object "integer[]" :unnest) {:pgmalli/element int4 :pgmalli/type-from-value "unnest"})
             :n nick-assigned}
            (args q opts))
-        "by position: an argument takes its column's type, an unnest one an array of it")
+        "by position: an argument takes its column's type, an unnest one an array of it, typed: unnest(unknown) is not unique")
     (is (= [] (check q opts)))
     (is (= []
            (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [:?m] [:?s]]}]} opts))
         "in the SELECT, where the argument is")
     (is (= [] (check {:insert-into [[:users [:group_id :mood :score]] {:select [[:?g] [[:unnest :?m]] [:?s]]}]} opts))
-        "an array is not judged: a java.sql.Array of the enum type is taken, a String[] is not")
+        "an array is not judged: a PGobject of the enum's array type is taken")
     (is (= {:s [:any {:pgmalli/untyped :position}]} (args {:insert-into [[:users [:group_id :nick :score]] {:select [:g.* :?s] :from [[:groups :g]]}]}))
         "a star stands for columns the data does not count")))
 
@@ -791,8 +799,8 @@
     (is (every? #(m/validate t % {:registry registry}) [50 true]) "a varchar's length bounds no number")))
 
 (deftest an-option-of-pgmalli-0-3-names-what-replaces-it
-  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is not read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
-                    [{:stringtype :unspecified} #":stringtype.* is not read: pgmalli types arguments as pgmalli-next.jdbc/install-sending! sends them"]
+  (doseq [[o says] [[{:write [[:keyword :unknown]]} #":write.* is not read: pgmalli types arguments as pgmalli-next.jdbc/sent sends them"]
+                    [{:stringtype :unspecified} #":stringtype.* is not read: pgmalli types arguments as pgmalli-next.jdbc/sent sends them"]
                     [{:qualified? false} #":qualified\? false.* is not read: .*\{:builder-fn \(pgmalli-next.jdbc/builder registry\)\}"]
                     [{:kebab? true} #":kebab\? true.* is not read"]
                     [{:return-keys true} #":return-keys is not read: pass it as \{:jdbc \{:return-keys ...\}\}$"]]]
@@ -874,11 +882,11 @@
   (is (= [:map [:x bigint]] (row {:select [:x] :from [[{:union [{:select [[:id :x]] :from [:users]} {:select [[:score :x]] :from [:users]}]} :s]]}))
       "a set operation's column is of the type PostgreSQL resolves its members' to: numbers the widest"))
 
-(deftest the-one-sending-sends-a-local-date-time-and-a-long-array
+(deftest the-one-sending-sends-a-local-date-time-and-a-vector
   (let [at #(:x (args {:update :users :set {:updated_at :?x} :where [:= :id 1]} {:schema "sample"}))]
     (is (m/validate (at) (java.time.LocalDateTime/of 2026 1 1 0 0) {:registry registry}) "next.jdbc.date-time sends a LocalDateTime untyped, a timestamp's own value"))
-  (is (= {:ids [:pg/array bigint-cmp]} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} {:schema "sample"}))
-      "pgjdbc sends a long[] as a bigint[]"))
+  (is (= {:ids (compared-array bigint "bigint[]" "int8[]")} (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} {:schema "sample"}))
+      "a vector, or a set, of the column's own values: sent untyped, read as bigint[]"))
 
 (deftest a-cast-arguments-nil-follows-every-use-of-the-cast
   (let [nullable? #(= :maybe (first (:x (args % (merge {:schema "sample"} %2)))))
@@ -911,7 +919,7 @@
   (is (= {:m [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]}
          (:args (h/analyze docs {:update :docs :set {:meta :?m} :where [:= :id 1]} {})))
       "what goes as a shaped json column's type takes its shape")
-  (is (= {:m [:or [:map-of :some :any] [:vector :any] pg-object]}
+  (is (= {:m [:or [:map-of :some :any] (accept/jsonb-vector :any) pg-object]}
          (:args (h/analyze (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:j [:any {:pg/type "jsonb"}]]]}})
                       {:update :t :set {:j :?m}} {})))
       "what goes as a type pgmalli has the driver's object for is all its argument takes"))
@@ -979,8 +987,8 @@
     (doseq [[o default] [[{} :default] [{:format {:quoted true}} [:default]]]
             [f row] [[h/values-schema {:id 1 :j [:lift {}]}] [h/set-schema {}]]
             :let [ok? #(m/validate (f reg :t o) (merge row %) {:registry reg})]]
-      (is (every? ok? [{:j [:lift {}]} {:j [:lift [1]]} {:ip nil}]) "a json document as jsonb, which PostgreSQL assigns to json")
-      (is (not-any? ok? [{:j "{}"} {:j :k} {:ip :k} {:j [1 2]} {:ip '("a")} {:j (list 1)}]) (pr-str f o))
+      (is (every? ok? [{:j [:lift {}]} {:j [:lift (accept/jsonb [1])]} {:ip nil}]) "a json document as jsonb, which PostgreSQL assigns to json")
+      (is (not-any? ok? [{:j "{}"} {:j :k} {:ip :k} {:j [1 2]} {:j [:lift [1]]} {:ip '("a")} {:j (list 1)}]) (pr-str f o))
       (is (not (ok? {:ip "10.0.0.1"})) "a String goes as varchar, which an inet column does not take: a PGobject of inet")
       (is (ok? {:ip default}) "HoneySQL's DEFAULT where the database fills a column"))))
 
@@ -1016,18 +1024,21 @@
         x (fn [t] (:x (:args (h/analyze reg {:select [[[:cast :?x t] :b]]} o))))]
     (doseq [t [:int :numeric :boolean :double-precision]]
       (is (not (m/validate (x t) {:a 1} {:registry reg})) (str "a jsonb object cast to " t " errors"))
-      (is (not (m/validate (x t) [1] {:registry reg})) (str "a jsonb array cast to " t " errors")))
+      (is (not (m/validate (x t) (accept/jsonb [1]) {:registry reg})) (str "a jsonb array cast to " t " errors")))
     (doseq [t [:text :varchar :jsonb]]
       (is (m/validate (x t) {:a 1} {:registry reg}) (str "a jsonb object casts to " t))
-      (is (m/validate (x t) [1] {:registry reg}) (str "a jsonb array casts to " t)))))
+      (is (m/validate (x t) (accept/jsonb [1]) {:registry reg}) (str "a jsonb array casts to " t)))
+    (is (not (m/validate (x :jsonb) [1] {:registry reg})) "an array literal, which jsonb's input reads not")))
 
 (deftest an-arrays-elements-are-read-as-the-columns-type
   (let [t (:xs (args {:select [:id] :from [:users] :where [:= :id [:any :?xs]]} {:schema "sample"}))]
-    (is (m/validate t (long-array [1]) {:registry registry}))
-    (is (not (m/validate t (into-array String ["1"]) {:registry registry})) "a varchar[] is no bigint[]'s own"))
+    (is (m/validate t [1] {:registry registry}))
+    (is (not (m/validate t ["1"] {:registry registry})) "a String is no bigint's own")
+    (is (not (m/validate t [1.5] {:registry registry})) "nor a fraction, which bigint's input reads not")
+    (is (not (m/validate t [nil] {:registry registry})) "NULL, which = ANY matches with no row"))
   (let [t (:xs (args {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]} {:schema "sample"}))]
-    (is (not (m/validate t (into-array java.math.BigDecimal [1M]) {:registry registry}))
-        "unnest takes a typed array whose elements the column holds as its own, which a numeric is not for an integer")))
+    (is (not (m/validate t [1] {:registry registry}))
+        "unnest(unknown) is not unique: a vector goes nowhere there")))
 
 (deftest a-types-own-values-come-first-however-many-kinds-it-takes
   (is (= text (second (second (:x (args {:select [[[:cast :?x :text] :t]]} {:schema "sample"})))))))
@@ -1709,8 +1720,8 @@
     (is (thrown-with-msg? clojure.lang.ExceptionInfo #"disallowed key" (h/values-schema registry :users {:schema "sample" :nope 1})))
     (is (= [:map [:s [:string {:pg/type "character varying"}]]] (row {:select [["s" :s]] :from [:users]} {:schema "sample"}))
         "a String goes as varchar by default")
-    (is (= {:x [:or (jdbc/typed-pg-object "json") [:map-of :some :any] [:vector :any]]} (:args (h/analyze reg {:update :t :set {:j :?x}} {})))
-        "a json column takes a PGobject of json, and a map and a vector sent as jsonb, which PostgreSQL assigns to it")))
+    (is (= {:x [:or (jdbc/typed-pg-object "json") [:map-of :some :any] (accept/jsonb-vector :any)]} (:args (h/analyze reg {:update :t :set {:j :?x}} {})))
+        "a json column takes a PGobject of json, and a map and a vector jsonb marks, sent as jsonb, which PostgreSQL assigns to it")))
 
 (deftest each-rule-of-a-row-written-holds
   (is (m/validate (h/values-schema registry :pg.sample/users {:schema "sample"})
@@ -1720,13 +1731,13 @@
       "an integer column takes a smallint")
   (is (thrown-with-msg? clojure.lang.ExceptionInfo #"takes a table as a keyword" (h/values-schema registry 'users {:schema "sample"}))))
 
-(deftest a-java-array-goes-where-postgresql-takes-its-array
-  (let [unnest {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest :?xs]]]}]}
+(deftest an-array-goes-where-postgresql-reads-its-literal
+  (let [unnest {:insert-into [[:users [:group_id :score]] {:select [[:?g] [[:unnest [:cast :?xs [:raw "integer[]"]]]]]}]}
         any {:select [:id] :from [:users] :where [:= :score [:any :?xs]]}
         ok? #(m/validate (:xs (args %1 {:schema "sample"})) %2 {:registry registry})]
-    (is (not (ok? unnest (into-array String ["1"]))) "a text is no integer, assigned")
-    (is (ok? unnest (short-array [1])) "a smallint is")
-    (is (not (ok? any (into-array String ["1"]))) "integer = text has no operator")))
+    (is (ok? unnest [1]) "an integer, cast")
+    (is (ok? any [1]))
+    (is (not (ok? any ["1"])) "a String is no integer's own")))
 
 (deftest a-row-schema-keys-as-each-format-writes-it-back
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:address_line :string]]}})
@@ -1833,21 +1844,24 @@
 
 (deftest an-unnest-tables-argument-is-an-array-of-where-its-column-goes
   (let [o opts
-        ids [:pg/array {:pgmalli/type-from-value "unnest"} bigint-cmp]]
-    (is (= {:ids ids} (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]} o))
-        "an unnest of one, named by its alias")
-    (is (= {:ids ids} (args {:update :users :set {:nick "x"} :from [[[:unnest :?ids] [:x {:columns [:i]}]]] :where [:= :users.id :x.i]} o))
-        "a column its alias lists")
-    (is (= {:ids [:or {:pgmalli/type-from-value "unnest"} [:pg/array :any] pg-object]} (args {:select [:i] :from [[[:unnest :?ids] :i]]} o))
-        "a column that goes nowhere typed: an array sent typed, unnest(unknown) being not unique (anyarray, anymultirange, tsvector)")))
+        ok? (fn [q v] (m/validate (:ids (args q o)) v {:registry registry}))]
+    (doseq [q [{:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]}
+               {:update :users :set {:nick "x"} :from [[[:unnest :?ids] [:x {:columns [:i]}]]] :where [:= :users.id :x.i]}
+               {:select [:i] :from [[[:unnest :?ids] :i]]}]]
+      (is (not (ok? q [1])) (str "unnest(unknown) is not unique (anyarray, anymultirange, tsvector): " (pr-str q))))
+    (is (ok? {:select [:id] :from [:users] :join [[[:unnest [:cast :?ids [:raw "bigint[]"]]] :i] [:= :users.id :i]]} [1])
+        "cast, an array of where its column goes")
+    (is (re-find #"\[:cast <the argument> \[:raw \"bigint\[\]\"\]\]"
+                 (first (me/humanize (m/explain (:ids (args {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [:= :users.id :i]]} o)) [1] {:registry registry}))))
+        "the error says the cast")))
 
 (deftest an-argument-whose-type-postgresql-takes-from-the-value-alone-takes-a-value-sent-typed
-  (is (= {:ids [:or {:pgmalli/type-from-value "cardinality"} [:pg/array :any] pg-object]} (args {:select [[[:cardinality :?ids] :n]]}))
-      "cardinality(anyarray): an array of a type, no keyword or date sent untyped, no nil")
-  (is (= {:ids [:pg/array {:pgmalli/type-from-value "cardinality"} bigint-cmp]}
-         (args {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:>= [:cardinality :?ids] 0]]}))
-      "another use's own type, the position told")
-  (is (= {:ids [:pg/array bigint-cmp] :n [:or {:pgmalli/type-from-value "cardinality"} [:pg/array :any] pg-object]}
+  (is (= {:ids (shape/merge-props pg-object {:pgmalli/type-from-value "cardinality"})} (args {:select [[[:cardinality :?ids] :n]]}))
+      "cardinality(anyarray): a value of a type, a PGobject: a vector goes untyped, no array of a type")
+  (is (= "PGobject of bigint[]"
+         (:pgmalli/describe (shape/props (:ids (args {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:>= [:cardinality :?ids] 0]]})))))
+      "cardinality(unknown) does not resolve: a vector, untyped, goes to = ANY alone, a PGobject to both")
+  (is (= {:ids (compared-array bigint "bigint[]" "int8[]") :n (shape/merge-props pg-object {:pgmalli/type-from-value "cardinality"})}
          (args {:select [:id] :from [:users] :where [:and [:= :id [:any :?ids]] [:= :id [:cardinality :?n]]]}))
       "another use's own type where it has one")
   (is (= [] (check {:select [:id] :from [:users] :where [:= 2 [:cardinality :?ids]]}))))
@@ -1932,7 +1946,10 @@
 (deftest an-unnest-into-a-nullable-column-takes-nil-elements
   (let [t (:n (args {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [:?s] [[:unnest :?n]]]}]}
                     opts))]
-    (is (m/validate t (into-array String ["a" nil]) {:registry registry}))))
+    (is (not (m/validate t ["a" nil] {:registry registry})) "unnest(unknown) is not unique")
+    (is (m/validate (:n (args {:insert-into [[:users [:group_id :mood :score :nick]] {:select [[:?g] [[:cast :?m :mood]] [:?s] [[:unnest [:cast :?n [:raw "text[]"]]]]]}]} opts))
+                    ["a" nil] {:registry registry})
+        "cast, NULLs too")))
 
 (deftest a-subquery-reading-a-cte-is-read-under-it
   (is (= {:n integer-cmp} (args {:with [[:users {:select [[[:cast 1 :integer] :nick]]}]] :select [:s.nick] :from [[{:select [:nick] :from [:users]} :s]] :where [:= :s.nick :?n]}))
@@ -1988,13 +2005,13 @@
       (is (m/validate (:v (:args (h/analyze reg q))) v {:registry reg}) (pr-str q v)))
     (is (m/validate (h/values-schema reg :t) {:n 12} {:registry reg}))))
 
-(deftest an-array-column-takes-a-narrower-numbers-typed-array
+(deftest an-array-column-of-fractions-takes-integers
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
                                                         [:na [:maybe [:vector {:pg/type "numeric[]"} [decimal? {:pg/type "numeric"}]]]]
                                                         [:da [:maybe [:vector {:pg/type "double precision[]"} [:double {:pg/type "double precision"}]]]]]}})
         o {}]
     (doseq [c [:na :da]]
-      (is (m/validate (:v (:args (h/analyze reg {:update :t :set {c :?v} :where [:= :id 1]} o))) (long-array [1 2]) {:registry reg}) (name c)))))
+      (is (m/validate (:v (:args (h/analyze reg {:update :t :set {c :?v} :where [:= :id 1]} o))) [1 2] {:registry reg}) (name c)))))
 
 (deftest a-written-row-takes-no-keyword-honeysql-would-write-as-a-column
   (let [s (h/values-schema registry :users opts)]
@@ -2093,8 +2110,8 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
                                                         [:tags [:maybe [:vector {:pg/type "text[]"} [:string {:pg/type "text"}]]]]]}})
         s (h/values-schema reg :t)]
-    (is (not (m/validate s {:id 1 :tags ["a"]} {:registry reg})))
-    (is (m/validate s {:id 1 :tags (into-array String ["a"])} {:registry reg}))))
+    (is (not (m/validate s {:id 1 :tags ["a"]} {:registry reg})) "HoneySQL writes a vector as a row of parameters")
+    (is (m/validate s {:id 1 :tags [:lift ["a"]]} {:registry reg}))))
 
 (deftest a-written-row-takes-values-and-lift-alone-no-expression
   (let [v (h/values-schema registry :users opts)
@@ -2128,13 +2145,9 @@
            (:m (args q o))) "a keyword sent untyped as the label it names")
     (is (ok? (:x (args {:select [[[:cast :?x :mood] :m]]} o)) "sad") "PostgreSQL casts a varchar to an enum")))
 
-(deftest a-boxed-or-other-java-array-is-typed-by-its-elements
-  (is (m/validate (:ids (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]})) (into-array Long [1 2]) {:registry registry})
-      "pgjdbc sends a Long[] as a bigint[]"))
-
 (deftest a-domains-array-argument-takes-its-base-types-typed-array
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]] [:di [:maybe [:pg/integer {:pg/type "integer" :pg/domain "d_int"}]]]]}})]
-    (is (m/validate (:v (:args (h/analyze reg {:select [:id] :from [:t] :where [:= :di [:any :?v]]}))) (int-array [1 2]) {:registry reg}))))
+    (is (m/validate (:v (:args (h/analyze reg {:select [:id] :from [:t] :where [:= :di [:any :?v]]}))) [1 2] {:registry reg}))))
 
 (deftest a-case-resolves-its-values-as-coalesce-does
   (is (= [:map [:c text]] (row {:select [[[:case [:= :id 1] [:inline "a"] :else [:inline "b"]] :c]] :from [:users]})))
@@ -2185,23 +2198,26 @@
   (is (= [:case] (map first (rest (row {:select [[[:case [:= :id 1] "a" :else "b"]]] :from [:users]}))))))
 
 (deftest an-unnest-tables-column-assigned-by-update-or-cast-types-its-argument
-  (is (= {:ids [:pg/array {:pgmalli/type-from-value "unnest"} bigint-cmp] :ss [:pg/array {:pgmalli/type-from-value "unnest"} int4]}
-         (args {:update :users :set {:score :r.s} :from [[[:unnest :?ids :?ss] [:r {:columns [:i :s]}]]] :where [:= :users.id :r.i]} opts)))
-  (is (m/validate (:ns (args {:update :users :set {:nick [:cast :r.n :text]} :from [[[:unnest :?ids :?ns] [:r {:columns [:i :n]}]]] :where [:= :users.id :r.i]} opts))
-                  (into-array String ["a"]) {:registry registry})
+  (let [{:keys [ids ss]} (args {:update :users :set {:score :r.s} :from [[[:unnest :?ids :?ss] [:r {:columns [:i :s]}]]] :where [:= :users.id :r.i]} opts)]
+    (is (= ["PGobject of bigint[]" "PGobject of integer[]"] (map #(:pgmalli/describe (shape/props %)) [ids ss]))
+        "unnest(unknown) is not unique: a PGobject of the array type, or the argument cast"))
+  (is (m/validate (:ss (args {:update :users :set {:score :r.s} :from [[[:unnest :?ids [:cast :?ss [:raw "integer[]"]]] [:r {:columns [:i :s]}]]] :where [:= :users.id :r.i]} opts))
+                  [1] {:registry registry}))
+  (is (m/validate (:ns (args {:update :users :set {:nick [:cast :r.n :text]} :from [[[:unnest :?ids [:cast :?ns [:raw "text[]"]]] [:r {:columns [:i :n]}]]] :where [:= :users.id :r.i]} opts))
+                  ["a"] {:registry registry})
       "an array of what casts to the type"))
 
 (deftest an-unnest-of-an-array-cast-to-the-columns-type-holds-each-element-to-the-column
   (let [q (fn [select more] {:insert-into [[:users [:group_id :nick]] (merge {:select select :from [[[:unnest [:cast :?gs [:raw "integer[]"]] [:cast :?ns [:raw "varchar[]"]]] [:r {:columns [:group_id :nick]}]]]} more)]})
         ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
-        long-nick (into-array String [(apply str (repeat 41 "a"))])]
+        long-nick [(apply str (repeat 41 "a"))]]
     (doseq [select [[:*] [:r.group_id :r.nick]]]
       (is (ok? (q select {}) :ns long-nick) "longer than the column's varchar(40): the database's to refuse")
-      (is (ok? (q select {}) :ns (into-array String ["a" nil])))
-      (is (not (ok? (q select {}) :gs (into-array Integer [nil]))) "NULL into a NOT NULL column")
-      (is (not (ok? (q select {:where [:= :r.group_id 1]}) :gs (into-array Integer [nil]))) "as on a row the WHERE lets through"))
+      (is (ok? (q select {}) :ns ["a" nil]))
+      (is (not (ok? (q select {}) :gs [nil])) "NULL into a NOT NULL column")
+      (is (not (ok? (q select {:where [:= :r.group_id 1]}) :gs [nil])) "as on a row the WHERE lets through"))
     (is (ok? {:insert-into [[:users [:group_id]] {:select [:*] :from [[[:unnest [:cast :?gs [:raw "bigint[]"]]] [:r {:columns [:group_id]}]]]}]}
-             :gs (long-array [Long/MAX_VALUE]))
+             :gs [Long/MAX_VALUE])
         "into a column of another type, the cast's type")))
 
 (deftest a-populate-records-document-is-a-closed-map-of-the-row-types-columns-each-as-its-input-reads-it
@@ -2229,7 +2245,8 @@
         "the row's columns are the row type's, NULL where the document lacks a key")))
 
 (deftest a-populate-recordsets-document-is-a-vector-of-them-a-key-required-where-insert-writes-its-not-null-column
-  (let [ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
+  ;; a document whose top is an array, jsonb-marked: a vector goes as an array
+  (let [ok? (fn [query k v] (m/validate (k (args query)) (cond-> v (vector? v) accept/jsonb) {:registry registry}))
         insert (fn [select more] {:insert-into [[:users [:group_id :score :nick]]
                                                 (merge {:select select :from [[[:jsonb_populate_recordset [:cast nil :users] :?rows] :r]]} more)]})]
     (doseq [select [[:group_id :score :nick] [:r.group_id :r.score :r.nick]]]
@@ -2295,13 +2312,14 @@
 (deftest a-populate-documents-keys-are-every-column-of-the-row-type-a-key-of-no-column-refused
   (let [ok? (fn [query v] (m/validate (:rows (args query)) v {:registry registry}))
         q {:insert-into [[:users [:group_id :score]] {:select [:r.group_id :r.score] :from [[[:jsonb_populate_recordset [:cast nil :users] :?rows] :r]]}]}]
-    (is (ok? q [{:group_id 1 :score 0 :nick "ann"}]) "a column the statement does not use, which PostgreSQL ignores")
-    (is (ok? q [{"group_id" 1 "score" 0 "nick" "ann"}]) "string keys")
-    (is (not (ok? q [{:group_id 1 :score 0 :nik "ann"}])) "a key of no column")
-    (is (not (ok? q [{:group_id 1}])) "a NOT NULL column's key still required")))
+    (is (ok? q (accept/jsonb [{:group_id 1 :score 0 :nick "ann"}])) "a column the statement does not use, which PostgreSQL ignores")
+    (is (ok? q (accept/jsonb [{"group_id" 1 "score" 0 "nick" "ann"}])) "string keys")
+    (is (not (ok? q [{:group_id 1 :score 0 :nick "ann"}])) "a vector goes as an array: jsonb marks the document")
+    (is (not (ok? q (accept/jsonb [{:group_id 1 :score 0 :nik "ann"}]))) "a key of no column")
+    (is (not (ok? q (accept/jsonb [{:group_id 1}]))) "a NOT NULL column's key still required")))
 
 (deftest a-to-recordsets-alias-defines-its-columns-and-its-document-is-typed-as-a-populate-documents
-  (let [ok? (fn [query k v] (m/validate (k (args query)) v {:registry registry}))
+  (let [ok? (fn [query k v] (m/validate (k (args query)) (cond-> v (vector? v) accept/jsonb) {:registry registry}))
         words (fn [select more] (merge {:select select
                                         :from [[[:jsonb_to_recordset :?words] [:w {:with-columns [[:pattern :text] [:role_keys :text :array] [:hide :boolean]]}]]]}
                                        more))
@@ -2322,6 +2340,7 @@
                      [[{:role_keys 1}] "a number to an array column"]]]
       (is (not (ok? q :words v)) why))
     (is (ok? q :words [{:role_keys "{a,b}"}]) "a string, the array's text, which its type's input reads")
+    (is (not (m/validate (:words (args q)) [{:pattern "a"}] {:registry registry})) "a vector unmarked, which goes as an array")
     (let [record {:select [:*] :from [[[:jsonb_to_record [:cast :?doc :jsonb]] [:r {:with-columns [[:n :int] [:x :nosuch]]}]]]}]
       (is (ok? record :doc {:n 1 :x [1]}) "a type not read, :any")
       (is (not (ok? record :doc {:n 1.5})) "a fraction, which an integer's input does not read")
@@ -2332,17 +2351,17 @@
       (is (ok? insert :rows [{:group_id 1 :score 0}]))
       (is (not (ok? insert :rows [{:group_id 1}])) "score is NOT NULL"))))
 
-(deftest a-numeric-or-domain-array-column-takes-a-narrower-numbers-array-assigned
+(deftest a-numeric-or-domain-array-column-takes-integers-assigned
   (let [reg (pgmalli/registry {:registry {:pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
                                                         [:nn [:maybe [:vector {:pg/type "numeric[]"} 'decimal?]]]
                                                         [:dn [:maybe [:vector {:pg/type "numeric[]" :pg/domain "dnum[]"} 'decimal?]]]]}})]
     (doseq [c [:nn :dn]]
-      (is (m/validate (:p (:args (h/analyze reg {:update :z :set {c :?p} :where [:= :id 1]}))) (long-array [1]) {:registry reg}) (name c)))))
+      (is (m/validate (:p (:args (h/analyze reg {:update :z :set {c :?p} :where [:= :id 1]}))) [1] {:registry reg}) (name c)))))
 
 (deftest an-array-compared-takes-elements-beyond-the-columns-length
   (let [reg (pgmalli/registry {:registry {:pg.public/z [:map {:pg/table "public.z"} [:id [:int {:pg/type "integer"}]]
                                                         [:vs [:maybe [:vector {:pg/type "character varying[]"} [:string {:max 5 :pg/max-length 5 :pg/type "character varying"}]]]]]}})]
-    (is (m/validate (:p (:args (h/analyze reg {:select [:id] :from [:z] :where [:= :vs :?p]}))) (into-array String ["abcdefg"]) {:registry reg}))))
+    (is (m/validate (:p (:args (h/analyze reg {:select [:id] :from [:z] :where [:= :vs :?p]}))) ["abcdefg"] {:registry reg}))))
 
 (deftest a-domains-value-is-sent-as-its-base-types
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:id [:int {:pg/type "integer"}]]
@@ -2361,10 +2380,10 @@
                                                         [:ps [:vector {:pg/type "integer[]" :pg/domain "posint[]"} :pg/integer]]
                                                         [:is [:vector {:pg/type "integer[]"} :pg/integer]]]}})
         ok? (fn [c v] (m/validate (:x (:args (h/analyze reg {:update :t :set {c :?x}}))) v {:registry reg}))]
-    (is (ok? :ps (long-array [1])))
-    (is (not (ok? :ps (long-array [3000000000]))) "a domain's elements, its base type's range")
-    (is (ok? :is (long-array [2147483647])))
-    (is (not (ok? :is (long-array [3000000000]))))))
+    (is (ok? :ps [1]))
+    (is (not (ok? :ps [3000000000])) "a domain's elements, its base type's range")
+    (is (ok? :is [2147483647]))
+    (is (not (ok? :is [3000000000])))))
 
 (deftest a-with-ordinality-table-function-is-named-by-its-alias
   (is (= [] (check {:select [:r.value :r.ordinality] :from [:users [[:with-ordinality [:jsonb_array_elements :users.nick] :r]]]}))))
@@ -2505,8 +2524,7 @@
 
 (deftest some-of-an-argument-is-typed-as-any-of-it
   (let [any (args {:select [:id] :from [:users] :where [:= :id [:any :?ids]]})]
-    (is (m/validate (:ids any) (into-array Long [1]) {:registry registry}) "a Java array of the column's type")
-    (is (not (m/validate (:ids any) [1] {:registry registry})) "a vector goes as jsonb")
+    (is (m/validate (:ids any) [1] {:registry registry}) "a vector of the column's values")
     (is (= any (args {:select [:id] :from [:users] :where [:= :id [:some :?ids]]})))))
 
 (deftest a-set-operation-resolves-its-members-two-at-a-time-from-the-left
@@ -2603,11 +2621,11 @@
              {:select [[[:count [:distinct :nick]] :a]] :from [:users]}]]
     (is (= [] (check q)) (pr-str q))))
 
-(deftest an-enum-compared-with-any-takes-a-pgobject-of-its-array-type-its-elements-the-labels
+(deftest an-enum-compared-with-any-takes-a-vector-of-its-labels
   (let [x (:ms (args {:select [:id] :from [:users] :where [:= :mood [:any :?ms]]}))]
-    (is (= "PGobject of mood[]" (:pgmalli/describe (shape/props x))))
-    (is (= [:happy :sad] (vec (shape/entries (:pgmalli/element (shape/props x))))) "the elements' schema, for an application sending them its own way")
-    (is (not (m/validate x (into-array String ["happy"]) {:registry registry})) "a String[] goes as varchar[]: mood = character varying does not exist")))
+    (is (= (compared-array [:enum {:pg/type "mood"} :happy :sad] "mood[]" "mood[]") x) "sent untyped, its text read as mood[]")
+    (is (m/validate x #{:happy} {:registry registry}))
+    (is (not (m/validate x [:angry] {:registry registry})) "a label of no mood")))
 
 (deftest an-unknown-table-is-reported-once-though-returning-sees-it-as-old-and-new-too
   (doseq [q [{:update :userz :set {:nick "a"} :returning [:id]} {:delete-from :userz :returning [:id]}]]
@@ -2693,9 +2711,8 @@
 
 (deftest an-unnest-tables-column-is-read-as-a-parameter-is
   (let [ids #(:ids (args % opts))
-        q (fn [op] {:select [:id] :from [:users] :join [[[:unnest :?ids] :i] [op :users.id :i]]})]
-    (is (m/validate (ids (q :is-not-distinct-from)) (into-array Long [1 nil]) {:registry registry}) "IS NOT DISTINCT FROM takes NULL")
-    (is (not (m/validate (ids (q :=)) (into-array Long [1 nil]) {:registry registry})) "= matches no NULL")
+        q (fn [op] {:select [:id] :from [:users] :join [[[:unnest [:cast :?ids [:raw "bigint[]"]]] :i] [op :users.id :i]]})]
+    (is (m/validate (ids (q :is-not-distinct-from)) [1 nil] {:registry registry}) "IS NOT DISTINCT FROM takes NULL")
     (is (= (ids {:select [:id] :from [:users] :where [:= :users.group_id [:cast :x.i :integer]] :join [[[:unnest :?ids] [:x {:columns [:i]}]] true]})
            (ids {:select [:id] :from [:users] :join [[[:unnest :?ids] [:x {:columns [:i]}]] true]
                  :where [:exists {:select [1] :from [:groups] :where [:= :groups.id [:cast :x.i :integer]]}]}))
@@ -2707,13 +2724,13 @@
         ss #(:ss (args (q %) opts))
         plain (g {:select [:?g :?s]})]
     (is (= plain (:g (args {:insert-into :users :values [{:group_id :?g :score :?s}]}))) "a row of arguments reaches the column, as one of :values does")
-    (is (not (m/validate (ss {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]}) (into-array Integer [(int 1) nil]) {:registry registry}))
+    (is (not (m/validate (ss {:select [:?g :x.s] :from [[[:unnest [:cast :?ss [:raw "integer[]"]]] [:x {:columns [:s]}]]]}) [1 nil] {:registry registry}))
         "unnest of arguments drops no element")
     (doseq [more [{:where [:is-not :?g nil]} {:having true} {:limit 1} {:offset 1} {:group-by [:?s]} {:from [:groups]}
                   {:where [:not [:exists {:select [1] :from [:users] :where [:= :score 5]}]]}]]
       (is (= plain (g (merge {:select [:?g :?s]} more))) (str (pr-str more) ": a row it writes takes no nil, PostgreSQL refusing it there")))
     (doseq [more [{:where [:= :x.s 1]} {:join [:groups [:= :groups.id 1]]}]]
-      (is (not (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest :?ss] [:x {:columns [:s]}]]]} more)) (into-array Integer [(int 1) nil]) {:registry registry})) (pr-str more)))
+      (is (not (m/validate (ss (merge {:select [:?g :x.s] :from [[[:unnest [:cast :?ss [:raw "integer[]"]]] [:x {:columns [:s]}]]]} more)) [1 nil] {:registry registry})) (pr-str more)))
     (let [t (g {:select [:?g :?s] :where [:is-not [:cast :?g :integer] nil]})]
       (is (every? #(m/validate t % {:registry registry}) [nil 1])
           "tested for NULL, cast so that PostgreSQL types it (a bare ? IS NOT NULL is 42P18 for a NULL): nil writes no row")
@@ -2819,7 +2836,7 @@
         "nil only where every use takes it")))
 
 (deftest a-pg-catalog-relation-has-the-columns-of-the-catalog-snapshot
-  (is (= {:names [:pg/array [:string {:pg/type "name"}]]}
+  (is (= {:names (compared-array [:or [:string {:pg/type "name"}] :keyword] "name[]" "name[]")}
          (args {:select [:c.oid] :from [[:pg_class :c]] :where [:= :c.relname [:any :?names]]})))
   (is (= [:map [:relname [:string {:pg/type "name"}]]]
          (row {:select [:c.relname] :from [[:pg_class :c]]} opts)))
@@ -2890,7 +2907,7 @@
       "schema-problems' :var first")
   (is (= {:pgmalli/problems []} (second (h/query-schema registry [] {:select [:id] :from [:users]} opts)))
       "a query schema's parts are where they are, problems or not")
-  (is (= {:args ["(bigint | numeric | float8 | real)[]"] :returns [{:id "bigint"}]}
+  (is (= {:args ["bigint[] | PGobject of bigint[]"] :returns [{:id "bigint"}]}
          (pgmalli/describe registry (h/query-schema registry [:ids] {:select [:id] :from [:users] :where [:= :id [:any :?ids]]} opts)))))
 
 (deftest special-syntax-writing-an-operator-names-its-column-?column?
@@ -2921,9 +2938,9 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                          [:ids [:vector {:pg/type "integer[]"} [:maybe [:int {:pg/type "integer"}]]]]]}})
         t (:x (:args (h/analyze reg {:select [[[:coalesce :ids :?x] :v]] :from [:t]})))]
-    (is (m/validate t (int-array [1]) {:registry reg}))
-    (is (m/validate t (double-array [1.5]) {:registry reg}) "coalesce(integer[], double precision[]) is a double precision[]")
-    (is (not (m/validate t (into-array String ["a"]) {:registry reg})) "text[] is of another category")))
+    (is (m/validate t [1 nil] {:registry reg}))
+    (is (not (m/validate t [1.5] {:registry reg})) "untyped, it resolves to integer[], whose input reads no fraction")
+    (is (not (m/validate t ["a"] {:registry reg})))))
 
 (deftest an-argument-where-every-candidate-type-refuses-an-untyped-value-takes-a-typed-one-alone
   (let [ok? #(m/validate %1 %2 {:registry registry})
@@ -3164,10 +3181,10 @@
   (let [t (args {:select [:id] :from [:users] :where [:or [:= [:cast :?ids [:raw "bigint[]"]] nil] [:= :id [:any :?ids]]]})
         ids (:ids t)
         ok? #(m/validate ids % {:registry registry})]
-    (is (ok? (long-array [1 2])))
-    (is (not (ok? (into-array String ["1"]))) "the cast reads a String, = ANY sends it as varchar[]")
+    (is (ok? [1 2]))
+    (is (not (ok? ["1"])) "a String is no bigint's own")
     (is (ok? nil) "the query tests it for NULL")
-    (is (= "(bigint | numeric | float8 | real)[]?" (pgmalli/describe registry ids)) "described as the common type"))
+    (is (= "(bigint[] | PGobject of bigint[])?" (pgmalli/describe registry ids)) "described as the common type"))
   (is (= "varchar(40) | keyword" (pgmalli/describe registry (:x (args {:update :users :set {:nick :?x} :where [:= :nick :?x]}))))
       "an assignment's varchar(40) within a comparison's varchar")
   (is (= "(varchar | keyword) & (date | timestamp | timestamptz)" (pgmalli/describe registry (:x (args {:select [:id] :from [:users] :where [:and [:= :nick :?x] [:= :born :?x]]}))))
@@ -3221,10 +3238,12 @@
       (is (not (ok? values {:id 1 :j {:a 1}})))
       (is (not (ok? set {:j {:a 1}})))
       (is (ok? values {:id 1 :j [:lift {:a 1}]}))
-      (is (ok? set {:j [:lift [1]]})))
-    (testing "a vector lifted to an array column goes as jsonb, which PostgreSQL does not assign"
-      (is (= [{:kind :literal-type :function "tags" :column :tags :value ["a"] :sent "jsonb" :type "text[]"}]
-             (:problems (h/analyze reg {:update :t :set {:tags [:lift ["a"]]} :where [:= :id 1]}))))
+      (is (ok? set {:j [:lift (accept/jsonb [1])]}))
+      (is (not (ok? set {:j [:lift [1]]})) "a vector unmarked, which goes as an array"))
+    (testing "a vector lifted to an array column goes as one, untyped"
+      (is (= [] (:problems (h/analyze reg {:update :t :set {:tags [:lift ["a"]]} :where [:= :id 1]}))))
+      (is (= [{:kind :literal-type :function "j" :column :j :value [1] :sent nil :type "jsonb"}]
+             (:problems (h/analyze reg {:update :t :set {:j [:lift [1]]} :where [:= :id 1]}))))
       (is (= [] (:problems (h/analyze reg {:update :t :set {:j [:lift {:a 1}]} :where [:= :id 1]})))))
     (testing "an enum label in :set is [:lift :ok], as in :values"
       (is (= [{:kind :unknown-column :column :ok :clause :set :target :m}]
@@ -3302,7 +3321,7 @@
       (is (str/ends-with? (first (say {:select [:id] :from [:billing.invoices] :where [:= :state "sent"]} {})) "write [:lift :sent]"))
       (is (str/ends-with? (first (say {:select [:id] :from [:billing.invoices] :where [:= :state "in progress"]} {})) "write [:cast \"in progress\" :billing.state]"))
       (is (= [] (:problems (h/analyze two-schemas {:select [:id] :from [:billing.invoices] :where [:= :state [:lift :sent]]})))))
-    (is (= "billing.state[]" (:type (first (:problems (h/analyze two-schemas {:update :billing.invoices :set {:states [:lift ["sent"]]}})))))))
+    (is (= "billing.state[]" (:type (first (:problems (h/analyze two-schemas {:update :billing.invoices :set {:states [:lift [1]]}})))))))
   (testing "a cast to a type of no schema the query reads, which an enum of another has the name of"
     (is (= [{:kind :unknown-type :type "mood" :did-you-mean ["app.mood"]}]
            (:problems (h/analyze two-schemas {:select [:id] :from [:invoices] :where [:= :payer_mood [:cast "happy" :mood]]} {:schema "billing"}))))
@@ -3406,13 +3425,12 @@
     (is (= [:maybe i] n))
     (is (not (m/validate i "10.0.0.1" {:registry reg})) "a String goes as varchar, which inet takes not")))
 
-(deftest an-array-column-of-a-type-no-java-array-goes-as-takes-a-pgobject-of-it
+(deftest an-array-column-takes-a-vector-of-its-elements-text-or-a-pgobject
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ts [:maybe [:vector {:pg/type "time[]"} :time/local-time]]]
                                                          [:ns [:maybe [:vector {:pg/type "numeric[]"} 'decimal?]]]]}})
         {:keys [ts ns]} (:args (h/analyze reg {:update :t :set {:ts :?ts :ns :?ns}}))]
-    (is (= "PGobject of time[]?" (pgmalli/describe ts)) "pgjdbc sends no Java array as time[]")
-    (is (m/validate ns (into-array Double [##NaN]) {:registry reg}) "float8[] to numeric[], element by element: NaN as it is")
-    (is (not (m/validate ns (into-array Double [1.5]) {:registry reg})) "1.5 would change")))
+    (is (= "(((time | org.postgresql.util.PGobject)?)[] | PGobject of time[])?" (pgmalli/describe ts)))
+    (is (m/validate ns [##NaN 1.5 1] {:registry reg}) "each element's text read by numeric's input")))
 
 (deftest a-generated-row-is-within-the-bounds-the-registry-generates-a-column-in
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:v [:maybe [:string {:pg/max-length 3 :pg/type "character varying"}]]]
@@ -3484,7 +3502,7 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t" :pg/before-triggers {:insert ["fill"]}}
                                                         [:group_id [:int {:pg/type "bigint"}]] [:nick [:maybe [:string {:pg/type "text"}]]]]}})
         doc (-> (:args (h/analyze reg {:insert-into [[:t [:group_id :nick]] {:select [:group_id :nick] :from [[[:jsonb_populate_recordset [:cast nil :t] :?rows] :r]]}]}))
-                :rows shape/non-null shape/alternatives first last shape/and-base)
+                :rows shape/non-null shape/alternatives first shape/and-base last shape/and-base)
         key-type #(shape/non-null (last (some (fn [e] (when (and (vector? e) (= % (first e))) e)) (rest doc))))]
     (is (= ["fill"] (:pgmalli/before-triggers (shape/props (key-type :group_id)))))
     (is (nil? (:pgmalli/before-triggers (shape/props (key-type :nick)))) "a nullable column's is nullable of itself")))
@@ -3560,11 +3578,10 @@
     (is (ok? :c))
     (is (not (ok? :t)) "PostgreSQL takes it as varchar: docs/queries.md#stricter-character")))
 
-(deftest a-numeric-arrays-empty-array-is-of-a-class-sent-as-a-number-type
+(deftest a-numeric-array-takes-an-empty-vector
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ns [:vector {:pg/type "numeric[]"} 'decimal?]] [:r [:double {:pg/type "real"}]]]}})
         t (:x (:args (h/analyze reg {:update :t :set {:ns :?x}})))]
-    (is (m/validate t (into-array Double []) {:registry reg}))
-    (is (not (m/validate t (into-array String []) {:registry reg})) "an empty String[] goes as varchar[]")
+    (is (m/validate t [] {:registry reg}))
     (is (< 1 (count (distinct (map :r (mg/sample (h/values-schema reg :t) {:registry reg :size 20 :seed 1}))))) "a real generates Floats of many values")))
 
 (deftest a-numeric-of-a-precision-written-generates-within-it
@@ -3673,14 +3690,12 @@
     (is (thrown? clojure.lang.ExceptionInfo (mg/generate (h/values-schema reg :t {:format {:inline true}}) {:registry reg :seed 1})))))
 
 (deftest a-required-date-array-written-generates
-  ;; babashka has no java.sql.Date, which a date[]'s Java array is of
-  (when-not (System/getProperty "babashka.version")
-    (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                           [:d [:vector {:pg/type "date[]"} :time/local-date]]
                                                           [:e [:vector {:pg/type "date[]"} :time/local-date]]
                                                           [:ts [:vector {:pg/type "timestamp with time zone[]"} :time/instant]]]}})
           v (h/values-schema reg :t)]
-      (is (every? #(m/validate v (mg/generate v {:registry reg :seed % :size 10}) {:registry reg}) (range 40))))))
+      (is (every? #(m/validate v (mg/generate v {:registry reg :seed % :size 10}) {:registry reg}) (range 40)))))
 
 (deftest a-required-column-generating-nothing-names-itself-failing
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:i [:any {:pg/type "interval"}]]]}})
@@ -3703,13 +3718,12 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n [:int {:pg/type "integer"}]] [:j [:any {:pg/type "jsonb"}]]]}})
         problems #(:problems (h/analyze reg %))]
     (doseq [q [{:select [:n] :from [:t] :where [:= :n [:any [:lift '(1 2)]]]}
-               {:select [[[:cast [:lift #{1}] :jsonb] :x]]}
                {:select [[[:lift '(1 2)] :x]]}]]
-      (is (= [{:kind :literal-type :value (-> q pr-str (str/includes? "#{1}") (if #{1} '(1 2))) :sent nil}] (problems q)) (pr-str q)))
+      (is (= [{:kind :literal-type :value '(1 2) :sent nil}] (problems q)) (pr-str q)))
     (is (= 1 (count (problems {:update :t :set {:j [:lift '(1 2)]}}))) "once where a slot reports it")
     (is (= [] (problems {:select [:n] :from [:t] :where [:in :n [:lift '(1 2)]]})) "IN, written a list of its elements")
-    (is (= [] (problems {:select [[[:lift [1 2]] :x]]})) "a vector, sent as jsonb")
-    (is (= ["(1 2) is sent as a parameter, which pgjdbc sends no PersistentList as; send a vector (jsonb) or a Java array (an array type)"]
+    (is (= [] (problems {:select [[[:lift [1 2]] :x] [[:lift #{1}] :y]]})) "a vector and a set, sent untyped")
+    (is (= ["(1 2) is sent as a parameter, which pgjdbc sends no PersistentList as; send a vector (an array) or a map (jsonb)"]
            (h/humanize (problems {:select [[[:lift '(1 2)] :x]]}))))))
 
 (deftest an-order-by-item-of-more-than-a-direction-is-written-otherwise

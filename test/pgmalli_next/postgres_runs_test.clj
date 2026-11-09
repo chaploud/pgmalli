@@ -5,8 +5,9 @@
             [honey.sql :as sql]
             [malli.core :as m]
             [malli.generator :as mg]
-            [next.jdbc :as jdbc]
-            [next.jdbc.prepare :as prepare]
+            [next.jdbc]
+            [pgmalli-next.jdbc :refer [jsonb]]
+            [pgmalli-next.test-jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
             [pgmalli-next.honeysql :as h]
@@ -248,8 +249,8 @@
   (when *db*
     (let [reg (registry)]
       (doseq [[q x] [[{:update :typed :set {:f :?x} :where [:= :id 1]} 1.5M]
-                     [{:update :typed :set {:fs :?x} :where [:= :id 1]} (into-array BigDecimal [1.5M])]
-                     [{:update :typed :set {:fs :?x} :where [:= :id 1]} (into-array Double [1.5])]
+                     [{:update :typed :set {:fs :?x} :where [:= :id 1]} [1.5M]]
+                     [{:update :typed :set {:fs :?x} :where [:= :id 1]} [1.5]]
                      [{:select [:r.i] :from [[[:jsonb_populate_record [:cast nil :typed] :?x] :r]]} {:i 2N}]]]
         (testing (pr-str q x)
           (is (some? (runs! q {:x x} {})))
@@ -296,12 +297,12 @@
     (let [reg (registry)
           pair {:select [:r.id :r.name] :from [[[:unnest [:cast :?ids [:raw "bigint[]"]] [:cast :?names [:raw "text[]"]]] [:r {:columns [:id :name]}]]]}]
       (is (= [:map [:id [:maybe [:int {:pg/type "bigint"}]]] [:name [:maybe [:string {:pg/type "text"}]]]] (:row (h/analyze reg pair))))
-      (doseq [[q params] [[pair {:ids (long-array [1 2]) :names (into-array String ["a" "b"])}]
+      (doseq [[q params] [[pair {:ids [1 2] :names ["a" "b"]}]
                           [pair {:ids "{1,2}" :names "{a,b}"}]
-                          [{:select [:id] :from [:accounts] :where [:= :id [:any [:cast :?xs [:raw "bigint[]"]]]]} {:xs (long-array [1])}]
+                          [{:select [:id] :from [:accounts] :where [:= :id [:any [:cast :?xs [:raw "bigint[]"]]]]} {:xs [1]}]
                           [{:select [:id] :from [:accounts] :where [:= :id [:any [:cast :?xs [:raw "bigint[]"]]]]} {:xs "{1}"}]
                           [{:select [[[:cast :?j [:raw "jsonb[]"]] :j]]} {:j "{\"{}\"}"}]
-                          [{:select [:id] :from [:accounts] :where [:= :tags [:cast :?t [:raw "status[]"]]]} {:t (into-array String ["live"])}]
+                          [{:select [:id] :from [:accounts] :where [:= :tags [:cast :?t [:raw "status[]"]]]} {:t [:live]}]
                           [{:select [[[:cast :?t [:raw "status[]"]] :t]]} {:t "{draft}"}]]]
         (testing (pr-str q params)
           (is (some? (runs! q params {})))
@@ -312,15 +313,15 @@
   (when *db*
     (let [reg (registry)
           cast-to #(hash-map :select [[[:cast :?x [:raw %]] :x]])]
-      (doseq [[t x] [["bigint[]" (into-array Long [1 nil])] ["bigint[]" (into-array String ["1"])] ["bigint[]" (into-array Integer [(int 1)])]
-                     ["jsonb[]" (into-array String ["{}"])] ["jsonb[]" "{\"{}\"}"]
-                     ["status[]" (into-array String ["live" nil])] ["dpos[]" (into-array Integer [(int 9) nil])]]]
-        (testing (str t " " (pr-str (if (string? x) x (vec x))))
+      (doseq [[t x] [["bigint[]" [1 nil]] ["bigint[]" ["1"]] ["bigint[]" [(int 1)]]
+                     ["jsonb[]" ["{}"]] ["jsonb[]" "{\"{}\"}"]
+                     ["status[]" ["live" nil]] ["status[]" [:live]] ["dpos[]" [(int 9) nil]]]]
+        (testing (str t " " (pr-str x))
           (is (some? (runs! (cast-to t) {:x x} {})))
           (is (accepted? reg (cast-to t) {:x x} {}))))
-      (doseq [[t x] [["bigint[]" (into-array Boolean [true])] ["jsonb[]" (long-array [1])]
-                     ["status[]" (into-array String ["gone"])]]]
-        (testing (str t " " (pr-str (vec x)))
+      (doseq [[t x] [["bigint[]" [true]] ["bigint[]" [1.5]]
+                     ["status[]" ["gone"]]]]
+        (testing (str t " " (pr-str x))
           (is (refused? (cast-to t) {:x x} {}))
           (is (not (accepted? reg (cast-to t) {:x x} {}))))))))
 
@@ -330,9 +331,9 @@
           star (fn [c t] {:insert-into [[:ul [c]] {:select [:*] :from [[[:unnest [:cast :?xs [:raw t]]] [:r {:columns [c]}]]]}]})
           items (fn [c t] {:insert-into [[:ul [c]] {:select [(keyword (str "r." (name c)))] :from [[[:unnest [:cast :?xs [:raw t]]] [:r {:columns [c]}]]]}]})]
       (doseq [q [star items]
-              [c t ok bad] [[:v "varchar[]" (into-array String ["abc" nil])]
-                            [:n "int[]" (into-array Integer [(int 9)]) (into-array Long [3000000000])]
-                            [:j "jsonb[]" (into-array String ["{}"]) (long-array [1])]]]
+              [c t ok bad] [[:v "varchar[]" ["abc" nil]]
+                            [:n "int[]" [9] [3000000000]]
+                            [:j "jsonb[]" ["{}"] [true]]]]
         (testing (pr-str (q c t))
           (is (some? (runs! (q c t) {:xs ok} {})))
           (is (accepted? reg (q c t) {:xs ok} {}))
@@ -362,6 +363,12 @@
 (deftest a-populate-recordsets-document-takes-the-row-types-columns-as-the-one-sending-writes-them
   (when *db*
     (let [reg (registry)
+          ;; a recordset's document, a vector of rows, is jsonb-marked: a vector alone goes as an array
+          docs (fn [params] (update-vals params #(cond-> % (and (vector? %) (every? map? %)) jsonb)))
+          [runs*! accepted*? refused*?] [runs! accepted? refused?]
+          runs! (fn [q p o] (runs*! q (docs p) o))
+          accepted? (fn [r q p o] (accepted*? r q (docs p) o))
+          refused? (fn [q p o] (refused*? q (docs p) o))
           insert (fn [t cols] {:insert-into [[t cols] {:select cols :from [[[:jsonb_populate_recordset [:cast nil t] :?rows] :r]]}]})
           q (insert :positions [:group_id :name :sort_order])]
       (is (some? (runs! q {:rows [{:group_id 1 :name "a" :sort_order 1} {:group_id 2 :name "b"}]} {})))
@@ -410,6 +417,13 @@
 (deftest a-to-recordsets-document-takes-the-columns-its-alias-defines-as-the-one-sending-writes-them
   (when *db*
     (let [reg (registry)
+          ;; a recordset's document, a vector of rows, is jsonb-marked: a vector alone goes as an array
+          docs (fn [params] (update-vals params #(cond-> % (and (vector? %) (every? map? %)) jsonb)))
+          [runs*! accepted*? refused*? returned*?] [runs! accepted? refused? returned?]
+          runs! (fn [q p o] (runs*! q (docs p) o))
+          accepted? (fn [r q p o] (accepted*? r q (docs p) o))
+          refused? (fn [q p o] (refused*? q (docs p) o))
+          returned? (fn [r q p o] (returned*? r q (docs p) o))
           q {:select [:w.pattern :w.role_keys :w.hide :w.n]
              :from [[[:jsonb_to_recordset :?words] [:w {:with-columns [[:pattern :text] [:role_keys :text :array] [:hide :boolean] [:n :int]]}]]]}
           ok [{:pattern "a" :role_keys ["x" nil] :hide true :n 1} {"pattern" "b"} {}]]
@@ -519,43 +533,20 @@
             "an Instant's MAX and MIN go as infinity, which no OffsetDateTime in UTC holds")))))
 
 
-(deftest install-sending-refuses-another-extension-of-a-class-pgmalli-sends
-  (let [install! (requiring-resolve 'pgmalli-next.jdbc/install-sending!)
-        protocol #'prepare/SettableParameter]
-    (install!)
-    (is (nil? (install!)) "its own extension again")
-    (extend java.util.UUID prepare/SettableParameter
-      {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setString s i (str v)))})
-    (try
-      (let [e (is (thrown? clojure.lang.ExceptionInfo (install!)))]
-        (is (= :pgmalli.error/other-sending (:pgmalli/error (ex-data e))))
-        (is (= ["java.util.UUID"] (:given (ex-data e)))))
-      (finally
-        (alter-var-root protocol update :impls dissoc java.util.UUID)
-        (-reset-methods @protocol)))
-    (extend Number prepare/SettableParameter
-      {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setString s i (str v)))})
-    (try
-      (let [e (is (thrown? clojure.lang.ExceptionInfo (install!)))]
-        (is (some #{"java.lang.Long"} (:given (ex-data e))) "a superclass's extension, which a Long goes through"))
-      (finally
-        (alter-var-root protocol update :impls dissoc Number)
-        (-reset-methods @protocol)))
-    (let [next-jdbcs (get-in (:impls @protocol) [Object :set-parameter])]
-      (extend Object prepare/SettableParameter
-        {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setObject s i v))})
-      (try
-        (is (thrown? clojure.lang.ExceptionInfo (install!)) "an application's extension of Object, which every class pgmalli sends reaches")
-        (finally
-          (extend Object prepare/SettableParameter {:set-parameter next-jdbcs}))))
-    (extend clojure.lang.IPersistentCollection prepare/SettableParameter
-      {:set-parameter (fn [v ^java.sql.PreparedStatement s ^long i] (.setString s i (str v)))})
-    (try
-      (is (nil? (install!)) "an interface its own IPersistentMap and IPersistentVector are more specific than")
-      (is (= {:t "object"} (jdbc/execute-one! (datasource) ["SELECT jsonb_typeof(?) AS t" {:a 1}])))
-      (finally
-        (alter-var-root protocol update :impls dissoc clojure.lang.IPersistentCollection)
-        (-reset-methods @protocol)))))
+(deftest sent-sends-a-vector-or-a-set-as-an-array-and-a-marked-vector-as-jsonb
+  (when *db*
+    (let [sent (requiring-resolve 'pgmalli-next.jdbc/sent)
+          jsonb (requiring-resolve 'pgmalli-next.jdbc/jsonb)
+          one #((requiring-resolve 'next.jdbc/execute-one!) (datasource) (sent %) {:builder-fn rs/as-unqualified-maps})]
+      (is (= {:n 3} (one ["SELECT cardinality(?::bigint[]) AS n" [1 nil 3]])) "NULL an element")
+      (is (= {:t "{{1,2},{3,4}}"} (one ["SELECT (?::int[])::text AS t" [[1 2] [3 4]]])) "a vector of vectors, multi-dimensional")
+      (is (= {:t "{\"a\\\"b\",c}"} (one ["SELECT (?::text[])::text AS t" ["a\"b" "c"]])) "quoted, a quote escaped")
+      (is (= {:b true} (one ["SELECT 2 = ANY(?) AS b" #{1 2}])) "a set, untyped: = ANY reads it as the other side's array")
+      (is (= {:t "{ns/a,b}"} (one ["SELECT (?::text[])::text AS t" [:ns/a :b]])) "a keyword element's text, its namespace kept")
+      (is (= {:t "array"} (one ["SELECT jsonb_typeof(?) AS t" (jsonb [1 2])])) "a vector jsonb marks, a document")
+      (is (= {:t "object"} (one ["SELECT jsonb_typeof(?) AS t" {:a 1}])))
+      (is (thrown? java.sql.SQLException (one ["SELECT jsonb_typeof(?) AS t" [1 2]])) "a vector alone, an array literal jsonb's input refuses")
+      (is (= {:t "\\x6162"} (one ["SELECT (?::bytea[])[1]::text AS t" [(.getBytes "ab")]])) "a byte[] element as bytea's hex"))))
 
 (deftest a-jsonb-nested-past-the-stack-is-an-error-naming-the-column
   (when *db*
@@ -573,7 +564,8 @@
       (let [e (is (thrown? clojure.lang.ExceptionInfo (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" {:m m}])) (pr-str m))]
         (is (re-find says (str (ex-message e))) (pr-str m))))
     (let [deep (reduce (fn [v _] [v]) [] (range 5000))]
-      (is (instance? clojure.lang.ExceptionInfo (on-small-stack #(jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" deep]))) "nested deeper than the stack walks"))))
+      (is (instance? clojure.lang.ExceptionInfo (on-small-stack #(jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" (jsonb deep)]))) "nested deeper than the stack walks")
+      (is (instance? clojure.lang.ExceptionInfo (on-small-stack #(jdbc/execute-one! (datasource) ["SELECT ?::int[] AS a" deep]))) "an array likewise"))))
 
 (deftest a-time-of-24-reads-as-the-java-time-types-max
   (when *db*
@@ -621,16 +613,16 @@
         (is (m/validate s row {:registry reg}))
         (is (nil? (written (q row))) (str table " " (pr-str row)))))))
 
-(deftest an-array-column-takes-null-elements-a-pgobject-and-an-empty-array-of-its-type-alone
+(deftest an-array-column-takes-null-elements-a-pgobject-and-an-empty-vector
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                        [:is [:vector {:pg/type "integer[]"} :pg/integer]]
                                                        [:ts [:vector {:pg/type "timestamp with time zone[]"} [:time/instant {:pg/type "timestamp with time zone"}]]]]}})
         ok? (fn [c v] (m/validate (:x (:args (h/analyze reg {:update :t :set {c :?x}}))) v {:registry reg}))]
-    (is (ok? :is (into-array Integer [(int 1) nil])) "PostgreSQL's arrays hold NULLs")
+    (is (ok? :is [1 nil]) "PostgreSQL's arrays hold NULLs")
     (is (ok? :is (pg-object "integer[]" "{1,NULL}")))
-    (is (ok? :ts (into-array java.sql.Timestamp [])))
-    (is (not (ok? :ts (into-array Long []))) "pgjdbc sends an empty Long[] as bigint[], which timestamptz[] takes not")
-    (is (not (ok? :ts (into-array Long [nil]))) "nor one of NULLs alone")))
+    (is (ok? :ts []) "untyped, an empty array of the column's type")
+    (is (ok? :ts [nil java.time.Instant/EPOCH]))
+    (is (not (ok? :ts [1])) "a number timestamptz's input reads not")))
 
 (deftest money-reads-as-a-pgobject-of-its-text-which-it-is-written-back-as
   (when *db*
@@ -677,25 +669,18 @@
           q #(sql/format {:insert-into :accounts :values [%]} {:inline true})]
       (doseq [row (mg/sample (h/values-schema reg :accounts {:format {:inline true}}) {:registry reg :size 30 :seed 3})]
         ;; a key or a CHECK is the database's to hold (docs/types.md)
-        (is (nil? (try (jdbc/with-transaction [tx (datasource) {:rollback-only true}] (jdbc/execute! tx (q row)) nil)
+        (is (nil? (try (next.jdbc/with-transaction [tx (datasource) {:rollback-only true}] (jdbc/execute! tx (q row)) nil)
                        (catch java.sql.SQLException e (when-not (#{"23505" "23503" "23514"} (.getSQLState e)) (ex-message e)))))
             (pr-str row))))))
 
-(deftest a-class-refused-is-sent-not-and-the-registry-refused-it-takes-no-argument-of-it
-  (let [install! (requiring-resolve 'pgmalli-next.jdbc/install-sending!)
-        data {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ts [:time/instant {:pg/type "timestamp with time zone"}]]]} :schemas ["public"]}
+(deftest the-registry-refused-a-class-takes-no-argument-of-it
+  (let [data {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ts [:time/instant {:pg/type "timestamp with time zone"}]]]} :schemas ["public"]}
         ts (fn [opts] (let [reg (pgmalli/registry data opts)] [reg (:ts (:args (h/analyze reg {:update :t :set {:ts :?ts}})))]))
         ldt (java.time.LocalDateTime/of 2026 1 1 0 0)]
     (let [[reg t] (ts {:refused [java.time.LocalDateTime]})]
-      (is (not (m/validate t ldt {:registry reg})) "an argument takes no value of it, whatever install-sending! was given")
+      (is (not (m/validate t ldt {:registry reg})) "an argument takes no value of it")
       (is (m/validate t java.time.Instant/EPOCH {:registry reg})))
-    (let [[reg t] (ts {})] (is (m/validate t ldt {:registry reg}) "of a registry not refusing it, an argument takes it"))
-    (try
-      (install! {:refused [java.time.LocalDateTime]})
-      (let [e (is (thrown? clojure.lang.ExceptionInfo (jdbc/execute-one! (datasource) ["SELECT ?::text AS v" ldt])))]
-        (is (= "java.time.LocalDateTime" (:given (ex-data e)))))
-      (finally (install!)))
-    (is (= {:v "2026-01-01 00:00:00"} (jdbc/execute-one! (datasource) ["SELECT ?::timestamp::text AS v" ldt])) "installed again without it, the driver sends it")))
+    (let [[reg t] (ts {})] (is (m/validate t ldt {:registry reg}) "of a registry not refusing it, an argument takes it"))))
 
 (deftest an-interval-is-sent-of-a-duration-or-a-period-and-read-whole
   (let [rows (jdbc/execute-one! (datasource) ["SELECT ?::interval::text AS d, ?::interval::text AS nd, ?::interval::text AS p,
