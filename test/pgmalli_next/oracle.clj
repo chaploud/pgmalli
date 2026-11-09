@@ -325,10 +325,12 @@
    NULL set into a NOT NULL column by an UPDATE or ON CONFLICT DO UPDATE, which fails once a row
    is touched or conflicts, or left out of one by an INSERT ... SELECT, once it returns a row;
    t.name of a t with no column name, which PostgreSQL reads as t's row converted to name; a label the result set's columns (labels, a delay) have
-   more than once. listed: listed of the schema; the column is one of a relation query names."
+   more than once; an ORDER BY item of more than a direction, whose rest sql/format drops, the
+   query PostgreSQL runs not the one written (honeysql_contract_test pins the drop). listed: listed of the schema; the column is one of a relation query names."
   [listed id query labels p]
   (case (:kind p)
     :duplicate-column (< 1 (count (filter #{(name (:column p))} @labels)))
+    :written-otherwise (contains? p :order-by)
     :enum-literal (or (enum-literal-by-design id)
                       (let [c (:column p)
                             named (set (map name (filter keyword? (tree-seq coll? seq query))))]
