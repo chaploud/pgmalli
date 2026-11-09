@@ -231,16 +231,17 @@
 (def ^:private inline-rows (rows-of inline-classes))
 
 (defn write-rows
-  "[schema type class] for each class the one sending sends, in accept/class-types' order, by array?
+  "[schema type class] for each class the one sending sends, but the refused, in accept/class-types' order, by array?
    an array argument's (a Java array, :pgmalli/element in its elements' place) or another's;
    under ::json, a value of a JSON document as accept/json-classes writes it, no array; under
    sql/format's :inline, a value it writes as a literal (inline-classes), no array; a Character
    under ::characters alone (sends)."
   [opts array?]
-  (cond (::json opts) (if array? [] (get json-rows false []))
-        (:inline (:format opts)) (get inline-rows array? [])
-        (::characters opts) (get character-rows array? [])
-        :else (get sent-rows array? [])))
+  (cond->> (cond (::json opts) (if array? [] (get json-rows false []))
+                 (:inline (:format opts)) (get inline-rows array? [])
+                 (::characters opts) (get character-rows array? [])
+                 :else (get sent-rows array? []))
+    (seq accept/refused) (into [] (remove #(contains? accept/refused (nth % 2 nil))))))
 
 (defn sent-as
   "The alternatives of the schemas of the classes, no array, the one sending sends as type t; with
@@ -323,7 +324,7 @@
           (and (= :any (:schema (types/entry t))) (not (types/json? t)) (not (array-column? schema))) [(if (= :some head) :some :any) {:pg/type t}]
           :else (driver-type schema pgjdbc?))))
 
-(declare write-type)
+(declare typed-pg-object write-type)
 
 (def pg-object
   "A PGobject or an instance of a subclass, by name: pgjdbc need not be loaded. pgjdbc sends it as
@@ -479,7 +480,8 @@
       (cond ;; a json or jsonb column an override shapes: what is sent as its type is held to that shape
             (and (types/json? (pg-type schema)) (not (#{:any :some} (shape/head schema)))) schema
             (empty? sent) t
-            (= :any (shape/head t)) (shape/either sent t)
+            ;; the driver's object of the type too (a PGInterval), a PGobject of it, where none is sent
+            (= :any (shape/head t)) (shape/either (cond-> sent (not (types/json? (pg-type schema))) (concat [(typed-pg-object (pg-type schema))])) t)
             ;; a kind the column's own values have already takes their bounds (an integer's range)
             :else (shape/either (concat (shape/alternatives t) (remove #(= (value-kind %) (value-kind (shape/and-base t))) sent)) t)))))
 

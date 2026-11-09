@@ -69,6 +69,8 @@
    [java.time.LocalTime "time without time zone" :time/local-time] [java.time.OffsetTime "time with time zone" :time/offset-time]
    [java.time.LocalDateTime "timestamp without time zone" :time/local-date-time]
    [java.time.OffsetDateTime "timestamp with time zone" :time/offset-date-time]
+   ;; as an interval PGobject of its ISO-8601 text, which interval's input reads (pgjdbc sends neither)
+   [java.time.Duration "interval" :time/duration] [java.time.Period "interval" :time/period]
    ;; the arrays pgjdbc's ArrayEncoding encodes, primitive and boxed
    [(array Long/TYPE) "bigint[]"] [(array Long) "bigint[]"] [(array Integer/TYPE) "integer[]"] [(array Integer) "integer[]"]
    [(array Short/TYPE) "smallint[]"] [(array Short) "smallint[]"] [(array Double/TYPE) "double precision[]"]
@@ -87,6 +89,17 @@
    ;; the one sending's jsonb writes a key as its text (a keyword's namespace kept): no nil key
    [clojure.lang.IPersistentMap "jsonb" [:map-of :some :any]] [clojure.lang.IPersistentVector "jsonb" [:vector :any]]]))
 
+(def refused
+  "The classes the one sending refuses to send (pgmalli-next.jdbc/install-sending!'s :refused),
+   which no argument takes: the application's, of the whole JVM, as the sending is."
+  #{})
+
+(defn refuse!
+  "Makes classes the ones the one sending refuses."
+  [classes]
+  (alter-var-root #'refused (constantly (set classes)))
+  nil)
+
 (def values
   "A value of each class of classes with a schema (a byte[] too), by class."
   (into {} (filter (comp some? key))
@@ -98,6 +111,7 @@
          java.time.LocalDateTime (java.time.LocalDateTime/of 2026 1 1 0 0)
          java.time.OffsetDateTime (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)
          java.time.Instant java.time.Instant/EPOCH
+         java.time.Duration (java.time.Duration/ofMinutes 90) java.time.Period (java.time.Period/of 1 2 3)
          bytes-class (.getBytes "a") clojure.lang.Keyword :a
          clojure.lang.IPersistentMap {:a 1} clojure.lang.IPersistentVector [1]}))
 

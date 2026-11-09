@@ -14,7 +14,7 @@
             [pgmalli-next.impl.types :as types])
   (:import (java.sql Array PreparedStatement ResultSet ResultSetMetaData Types)
            (java.time Instant LocalDate LocalDateTime LocalTime OffsetDateTime OffsetTime ZoneOffset)
-           (org.postgresql.util PGobject)))
+           (org.postgresql.util PGInterval PGobject)))
 
 ;;; reading
 
@@ -35,6 +35,18 @@
     OffsetDateTime/MIN Instant/MIN
     (.toInstant v)))
 
+(defn- interval
+  "An interval as java.time holds it whole: a Period of years, months and days alone, a Duration
+   of a time alone (its fraction and sign too); one of both (1 day 02:00, whose day is no 24
+   hours where it is added across a change of offset) pgjdbc's PGInterval."
+  [^PGInterval v]
+  (let [y (.getYears v) mo (.getMonths v) d (.getDays v)
+        time? (or (not (zero? (.getHours v))) (not (zero? (.getMinutes v))) (not (zero? (.getWholeSeconds v))) (not (zero? (.getMicroSeconds v))))]
+    (cond (and (zero? y) (zero? mo) (zero? d)) (-> (java.time.Duration/ofHours (.getHours v)) (.plusMinutes (.getMinutes v))
+                                                    (.plusSeconds (.getWholeSeconds v)) (.plusNanos (* 1000 (.getMicroSeconds v))))
+          (not time?) (java.time.Period/of y mo d)
+          :else v)))
+
 (def ^:private by-kind
   "(fn [^ResultSet rs i]) reading a column of a type of each schema kind (types/types') as the one
    reading reads it, through pgjdbc's java.time reading."
@@ -42,7 +54,8 @@
    :time/local-date-time (fn [^ResultSet rs i] (.getObject rs (int i) LocalDateTime))
    :time/local-date (fn [^ResultSet rs i] (.getObject rs (int i) LocalDate))
    :time/local-time (fn [^ResultSet rs i] (.getObject rs (int i) LocalTime))
-   :time/offset-time (fn [^ResultSet rs i] (.getObject rs (int i) OffsetTime))})
+   :time/offset-time (fn [^ResultSet rs i] (.getObject rs (int i) OffsetTime))
+   :time/duration (fn [^ResultSet rs i] (some-> (.getObject rs (int i)) interval))})
 
 (declare read-array)
 
@@ -147,6 +160,8 @@
    namespace loaded again makes other functions)."
   (update-vals {Instant (fn [v ^PreparedStatement s ^long i] (.setObject s i (offset-date-time v)))
                 clojure.lang.Keyword (fn [k ^PreparedStatement s ^long i] (.setObject s i (accept/sent-text k) Types/OTHER))
+                java.time.Duration (fn [d ^PreparedStatement s ^long i] (.setObject s i (doto (PGobject.) (.setType "interval") (.setValue (str d)))))
+                java.time.Period (fn [p ^PreparedStatement s ^long i] (.setObject s i (doto (PGobject.) (.setType "interval") (.setValue (str p)))))
                 clojure.lang.IPersistentMap (fn [m ^PreparedStatement s ^long i] (.setObject s i (jsonb m)))
                 clojure.lang.IPersistentVector (fn [v ^PreparedStatement s ^long i] (.setObject s i (jsonb v)))}
                #(with-meta % {::sending true})))
@@ -163,13 +178,27 @@
                  impl)
         (impl Object))))
 
+(defn- refusing
+  "The set-parameter of a class the application does not send: an error naming it."
+  [^Class c]
+  (with-meta (fn [_ _ _] (error/fail! :pgmalli.error/invalid-options
+                                      (str "install-sending! refuses to send a " (.getName c) " ({:refused ...}): send a value of another class")
+                                      {:given (.getName c)}))
+    {::sending true ::refused true}))
+
 (defn install-sending!
   "Extends next.jdbc's SettableParameter, for the whole JVM, for the classes
    docs/reading-rows.md#the-one-reading-and-sending lists. Call it once, before sending arguments.
    Throws where another extension of it already holds a class pgmalli sends (accept/classes'),
    which would go otherwise than pgmalli types it: next.jdbc.date-time's, an application's own;
-   one made after it is not seen."
-  []
+   one made after it is not seen. :refused, classes the application does not send (a
+   LocalDateTime, of no time zone): sending one is an error, and no argument takes one.
+
+   (install-sending! {:refused [java.time.LocalDateTime]})"
+  ([] (install-sending! {}))
+  ([{:keys [refused] :as opts}]
+  (error/checked! [:map {:closed true} [:refused {:optional true} [:sequential [:fn {:error/message "should be a class"} class?]]]] opts)
+  (let [sending (merge sending (into {} (map (juxt identity refusing)) refused))]
   (let [impls (:impls prepare/SettableParameter)
         ours? #(::sending (meta %))
         ;; next.jdbc's own, which an application's extension of Object replaces
@@ -193,5 +222,13 @@
                         ", which pgmalli types as pgjdbc's setObject or install-sending! sends them; drop that extension"
                         " (next.jdbc.date-time extends Instant, LocalDate and LocalDateTime when it loads)")
                    {:given (mapv #(.getName ^Class %) others)})))
+  ;; a class refused before and no longer: the driver's again
+  (let [dropped (for [[c m] (:impls prepare/SettableParameter)
+                      :when (and (::refused (meta (:set-parameter m))) (not (contains? (set refused) c)))]
+                  c)]
+    (when (seq dropped)
+      (alter-var-root #'prepare/SettableParameter #(apply update % :impls dissoc dropped))
+      (-reset-methods prepare/SettableParameter)))
   (doseq [[c f] sending]
-    (extend c prepare/SettableParameter {:set-parameter f})))
+    (extend c prepare/SettableParameter {:set-parameter f}))
+  (accept/refuse! refused))))

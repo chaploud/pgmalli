@@ -325,6 +325,7 @@ by the one sending, `pgmalli-next.jdbc/install-sending!`
 | `Boolean`, `String`, `Character`, `UUID`, `byte[]` | `boolean`, `varchar`, `varchar`, `uuid`, `bytea` |
 | `LocalDate`, `LocalTime`, `LocalDateTime` | `date`, `time`, `timestamp` |
 | `OffsetTime`, `OffsetDateTime`, `Instant` | `timetz`, `timestamptz`, `timestamptz` (an `Instant` as an `OffsetDateTime` in UTC) |
+| `Duration`, `Period` | `interval` (its ISO-8601 text, which interval's input reads to the microsecond) |
 | a keyword | untyped, its text (`:ns/a` as `ns/a`) |
 | a map, a vector | `jsonb` |
 | a Java array (`long[]`, `String[]` ...) | an array of its elements' type (`bigint[]`, `varchar[]`); a `java.sql.Date[]` a `date[]`, a `java.sql.Timestamp[]` a `timestamptz[]` (pgjdbc sends no array of java.time's; a `java.sql.Time[]`, a `timetz[]` of the JVM's offset, is sent nowhere) |

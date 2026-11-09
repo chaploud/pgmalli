@@ -680,3 +680,29 @@
         (is (nil? (try (jdbc/with-transaction [tx (datasource) {:rollback-only true}] (jdbc/execute! tx (q row)) nil)
                        (catch java.sql.SQLException e (when-not (#{"23505" "23503" "23514"} (.getSQLState e)) (ex-message e)))))
             (pr-str row))))))
+
+(deftest install-sending-refuses-a-class-the-application-sends-not-and-no-argument-takes-it
+  (let [install! (requiring-resolve 'pgmalli-next.jdbc/install-sending!)
+        reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:ts [:time/instant {:pg/type "timestamp with time zone"}]]]}})
+        ts #(:ts (:args (h/analyze reg {:update :t :set {:ts :?ts}})))
+        ldt (java.time.LocalDateTime/of 2026 1 1 0 0)]
+    (try
+      (install! {:refused [java.time.LocalDateTime]})
+      (let [e (is (thrown? clojure.lang.ExceptionInfo (jdbc/execute-one! (datasource) ["SELECT ?::text AS v" ldt])))]
+        (is (= ["java.time.LocalDateTime"] [(:given (ex-data e))])))
+      (is (not (m/validate (ts) ldt {:registry reg})) "an argument takes no value of it")
+      (is (m/validate (ts) java.time.Instant/EPOCH {:registry reg}))
+      (finally (install!)))
+    (is (m/validate (ts) ldt {:registry reg}) "installed again without it, an argument takes it")
+    (is (= {:v "2026-01-01 00:00:00"} (jdbc/execute-one! (datasource) ["SELECT ?::timestamp::text AS v" ldt])) "and the driver sends it")))
+
+(deftest an-interval-is-sent-of-a-duration-or-a-period-and-read-whole
+  (let [rows (jdbc/execute-one! (datasource) ["SELECT ?::interval::text AS d, ?::interval::text AS nd, ?::interval::text AS p,
+                                                     interval '1 hour 2.5 seconds' AS rd, interval '-0.5 seconds' AS rn,
+                                                     interval '1 year 2 mons 3 days' AS rp, interval '1 day 02:00' AS rm"
+                                                (java.time.Duration/ofMinutes -90) (.plusNanos (java.time.Duration/ofSeconds 3) 123456789) (java.time.Period/of 1 2 3)]
+                                    {:builder-fn (builder-of *db*)})]
+    (is (= ["-01:30:00" "00:00:03.123457" "1 year 2 mons 3 days"] [(:d rows) (:nd rows) (:p rows)]) "its ISO-8601, which interval's input reads, to the microsecond")
+    (is (= [(.plusMillis (java.time.Duration/ofHours 1) 2500) (java.time.Duration/ofMillis -500) (java.time.Period/of 1 2 3)] [(:rd rows) (:rn rows) (:rp rows)])
+        "a time alone a Duration, its fraction and sign kept; years, months and days alone a Period")
+    (is (instance? org.postgresql.util.PGInterval (:rm rows)) "of both, whose day is no 24 hours, pgjdbc's PGInterval")))

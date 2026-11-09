@@ -2650,12 +2650,12 @@
                 :time/offset-date-time
                 :time/local-date
                 :time/local-date-time]
-          :d [:maybe [:or (jdbc/typed-pg-object "interval") :time/local-time]]
+          :d [:maybe [:or :time/duration :time/period (jdbc/typed-pg-object "interval") :time/local-time]]
           :n [:maybe int-call]} (args {:select [:id] :from [:users]
                     :where [:and [:> :?now [:coalesce :closed_at [:- :current_timestamp [:interval "1 day"]]]]
                             [:< [:+ :closed_at :?d] :current_timestamp]
                             [:= :nick [:repeat "a" :?n]]]})))
-  (is (= "(PGobject of interval | time | timestamptz | date | timestamp)?"
+  (is (= "(interval | PGobject of interval | time | timestamptz | date | timestamp)?"
          (:d (into {} (map vector [:now :d] (:args (pgmalli/describe registry (h/query-schema registry [:now :d] {:select [:id] :from [:users] :where [:> :?now [:- :current_timestamp :?d]]} opts))))))))
   (is (= {:x [:maybe integer-cmp]} (args {:select [[[:case [:= :id 1] :?x :else :score] :c]] :from [:users]}))
       "CASE's values resolve as coalesce's arguments"))

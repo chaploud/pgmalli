@@ -44,7 +44,7 @@ sends](queries.md#what-your-application-sends) lists: `Instant/MAX` and `MIN` as
 times as their ISO-8601 text, a `UUID`, a keyword and a `Character` as their text; a document JSON cannot hold
 an error: [two keys of one text](queries.md#stricter-json-keys), a nil key, a NaN, an infinity, a
 value of another class, a `PGobject`). Every other class goes as
-pgjdbc's `setObject` sends it. Call it once, before sending arguments: without it, pgjdbc refuses
+pgjdbc's `setObject` sends it. `(install-sending! {:refused [java.time.LocalDateTime]})` makes classes your application does not send (a date and time of no time zone) an error to send, and no argument takes one. Call it once, before sending arguments and before analyzing queries: without it, pgjdbc refuses
 a keyword and a vector (a `PSQLException` of SQLState `07006`, which names the class) and sends a
 map as `hstore` (an error naming hstore where that extension is not installed). It throws where another extension already holds a class pgmalli sends
 (`next.jdbc.date-time`'s `LocalDate`), which would go otherwise than pgmalli types it; one made
@@ -77,7 +77,8 @@ What each type comes back as:
 | `money` | a `PGobject` of `money`, its text (`$1,000.50`, as the server's `lc_monetary` writes it), which pgjdbc's `Double` neither holds exactly nor reads past 999.99 |
 | `json`, `jsonb` | parsed: an object a map of keyword keys, an array a vector, `null` nil, an integer an `Integer`, a `Long` past it, a `BigInteger` past that (jsonista's), a fraction a `Double`, booleans and strings as they are; a document nested deeper than the thread's stack holds a `:pgmalli.error/fault` naming the column |
 | an enum type, a domain over one | its label, a keyword (`:active`), of an enum type of the registry `builder` is given; another enum's a `String` |
-| every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` or infinity a `Double`, an `interval` a `PGInterval` (an interval holds months, days and a time at once, which neither a `Duration` nor a `Period` holds alone), `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`, `xml` a `java.sql.SQLXML`) |
+| `interval` | whole: of years, months and days alone a `Period`, of a time alone a `Duration` (its fraction and sign kept), of both (`1 day 02:00`, whose day is no 24 hours across a change of offset) pgjdbc's `PGInterval` |
+| every other type | as pgjdbc returns it: `real` a `Float`, `bit(1)` a `Boolean`, a numeric `NaN` or infinity a `Double`, `citext`, `bit(n)` (n > 1), `bit varying`, `inet` and the other types of `[:any]` a `PGobject` (`hstore` a `java.util.Map`, `xml` a `java.sql.SQLXML`) |
 
 `builder` reads where next.jdbc builds a row (`execute!`, `execute-one!`). `plan`'s `(:col
 row)` builds none and reads the column as pgjdbc returns it (a `java.sql.Timestamp`, a
