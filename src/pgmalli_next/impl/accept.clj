@@ -6,7 +6,8 @@
    pgmalli-next.impl.types keys them by, \"x[]\" for an array of x, [:enum name] for an enum type;
    a caller passes a domain as its base type, a domain over an enum as [:enum name {:domain? true}]. pgmalli-next.accept-test holds both against the one
    sending and PostgreSQL."
-  (:require [pgmalli-next.impl.resolve :as resolve]
+  (:require [pgmalli-next.impl.memo :as memo]
+            [pgmalli-next.impl.resolve :as resolve]
             [pgmalli-next.impl.types :as types]))
 
 ;;; what an application sends
@@ -206,7 +207,7 @@
   "Whether PostgreSQL resolves operator = for a value of type t and one of type sent, in some
    version the catalog holds; an extension's type of strings (citext), whose operators the
    catalog does not hold, as text, which it casts to implicitly."
-  (memoize
+  (memo/bounded
    (fn [t sent]
      (let [os (resolve/overloads :operators "=")
            [t sent] (map #(if (types/extension-string? %) "text" %) [t sent])]

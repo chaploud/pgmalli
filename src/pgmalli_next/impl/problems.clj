@@ -6,6 +6,7 @@
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
+            [pgmalli-next.impl.memo :as memo]
             [pgmalli-next.impl.query :as query]
             [pgmalli-next.impl.shape :as shape]
             [pgmalli-next.impl.types :as types]))
@@ -432,7 +433,7 @@
 (def ^:private select-first?
   "Whether the loaded HoneySQL writes a statement of write clause k (:insert-into, :update,
    :delete-from) and a SELECT of it beside as the SELECT first (SELECT x INSERT INTO t ...)."
-  (memoize (fn [k s] (boolean (some-> (try (first (sql/format {k :t s (if (= :table s) :u [:x])})) (catch Exception _ nil))
+  (memo/bounded (fn [k s] (boolean (some-> (try (first (sql/format {k :t s (if (= :table s) :u [:x])})) (catch Exception _ nil))
                                       str/upper-case (str/starts-with? "SELECT"))))))
 
 (defn- written-first

@@ -3720,3 +3720,12 @@
     (is (= [] (problems {:select [:a] :from [:t] :order-by [[:a :desc-nulls-last]]})))
     (is (= ["[:a :desc :nulls-last] is written :a DESC, :nulls-last dropped: write the direction as one keyword, [:a :desc-nulls-last]"]
            (h/humanize (problems {:select [:a] :from [:t] :order-by [[:a :desc :nulls-last]]}))))))
+
+(deftest a-query-of-many-ctes-is-analyzed-in-time-near-its-size
+  ;; babashka's interpreter runs out of stack on a CTE typed through 400 before it
+  (when-not (System/getProperty "babashka.version")
+   (let [q {:with (vec (for [i (range 400)] [(keyword (str "c" i)) {:select [:id] :from [(if (zero? i) :users (keyword (str "c" (dec i))))] :where [:> :id :?x]}]))
+           :select [:c399.id] :from [:c399]}
+        f (future (h/analyze registry q opts))]
+    (is (not= ::slow (deref f 10000 ::slow)) "each CTE's body read once, not again under each CTE after it")
+    (future-cancel f))))

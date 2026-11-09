@@ -1,6 +1,25 @@
 (ns pgmalli-next.impl.memo
-  "Caches keyed on what queries hold (names, clauses, values), which an application may build from
-   its input: bounded however many queries it analyzes.")
+  "pgmalli's caches, each of a lifetime: one call of a public function (kept, *calls*), dropped
+   with it; and the process (bounded), keyed on what queries hold (names, clauses, values), which
+   an application may build from its input, bounded however many queries it analyzes. What is
+   kept for the schemas of a registry is query/reading's.")
+
+(def ^:dynamic *calls*
+  "The atom of what one call of a pgmalli-next.honeysql public function keeps (analyze binds it),
+   for code that takes no registry; nil outside one."
+  nil)
+
+(defn kept
+  "(thunk), kept in atom m under k; (thunk) itself where m is nil. With reentered, k holds it
+   while thunk runs: a call of k from within it (a CTE reading itself) gets reentered."
+  ([m k thunk]
+   (if m
+     (if-let [[_ v] (find @m k)] v (let [v (thunk)] (swap! m assoc k v) v))
+     (thunk)))
+  ([m k reentered thunk]
+   (if m
+     (if-let [[_ v] (find @m k)] v (do (swap! m assoc k reentered) (let [v (thunk)] (swap! m assoc k v) v)))
+     (thunk))))
 
 (def ^:private limit 10000)
 

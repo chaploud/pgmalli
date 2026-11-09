@@ -72,7 +72,7 @@
   ([registry body] (analyze registry body {}))
   ([registry written opts]
    (let [[registry body opts] (prepared registry written opts option-keys)]
-     (binding [syntax/*scans* (or syntax/*scans* (::query/scans registry))]
+     (binding [memo/*calls* (or memo/*calls* (::query/calls registry))]
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)

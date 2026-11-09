@@ -202,19 +202,10 @@
   [x]
   (and (map? x) (some statement-keys (keys x))))
 
-(def ^:dynamic *scans*
-  "An atom of the walks of a body done in one call of a pgmalli-next.honeysql public function
-   (analyze and query/once bind it), which a query of many CTEs walks again for each; nil for none
-   kept."
-  nil)
-
 (defn- scanned
-  "(apply f args), once per *scans*."
+  "(apply f args), kept within one call (memo/*calls*)."
   [k f & args]
-  (if-let [m *scans*]
-    (let [key (into [k] args)]
-      (if-let [[_ v] (find @m key)] v (let [v (apply f args)] (swap! m assoc key v) v)))
-    (apply f args)))
+  (memo/kept memo/*calls* (into [k] args) #(apply f args)))
 
 (defn nodes
   "The nodes of body in tree-seq's order (branch?'s walk), as a vector."
@@ -223,9 +214,8 @@
     (persistent! (walk (transient []) body))))
 
 (defn- walked
-  "(f x) of each map x in body, in a walk's order (tree-seq's), concatenated: kept per map within
-   *scans*, so that a body holding another one walked (a CTE's statement on its own, holding the
-   entries before it) walks only what is new."
+  "(f x) of each map x in body, in tree-seq's order, concatenated; kept per map, so a body built
+   from another one (a CTE's statement under the entries before it) walks only its new maps."
   [k f body]
   (letfn [(walk [x]
             (cond (map? x) (scanned k #(into (vec (f %)) (mapcat walk) (seq %)) x)
@@ -275,17 +265,10 @@
          ;; each listed column read, to the keyword written
          :written (when listed (zipmap dotted listed))}))))
 
-(defn- per-map
-  "The set of (f m) of each map m in x, kept per map within *scans* as walked keeps its walk."
-  [k f x]
-  (cond (map? x) (scanned k #(into (set (f %)) (mapcat (fn [c] (per-map k f c))) (seq %)) x)
-        (branch? x) (into #{} (mapcat #(per-map k f %)) (seq x))
-        :else #{}))
-
 (defn cte-names
   "Names of the CTEs a query defines, at any depth."
   [body format]
-  (per-map [::cte-names format] (fn [m] (when (statement? m) (keep #(cte-name % format) (cte-entries m)))) body))
+  (set (walked [::cte-names format] (fn [m] (when (statement? m) (keep #(cte-name % format) (cte-entries m)))) body)))
 
 (defn qualified
   "\"schema.table\" of a table keyword: :schema/table, :schema.table, or :table in opts' :schema;
@@ -531,6 +514,12 @@
 
 (def populate-name #"jsonb?_(populate|to)_record(set)?")
 
+(defn populate-candidate?
+  "Whether x may be a call populate-name names: its head (or x) holds record, which every one of
+   them does, whatever its spelling; a check before call-parts, which costs more."
+  [x]
+  (str/includes? (str/lower-case (str (if (vector? x) (first x) x))) "record"))
+
 (defn- populate-item?
   "Whether a FROM item is a call of json_populate_record, jsonb_populate_record, json_to_record,
    jsonb_to_record or their recordset ([[:jsonb_populate_recordset t ?] :r])."
@@ -573,15 +562,15 @@
 (defn standalone
   "Statement inner as a query of its own: itself where it reads no CTE of ctes (those its place
    in query body sees), else under the entries of the one :with of body that define them, up to
-   the last; nil where they are not there, or inner has a :with of its own. One object of the
-   same arguments within *scans*: derived types are kept by it."
+   the last; nil where they are not there, or inner has a :with of its own. The same object of
+   the same arguments within a call: derived-types keys by it, a new map hashed again."
   [body inner ctes opts]
   (scanned ::standalone standalone* body inner ctes opts))
 
 (defn- read-names
   "The names as written of the tables the statements of x read (table-ref's third), at any depth."
   [x format]
-  (per-map [::read-names format] (fn [m] (when (statement? m) (keep #(nth (table-ref % {:format format}) 2) (table-items m)))) x))
+  (set (walked [::read-names format] (fn [m] (when (statement? m) (keep #(nth (table-ref % {:format format}) 2) (table-items m)))) x)))
 
 (defn- cte-index
   "{name [with-entry ...]} of with-entries of body, by the CTE's name, in their order."
@@ -968,7 +957,7 @@
    scope the target table's. feed, for the SELECT of an INSERT ... SELECT, is {:columns :target} of its INSERT:
    its items go to those columns by position."
   [stmt chain outer feed {:keys [format] :as opts}]
-  (let [nodes (fn nodes [k x c expression? call whole?]
+  (let [clause-nodes (fn clause-nodes [k x c expression? call whole?]
                 (letfn [(walk [x neg? top? item? expression?]
                           (let [expression? (or expression? (and (some? call) (identical? x call)))
                                 ;; a clause's value HoneySQL writes as a list (GROUP BY a, b), not a call
@@ -982,7 +971,7 @@
                                          (let [[es items] (distinct-on-parts x)]
                                            (concat (mapcat #(walk % neg? false false expression?) es) (mapcat #(walk % neg? false true expression?) items)))
                                          ;; a window's :frame ([:rows :between :unbounded-preceding :current-row]) is its own clause
-                                         (mapcat #(if (and (map? x) (= :frame (key %))) (nodes :frame (val %) c expression? nil true) (walk % neg? false top? expression?))
+                                         (mapcat #(if (and (map? x) (= :frame (key %))) (clause-nodes :frame (val %) c expression? nil true) (walk % neg? false top? expression?))
                                                  ;; [expr alias], an item of a select list: the alias (:%count.c too) is no expression
                                                  (if (and item? (select-list-clauses k) (vector? x) (= 2 (count x)) (alias? (second x)))
                                                    [(first x)]
@@ -999,8 +988,8 @@
                  item? (and (#{:outer :lateral :group} sees) (not (#{:values :insert-into} k)))
                  using? (and (vector? v) (= :using (first v)))
                  node (fn [x] (if item?
-                                (nodes k x c false (item-call x sees) false)
-                                (nodes k x c (not (or using? (expressionless-clauses k))) nil (and (nil? i) (identical? x v)))))]
+                                (clause-nodes k x c false (item-call x sees) false)
+                                (clause-nodes k x c (not (or using? (expressionless-clauses k))) nil (and (nil? i) (identical? x v)))))]
            p (if (some #{k} join-keys)
                [(node v)]
                (case k

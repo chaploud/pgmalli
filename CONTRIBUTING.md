@@ -55,6 +55,24 @@ before it.
 
 When a change touches what a type becomes, update [docs/types.md](docs/types.md).
 
+## Memory
+
+What pgmalli holds is bounded, and of three kinds alone, each in one place:
+
+- **One call** of a public function: `memo/kept` in the call's `::calls` (`query/once`, and
+  `memo/*calls*`, which `analyze` binds, for code that takes no registry). It is dropped with
+  the call; an application's query, however large, is held only while it is analyzed.
+- **The schemas of a registry**: `query/reading`'s one slot (`last-read`), of the last schemas
+  read, compared by identity, and `shape`'s last registry map checked.
+- **The process**: `memo/bounded`, at most `memo/limit` results each, none of an argument longer
+  than a name PostgreSQL holds (`memo/long-name?`), for what queries name (columns, types,
+  HoneySQL's answers).
+
+No other cache (`memoize`, an atom, `defonce`), and no thread: test/pgmalli_next/caches_test.clj
+names one. A recursion a value drives (java.util.regex's over a long value) runs on the
+caller's stack and refuses what overflows it: a JVM unwinding an overflow of compiled frames
+takes native memory in proportion to the stack, which glibc keeps (a 256 MB stack took 9 GB).
+
 ## Randomized tests
 
 `catalog-fuzz-test`, `honeysql-robust-test` and the oracle draw their cases from a

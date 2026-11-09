@@ -50,7 +50,7 @@
 
 ;; compiled once per set of keys: malli keeps a schema's validator, and options are checked on every call
 (def ^:private options-schema
-  (memoize (fn [ks] (m/schema (into [:map {:closed true :pgmalli/not-a-map "should be a map of options"}] (map option-entries) ks)))))
+  (memo/bounded (fn [ks] (m/schema (into [:map {:closed true :pgmalli/not-a-map "should be a map of options"}] (map option-entries) ks)))))
 
 ;;; what an application sends
 
@@ -61,7 +61,7 @@
 
 (def ^:private class-schema
   ;; memoized: a class's [:fn] is one function, so the schemas of one call equal the next's
-  (memoize (fn [^Class c]
+  (memo/bounded (fn [^Class c]
              (or (get (accept/row-of c accept/classes) 2)
                  ;; a Java array (but byte[], a bytea): :pg/array reads its elements by value, as the
                  ;; column's, which array-type puts in

@@ -9,6 +9,7 @@
             [pgmalli-next.impl.accept :as accept]
             [pgmalli-next.impl.error :as error]
             [pgmalli-next.impl.memo :as memo]
+            [pgmalli-next.impl.registry :as registry]
             [pgmalli-next.impl.hsyntax :as syntax]
             [pgmalli-next.impl.jdbc :as jdbc]
             [pgmalli-next.impl.portable :as portable]
@@ -89,7 +90,7 @@
    merges them on every lookup), the columns of a table memoized, since a column is looked for
    in every table in scope, and the schemas' own functions and operators read once, all of it
    kept for the next call with the same schemas; and, for one call of pgmalli-next.honeysql's
-   public functions, the rows of derived tables and the statements of a query (::calls)."
+   public functions, ::calls: what once and memo/kept keep."
   [registry]
   (let [schemas (shape/schemas-of registry)
         [read r] @last-read
@@ -101,22 +102,18 @@
                            ::generated? (boolean (some shape/generated-name? (keys schemas)))
                            ::table-columns (memo/bounded #(some->> (column-entries r %) (map (fn [[c s]] [c s]))
                                                               (into (if (view? r %) {} system-columns))))
-                           ::routines (memo/bounded #(own-routines r %1 %2 %3)))]
+                           ::routines (memo/bounded #(own-routines r %1 %2 %3))
+                           ;; the malli options a schema of it is validated under (args/malli-options)
+                           ::malli-options (delay {:registry (merge registry/base schemas)}))]
               (reset! last-read [schemas r])
               r))]
-    (assoc r ::derived (atom {}) ::calls (atom {}) ::scans (atom {}))))
+    (assoc r ::calls (atom {}))))
 
 (defn once
   "(f registry & args), once per call of a pgmalli-next.honeysql public function (reading's ::calls): the functions a
    call makes of one another read the same statements."
   [registry f & args]
-  (if-let [memo (::calls registry)]
-    (binding [syntax/*scans* (or syntax/*scans* (::scans registry))]
-      (let [k (into [f] args)]
-        (if-let [[_ v] (find @memo k)]
-          v
-          (let [v (apply f registry args)] (swap! memo assoc k v) v))))
-    (apply f registry args)))
+  (memo/kept (::calls registry) (into [f] args) #(apply f registry args)))
 
 (defn table-columns [registry table] ((::table-columns registry) table))
 
@@ -304,7 +301,7 @@
    of type (\"json\" or \"jsonb\"); arg the argument there, bare or cast to json or jsonb, nil
    for another value. nil for another x."
   [registry scopes x {:keys [schema format]}]
-  (when (str/includes? (str/lower-case (str (if (vector? x) (first x) x))) "record")
+  (when (syntax/populate-candidate? x)
   (let [[kind n args q] (syntax/call-parts x)
         to? (some-> n (str/includes? "_to_"))
         [a json :as args] (if to? (cons nil args) args)]
@@ -507,11 +504,9 @@
    table or to several known ones. A column an opaque table may hold besides one known table is
    the opaque one's, untyped: which of them PostgreSQL takes is not in the data."
   [registry scope col]
-  (if-let [m (::calls registry)]
-    ;; the scopes' ::using too, which column-hits reads and = does not see
-    (let [k [::resolve scope (map (comp ::using meta) (syntax/chain scope)) col]]
-      (if-let [[_ v] (find @m k)] v (let [v (resolve-column* registry scope col)] (swap! m assoc k v) v)))
-    (resolve-column* registry scope col)))
+  ;; the scopes' ::using too, which column-hits reads and = does not see
+  (memo/kept (::calls registry) [::resolve scope (map (comp ::using meta) (syntax/chain scope)) col]
+             #(resolve-column* registry scope col)))
 
 (defn- resolve-column*
   [registry scope col]
@@ -1281,8 +1276,7 @@
 
 (defn- derived-types*
   [registry stmt opts outer]
-  (let [opts (-> opts (dissoc :jdbc) (assoc ::columns true))
-        chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt (assoc opts ::row-only true) outer))]
+  (let [chains (into {} (map (fn [[_ c p]] [p c])) (statement-chains registry stmt (assoc opts ::row-only true) outer))]
     (when-let [entries (row-entries registry stmt [] chains opts)]
       (vec (for [[k _ s] (map shape/entry-parts entries)]
              [(name k) (when-not (= :any s) s)])))))
@@ -1294,14 +1288,9 @@
    when its row cannot be told, or is asked for again while it is read (a CTE read inside itself)."
   ([registry stmt opts] (derived-types registry stmt opts ()))
   ([registry stmt opts outer]
-   ;; one key whatever the options derived-types* adds as it reads (::columns, ::row-only)
-   (let [memo (::derived registry)
-         opts (-> opts (dissoc :jdbc ::row-only) (assoc ::columns true))
-         k [stmt opts outer]]
-     (if (contains? @memo k)
-       (@memo k)
-       (do (swap! memo assoc k nil)
-           (let [v (derived-types* registry stmt opts outer)] (swap! memo assoc k v) v))))))
+   ;; one key whatever ::row-only the caller carries; nil while it is read
+   (let [opts (-> opts (dissoc :jdbc ::row-only) (assoc ::columns true))]
+     (memo/kept (::calls registry) [::derived stmt opts outer] nil #(derived-types* registry stmt opts outer)))))
 
 (defn- returned-entries [registry body opts]
   (row-entries registry body [] (into {} (map (fn [[_ c p]] [p c])) (once registry statement-chains body opts)) opts))

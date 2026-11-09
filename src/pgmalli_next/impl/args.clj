@@ -719,17 +719,10 @@
                                    :any))
           :else (query/nullable (accepted-type registry (first ss) held-in opts)))))
 
-(def ^:private last-options (atom [nil nil]))
-
 (defn malli-options
-  "The malli options a schema of registry r (an argument's, a row's) is validated under, of the
-   last schemas built again only for others."
+  "The malli options a schema of registry r (an argument's, a row's) is validated under."
   [r]
-  (let [schemas (::query/schemas r)
-        [s o] @last-options]
-    (if (and o (identical? s schemas))
-      o
-      (let [o {:registry (merge registry/base schemas)}] (reset! last-options [schemas o]) o))))
+  (if-let [o (::query/malli-options r)] @o {:registry (merge registry/base (::query/schemas r))}))
 
 (defn- refuses?
   "Whether argument schema t refuses literal v; not where malli cannot tell (validate throws)."
