@@ -3729,3 +3729,8 @@
         f (future (h/analyze registry q opts))]
     (is (not= ::slow (deref f 10000 ::slow)) "each CTE's body read once, not again under each CTE after it")
     (future-cancel f))))
+
+(deftest a-recursive-cte-read-from-a-lateral-under-it-is-untyped-not-a-stack-overflow
+  (let [q {:with-recursive [[:r {:select [:x.id] :from [[:users :u] [[:lateral {:select [:id] :from [:r] :where [:= :r.id :u.id]}] :x]]}]]
+           :select [:id] :from [:r] :where [:= :id :?p]}]
+    (is (= [:any {:pgmalli/untyped :type}] (:p (:args (h/analyze registry q opts)))))))

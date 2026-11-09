@@ -1383,12 +1383,19 @@
   [x]
   (if (and (vector? x) (#{:inline :cast} (first x))) (recur (second x)) x))
 
+(defn- conjuncts
+  "The conjuncts of condition c, an AND inside an AND too, in order; eager, as a lazy walk's
+   concatenations nest as deep as c."
+  [c]
+  (letfn [(walk [acc x] (if (and (vector? x) (= :and (first x))) (reduce walk acc (rest x)) (conj! acc x)))]
+    (persistent! (walk (transient []) c))))
+
 (defn- predicate-holds?
   "Whether condition c (a WHERE) holds each of a partial index's predicate conditions ([:= column
    value], [:is-null column]) of the table of alias, whose columns are columns: the same = of a
    literal of the value, or IS NULL, among its conjuncts."
   [c alias columns conds format]
-  (let [conjuncts (tree-seq #(and (vector? %) (= :and (first %))) rest c)
+  (let [conjuncts (conjuncts c)
         of? (fn [k col] (and (syntax/column-keyword? k)
                              (let [[q n] (syntax/split-column k format)]
                                (and (= col n) (if q (= q alias) (contains? columns n))))))
@@ -1406,7 +1413,7 @@
 (defn- equalities
   "[a b] and [b a] of each = among condition c's conjuncts, an AND inside an AND too."
   [c]
-  (for [x (tree-seq #(and (vector? %) (= :and (first %))) rest c)
+  (for [x (conjuncts c)
         :when (and (vector? x) (= := (first x)) (= 3 (count x)))
         pair [[(second x) (nth x 2)] [(nth x 2) (second x)]]]
     pair))

@@ -958,25 +958,27 @@
    its items go to those columns by position."
   [stmt chain outer feed {:keys [format] :as opts}]
   (let [clause-nodes (fn clause-nodes [k x c expression? call whole?]
-                (letfn [(walk [x neg? top? item? expression?]
+                ;; eager: a lazy walk's concatenations nest as deep as x, each node read through all of them
+                (letfn [(walk [acc x neg? top? item? expression?]
                           (let [expression? (or expression? (and (some? call) (identical? x call)))
                                 ;; a clause's value HoneySQL writes as a list (GROUP BY a, b), not a call
-                                listed? (and whole? top? (vector? x) (not (call-written? k)))]
-                            (lazy-seq
-                             (cons {:x x :clause k :chain c :negated? neg? :top? top? :item? item? :expression? (and expression? (not listed?))}
-                                   (when (and (branch? x) (not (statement? x)))
-                                     (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
-                                       (if (and top? (= :select-distinct-on k) (vector? x))
-                                         ;; DISTINCT ON's expressions, then the select list's items
-                                         (let [[es items] (distinct-on-parts x)]
-                                           (concat (mapcat #(walk % neg? false false expression?) es) (mapcat #(walk % neg? false true expression?) items)))
-                                         ;; a window's :frame ([:rows :between :unbounded-preceding :current-row]) is its own clause
-                                         (mapcat #(if (and (map? x) (= :frame (key %))) (clause-nodes :frame (val %) c expression? nil true) (walk % neg? false top? expression?))
-                                                 ;; [expr alias], an item of a select list: the alias (:%count.c too) is no expression
-                                                 (if (and item? (select-list-clauses k) (vector? x) (= 2 (count x)) (alias? (second x)))
-                                                   [(first x)]
-                                                   (seq x))))))))))]
-                  (walk x false true false expression?)))
+                                listed? (and whole? top? (vector? x) (not (call-written? k)))
+                                acc (conj! acc {:x x :clause k :chain c :negated? neg? :top? top? :item? item? :expression? (and expression? (not listed?))})]
+                            (if (and (branch? x) (not (statement? x)))
+                              (let [neg? (case (when (vector? x) (first x)) :not (not neg?) (:and :or) neg? false)]
+                                (if (and top? (= :select-distinct-on k) (vector? x))
+                                  ;; DISTINCT ON's expressions, then the select list's items
+                                  (let [[es items] (distinct-on-parts x)]
+                                    (reduce #(walk %1 %2 neg? false true expression?) (reduce #(walk %1 %2 neg? false false expression?) acc es) items))
+                                  ;; a window's :frame ([:rows :between :unbounded-preceding :current-row]) is its own clause
+                                  (reduce (fn [acc e] (if (and (map? x) (= :frame (key e))) (reduce conj! acc (clause-nodes :frame (val e) c expression? nil true)) (walk acc e neg? false top? expression?)))
+                                          acc
+                                          ;; [expr alias], an item of a select list: the alias (:%count.c too) is no expression
+                                          (if (and item? (select-list-clauses k) (vector? x) (= 2 (count x)) (alias? (second x)))
+                                            [(first x)]
+                                            (seq x)))))
+                              acc)))]
+                  (persistent! (walk (transient []) x false true false expression?))))
         target (target-scope chain stmt opts)
         written (group-by #(nth % 3) (writes stmt))
         assigned (fn [clause c]
