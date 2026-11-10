@@ -147,6 +147,27 @@
                       (error/fail! :pgmalli.error/invalid-options (str "jsonb holds no document of " accept/too-deep)
                                    {:given (.getName (class x))}))))))
 
+(defn- stored-value
+  "Value x of a document as jsonb holds it: a number a numeric, one written of no fraction
+   (1.0E7, 1E+3M) an integer, -0.0 0.0; a string as pgjdbc encodes it, a lone surrogate ?."
+  [x]
+  (cond (string? x) (String. (.getBytes ^String x java.nio.charset.StandardCharsets/UTF_8) java.nio.charset.StandardCharsets/UTF_8)
+        (or (float? x) (decimal? x)) (let [d (java.math.BigDecimal. ^String (json/write x))]
+                                       (cond (<= (.scale d) 0) (.toBigIntegerExact d)
+                                             (and (float? x) (zero? d)) 0.0
+                                             :else x))
+        :else x))
+
+(defn stored
+  "Value x as a jsonb document holds it, read as builder reads one: written as sent writes a
+   document and read back, without the database. A map, a vector (marked or not: in a document
+   it is an array), a value or nil. What sent refuses in a document is an error.
+
+   (= (pgmalli-next.jdbc/stored doc) (:doc (jdbc/execute-one! ds (sent [\"SELECT ?::jsonb AS doc\" doc]) opts)))"
+  [x]
+  (jsonb-object x)
+  (json/parse (json/write (walk/postwalk (comp stored-value json-text) x)) true))
+
 (defn- offset-date-time
   "An Instant as an OffsetDateTime in UTC; infinity as OffsetDateTime's MAX and MIN, which pgjdbc
    sends as infinity (no OffsetDateTime in UTC holds Instant's MAX or MIN)."

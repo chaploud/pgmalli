@@ -48,17 +48,23 @@
   "Why a document nested past the stack is no document the one sending writes."
   "nesting deeper than the stack walks")
 
+(def ^:private nul "a \\u0000, which jsonb has not")
+
 (defn json-problem
   "Why the one sending cannot write document x (a map or a vector) as jsonb, nil where it can: a
    map of two keys of one text (:a and \"a\"), of which the document would keep one, a nil key,
-   a NaN or an infinity, which JSON has not, or nesting deeper than the stack walks."
+   a NaN or an infinity, which JSON has not, a \\u0000 in a text, which jsonb has not, or
+   nesting deeper than the stack walks."
   [x]
-  (letfn [(walk [v]
+  (letfn [(nul? [t] (.contains ^String t "\u0000"))
+          (walk [v]
             (cond (map? v) (or (when (contains? v nil) "a nil key, which JSON has not")
+                               (when (some (comp nul? json-key-text) (keys v)) nul)
                                (some (fn [[t n]] (when (> n 1) (str "two keys of text " (pr-str t) ", of which the document would keep one")))
                                      (frequencies (map json-key-text (keys v))))
                                (some walk (vals v)))
                   (coll? v) (some walk v)
+                  (and (or (string? v) (char? v) (keyword? v) (symbol? v)) (nul? (json-key-text v))) nul
                   (and (float? v) (or (Double/isNaN (double v)) (Double/isInfinite (double v)))) "a NaN or an infinity, which JSON has not"))]
     (try (walk x) (catch StackOverflowError _ too-deep))))
 

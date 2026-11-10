@@ -6,7 +6,7 @@
             [malli.core :as m]
             [malli.generator :as mg]
             [next.jdbc]
-            [pgmalli-next.jdbc :refer [jsonb]]
+            [pgmalli-next.jdbc :refer [jsonb stored]]
             [pgmalli-next.test-jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [pgmalli-next.core :as pgmalli]
@@ -555,6 +555,21 @@
       (is (= {:b true} (one ["SELECT (?::timestamptz[])[1] = '0002-01-01 00:00:00+00 BC'::timestamptz AS b"
                              [(java.time.OffsetDateTime/of -1 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]))))))
 
+(deftest stored-is-the-document-a-jsonb-column-holds-as-the-builder-reads-it
+  (when *db*
+    (doseq [doc [{:a 1.0E7} {:a 1E+3M} {:a -0.0} {:a 1.5M} {:a 1.0E300} {:a (float 1.1)} {:a 1.0E-7} {:a 22/7}
+                 {:a 12345678901234567890N} {:a "\ud800"} {"\ud800" 1} (jsonb [1 "a" nil {:x nil}])
+                 {:a/b #{1 2} :t (java.time.Instant/parse "2026-01-01T00:00:00.123456789Z") :c \x
+                  :d (java.time.LocalDate/of 2026 1 2) :u (random-uuid) :s "日本"}]]
+      (is (= (:doc (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" doc] {:builder-fn (builder {})}))
+             (stored doc))
+          (pr-str doc)))
+    (doseq [v [:ns/draft "a" 1.0E7 22/7 nil [1 #{2}] true]]
+      (is (= (:v (jdbc/execute-one! (datasource) ["SELECT (?::jsonb)->'v' AS v" {:v v}] {:builder-fn (builder {})}))
+             (stored v))
+          (str "a value within a document: " (pr-str v))))
+    (is (thrown? clojure.lang.ExceptionInfo (stored "a\u0000")) "what sent refuses in a document")))
+
 (deftest a-jsonb-nested-past-the-stack-is-an-error-naming-the-column
   (when *db*
     (let [deep (str (apply str (repeat 5000 "[")) (apply str (repeat 5000 "]")))
@@ -567,7 +582,7 @@
 (deftest a-document-json-holds-not-is-refused-not-sent-as-another
   (when *db*
     (doseq [[m says] [[{:role "user" "role" "admin"} #"two keys of text"] [{:a/role 1 'a/role 2} #"two keys of text"] [{1 :x "1" :y} #"two keys of text"]
-                      [{:a ##NaN} #"NaN"] [[Float/POSITIVE_INFINITY] #"infinity"] [{nil 1} #"nil key"]]]
+                      [{:a "x\u0000"} #"u0000"] [{"\u0000" 1} #"u0000"] [{:a ##NaN} #"NaN"] [[Float/POSITIVE_INFINITY] #"infinity"] [{nil 1} #"nil key"]]]
       (let [e (is (thrown? clojure.lang.ExceptionInfo (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" {:m m}])) (pr-str m))]
         (is (re-find says (str (ex-message e))) (pr-str m))))
     (let [deep (reduce (fn [v _] [v]) [] (range 5000))]
