@@ -564,7 +564,7 @@
       (is (= (:doc (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" doc] {:builder-fn (builder {})}))
              (stored doc))
           (pr-str doc)))
-    (doseq [v [:ns/draft "a" 1.0E7 22/7 nil [1 #{2}] true]]
+    (doseq [v [:ns/draft "a" 1.0E7 22/7 nil [1 #{2}] true {1.0E7 1 [-0.0] 2} #{:a "a"} #{1.0E7 10000000}]]
       (is (= (:v (jdbc/execute-one! (datasource) ["SELECT (?::jsonb)->'v' AS v" {:v v}] {:builder-fn (builder {})}))
              (stored v))
           (str "a value within a document: " (pr-str v))))
@@ -582,7 +582,8 @@
 (deftest a-document-json-holds-not-is-refused-not-sent-as-another
   (when *db*
     (doseq [[m says] [[{:role "user" "role" "admin"} #"two keys of text"] [{:a/role 1 'a/role 2} #"two keys of text"] [{1 :x "1" :y} #"two keys of text"]
-                      [{:a "x\u0000"} #"u0000"] [{"\u0000" 1} #"u0000"] [{:a ##NaN} #"NaN"] [[Float/POSITIVE_INFINITY] #"infinity"] [{nil 1} #"nil key"]]]
+                      [{:a "x\u0000"} #"u0000"] [{"\u0000" 1} #"u0000"] [{:a ##NaN} #"NaN"] [{:a (/ (biginteger (.pow 10M 400)) 3)} #"infinity"] [{1/2 :x "1/2" :y} #"two keys of text"]
+                      [{:a 1E-16384M} #"numeric"] [{:a 1E+131072M} #"numeric"] [[Float/POSITIVE_INFINITY] #"infinity"] [{nil 1} #"nil key"]]]
       (let [e (is (thrown? clojure.lang.ExceptionInfo (jdbc/execute-one! (datasource) ["SELECT ?::jsonb AS doc" {:m m}])) (pr-str m))]
         (is (re-find says (str (ex-message e))) (pr-str m))))
     (let [deep (reduce (fn [v _] [v]) [] (range 5000))]

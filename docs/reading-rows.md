@@ -42,15 +42,16 @@ a map or a vector as it is: `sent` reads no query, so what a position takes is t
 to tell. `sent` writes a document with jsonista (an `Instant` and
 java.time's dates and times as their ISO-8601 text, a `UUID`, a keyword and a `Character` as
 their text); one JSON cannot hold is an error: [two keys of one text](queries.md#stricter-json-keys),
-a nil key, a NaN, an infinity, a `\u0000` in a text (which `jsonb` refuses), a value of another class, a `PGobject`. It reads no registry and
+a nil key, a NaN, an infinity, a number past what `numeric` holds, a `\u0000` in a string or a key (which `jsonb` refuses), a value of another class, a `PGobject`. It reads no registry and
 changes nothing outside the sqlvec, so a query whose parameters are strings and numbers alone
 goes the same without it. Classes your application does not send (a date and time of no time
 zone) are the registry's `:refused`, `(pgmalli/registry data {:refused [java.time.LocalDateTime]})`:
 no argument takes one.
 
-`(pgmalli-jdbc/stored x)` is value `x` as a `jsonb` document holds it, read as `builder` reads one,
+`(pgmalli-jdbc/stored x)` is `x` as a `jsonb` document holds it, read as `builder` reads one,
 without the database: a map, a vector, a value or nil, a number as `numeric` holds it (`1.0E7`
-an integer), a keyword a string, a set a vector. Compare it with what a row holds to skip a write
+an integer), what `sent` writes as text (a keyword, a `UUID`, java.time's values) a string,
+a set a vector. Compare it with what a row holds to skip a write
 that changes nothing, or return what was written without reading it back. What `sent` refuses in
 a document is the same error.
 

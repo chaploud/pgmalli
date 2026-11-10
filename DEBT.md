@@ -15,7 +15,7 @@ something PostgreSQL takes, leaves a type untold, or tells a type other than the
   before it may hold NULL, so a write takes nil there too, which PostgreSQL refuses.
 - A map or a vector `pgmalli-next.jdbc/jsonb` marks to a `json` or `jsonb` column is not checked for what the one sending
   refuses to write (accept/json-problem): two keys of one text (`:a` and `"a"`), a nil key inside
-  the document (the map's own is refused), a NaN or an infinity, a value of a class JSON has no form for (a `PGobject`). Sending it is an error of `:pgmalli.error/invalid-options`.
+  the document (the map's own is refused), a NaN or an infinity, a number past what `numeric` holds, a `\u0000` in a string or a key, a value of a class JSON has no form for (a `PGobject`). Sending it is an error of `:pgmalli.error/invalid-options`.
 - A column of a pg_catalog type `types/types` does not list (`refcursor`, `aclitem`, the ones
   upstream_test's `unsupported` names) takes any value: PostgreSQL refuses a `varchar` there.
 - `as-read` refuses a multi-dimensional array `builder` reads (`[[1 2] [3 4]]`): it types an

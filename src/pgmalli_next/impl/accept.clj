@@ -53,8 +53,8 @@
 (defn json-problem
   "Why the one sending cannot write document x (a map or a vector) as jsonb, nil where it can: a
    map of two keys of one text (:a and \"a\"), of which the document would keep one, a nil key,
-   a NaN or an infinity, which JSON has not, a \\u0000 in a text, which jsonb has not, or
-   nesting deeper than the stack walks."
+   a NaN or an infinity (a Ratio's double too), which JSON has not, a \\u0000 in a string or a key,
+   which jsonb has not, a number past what numeric holds, or nesting deeper than the stack walks."
   [x]
   (letfn [(nul? [t] (.contains ^String t "\u0000"))
           (walk [v]
@@ -65,7 +65,10 @@
                                (some walk (vals v)))
                   (coll? v) (some walk v)
                   (and (or (string? v) (char? v) (keyword? v) (symbol? v)) (nul? (json-key-text v))) nul
-                  (and (float? v) (or (Double/isNaN (double v)) (Double/isInfinite (double v)))) "a NaN or an infinity, which JSON has not"))]
+                  (and (or (float? v) (ratio? v)) (or (Double/isNaN (double v)) (Double/isInfinite (double v)))) "a NaN or an infinity, which JSON has not"
+                  (and (or (decimal? v) (instance? BigInteger v) (instance? clojure.lang.BigInt v))
+                       (let [d (bigdec v)] (or (< 131072 (- (.precision d) (.scale d))) (< 16383 (.scale d)))))
+                  "a number past numeric's 131072 digits before the point or 16383 after it"))]
     (try (walk x) (catch StackOverflowError _ too-deep))))
 
 (def bytes-class "The class of byte[], which pgjdbc sends as a bytea." (Class/forName "[B"))

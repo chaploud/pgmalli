@@ -516,7 +516,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 |---|---|
 | `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` too), a schema the database lacks, or an `:out` that is a symbolic link or a file generate! did not write |
 | `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
-| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a value `pgmalli-next.jdbc/sent` cannot send: a document it cannot write as jsonb (two keys of one text, a nil key, a NaN or an infinity, a `\u0000`), an array element of a class it has no text for |
+| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a value `pgmalli-next.jdbc/sent` cannot send: a document it cannot write as jsonb (two keys of one text, a nil key, a NaN or an infinity, a number past what `numeric` holds, a `\u0000`), an array element of a class it has no text for |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
 | `:pgmalli.error/not-query-data` | a query that is no HoneySQL data: SQL already formatted, or code (a symbol in it) |

@@ -1,7 +1,8 @@
 (ns pgmalli-next.jdbc
   "The one reading and sending pgmalli types rows and arguments as (docs/reading-rows.md):
-   builder, the :builder-fn your application passes next.jdbc, and sent, the parameters of a
-   sqlvec as pgmalli sends them where pgjdbc sends them otherwise. Your application adds
+   builder, the :builder-fn your application passes next.jdbc; sent, the parameters of a
+   sqlvec as pgmalli sends them where pgjdbc sends them otherwise; jsonb, a vector sent as a
+   document; stored, a value as a jsonb document holds it. Your application adds
    next.jdbc and pgjdbc."
   (:require [clojure.string :as str]
             [clojure.walk :as walk]
@@ -121,34 +122,46 @@
 ;;; timestamp, a LocalDate as a date, an OffsetDateTime as a timestamptz), but what sent changes
 
 (defn- json-text
-  "x as JSON holds it: a keyword's or a symbol's text as accept/json-key-text writes it (:n/a as
-   n/a), a Character's, java.time's and a UUID's text (an Instant's to the nanosecond, as its
-   ISO-8601), a Ratio a double; a value JSON has no form for an error."
+  "Value x, of no collection, as JSON holds it: a keyword's or a symbol's text as
+   accept/json-key-text writes it (:n/a as n/a), a Character's, java.time's and a UUID's text (an
+   Instant's to the nanosecond, as its ISO-8601), a Ratio a double; a value JSON has no form for
+   an error."
   [x]
   (cond (or (keyword? x) (symbol? x)) (accept/json-key-text x)
         (or (char? x) (instance? java.time.temporal.Temporal x) (uuid? x)) (str x)
         (ratio? x) (double x)
         (instance? clojure.lang.BigInt x) (biginteger x)
-        (or (nil? x) (boolean? x) (number? x) (string? x) (map? x) (map-entry? x) (coll? x)) x
+        (or (nil? x) (boolean? x) (number? x) (string? x)) x
         :else (error/fail! :pgmalli.error/invalid-options
                            (str "a jsonb document holds no " (.getName (class x)) ": send its text, or the value as its own argument")
                            {:given (.getName (class x))})))
 
-(defn- jsonb-object
-  "Document x as a jsonb PGobject; one JSON cannot hold an error (docs/queries.md#stricter-json-keys)."
+(defn- document
+  "x as the data of the JSON the one sending writes: a map's keys their accept/json-key-text, a
+   collection a vector (a set's elements each kept, though two write alike), a value json-text's."
+  [x]
+  (cond (map? x) (into {} (map (fn [[k v]] [(accept/json-key-text k) (document v)])) x)
+        (coll? x) (mapv document x)
+        :else (json-text x)))
+
+(defn- written
+  "x's document, of which accept/json-problem says why the one sending cannot write it an error."
   [x]
   (when-let [why (accept/json-problem x)]
     (error/fail! :pgmalli.error/invalid-options (str "jsonb holds no document of " why)
                  {:given (.getName (class x))}))
-  (doto (PGobject.)
-    (.setType "jsonb")
-    (.setValue (try (json/write (walk/postwalk json-text x))
-                    (catch StackOverflowError _
-                      (error/fail! :pgmalli.error/invalid-options (str "jsonb holds no document of " accept/too-deep)
-                                   {:given (.getName (class x))}))))))
+  (try (document x)
+       (catch StackOverflowError _
+         (error/fail! :pgmalli.error/invalid-options (str "jsonb holds no document of " accept/too-deep)
+                      {:given (.getName (class x))}))))
+
+(defn- jsonb-object
+  "Document x as a jsonb PGobject (docs/queries.md#stricter-json-keys)."
+  [x]
+  (doto (PGobject.) (.setType "jsonb") (.setValue (json/write (written x)))))
 
 (defn- stored-value
-  "Value x of a document as jsonb holds it: a number a numeric, one written of no fraction
+  "Value x of a document's data as jsonb holds it: a number a numeric, one written of no fraction
    (1.0E7, 1E+3M) an integer, -0.0 0.0; a string as pgjdbc encodes it, a lone surrogate ?."
   [x]
   (cond (string? x) (String. (.getBytes ^String x java.nio.charset.StandardCharsets/UTF_8) java.nio.charset.StandardCharsets/UTF_8)
@@ -163,10 +176,9 @@
    document and read back, without the database. A map, a vector (marked or not: in a document
    it is an array), a value or nil. What sent refuses in a document is an error.
 
-   (= (pgmalli-next.jdbc/stored doc) (:doc (jdbc/execute-one! ds (sent [\"SELECT ?::jsonb AS doc\" doc]) opts)))"
+   (= (pgmalli-next.jdbc/stored v) (:v (jdbc/execute-one! ds (sent [\"SELECT (?::jsonb)->'v' AS v\" {:v v}]) opts)))"
   [x]
-  (jsonb-object x)
-  (json/parse (json/write (walk/postwalk (comp stored-value json-text) x)) true))
+  (json/parse (json/write (walk/postwalk stored-value (written x))) true))
 
 (defn- offset-date-time
   "An Instant as an OffsetDateTime in UTC; infinity as OffsetDateTime's MAX and MIN, which pgjdbc
