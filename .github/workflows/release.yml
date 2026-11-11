@@ -68,7 +68,7 @@ jobs:
         run: |
           echo "jar=$(sha256sum target/pgmalli.jar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           echo "pom=$(sha256sum target/classes/META-INF/maven/io.github.chaploud/pgmalli/pom.xml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: jar
           path: |
@@ -110,7 +110,7 @@ jobs:
         with:
           cli: 1.12.5.1664
           invalidate-cache: "true"
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: jar
           path: target
@@ -133,7 +133,7 @@ jobs:
     permissions:
       contents: write # creates the release
     steps:
-      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: jar
       # the jar the jar job built, as deploy checks it
