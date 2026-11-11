@@ -86,11 +86,11 @@ shows how CI catches a forgotten one.
 
 ## Installation
 
-Depend on a commit of this repository in `deps.edn`'s `:deps`:
+In `deps.edn`'s `:deps`:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-io.github.chaploud/pgmalli {:git/url "https://github.com/chaploud/pgmalli" :git/sha "<commit>"}
+io.github.chaploud/pgmalli {:mvn/version "0.4.0"}
 ```
 
 pgmalli depends on malli, test.check and jsonista (on babashka, cheshire, which it ships). Add HoneySQL for `pgmalli.core` and

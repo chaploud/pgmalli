@@ -1,13 +1,26 @@
 # Changelog
 
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
-break what [Stability](README.md#stability) lists. pgmalli has no release yet; the versions
-below were released as `io.github.chaploud/pgmalli`.
+break what [Stability](README.md#stability) lists; its entry says what to do.
 
-## Unreleased
+## 0.4.0
 
-* pgmalli's main, merged into pgmalli whole. It assumes no user of 0.3 and lists no change
-  from it: [README](README.md) and [docs](docs/) describe it as it is.
+* A rewrite: [README](README.md) and [docs](docs/) describe it as it is. Most of 0.3's API is
+  gone or changed.
+* `pgmalli.jdbc`: `builder`, the `:builder-fn` that reads rows as the registry types them;
+  `sent`, a sqlvec's parameters as pgmalli sends them; `jsonb`; `stored`.
+* `pgmalli.honeysql/analyze` gives a query's `:args`, `:row`, `:rows`, `:problems` and
+  `:tables` in one map, in place of `check`, `arg-types`, `row-schema`, `params-schema`,
+  `tables` and `explain`; `humanize` writes its problems; `values-schema` and `set-schema` type
+  a write's rows.
+* `pgmalli.main`, `pgmalli.data` and `pgmalli.core`'s `columns`, `portable`, `read-options` and
+  `transformer` are gone.
+* What to do: generate through `clojure -X` with `pgmalli.generate/generate!`
+  ([Quickstart](README.md#quickstart)); a `pgmalli.edn` of 0.3's settings in the working
+  directory is no longer read, and the generated file is one, `resources/pgmalli.edn`, in place
+  of `resources/pgmalli/<schema>.edn`. Read rows through `pgmalli.jdbc/builder` and send
+  parameters through `sent`; replace each removed `pgmalli.honeysql` call with the key of
+  `analyze` it gave.
 
 ## 0.3.3 (2026-11-03)
 

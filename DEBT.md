@@ -1,8 +1,6 @@
 # Debt
 
-What pgmalli knows it gets wrong and has not fixed yet. This repository is a temporary
-branch of pgmalli: these would be issues there. Move them to issues, or delete this file, when the
-work goes back.
+What pgmalli knows it gets wrong and has not fixed yet.
 
 Each lets through something PostgreSQL refuses (it fails when the query runs), refuses
 something PostgreSQL takes, leaves a type untold, or tells a type other than the value read. Fix one, then delete its entry.
