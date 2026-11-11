@@ -315,7 +315,7 @@
         value (fn [sent]
                 (if (symbol? sent)
                   [(get accept/values (resolve sent))]
-                  ;; a type no class goes as goes as a PGobject alone, whose type args reads not (DEBT.md)
+                  ;; a type no class goes as goes as a PGobject alone, whose type args reads not (#24)
                   (for [[c st] accept/class-types :when (= sent st) :let [v (get accept/values c)] :when (some? v)] v)))
         checked (for [[sent context t] pairs :when (column t)] [sent context t])]
     (is (empty? (remove #(or (column %) (#{"positive" "feel"} %) (#{"aclitem" "gtsvector" "refcursor"} (or (types/element %) %))) (map last pairs)))
