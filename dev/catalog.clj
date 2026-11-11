@@ -1,14 +1,14 @@
 (ns catalog
-  "Rewrites resources/pgmalli-next/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs:
-   bb catalog dumps each version in a babashka of its own (pgmalli-next.test-db starts one image per
+  "Rewrites resources/pgmalli/impl/catalog.edn from pg_catalog of each PostgreSQL version CI runs:
+   bb catalog dumps each version in a babashka of its own (pgmalli.test-db starts one image per
    process). A type, range, cast or overload not every version has names the versions it is :in;
-   pgmalli-next.upstream-test checks the file against the server it runs on."
+   pgmalli.upstream-test checks the file against the server it runs on."
   (:require [babashka.process :as p]
             [cheshire.core :as json]
             [ci-images]
             [clojure.string :as str]
-            [pgmalli-next.catalog-source :as source]
-            [pgmalli-next.test-db :as db]))
+            [pgmalli.catalog-source :as source]
+            [pgmalli.test-db :as db]))
 
 (defn dump
   "This process's server's catalog, as query gives it."
@@ -28,7 +28,7 @@
                                         vs (in #(contains? (k %) n))]]
                               (if (next facts)
                                 (throw (ex-info (str "PostgreSQL " (str/join ", " versions) " differ in " (name k) " " n ": " (pr-str facts)
-                                                     "; pgmalli-next.impl.types reads one of each") {}))
+                                                     "; pgmalli.impl.types reads one of each") {}))
                                 [n (cond-> (first facts) (not= vs versions) (assoc :in vs))]))))
         overloads (fn [k] (into (sorted-map)
                                 (for [n (distinct (mapcat (comp keys k) cs))]
@@ -60,7 +60,7 @@
                  (source/shape (read-string (:out (p/shell {:out :string :extra-env {"PGMALLI_PG_IMAGE" (images v)}}
                                                     "bb" "catalog:dump"))))))
         c (merged versions cs)]
-    (spit "resources/pgmalli-next/impl/catalog.edn"
+    (spit "resources/pgmalli/impl/catalog.edn"
           (str ";; pg_catalog's types, casts, functions, operators and relations of PostgreSQL " (str/join ", " versions)
                ": bb catalog writes it\n"
                ;; a line a name: a regenerated file's diff is the names that changed

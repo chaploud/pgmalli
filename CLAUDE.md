@@ -1,4 +1,4 @@
-# pgmalli-next
+# pgmalli
 
 - Read DEBT.md before changing how arguments, literals or problems are typed: it lists what is
   known to be wrong. Fixing one, delete its entry in the same commit.

@@ -136,10 +136,10 @@ returns their values as `PGobject`s (`hstore` as a `java.util.Map`), which `as-r
 of one of their names that the extension did not make (a composite type `citext`) is none of them.
 
 Every type pgmalli supports is one entry of `types` in
-[src/pgmalli_next/impl/types.clj](../src/pgmalli_next/impl/types.clj): its malli schema, the literals
+[src/pgmalli/impl/types.clj](../src/pgmalli/impl/types.clj): its malli schema, the literals
 it generates, the cast on insert and what the driver returns. The types it does not support
 yet are listed under `unsupported` in
-[test/pgmalli_next/upstream_test.clj](../test/pgmalli_next/upstream_test.clj), each with why
+[test/pgmalli/upstream_test.clj](../test/pgmalli/upstream_test.clj), each with why
 ([CONTRIBUTING.md](../CONTRIBUTING.md#following-upstream) says how to add one).
 
 ## jsonb columns
@@ -150,7 +150,7 @@ gives it one ([Column shapes](../README.md#column-shapes)). For shapes that depe
 write them as malli and join them to the generated schema, with no copy of either:
 
 ```clojure
-(require '[pgmalli-next.core :as pgmalli]
+(require '[pgmalli.core :as pgmalli]
          '[malli.core :as m]
          '[malli.util :as mu]
          '[malli.error :as me]
@@ -210,7 +210,7 @@ A generated column's expression is not evaluated; `:pg/generated` holds its SQL.
 
 ## Registries
 
-`pgmalli-next.core/registry` returns a map: malli's default schemas, `malli.util`'s,
+`pgmalli.core/registry` returns a map: malli's default schemas, `malli.util`'s,
 `malli.experimental.time`'s, pgmalli's `:pg/*` types, and the generated and derived names.
 Its `:string`, `:double` and `:re` replace malli's ([above](#names-in-the-registry)).
 
@@ -220,7 +220,7 @@ registry holding a name wins.
 
 ## The generated file
 
-`pgmalli-next.core/generated` reads the generated file on the classpath (`pgmalli-next.edn`) as
+`pgmalli.core/generated` reads the generated file on the classpath (`pgmalli.edn`) as
 data:
 
 | key | holds |
@@ -229,7 +229,7 @@ data:
 | `:database-version` | the major version it was read from, `"PostgreSQL 17"` |
 | `:diagnostics` | what deserves a look in the database |
 | `:registry` | `{name schema}`: the rows and enums of every schema; the insert and update schemas are derived when it is loaded |
-| `:functions`, `:operators` | `{schema {name [overload ...]}}`: each schema's own functions (no procedure or trigger function) and operators, which [`pgmalli-next.honeysql`](queries.md#the-row-a-query-returns) resolves a call to beside `pg_catalog`'s. An overload is `{:args [type ...] :result type}`, types named as `:pg/type` names them, with `:set true` for a set-returning function, `:kind` (`:a` an aggregate, `:w` a window function), `:variadic true`, `:defaults` (how many of the last arguments may be left out), `:columns` (`[[name type] ...]` it returns in FROM: its OUT or `TABLE` arguments, or its composite type's columns), `:btree true` for a comparison operator |
+| `:functions`, `:operators` | `{schema {name [overload ...]}}`: each schema's own functions (no procedure or trigger function) and operators, which [`pgmalli.honeysql`](queries.md#the-row-a-query-returns) resolves a call to beside `pg_catalog`'s. An overload is `{:args [type ...] :result type}`, types named as `:pg/type` names them, with `:set true` for a set-returning function, `:kind` (`:a` an aggregate, `:w` a window function), `:variadic true`, `:defaults` (how many of the last arguments may be left out), `:columns` (`[[name type] ...]` it returns in FROM: its OUT or `TABLE` arguments, or its composite type's columns), `:btree true` for a comparison operator |
 | `:sequences` | `{schema [name ...]}`: the sequences' names; the registry holds a row schema of each by its name, `last_value` and `log_cnt` (`bigint`) and `is_called` (`boolean`), the columns every sequence has, with `:pg/sequence true` |
 | `:unrendered` | the columns of a type pgmalli has no schema for |
 

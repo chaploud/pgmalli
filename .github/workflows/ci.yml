@@ -44,7 +44,7 @@ jobs:
       fail-fast: false
       matrix:
         pg: ["16", "17", "18"]
-        # pgmalli-next.oracle-test takes as long as the rest: a job of its own (bb.edn's suite)
+        # pgmalli.oracle-test takes as long as the rest: a job of its own (bb.edn's suite)
         suite: [main, oracle]
         # the oracle's mutants and generated values by seed; main's fuzzing keeps 42
         seed: ["42", "1", "7", "24"]

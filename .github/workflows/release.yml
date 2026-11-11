@@ -1,7 +1,7 @@
 name: release
 # Pushing a vX.Y.Z tag on main builds the jar, publishes it to Clojars and creates a GitHub release.
 # The tag is the version: v1.2.3 publishes 1.2.3.
-# Secret: CLOJARS_PASSWORD, a Clojars deploy token of chaploud scoped to io.github.chaploud/pgmalli-next,
+# Secret: CLOJARS_PASSWORD, a Clojars deploy token of chaploud scoped to io.github.chaploud/pgmalli,
 # kept in the environment clojars (deployments from v* tags only).
 on:
   push:
@@ -63,18 +63,18 @@ jobs:
       - run: echo "PGMALLI_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
       # tools.build alone on the classpath
       - run: clojure -T:build jar
-      - run: cd target && sha256sum pgmalli-next.jar > pgmalli-next.jar.sha256
+      - run: cd target && sha256sum pgmalli.jar > pgmalli.jar.sha256
       - id: sums
         run: |
-          echo "jar=$(sha256sum target/pgmalli-next.jar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
-          echo "pom=$(sha256sum target/classes/META-INF/maven/io.github.chaploud/pgmalli-next/pom.xml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "jar=$(sha256sum target/pgmalli.jar | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+          echo "pom=$(sha256sum target/classes/META-INF/maven/io.github.chaploud/pgmalli/pom.xml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: jar
           path: |
-            target/pgmalli-next.jar
-            target/pgmalli-next.jar.sha256
-            target/classes/META-INF/maven/io.github.chaploud/pgmalli-next/pom.xml
+            target/pgmalli.jar
+            target/pgmalli.jar.sha256
+            target/classes/META-INF/maven/io.github.chaploud/pgmalli/pom.xml
   # the signing token in a job that runs no build: the provenance is of the jar job's SHA-256s
   attest:
     name: attest the jar and its pom
@@ -86,7 +86,7 @@ jobs:
     steps:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-name: pgmalli-next.jar
+          subject-name: pgmalli.jar
           subject-digest: sha256:${{ needs.jar.outputs.jar }}
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -116,8 +116,8 @@ jobs:
           path: target
       # the artifact is the one the jar job built and attested, not one another job of the run uploaded
       - run: |
-          echo "$JAR  target/pgmalli-next.jar" | sha256sum -c
-          echo "$POM  target/classes/META-INF/maven/io.github.chaploud/pgmalli-next/pom.xml" | sha256sum -c
+          echo "$JAR  target/pgmalli.jar" | sha256sum -c
+          echo "$POM  target/classes/META-INF/maven/io.github.chaploud/pgmalli/pom.xml" | sha256sum -c
         env:
           JAR: ${{ needs.jar.outputs.jar }}
           POM: ${{ needs.jar.outputs.pom }}
@@ -137,9 +137,9 @@ jobs:
         with:
           name: jar
       # the jar the jar job built, as deploy checks it
-      - run: echo "$JAR  pgmalli-next.jar" | sha256sum -c
+      - run: echo "$JAR  pgmalli.jar" | sha256sum -c
         env:
           JAR: ${{ needs.jar.outputs.jar }}
-      - run: gh release create "$GITHUB_REF_NAME" pgmalli-next.jar pgmalli-next.jar.sha256 --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
+      - run: gh release create "$GITHUB_REF_NAME" pgmalli.jar pgmalli.jar.sha256 --repo "$GITHUB_REPOSITORY" --generate-notes --verify-tag
         env:
           GH_TOKEN: ${{ github.token }}

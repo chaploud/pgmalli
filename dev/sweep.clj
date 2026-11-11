@@ -13,10 +13,10 @@
             [babashka.process :as p]
             [clojure.pprint :as pp]
             [clojure.string :as str]
-            [pgmalli-next.core :as pgmalli]
-            [pgmalli-next.impl.files :as files]
-            [pgmalli-next.pipeline :as pipeline :refer [try-step]]
-            [pgmalli-next.test-db :as db]))
+            [pgmalli.core :as pgmalli]
+            [pgmalli.impl.files :as files]
+            [pgmalli.pipeline :as pipeline :refer [try-step]]
+            [pgmalli.test-db :as db]))
 
 (def ^:private statement-timeout "20000")
 

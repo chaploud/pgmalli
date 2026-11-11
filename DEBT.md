@@ -1,6 +1,6 @@
 # Debt
 
-What pgmalli-next knows it gets wrong and has not fixed yet. This repository is a temporary
+What pgmalli knows it gets wrong and has not fixed yet. This repository is a temporary
 branch of pgmalli: these would be issues there. Move them to issues, or delete this file, when the
 work goes back.
 
@@ -8,12 +8,12 @@ Each lets through something PostgreSQL refuses (it fails when the query runs), r
 something PostgreSQL takes, leaves a type untold, or tells a type other than the value read. Fix one, then delete its entry.
 
 - An enum named `text`, `name` or `varchar` in a schema on the session's search_path reads as a
-  `String` (`pgmalli-next.jdbc/builder`), while its row type says keyword labels: pgjdbc names it
+  `String` (`pgmalli.jdbc/builder`), while its row type says keyword labels: pgjdbc names it
   as it names that pg_catalog type, both a `VARCHAR`, and tells no type OID through
   `ResultSetMetaData`. Off the search_path it is named `"schema"."text"` and reads as keywords.
 - A column of a `NOT NULL NOT VALID` constraint (PostgreSQL 18) is nullable, as rows from
   before it may hold NULL, so a write takes nil there too, which PostgreSQL refuses.
-- A map or a vector `pgmalli-next.jdbc/jsonb` marks to a `json` or `jsonb` column is not checked for what the one sending
+- A map or a vector `pgmalli.jdbc/jsonb` marks to a `json` or `jsonb` column is not checked for what the one sending
   refuses to write (accept/json-problem): two keys of one text (`:a` and `"a"`), a nil key inside
   the document (the map's own is refused), a NaN or an infinity, a number past what `numeric` holds, a `\u0000` in a string or a key, a value of a class JSON has no form for (a `PGobject`). Sending it is an error of `:pgmalli.error/invalid-options`.
 - A column of a pg_catalog type `types/types` does not list (`refcursor`, `aclitem`, the ones

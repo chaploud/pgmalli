@@ -2,11 +2,11 @@
 
 Part of [pgmalli](../README.md): [types](types.md) · [reading rows](reading-rows.md) · [queries](queries.md)
 
-`pgmalli-next.core/as-read` gives the `[:map ...]` of a row as `pgmalli-next.jdbc/builder` builds
+`pgmalli.core/as-read` gives the `[:map ...]` of a row as `pgmalli.jdbc/builder` builds
 it from what PostgreSQL's JDBC driver returns. The examples use [example/schema.sql](example/schema.sql).
 
 ```clojure
-(require '[pgmalli-next.core :as pgmalli]
+(require '[pgmalli.core :as pgmalli]
          '[malli.core :as m])
 
 (def registry (pgmalli/registry))
@@ -15,13 +15,13 @@ it from what PostgreSQL's JDBC driver returns. The examples use [example/schema.
 ## The one reading and sending
 
 pgmalli types rows as one reading builds them and arguments as one sending sends them, both in
-`pgmalli-next.jdbc`, which needs next.jdbc and pgjdbc in your application:
+`pgmalli.jdbc`, which needs next.jdbc and pgjdbc in your application:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
 (require '[honey.sql :as sql]
          '[next.jdbc :as jdbc]
-         '[pgmalli-next.jdbc :as pgmalli-jdbc])
+         '[pgmalli.jdbc :as pgmalli-jdbc])
 
 (def jdbc-opts {:builder-fn (pgmalli-jdbc/builder registry)})
 
@@ -55,9 +55,9 @@ a set a vector. Compare it with what a row holds to skip a write
 that changes nothing, or return what was written without reading it back. What `sent` refuses in
 a document is the same error.
 
-`builder` takes the generated data too (`(builder (edn/read-string (slurp "api/pgmalli-next.edn")))`):
+`builder` takes the generated data too (`(builder (edn/read-string (slurp "api/pgmalli.edn")))`):
 an application that reads rows alone, without checking queries, loads no more than
-`pgmalli-next.jdbc` (no `pgmalli-next.core`, nor the analysis). `builder` is next.jdbc's
+`pgmalli.jdbc` (no `pgmalli.core`, nor the analysis). `builder` is next.jdbc's
 `as-unqualified-maps`, each column read by its type as below. It
 extends no protocol: what your application extends `next.jdbc.result-set/ReadableColumn` with
 reads no column it builds. Pass it wherever your application reads rows; to make it the
@@ -144,7 +144,7 @@ An option pgmalli does not know is an error that suggests the intended name:
 ## The options of next.jdbc
 
 pgmalli passes over the keys of `:jdbc` it does not read, so the map your application passes
-to next.jdbc goes as it is. `:builder-fn` there is one `pgmalli-next.jdbc/builder` returned; one
+to next.jdbc goes as it is. `:builder-fn` there is one `pgmalli.jdbc/builder` returned; one
 of a registry of other enums (which reads an enum it lacks as a `String`), another builder,
 `:label-fn` or `:qualifier-fn` is an error. A key spelled close
 to one pgmalli reads and read by no next.jdbc function (`:return-key`) is an error naming the

@@ -1,6 +1,6 @@
-# pgmalli-next
+# pgmalli
 
-[![ci](https://github.com/chaploud/pgmalli-next/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chaploud/pgmalli-next/actions/workflows/ci.yml)
+[![ci](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/chaploud/pgmalli/actions/workflows/ci.yml)
 
 Your PostgreSQL schema as [malli](https://github.com/metosin/malli) schemas: validate rows,
 generate test data and check HoneySQL queries, without a database at hand.
@@ -23,12 +23,12 @@ generate test data and check HoneySQL queries, without a database at hand.
 The examples use [docs/example/schema.sql](docs/example/schema.sql): `groups`, `users`,
 `posts` and `events`, with an enum, identity and generated columns, a jsonb column, and
 CHECKs. Add pgmalli to your dependencies ([Installation](#installation)), `"resources"` to
-`:paths` in `deps.edn` (the generated file goes to `resources/pgmalli-next.edn`, and the
+`:paths` in `deps.edn` (the generated file goes to `resources/pgmalli.edn`, and the
 default `:paths` is `["src"]` alone), and an alias that generates it:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-{:aliases {:pgmalli-next {:exec-fn pgmalli-next.generate/generate!
+{:aliases {:pgmalli {:exec-fn pgmalli.generate/generate!
                           :exec-args {:schemas ["public"]}}}}
 ```
 
@@ -38,17 +38,17 @@ reaches the database):
 
 ```shell
 $ createdb pgmalli_example
-$ psql -d pgmalli_example -f path/to/pgmalli-next/docs/example/schema.sql
+$ psql -d pgmalli_example -f path/to/pgmalli/docs/example/schema.sql
 $ export PGDATABASE=pgmalli_example
-$ clojure -X:pgmalli-next
+$ clojure -X:pgmalli
 ```
 
-It writes `resources/pgmalli-next.edn`.
+It writes `resources/pgmalli.edn`.
 
 Load the generated file as a registry and validate an INSERT:
 
 ```clojure
-(require '[pgmalli-next.core :as pgmalli]
+(require '[pgmalli.core :as pgmalli]
          '[malli.core :as m]
          '[malli.error :as me]
          '[malli.generator :as mg])
@@ -90,23 +90,23 @@ Depend on a commit of this repository in `deps.edn`'s `:deps`:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-io.github.chaploud/pgmalli-next {:git/url "https://github.com/chaploud/pgmalli-next" :git/sha "<commit>"}
+io.github.chaploud/pgmalli {:git/url "https://github.com/chaploud/pgmalli" :git/sha "<commit>"}
 ```
 
-pgmalli depends on malli, test.check and jsonista (on babashka, cheshire, which it ships). Add HoneySQL for `pgmalli-next.core` and
-`pgmalli-next.honeysql`, and next.jdbc and pgjdbc for `pgmalli-next.jdbc` ([Supported
+pgmalli depends on malli, test.check and jsonista (on babashka, cheshire, which it ships). Add HoneySQL for `pgmalli.core` and
+`pgmalli.honeysql`, and next.jdbc and pgjdbc for `pgmalli.jdbc` ([Supported
 versions](#supported-versions) has the oldest each takes); generating needs none of them, but
 pgjdbc for a `:db` with `:jdbcUrl`. On babashka, put the same coordinate in `bb.edn`'s `:deps`.
 
 ## Generating
 
-`pgmalli-next.generate/generate!` and `check` take one map, so `clojure -X` passes them an
+`pgmalli.generate/generate!` and `check` take one map, so `clojure -X` passes them an
 alias's `:exec-args` and a REPL calls them alike:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
 {:schemas ["public"]                  ; the default
- :out "resources/pgmalli-next.edn"    ; the default; keep it on the classpath
+ :out "resources/pgmalli.edn"    ; the default; keep it on the classpath
  :db {:host "localhost" :port 5432 :dbname "app_dev" :user "app"}}
 ```
 
@@ -119,11 +119,11 @@ JDBC driver) instead, no psql needed, and `{:datasource ds}` through a `javax.sq
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-(require '[pgmalli-next.generate :as generate])
+(require '[pgmalli.generate :as generate])
 
 (generate/generate! {:schemas ["public" "app"]
                      :db {:jdbcUrl "jdbc:postgresql://localhost/app_dev" :user "app" :password "secret"}})
-;; => {:out "resources/pgmalli-next.edn", :unrendered nil, :diagnostics nil}
+;; => {:out "resources/pgmalli.edn", :unrendered nil, :diagnostics nil}
 ```
 
 One file holds every schema in `:schemas`. `generate!` writes over no file but a generated one,
@@ -132,12 +132,12 @@ and returns the diagnostics and the columns left out ([docs/types.md](docs/types
 [supported PostgreSQL](#supported-versions). The read runs in a read-only transaction and needs no
 privilege but to log in: give `:db` a role of its own, one that owns nothing and writes nothing.
 
-`(pgmalli/registry)` reads `pgmalli-next.edn` from the classpath. Where `:out` is elsewhere,
+`(pgmalli/registry)` reads `pgmalli.edn` from the classpath. Where `:out` is elsewhere,
 pass its data:
 
 <!-- :test-doc-blocks/skip -->
 ```clojure
-(pgmalli/registry (clojure.edn/read-string (slurp "api/pgmalli-next.edn")))
+(pgmalli/registry (clojure.edn/read-string (slurp "api/pgmalli.edn")))
 ```
 
 ## Validating rows and writes
@@ -148,7 +148,7 @@ have schemas of their own:
 
 | to check | use |
 |---|---|
-| a row read through `pgmalli-next.jdbc/builder` | `as-read` ([below](#rows-read-through-nextjdbc)) |
+| a row read through `pgmalli.jdbc/builder` | `as-read` ([below](#rows-read-through-nextjdbc)) |
 | a row your code writes in `:values` or `:set` | `h/values-schema`, `h/set-schema` ([queries](docs/queries.md#a-row-written-into-a-table)) |
 | a row of the database's types: another system's (an export, a message) | the registry's row, `/insert` and `/update` schemas (here) |
 
@@ -199,8 +199,8 @@ error to the people using your application, word it yourself.
 
 ## Rows read through next.jdbc
 
-pgjdbc does not return the registry's types. pgmalli types rows as `pgmalli-next.jdbc/builder`
-builds them and arguments as `pgmalli-next.jdbc/sent` sends them: pass next.jdbc the sqlvec
+pgjdbc does not return the registry's types. pgmalli types rows as `pgmalli.jdbc/builder`
+builds them and arguments as `pgmalli.jdbc/sent` sends them: pass next.jdbc the sqlvec
 through `(sent (sql/format q {:params args}))`, and `{:builder-fn (builder registry)}`
 ([docs/reading-rows.md](docs/reading-rows.md#the-one-reading-and-sending)). `as-read` gives the
 row as the builder builds it, to validate results as they come back:
@@ -228,7 +228,7 @@ their `varchar(n)`'s length ([what the database checks](docs/types.md#names-in-t
 aside):
 
 ```clojure
-(require '[pgmalli-next.honeysql :as h])
+(require '[pgmalli.honeysql :as h])
 
 (let [row (h/values-schema registry :events)]
   (m/validate row (mg/generate row {:registry registry :seed 1}) {:registry registry}))
@@ -253,7 +253,7 @@ map), what another system holds rather than what HoneySQL sends.
 types, the row, the problems PostgreSQL would report and more ([queries](docs/queries.md)):
 
 ```clojure
-(require '[pgmalli-next.honeysql :as h])
+(require '[pgmalli.honeysql :as h])
 
 (h/analyze registry {:select [:email] :from [:users] :where [:= :id :?id]})
 ;; => {:args {:id [:or [:int #:pg{:type "bigint"}] decimal? integer? :double float?]}, :row [:map [:email [:string #:pg{:max-length 120, :type "character varying"}]]], :rows {:min 0, :max 1}, :problems [], :tables {:reads #{"public.users"}, :writes #{}}, :document-columns {}}
@@ -295,7 +295,7 @@ problems it reports:
 | `:unknown-table` | a table the registry lacks; `:did-you-mean` lists a table of that name in another schema first; `:quoted` true where, under `:quoted`, the name folded to lower case is a table of the registry |
 | `:unknown-column` | a column no table in scope has, or a qualifier no table or alias in scope has (`:qualifier`); with `:clause` where a clause names it: `:using` (`:side` `:left`, `:right` or `:both`, `:table` the joined one), `:on-conflict` (`:table`; `:constraint` where a vector headed by `:on-constraint` names one), `:values` (a keyword value, which HoneySQL writes as a column; `:table` the table written, `:target` the value's key, absent past a positional row's columns), `:set` or `:do-update-set` with `:target` (a keyword value likewise, `:target` the column it is assigned to), `:set`, `:do-update-set`, `:columns` or `:values` without `:table` or `:target` (an assigned target qualified by its table or alias: a field of a column to PostgreSQL); `:outside-join` true where an ON inside a parenthesized join names a table of the statement outside it; `:did-you-mean` where a column is spelled close; `:quoted` true where, under `:quoted`, the name folded to lower case is a column |
 | `:ambiguous-column` | an unqualified column of two tables, or a column a subquery or CTE has several of, with `:candidates` (that one alone) |
-| `:duplicate-column` | columns of one label in the row a query returns, which `pgmalli-next.jdbc/builder` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
+| `:duplicate-column` | columns of one label in the row a query returns, which `pgmalli.jdbc/builder` reads into one key; with `:items`, the select items making them ([stricter than PostgreSQL](docs/queries.md#stricter-than-postgresql)) |
 | `:missing-required-column` | an INSERT lacking a required column |
 | `:not-null-violation` | NULL written into a NOT NULL column |
 | `:row-value` | a vector of two values or more as an operand or a function's argument (`[:= :id [:any [1 2]]]`, `[:array_length [1 2] 1]`), which HoneySQL writes as a row, `(?, ?)`, compared with no row (a composite, another row, a column of a row type); with `:function` and `:value`. Write `[:lift v]` |
@@ -389,7 +389,7 @@ returns:
 ;; => {:args ["bigint | numeric | float8 | real"], :returns [:maybe {:id "bigint", :email "varchar(120)"}]}
 ```
 
-The options of `pgmalli-next.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
+The options of `pgmalli.honeysql`'s functions are in [docs/queries.md](docs/queries.md#options).
 
 ## Keeping the file current
 
@@ -399,19 +399,19 @@ throws (`:pgmalli.error/stale`, ex-data `{:out path :missing path :stale [differ
 `clojure -X` exits non-zero in CI; else it returns `{:unrendered :diagnostics}`:
 
 ```shell
-$ clojure -X:pgmalli-next pgmalli-next.generate/check
+$ clojure -X:pgmalli pgmalli.generate/check
 :pg.public/groups :motto
   file: nil
   db:   [:maybe [:string {:pg/type "text"}]]
 ...
-stale (differences: 1); run pgmalli-next.generate/generate! with the same map and commit the file
+stale (differences: 1); run pgmalli.generate/generate! with the same map and commit the file
 ```
 
 `generate/diff` gives the same differences between two generated files, the effect of a
 migration:
 
 ```clojure
-(require '[pgmalli-next.generate :as generate])
+(require '[pgmalli.generate :as generate])
 
 (let [before (pgmalli/generated)
       after (update-in before [:registry :pg.public/groups] conj [:motto [:maybe :string]])]
@@ -453,7 +453,7 @@ what is read, and for a map or a vector an argument sends ([what your applicatio
 sends](docs/queries.md#what-your-application-sends)). `registry` checks every key against the
 schemas generated: a key must name a column, and a value must be a malli schema (a qualified
 name passes, as your registry's). An error names the key meant; a type key (`:inet`) names the
-columns of the type to shape instead. `pgmalli-next.jdbc/builder` takes the generated data
+columns of the type to shape instead. `pgmalli.jdbc/builder` takes the generated data
 alone: reading rows needs no shape.
 
 A `[:ref ...]` to your own schema needs a registry holding it (without one, malli throws
@@ -507,8 +507,8 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 1. the keys of the map `generate!` and `check` take
 2. the generated file and the registry names
 3. the kinds of `:unrendered` entries and of `h/analyze`'s problems
-4. the public vars of `pgmalli-next.core`, `pgmalli-next.generate`, `pgmalli-next.honeysql`
-   and `pgmalli-next.jdbc`, and the options of their functions
+4. the public vars of `pgmalli.core`, `pgmalli.generate`, `pgmalli.honeysql`
+   and `pgmalli.jdbc`, and the options of their functions
 5. the `:pgmalli/error` kinds of the errors pgmalli throws
 6. what `check` throws where the file is stale or missing
 
@@ -516,7 +516,7 @@ Changing any of these is breaking; before 1.0 it bumps the minor version:
 |---|---|
 | `:pgmalli.error/invalid-config` | a map `generate!` or `check` cannot use (its `:db` too), a schema the database lacks, or an `:out` that is a symbolic link or a file generate! did not write |
 | `:pgmalli.error/stale` | `check`: the file differs from the database or is missing, with `:out`, `:missing` and `:stale` |
-| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a value `pgmalli-next.jdbc/sent` cannot send: a document it cannot write as jsonb (two keys of one text, a nil key, a NaN or an infinity, a number past what `numeric` holds, a `\u0000`), an array element of a class it has no text for |
+| `:pgmalli.error/invalid-options` | an option or argument it does not take, with the one meant, or a value `pgmalli.jdbc/sent` cannot send: a document it cannot write as jsonb (two keys of one text, a nil key, a NaN or an infinity, a number past what `numeric` holds, a `\u0000`), an array element of a class it has no text for |
 | `:pgmalli.error/unknown-schema` | a name the registry lacks, or one of the wrong kind (an insert schema where a row's goes), with the one meant |
 | `:pgmalli.error/not-a-registry` | something passed as a registry that is none |
 | `:pgmalli.error/not-query-data` | a query that is no HoneySQL data: SQL already formatted, or code (a symbol in it) |

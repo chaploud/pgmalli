@@ -1,0 +1,242 @@
+(ns pgmalli.row-keys-test
+  "row-schema's keys against the rows next.jdbc builds from PostgreSQL's JDBC driver. JVM only
+   (babashka has no java.sql), so bb test does not list it."
+  (:require [clojure.set]
+            [clojure.test :refer [deftest is use-fixtures]]
+            [honey.sql :as sql]
+            [malli.core :as m]
+            [malli.error :as me]
+            [pgmalli.test-jdbc :as jdbc]
+            [pgmalli.core :as pgmalli]
+            [pgmalli.honeysql :as h]
+            [pgmalli.impl.ir :as ir]
+            [pgmalli.test-db :refer [builder generated *db* datasource exec-sql! jdbcUrl with-postgres]]))
+
+(use-fixtures :once with-postgres)
+
+(def queries
+  [{:select [:id [:nick :name]] :from [:users]}
+   {:select [:u.id [:g.name :group_name]] :from [[:users :u]] :join [[:groups :g] [:= :g.id :u.group_id]]}
+   {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id :name] :from [:groups]}]}
+   {:select [[[:count :*]] [[:max :id] :top_id] [[:+ :id 1]] [[:coalesce :nick "x"]] [[:cast :id :bigint] :big_id] [[:upper :nick]]]
+    :from [:users] :group-by [:id :nick]}
+   {:select [[[:cast :nick :text]]] :from [:users]}
+   ;; the types of the expressions row-schema knows, as the driver returns them
+   {:select [[[:sum :id] :s] [[:avg :id] :a] [[:min :nick] :mn] [[:count :nick] :c] [[:coalesce :nick "x"] :cn]
+             [[:= :id 1] :eq] [[:= :nick "a"] :eqn] [[:exists {:select [1] :from [:posts]}] :ex] [[:is :nick nil] :isn]
+             [[:and true [:= :id 1]] :both] [[:now] :t] [:current_date] [:localtimestamp] ["s" :lit] [1 :one] [1.5 :f] [true :b]
+             [[:cast :id :text] :idt] [[:cast :id :numeric] :idn] [[:cast :id :double-precision] :idd]
+             [(int 1) :int] [(float 1.5) :real] [1.5M :dec] [1N :bigint] [[:coalesce :id 1.5] :mixed]
+             [:current_timestamp] [:current_time] [:localtime]]
+    :from [:users] :group-by [:id :nick]}
+   {:select [[[:sum :id] :s] [[:avg :id] :a] [[:max :title] :m]] :from [:posts]}
+   {:select [[[:sum :n] :s] [[:avg :n] :a] [[:max :n] :m] [[:count :*] :c]] :from [:likes] :where [:= :id -1]}
+   {:select [:u.id :g.name :g/*] :from [[:users :u]] :left-join [[:groups :g] [:= :g.id -1]]}
+   {:select [:u.nick :g.id] :from [[:users :u]] :right-join [[:groups :g] [:= :g.id -1]]}
+   {:select [:id [[:count :*] :n]] :from [[{:select [:id] :from [:users]} :sub]] :group-by [:id]}
+   {:with [[:c {:select [:id] :from [:groups]}]] :select [:id] :from [:c]}
+   {:select [:u.id :x.n] :from [[:users :u]] :join [[[:lateral {:select [[:u.nick :n]]}] :x] true]}
+   {:select [[:nick "nn"]] :from [:users]}
+   ;; USING merges a column
+   {:select [:*] :from [[:users :u]] :join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :left-join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :right-join [[:posts :p] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :full-join [[:posts :p] [:using :id]]}
+   {:select [:*] :from [[:users :u]] :join [[:likes :l] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :right-join [[:likes :l] [:using :id]]}
+   {:select [:id] :from [[:users :u]] :left-join [[:likes :l] [:using :id]]}
+   ;; a chain of USING joins: each merges what the joins before it merged
+   {:select [:id] :from [[:users :a]] :join [[:posts :b] [:using :id]] :left-join [[:users :c] [:using :id]]}
+   {:select [:*] :from [[:users :a]] :join [[:posts :b] [:using :id]] :left-join [[:users :c] [:using :id]]}])
+
+(def using-chains
+  "Three tables USING one column, every pair of joins, the columns of one type (likes) or not
+   (posts' bigint)."
+  (for [t [:likes :posts] j1 [:join :left-join :right-join :full-join] j2 [:join :left-join :right-join :full-join]
+        sel [[:id] [:*]]
+        :let [q {:select sel :from [[:users :a]]}]]
+    (if (= j1 j2)
+      (assoc q j1 [[t :b] [:using :id] [:likes :c] [:using :id]])
+      (assoc q j1 [[t :b] [:using :id]] j2 [[:likes :c] [:using :id]]))))
+
+(deftest row-schema-keys-are-the-drivers
+  (when *db*
+    (exec-sql! "CREATE TABLE groups (id int PRIMARY KEY, name text NOT NULL);
+                CREATE TABLE users (id int PRIMARY KEY, group_id int NOT NULL REFERENCES groups, nick text);
+                CREATE TABLE posts (id bigint PRIMARY KEY, title text);
+                CREATE TABLE likes (id int PRIMARY KEY, n int);
+                INSERT INTO groups VALUES (1, 'g'); INSERT INTO users VALUES (1, 1, 'a'); INSERT INTO posts VALUES (1, 't'), (2, 'u');
+                INSERT INTO likes VALUES (1, 1), (2, 2);")
+    (let [ds (datasource)
+          registry (pgmalli/registry (generated {:db *db*} "public"))]
+      (doseq [q (concat queries using-chains)
+              row (jdbc/execute! ds (sql/format q) {:builder-fn (builder registry)})
+              :let [schema (:row (h/analyze registry q))]]
+        (is (= (set (keys row)) (set (map first (m/children (m/schema schema {:registry registry}))))) (pr-str q row))
+        (is (m/validate schema row {:registry registry}) (pr-str q row))))))
+
+(deftest a-writes-row-is-what-next-jdbc-returns
+  (when *db*
+    (exec-sql! "CREATE TABLE tags (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name text NOT NULL);")
+    (let [ds (datasource)
+          registry (pgmalli/registry (generated {:db *db*} "public"))]
+      (doseq [q [{:insert-into :tags :values [{:name "a"} {:name "b"}]}
+                 {:insert-into :tags :values [{:name "a"}] :on-conflict [:id] :do-nothing true}
+                 {:update :tags :set {:name "c"} :where [:= :name "a"]}
+                 {:update :tags :set {:name "c"} :where [:= :name "nothing"]}
+                 {:with [[:old {:select [:id] :from [:tags]}]] :delete-from :tags :where [:in :id {:select [:id] :from [:old]}]}
+                 {:delete-from :tags :returning [:id]}
+                 {:truncate :tags}]
+              return-keys [nil true ["name"]]
+              :let [jdbc-opts (cond-> {:builder-fn (builder registry)} return-keys (assoc :return-keys return-keys))
+                    ;; the map the application passes next.jdbc, its builder too
+                    opts {:jdbc jdbc-opts}
+                    [_ row] (m/children (m/schema (h/query-schema registry [] q opts) {:registry registry}))
+                    [_ one] (m/children (m/schema (h/query-schema registry [] q (assoc opts :result :one)) {:registry registry}))]]
+        (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
+        (let [rows (jdbc/execute! ds (sql/format q) jdbc-opts)]
+          (is (m/validate row rows) (pr-str return-keys q))
+          (when (and return-keys (:insert-into q) (not (:on-conflict q)))
+            (is (seq rows) "an INSERT under :return-keys returns its rows")))
+        (jdbc/execute! ds ["INSERT INTO tags (name) VALUES ('a')"])
+        (is (m/validate one (jdbc/execute-one! ds (sql/format q) jdbc-opts)) (pr-str :one return-keys q))))))
+
+(deftest arguments-typed-from-expressions-are-what-the-driver-takes
+  (when *db*
+    (exec-sql! "CREATE TYPE feel AS ENUM ('ok', 'meh'); CREATE DOMAIN positive AS int CHECK (VALUE > 0);
+                CREATE TABLE notes (id int GENERATED ALWAYS AS IDENTITY PRIMARY KEY, n int NOT NULL, feel feel, body text);")
+    (let [ds (datasource)
+          registry (pgmalli/registry (generated {:db *db*} "public"))
+          opts {}]
+      (doseq [[q params] [[{:insert-into [[:notes [:n :feel :body]] {:select [[:?n] [[:cast :?feel :feel]] [[:unnest [:cast :?bodies [:raw "text[]"]]]]]}]}
+                           {:n 1 :feel "ok" :bodies ["a" "b"]}]
+                          [{:select [:id] :from [:notes] :where [:and [:= [:cast :n :text] :?t] [:< [:composite :n :id] [:composite :?n :?id]]]}
+                           {:t "1" :n 2 :id 99}]]
+              :let [types (:args (h/analyze registry q opts))]]
+        (is (m/validate (into [:map] types) params {:registry registry}) (pr-str q))
+        (is (some? (jdbc/execute! ds (sql/format q {:params params}))) (pr-str q)))
+      (let [q {:select [[[:cast "ok" :feel] :f] [[:cast 2 :positive] :p] [[:cast :n :int] :i] [[:cast true :bool] :b]] :from [:notes]}
+            row (first (jdbc/execute! ds (sql/format q) {:builder-fn (builder registry)}))]
+        (is (some? row))
+        (is (= [:p] (keep #(when (= [:maybe :any] (last %)) (first %)) (rest (:row (h/analyze registry q opts)))))
+            "each cast is typed but to a domain, which the generated file holds no entry of")
+        (is (m/validate (:row (h/analyze registry q opts)) row {:registry registry}) (pr-str row))))))
+
+(deftest arguments-typed-as-postgresql-takes-them-run
+  (when *db*
+    (exec-sql! "CREATE TABLE prices (id bigint PRIMARY KEY, amount numeric NOT NULL, at timestamptz); INSERT INTO prices VALUES (1, 2.5, now());")
+    (let [ds (datasource)
+          registry (pgmalli/registry (generated {:db *db*} "public"))]
+      (doseq [[q opts values] [[{:select [:id] :from [:prices] :where [:= :id :?x]} {} [1 (int 1)]]
+                               [{:select [:id] :from [:prices] :where [:> :amount :?x]} {} [1 2.5M]]
+                               [{:select [:id] :from [:prices] :where [:< :at [:cast :?x :timestamptz]]} {}
+                                ["2026-01-01T00:00:00Z" (java.time.LocalDate/of 2026 1 1) (java.time.LocalDateTime/of 2026 1 1 0 0)
+                                 (java.time.OffsetDateTime/of 2026 1 1 0 0 0 0 java.time.ZoneOffset/UTC)]]
+                               [{:select [:id] :from [:prices] :limit :?x} {} [nil 1]]]
+              :let [t (:x (:args (h/analyze registry q opts)))]
+              v values]
+        (is (m/validate t v {:registry registry}) (str (pr-str q) " " (pr-str v)))
+        (is (vector? (jdbc/execute! ds (sql/format q {:params {:x v}}))) (str (pr-str q) " " (pr-str v))))
+      (is (not (m/validate (:x (:args (h/analyze registry {:select [:id] :from [:prices] :where [:= :id :?x]}))) "1"))
+          "a varchar compared with a bigint is no argument PostgreSQL takes"))))
+
+(deftest pg-array-is-what-the-one-sending-sends-as-an-array
+  (when *db*
+    (let [ds (datasource)
+          s (m/schema [:pg/array :int] {:registry (pgmalli/registry {:registry {}})})
+          sets (m/schema [:pg/array {:pg/set true} :int] {:registry (pgmalli/registry {:registry {}})})
+          taken? (fn [c v] (try (jdbc/execute-one! c ["SELECT 1 AS one WHERE 1 = ANY(?)" v]) true (catch Exception _ false)))]
+      (with-open [c (jdbc/get-connection ds)]
+        (doseq [v [[1 2] [] [[1 2] [3 4]]]]
+          (is (and (taken? c v) (m/validate s v)) (pr-str v)))
+        (is (and (taken? c #{1}) (m/validate sets #{1}) (not (m/validate s #{1}))) "a set where its order is not seen alone")
+        (is (and (taken? c '(1)) (taken? c (map inc [0])) (m/validate s '(1)) (m/validate s (map inc [0]))) "a seq, as a vector")
+        (is (and (taken? c (long-array [1])) (not (m/validate s (long-array [1]))))
+            "a Java array pgjdbc sends, which pgmalli takes not: a vector is the one way")))))
+
+(deftest arrays-and-json-are-what-the-driver-returns-and-takes
+  (when *db*
+    (exec-sql! "CREATE TABLE docs (id int PRIMARY KEY, paths text[], meta jsonb NOT NULL CHECK (jsonb_typeof(meta) = 'object'));")
+    (let [ds (datasource)
+          registry (pgmalli/registry (generated {:db *db*} "public"))
+          ins {:insert-into :docs :values [{:id :?id :paths :?paths :meta [:cast :?meta :jsonb]}]}
+          args (:args (h/analyze registry ins))
+          v ["a" nil]]
+      (is (m/validate (:paths args) v {:registry registry}) "a vector for a text[] column")
+      (is (not (m/validate (:paths args) #{"a"} {:registry registry})) "a set, whose order the column would keep")
+      (jdbc/execute! ds (sql/format ins {:params {:id 1 :paths v :meta "{\"a\": 1}"}}))
+      (let [q {:select [:paths :meta] :from [:docs]}
+            row (first (jdbc/execute! ds (sql/format q) {:builder-fn (builder registry)}))]
+        (is (m/validate (:row (h/analyze registry q)) row) (pr-str (update-vals row class)))))))
+
+(deftest as-read-is-the-row-the-driver-returns
+  (when *db*
+    (exec-sql! "CREATE TABLE odd_keys (id int PRIMARY KEY, line_no2 int, \"userId\" int, tags text[], doc jsonb, span interval, born date);
+                INSERT INTO odd_keys VALUES (1, 2, 3, '{a}', '{\"a\": 1}', '1 day', '2026-01-01');")
+    (let [registry (pgmalli/registry (generated {:db *db*} "public"))
+          row (first (jdbc/execute! (datasource) ["SELECT * FROM odd_keys"] {:builder-fn (builder registry)}))
+          schema (pgmalli/as-read registry :pg.public/odd_keys)]
+      (is (= #{:id :line_no2 :userId :tags :doc :span :born} (set (keys row)) (set (map first (drop 2 schema)))))
+      (is (m/validate schema row {:registry registry}) (pr-str (update-vals row class))))))
+
+(deftest a-null-column-keeps-its-key
+  (when *db*
+    (let [row (jdbc/execute-one! (datasource) ["SELECT NULL::int AS group_id"] {:builder-fn (builder {})})]
+      (is (= {:group_id nil} row)))))
+
+(deftest jdbc-leaves-a-pooled-connection-as-it-was
+  (when *db*
+    (let [{:keys [user password]} *db*
+          c (java.sql.DriverManager/getConnection (jdbcUrl) user password)
+          ;; a pool hands the same connection out again: close is a no-op here
+          kept (java.lang.reflect.Proxy/newProxyInstance (.getClassLoader java.sql.Connection) (into-array Class [java.sql.Connection])
+                                                         (reify java.lang.reflect.InvocationHandler
+                                                           (invoke [_ _ m args] (when-not (= "close" (.getName m)) (.invoke m c args)))))
+          ds (reify javax.sql.DataSource (getConnection [_] kept))
+          path #(with-open [st (.createStatement c)] (let [rs (.executeQuery st "SHOW search_path")] (.next rs) (.getString rs 1)))
+          before (path)]
+      (ir/from-db {:datasource ds :schema "public"})
+      (is (= before (path)))
+      (is (.getAutoCommit c))
+      (.close c))))
+
+(deftest an-enum-reads-as-its-labels-as-keywords-whatever-its-schema-and-name
+  (when *db*
+    (exec-sql! "CREATE SCHEMA \"Odd s\";
+                CREATE TYPE \"Odd s\".\"a\"\"q\" AS ENUM ('it''s', 'b c', 'n/a');
+                CREATE TYPE \"Odd s\".\"text\" AS ENUM ('t');
+                CREATE TYPE \"Odd s\".pair AS ENUM ('p');
+                CREATE TYPE pair AS (a int);
+                CREATE TYPE feeling AS ENUM ('ok');
+                CREATE DOMAIN feeling_d AS feeling;
+                CREATE TABLE \"Odd s\".e (id int PRIMARY KEY, q \"Odd s\".\"a\"\"q\", qs \"Odd s\".\"a\"\"q\"[], f feeling, fd feeling_d, fs feeling[],
+                                           ff feeling[], tz timestamptz[], t \"Odd s\".\"text\", s text, p pair, j json[]);
+                INSERT INTO \"Odd s\".e VALUES (1, 'n/a', '{\"b c\", NULL}', 'ok', 'ok', '{ok}', '{{ok,NULL},{ok,ok}}',
+                                                ARRAY[ARRAY['infinity'::timestamptz, '2026-01-01Z']], 't', 's', ROW(1), ARRAY['{\"a\": 1}'::json, NULL]);")
+    (let [registry (pgmalli/registry (generated {:db *db*} "public" "Odd s"))
+          row (jdbc/execute-one! (datasource) ["SELECT * FROM \"Odd s\".e"] {:builder-fn (builder registry)})]
+      (is (= {:id 1 :q (keyword "n/a") :qs [(keyword "b c") nil] :f :ok :fd :ok :fs [:ok] :ff [[:ok nil] [:ok :ok]]
+              :tz [[java.time.Instant/MAX (java.time.Instant/parse "2026-01-01T00:00:00Z")]] :t :t :s "s" :j [{:a 1} nil]}
+             (dissoc row :p))
+          "a type of a schema off the search_path is named \"schema\".\"name\", a domain's column as its base type, a pg_catalog type's name its own")
+      (is (instance? org.postgresql.util.PGobject (:p row)) "a composite type of the enum's name on the search_path is no enum")
+      ;; a multi-dimensional array's type is one-dimensional (PostgreSQL's type does not say the dimensions)
+      (let [read (pgmalli/as-read registry "pg.Odd s/e")
+            row (assoc row :p nil :ff nil :tz nil)]
+        (is (m/validate read row {:registry registry}) (pr-str (me/humanize (m/explain read row {:registry registry})))))
+      (is (= {:q (keyword "n/a") :j {(keyword "n/a") ["n/a"]}}
+             (jdbc/execute-one! (datasource) ["SELECT ?::\"Odd s\".\"a\"\"q\" AS q, ?::jsonb AS j" (:q row) {(:q row) [(:q row)]}]
+                                {:builder-fn (builder registry)}))
+          "a label of a / goes as its text, alone and in a jsonb document")
+      (exec-sql! "CREATE TYPE \"Odd s\".\"date\" AS ENUM ('d1'); CREATE TYPE \"Odd s\".\"integer\" AS ENUM ('i1');
+                  CREATE TABLE \"Odd s\".named (d \"Odd s\".\"date\", i \"Odd s\".\"integer\", real_d date);
+                  INSERT INTO \"Odd s\".named VALUES ('d1', 'i1', '2026-01-01');")
+      (with-open [c (jdbc/get-connection (datasource))]
+        ;; on the search_path, pgjdbc names them as the pg_catalog types date and integer
+        (jdbc/execute! c ["SET search_path = \"Odd s\", public"])
+        (is (= {:d :d1 :i :i1 :real_d (java.time.LocalDate/of 2026 1 1)}
+               (jdbc/execute-one! c ["SELECT * FROM named"] {:builder-fn (builder (pgmalli/registry (generated {:db *db*} "public" "Odd s")))}))
+            "an enum named as a pg_catalog type pgjdbc returns otherwise than a VARCHAR")
+        (is (= {:d "d1"} (jdbc/execute-one! c ["SELECT d FROM named"] {:builder-fn (builder {})}))
+            "an enum of no registry the builder is given, named as a date, its label a String")))))

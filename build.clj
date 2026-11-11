@@ -1,10 +1,10 @@
 (ns build
-  "clojure -T:build jar      target/pgmalli-next.jar and pom
+  "clojure -T:build jar      target/pgmalli.jar and pom
    clojure -T:build install  into ~/.m2
    Publishing: clojure -X:deploy with CLOJARS_USERNAME and CLOJARS_PASSWORD (a deploy token)."
   (:require [clojure.tools.build.api :as b]))
 
-(def lib 'io.github.chaploud/pgmalli-next)
+(def lib 'io.github.chaploud/pgmalli)
 (defn- tag-version
   "The version is the release tag (v1.2.3 -> 1.2.3), passed in as PGMALLI_VERSION by the release
    workflow; a build outside a release is a snapshot of the last tag."
@@ -14,7 +14,7 @@
 
 (def version (tag-version))
 (def class-dir "target/classes")
-(def jar-file "target/pgmalli-next.jar")
+(def jar-file "target/pgmalli.jar")
 (def basis (delay (b/create-basis {:project "deps.edn"})))
 
 (defn clean [_] (b/delete {:path "target"}))
@@ -23,17 +23,17 @@
   (clean nil)
   (b/write-pom {:class-dir class-dir :lib lib :version version :basis @basis
                 :src-dirs ["src"]
-                :scm {:url "https://github.com/chaploud/pgmalli-next"
-                      :connection "scm:git:git://github.com/chaploud/pgmalli-next.git"
-                      :developerConnection "scm:git:ssh://git@github.com/chaploud/pgmalli-next.git"
+                :scm {:url "https://github.com/chaploud/pgmalli"
+                      :connection "scm:git:git://github.com/chaploud/pgmalli.git"
+                      :developerConnection "scm:git:ssh://git@github.com/chaploud/pgmalli.git"
                       :tag (str "v" version)}
                 :pom-data [[:description "Generate malli schemas from an applied PostgreSQL schema"]
-                           [:url "https://github.com/chaploud/pgmalli-next"]
+                           [:url "https://github.com/chaploud/pgmalli"]
                            [:licenses [:license [:name "MIT License"] [:url "https://opensource.org/license/mit"]]]]})
   (b/copy-dir {:src-dirs ["src"] :target-dir class-dir})
   ;; resources is also where generate! writes by default, so a file generated in this checkout
-  ;; would shadow a user's own pgmalli-next.edn on the classpath
-  (b/copy-dir {:src-dirs ["resources"] :target-dir class-dir :include "pgmalli-next/{ir.sql,impl/catalog.edn}"})
+  ;; would shadow a user's own pgmalli.edn on the classpath
+  (b/copy-dir {:src-dirs ["resources"] :target-dir class-dir :include "pgmalli/{ir.sql,impl/catalog.edn}"})
   (b/jar {:class-dir class-dir :jar-file jar-file})
   (println "built" jar-file "as" (str lib) version))
 
