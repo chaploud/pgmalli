@@ -214,12 +214,17 @@
     #{Instant/MIN LocalDate/MIN LocalDateTime/MIN OffsetDateTime/MIN} "-infinity"
     nil))
 
-(declare array-text)
+(declare append-array!)
 
-(defn- quoted
-  "Text t as a quoted element of an array literal, a quote and a backslash escaped."
-  [t]
-  (str \" (str/replace t #"[\"\\]" "\\\\$0") \"))
+(defn- append-quoted!
+  "Appends text t as a quoted element of an array literal, a quote and a backslash escaped."
+  [^StringBuilder sb ^String t]
+  (.append sb \")
+  (dotimes [i (.length t)]
+    (let [c (.charAt t i)]
+      (case c (\" \\) (.append sb \\) nil)
+      (.append sb c)))
+  (.append sb \"))
 
 (defn- date-text
   "The text date and time input reads of a java.time value of a year java.time writes otherwise:
@@ -234,12 +239,14 @@
       (let [s (str (if (instance? Instant x) (OffsetDateTime/ofInstant ^Instant x ZoneOffset/UTC) x))]
         (str (str/replace-first s #"^[+-]?\d+" (format "%04d" (if (pos? y) y (- 1 y)))) (when-not (pos? y) " BC"))))))
 
-(defn- element-text
-  "Element x of an array literal: NULL, an array, or its text quoted."
-  [x]
-  (cond (or (nil? x) (and (instance? PGobject x) (nil? (.getValue ^PGobject x)))) "NULL"
-        (or (map? x) (accept/jsonb? x)) (quoted (.getValue ^PGobject (jsonb-object x)))
-        (or (vector? x) (seq? x) (set? x)) (array-text x)
+(defn- append-element!
+  "Appends element x of an array literal: NULL, an array, an integer, or its text quoted."
+  [^StringBuilder sb x]
+  (cond (string? x) (append-quoted! sb x)
+        (integer? x) (.append sb (str x))
+        (or (nil? x) (and (instance? PGobject x) (nil? (.getValue ^PGobject x)))) (.append sb "NULL")
+        (or (map? x) (accept/jsonb? x)) (append-quoted! sb (.getValue ^PGobject (jsonb-object x)))
+        (or (vector? x) (seq? x) (set? x)) (append-array! sb x)
         :else
         (let [t (cond (keyword? x) (accept/sent-text x)
                       ;; a domain's element as pgjdbc reads it
@@ -249,24 +256,26 @@
                       (bytes? x) (str "\\x" (apply str (map #(format "%02x" (bit-and 0xff %)) x)))
                       (decimal? x) (.toPlainString ^java.math.BigDecimal x)
                       (ratio? x) (str (double x))
-                      (or (string? x) (number? x) (boolean? x) (uuid? x) (char? x)
+                      (or (number? x) (boolean? x) (uuid? x) (char? x)
                           (instance? java.time.temporal.Temporal x) (instance? java.time.temporal.TemporalAmount x)) (str x)
                       :else (error/fail! :pgmalli.error/invalid-options
                                          (str "a vector or a set goes as an array, which holds no " (.getName (class x)) ": send its text")
                                          {:given (.getName (class x))}))]
-          (quoted t))))
+          (append-quoted! sb t))))
 
-(defn- array-text
-  "The array literal of sequential or set xs ('{\"1\",NULL}'), a set's elements in its order."
-  [xs]
-  (str "{" (str/join "," (map element-text xs)) "}"))
+(defn- append-array!
+  "Appends the array literal of sequential or set xs ('{\"1\",NULL}'), a set's elements in its order."
+  [^StringBuilder sb xs]
+  (.append sb \{)
+  (reduce (fn [first? x] (when-not first? (.append sb \,)) (append-element! sb x) false) true xs)
+  (.append sb \}))
 
 (defn- sent-value [v]
   (cond (instance? Instant v) (offset-date-time v)
         (keyword? v) (untyped (accept/sent-text v))
         (or (instance? java.time.Duration v) (instance? java.time.Period v)) (interval-object v)
         (or (map? v) (accept/jsonb? v)) (jsonb-object v)
-        (or (vector? v) (seq? v) (set? v)) (untyped (try (array-text v)
+        (or (vector? v) (seq? v) (set? v)) (untyped (try (str (append-array! (StringBuilder.) v))
                                                 (catch StackOverflowError _
                                                   (error/fail! :pgmalli.error/invalid-options (str "an array nested " accept/too-deep)
                                                                {:given (.getName (class v))}))))
