@@ -415,7 +415,8 @@ of several columns one key, the last column's (a `:duplicate-column`, [stricter 
 PostgreSQL](#stricter-than-postgresql)). A column an outer
 join may leave NULL is nullable. A set operation (`:union` ...) takes its first member's column
 names; each column is of the type PostgreSQL resolves its members' to, as for
-`CASE`. A column read from a table, through a subquery or a CTE too, keeps its `:pg/identity`,
+`CASE`. A column read from a table, through a subquery or a CTE too, or cast to its own type
+and type modifiers (which PostgreSQL leaves out), keeps its `:pg/identity`,
 `:pg/generated`, `:pg/default` and `:default`; a column of no table has none of them, as
 PostgreSQL names no table of it: an expression, a scalar subquery, a set operation's column, a
 recursive CTE's, and the column `FULL JOIN ... USING` merges. `SELECT *` of a subquery or a CTE

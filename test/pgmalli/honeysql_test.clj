@@ -130,10 +130,14 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                         [:b1 [:string {:pg/type "bit" :pg/max-length 1}]]
                                                         [:b4 [:string {:pg/type "bit" :pg/max-length 4}]]]}})
-        row #(:row (h/analyze reg % {}))]
-    (is (= [:map [:x [:or [:boolean {:pg/type "bit"}] [:any {:pg/type "bit"}]]]]
-           (row {:union-all [{:select [[:b1 :x]] :from [:t]} {:select [[:b4 :x]] :from [:t]}]}))
-        "bit(1) a Boolean, bit(4) a PGobject: the result's typmod is gone, and pgjdbc reads each value")))
+        row #(:row (h/analyze reg % {}))
+        u {:union-all [{:select [[:b1 :x]] :from [:t]} {:select [[:b4 :x]] :from [:t]}]}]
+    (is (= [:map [:x [:or [:boolean {:pg/type "bit"}] [:any {:pg/type "bit"}]]]] (row u))
+        "bit(1) a Boolean, bit(4) a PGobject: the result's typmod is gone, and pgjdbc reads each value")
+    (doseq [q [{:with [[:u u]] :select [:x] :from [:u]}
+               {:select [:x] :from [[u :s]]}
+               {:with [[:u u]] :union-all [{:select [:x] :from [:u]} {:select [[:b4 :x]] :from [:t]}]}]]
+      (is (= (row u) (row q)) (str "read through a CTE, a derived table or another set operation: " (pr-str q))))))
 
 (deftest a-literal-honeysql-sends-is-judged-as-an-argument-there-is
   (let [reg (pgmalli/registry {:schemas ["public"] :registry {:pg.public/mood [:enum "ok" "sad"]
@@ -1850,15 +1854,15 @@
     (is (= {:n [:or [:string {:pg/type "character varying"}] :keyword]} (args (merge recent {:select [:id] :from [:recent] :where [:= :nick :?n]}))))
     (is (= [{:kind :unknown-column :column :mail}] (check (merge recent {:select [:mail] :from [:recent]})))
         "a column its SELECT does not give is none")
-    (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}] [:b {:select [:id] :from [:a]}]] :select [:id] :from [:b]}))
+    (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast [:cast :id :text] :bigint] :id]] :from [:users]}] [:b {:select [:id] :from [:a]}]] :select [:id] :from [:b]}))
         "a CTE reads the ones before it")
-    (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast :id :bigint] :id]] :from [:users]}]
+    (is (= [:map [:id bigint]] (row {:with [[:a {:select [[[:cast [:cast :id :text] :bigint] :id]] :from [:users]}]
                                             [:b {:with [[:c {:select [:id] :from [:a]} :materialized]] :select-distinct [:id] :from [:c]} :materialized]]
                                      :select [:id] :from [:b]}))
         "a CTE's body with a :with of its own sees the ones before it too")
     (is (= [] (check {:with [[[:c {:columns [:x]}] {:select [:id :nick] :from [:users]}]] :select [:x :nick] :from [:c]}))
         "a CTE's name may rename its columns, by position")
-    (is (= [:map [:x bigint]] (row {:with [[[:c {:columns [:x]}] {:select [[[:cast :id :bigint] :id]] :from [:users]}]] :select [:x] :from [:c]})))
+    (is (= [:map [:x bigint]] (row {:with [[[:c {:columns [:x]}] {:select [[[:cast [:cast :id :text] :bigint] :id]] :from [:users]}]] :select [:x] :from [:c]})))
     (is (= [:map [:n bigint]] (row {:select [:s.n] :from [[{:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]} :s]]})))
     (is (= [:map [:id [:maybe bigint]]] (row {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}))
         "a recursive CTE has its first member's types, NULL where later rows may hold it")
@@ -2812,20 +2816,29 @@
     (doseq [q [{:select [:id] :from [:users]}
                {:select [:id] :from [[{:select [:*] :from [:users]} :u]]}
                {:with [[:u {:select [:id] :from [:users]}]] :select [:id] :from [:u]}
-               {:select [[[[:and :id]] :x]] :from [:users]}]]
-      (is (not= none (own q)) (str "a column, read through a subquery or a CTE too, (id) too: " (pr-str q))))
+               {:select [[[[:and :id]] :x]] :from [:users]}
+               {:select [[[:cast :id :int8] :x]] :from [:users]}
+               {:select [[[:cast :total :integer] :x]] :from [:users]}]]
+      (is (not= none (own q)) (str "a column, read through a subquery or a CTE too, (id) and a cast to its own type and length, which PostgreSQL leaves out, too: " (pr-str q))))
     (doseq [q [{:select [[[:coalesce :id] :x]] :from [:users]}
                {:select [[[:nullif :mood :mood] :x]] :from [:users]}
                {:select [[[:max :mood] :x]] :from [:users]}
                {:select [[[:+ :mood [:inline 1]] :x]] :from [:users]}
                {:select [[{:select [:id] :from [:users] :limit 1} :x]]}
                {:select [:x] :from [[{:select [[[:coalesce :id] :x]] :from [:users]} :s]]}
+               {:select [[[:cast :total :bigint] :x]] :from [:users]}
                {:union [{:select [:id] :from [:users]} {:select [:id] :from [:users]}]}
                {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}
                {:select [:id] :from [:users] :full-join [:groups [:using :id]]}]]
       (is (= none (own q)) (str "of no table, as PostgreSQL's RowDescription names none: " (pr-str q))))
     (is (= [:map [:x [:maybe int4]]] (row {:select [[[:cast [:raw "NULL"] :integer] :x]]}))
         "an untyped value cast is nullable, as it was")))
+
+(deftest a-shapes-property-of-an-empty-map-is-a-property
+  (let [shape [:map [:a {:optional true :default {}} [:map-of :string :int]]]
+        reg (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d"} [:doc [:any {:pg/type "jsonb"}]]]}}
+                              {:shapes {:public.d/doc shape}})]
+    (is (= [:map [:doc (into [:map {:pg/type "jsonb"}] (rest shape))]] (:row (h/analyze reg {:select [:doc] :from [:d]} {}))))))
 
 (deftest a-jsonb-shapes-own-defaults-are-kept-where-the-columns-are-not
   (let [doc [:or {:pg/type "jsonb"} [:map {:default {:a 1}} [:a :int]] [:string {:default "x"}]]

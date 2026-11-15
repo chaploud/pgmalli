@@ -53,6 +53,7 @@
             [pgmalli.impl.types :as types]
             [pgmalli.test-db :as test-db])
   (:import (java.util Random)
+           (org.postgresql PGResultSetMetaData)
            (org.postgresql.util PSQLException)))
 
 (def schema-sql (slurp (io/resource "pgmalli/oracle/schema.sql")))
@@ -428,11 +429,26 @@
       [t]
       (when (#{:maybe :or :and} (first f)) (mapcat claimed (rest f))))))
 
+(defn- column-own
+  "What a table's column alone has of column schema s (:pg/identity, :pg/generated, :pg/default),
+   a numeric's on its first alternative."
+  [s]
+  (let [s (shape/non-null s)]
+    (select-keys (merge (shape/props s) (when (= :or (shape/head s)) (shape/props (first (shape/alternatives s)))))
+                 [:pg/identity :pg/generated :pg/default])))
+
+(defn- table-column
+  "The schema of column col of table sch.table in registry; nil for none."
+  [registry sch table col]
+  (when-let [t (try (m/form (m/deref (m/schema (shape/schema-key sch table) {:registry registry}))) (catch Exception _ nil))]
+    (some (fn [e] (when (and (vector? e) (= col (name (first e)))) (last e))) (drop 2 t))))
+
 (defn- column-mismatches
   "{:mismatches :typed}: where row-schema differs from the columns PostgreSQL returned for sqlvec
    (the ResultSet's metadata), its keys from their labels, an entry's :pg/type from the column's
-   type, or an entry with what a table's column alone has (:pg/identity ...) where PostgreSQL
-   names no table of the column; and how many columns it names a :pg/type of. A
+   type, an entry with what a table's column alone has (:pg/identity ...) where PostgreSQL
+   names no table of the column, or one without what the column it names has; and how many
+   columns it names a :pg/type of. A
    write without a result set, or a row-schema that is no map, is left out (nil); row-schema
    throwing, or the run, is a mismatch {:error}."
   [registry ^java.sql.Connection conn domains query opts sqlvec]
@@ -443,7 +459,8 @@
                       (when (.execute ps)
                         (let [md (.getMetaData (.getResultSet ps))]
                           (vec (for [i (range 1 (inc (.getColumnCount md)))]
-                                 [(.getColumnLabel md i) (.getColumnTypeName md i) (.getTableName md i)])))))
+                                 [(.getColumnLabel md i) (.getColumnTypeName md i) (.getTableName md i)
+                                  (.getBaseSchemaName ^PGResultSetMetaData md i) (.getBaseColumnName ^PGResultSetMetaData md i)])))))
                     (catch Exception e {:error (str "the run throws: " (ex-message e))})
                     (finally (.rollback conn))))]
     (cond
@@ -452,7 +469,7 @@
       cols
       (let [entries (into {} (map (fn [[k _ s]] [(name k) (m/form s)])) (m/children row))
             labels (set (map first cols))
-            typed (for [[label pg] (into {} (map pop) cols)
+            typed (for [[label pg] (into {} (map (juxt first second)) cols)
                         :let [f (entries label)
                               ts (distinct (map #(canonical domains %) (claimed f)))]
                         :when (seq ts)]
@@ -465,7 +482,14 @@
                            (for [[label _ table] cols
                                  :let [f (entries label)]
                                  :when (and (= "" table) (not= f (shape/without-column-props f)))]
-                             {:label label :of-no-table f})))}))))
+                             {:label label :of-no-table f})
+                           (for [[label _ table sch col] cols
+                                 ;; a label twice is the last column's (a :duplicate-column)
+                                 :when (= 1 (get (frequencies (map first cols)) label))
+                                 :let [f (entries label)
+                                       own (when (seq table) (some-> (table-column registry sch table col) column-own))]
+                                 :when (and (seq own) f (not (#{:any :some} (shape/head (shape/non-null f)))) (not= own (column-own f)))]
+                             {:label label :of-table (str sch "." table "." col) :own own :schema f})))}))))
 
 ;;; the generated corpus
 

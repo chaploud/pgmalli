@@ -337,7 +337,7 @@
   (walk/postwalk (fn [f] (cond (map? f) (cond-> (dissoc f :gen/min :gen/max :gen/schema :gen/elements :gen/fmap :gen/gen :pg/dispatch)
                                           (:pg/dispatch f) (assoc :dispatch (:pg/dispatch f)))
                                ;; a property map the hints emptied goes too
-                               (and (vector? f) (map? (second f)) (empty? (second f)) (not (#{:map :enum} (first f))))
+                               (and (vector? f) (not (map-entry? f)) (map? (second f)) (empty? (second f)) (not (#{:map :enum} (first f))))
                                (if (= 2 (count f)) (first f) (into [(first f)] (drop 2 f)))
                                :else f))
                  schema))

@@ -11,7 +11,12 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   no table of it. A `UNION` of an identity column and another of its type was an `:or` of the
   two.
 * A set operation's column is typed where a member is, or reads, a set operation whose column is
-  of two schemas of one type: it was `:any`.
+  of two schemas of one type: it was `:any`. Read through a CTE or a subquery, such a column
+  (bit(1) beside bit(4)) is each value as its member reads it, as read directly: it was the first
+  member's.
+* A cast of a column to its own type and type modifiers, which PostgreSQL leaves out, is the
+  column, its `:pg/identity` and default kept.
+* A shape with a property of an empty map (`{:default {}}`) is read: analyze threw.
 
 ## 0.4.0
 

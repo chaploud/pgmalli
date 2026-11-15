@@ -672,7 +672,11 @@
 
 (defn- driver-schema*
   [registry f s opts]
-  (let [t (portable/portable-data (::schemas registry) (f (::schemas registry) (shape/non-null s) opts))]
+  (let [s (shape/non-null s)
+        ;; an :or of no properties (a set operation's, of members of one type) is each alternative as its column reads
+        t (if (and (= :or (shape/head s)) (nil? (shape/props s)))
+            (shape/either (distinct (mapcat #(shape/alternatives (driver-schema* registry f % opts)) (shape/alternatives s))) :any)
+            (portable/portable-data (::schemas registry) (f (::schemas registry) s opts)))]
     ;; one of each kind, after pgmalli's own types read as malli's (:pg/bytes as bytes?)
     (if (and (vector? t) (= :or (first t)) (not (map? (second t))))
       (shape/either (shape/distinct-kinds (rest t)) t)
@@ -1030,12 +1034,28 @@
         (when-let [s (own-type-schema registry (or e n) (:schema opts))]
           (if e [:vector {:pg/type n} s] s)))))
 
+(defn- typmods
+  "The type modifiers a cast's t writes ([:varchar 10], :numeric(6,2) or [:raw \"numeric(6,2)\"]),
+   or column schema s has (its :pg/max-length, or :pg/precision and :pg/scale)."
+  ([t] (if (and (vector? t) (not= :raw (first t)))
+         (filterv integer? (rest t))
+         (some->> (re-find #"\((\d+)\s*(?:,\s*(-?\d+))?\)" (str (if (vector? t) (second t) (name t))))
+                  rest (remove nil?) (mapv parse-long))))
+  ([_ s] (let [p (shape/column-props s)] (vec (keep p [:pg/max-length :pg/precision :pg/scale])))))
+
 (defn- cast-type
-  "The expression type of [:cast v t], v of expression type m, t of cast-target."
+  "The expression type of [:cast v t], v of expression type m, t of cast-target; of a cast to v's
+   own type and type modifiers, which PostgreSQL leaves out, m's, ::column."
   [registry [_ _ t] m opts]
   (when-let [s (some->> (syntax/cast-target t) (named-type-schema registry opts))]
-    {:schema s :type (resolver-type registry s)
-     :nullable? (if m (boolean (:nullable? m)) true)}))
+    (if (and (:schema m) (nil? (domain-of (:schema m)))
+             ;; an enum of another schema named as its own names it (prio), and as the cast does (app.prio)
+             (or (= (:type m) (resolver-type registry s))
+                 (and (= :ref (shape/head (:schema m)) (shape/head s)) (= (last (:schema m)) (last s))))
+             (= (or (typmods t) []) (typmods nil (:schema m))))
+      (assoc m ::column true)
+      {:schema s :type (resolver-type registry s)
+       :nullable? (if m (boolean (:nullable? m)) true)})))
 
 (defn- array-type
   "The expression type of ARRAY[es...], of the elements' (of expression types ms) common type,
@@ -1139,10 +1159,13 @@
   "{:schema column-schema :nullable? bool :type t} of an expression, t its type as
    pgmalli.impl.resolve takes it (:unknown for an untyped literal, :free for an argument), as
    docs/queries.md#the-row-a-query-returns says; nil where that is not told. A column keeps what
-   a table's column alone has (its identity, DEFAULT ...), anything else none of it."
+   a table's column alone has (its identity, DEFAULT ...), a cast of it to its own type too,
+   anything else none of it."
   [registry chain x opts]
   (let [r (expression-type* registry chain x opts)]
-    (cond-> r (and (:schema r) (not (column-reference? x))) (update :schema shape/without-column-props))))
+    (cond (or (nil? r) (column-reference? x)) r
+          (::column r) (dissoc r ::column)
+          :else (cond-> r (:schema r) (update :schema shape/without-column-props)))))
 
 (defn type-call
   "[:cast a f] of a call [:f a] PostgreSQL reads as a cast (func_get_detail): f names a type, of
