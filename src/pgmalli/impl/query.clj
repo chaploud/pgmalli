@@ -398,8 +398,8 @@
                              (function-columns registry item (cons (dissoc sc alias) outer) opts))
                     named (concat (map-indexed (fn [i [c t]] [(nth listed i c) t]) ts)
                                   (when ts (for [[c t] added] [c (some-> t types/type-schema)])))
-                    ;; a CTE's name may list new names for its columns, by position; a recursive
-                    ;; one's later rows may hold NULL where its first member's do not, and are of its UNION
+                    ;; a CTE's name may list new names for its columns, by position; a recursive one's are
+                    ;; its first member's types, of no table (its UNION's), NULL in the later rows too
                     types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (shape/without-column-props t)) t)])))]
                 (cond-> sc types (update alias assoc :types types :order (mapv first named)))))
             sc items)))
@@ -1072,7 +1072,8 @@
     (let [o (syntax/operand-alone x)] (when (not= x o) o))))
 
 (defn- column-reference?
-  "Whether x is a column, enclosed too: what PostgreSQL names a table of."
+  "Whether HoneySQL writes x as a column alone ([[x]], [:and x] ... too): what PostgreSQL may name a
+   table of."
   [x]
   (or (syntax/column-keyword? x) (some-> (enclosed x) column-reference?)))
 
