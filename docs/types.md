@@ -75,7 +75,7 @@ The table's map carries:
 | `:pg/unique` | `[{:columns ["email"]}]`; `:nulls-distinct false` for `NULLS NOT DISTINCT`, `:index true` for a unique index, for a partial one `:where` its predicate where it is equalities of a column (a `varchar` too, which PostgreSQL casts to `text` there) to a string or integer and `IS NULL`s, ANDed (`[[:= "status" "active"] [:is-null "deleted_at"]]`), `true` otherwise, `:deferrable true` for a DEFERRABLE one; one whose index is invalid is left out |
 | `:pg/inherited` | `true`: other tables inherit it (not as partitions), so a query reads their rows too |
 | `:pg/before-triggers` | `{:insert ["fill_owner"]}`: BEFORE row triggers, which may fill a row before NOT NULL is checked; a partitioned table's its partitions' too |
-| `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; `:where true` for a partial one |
+| `:pg/exclude` | `[{:constraint "slots_room_seat_excl" :using "gist" :elements [{:column "room" :op "="} ...]}]`; an expression's element `:column nil` (no expression is read); `:where true` for a partial one |
 | `:pg/foreign-keys` | `[{:columns ["group_id"] :table "public.groups" :to ["id"]}]`; `:match :full` for `MATCH FULL` |
 
 An identifier that is not a plain name (`Order Items`) makes a string key:
