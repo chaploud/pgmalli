@@ -48,6 +48,7 @@
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.hsyntax :as syntax]
             [pgmalli.impl.pgtypes :as pgtypes]
+            [pgmalli.impl.query :as query]
             [pgmalli.impl.shape :as shape]
             [pgmalli.impl.jdbc :as pjdbc]
             [pgmalli.impl.types :as types]
@@ -488,7 +489,9 @@
                                  :when (= 1 (get (frequencies (map first cols)) label))
                                  :let [f (entries label)
                                        own (when (seq table) (some-> (table-column registry sch table col) column-own))]
-                                 :when (and (seq own) f (not (#{:any :some} (shape/head (shape/non-null f)))) (not= own (column-own f)))]
+                                 :when (and (seq own) f (not (#{:any :some} (shape/head (shape/non-null f)))) (not= own (column-own f))
+                                            ;; of a typmod the registry holds not, a cast to its type is told as one of any
+                                            (not (query/unrecorded-typmods (types/canonical-name (:pg/type (shape/column-props f))))))]
                              {:label label :of-table (str sch "." table "." col) :own own :schema f})))}))))
 
 ;;; the generated corpus

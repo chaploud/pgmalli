@@ -15,7 +15,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   (bit(1) beside bit(4)) is each value as its member reads it, as read directly: it was the first
   member's.
 * A cast of a column to its own type and type modifiers, which PostgreSQL leaves out, is the
-  column, its `:pg/identity` and default kept.
+  column, its `:pg/identity` and default kept (not a timestamp's or an interval's, whose
+  modifiers the generated file does not hold).
 * A shape with a property of an empty map (`{:default {}}`) is read: analyze threw.
 
 ## 0.4.0

@@ -2834,6 +2834,16 @@
     (is (= [:map [:x [:maybe int4]]] (row {:select [[[:cast [:raw "NULL"] :integer] :x]]}))
         "an untyped value cast is nullable, as it was")))
 
+(deftest a-cast-to-a-columns-own-type-and-type-modifiers-is-the-column
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
+                                                        [:at [:time/instant {:pg/type "timestamp with time zone" :pg/default {:sql "now()"}}]]
+                                                        [:bp [:string {:pg/type "character" :pg/default "x" :default "x"}]]
+                                                        [:c1 [:string {:pg/type "character" :pg/max-length 1 :pg/default "a" :default "a"}]]]}})
+        default #(:pg/default (shape/column-props (last (second (:row (h/analyze reg {:select [[[:cast %1 %2] :x]] :from [:t]} {}))))))]
+    (is (nil? (default :at :timestamptz)) "the registry holds no timestamp's precision: timestamptz(3)::timestamptz is no column")
+    (is (nil? (default :bp :char)) "char is char(1), which a bpchar of no length cast to is not")
+    (is (= "a" (default :c1 :char)) "char(1)::char")))
+
 (deftest a-shapes-property-of-an-empty-map-is-a-property
   (let [shape [:map [:a {:optional true :default {}} [:map-of :string :int]]]
         reg (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d"} [:doc [:any {:pg/type "jsonb"}]]]}}

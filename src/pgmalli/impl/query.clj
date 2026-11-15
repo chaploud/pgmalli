@@ -1034,13 +1034,20 @@
         (when-let [s (own-type-schema registry (or e n) (:schema opts))]
           (if e [:vector {:pg/type n} s] s)))))
 
+(def unrecorded-typmods
+  "The types of a type modifier the registry does not hold (a timestamp's precision, an
+   interval's fields): a cast to one is a cast of a column of any, of no table."
+  #{"timestamp without time zone" "timestamp with time zone" "time without time zone" "time with time zone" "interval"})
+
 (defn- typmods
-  "The type modifiers a cast's t writes ([:varchar 10], :numeric(6,2) or [:raw \"numeric(6,2)\"]),
-   or column schema s has (its :pg/max-length, or :pg/precision and :pg/scale)."
-  ([t] (if (and (vector? t) (not= :raw (first t)))
-         (filterv integer? (rest t))
-         (some->> (re-find #"\((\d+)\s*(?:,\s*(-?\d+))?\)" (str (if (vector? t) (second t) (name t))))
-                  rest (remove nil?) (mapv parse-long))))
+  "The type modifiers a cast's t writes ([:varchar 10], :numeric(6,2) or [:raw \"numeric(6,2)\"];
+   char and bit of none, 1), or column schema s has (its :pg/max-length, or :pg/precision and
+   :pg/scale)."
+  ([t] (let [spelled (str/lower-case (str (if (and (vector? t) (= :raw (first t))) (second t) (if (vector? t) (name (first t)) (name t)))))]
+         (cond (and (vector? t) (not= :raw (first t))) (filterv integer? (rest t))
+               (re-find #"\(" spelled) (some->> (re-find #"\((\d+)\s*(?:,\s*(-?\d+))?\)" spelled) rest (remove nil?) (mapv parse-long))
+               (#{"char" "character" "bit" "pg_catalog.char" "pg_catalog.bit"} (str/trim spelled)) [1]
+               :else [])))
   ([_ s] (let [p (shape/column-props s)] (vec (keep p [:pg/max-length :pg/precision :pg/scale])))))
 
 (defn- cast-type
@@ -1049,10 +1056,11 @@
   [registry [_ _ t] m opts]
   (when-let [s (some->> (syntax/cast-target t) (named-type-schema registry opts))]
     (if (and (:schema m) (nil? (domain-of (:schema m)))
+             (not (unrecorded-typmods (str/replace (str (:type m)) #"\[\]$" "")))
              ;; an enum of another schema named as its own names it (prio), and as the cast does (app.prio)
              (or (= (:type m) (resolver-type registry s))
                  (and (= :ref (shape/head (:schema m)) (shape/head s)) (= (last (:schema m)) (last s))))
-             (= (or (typmods t) []) (typmods nil (:schema m))))
+             (= (typmods t) (typmods nil (:schema m))))
       (assoc m ::column true)
       {:schema s :type (resolver-type registry s)
        :nullable? (if m (boolean (:nullable? m)) true)})))

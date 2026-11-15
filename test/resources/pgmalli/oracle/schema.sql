@@ -22,6 +22,7 @@ CREATE TABLE events (id serial PRIMARY KEY, title text NOT NULL);
 CREATE TABLE special_events (extra text) INHERITS (events);
 CREATE DOMAIN money2 AS numeric(10,2) CHECK (VALUE > 0);
 CREATE TABLE kinds (id serial PRIMARY KEY, flag boolean, uid uuid, day date, at time, att timetz, ts timestamp, raw bytea, span interval, js json, ch char(2), ints int[], texts text[], bigs bigint[], nums numeric[], dbls double precision[], posints posint[], money2s money2[], short_texts varchar(5)[]);
+CREATE TABLE precisions (id serial PRIMARY KEY, at3 timestamptz(3) NOT NULL DEFAULT now(), t3 time(3) DEFAULT '00:00', bp bpchar DEFAULT 'x', c1 char(1) DEFAULT 'a', span_d interval day DEFAULT '1 day');
 CREATE VIEW active_users AS SELECT id, nick, group_id, mood FROM users WHERE score > 0;
 INSERT INTO groups (name) VALUES ('g1'), ('g2');
 INSERT INTO users (group_id, nick, name, mood, score) VALUES (1, 'a', 'A', 'happy', 1), (2, 'b', 'B', 'sad', 0);
