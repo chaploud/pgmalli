@@ -3,6 +3,7 @@
    Data lives on tmpfs with durability off, as usual for CI."
   (:require [babashka.process :as p]
             [clojure.string :as str]
+            [ci-images]
             [clojure.test :as t]
             [honey.sql :as sql]
             [pgmalli.impl.files :as files]
@@ -22,9 +23,9 @@
 (def ^:dynamic *container* nil)
 
 ;; ci.yml's PostgreSQL 17, by digest (Renovate updates it there), as CI runs it
-(def image (or (System/getenv "PGMALLI_PG_IMAGE")
-               (re-find #"postgres:17-alpine@sha256:[0-9a-f]+" (slurp ".github/workflows/ci.yml"))
-               (throw (ex-info ".github/workflows/ci.yml lists no postgres:17-alpine by digest" {}))))
+(def image (delay (or (System/getenv "PGMALLI_PG_IMAGE")
+                      (get (try (ci-images/images) (catch java.io.FileNotFoundException _ nil)) "17")
+                      (throw (ex-info "no PostgreSQL 17 image: .github/workflows/ci.yml, read from the working directory, lists none by digest; run from the repository's root, or set PGMALLI_PG_IMAGE" {})))))
 
 (defn- free-port []
   (with-open [s (ServerSocket. 0)] (.getLocalPort s)))
@@ -67,13 +68,13 @@
                                 ;; which is on disk; 18 refuses a mount there
                                 "--tmpfs" "/var/lib/postgresql:rw,size=1g"
                                 "-e" "PGDATA=/var/lib/postgresql/pgdata"
-                                "-p" (str "127.0.0.1:" port ":5432") image
+                                "-p" (str "127.0.0.1:" port ":5432") @image
                                 "-c" "fsync=off" "-c" "synchronous_commit=off" "-c" "full_page_writes=off"])]
       (cond (zero? exit) {:name name :port port}
             (< attempt 3) (recur (inc attempt))
-            :else (throw (ex-info (str "could not start the postgres container (" image "): " (str/trim (str err))
-                                       "; start docker, or set PGMALLI_SKIP_DB=1 to run without the database tests")
-                                  {:port port :image image}))))))
+            :else (throw (ex-info (str "could not start the postgres container (" @image "): " (str/trim (str err))
+                                       "; start docker, set PGMALLI_PG_IMAGE to an image you have, or set PGMALLI_SKIP_DB=1 to run without the database tests")
+                                  {:port port :image @image}))))))
 
 (defn- wait-ready! [name]
   ;; the init-time temporary server only listens on a unix socket, so check over TCP

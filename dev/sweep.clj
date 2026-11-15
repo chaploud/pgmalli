@@ -69,7 +69,7 @@
         (let [start (System/currentTimeMillis)
               findings (try (sweep-file i f) (catch Throwable e [{:kind :error :step :file :message (ex-message e)}]))]
           (spit out (with-out-str (binding [*print-namespace-maps* false pp/*print-right-margin* 110]
-                                    (pp/pprint {:file name :image db/image :ms (- (System/currentTimeMillis) start)
+                                    (pp/pprint {:file name :image @db/image :ms (- (System/currentTimeMillis) start)
                                                 :findings findings}))))
           (println name (count findings) (pr-str (frequencies (map :kind findings))) (str (- (System/currentTimeMillis) start) "ms")))))))
 
