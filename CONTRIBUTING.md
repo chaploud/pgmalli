@@ -5,7 +5,8 @@ Issues and pull requests are welcome.
 ## Setup
 
 `nix develop` (or direnv) provides clojure, babashka, clj-kondo and psql. The database tests
-need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the image).
+need docker: they start a throwaway PostgreSQL container (`PGMALLI_PG_IMAGE` selects the image;
+by default, CI's PostgreSQL 17 as `.github/workflows/ci.yml` pins it).
 `bb tasks` says which tasks need it.
 
 ## Tests

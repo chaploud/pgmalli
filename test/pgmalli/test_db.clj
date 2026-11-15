@@ -21,7 +21,10 @@
 (def ^:dynamic *db* nil)
 (def ^:dynamic *container* nil)
 
-(def image (or (System/getenv "PGMALLI_PG_IMAGE") "postgres:17-alpine"))
+;; ci.yml's PostgreSQL 17, by digest (Renovate updates it there), as CI runs it
+(def image (or (System/getenv "PGMALLI_PG_IMAGE")
+               (re-find #"postgres:17-alpine@sha256:[0-9a-f]+" (slurp ".github/workflows/ci.yml"))
+               (throw (ex-info ".github/workflows/ci.yml lists no postgres:17-alpine by digest" {}))))
 
 (defn- free-port []
   (with-open [s (ServerSocket. 0)] (.getLocalPort s)))
