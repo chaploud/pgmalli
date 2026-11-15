@@ -301,10 +301,11 @@
 (deftest a-set-operations-row-is-named-by-its-first-member
   (let [body {:union-all [{:select [:id [:nick :name]] :from [:users]} {:select [:id [:nick :n]] :from [:users]}]}]
     (is (= [:map
-            [:id [:int {:pg/identity :always :pg/type "bigint"}]]
+            [:id bigint]
             [:name [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]]]
-           (row body opts)))
-    (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]] (row {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]}))
+           (row body opts))
+        "of no table: no identity, as PostgreSQL's RowDescription names none")
+    (is (= [:map [:id [:maybe bigint]]] (row {:union [{:select [:id] :from [:users]} {:select [[nil :id]]}]}))
         "of the members' type, NULL left out, nullable where one is")))
 
 (deftest an-in-argument-is-what-sql-format-expands
@@ -531,6 +532,15 @@
          (row {:select [:groups/*] :from [:groups]})) ":t/* is the table's columns")
   (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]] (row {:select [:*] :from [[{:select [:id] :from [:users]} :r]]}))
       "a subquery's * is the columns its SELECT gives")
+  (let [star {:select [:*] :from [:users] :where [:> :score 0]}
+        un {:select [:x] :from [[[:unnest [:cast :?ids [:raw "bigint[]"]]] :x]]}
+        rec (fn [t] {:with-recursive [[:r {:union-all [{:select [:id] :from [t]} {:select [:u.id] :from [:r] :join [[t :u] [:= :u.group_id :r.id]]}]}]]
+                     :union [{:select [:id] :from [:r]} un]})]
+    (doseq [[direct via] [[{:select [:id :nick] :from [:users]} {:select [:id :nick] :from [[star :u]]}]
+                          [{:select [:id :nick] :from [:users]} {:with [[:u star]] :select [:id :nick] :from [:u]}]
+                          [{:union [{:select [:id] :from [:users]} un]} {:union [{:select [:id] :from [[star :u]]} un]}]
+                          [(rec :users) (rec [star :u])]]]
+      (is (= (row direct) (row via)) (str "a select * of a table types as the table: " (pr-str via)))))
   (is (nil? (row {:select [:*] :from [[[:public.my-fn 1 3] :r]]})) "an opaque table's * is unknown")
     (is (= [:map [:r [:maybe bigint]]] (row {:select [:*] :from [[[:generate_series 1 3] :r]]})) "a function's of pg_catalog is its columns")
   (is (= [] (check {:select [:cp.id] :from [[:users :cp]] :join [[:groups :c] [:= :c.id :cp.group_id]]
@@ -1165,9 +1175,15 @@
   (is (= {:x [:and {:pgmalli/uses true} bigint-cmp [:or [:map {:pg/type "jsonb"} [:a :int]] pg-object]]} (:args (h/analyze docs {:select [:id] :from [:docs] :where [:and [:= :meta :?x] [:= :id :?x]]})))
       "a jsonb compared: the values sent as jsonb"))
 
+(deftest a-set-operation-reading-another-set-operations-column-is-of-their-type
+  (let [a {:union [{:select [[:group_id :x]] :from [:users]} {:select [:x] :from [[[:unnest [:cast :?xs [:raw "integer[]"]]] :x]]}]}]
+    (is (= [:map [:x [:maybe int4]]]
+           (row {:with [[:a a] [:b {:union [{:select [:x] :from [:a]} {:select [[:group_id :x]] :from [:users]}]}]] :select [:x] :from [:b]}))
+        "a's column of two schemas of one type (a key's generation hints, an unnest's none) beside a third")))
+
 (deftest a-set-operations-row-keeps-a-null-columns-key
   (is (= [:map
-          [:id [:int {:pg/identity :always :pg/type "bigint"}]]
+          [:id bigint]
           [:nick [:maybe [:string {:pg/max-length 40 :pg/type "character varying"}]]]]
          (row {:union [{:select [:id :nick] :from [:users]} {:select [:id :nick] :from [:users]}]} opts))))
 
@@ -1205,7 +1221,7 @@
     (is (= [:or [:string {:pg/type "character varying"}] :keyword] (:p types)))))
 
 (deftest a-select-of-every-set-operation-and-the-dot
-  (is (= [:map [:id [:int {:pg/identity :always :pg/type "bigint"}]]]
+  (is (= [:map [:id bigint]]
          (row {:except-all [{:select [:id] :from [:users]} {:select [:id] :from [:users]}]})))
   (is (= [:map [:nick [:maybe :any]]] (row {:select [[[:. :u :nick]]] :from [[:users :u]]}))
       "[:. a b] is a.b, named b"))
@@ -1836,7 +1852,7 @@
         "a CTE's name may rename its columns, by position")
     (is (= [:map [:x bigint]] (row {:with [[[:c {:columns [:x]}] {:select [[[:cast :id :bigint] :id]] :from [:users]}]] :select [:x] :from [:c]})))
     (is (= [:map [:n bigint]] (row {:select [:s.n] :from [[{:select [:id [[:count :*] :n]] :from [:users] :group-by [:id]} :s]]})))
-    (is (= [:map [:id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]] (row {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}))
+    (is (= [:map [:id [:maybe bigint]]] (row {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}))
         "a recursive CTE has its first member's types, NULL where later rows may hold it")
     (is (= [:map [:n bigint]] (row {:select [:x.n] :from [:users [[:lateral {:select [[[:cast :id :bigint] :n]] :from [:groups] :where [:= :groups.id :users.group_id]}] :x]]}))
         "a LATERAL subquery sees the tables before it")
@@ -2495,7 +2511,7 @@
         "pg_catalog comes first on the search path: the schema's lower(text) gives way to its")
     (is (= [:map [:u [:maybe [:string {:pg/type "text"}]]]] (row {:u [:upper :mood]})) "an overload taking the schema's enum type")
     (is (= [:map [:m [:maybe [:enum {:pg/type "mood"} :happy :sad]]]] (row {:m [:pick_mood]})) "a result of the schema's enum type")
-    (is (= [:map [:o [:maybe [:enum {:default :happy :pg/default "happy" :pg/type "mood"} :happy :sad]]]] (row {:o [:+ :mood [:inline 1]]}))
+    (is (= [:map [:o [:maybe [:enum {:pg/type "mood"} :happy :sad]]]] (row {:o [:+ :mood [:inline 1]]}))
         "an operator of the schema's, of its enum type as its operand's")
     (is (= [:map
             [:uid [:maybe [:int {:pg/type "bigint"}]]]
@@ -2782,13 +2798,31 @@
          (row {:union-all [{:select [[[:inline "a"] :z]]} {:select [[:nick :z]] :from [:users]}]}))
       "a literal is no value of the column's length"))
 
+(deftest only-a-column-of-a-table-keeps-what-a-tables-column-alone-has
+  (let [own (fn [q] (let [[_ & es] (row q)] (map #(select-keys (shape/column-props (last %)) [:pg/identity :default :pg/default]) es)))
+        none [{}]]
+    (doseq [q [{:select [:id] :from [:users]}
+               {:select [:id] :from [[{:select [:*] :from [:users]} :u]]}
+               {:with [[:u {:select [:id] :from [:users]}]] :select [:id] :from [:u]}]]
+      (is (not= none (own q)) (str "a column, read through a subquery or a CTE too: " (pr-str q))))
+    (doseq [q [{:select [[[:coalesce :id] :x]] :from [:users]}
+               {:select [[[:nullif :mood :mood] :x]] :from [:users]}
+               {:select [[[:max :mood] :x]] :from [:users]}
+               {:select [[[:+ :mood [:inline 1]] :x]] :from [:users]}
+               {:select [[{:select [:id] :from [:users] :limit 1} :x]]}
+               {:select [:x] :from [[{:select [[[:coalesce :id] :x]] :from [:users]} :s]]}
+               {:union [{:select [:id] :from [:users]} {:select [:id] :from [:users]}]}
+               {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}
+               {:select [:id] :from [:users] :full-join [:groups [:using :id]]}]]
+      (is (= none (own q)) (str "of no table, as PostgreSQL's RowDescription names none: " (pr-str q))))))
+
 (deftest a-void-function-is-of-type-void-which-the-driver-reads-as-an-object
   (is (= [:map [:l [:maybe [:any {:pg/type "void"}]]]] (row {:select [[[:pg_advisory_xact_lock :id] :l]] :from [:users]}))))
 
 (deftest a-recursive-cte-keeps-its-first-members-types-through-what-reads-it
   (let [r [:r {:union-all [{:select [:id :nick] :from [:users] :where [:= :id 1]}
                            {:select [:u.id :u.nick] :from [[:users :u]] :join [:r [:= :r.id :u.referrer_id]]}]}]
-        id [:maybe [:int {:pg/identity :always :pg/type "bigint"}]]]
+        id [:maybe bigint]]
     (is (= [:map [:id id]] (row {:with-recursive [r [:x {:select [:r.id] :from [:r]}]] :select [:id] :from [:x]}))
         "another CTE")
     (is (= [:map [:id id]] (row {:with-recursive [r] :select [:d.id] :from [[{:select [:id] :from [:r]} :d]]}))

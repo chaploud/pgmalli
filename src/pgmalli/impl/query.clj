@@ -399,8 +399,8 @@
                     named (concat (map-indexed (fn [i [c t]] [(nth listed i c) t]) ts)
                                   (when ts (for [[c t] added] [c (some-> t types/type-schema)])))
                     ;; a CTE's name may list new names for its columns, by position; a recursive
-                    ;; one's later rows may hold NULL where its first member's do not
-                    types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable t) t)])))]
+                    ;; one's later rows may hold NULL where its first member's do not, and are of its UNION
+                    types (when ts (into {} (for [[c t] named] [c (if (and t recursive?) (nullable (shape/without-column-props t)) t)])))]
                 (cond-> sc types (update alias assoc :types types :order (mapv first named)))))
             sc items)))
 
@@ -840,7 +840,7 @@
                 ;; a timestamp's or time's precision is not in the registry, so (3) and (6) read as one type
                 (let [same? (and (:schema l) (:schema r) (= (type-of (:schema l)) (type-of (:schema r))))
                       side (case join (:join :inner-join :left-join) l :right-join r nil)]
-                  (cond (nil? side) {:schema (when same? (:schema l)) :nullable? true}
+                  (cond (nil? side) {:schema (when same? (shape/without-column-props (:schema l))) :nullable? true}
                         same? side
                         ;; one side cast to the merged type: which one, the registry does not say
                         :else {:schema nil :nullable? true})))]
@@ -1064,10 +1064,26 @@
       (when (= "boolean" (:result r))
         (when-let [s (result-schema t ms)] {:type t :schema s :nullable? true}))))))
 
+(defn- column-reference?
+  "Whether x is a column, (x) or [[x]] too: what PostgreSQL names a table of."
+  [x]
+  (cond (syntax/column-keyword? x) true
+        (and (vector? x) (vector? (first x)) (= 1 (count x))) (recur (first x))
+        (not= x (syntax/operand-alone x)) (recur (syntax/operand-alone x))
+        :else false))
+
+(declare expression-type*)
+
 (defn expression-type
   "{:schema column-schema :nullable? bool :type t} of an expression, t its type as
    pgmalli.impl.resolve takes it (:unknown for an untyped literal, :free for an argument), as
-   docs/queries.md#the-row-a-query-returns says; nil where that is not told."
+   docs/queries.md#the-row-a-query-returns says; nil where that is not told. A column keeps what
+   a table's column alone has (its identity, DEFAULT ...), anything else none of it."
+  [registry chain x opts]
+  (cond-> (expression-type* registry chain x opts)
+    (not (column-reference? x)) (update :schema #(some-> % shape/without-column-props))))
+
+(defn- expression-type*
   [registry chain x opts]
   (let [h (when (vector? x) (first x))
         sub #(expression-type registry chain % opts)
@@ -1227,8 +1243,9 @@
                           known (keep identity (map (fn [s u] (when-not (contains? u j) s)) schemas unknown))
                           ;; a literal is a value of the type, not of the column's bounds
                           literal? (and (seq known) (some #(get % j) unknown))
-                          inners (distinct (map (cond->> shape/non-null literal? (comp loose shape/non-null))
-                                                (or (seq known) schemas)))]]
+                          ;; a member's :or (of a set operation of its own) is its alternatives, each beside the others'
+                          inners (distinct (mapcat (comp shape/alternatives (cond->> (comp shape/without-column-props shape/non-null) literal? (comp loose)))
+                                                   (or (seq known) schemas)))]]
                 ;; PostgreSQL resolves each column's type as CASE's
                 (with-meta
                  (jdbc/row-entry (ffirst entries)

@@ -3,6 +3,15 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
+## 0.4.1
+
+* A column of no table in `:row` (an expression, a scalar subquery, a set operation's column,
+  a recursive CTE's, the column `FULL JOIN ... USING` merges) has no `:pg/identity`,
+  `:pg/generated` or default of the column it comes from, as PostgreSQL names no table of it. A
+  `UNION` of an identity column and another of its type was an `:or` of the two.
+* A set operation's column is typed where a member reads another set operation's column of
+  two schemas of one type (a key column's beside an `unnest`'s): it was `:any`.
+
 ## 0.4.0
 
 * A rewrite: [README](README.md) and [docs](docs/) describe it as it is. Most of 0.3's API is

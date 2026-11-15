@@ -273,6 +273,18 @@
                             %)
                          t))
 
+(defn without-column-props
+  "t without what a table's column alone has (identity, generated, DEFAULT), through its :maybe,
+   :or and :and, not into the values it holds (a jsonb shape's own defaults): a value not read
+   from one column, as PostgreSQL's RowDescription names no table of."
+  [t]
+  (let [p (props t)
+        t (if (#{:maybe :or :and} (head t)) (into [(first t)] (map #(if (map? %) % (without-column-props %))) (rest t)) t)
+        kept (some-> p (dissoc :pg/identity :pg/generated :default :pg/default))]
+    (cond (nil? p) t
+          (empty? kept) (into [(first t)] (drop 2 t))
+          :else (assoc t 1 kept))))
+
 (defn either
   "One schema of alternatives ts: an :or of them, the one alone, empty when there are none."
   [ts empty]

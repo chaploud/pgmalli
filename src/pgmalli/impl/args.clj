@@ -49,11 +49,7 @@
    column's own properties; :any where side's is not told."
   [registry sc side opts]
   (if-let [s (query/side-schema registry sc side opts)]
-    (walk/postwalk #(if-let [p (shape/props %)]
-                      (let [p (dissoc p :pg/identity :pg/generated :default :pg/default)]
-                        (if (empty? p) (into [(first %)] (drop 2 %)) (assoc % 1 p)))
-                      %)
-                   (shape/without-lengths (accepted-type registry s :assign opts)))
+    (shape/without-column-props (shape/without-lengths (accepted-type registry s :assign opts)))
     :any))
 
 (defn- unlabel

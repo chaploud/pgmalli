@@ -48,6 +48,7 @@
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.hsyntax :as syntax]
             [pgmalli.impl.pgtypes :as pgtypes]
+            [pgmalli.impl.shape :as shape]
             [pgmalli.impl.jdbc :as pjdbc]
             [pgmalli.impl.types :as types]
             [pgmalli.test-db :as test-db])
@@ -429,8 +430,9 @@
 
 (defn- column-mismatches
   "{:mismatches :typed}: where row-schema differs from the columns PostgreSQL returned for sqlvec
-   (the ResultSet's metadata), its keys from their labels
-   or an entry's :pg/type from the column's type; and how many columns it names a :pg/type of. A
+   (the ResultSet's metadata), its keys from their labels, an entry's :pg/type from the column's
+   type, or an entry with what a table's column alone has (:pg/identity ...) where PostgreSQL
+   names no table of the column; and how many columns it names a :pg/type of. A
    write without a result set, or a row-schema that is no map, is left out (nil); row-schema
    throwing, or the run, is a mismatch {:error}."
   [registry ^java.sql.Connection conn domains query opts sqlvec]
@@ -441,7 +443,7 @@
                       (when (.execute ps)
                         (let [md (.getMetaData (.getResultSet ps))]
                           (vec (for [i (range 1 (inc (.getColumnCount md)))]
-                                 [(.getColumnLabel md i) (.getColumnTypeName md i)])))))
+                                 [(.getColumnLabel md i) (.getColumnTypeName md i) (.getTableName md i)])))))
                     (catch Exception e {:error (str "the run throws: " (ex-message e))})
                     (finally (.rollback conn))))]
     (cond
@@ -450,7 +452,7 @@
       cols
       (let [entries (into {} (map (fn [[k _ s]] [(name k) (m/form s)])) (m/children row))
             labels (set (map first cols))
-            typed (for [[label pg] (into {} cols)
+            typed (for [[label pg] (into {} (map pop) cols)
                         :let [f (entries label)
                               ts (distinct (map #(canonical domains %) (claimed f)))]
                         :when (seq ts)]
@@ -459,7 +461,11 @@
          :mismatches (vec (concat
                            (when (not= labels (set (keys entries)))
                              [{:labels (sort labels) :keys (sort (keys entries))}])
-                           (map #(dissoc % :ok?) (remove :ok? typed))))}))))
+                           (map #(dissoc % :ok?) (remove :ok? typed))
+                           (for [[label _ table] cols
+                                 :let [f (entries label)]
+                                 :when (and (= "" table) (not= f (shape/without-column-props f)))]
+                             {:label label :of-no-table f})))}))))
 
 ;;; the generated corpus
 
