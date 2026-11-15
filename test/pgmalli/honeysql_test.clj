@@ -2844,11 +2844,14 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
                                                         [:at [:time/instant {:pg/type "timestamp with time zone" :pg/default {:sql "now()"}}]]
                                                         [:bp [:string {:pg/type "character" :pg/default "x" :default "x"}]]
-                                                        [:c1 [:string {:pg/type "character" :pg/max-length 1 :pg/default "a" :default "a"}]]]}})
+                                                        [:c1 [:string {:pg/type "character" :pg/max-length 1 :pg/default "a" :default "a"}]]
+                                                        [:v [:string {:pg/type "character varying" :pg/default "v" :default "v"}]]]}})
         default #(:pg/default (shape/column-props (last (second (:row (h/analyze reg {:select [[[:cast %1 %2] :x]] :from [:t]} {}))))))]
     (is (nil? (default :at :timestamptz)) "the registry holds no timestamp's precision: timestamptz(3)::timestamptz is no column")
     (is (nil? (default :bp :char)) "char is char(1), which a bpchar of no length cast to is not")
-    (is (= "a" (default :c1 :char)) "char(1)::char")))
+    (is (= "a" (default :c1 :char)) "char(1)::char")
+    (is (nil? (default :c1 :pg_catalog.char)) "pg_catalog.char is \"char\", another type")
+    (is (nil? (default :v [:varchar [:inline 10]])) "varchar::varchar(10), as HoneySQL writes the length")))
 
 (deftest a-shapes-property-of-an-empty-map-is-a-property
   (let [shape [:map [:a {:optional true :default {}} [:map-of :string :int]]]

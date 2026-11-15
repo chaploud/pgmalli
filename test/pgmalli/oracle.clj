@@ -444,6 +444,12 @@
   (when-let [t (try (m/form (m/deref (m/schema (shape/schema-key sch table) {:registry registry}))) (catch Exception _ nil))]
     (some (fn [e] (when (and (vector? e) (= col (name (first e)))) (last e))) (drop 2 t))))
 
+(defn- cast-item?
+  "Whether label is of a [:cast ...] query selects."
+  [query label]
+  (boolean (some #(and (vector? %) (= 2 (count %)) (= label (name (second %))) (vector? (first %)) (= :cast (ffirst %)))
+                 (:select query))))
+
 (defn- column-mismatches
   "{:mismatches :typed}: where row-schema differs from the columns PostgreSQL returned for sqlvec
    (the ResultSet's metadata), its keys from their labels, an entry's :pg/type from the column's
@@ -491,7 +497,8 @@
                                        own (when (seq table) (some-> (table-column registry sch table col) column-own))]
                                  :when (and (seq own) f (not (#{:any :some} (shape/head (shape/non-null f)))) (not= own (column-own f))
                                             ;; of a typmod the registry holds not, a cast to its type is told as one of any
-                                            (not (query/unrecorded-typmods (types/canonical-name (:pg/type (shape/column-props f))))))]
+                                            (not (and (query/unrecorded-typmods (types/canonical-name (:pg/type (shape/column-props f))))
+                                                      (cast-item? query label))))]
                              {:label label :of-table (str sch "." table "." col) :own own :schema f})))}))))
 
 ;;; the generated corpus

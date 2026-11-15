@@ -1045,12 +1045,14 @@
 
 (defn- typmods
   "The type modifiers a cast's t writes ([:varchar 10], :numeric(6,2) or [:raw \"numeric(6,2)\"];
-   char and bit of none, 1), or column schema s has (its :pg/max-length, or :pg/precision and
+   [:varchar [:inline 10]] too; char and bit of none, 1), or column schema s has (its :pg/max-length, or :pg/precision and
    :pg/scale)."
   ([t] (let [spelled (str/lower-case (str (if (and (vector? t) (= :raw (first t))) (second t) (if (vector? t) (name (first t)) (name t)))))]
-         (cond (and (vector? t) (not= :raw (first t))) (filterv integer? (rest t))
+         (cond (and (vector? t) (not= :raw (first t)))
+               (vec (keep #(cond (integer? %) % (and (vector? %) (= :inline (first %)) (integer? (second %))) (second %)) (rest t)))
                (re-find #"\(" spelled) (some->> (re-find #"\((\d+)\s*(?:,\s*(-?\d+))?\)" spelled) rest (remove nil?) (mapv parse-long))
-               (#{"char" "character" "bit" "pg_catalog.char" "pg_catalog.bit"} (str/trim spelled)) [1]
+               ;; the grammar's keywords alone: pg_catalog.char is "char", pg_catalog.bit of no length
+               (#{"char" "character" "bit"} (str/trim spelled)) [1]
                :else [])))
   ([_ s] (let [p (shape/column-props s)] (vec (keep p [:pg/max-length :pg/precision :pg/scale])))))
 
