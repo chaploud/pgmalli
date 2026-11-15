@@ -18,6 +18,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
   column, its `:pg/identity` and default kept (not a timestamp's or an interval's, whose
   modifiers the generated file does not hold).
 * A shape with a property of an empty map (`{:default {}}`) is read: analyze threw.
+* A value compared with a set operation's column of one type takes what one compared with a
+  column of the type takes (a `Double` beside `numeric` and `numeric(6,2)`).
 
 ## 0.4.0
 

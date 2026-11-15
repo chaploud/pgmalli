@@ -979,7 +979,13 @@
            (row {:union [{:select [:n] :from [:t]} {:select [:n] :from [:t]}]}))
         "a set operation of one domain is of the domain")
     (is (= [:map [:p :any]] (row {:union [{:select [:p] :from [:t]} {:select [[:i :p]] :from [:t]}]}))
-        "numeric beside integer: numeric, its NaN a Double, which none of the members' schemas is alone")))
+        "numeric beside integer: numeric, its NaN a Double, which none of the members' schemas is alone")
+    (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:p ['decimal? {:pg/type "numeric"}]]
+                                                          [:p62 ['decimal? {:pg/type "numeric" :pg/precision 6 :pg/scale 2}]]]}})
+          direct (:v (:args (h/analyze reg {:select [:p] :from [:t] :where [:= :p :?v]} {})))]
+      (is (= direct (:v (:args (h/analyze reg {:select [:x] :from [[{:union-all [{:select [[:p :x]] :from [:t]} {:select [[:p62 :x]] :from [:t]}]} :s]]
+                                                :where [:= :x :?v]} {}))))
+          "a value compared with a set operation's column of one type is what one compared with a column of the type takes"))))
 
 (deftest a-field-of-a-composite-column-is-assigned-to-that-column-its-value-unchecked
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}

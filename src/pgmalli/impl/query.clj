@@ -627,11 +627,15 @@
    (or a domain over one), a domain's base type, \"x[]\" for an array; nil for a type it does
    not answer for."
   [registry s]
+  (if (and (= :or (shape/head (shape/non-null s))) (nil? (shape/props (shape/non-null s))))
+    ;; a set operation's of members of one type
+    (let [ts (distinct (map #(slot-type registry %) (shape/alternatives (shape/non-null s))))]
+      (when (= 1 (count ts)) (first ts)))
   (let [p (shape/column-props s)
         t (if-let [e (types/entry (shape/type-name p))]
             (cond-> (:name e) (types/element (:pg/type p)) types/array-of)
             (when-let [n (enum-type registry s)] (cond-> [:enum n] (:pg/domain p) (conj {:domain? true}))))]
-    (when (accept/answers? t) t)))
+    (when (accept/answers? t) t))))
 
 (defn side-schema
   "The column schema of one side of a comparison: a column's, or an expression's where
