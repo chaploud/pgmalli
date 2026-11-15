@@ -262,28 +262,31 @@
                  'int? 'integer? 'decimal? 'double? 'float? 'number? 'boolean? 'uuid? 'bytes? 'inst? 'nil?} k)) #{}
           :else #{:string :keyword})))
 
+(defn- without-props
+  "t without its properties ks, the property map dropped where none is left."
+  [t ks]
+  (if-let [p (props t)]
+    (let [kept (apply dissoc p ks)]
+      (if (empty? kept) (into [(first t)] (drop 2 t)) (assoc t 1 kept)))
+    t))
+
 (defn without-lengths
   "t without a string's length (its :min, :max and :pg/max-length), its other bounds kept: an
    element of an array sent untyped, which PostgreSQL resolves to an array type of no type
    modifier."
   [t]
-  (walk/postwalk #(if (and (vector? %) (= :string (first %)) (map? (second %)))
-                            (let [p (dissoc (second %) :min :max :pg/max-length)]
-                              (if (empty? p) (into [:string] (drop 2 %)) (assoc % 1 p)))
-                            %)
-                         t))
+  (walk/postwalk #(if (= :string (head %)) (without-props % [:min :max :pg/max-length]) %) t))
 
 (defn without-column-props
-  "t without what a table's column alone has (identity, generated, DEFAULT), through its :maybe,
-   :or and :and, not into the values it holds (a jsonb shape's own defaults): a value not read
-   from one column, as PostgreSQL's RowDescription names no table of."
+  "t without what a table's column alone has (identity, generated, DEFAULT): a value not read
+   from one column, as PostgreSQL's RowDescription names no table of. Through a :maybe, and an
+   :or or :and of no :pg/type (a numeric's, its column's properties on its first alternative),
+   not into a shape's alternatives or the values it holds (their own defaults)."
   [t]
-  (let [p (props t)
-        t (if (#{:maybe :or :and} (head t)) (into [(first t)] (map #(if (map? %) % (without-column-props %))) (rest t)) t)
-        kept (some-> p (dissoc :pg/identity :pg/generated :default :pg/default))]
-    (cond (nil? p) t
-          (empty? kept) (into [(first t)] (drop 2 t))
-          :else (assoc t 1 kept))))
+  (let [t (without-props t [:pg/identity :pg/generated :default :pg/default])]
+    (if (and (#{:maybe :or :and} (head t)) (not (:pg/type (props t))))
+      (into [(first t)] (map #(if (map? %) % (without-column-props %))) (rest t))
+      t)))
 
 (defn either
   "One schema of alternatives ts: an :or of them, the one alone, empty when there are none."

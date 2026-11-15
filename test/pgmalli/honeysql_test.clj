@@ -967,7 +967,15 @@
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n ['decimal? {:pg/type "numeric" :pg/domain "nm"}]]]}})]
     (is (= [:map [:n [:or {:pg/domain "nm"} ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
            (:row (h/analyze reg {:select [:n] :from [:t]} {})))
-        "a numeric domain's NaN is a Double")))
+        "a numeric domain's NaN is a Double"))
+  (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"} [:n ['decimal? {:pg/type "numeric" :pg/domain "nm"}]]
+                                                        [:p ['decimal? {:pg/type "numeric"}]] [:i [:int {:pg/type "integer"}]]]}})
+        row #(:row (h/analyze reg % {}))]
+    (is (= [:map [:n [:or {:pg/domain "nm"} ['decimal? {:pg/type "numeric"}] ['double? {:pg/type "numeric"}]]]]
+           (row {:union [{:select [:n] :from [:t]} {:select [:n] :from [:t]}]}))
+        "a set operation of one domain is of the domain")
+    (is (= [:map [:p :any]] (row {:union [{:select [:p] :from [:t]} {:select [[:i :p]] :from [:t]}]}))
+        "numeric beside integer: numeric, its NaN a Double, which none of the members' schemas is alone")))
 
 (deftest a-field-of-a-composite-column-is-assigned-to-that-column-its-value-unchecked
   (let [reg (pgmalli/registry {:registry {:pg.public/t [:map {:pg/table "public.t"}
@@ -2803,8 +2811,9 @@
         none [{}]]
     (doseq [q [{:select [:id] :from [:users]}
                {:select [:id] :from [[{:select [:*] :from [:users]} :u]]}
-               {:with [[:u {:select [:id] :from [:users]}]] :select [:id] :from [:u]}]]
-      (is (not= none (own q)) (str "a column, read through a subquery or a CTE too: " (pr-str q))))
+               {:with [[:u {:select [:id] :from [:users]}]] :select [:id] :from [:u]}
+               {:select [[[[:and :id]] :x]] :from [:users]}]]
+      (is (not= none (own q)) (str "a column, read through a subquery or a CTE too, (id) too: " (pr-str q))))
     (doseq [q [{:select [[[:coalesce :id] :x]] :from [:users]}
                {:select [[[:nullif :mood :mood] :x]] :from [:users]}
                {:select [[[:max :mood] :x]] :from [:users]}
@@ -2814,7 +2823,16 @@
                {:union [{:select [:id] :from [:users]} {:select [:id] :from [:users]}]}
                {:with-recursive [[:t {:union-all [{:select [:id] :from [:users]} {:select [:id] :from [:t]}]}]] :select [:id] :from [:t]}
                {:select [:id] :from [:users] :full-join [:groups [:using :id]]}]]
-      (is (= none (own q)) (str "of no table, as PostgreSQL's RowDescription names none: " (pr-str q))))))
+      (is (= none (own q)) (str "of no table, as PostgreSQL's RowDescription names none: " (pr-str q))))
+    (is (= [:map [:x [:maybe int4]]] (row {:select [[[:cast [:raw "NULL"] :integer] :x]]}))
+        "an untyped value cast is nullable, as it was")))
+
+(deftest a-jsonb-shapes-own-defaults-are-kept-where-the-columns-are-not
+  (let [doc [:or {:pg/type "jsonb"} [:map {:default {:a 1}} [:a :int]] [:string {:default "x"}]]
+        reg (pgmalli/registry {:registry {:pg.public/d [:map {:pg/table "public.d"} [:id bigint] [:doc (assoc doc 1 {:pg/type "jsonb" :pg/default "'{}'"})]]}})
+        an #(h/analyze reg % {})]
+    (is (= [:map [:m doc]] (:row (an {:select [[[:coalesce :doc] :m]] :from [:d]}))) "an expression of the column")
+    (is (= [:map [:doc doc]] (:row (an {:union [{:select [:doc] :from [:d]} {:select [:doc] :from [:d]}]}))) "a set operation's column")))
 
 (deftest a-void-function-is-of-type-void-which-the-driver-reads-as-an-object
   (is (= [:map [:l [:maybe [:any {:pg/type "void"}]]]] (row {:select [[[:pg_advisory_xact_lock :id] :l]] :from [:users]}))))

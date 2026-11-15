@@ -1064,24 +1064,17 @@
       (when (= "boolean" (:result r))
         (when-let [s (result-schema t ms)] {:type t :schema s :nullable? true}))))))
 
-(defn- column-reference?
-  "Whether x is a column, (x) or [[x]] too: what PostgreSQL names a table of."
+(defn- enclosed
+  "The expression x encloses: [[f x]]'s (HoneySQL's (f(x))) or an operand alone's; nil for none."
   [x]
-  (cond (syntax/column-keyword? x) true
-        (and (vector? x) (vector? (first x)) (= 1 (count x))) (recur (first x))
-        (not= x (syntax/operand-alone x)) (recur (syntax/operand-alone x))
-        :else false))
+  (if (and (vector? x) (vector? (first x)) (= 1 (count x)))
+    (first x)
+    (let [o (syntax/operand-alone x)] (when (not= x o) o))))
 
-(declare expression-type*)
-
-(defn expression-type
-  "{:schema column-schema :nullable? bool :type t} of an expression, t its type as
-   pgmalli.impl.resolve takes it (:unknown for an untyped literal, :free for an argument), as
-   docs/queries.md#the-row-a-query-returns says; nil where that is not told. A column keeps what
-   a table's column alone has (its identity, DEFAULT ...), anything else none of it."
-  [registry chain x opts]
-  (cond-> (expression-type* registry chain x opts)
-    (not (column-reference? x)) (update :schema #(some-> % shape/without-column-props))))
+(defn- column-reference?
+  "Whether x is a column, enclosed too: what PostgreSQL names a table of."
+  [x]
+  (or (syntax/column-keyword? x) (some-> (enclosed x) column-reference?)))
 
 (defn- expression-type*
   [registry chain x opts]
@@ -1098,9 +1091,7 @@
                             (when s {:schema (shape/non-null s) :nullable? (boolean (or nullable? (shape/maybe? s)))
                                      :type (resolver-type registry (shape/non-null s))}))
       (syntax/statement? x) (subquery-type registry chain x opts)
-      ;; [[f x]], HoneySQL's (f(x))
-      (and (vector? h) (= 1 (count x))) (sub h)
-      (not= x (syntax/operand-alone x)) (sub (syntax/operand-alone x))
+      (enclosed x) (sub (enclosed x))
       (and (not (keyword? x)) (not (keyword? h))) nil
       (= :inline h) (let [v (second x)] (when-not (or (nil? v) (keyword? v) (symbol? v) (coll? v)) (literal-type v true opts)))
       ;; [:lift v] sends v as a parameter as it is, a keyword or a vector too: a collection as the one
@@ -1142,6 +1133,15 @@
               (sub c)
               (when-let [[_ _ args :as parts] (syntax/call-parts x)]
                 (call-type registry parts (map sub args) opts))))))
+
+(defn expression-type
+  "{:schema column-schema :nullable? bool :type t} of an expression, t its type as
+   pgmalli.impl.resolve takes it (:unknown for an untyped literal, :free for an argument), as
+   docs/queries.md#the-row-a-query-returns says; nil where that is not told. A column keeps what
+   a table's column alone has (its identity, DEFAULT ...), anything else none of it."
+  [registry chain x opts]
+  (let [r (expression-type* registry chain x opts)]
+    (cond-> r (and (:schema r) (not (column-reference? x))) (update :schema shape/without-column-props))))
 
 (defn type-call
   "[:cast a f] of a call [:f a] PostgreSQL reads as a cast (func_get_detail): f names a type, of
@@ -1243,9 +1243,16 @@
                           known (keep identity (map (fn [s u] (when-not (contains? u j) s)) schemas unknown))
                           ;; a literal is a value of the type, not of the column's bounds
                           literal? (and (seq known) (some #(get % j) unknown))
-                          ;; a member's :or (of a set operation of its own) is its alternatives, each beside the others'
-                          inners (distinct (mapcat (comp shape/alternatives (cond->> (comp shape/without-column-props shape/non-null) literal? (comp loose)))
-                                                   (or (seq known) schemas)))]]
+                          inners (->> (or (seq known) schemas)
+                                      (map (comp shape/without-column-props shape/non-null))
+                                      (map #(cond-> % literal? loose))
+                                      distinct)
+                          ;; an :or of no properties of alternatives of one type (a set operation's of its own) is of that type
+                          read-as (fn [s] (if (and (= :or (shape/head s)) (nil? (shape/props s)))
+                                            (let [ts (distinct (map #(:pg/type (shape/column-props %)) (shape/alternatives s)))]
+                                              (when (= 1 (count ts)) (first ts)))
+                                            (:pg/type (shape/column-props s))))
+                          of-one-type (map (juxt read-as domain-of) inners)]]
                 ;; PostgreSQL resolves each column's type as CASE's
                 (with-meta
                  (jdbc/row-entry (ffirst entries)
@@ -1257,7 +1264,8 @@
                                                                s))
                                       ;; the members' schemas are as the driver reads them: of one type, each
                                       ;; value as its member's (a bit(1) a Boolean, a bit(4) a PGobject)
-                                      (apply = (map (juxt #(:pg/type (shape/column-props %)) domain-of) inners)) (shape/either inners :any)
+                                      (and (every? first of-one-type) (apply = of-one-type))
+                                      (shape/either (distinct (mapcat #(if (and (= :or (shape/head %)) (nil? (shape/props %))) (shape/alternatives %) [%]) inners)) :any)
                                       ;; else one of them, or untold
                                       :else (let [r (:schema (common (for [s inners] {:schema s :type (resolver-type registry s)})))]
                                               (if (and r (some #(= r (loose %)) inners)) r :any)))
