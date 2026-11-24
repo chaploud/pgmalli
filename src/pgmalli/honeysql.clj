@@ -42,6 +42,15 @@
      (let [[r opts] (prepared registry opts ks)]
        [r (syntax/query! body) (query/with-defaults r opts)]))))
 
+(defn- within
+  "(f) as a public function reads registry r (prepared's): with what one call keeps
+   (memo/*calls*), and casts read in the versions r was generated on (types/*versions*).
+   Every public function that types through r calls it."
+  [r f]
+  (binding [memo/*calls* (or memo/*calls* (::query/calls r))
+            types/*versions* (::query/versions r)]
+    (f)))
+
 (defn- as-written
   "problems with each :in a path in written, the query as given."
   [written problems]
@@ -74,15 +83,14 @@
   ([registry body] (analyze registry body {}))
   ([registry written opts]
    (let [[registry body opts] (prepared registry written opts option-keys)]
-     (binding [memo/*calls* (or memo/*calls* (::query/calls registry))
-               types/*versions* (::query/versions registry)]
+     (within registry (fn []
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
       :problems (as-written written (let [ps (concat (problems/check registry body opts) (args/arg-problems registry body opts) (args/literal-problems registry body opts) (args/row-problems registry body opts))]
                                       (concat ps (problems/unsent-lifted body ps opts))))
       :tables (query/tables registry body opts)
-      :document-columns (args/document-columns registry body opts)}))))
+      :document-columns (args/document-columns registry body opts)})))))
 
 (defn query-schema
   "[:=> {:pgmalli/problems [...]} [:cat arg ...] [:sequential row]], the malli function schema of a function taking args
@@ -373,7 +381,7 @@
                                            (str (pr-str name) " is a view's row schema, and a view has no " derived " schema; " what " takes a table's")
                                            {:given name})
           :else (shape/not-a-row! registry name what))
-    (or (binding [types/*versions* (::query/versions r)] (written-row* r name derived opts))
+    (or (within r #(written-row* r name derived opts))
         (let [dn (shape/derived-name name derived)]
           (error/fail! :pgmalli.error/unknown-schema
                        (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")
