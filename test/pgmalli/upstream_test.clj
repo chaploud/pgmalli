@@ -28,6 +28,10 @@
 
 (defn- column [ds sql] (mapv (comp val first) (jdbc/execute! ds [sql])))
 
+(defn- entries
+  "types/types of the types the server has (oid8 is 19's)."
+  []
+  (into (sorted-map) (filter (fn [[t]] (types/in-version? t @test-db/major))) types/types))
 
 (def ^:private unsupported
   "The types of pg_catalog and of the extensions PostgreSQL ships that types/types has no entry
@@ -56,7 +60,7 @@
                                      WHERE t.typtype IN ('b', 'r', 'm') AND NOT (t.typelem <> 0 AND t.typlen = -1)
                                        AND (t.typnamespace = 'pg_catalog'::regnamespace OR x.oid IS NOT NULL)
                                      ORDER BY 1, 2"]
-                                   {:builder-fn rs/as-unqualified-maps})]
+                                {:builder-fn rs/as-unqualified-maps})]
         (is (< 50 (count rows)))
         (doseq [{:keys [ext type]} rows
                 :let [e (types/entry type)]]
@@ -67,14 +71,14 @@
           (when e
             (is (= ext (:extension e)) (str type "'s :extension in src/pgmalli/impl/types.clj/types is " (pr-str (:extension e)) ", PostgreSQL " version " says " (pr-str ext)))))
         (testing "every entry names a type there is"
-          (is (= #{} (set/difference (set (keys types/types)) (set (map :type rows))))))))))
+          (is (= #{} (set/difference (set (keys (entries))) (set (map :type rows))))))))))
 
 (deftest every-literal-is-one-postgresql-reads
   (when *db*
     (let [ds (datasource)]
       (doseq [e (set (keep :extension (vals types/types)))]
         (jdbc/execute! ds [(str "CREATE EXTENSION IF NOT EXISTS \"" e "\"")]))
-      (doseq [[t {:keys [literals]}] types/types, l literals
+      (doseq [[t {:keys [literals]}] (entries), l literals
               :let [err (try (jdbc/execute! ds [(str "SELECT " (test-db/sql-literal l) "::" t)]) nil (catch Exception x (ex-message x)))]]
         (is (nil? err) (str "PostgreSQL does not read " (pr-str l) " as " t " (" err "): fix its :literals in src/pgmalli/impl/types.clj/types"))))))
 
@@ -83,14 +87,14 @@
   [t v]
   (cond (#{"json" "jsonb"} t) (json/write v)
         (map? v) (str/join ", " (for [[k x] v :let [q #(str "\"" (str/replace (str %) #"[\\\"]" "\\\\$0") "\"")]]
-                                        (str (q k) "=>" (if (nil? x) "NULL" (q x)))))
+                                  (str (q k) "=>" (if (nil? x) "NULL" (q x)))))
         (bytes? v) (apply str "\\x" (map #(format "%02x" (bit-and % 0xff)) v))
         :else (str v)))
 
 (deftest a-not-null-column-of-every-supported-type-generates-inserts-and-reads-back
   (when *db*
     (let [ds (datasource)
-          tables (into (sorted-map) (map-indexed (fn [i t] [(str "t" i) t]) (sort (keys types/types))))]
+          tables (into (sorted-map) (map-indexed (fn [i t] [(str "t" i) t]) (keys (entries))))]
       (doseq [e (set (keep :extension (vals types/types)))]
         (jdbc/execute! ds [(str "CREATE EXTENSION IF NOT EXISTS \"" e "\"")]))
       (jdbc/execute! ds [(str/join ";\n" (for [[table t] tables] (str "CREATE TABLE " table " (id integer PRIMARY KEY, c " t " NOT NULL)")))])
@@ -123,19 +127,22 @@
           hint (str "PostgreSQL " version " differs from resources/pgmalli/impl/catalog.edn (run bb catalog): ")
           differs (fn [what theirs ours]
                     (str hint what "\n  server only: " (set/difference (set theirs) (set ours)) "\n  snapshot only: " (set/difference (set ours) (set theirs))))]
-      (is (some #{version} (:versions snapshot)) (str "PostgreSQL " version " is not among the catalog's versions: add it to CI and run bb catalog"))
-      (doseq [k [:types :casts :ranges]
-              :when (not= (get server k) (get ours k))]
-        (is false (differs (name k) (get server k) (get ours k))))
-      (doseq [k [:functions :operators]
-              n (set (concat (keys (get server k)) (keys (get snapshot k))))
-              :let [theirs (get-in server [k n] #{}) ours (mine (get-in snapshot [k n]))]
-              :when (not= theirs ours)]
-        (is false (differs (str (name k) " " n) theirs ours)))
-      (doseq [n (set (concat (keys (:relations server)) (keys (:relations snapshot))))
-              :let [theirs (get-in server [:relations n] []) ours (mine (get-in snapshot [:relations n]))]
-              :when (not= (set theirs) ours)]
-        (is false (differs (str "relation " n) theirs ours))))))
+      ;; of a version it lacks, the snapshot differs in everything that version changed: one failure says so
+      (if-not (some #{version} (:versions snapshot))
+        (is false (str "PostgreSQL " version " is not among the catalog's versions: add it to CI and run bb catalog (CONTRIBUTING.md, A new PostgreSQL version)"))
+        (do
+          (doseq [k [:types :casts :ranges]
+                  :when (not= (get server k) (get ours k))]
+            (is false (differs (name k) (get server k) (get ours k))))
+          (doseq [k [:functions :operators]
+                  n (set (concat (keys (get server k)) (keys (get snapshot k))))
+                  :let [theirs (get-in server [k n] #{}) ours (mine (get-in snapshot [k n]))]
+                  :when (not= theirs ours)]
+            (is false (differs (str (name k) " " n) theirs ours)))
+          (doseq [n (set (concat (keys (:relations server)) (keys (:relations snapshot))))
+                  :let [theirs (get-in server [:relations n] []) ours (mine (get-in snapshot [:relations n]))]
+                  :when (not= (set theirs) ours)]
+            (is false (differs (str "relation " n) theirs ours))))))))
 
 (deftest every-types-typname-is-among-its-aliases
   ;; :aliases names a type as pg_type's typname too (int4, float8, timestamptz), which casts and
@@ -145,7 +152,7 @@
           typnames (into {} (map (juxt :t :n))
                          (jdbc/execute! ds ["SELECT format_type(oid, NULL) AS t, typname AS n FROM pg_type WHERE typnamespace = 'pg_catalog'::regnamespace"]
                                         {:builder-fn rs/as-unqualified-maps}))]
-      (doseq [[t {:keys [aliases]}] types/types
+      (doseq [[t {:keys [aliases]}] (entries)
               :let [n (typnames t)]
               ;; but one the grammar reads as another type (char is character's, "char" quoted)
               :when (and n (not= n t) (not-any? (fn [[t2 e]] (and (not= t t2) (some #{n} (:aliases e)))) types/types))]
@@ -163,7 +170,7 @@
   (when *db*
     (let [ds (datasource)
           read-as #(:t (jdbc/execute-one! ds ["SELECT format_type(to_regtype(?), NULL) AS t" %] {:builder-fn rs/as-unqualified-maps}))]
-      (doseq [[t e] types/types :when (not (:extension e)), n (cons t (:aliases e))]
+      (doseq [[t e] (entries) :when (not (:extension e)), n (cons t (:aliases e))]
         (is (= t (read-as n)) (str n " of " t " in pgmalli.impl.types is not a name PostgreSQL reads as " t)))
       (doseq [n grammar-spellings]
         (is (= (read-as n) (:name (types/entry n))) (str "PostgreSQL reads " n " as " (read-as n) ": add it to that type's :aliases in pgmalli.impl.types"))))))

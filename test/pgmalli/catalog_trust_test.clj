@@ -63,8 +63,12 @@
       (is (not (contains? (:tables (ir/from-db (assoc *db* :schema "public"))) "injected"))))))
 
 (deftest a-schema-name-stays-one-literal-whatever-standard-conforming-strings-says
-  (when (and *db* (not (System/getProperty "babashka.version")))
-    (exec-sql! "DROP ROLE IF EXISTS scs_off; CREATE ROLE scs_off LOGIN PASSWORD 'pw'; ALTER ROLE scs_off SET standard_conforming_strings = off;")
+  (when (and *db* (not (System/getProperty "babashka.version"))
+             ;; PostgreSQL 19 refuses the setting: no literal reads otherwise there
+             (try (exec-sql! "DROP ROLE IF EXISTS scs_off; CREATE ROLE scs_off LOGIN PASSWORD 'pw'; ALTER ROLE scs_off SET standard_conforming_strings = off;")
+                  true
+                  (catch clojure.lang.ExceptionInfo x
+                    (if (str/includes? (ex-message x) "non-standard string literals are not supported") false (throw x)))))
     (let [schema "x\\') SELECT 1; CREATE TABLE public.injected_scs (); COMMIT; --"]
       (is (thrown? clojure.lang.ExceptionInfo (ir/from-db {:jdbcUrl (jdbcUrl) :user "scs_off" :password "pw" :schema schema})))
       (is (not (contains? (:tables (ir/from-db (assoc *db* :schema "public"))) "injected_scs"))))

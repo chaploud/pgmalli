@@ -192,15 +192,19 @@
                 (or (and (string? sent) (types/json? sent))
                     (and (= :unknown sent) (#{"N" "B"} (types/category t)))))))
 
-(def ^:private compares?
-  "Whether PostgreSQL resolves operator = for a value of type t and one of type sent, in some
-   version the catalog holds; an extension's type of strings (citext), whose operators the
-   catalog does not hold, as text, which it casts to implicitly."
+(def ^:private compares-in?
   (memo/bounded
-   (fn [t sent]
+   (fn [t sent vs]
      (let [os (resolve/overloads :operators "=")
            [t sent] (map #(if (types/extension-string? %) "text" %) [t sent])]
-       (boolean (some #(resolve/call :operators "=" [t sent] (resolve/of-version os %)) (:versions @types/catalog)))))))
+       (boolean (some #(resolve/call :operators "=" [t sent] (resolve/of-version os %)) vs))))))
+
+(defn- compares?
+  "Whether PostgreSQL resolves operator = for a value of type t and one of type sent, in one of
+   types/*versions*; an extension's type of strings (citext), whose operators the catalog does
+   not hold, as text, which it casts to implicitly."
+  [t sent]
+  (compares-in? t sent (or types/*versions* (:versions @types/catalog))))
 
 (defn accepts?
   "Whether a parameter of type sent goes where a value of type t does, in context (:compare,

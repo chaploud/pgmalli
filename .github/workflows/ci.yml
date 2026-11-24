@@ -43,7 +43,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        pg: ["16", "17", "18"]
+        pg: ["16", "17", "18", "19"]
         # pgmalli.oracle-test takes as long as the rest: a job of its own (bb.edn's suite)
         suite: [main, oracle]
         # the oracle's mutants and generated values by seed; main's fuzzing keeps 42
@@ -55,11 +55,13 @@ jobs:
         # by digest, which Renovate updates: a new image runs in a pull request of its own
         include:
           - pg: "16"
-            image: &floor-image postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
+            image: &floor-image postgres:16-alpine@sha256:f2f98726820d0342055351c6e9d36e705f5bfffb3dd53ff556325114b08afb6d
           - pg: "17"
-            image: postgres:17-alpine@sha256:266d3c257594e195b309ae9d1805e54c788f1d7b375f56bf6c367aac6c917e7b
+            image: postgres:17-alpine@sha256:f9cf3e1f0066f0eb0c48707d864f0ac5941e9ff454a072077d97a4d278d07d73
           - pg: "18"
-            image: postgres:18-alpine@sha256:10a5c69a83035ab5239f5620d708520e8b28f5aa1f2b20143e6024532edadfb5
+            image: postgres:18-alpine@sha256:0115267ab5a509022df9319c77be365cef335adb71556c75f60f5360ee247e71
+          - pg: "19"
+            image: postgres:19-alpine@sha256:cac45fb483caee3668946088a1c0532db89d5285c28dbfeac889b4068296e06f
     env:
       PGMALLI_PG_IMAGE: ${{ matrix.image }}
       SUITE: ${{ matrix.suite }}

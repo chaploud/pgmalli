@@ -26,7 +26,7 @@
     (is (= kinds (table "README.md" "| `:kind` | for |")) "the table of :kind in README.md")))
 
 (deftest every-diagnostic-kind-is-in-the-types-doc
-  (is (= (made ["src/pgmalli/impl/render.clj"] " :severity :")
+  (is (= (made ["src/pgmalli/impl/render.clj" "src/pgmalli/impl/files.clj"] " :severity :")
          (table "docs/types.md" "| `:kind` | severity | when |"))))
 
 (deftest every-error-kind-thrown-has-a-category-and-a-row-in-readme

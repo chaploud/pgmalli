@@ -3,6 +3,20 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
+## Unreleased
+
+* PostgreSQL 19: its `pg_catalog` (functions, operators, casts, tables and views), and its types
+  `oid8` and `regdatabase`.
+* A call resolves with the implicit casts of the version the registry was generated on. A cast
+  that not every version has was read as no implicit cast at all, so a value it converts
+  (a `regdatabase` compared with an integer, on 19) was refused.
+* An argument cast to a type takes what the cast takes in the version the registry was generated
+  on: a registry of 17 took a `byte[]` cast to `integer`, which 18 alone casts. Fixes #34.
+* A file generated on a PostgreSQL version newer than pgmalli knows holds a `:newer-version`
+  diagnostic, besides the warning `generate!` and `check` print, and its queries'
+  `pg_catalog` is typed as the newest version pgmalli knows has it, as the warning says: it was
+  any version's.
+
 ## 0.4.1
 
 * A column of no table in `:row` (an expression, a scalar subquery, a set operation's column,

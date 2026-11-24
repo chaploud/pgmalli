@@ -476,7 +476,7 @@ A `[:ref ...]` to your own schema needs a registry holding it (without one, mall
 
 | | |
 |---|---|
-| PostgreSQL | 16, 17 and 18, to generate; a newer one is a warning (its new functions and types are not typed), an older one an error |
+| PostgreSQL | 16, 17, 18 and 19, to generate; a newer one is a warning, printed and among the file's `:diagnostics` (a query's `pg_catalog` is typed as 19 has it), an older one an error |
 | Clojure | 1.11.4 and later |
 | JDK | 25 (what CI runs) |
 | malli | 0.20.0 and later |

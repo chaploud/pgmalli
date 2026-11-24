@@ -21,12 +21,14 @@
 
 (defn- versions
   "The versions of the catalog snapshot the registry's generated schemas are of: their file's
-   PostgreSQL major, every version the snapshot holds where it is none of them, or there is no
-   generated schema."
+   PostgreSQL major, the snapshot's newest for one newer than it holds (which
+   pgmalli.impl.files/version-warning tells of); every version the snapshot holds where one is
+   none of them, or there is no generated schema."
   [schemas]
   (let [all (:versions @types/catalog)
-        vs (for [[k s] schemas :when (and (keyword? k) (= (namespace (shape/routines-key "")) (namespace k)))]
-             (types/label-version (:pg/database-version (second s))))]
+        vs (for [[k s] schemas :when (and (keyword? k) (= (namespace (shape/routines-key "")) (namespace k)))
+                 :let [v (types/label-version (:pg/database-version (second s)))]]
+             (if (types/newer? v) (last all) v))]
     (if (and (seq vs) (every? (set all) vs)) (vec (distinct vs)) all)))
 
 (defn- in-versions

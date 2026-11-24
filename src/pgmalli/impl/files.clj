@@ -43,6 +43,15 @@
   (cond-> {:kind :type :table (str schema "." table) :column column :type type}
     type-schema (assoc :type-schema type-schema)))
 
+(defn version-warning
+  "Why a file of a server's version newer than the catalog snapshot holds (\"PostgreSQL 20\") is
+   typed as the newest it holds; nil for another."
+  [database-version]
+  (let [versions (:versions @types/catalog)]
+    (when (types/newer? (types/label-version database-version))
+      (str database-version " is newer than the versions this pgmalli knows (" (str/join ", " versions)
+           "): a query's pg_catalog functions and types are typed as " (types/version-label (last versions)) " has them"))))
+
 (defn assemble
   "The file's data from the rendering of each schema's facts ({schema facts}, in the config's
    order), in reading order: what it is, then what deserves a look, then the schemas, then what
@@ -52,7 +61,8 @@
         by-schema (fn [k] (into (sorted-map) (for [[s r] rs] [s (get r k)])))
         schemas (into (sorted-map-by #(compare (str %1) (str %2))) (map (comp :registry second)) rs)]
     (array-map :schemas (mapv first rs) :database-version database-version
-               :diagnostics (vec (mapcat (comp :diagnostics second) rs))
+               :diagnostics (into (if-let [w (version-warning database-version)] [{:kind :newer-version :severity :warning :message w}] [])
+                                  (mapcat (comp :diagnostics second)) rs)
                :registry schemas
                :functions (by-schema :functions) :operators (by-schema :operators) :sequences (by-schema :sequences)
                :unrendered (vec (for [[_ r] rs, u (:unrendered r)

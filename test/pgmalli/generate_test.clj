@@ -107,6 +107,10 @@
   (with-redefs [diff/check (constantly {:database-version "PostgreSQL 99"})]
     (is (re-find #"^warning: PostgreSQL 99 is newer than the versions this pgmalli knows" (with-out-str (generate/check {}))))))
 
+(deftest the-file-of-a-version-newer-than-pgmalli-knows-says-so-among-its-diagnostics
+  (is (= [:newer-version :warning] ((juxt :kind :severity) (first (:diagnostics (files/assemble "PostgreSQL 99" []))))))
+  (is (= [] (:diagnostics (files/assemble "PostgreSQL 17" [])))))
+
 (deftest the-db-map-names-no-schema-the-config-does
   (let [e (is (thrown? clojure.lang.ExceptionInfo (files/config {:db {:schema "app"}})))]
     (is (= [":db's :schema is not read: the schemas generated are :schemas, such as {:schemas [\"public\"]}" [:schemas]]

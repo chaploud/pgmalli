@@ -233,11 +233,12 @@ data:
 | `:sequences` | `{schema [name ...]}`: the sequences' names; the registry holds a row schema of each by its name, `last_value` and `log_cnt` (`bigint`) and `is_called` (`boolean`), the columns every sequence has, with `:pg/sequence true` |
 | `:unrendered` | the columns of a type pgmalli has no schema for |
 
-A diagnostic is `{:table :kind :severity :message}`, with `:constraint` or `:trigger` where it
-applies:
+A diagnostic is `{:kind :severity :message}`, with `:table`, `:constraint` or `:trigger` where
+it applies:
 
 | `:kind` | severity | when |
 |---|---|---|
+| `:newer-version` | `:warning` | the database is of a PostgreSQL version newer than this pgmalli knows: a query's `pg_catalog` functions, operators, casts and tables are typed as the newest it knows has them |
 | `:not-valid` | `:info` | a `NOT VALID` foreign key, or `NOT NULL` (PostgreSQL 18, the column then nullable): rows from before it may violate it |
 | `:not-enforced` | `:info` | a `NOT ENFORCED` foreign key (PostgreSQL 18), which the database never checks |
 | `:row-trigger` | `:info` | a row-level INSERT trigger, which may reject or change rows |

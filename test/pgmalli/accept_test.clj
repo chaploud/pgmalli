@@ -17,7 +17,7 @@
             [pgmalli.impl.jdbc :as pgjdbc]
             [pgmalli.impl.types :as types]
             [pgmalli.oracle :as oracle]
-            [pgmalli.test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
+            [pgmalli.test-db :as test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -59,20 +59,30 @@
         (is (= (sent-as con v) (some (fn [[c t]] (when (instance? c v) t)) accept/class-types)) (.getName ^Class c)))
       (is (= :unknown (sent-as con :ns/a)) "a qualified keyword goes as its text, ns/a"))))
 
-(def ^:private targets
+(defn- major [] @test-db/major)
+
+(defn- here?
+  "Whether the server, of major version v, has type x (anything but a type name: yes)."
+  [v x]
+  (or (not (string? x)) (types/in-version? x v)))
+
+(defn- targets
   "[column type, the type accept/accepts? takes for it]: every type of pg_catalog a column may be
-   of (not a pseudo-type or the catalog's own) and of types, an array of each, an enum, and a domain as its base type."
+   of in version v (not a pseudo-type or the catalog's own) and of types, an array of each, an enum, and a domain as its base type."
+  [v]
   (concat (for [t (distinct (concat (for [[t {:keys [category]}] (:types @types/catalog) :when (not (#{"P" "X" "Z"} category))] t)
                                     (keys types/types)))
+                :when (here? v t)
                 t [t (str t "[]")]]
             [t t])
           [["feel" [:enum "feel"]] ["positive" "integer"]]))
 
-(def ^:private sents
-  "Every type a value may be sent as: pgjdbc's, and any other :send names (a map as jsonb, an
+(defn- sents
+  "Every type a value may be sent as in version v: pgjdbc's, and any other :send names (a map as jsonb, an
    extension's) that pgmalli.impl.accept answers for (answers?), and an enum's and none."
+  [v]
   (distinct (concat (map second accept/class-types)
-                    (filter #(and (string? %) (accept/answers? %)) (map first targets))
+                    (filter #(and (string? %) (accept/answers? %)) (map first (targets v)))
                     ["feel" :unknown])))
 
 (defn- column [t] (str "c_" (str/replace (str/replace t "[]" "_array") #"\W" "_")))
@@ -83,12 +93,13 @@
   []
   (exec-sql! (str (apply str (for [e (distinct (keep :extension (vals types/types)))] (str "CREATE EXTENSION IF NOT EXISTS " e ";")))
                   "CREATE TYPE feel AS ENUM ('ok', 'meh'); CREATE DOMAIN positive AS integer CHECK (VALUE > 0);"
-                  "CREATE TABLE probe_target (" (str/join ", " (for [[t] targets] (str (column t) " " t))) ");"
+                  "CREATE TABLE probe_target (" (str/join ", " (for [[t] (targets (major))] (str (column t) " " t))) ");"
                   ;; one round trip for every pair: an error other than a type error is thrown
                   "CREATE FUNCTION taken(sql text) RETURNS boolean LANGUAGE plpgsql AS $$ BEGIN"
                   " EXECUTE sql; DEALLOCATE probe; RETURN true;"
                   " EXCEPTION WHEN SQLSTATE '42883' OR SQLSTATE '42804' OR SQLSTATE '42846' OR SQLSTATE '42725' THEN RETURN false; END $$"))
-  (let [pairs (for [[t accepted-t] targets, sent sents
+  (let [v (major)
+        pairs (for [[t accepted-t] (targets v), sent (sents v)
                     [context sql] {:compare (str "SELECT 1 FROM probe_target WHERE " (column t) " = $1")
                                    :assign (str "INSERT INTO probe_target (" (column t) ") VALUES ($1)")
                                    :common (str "SELECT coalesce(" (column t) ", $1) FROM probe_target")
@@ -141,7 +152,9 @@
       (let [now (stricter vs)]
         (if (System/getenv "PGMALLI_UPDATE_STRICTER")
           (spit stricter-file (with-out-str (println "{") (doseq [[k ts] now] (pr k) (print " ") (prn ts)) (println "}")))
-          (let [was (triples (edn/read-string (slurp stricter-file)))
+          ;; the file is of the newest version: what names a type this one lacks is not this one's
+          (let [v (major)
+                was (set (filter #(every? (partial here? v) %) (triples (edn/read-string (slurp stricter-file)))))
                 [left-out held] (map #(sort-by pr-str %) [(remove was (triples now)) (remove (triples now) was)])]
             (is (and (empty? left-out) (empty? held))
                 (str "where PostgreSQL takes a parameter, takes? leaves out otherwise than " stricter-file

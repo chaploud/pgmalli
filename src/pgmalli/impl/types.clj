@@ -70,6 +70,7 @@
    "txid_snapshot" {:schema :any :literals ["10:20:"]}
    "xid" {:schema :any :literals ["1" "1234"]}
    "xid8" {:schema :any :literals ["1" "1234"]}
+   "oid8" {:schema :any :literals ["1" "18446744073709551615"]}
    "cid" {:schema :any :literals ["0" "3"]}
    "point" {:schema :any :literals ["(1,2)" "(0,0)" "(-1.5,2.5)"]}
    "line" {:schema :any :literals ["{1,-1,0}" "{0,1,-2}"]}
@@ -103,6 +104,7 @@
    "regconfig" {:schema :any :literals ["english"]}
    "regdictionary" {:schema :any :literals ["simple"]}
    "regcollation" {:schema :any :literals ["\"C\""]}
+   "regdatabase" {:schema :any :literals ["template1"]}
 
    ;; strings compare case-insensitively in the database, which a :string does not
    "citext" {:schema :string :read :any :extension "citext"}
@@ -220,6 +222,11 @@
   [label]
   (some->> label str (re-matches #"PostgreSQL (\d+)") second))
 
+(defn newer?
+  "Whether major version major (\"20\") is newer than every one the catalog holds."
+  [major]
+  (boolean (some-> major parse-long (> (parse-long (last (:versions @catalog)))))))
+
 (defn oldest-version
   "The oldest PostgreSQL major version pgmalli reads, the catalog's first (\"16\")."
   []
@@ -229,6 +236,14 @@
   "The element type of an array type t (\"bigint[]\" is bigint); nil for another."
   [t]
   (when (string? t) (second (re-matches #"(.+)\[\]" t))))
+
+(defn in-version?
+  "Whether type t (a name types keys by, or an array of one) is in major version v
+   (\"19\"), as the catalog snapshot holds pg_catalog's; an extension's, which it does not
+   hold, is."
+  [t v]
+  (let [in (get-in @catalog [:types (or (element t) t) :in])]
+    (or (nil? in) (boolean (some #{v} in)))))
 
 (defn array-of
   "The array type of elements of type t: \"x[]\", t itself for an array (PostgreSQL's array types
@@ -303,15 +318,6 @@
   (boolean (and (not= "S" (category t))
                 (when-let [e (and (string? t) (entry t))] (and (:extension e) (= :string (:schema e)))))))
 
-(defn implicit?
-  "Whether PostgreSQL converts a value of type from to type to implicitly (pg_cast's castcontext
-   'i', an array element by element); an extension's type of strings to text, as citext's own
-   casts, which the catalog does not hold, do."
-  [from to]
-  (or (= from to)
-      (contains? (:casts @catalog) [from to "i"])
-      (and (= "text" to) (extension-string? from))
-      (let [a (element from) b (element to)] (boolean (and a b (implicit? a b))))))
 
 (def ^:private keywords (delay (set (:keywords @catalog))))
 
@@ -335,11 +341,26 @@
   [t]
   (or (= "oid" t) (oid-alias? t)))
 
-(def ^:private contexts
-  (delay (reduce (fn [m [from to c]] (update m [from to] (fnil conj #{}) c)) {} (:casts @catalog))))
+(def ^:dynamic *versions*
+  "The catalog's versions a cast is read in, as pgmalli.impl.resolve resolves a call in each
+   version; nil for every one it holds."
+  nil)
+
+(def ^:private casts
+  (delay (reduce (fn [m [from to c {:keys [in]}]] (update m [from to] (fnil conj []) [c in])) {} (:casts @catalog))))
 
 (defn cast-contexts
-  "The castcontexts of pg_cast's casts from type from to type to, in any version the catalog
-   holds: a set of \"i\", \"a\" and \"e\"."
+  "The castcontexts of pg_cast's casts from type from to type to, in any of *versions*: a set of
+   \"i\", \"a\" and \"e\"."
   [from to]
-  (get @contexts [from to] #{}))
+  (set (for [[c in] (get @casts [from to]) :when (or (nil? in) (nil? *versions*) (some (set in) *versions*))] c)))
+
+(defn implicit?
+  "Whether PostgreSQL converts a value of type from to type to implicitly (pg_cast's castcontext
+   'i' in any of *versions*, an array element by element); an extension's type of strings to
+   text, as citext's own casts, which the catalog does not hold, do."
+  [from to]
+  (or (= from to)
+      (contains? (cast-contexts from to) "i")
+      (and (= "text" to) (extension-string? from))
+      (let [a (element from) b (element to)] (boolean (and a b (implicit? a b))))))

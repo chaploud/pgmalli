@@ -12,6 +12,7 @@
             [malli.experimental.time :as time]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
+            [pgmalli.impl.types :as types]
             [pgmalli.impl.accept :as accept]
             [pgmalli.impl.args :as args]
             [pgmalli.impl.hsyntax :as syntax]
@@ -2450,10 +2451,33 @@
   (let [frozen #(some (fn [e] (when (= :relallfrozen (first e)) e)) (rest (:row (h/analyze % {:select [:*] :from [:pg_class]} opts))))]
     (is (= [:relallfrozen {:optional true} int4] (frozen registry)) "a file of no version known: any version the catalog holds")
     (is (= [:relallfrozen int4] (frozen (generated-on "PostgreSQL 18"))))
+    (is (= [:relallfrozen int4] (frozen (generated-on "PostgreSQL 99"))) "a file of a version newer than the catalog's: its newest")
     (is (nil? (frozen (generated-on "PostgreSQL 17"))))
     (is (= [{:kind :unknown-column :column :relallfrozen}]
            (:problems (h/analyze (generated-on "PostgreSQL 17") {:select [:relallfrozen] :from [:pg_class]} opts))))
     (is (= [] (check {:select [:relallfrozen] :from [:pg_class]})))))
+
+(deftest every-public-function-taking-a-registry-reads-casts-in-its-version
+  (let [r (generated-on "PostgreSQL 17")
+        q {:select [[[:cast :?x :integer] :i]] :from [:users] :where [:= :score :?y]}
+        calls {#'h/analyze #(h/analyze r q opts)
+               #'h/query-schema #(h/query-schema r [:x :y] q opts)
+               #'h/values-schema #(h/values-schema r :users opts)
+               #'h/set-schema #(h/set-schema r :users opts)}
+        cast-contexts types/cast-contexts]
+    (is (= (set (keys calls))
+           (set (for [[_ v] (ns-publics 'pgmalli.honeysql) :when (some #(= 'registry (first %)) (:arglists (meta v)))] v)))
+        "a public function of a registry is called here: it reads casts through within")
+    (doseq [[v f] calls
+            :let [seen (atom #{})]]
+      (with-redefs [types/cast-contexts (fn [from to] (swap! seen conj types/*versions*) (cast-contexts from to))]
+        (f))
+      (is (= #{["17"]} @seen) (str v " reads a cast in versions other than the registry's")))))
+
+(deftest a-cast-of-a-version-later-than-the-registrys-is-not-taken
+  (let [bytes-taken? #(m/validate (:x (:args (h/analyze (generated-on %) {:select [[[:cast :?x :integer] :i]]} opts))) (byte-array [1]) {:registry (generated-on %)})]
+    (is (bytes-taken? "PostgreSQL 18") "PostgreSQL 18 casts bytea to integer")
+    (is (not (bytes-taken? "PostgreSQL 17")))))
 
 (deftest a-function-of-the-version-the-registry-is-of-alone-is-typed-there
   (let [q {:select [[[:uuidv7] :u] [[:casefold [:inline "a"]] :c]]}]
