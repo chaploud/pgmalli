@@ -7,7 +7,8 @@
 
 (def query
   "One JSON object of pg_catalog's types (an array's facts are its element's: x[]), casts (with
-   castcontext: i implicit, a assignment, e explicit), ranges, functions (no procedure), operators and the columns of its tables and views,
+   castcontext: i implicit, a assignment, e explicit), ranges, functions an SQL call can reach (no
+   procedure), operators and the columns of its tables and views,
    as format_type names them; no extension's."
   "SELECT json_build_object(
      'types', (SELECT json_agg(json_build_array(format_type(oid, NULL), typcategory, typispreferred, typname) ORDER BY 1)
@@ -25,7 +26,9 @@
                                                                  FROM unnest(p.proargnames, p.proallargtypes, p.proargmodes) WITH ORDINALITY u(n, t, m, i)
                                                                  WHERE u.m IN ('o', 'b', 't'))) ORDER BY p.proname)
                    FROM pg_proc p LEFT JOIN pg_aggregate a ON a.aggfnoid = p.oid
-                   WHERE p.pronamespace = 'pg_catalog'::regnamespace AND p.prokind <> 'p'),
+                   WHERE p.pronamespace = 'pg_catalog'::regnamespace AND p.prokind <> 'p'
+                     -- none SQL can call: of an internal argument (docs 8.21), binary_upgrade_* (pg_upgrade alone)
+                     AND NOT 'internal'::regtype = ANY (p.proargtypes::oid[]) AND p.proname NOT LIKE 'binary\\_upgrade\\_%'),
      'ranges', (SELECT json_agg(json_build_array(format_type(rngtypid, NULL), format_type(rngsubtype, NULL), format_type(rngmultitypid, NULL)) ORDER BY 1)
                 FROM pg_range r JOIN pg_type t ON t.oid = r.rngtypid WHERE t.typnamespace = 'pg_catalog'::regnamespace),
      'relations', (SELECT json_agg(json_build_array(c.relname,
