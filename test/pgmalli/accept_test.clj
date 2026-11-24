@@ -17,7 +17,7 @@
             [pgmalli.impl.jdbc :as pgjdbc]
             [pgmalli.impl.types :as types]
             [pgmalli.oracle :as oracle]
-            [pgmalli.test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
+            [pgmalli.test-db :as test-db :refer [generated *db* datasource exec-sql! with-postgres]]))
 
 (use-fixtures :once with-postgres)
 
@@ -59,14 +59,12 @@
         (is (= (sent-as con v) (some (fn [[c t]] (when (instance? c v) t)) accept/class-types)) (.getName ^Class c)))
       (is (= :unknown (sent-as con :ns/a)) "a qualified keyword goes as its text, ns/a"))))
 
-(defn- major [] (first (str/split (:server_version (jdbc/execute-one! (datasource) ["SHOW server_version"] {:builder-fn rs/as-unqualified-maps})) #"\.")))
+(defn- major [] @test-db/major)
 
 (defn- here?
-  "Whether the server, of major version v, has type x (anything but a type name: yes): of
-   pg_catalog's, where the catalog snapshot has it in v."
+  "Whether the server, of major version v, has type x (anything but a type name: yes)."
   [v x]
-  (let [in (get-in @types/catalog [:types (or (types/element x) x) :in])]
-    (or (not (string? x)) (nil? in) (some #{v} in))))
+  (or (not (string? x)) (types/in-version? x v)))
 
 (defn- targets
   "[column type, the type accept/accepts? takes for it]: every type of pg_catalog a column may be

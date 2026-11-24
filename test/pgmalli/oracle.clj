@@ -738,11 +738,11 @@
    ["timestamp_3" "timestamp(3) without time zone" "2026-01-01 00:00"] ["bit_4" "bit(4)" "1010"]])
 
 (defn matrix-types
-  "[name type sample] of each type of pgmalli.impl.types whose extension, if any, available?
-   holds, and each of typmods: the columns of matrix.types (matrix-schema!) are of these."
+  "[name type sample] of each type of pgmalli.impl.types the server has whose extension, if any,
+   available? holds, and each of typmods: the columns of matrix.types (matrix-schema!) are of these."
   [available?]
   (concat (for [[t e] (sort-by key types/types)
-                :when (or (nil? (:extension e)) (available? (:extension e)))]
+                :when (and (or (nil? (:extension e)) (available? (:extension e))) (types/in-version? t @test-db/major))]
             [(str/replace (str/replace t #"[^a-z0-9]+" "_") #"^_|_$" "")
              t
              (or (samples t) (first (:literals e)) (throw (ex-info "no sample for a type" {:type t})))])

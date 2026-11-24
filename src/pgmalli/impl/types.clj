@@ -237,6 +237,14 @@
   [t]
   (when (string? t) (second (re-matches #"(.+)\[\]" t))))
 
+(defn in-version?
+  "Whether type t (a name types keys by, or an array of one) is in major version v
+   (\"19\"), as the catalog snapshot holds pg_catalog's; an extension's, which it does not
+   hold, is."
+  [t v]
+  (let [in (get-in @catalog [:types (or (element t) t) :in])]
+    (or (nil? in) (boolean (some #{v} in)))))
+
 (defn array-of
   "The array type of elements of type t: \"x[]\", t itself for an array (PostgreSQL's array types
    take any number of dimensions); nil for no name."
