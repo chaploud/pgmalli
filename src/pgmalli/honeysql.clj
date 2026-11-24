@@ -74,7 +74,8 @@
   ([registry body] (analyze registry body {}))
   ([registry written opts]
    (let [[registry body opts] (prepared registry written opts option-keys)]
-     (binding [memo/*calls* (or memo/*calls* (::query/calls registry))]
+     (binding [memo/*calls* (or memo/*calls* (::query/calls registry))
+               types/*versions* (::query/versions registry)]
      {:args (args/arg-types registry body opts)
       :row (query/row-schema registry body opts)
       :rows (query/row-count registry body opts)
@@ -372,7 +373,7 @@
                                            (str (pr-str name) " is a view's row schema, and a view has no " derived " schema; " what " takes a table's")
                                            {:given name})
           :else (shape/not-a-row! registry name what))
-    (or (written-row* r name derived opts)
+    (or (binding [types/*versions* (::query/versions r)] (written-row* r name derived opts))
         (let [dn (shape/derived-name name derived)]
           (error/fail! :pgmalli.error/unknown-schema
                        (str "the registry has no " derived " schema " (pr-str dn) " for " (pr-str name) "; pgmalli.core/registry derives it")

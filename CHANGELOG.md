@@ -10,6 +10,8 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * A call resolves with the implicit casts of the version the registry was generated on. A cast
   that not every version has was read as no implicit cast at all, so a value it converts
   (a `regdatabase` compared with an integer, on 19) was refused.
+* An argument cast to a type takes what the cast takes in the version the registry was generated
+  on: a registry of 17 took a `byte[]` cast to `integer`, which 18 alone casts. Fixes #34.
 * A file generated on a PostgreSQL version newer than pgmalli knows holds a `:newer-version`
   diagnostic, besides the warning `generate!` and `check` print, and its queries'
   `pg_catalog` is typed as the newest version pgmalli knows has it, as the warning says: it was

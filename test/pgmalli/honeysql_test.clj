@@ -2456,6 +2456,11 @@
            (:problems (h/analyze (generated-on "PostgreSQL 17") {:select [:relallfrozen] :from [:pg_class]} opts))))
     (is (= [] (check {:select [:relallfrozen] :from [:pg_class]})))))
 
+(deftest a-cast-of-a-version-later-than-the-registrys-is-not-taken
+  (let [bytes-taken? #(m/validate (:x (:args (h/analyze (generated-on %) {:select [[[:cast :?x :integer] :i]]} opts))) (byte-array [1]) {:registry (generated-on %)})]
+    (is (bytes-taken? "PostgreSQL 18") "PostgreSQL 18 casts bytea to integer")
+    (is (not (bytes-taken? "PostgreSQL 17")))))
+
 (deftest a-function-of-the-version-the-registry-is-of-alone-is-typed-there
   (let [q {:select [[[:uuidv7] :u] [[:casefold [:inline "a"]] :c]]}]
     (is (= [:map [:u [:maybe [:uuid {:pg/type "uuid"}]]] [:c [:maybe [:string {:pg/type "text"}]]]]
