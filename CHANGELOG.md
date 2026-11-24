@@ -3,7 +3,7 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
-## Unreleased
+## 0.4.2
 
 * PostgreSQL 19: its `pg_catalog` (functions, operators, casts, tables and views), and its types
   `oid8` and `regdatabase`.
