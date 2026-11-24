@@ -11,8 +11,7 @@
             [pgmalli.impl.diff :as diff]
             [pgmalli.impl.error :as error]
             [pgmalli.impl.files :as files]
-            [pgmalli.impl.registry :as registry]
-            [pgmalli.impl.types :as types]))
+            [pgmalli.impl.registry :as registry]))
 
 (defn- print-difference [{:keys [name key schema column property order file db]}]
   (println (str/join " " (remove nil? [(some-> key pr-str) schema (some-> name pr-str) (some-> column pr-str) (some-> property pr-str)
@@ -20,20 +19,11 @@
   (println "  file:" (pr-str file))
   (println "  db:  " (pr-str db)))
 
-(defn- version-warning
-  "Why a file of a server's version (\"PostgreSQL 19\") is typed as an older one, nil when the
-   catalog snapshot has it."
-  [database-version]
-  (let [versions (:versions @types/catalog)]
-    (when-not (some #{(types/label-version database-version)} versions)
-      (str database-version " is newer than the versions this pgmalli knows (" (str/join ", " versions)
-           "): a query's pg_catalog functions and types are typed as " (types/version-label (last versions)) " has them"))))
-
 (defn- print-generated
   "What generate! and check print of the data read from the database: a version newer than
    pgmalli knows, and the columns left out."
   [{:keys [database-version unrendered]}]
-  (when-let [w (version-warning database-version)] (println "warning:" w))
+  (when-let [w (files/version-warning database-version)] (println "warning:" w))
   (when (seq unrendered)
     (println (str "unrendered (" (count unrendered) "), left out of the schemas:"))
     (doseq [{:keys [table column type]} unrendered]

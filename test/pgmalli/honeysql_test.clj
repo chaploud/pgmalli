@@ -2450,6 +2450,7 @@
   (let [frozen #(some (fn [e] (when (= :relallfrozen (first e)) e)) (rest (:row (h/analyze % {:select [:*] :from [:pg_class]} opts))))]
     (is (= [:relallfrozen {:optional true} int4] (frozen registry)) "a file of no version known: any version the catalog holds")
     (is (= [:relallfrozen int4] (frozen (generated-on "PostgreSQL 18"))))
+    (is (= [:relallfrozen int4] (frozen (generated-on "PostgreSQL 99"))) "a file of a version newer than the catalog's: its newest")
     (is (nil? (frozen (generated-on "PostgreSQL 17"))))
     (is (= [{:kind :unknown-column :column :relallfrozen}]
            (:problems (h/analyze (generated-on "PostgreSQL 17") {:select [:relallfrozen] :from [:pg_class]} opts))))

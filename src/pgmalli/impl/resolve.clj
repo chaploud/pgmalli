@@ -222,19 +222,19 @@
         {:result r :args (mapv #(bound % b) (:decls c)) :overload (dissoc (:overload c) :in)}))))
 
 (defn of-version
-  "The overloads of os that version v has, as of it alone (without :in)."
+  "The overloads of os that version v has, as of it alone (without :in, :pgmalli/versions [v])."
   [os v]
-  (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in)))
+  (with-meta (vec (for [o os :when (or (nil? (:in o)) (some #{v} (:in o)))] (dissoc o :in)))
+    {:pgmalli/versions [v]}))
 
 (defn- in-every-version
-  "(f overloads) of each version's overloads, where all agree; nil otherwise. The versions are
-   the overloads' :pgmalli/versions metadata (a registry's), else every one the catalog holds."
+  "(f overloads) of each version's overloads and casts, where all agree; nil otherwise. The
+   versions are the overloads' :pgmalli/versions metadata (a registry's), else every one the
+   catalog holds."
   [overloads f]
-  (if (not-any? :in overloads)
-    (f overloads)
-    (let [rs (for [v (or (:pgmalli/versions (meta overloads)) (:versions @types/catalog))]
-               (f (of-version overloads v)))]
-      (when (apply = rs) (first rs)))))
+  (let [rs (mapv (fn [v] (binding [types/*versions* [v]] (f (of-version overloads v))))
+                 (or (:pgmalli/versions (meta overloads)) (:versions @types/catalog)))]
+    (when (apply = rs) (first rs))))
 
 (defn overloads
   "The overloads of a function (kind :functions) or operator (:operators) n: pg_catalog's; or
