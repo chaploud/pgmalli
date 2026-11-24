@@ -75,9 +75,9 @@ jobs:
           if [ "$OUTCOME" = failure ]; then
             { echo "bb upstream fails: $RUN_URL"
               echo
-              echo "Each line names the upstream change and what to update; run \`bb upstream\` to see it locally."
+              echo "Each line names the upstream change and what to update; run \`bb upstream\` to see it locally, the run's artifact upstream-report holds the whole report."
               echo
-              tail -c 60000 upstream-report.md; } > body.md
+              head -c 60000 upstream-report.md; } > body.md
             if [ -n "$issue" ]; then gh issue comment "$issue" --body-file body.md
             else gh issue create --title "Upstream: the suite fails on the newest versions" --label upstream --body-file body.md; fi
             exit 1

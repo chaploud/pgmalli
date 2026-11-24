@@ -20,11 +20,15 @@
       reports (rest (str/split (slurp out) #"(?m)^(?=(FAIL|ERROR) in )"))
       todo (fn [r] (some #(re-matches #"(HoneySQL|PostgreSQL|next\.jdbc|pgjdbc|malli) \d\S* .*" %) (str/split-lines r)))
       {classified true unclassified false} (group-by (comp boolean todo) reports)]
-  (doseq [[upstream items] (sort (group-by (comp second todo) classified))]
+  ;; one cause fails many tests: a few lines of each, and how many more
+  (doseq [[upstream items] (sort (group-by (comp second todo) classified))
+          :let [ms (sort (distinct (map (comp first todo) items)))]]
     (println (str "\n## " upstream))
-    (doseq [m (sort (distinct (map (comp first todo) items)))] (println "-" m)))
+    (doseq [m (take 20 ms)] (println "-" m))
+    (when (next (drop 19 ms)) (println "- and" (- (count ms) 20) "more")))
   (when (seq unclassified)
     (println "\n## unclassified: failures that name no upstream (give their message one)")
-    (doseq [r unclassified] (println "-" (str/join " | " (take 3 (remove str/blank? (str/split-lines r)))))))
+    (doseq [[test rs] (sort-by key (group-by #(re-find #"^\S+ in \(\S+\)" %) unclassified))]
+      (println "-" test (count rs) "failures, the first:" (str/join " | " (take 3 (drop 1 (remove str/blank? (str/split-lines (first rs)))))))))
   (println (if (zero? exit) "\nall green" (str "\nthe suite failed; the whole output is in " out)))
   (System/exit exit))

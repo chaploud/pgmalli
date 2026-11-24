@@ -28,7 +28,6 @@
 
 (defn- column [ds sql] (mapv (comp val first) (jdbc/execute! ds [sql])))
 
-
 (def ^:private unsupported
   "The types of pg_catalog and of the extensions PostgreSQL ships that types/types has no entry
    for yet, with why: what to add next."
@@ -56,7 +55,7 @@
                                      WHERE t.typtype IN ('b', 'r', 'm') AND NOT (t.typelem <> 0 AND t.typlen = -1)
                                        AND (t.typnamespace = 'pg_catalog'::regnamespace OR x.oid IS NOT NULL)
                                      ORDER BY 1, 2"]
-                                   {:builder-fn rs/as-unqualified-maps})]
+                                {:builder-fn rs/as-unqualified-maps})]
         (is (< 50 (count rows)))
         (doseq [{:keys [ext type]} rows
                 :let [e (types/entry type)]]
@@ -83,7 +82,7 @@
   [t v]
   (cond (#{"json" "jsonb"} t) (json/write v)
         (map? v) (str/join ", " (for [[k x] v :let [q #(str "\"" (str/replace (str %) #"[\\\"]" "\\\\$0") "\"")]]
-                                        (str (q k) "=>" (if (nil? x) "NULL" (q x)))))
+                                  (str (q k) "=>" (if (nil? x) "NULL" (q x)))))
         (bytes? v) (apply str "\\x" (map #(format "%02x" (bit-and % 0xff)) v))
         :else (str v)))
 
@@ -123,19 +122,22 @@
           hint (str "PostgreSQL " version " differs from resources/pgmalli/impl/catalog.edn (run bb catalog): ")
           differs (fn [what theirs ours]
                     (str hint what "\n  server only: " (set/difference (set theirs) (set ours)) "\n  snapshot only: " (set/difference (set ours) (set theirs))))]
-      (is (some #{version} (:versions snapshot)) (str "PostgreSQL " version " is not among the catalog's versions: add it to CI and run bb catalog"))
-      (doseq [k [:types :casts :ranges]
-              :when (not= (get server k) (get ours k))]
-        (is false (differs (name k) (get server k) (get ours k))))
-      (doseq [k [:functions :operators]
-              n (set (concat (keys (get server k)) (keys (get snapshot k))))
-              :let [theirs (get-in server [k n] #{}) ours (mine (get-in snapshot [k n]))]
-              :when (not= theirs ours)]
-        (is false (differs (str (name k) " " n) theirs ours)))
-      (doseq [n (set (concat (keys (:relations server)) (keys (:relations snapshot))))
-              :let [theirs (get-in server [:relations n] []) ours (mine (get-in snapshot [:relations n]))]
-              :when (not= (set theirs) ours)]
-        (is false (differs (str "relation " n) theirs ours))))))
+      ;; of a version it lacks, the snapshot differs in everything that version changed: one failure says so
+      (if-not (some #{version} (:versions snapshot))
+        (is false (str "PostgreSQL " version " is not among the catalog's versions: add it to CI and run bb catalog (CONTRIBUTING.md, A new PostgreSQL version)"))
+        (do
+          (doseq [k [:types :casts :ranges]
+                  :when (not= (get server k) (get ours k))]
+            (is false (differs (name k) (get server k) (get ours k))))
+          (doseq [k [:functions :operators]
+                  n (set (concat (keys (get server k)) (keys (get snapshot k))))
+                  :let [theirs (get-in server [k n] #{}) ours (mine (get-in snapshot [k n]))]
+                  :when (not= theirs ours)]
+            (is false (differs (str (name k) " " n) theirs ours)))
+          (doseq [n (set (concat (keys (:relations server)) (keys (:relations snapshot))))
+                  :let [theirs (get-in server [:relations n] []) ours (mine (get-in snapshot [:relations n]))]
+                  :when (not= (set theirs) ours)]
+            (is false (differs (str "relation " n) theirs ours))))))))
 
 (deftest every-types-typname-is-among-its-aliases
   ;; :aliases names a type as pg_type's typname too (int4, float8, timestamptz), which casts and
