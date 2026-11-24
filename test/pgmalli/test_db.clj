@@ -28,10 +28,10 @@
                       (throw (ex-info "no PostgreSQL 17 image: .github/workflows/ci.yml, read from the working directory, lists none by digest; run from the repository's root, or set PGMALLI_PG_IMAGE" {})))))
 
 (def major
-  "The major version of image (\"17\"): its tag's, the catalog snapshot's newest for an image
-   that names none (postgres:alpine, the newest)."
+  "The major version of image (\"17\"): ci.yml's of its digest, else its tag's (17-alpine,
+   pgvector's pg17), the catalog snapshot's newest for a tag of none (postgres:alpine, the newest)."
   (delay (or (some (fn [[m i]] (when (= i @image) m)) (try (ci-images/images) (catch java.io.FileNotFoundException _ nil)))
-             (second (re-find #"postgres:(\d+)" @image))
+             (second (re-find #":(?:pg)?(\d+)" @image))
              (last (:versions @types/catalog)))))
 
 (defn- free-port []
