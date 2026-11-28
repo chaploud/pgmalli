@@ -128,8 +128,8 @@
 
 (deftest an-array-read-through-getarray-is-what-its-result-set-reads
   (when *db*
-    (let [arrays ["'{1,NULL,-2147483648}'::int4[]" "'{{1,2},{3,4}}'::int4[]" "'[2:3]={1,2}'::int4[]" "'{}'::int4[]"
-                  "'{{9223372036854775807,NULL},{1,2}}'::int8[]"
+    (let [arrays ["'{1,NULL,-2147483648}'::int4[]" "'{{1,2},{3,4}}'::int4[]" "'{{{1,2}},{{3,NULL}}}'::int4[]" "'[2:3]={1,2}'::int4[]" "'{}'::int4[]"
+                  "'{{{9223372036854775807,NULL}},{{1,2}}}'::int8[]"
                   "'{NaN,Infinity,-Infinity,1.5,NULL}'::float4[]" "'{NaN,Infinity,-Infinity,1e300,NULL}'::float8[]"
                   "'{t,f,NULL}'::bool[]"
                   "'{\"a,b\",\"\",NULL,\"NULL\",\"x\\\"y\"}'::text[]" "'{{a,b},{c,NULL}}'::text[]"
@@ -154,13 +154,6 @@
                         (.next rs)
                         (.getBaseTypeName ^java.sql.Array (.getObject rs 1))))))
             "each element type read through getArray is among the arrays")))))
-
-(deftest a-three-dimensional-array-reads-as-binary
-  ;; pgjdbc 42.7.7's getResultSet of one throws
-  (when *db*
-    (with-open [con (jdbc/get-connection (datasource))]
-      (doseq [t ["int4" "int8"]]
-        (is (= [[[1 2]] [[3 nil]]] (read-array #'pgmalli.jdbc/read-array con (str "'{{{1,2}},{{3,NULL}}}'::" t "[]") -1 #{})))))))
 
 (deftest an-enum-pgjdbc-names-as-a-type-getarray-decodes-reads-as-keywords
   (when *db*

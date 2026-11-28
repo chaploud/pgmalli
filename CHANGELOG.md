@@ -8,8 +8,9 @@ break what [Stability](README.md#stability) lists; its entry says what to do.
 * `builder` reads an array of `integer`, `bigint`, `real`, `double precision`, `boolean`, `text`,
   `varchar`, `char` or `uuid` through pgjdbc's `getArray`, without building a result set for
   each array: reading rows of such arrays allocates about half as much. The values read are the
-  same. On pgjdbc 42.7.7, a three-dimensional `integer` or `bigint` array read as binary (a
-  statement past `prepareThreshold`) is read: it threw.
+  same.
+* The oldest pgjdbc supported is 42.7.8, from 42.7.7, which throws reading a three-dimensional
+  array as binary (a statement run past `prepareThreshold`).
 
 ## 0.4.2
 

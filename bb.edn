@@ -68,7 +68,7 @@
          ;; Renovate would raise them
          test:floor {:doc "bb test:floor [main|oracle]: run the JVM suite, or one part of it, on the oldest Clojure, HoneySQL, malli, next.jdbc and pgjdbc README supports (needs docker)"
                      :task (apply shell "clojure" "-Sdeps"
-                                  "{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version \"2.4.1066\"} org.clojure/clojure {:mvn/version \"1.11.4\"} metosin/malli {:mvn/version \"0.20.0\"} com.github.seancorfield/next.jdbc {:mvn/version \"1.3.1048\"} org.postgresql/postgresql {:mvn/version \"42.7.7\"}}}}}"
+                                  "{:aliases {:floor {:override-deps {com.github.seancorfield/honeysql {:mvn/version \"2.4.1066\"} org.clojure/clojure {:mvn/version \"1.11.4\"} metosin/malli {:mvn/version \"0.20.0\"} com.github.seancorfield/next.jdbc {:mvn/version \"1.3.1048\"} org.postgresql/postgresql {:mvn/version \"42.7.8\"}}}}}"
                                   "-M:test:floor" (suite [] ["-r" "pgmalli\\.(?!oracle-test$).*"]))}
          test:all {:doc "lint, bb test, test:jvm, test:floor, oracle and test:docs at once, each into target/<task>.log (: as -), and the exit code of each (needs docker)"
                    :requires ([babashka.fs :as fs] [babashka.process :as p] [clojure.string :as str])
