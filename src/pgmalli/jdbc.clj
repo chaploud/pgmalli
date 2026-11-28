@@ -89,9 +89,22 @@
   [^ResultSetMetaData md enums label]
   (mapv #(reader (.getColumnTypeName md (int %)) (.getColumnType md (int %)) enums (label %)) (range 1 (inc (.getColumnCount md)))))
 
-(defn- read-array
-  "The elements of a java.sql.Array as a vector, each read as a column of the element type, an
-   element array (a multi-dimensional array's) as a vector likewise."
+(def ^:private decoded-element-types
+  "The element types whose array pgjdbc's getArray decodes as read-elements reads them, value and
+   class alike, building no result set an array: of int2 it decodes a Short, of numeric refuses
+   NaN and infinity."
+  #{"int4" "int8" "float4" "float8" "bool" "text" "varchar" "bpchar" "uuid"})
+
+(def ^:private ^Class objects-class (Class/forName "[Ljava.lang.Object;"))
+
+(defn- vectors
+  "A getArray's Object[] as a vector, an element array (a multi-dimensional array's) likewise."
+  [^objects a]
+  (mapv #(if (instance? objects-class %) (vectors %) %) a))
+
+(defn- read-elements
+  "The elements of a java.sql.Array as a vector, each read as a column of the element type through
+   the array's result set, an element array (a multi-dimensional array's) as a vector likewise."
   [^Array a enums label]
   (with-open [r (.getResultSet a)]
     (let [read (nth (readers (.getMetaData r) enums (constantly label)) 1)]
@@ -99,6 +112,14 @@
         (if (.next r)
           (recur (conj! acc (read r 2)))
           (persistent! acc))))))
+
+(defn- read-array
+  "read-elements of a java.sql.Array, through getArray of an element type of
+   decoded-element-types; an enum of the search_path pgjdbc names as that type (int4) read-elements."
+  [^Array a enums label]
+  (if (let [t (.getBaseTypeName a)] (and (contains? decoded-element-types t) (not (contains? enums t))))
+    (vectors (.getArray a))
+    (read-elements a enums label)))
 
 (defn builder
   "The :builder-fn pgmalli types rows as: next.jdbc's as-unqualified-maps, each column read as
