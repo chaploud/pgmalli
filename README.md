@@ -482,7 +482,7 @@ A `[:ref ...]` to your own schema needs a registry holding it (without one, mall
 | malli | 0.20.0 and later |
 | HoneySQL | 2.4.1066 and later |
 | next.jdbc | 1.3.1048 and later |
-| pgjdbc | 42.7.7 and later |
+| pgjdbc | 42.7.8 and later |
 | babashka | the latest (what CI runs), for everything but JDBC |
 
 CI tests the oldest versions listed here.

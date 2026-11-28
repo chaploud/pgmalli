@@ -11,8 +11,9 @@
             [next.jdbc.prepare :as prepare]
             [pgmalli.core :as pgmalli]
             [pgmalli.honeysql :as h]
+            pgmalli.jdbc
             [pgmalli.oracle :as oracle]
-            [pgmalli.test-db :refer [builder generated *db* datasource exec-sql! with-postgres]]))
+            [pgmalli.test-db :refer [builder generated *db* datasource exec-sql! jdbcUrl with-postgres]]))
 
 (use-fixtures :once with-postgres
   (fn [f]
@@ -114,6 +115,54 @@
         (is (m/validate (h/set-schema registry :types o) {:c_jsonb v :c_json v} {:registry registry}))
         (is (m/validate (:v (:args (h/analyze registry {:update :types :set {:c_jsonb :?v} :where [:= :id 2]} o))) v {:registry registry}))))))
 
+
+(defn- read-array
+  "What read (pgmalli.jdbc's read-array or read-elements) reads of the array sql selects, on con,
+   its statement's prepareThreshold threshold."
+  [read con sql threshold enums]
+  (with-open [ps (.prepareStatement con (str "SELECT " sql))]
+    (.setPrepareThreshold (.unwrap ps org.postgresql.PGStatement) threshold)
+    (with-open [rs (.executeQuery ps)]
+      (.next rs)
+      (read (.getObject rs 1) enums "a"))))
+
+(deftest an-array-read-through-getarray-is-what-its-result-set-reads
+  (when *db*
+    (let [arrays ["'{1,NULL,-2147483648}'::int4[]" "'{{1,2},{3,4}}'::int4[]" "'{{{1,2}},{{3,NULL}}}'::int4[]" "'[2:3]={1,2}'::int4[]" "'{}'::int4[]"
+                  "'{{{9223372036854775807,NULL}},{{1,2}}}'::int8[]"
+                  "'{NaN,Infinity,-Infinity,1.5,NULL}'::float4[]" "'{NaN,Infinity,-Infinity,1e300,NULL}'::float8[]"
+                  "'{t,f,NULL}'::bool[]"
+                  "'{\"a,b\",\"\",NULL,\"NULL\",\"x\\\"y\"}'::text[]" "'{{a,b},{c,NULL}}'::text[]"
+                  "'{ab,NULL}'::varchar(5)[]" "'{a,\"b  \",NULL}'::char(3)[]"
+                  "'{a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11,NULL}'::uuid[]"]
+          classes (fn classes [v] (if (vector? v) (mapv classes v) (some-> v class .getName)))]
+      ;; pgjdbc reads an array as text, or as binary where prepareThreshold is -1 and the array type
+      ;; is among its binary ones, which bool[] and uuid[] are not but by binaryTransferEnable; a
+      ;; binary bpchar[] it reads neither way (getArray is unimplemented, getResultSet overflows)
+      (with-open [con (jdbc/get-connection {:jdbcUrl (str (jdbcUrl) "?binaryTransferEnable=1000,2951")
+                                            :user (:user *db*) :password (:password *db*)})]
+        (doseq [threshold [0 -1] a arrays]
+          (testing (str a " " threshold)
+            (let [read (read-array #'pgmalli.jdbc/read-array con a threshold #{})
+                  elements (read-array #'pgmalli.jdbc/read-elements con a threshold #{})]
+              ;; NaN is no NaN's =
+              (is (= (pr-str elements) (pr-str read)))
+              (is (= (classes elements) (classes read))))))
+        (is (= @#'pgmalli.jdbc/decoded-element-types
+               (set (for [a arrays]
+                      (with-open [st (.createStatement con) rs (.executeQuery st (str "SELECT " a))]
+                        (.next rs)
+                        (.getBaseTypeName ^java.sql.Array (.getObject rs 1))))))
+            "each element type read through getArray is among the arrays")))))
+
+(deftest an-enum-pgjdbc-names-as-a-type-getarray-decodes-reads-as-keywords
+  (when *db*
+    (exec-sql! "CREATE SCHEMA e; CREATE TYPE e.int4 AS ENUM ('a'); CREATE TYPE e.uuid AS ENUM ('x');")
+    (with-open [con (jdbc/get-connection (datasource))]
+      (jdbc/execute! con ["SET search_path TO e"])
+      (doseq [threshold [0 -1]]
+        (is (= [:a nil] (read-array #'pgmalli.jdbc/read-array con "'{a,NULL}'::e.int4[]" threshold #{"int4"})))
+        (is (= [:x] (read-array #'pgmalli.jdbc/read-array con "'{x}'::e.uuid[]" threshold #{"uuid"})))))))
 
 (deftest a-schema-read-failing-over-jdbc-says-what-pgmalli-needs
   (when *db*
