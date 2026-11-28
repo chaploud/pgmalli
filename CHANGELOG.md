@@ -3,6 +3,14 @@
 pgmalli follows [semantic versioning](https://semver.org). Before 1.0, a minor release may
 break what [Stability](README.md#stability) lists; its entry says what to do.
 
+## 0.4.3
+
+* `builder` reads an array of `integer`, `bigint`, `real`, `double precision`, `boolean`, `text`,
+  `varchar`, `char` or `uuid` through pgjdbc's `getArray`, without building a result set for
+  each array: reading rows of such arrays allocates about half as much. The values read are the
+  same. On pgjdbc 42.7.7, a three-dimensional `integer` or `bigint` array read as binary (a
+  statement past `prepareThreshold`) is read: it threw.
+
 ## 0.4.2
 
 * PostgreSQL 19: its `pg_catalog` (functions, operators, casts, tables and views), and its types
